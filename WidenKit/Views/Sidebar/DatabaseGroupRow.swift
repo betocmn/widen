@@ -1,7 +1,7 @@
 import SwiftUI
 
-/// Selectable database row: icon with a status badge, the database name,
-/// a connection caption, and a hover "+" button that starts a new session.
+/// Selectable database row: icon with a status badge, the custom name,
+/// the host/database caption, and a hover "+" button that starts a new session.
 /// Selecting the row opens the database's schema in the inspector.
 struct DatabaseGroupRow: View {
     @Environment(AppState.self) private var appState
@@ -23,9 +23,9 @@ struct DatabaseGroupRow: View {
                 }
 
             VStack(alignment: .leading, spacing: 1) {
-                Text(connection.database)
+                Text(connection.name)
                     .font(.system(size: 13, weight: .semibold))
-                Text("\(connection.name) · \(connection.host)")
+                Text("\(connection.host) · \(connection.database)")
                     .font(.system(size: 11))
                     .foregroundStyle(.secondary)
                     .lineLimit(1)
