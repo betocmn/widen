@@ -22,6 +22,20 @@ public struct MainView: View {
                 }
                 detailContent
             }
+            .inspector(isPresented: $appState.showSchemaInspector) {
+                SchemaInspectorView()
+                    .inspectorColumnWidth(min: 240, ideal: 300, max: 420)
+            }
+        }
+        .toolbar {
+            ToolbarItem(placement: .primaryAction) {
+                Button {
+                    appState.showSchemaInspector.toggle()
+                } label: {
+                    Label("Schema", systemImage: "sidebar.right")
+                }
+                .help("Show or hide the schema inspector")
+            }
         }
         .frame(minWidth: 900, minHeight: 560)
         .sheet(isPresented: $appState.showSettings) {
