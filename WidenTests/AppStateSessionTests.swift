@@ -6,6 +6,19 @@ import Testing
 @Suite("AppState sessions")
 @MainActor
 struct AppStateSessionTests {
+    private struct StubTitleGenerator: SessionTitleGenerating {
+        var result: String
+        func generateTitle(for question: String) async throws -> String {
+            result
+        }
+    }
+
+    private struct FailingTitleGenerator: SessionTitleGenerating {
+        func generateTitle(for question: String) async throws -> String {
+            throw AppError.modelUnavailable("The local model is unavailable.")
+        }
+    }
+
     private func makeState() -> (AppState, URL) {
         let dir = FileManager.default.temporaryDirectory
             .appendingPathComponent("widen-tests-\(UUID().uuidString)", isDirectory: true)
@@ -136,6 +149,41 @@ struct AppStateSessionTests {
 
         #expect(state.session(for: session.id)?.title == QuerySession.placeholderTitle)
         #expect(state.session(for: session.id)?.titleWasManuallySet == false)
+    }
+
+    @Test func autoTitleAppliesSanitizedGeneratedTitle() async {
+        let (state, dir) = makeState()
+        defer { try? FileManager.default.removeItem(at: dir) }
+        state.titleGeneratorOverride = StubTitleGenerator(result: "\"Top Spenders.\"")
+        let session = state.createSession(connectionID: UUID())
+
+        await state.autoTitleSession(session.id, question: "Which users have spent the most?")
+
+        #expect(state.session(for: session.id)?.title == "Top Spenders")
+        #expect(state.session(for: session.id)?.titleWasManuallySet == false)
+    }
+
+    @Test func autoTitleFallsBackToTruncatedQuestionOnFailure() async {
+        let (state, dir) = makeState()
+        defer { try? FileManager.default.removeItem(at: dir) }
+        state.titleGeneratorOverride = FailingTitleGenerator()
+        let session = state.createSession(connectionID: UUID())
+
+        await state.autoTitleSession(session.id, question: "Which users have spent the most?")
+
+        #expect(state.session(for: session.id)?.title == "Which users have spent the most?")
+    }
+
+    @Test func autoTitleNeverOverridesAManualRename() async {
+        let (state, dir) = makeState()
+        defer { try? FileManager.default.removeItem(at: dir) }
+        state.titleGeneratorOverride = StubTitleGenerator(result: "Generated Title")
+        let session = state.createSession(connectionID: UUID())
+        state.renameSession(session.id, to: "My Title")
+
+        await state.autoTitleSession(session.id, question: "anything")
+
+        #expect(state.session(for: session.id)?.title == "My Title")
     }
 
     @Test func deleteConnectionCascadesToItsSessions() throws {

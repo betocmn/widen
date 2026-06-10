@@ -52,3 +52,17 @@ struct SessionTitleFallbackTests {
         #expect(SessionTitleFallback.sanitize("\"...\"") == nil)
     }
 }
+
+@Suite("MockTitleGenerator")
+struct MockTitleGeneratorTests {
+    @Test func titlesAreDeterministic() async throws {
+        let generator = MockTitleGenerator()
+        let question = "Which users have spent the most?"
+
+        let first = try await generator.generateTitle(for: question)
+        let second = try await generator.generateTitle(for: question)
+
+        #expect(first == second)
+        #expect(first == "Which users have spent the most?")
+    }
+}
