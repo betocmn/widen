@@ -67,39 +67,59 @@ The central object is `AppState` in `WidenKit/App/AppState.swift`.
 
 `AppState` is `@MainActor` and `@Observable`. It owns:
 
-- Connection status and current `DatabaseConnectionConfig`.
-- The loaded `DatabaseSchema`.
-- Settings sheet and error banner state.
+- `connections: [DatabaseConnectionConfig]` plus per-connection runtime maps:
+  `connectionStates` (status), `schemas` (schema cache), `loadingSchemas`,
+  and a private lazy `PostgresService` per connection id.
+- `sessions: [QuerySession]` (including archived ones), `selectedSessionID`,
+  and a private cache of `SessionController` runtime containers.
+- UI state: schema inspector visibility, the Settings tab + open request,
+  and the error banner.
 - The saved "Use mock AI" toggle.
-- Services: `ConnectionStore`, `KeychainService`, `PostgresService`.
-- View models: `SchemaViewModel`, `QueryResultViewModel`, `ChatViewModel`.
-- `SchemaIntrospectionService`.
+- Services: `ConnectionStore`, `SessionStore`, `KeychainService`,
+  `SchemaIntrospectionService`, and the shared `SchemaViewModel`.
 
-It also exposes `sqlGenerator`, which chooses:
+It also exposes `sqlGenerator` and `titleGenerator`, which choose:
 
-- `MockSQLGenerator` when the developer toggle is enabled.
-- `FoundationModelsSQLGenerator` when available at compile time.
-- `MockSQLGenerator` as a compile-time fallback when Foundation Models is not
+- The mock implementations when the developer toggle is enabled.
+- `FoundationModelsSQLGenerator` / `FoundationModelsTitleGenerator` when
+  available at compile time.
+- The mocks as a compile-time fallback when Foundation Models is not
   available.
 
+`SessionController` in `WidenKit/App/SessionController.swift` is the
+per-session runtime container. It owns a `ChatViewModel` and a
+`QueryResultViewModel`, hydrates them from the persisted `QuerySession`
+(`hydrate(from:)`), copies live state back (`snapshot(into:)`, which bumps
+`updatedAt` only when something changed), and orchestrates
+`submit(appState:)` / `runQuery(appState:)` against the session's
+connection. Controllers are cached by `AppState`, so switching sessions
+never loses an in-flight generation or query run.
+
 The app's SwiftUI entry point is `Widen/WidenApp.swift`. It creates one
-`@State` `AppState`, injects it into the SwiftUI environment, and registers app
-commands for Settings, Refresh Schema, Connect, and Disconnect.
+`@State` `AppState`, injects it into the SwiftUI environment, registers the
+Settings scene plus commands for New Session, Refresh Schema, Connect, and
+Disconnect, and applies the saved appearance preference.
 
 `MainView` in `WidenKit/Views/MainView.swift` builds the application shell:
 
 ```text
 NavigationSplitView
-  sidebar: SidebarView
+  sidebar: SidebarView (database groups + sessions)
   detail:
     ErrorBannerView when needed
-    VSplitView
-      ChatView
-      SQLPreviewView
-      QueryResultsView
+    SessionDetailView for the selected session's controller
+      VSplitView
+        ChatView
+        SQLPreviewView
+        QueryResultsView
+    .inspector: SchemaInspectorView (toolbar-toggled)
+  toolbar: connection chip · light/dark toggle · inspector toggle
 ```
 
-On first render, `MainView` runs `await appState.onLaunch()`.
+On first render, `MainView` runs `await appState.onLaunch()`. It also
+watches `appState.openSettingsRequest` and opens the Settings window via
+`@Environment(\.openSettings)`, and flushes sessions on
+`NSApplication.willTerminateNotification`.
 
 ## Launch And Connection Flow
 
@@ -108,14 +128,25 @@ Launch flow:
 ```text
 MainView.task
   AppState.onLaunch()
-    ConnectionStore.loadPrimary()
-      no saved connection -> show settings sheet
-      saved connection -> AppState.connect(saved)
+    ConnectionStore.load()    -> connections
+    SessionStore.load()       -> sessions (incl. archived)
+    restore selection from UserDefaults ("WidenSelectedSessionID"),
+      falling back to the most recently updated visible session
+    selectSession(...)        -> lazily connects only that database
+    no connections            -> open Settings on the Databases tab
 ```
+
+Databases connect lazily: `connectIfNeeded(_:)` is a no-op when the
+connection is already connected or connecting, reads the password from the
+Keychain, and loads the schema only when it is not cached yet.
+`disconnect(_:)` cancels in-flight runs on that connection's controllers and
+keeps the schema cache.
 
 Connection setup lives in:
 
-- `WidenKit/Views/ConnectionSettingsView.swift`
+- `WidenKit/Views/Settings/` (`SettingsView`, `GeneralSettingsView`,
+  `DatabasesSettingsView`, `ConnectionEditorForm`,
+  `ArchivedSessionsSettingsView`)
 - `WidenKit/ViewModels/ConnectionSettingsViewModel.swift`
 - `WidenKit/Models/DatabaseConnectionConfig.swift`
 - `WidenKit/Services/ConnectionStore.swift`
@@ -145,8 +176,56 @@ one-shot `PostgresConnection` probe and a 15-second app-level timeout. This is
 separate from the long-lived pooled client so authentication errors and missing
 database errors surface immediately.
 
-`Save and Connect` saves the non-secret config, saves the password to Keychain,
-then calls `AppState.connect`.
+`Save` calls `AppState.addOrUpdateConnection(_:password:)`, which writes the
+password to the Keychain and the configs to disk. There is no eager connect —
+the database connects when one of its sessions is selected. If an existing
+connection's endpoint changed (host/port/database/username/SSL), the live
+client and cached schema are invalidated.
+
+`AppState.deleteConnection(_:)` disconnects, deletes the Keychain password,
+and cascade-deletes every session belonging to that connection.
+`DatabasesSettingsView` shows a confirmation dialog warning about the cascade
+before calling it.
+
+## Sessions And Persistence
+
+`QuerySession` (`WidenKit/Models/QuerySession.swift`) is the persisted value:
+id, connection id, title (+ `titleWasManuallySet`), `messages`
+(`[ChatMessage]`, Codable), `sqlText`, `lastGeneration`, `isArchived`, and
+timestamps. Runtime-only state — query results, validation, in-flight flags,
+the input draft — is never persisted.
+
+`SessionStore` mirrors `ConnectionStore`: a single
+`~/Library/Application Support/Widen/sessions.json` with ISO8601 dates and
+atomic pretty-printed writes, plus an `init(directory:)` override for tests.
+
+Persistence flow: views report edits through
+`AppState.sessionDidChange(_:)`, which snapshots the controller into the
+session value and schedules a debounced (~1s) save. `flushSessions()` writes
+immediately and is called on create/rename/archive/delete, on session
+switches, and at app termination.
+
+Lifecycle: `createSession(connectionID:)` appends a placeholder-titled
+session and selects it. `selectSession(_:)` snapshots the outgoing
+controller, gets-or-creates the incoming one, persists the selection to
+UserDefaults, and lazily connects the session's database. Archiving hides a
+session from the sidebar (recoverable from Settings › Archived Sessions);
+Delete Forever removes it permanently.
+
+## Session Auto-Naming
+
+`SessionTitleGenerating` (`WidenKit/Services/SessionTitleGenerator.swift`)
+generates a short title from the first question. Implementations:
+`FoundationModelsTitleGenerator` (structured `@Generable` output, greedy
+sampling, 64 tokens max) and `MockTitleGenerator` (deterministic truncation).
+
+`SessionController.submit(appState:)` detects the first user message of a
+session and fire-and-forgets `AppState.autoTitleSession(_:question:)`, which
+sanitizes the model's title (`SessionTitleFallback.sanitize`) or falls back
+to a word-boundary truncation of the question
+(`SessionTitleFallback.title(from:)`). `applyGeneratedTitle` re-checks at
+apply time that the user has not renamed the session and that the title is
+still the placeholder, so a manual rename always wins.
 
 ## PostgreSQL Client Lifecycle
 
@@ -199,31 +278,38 @@ The service returns a `DatabaseSchema` containing:
 `TableInfo.id` is the schema-qualified identifier, e.g. `public.users`.
 `TableInfo.qualifiedName` is used in prompts and UI display.
 
-`SidebarView`, `SchemaBrowserView`, and `SchemaViewModel` render this schema
-with search, table selection, and column details.
+`SchemaInspectorView`, `SchemaBrowserView`, and `SchemaViewModel` render the
+active connection's schema with search, table selection, and column details
+in a toolbar-toggled right inspector. Schemas are cached per connection in
+`AppState.schemas`; `refreshSchema(for:)` reloads only the given connection
+and preserves the table selection when it still exists.
 
 ## Chat-To-SQL Flow
 
-The chat loop is centered in `WidenKit/ViewModels/ChatViewModel.swift`.
+The chat loop is centered in `WidenKit/ViewModels/ChatViewModel.swift`,
+orchestrated per session by `SessionController`.
 
 Flow:
 
 ```text
 ChatView submit
-  ChatViewModel.submit(appState:)
-    trim input
-    require loaded schema
-    append user ChatMessage
-    call appState.sqlGenerator.generateSQL(...)
-    append assistant or clarification ChatMessage
-    queryVM.setGeneration(result)
+  SessionController.submit(appState:)
+    ChatViewModel.submit(schema:generator:config:queryVM:)
+      trim input
+      require loaded schema
+      append user ChatMessage
+      call generator.generateSQL(...)
+      append assistant or clarification ChatMessage
+      queryVM.setGeneration(result)
+    sessionDidChange -> debounced save
+    first user message -> autoTitleSession (fire-and-forget)
 ```
 
 Generated SQL is not executed automatically. It fills the editable SQL preview
 and is validated immediately. The user still reviews and clicks Run.
 
-Chat history is in memory only for the current app session. It is not saved to
-disk.
+Chat transcripts are persisted as part of the session (see "Sessions And
+Persistence"); query results are not.
 
 ## Prompt Construction
 
@@ -391,19 +477,24 @@ Every query path uses this validator, including generated SQL and manual SQL.
 
 ## Query Execution
 
-The UI calls `QueryResultViewModel.startRun(appState:)`, which starts a task
-and calls its private `run` method.
+The UI calls `SessionController.runQuery(appState:)`, which resolves the
+session's connection config, `PostgresService`, and connection state, then
+calls `QueryResultViewModel.startRun(connection:postgres:isConnected:)`.
 
 Execution flow:
 
 ```text
 QueryResultViewModel.run
   validate SQL
-  require connected AppState and config
+  require isConnected and a connection config
   QueryExecutionService.run
     SQLSafetyValidator.validate
     PostgresService.executeReadOnly
 ```
+
+`QueryResultViewModel.restore(sqlText:generation:)` rehydrates the editor
+when a session controller is recreated; unlike `setGeneration`, it never
+treats the persisted SQL as a fresh generation.
 
 `QueryExecutionService` re-validates the SQL even if the UI already validated
 it. This keeps the service boundary safe.
@@ -459,24 +550,40 @@ The UI is intentionally thin and uses view models for behavior.
 
 Key views:
 
-- `ConnectionSettingsView`: form for connection settings, test/save/connect,
-  mock AI toggle, model availability message, privacy note.
-- `SidebarView`: connection status, schema refresh, settings, schema browser.
-- `SchemaBrowserView`: table search, table list, selected table columns and
-  foreign keys.
-- `ChatView`: natural language input and generated response history.
+- `SidebarView` + `Sidebar/DatabaseGroupRow` + `Sidebar/SessionRow`: one
+  section per database (status dot, endpoint caption, hover "+", context
+  menu) listing its sessions (inline rename, archive, placeholder styling).
+- `SessionDetailView`: hosts ChatView / SQLPreviewView / QueryResultsView for
+  one session's controller and reports edits via `sessionDidChange`.
+- `SchemaInspectorView` + `SchemaBrowserView`: toolbar-toggled inspector with
+  table search, table list, and selected table columns.
+- `Settings/SettingsView` (+ General / Databases / Archived Sessions tabs,
+  `ConnectionEditorForm`): appearance, AI toggle, connection CRUD with
+  cascade-delete warning, archive restore / delete forever.
+- `ChatView`: natural language input and generated response history (glass
+  input bar; the user bubble is glass, assistant/error bubbles use a plain
+  material to keep scrolling cheap).
 - `SQLPreviewView`: editable SQL text, validation messages, generation
   metadata, Validate, Run, Copy SQL, Clear.
 - `QueryResultsView`: result metadata, horizontal/vertical grid, Copy CSV,
   empty/loading/error states.
-- `ErrorBannerView`: dismissible app-level error banner.
+- `ErrorBannerView`: dismissible app-level error banner (red-tinted glass).
 - `LoadingView`: small reusable loading indicator.
+
+Appearance: the `"WidenAppearance"` AppStorage key (`AppearancePreference`)
+drives `.preferredColorScheme` on the window and Settings roots. The toolbar
+sun/moon button flips to the opposite of the effective scheme; the "System"
+reset lives in Settings › General. Liquid Glass styling (`.glassEffect`,
+`.buttonStyle(.glass)/.glassProminent`, `GlassEffectContainer`) is used for
+chat input, primary buttons, the connection chip, and the error banner; the
+sidebar, inspector, and results grid intentionally keep system materials.
 
 Keyboard behavior:
 
 - Enter in chat submits for generation.
 - Cmd+Enter in the SQL editor runs the current SQL.
-- Cmd+R refreshes schema through the Database command menu.
+- Cmd+N creates a session on the active (or first) database.
+- Cmd+R refreshes the active connection's schema through the Database menu.
 
 ## Error Mapping
 
@@ -504,13 +611,24 @@ Main suites:
   dollar-quotes, dangerous functions, warnings.
 - `SQLPromptBuilderTests`: schema rendering, prompt content, truncation, system
   schema exclusion.
-- `ConnectionStoreTests`: persistence round trips and password exclusion.
+- `ConnectionStoreTests`: multi-connection persistence round trips and
+  password exclusion (plus `ConnectionSettingsViewModel` validation).
+- `SessionStoreTests`: session round trips (generation metadata, archived
+  flag), missing file, corrupted JSON, and `ChatMessage` Codable stability.
+- `AppStateSessionTests`: session lifecycle against temp-dir stores —
+  create/select, controller-cache identity, snapshot-on-switch,
+  archive/restore/delete, title guards, auto-title (stub generators), and
+  connection cascade-delete.
+- `SessionTitleTests`: fallback truncation, sanitizer rules, mock generator
+  determinism.
 - `PostgresIntegrationTests`: gated local PostgreSQL tests for connection,
   introspection, execution, truncation, mutation blocking, and timeout.
-- `FoundationModelsSmokeTests`: gated local model availability and structured
-  generation test.
-- `ChatViewModelTests`: chat flow and preview population.
-- `WidenKitTests`: lightweight smoke test.
+- `FoundationModelsSmokeTests`: gated local model availability, structured
+  SQL generation, and session-title generation tests.
+- `ChatViewModelTests`: chat flow and preview population (the internal
+  `submit(schema:generator:config:queryVM:)` seam).
+- `WidenKitTests`: smoke tests plus `QueryResultViewModel` run/restore
+  behavior.
 
 Default `make test` skips the gated suites unless the relevant environment
 variables are set by Make:
@@ -529,11 +647,13 @@ Foundation Models generation, prompt shape, or structured output.
 Add a new connection setting:
 
 1. Add the field to `DatabaseConnectionConfig`.
-2. Update default form state in `ConnectionSettingsViewModel`.
+2. Update default form state in `ConnectionSettingsViewModel` (including
+   `startNew()`).
 3. Add validation in `ConnectionSettingsViewModel.validationErrors`.
-4. Add UI in `ConnectionSettingsView`.
+4. Add UI in `Settings/ConnectionEditorForm`.
 5. Update `ConnectionStoreTests`.
-6. If it affects Postgres connection behavior, update `PostgresService`.
+6. If it affects Postgres connection behavior, update `PostgresService` and
+   consider `AppState.addOrUpdateConnection`'s endpoint-change invalidation.
 
 Change SQL safety policy:
 
@@ -564,19 +684,22 @@ Add another SQL generator:
 3. Keep `SQLGenerationResult` as the common output.
 4. Do not bypass `SQLSafetyValidator` or `QueryExecutionService`.
 
-Add query history:
+Add per-session state:
 
-1. Keep history separate from `ChatMessage`; chat history is conversational,
-   query history is executable/auditable.
-2. Store SQL, timestamp, validation result, execution metadata, and optional
-   generation metadata.
-3. Do not persist database passwords or model prompts unless there is an
-   explicit product decision to do so.
+1. Decide whether it is persistent (add to `QuerySession`, hydrate/snapshot
+   in `SessionController`) or runtime-only (keep it on the controller or its
+   view models).
+2. Wire change reporting through `sessionDidChange` if it should be saved.
+3. Update `SessionStoreTests` / `AppStateSessionTests`.
+4. Never persist query results, passwords, or model prompts.
 
 ## Invariants Future Work Should Preserve
 
 - The app remains local-only: no backend and no external LLM API calls.
 - Passwords are never stored in `DatabaseConnectionConfig` or JSON files.
+- Query results are never persisted; `sessions.json` holds transcripts, SQL
+  text, and generation metadata only.
+- A manual session rename is never overwritten by the auto-namer.
 - Generated SQL is never auto-executed.
 - Manual and generated SQL share the exact same validation and execution path.
 - Only `SELECT` or `WITH ... SELECT` statements can reach PostgreSQL.
@@ -594,16 +717,18 @@ For most onboarding or agent work, read these files in order:
 
 1. `README.md` for setup, limitations, and user-facing behavior.
 2. `WidenKit/App/AppState.swift` for ownership and runtime flow.
-3. `WidenKit/Views/MainView.swift` for UI composition.
-4. `WidenKit/Services/PostgresService.swift` for connection and execution.
-5. `WidenKit/Services/SQLSafetyValidator.swift` for the safety boundary.
-6. `WidenKit/Services/FoundationModelsSQLGenerator.swift` for local AI
+3. `WidenKit/App/SessionController.swift` for the per-session runtime
+   container and persistence glue.
+4. `WidenKit/Views/MainView.swift` for UI composition.
+5. `WidenKit/Services/PostgresService.swift` for connection and execution.
+6. `WidenKit/Services/SQLSafetyValidator.swift` for the safety boundary.
+7. `WidenKit/Services/FoundationModelsSQLGenerator.swift` for local AI
    generation.
-7. `WidenKit/Services/SQLPromptBuilder.swift` for prompt shape.
-8. `WidenKit/ViewModels/QueryResultViewModel.swift` for SQL preview and run
+8. `WidenKit/Services/SQLPromptBuilder.swift` for prompt shape.
+9. `WidenKit/ViewModels/QueryResultViewModel.swift` for SQL preview and run
    behavior.
-9. `WidenTests/SQLSafetyValidatorTests.swift` and
-   `WidenTests/PostgresIntegrationTests.swift` for expected behavior.
+10. `WidenTests/SQLSafetyValidatorTests.swift` and
+    `WidenTests/PostgresIntegrationTests.swift` for expected behavior.
 
 When in doubt, preserve the existing service boundaries and add tests around
 the behavior you are changing.
