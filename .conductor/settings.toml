@@ -1,3 +1,4 @@
+#:schema https://conductor.build/schemas/settings.repo.schema.json
 "$schema" = "https://conductor.build/schemas/settings.repo.schema.json"
 file_include_globs = ".env\n.env.local\n"
 
