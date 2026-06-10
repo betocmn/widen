@@ -90,6 +90,13 @@ struct SQLSafetyValidatorTests {
         #expect(!validate(#"SELECT "pg_terminate_backend"(123)"#).isValid)
     }
 
+    @Test func rejectsServerFileFunctions() {
+        #expect(!validate("SELECT pg_read_file('/etc/passwd')").isValid)
+        #expect(!validate("SELECT pg_read_binary_file('/etc/passwd')").isValid)
+        #expect(!validate("SELECT pg_ls_dir('.')").isValid)
+        #expect(!validate("SELECT pg_stat_file('/etc/passwd')").isValid)
+    }
+
     @Test func rejectsSelectForUpdateLockClause() {
         // FOR UPDATE takes row locks; the UPDATE token rejection is intended.
         #expect(!validate("SELECT * FROM users FOR UPDATE").isValid)
@@ -132,6 +139,18 @@ struct SQLSafetyValidatorTests {
 
     @Test func escapedQuotesInsideStringsAreHandled() {
         let result = validate("SELECT 'it''s a DROP TABLE trap' AS note LIMIT 1")
+        #expect(result.isValid)
+    }
+
+    @Test func standardStringBackslashDoesNotHideSemicolon() {
+        let result = validate(#"SELECT '\' AS x; SELECT pg_sleep(10); --' LIMIT 1"#)
+        #expect(!result.isValid)
+        #expect(result.errors.contains { $0.contains("Multiple statements") })
+        #expect(result.errors.contains { $0.contains("pg_sleep") })
+    }
+
+    @Test func escapeStringBackslashCanEscapeQuote() {
+        let result = validate(#"SELECT E'it\'s ok' AS note LIMIT 1"#)
         #expect(result.isValid)
     }
 

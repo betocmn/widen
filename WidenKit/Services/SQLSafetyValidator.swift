@@ -40,6 +40,7 @@ public enum SQLSafetyValidator {
         "PG_CANCEL_BACKEND", "PG_TERMINATE_BACKEND",
         "PG_RELOAD_CONF", "PG_ROTATE_LOGFILE", "PG_PROMOTE",
         "PG_SWITCH_WAL", "PG_CREATE_RESTORE_POINT",
+        "PG_READ_FILE", "PG_READ_BINARY_FILE", "PG_LS_DIR", "PG_STAT_FILE",
         "PG_START_BACKUP", "PG_STOP_BACKUP", "PG_BACKUP_START", "PG_BACKUP_STOP",
         "PG_STAT_RESET", "PG_STAT_RESET_SHARED",
         "PG_STAT_RESET_SINGLE_TABLE_COUNTERS", "PG_STAT_RESET_SINGLE_FUNCTION_COUNTERS",
@@ -133,9 +134,8 @@ public enum SQLSafetyValidator {
     /// and comments with spaces, so keyword checks cannot be fooled by their
     /// contents. Anything unterminated is flagged.
     ///
-    /// Backslashes are treated as escapes inside every single-quoted string
-    /// (standard SQL only escapes via `''`); this can flag valid strings that
-    /// end in a backslash as unterminated, which errs on the safe side.
+    /// Backslashes are treated as escapes only inside PostgreSQL `E'...'`
+    /// escape strings. Standard single-quoted strings only escape via `''`.
     static func strip(_ sql: String) -> StripResult {
         var output = ""
         var unterminated = false
@@ -146,6 +146,29 @@ public enum SQLSafetyValidator {
 
         func char(at offset: Int) -> Character? {
             offset < count ? chars[offset] : nil
+        }
+
+        func consumeStringLiteral(openingQuoteIndex: Int, allowBackslashEscapes: Bool) {
+            i = openingQuoteIndex + 1
+            var closed = false
+            while i < count {
+                if allowBackslashEscapes, chars[i] == "\\" {
+                    i += 2
+                    continue
+                }
+                if chars[i] == "'" {
+                    if char(at: i + 1) == "'" {
+                        i += 2
+                        continue
+                    }
+                    closed = true
+                    i += 1
+                    break
+                }
+                i += 1
+            }
+            if !closed { unterminated = true }
+            output.append(" ")
         }
 
         func indexAfterTrivia(from offset: Int) -> Int {
@@ -189,6 +212,13 @@ public enum SQLSafetyValidator {
         while i < count {
             let c = chars[i]
 
+            // Escape string literal: E'…'. Backslashes only escape quotes in
+            // this PostgreSQL-specific string form, not in ordinary strings.
+            if (c == "E" || c == "e"), char(at: i + 1) == "'" {
+                consumeStringLiteral(openingQuoteIndex: i + 1, allowBackslashEscapes: true)
+                continue
+            }
+
             // Line comment: -- … end of line
             if c == "-", char(at: i + 1) == "-" {
                 while i < count, chars[i] != "\n" { i += 1 }
@@ -216,28 +246,9 @@ public enum SQLSafetyValidator {
                 continue
             }
 
-            // String literal: '…' with '' escapes (and backslash, see above).
+            // String literal: '…' with '' escapes.
             if c == "'" {
-                i += 1
-                var closed = false
-                while i < count {
-                    if chars[i] == "\\" {
-                        i += 2
-                        continue
-                    }
-                    if chars[i] == "'" {
-                        if char(at: i + 1) == "'" {
-                            i += 2
-                            continue
-                        }
-                        closed = true
-                        i += 1
-                        break
-                    }
-                    i += 1
-                }
-                if !closed { unterminated = true }
-                output.append(" ")
+                consumeStringLiteral(openingQuoteIndex: i, allowBackslashEscapes: false)
                 continue
             }
 
