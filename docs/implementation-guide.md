@@ -70,8 +70,10 @@ The central object is `AppState` in `WidenKit/App/AppState.swift`.
 - `connections: [DatabaseConnectionConfig]` plus per-connection runtime maps:
   `connectionStates` (status), `schemas` (schema cache), `loadingSchemas`,
   and a private lazy `PostgresService` per connection id.
-- `sessions: [QuerySession]` (including archived ones), `selectedSessionID`,
-  and a private cache of `SessionController` runtime containers.
+- `sessions: [QuerySession]` (including archived ones), the
+  `sidebarSelection` (`SidebarItem.database` or `.session`, with derived
+  `selectedSessionID` / `selectedDatabaseID`), and a private cache of
+  `SessionController` runtime containers.
 - UI state: schema inspector visibility, the Settings tab + open request,
   and the error banner.
 - The saved "Use mock AI" toggle.
@@ -104,9 +106,10 @@ Disconnect, and applies the saved appearance preference.
 
 ```text
 NavigationSplitView
-  sidebar: SidebarView (database groups + sessions)
+  sidebar: SidebarView (selectable database rows + their sessions)
   detail:
     ErrorBannerView when needed
+    DatabaseOverviewView when a database row is selected
     SessionDetailView for the selected session's controller
       VSplitView
         ChatView
@@ -131,8 +134,10 @@ MainView.task
     ConnectionStore.load()    -> connections
     SessionStore.load()       -> sessions (incl. archived)
     restore selection from UserDefaults ("WidenSelectedSessionID"),
-      falling back to the most recently updated visible session
-    selectSession(...)        -> lazily connects only that database
+      falling back to the most recently updated visible session,
+      then to the first database (schema browsing, no session)
+    selectSession(...) / selectDatabase(...)
+                              -> lazily connects only that database
     no connections            -> open Settings on the Databases tab
 ```
 
@@ -551,8 +556,13 @@ The UI is intentionally thin and uses view models for behavior.
 Key views:
 
 - `SidebarView` + `Sidebar/DatabaseGroupRow` + `Sidebar/SessionRow`: one
-  section per database (status dot, endpoint caption, hover "+", context
-  menu) listing its sessions (inline rename, archive, placeholder styling).
+  section per database — the database itself is a selectable row (status
+  badge on the icon, endpoint caption, hover "+", context menu) that opens
+  its schema in the inspector, with its sessions indented beneath it
+  (inline rename, archive, placeholder styling) and an "Add Database"
+  footer.
+- `DatabaseOverviewView`: detail pane for a selected database row — the
+  connection at a glance plus a New Session call to action.
 - `SessionDetailView`: hosts ChatView / SQLPreviewView / QueryResultsView for
   one session's controller and reports edits via `sessionDidChange`.
 - `SchemaInspectorView` + `SchemaBrowserView`: toolbar-toggled inspector with

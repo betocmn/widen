@@ -18,9 +18,9 @@ it safely - all locally.
   macOS Keychain, never on disk in plaintext.
 - **Multiple databases, persistent sessions.** Configure any number of
   PostgreSQL connections in Settings; each one is a group in the sidebar.
-  Press "+" on a database to start a query session — a persistent chat +
-  SQL + results workspace that survives restarts and is auto-named by the
-  local model after your first question.
+  Select a database to browse its schema, or press "+" on it to start a
+  query session — a persistent chat + SQL + results workspace that survives
+  restarts and is auto-named by the local model after your first question.
 - **Modern macOS 26 look.** Liquid Glass styling, a schema inspector panel,
   and a light/dark toggle in the toolbar (or follow the system).
 
@@ -116,9 +116,10 @@ in the macOS Keychain (service `Widen`).
 
 ## Sessions
 
-Each database in the sidebar lists its query sessions. Press the hover "+"
-(or Cmd+N) to start one — the database connects lazily, so nothing happens
-until a session needs it. A session keeps its chat transcript, SQL editor
+Each database in the sidebar lists its query sessions. Selecting the
+database itself opens its schema in the inspector; press the hover "+"
+(or Cmd+N) to start a session — the database connects lazily, so nothing
+happens until a session or schema browse needs it. A session keeps its chat transcript, SQL editor
 contents, and generation metadata in
 `~/Library/Application Support/Widen/sessions.json` (query results are
 deliberately not persisted). The local model names the session after your
