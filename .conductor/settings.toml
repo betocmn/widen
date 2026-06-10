@@ -1,0 +1,7 @@
+"$schema" = "https://conductor.build/schemas/settings.repo.schema.json"
+
+[scripts]
+setup = 'DEVELOPER_DIR="${DEVELOPER_DIR:-/Applications/Xcode-26.app/Contents/Developer}" xcodebuild -resolvePackageDependencies -project Widen.xcodeproj -scheme Widen -derivedDataPath build'
+run = "make run"
+archive = "make clean"
+run_mode = "nonconcurrent"
