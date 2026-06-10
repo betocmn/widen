@@ -22,6 +22,37 @@ public final class AppState {
     }
 
     public var connectionStatus: ConnectionStatus = .notConnected
+    public var config: DatabaseConnectionConfig?
+    public var showSettings = false
+    public var errorBanner: String?
+
+    public let connectionStore = ConnectionStore()
+    public let keychain = KeychainService()
+    public let postgres = PostgresService()
+
+    private var didLaunch = false
 
     public init() {}
+
+    /// Called once at launch: loads the saved connection if there is one,
+    /// otherwise surfaces the first-launch settings screen.
+    public func onLaunch() async {
+        guard !didLaunch else { return }
+        didLaunch = true
+        do {
+            if let saved = try connectionStore.loadPrimary() {
+                config = saved
+                await connect(saved)
+            } else {
+                showSettings = true
+            }
+        } catch {
+            showSettings = true
+            errorBanner = "Could not load the saved connection: \(error.localizedDescription)"
+        }
+    }
+
+    public func connect(_ config: DatabaseConnectionConfig) async {
+        // Implemented with the Postgres service milestone.
+    }
 }
