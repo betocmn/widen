@@ -43,6 +43,9 @@ public struct SchemaInspectorView: View {
                     .frame(maxHeight: 260)
             }
         }
+        // The inspector pane lays its content out slightly wider than its
+        // visible width, so compensate to keep a trailing margin.
+        .padding(.trailing, 10)
     }
 
     private var activeConnectionID: UUID? {
@@ -109,6 +112,7 @@ public struct SchemaInspectorView: View {
                                 Text(table.name)
                             }
                             .tag(table.id)
+                            .listRowSeparator(.hidden)
                         }
                     }
                 }

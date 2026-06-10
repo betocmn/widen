@@ -51,7 +51,9 @@ public struct SidebarView: View {
                 .buttonStyle(.borderless)
                 .foregroundStyle(.secondary)
                 .frame(maxWidth: .infinity, alignment: .leading)
-                .padding(.horizontal, 12)
+                // Leading padding keeps the icon clear of the window's
+                // rounded bottom corner and aligned with the list rows.
+                .padding(.horizontal, 16)
                 .padding(.vertical, 9)
             }
         }
