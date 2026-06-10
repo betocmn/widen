@@ -1,7 +1,7 @@
 import SwiftUI
 
-/// One session in the sidebar: icon + title, inline rename, and a context
-/// menu with Rename / Archive.
+/// One session in the sidebar: title indented under its database row,
+/// inline rename, and a context menu with Rename / Archive.
 struct SessionRow: View {
     @Environment(AppState.self) private var appState
     let session: QuerySession
@@ -11,14 +11,11 @@ struct SessionRow: View {
     @FocusState private var renameFieldFocused: Bool
 
     var body: some View {
-        HStack(spacing: 6) {
-            Image(systemName: "text.bubble")
-                .foregroundStyle(.secondary)
-                .imageScale(.small)
-
+        Group {
             if renamingSessionID == session.id {
                 TextField("Session name", text: $draftTitle)
                     .textFieldStyle(.plain)
+                    .font(.system(size: 13))
                     .focused($renameFieldFocused)
                     .onSubmit { commitRename() }
                     .onExitCommand { renamingSessionID = nil }
@@ -28,12 +25,18 @@ struct SessionRow: View {
                     }
             } else if session.title == QuerySession.placeholderTitle {
                 Text(session.title)
+                    .font(.system(size: 13))
                     .italic()
                     .foregroundStyle(.secondary)
             } else {
                 Text(session.title)
+                    .font(.system(size: 13))
+                    .lineLimit(1)
             }
         }
+        // Aligns session titles under the database name (icon + spacing).
+        .padding(.leading, 29)
+        .padding(.vertical, 1)
         .contextMenu {
             Button("Rename") {
                 renamingSessionID = session.id

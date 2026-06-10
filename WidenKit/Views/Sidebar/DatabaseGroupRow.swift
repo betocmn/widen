@@ -1,22 +1,32 @@
 import SwiftUI
 
-/// Section header for one configured database: status dot, name, endpoint
-/// caption, and a hover "+" button that starts a new session.
+/// Selectable database row: icon with a status badge, name, endpoint
+/// caption, and a hover "+" button that starts a new session. Selecting
+/// the row opens the database's schema in the inspector.
 struct DatabaseGroupRow: View {
     @Environment(AppState.self) private var appState
     let connection: DatabaseConnectionConfig
     @State private var isHovering = false
 
     var body: some View {
-        HStack(spacing: 6) {
-            Circle()
-                .fill(statusColor)
-                .frame(width: 8, height: 8)
+        HStack(spacing: 9) {
+            Image(systemName: "cylinder.split.1x2.fill")
+                .font(.system(size: 13, weight: .medium))
+                .foregroundStyle(.secondary)
+                .frame(width: 20, height: 20)
+                .overlay(alignment: .bottomTrailing) {
+                    Circle()
+                        .fill(statusColor)
+                        .frame(width: 7, height: 7)
+                        .overlay(Circle().strokeBorder(.background, lineWidth: 1.5))
+                        .offset(x: 1, y: 1)
+                }
 
             VStack(alignment: .leading, spacing: 1) {
                 Text(connection.name)
+                    .font(.system(size: 13, weight: .semibold))
                 Text("\(connection.database) @ \(connection.host)")
-                    .font(.caption2)
+                    .font(.system(size: 11))
                     .foregroundStyle(.secondary)
                     .lineLimit(1)
                     .truncationMode(.middle)
@@ -33,11 +43,13 @@ struct DatabaseGroupRow: View {
                 appState.createSession(connectionID: connection.id)
             } label: {
                 Image(systemName: "plus")
+                    .font(.system(size: 11, weight: .semibold))
             }
             .buttonStyle(.borderless)
             .help("New Session")
             .opacity(isHovering ? 1 : 0)
         }
+        .padding(.vertical, 3)
         .onHover { isHovering = $0 }
         .contextMenu {
             Button("New Session") {
