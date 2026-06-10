@@ -8,30 +8,39 @@ public struct MainView: View {
     public var body: some View {
         @Bindable var appState = appState
 
-        VStack(spacing: 12) {
-            Text("Widen")
-                .font(.largeTitle.bold())
-            Text("Ask your PostgreSQL database questions in plain English.")
-                .foregroundStyle(.secondary)
-
-            if let config = appState.config {
-                Text("\(config.name) — \(config.database) on \(config.host):\(String(config.port))")
-                    .font(.callout)
-                    .foregroundStyle(.secondary)
-            }
-            Text(appState.connectionStatus.label)
-                .font(.callout)
-
-            Button("Settings…") {
-                appState.showSettings = true
+        NavigationSplitView {
+            SidebarView()
+                .navigationSplitViewColumnWidth(min: 230, ideal: 280, max: 400)
+        } detail: {
+            VStack(spacing: 0) {
+                if let message = appState.errorBanner {
+                    ErrorBannerView(message: message) {
+                        appState.errorBanner = nil
+                    }
+                }
+                detailContent
             }
         }
-        .frame(minWidth: 700, minHeight: 450)
+        .frame(minWidth: 900, minHeight: 560)
         .sheet(isPresented: $appState.showSettings) {
             ConnectionSettingsView()
         }
         .task {
             await appState.onLaunch()
         }
+    }
+
+    @ViewBuilder
+    private var detailContent: some View {
+        // The chat / SQL / results panels arrive with the next milestones.
+        VStack(spacing: 12) {
+            Text("Widen")
+                .font(.largeTitle.bold())
+            Text("Ask your PostgreSQL database questions in plain English.")
+                .foregroundStyle(.secondary)
+            Text(appState.connectionStatus.label)
+                .font(.callout)
+        }
+        .frame(maxWidth: .infinity, maxHeight: .infinity)
     }
 }

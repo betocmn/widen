@@ -81,6 +81,36 @@ struct PostgresIntegrationTests {
         #expect(!stillConnected)
     }
 
+    @Test func introspectsSampleSchema() async throws {
+        let service = PostgresService()
+        try await service.connect(config: makeConfig(), password: nil)
+        defer { Task { await service.disconnect() } }
+
+        let schema = try await SchemaIntrospectionService().loadSchema(using: service)
+
+        let users = try #require(
+            schema.tables.first { $0.schema == "public" && $0.name == "users" })
+        #expect(users.columns.map(\.name) == ["id", "email", "name", "created_at"])
+        #expect(users.columns.first { $0.name == "email" }?.isNullable == false)
+        #expect(users.columns.first { $0.name == "name" }?.isNullable == true)
+
+        let orders = try #require(
+            schema.tables.first { $0.schema == "public" && $0.name == "orders" })
+        #expect(orders.columns.count == 5)
+
+        #expect(
+            schema.foreignKeys.contains {
+                $0.sourceTable == "orders" && $0.sourceColumn == "user_id"
+                    && $0.targetTable == "users" && $0.targetColumn == "id"
+            })
+
+        #expect(schema.schemas.contains { $0.name == "public" })
+        #expect(
+            !schema.tables.contains {
+                $0.schema == "pg_catalog" || $0.schema == "information_schema"
+            })
+    }
+
     @Test func queryWithoutConnectionThrowsNotConnected() async {
         let service = PostgresService()
         await #expect(throws: AppError.notConnected) {
