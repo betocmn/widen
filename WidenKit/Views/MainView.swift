@@ -32,12 +32,13 @@ public struct MainView: View {
 
     @ViewBuilder
     private var detailContent: some View {
-        // The chat panel arrives with the chat milestone.
         VSplitView {
+            ChatView()
+                .frame(minHeight: 150, idealHeight: 210)
             SQLPreviewView()
-                .frame(minHeight: 150, idealHeight: 200)
+                .frame(minHeight: 150, idealHeight: 210)
             QueryResultsView()
-                .frame(minHeight: 180, maxHeight: .infinity)
+                .frame(minHeight: 170, maxHeight: .infinity)
         }
     }
 }
