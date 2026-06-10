@@ -62,8 +62,65 @@ public struct SQLPreviewView: View {
                     }
                 }
             }
+
+            if let generation = appState.queryVM.generation {
+                generationDetails(generation)
+            }
         }
         .padding(10)
+    }
+
+    private func generationDetails(_ generation: SQLGenerationResult) -> some View {
+        VStack(alignment: .leading, spacing: 4) {
+            HStack(spacing: 10) {
+                Label(
+                    "Confidence \(Int((generation.confidence * 100).rounded()))%",
+                    systemImage: "gauge.with.needle"
+                )
+                Label("Risk \(generation.riskLevel.rawValue)", systemImage: riskIcon(generation.riskLevel))
+                    .foregroundStyle(riskColor(generation.riskLevel))
+                if !generation.referencedTables.isEmpty {
+                    Label(
+                        generation.referencedTables.joined(separator: ", "),
+                        systemImage: "tablecells"
+                    )
+                    .lineLimit(1)
+                    .truncationMode(.middle)
+                }
+            }
+            .font(.caption)
+            .foregroundStyle(.secondary)
+
+            Text(generation.explanation)
+                .font(.caption)
+                .foregroundStyle(.secondary)
+                .textSelection(.enabled)
+
+            ForEach(generation.assumptions, id: \.self) { assumption in
+                Label(assumption, systemImage: "questionmark.circle")
+                    .font(.caption2)
+                    .foregroundStyle(.secondary)
+            }
+        }
+        .padding(8)
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .background(.quaternary.opacity(0.3), in: RoundedRectangle(cornerRadius: 6))
+    }
+
+    private func riskIcon(_ risk: SQLRiskLevel) -> String {
+        switch risk {
+        case .low: "checkmark.shield"
+        case .medium: "exclamationmark.shield"
+        case .high: "xmark.shield"
+        }
+    }
+
+    private func riskColor(_ risk: SQLRiskLevel) -> Color {
+        switch risk {
+        case .low: .secondary
+        case .medium: Color.orange
+        case .high: Color.red
+        }
     }
 
     @ViewBuilder

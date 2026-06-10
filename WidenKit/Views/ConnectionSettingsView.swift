@@ -28,6 +28,27 @@ public struct ConnectionSettingsView: View {
                     TextField("Statement timeout (seconds)", text: $viewModel.timeoutText)
                 }
 
+                Section("AI") {
+                    @Bindable var appState = appState
+                    Toggle("Use mock AI (developer)", isOn: $appState.useMockAI)
+                    if let message = appState.modelAvailabilityMessage {
+                        Label(message, systemImage: "exclamationmark.triangle")
+                            .font(.callout)
+                            .foregroundStyle(.orange)
+                    } else if appState.useMockAI {
+                        Text("Generation returns a constant test query while mock mode is on.")
+                            .font(.callout)
+                            .foregroundStyle(.secondary)
+                    } else {
+                        Label(
+                            "Apple's on-device model is ready.",
+                            systemImage: "checkmark.circle"
+                        )
+                        .font(.callout)
+                        .foregroundStyle(.secondary)
+                    }
+                }
+
                 Section {
                     Label(
                         "For safety, connect with a read-only Postgres user when using AI-generated SQL.",

@@ -28,6 +28,34 @@ public final class AppState {
     public var showSettings = false
     public var errorBanner: String?
 
+    /// Developer toggle: use the deterministic mock generator instead of the
+    /// on-device model.
+    public var useMockAI = UserDefaults.standard.bool(forKey: AppState.useMockAIKey) {
+        didSet { UserDefaults.standard.set(useMockAI, forKey: Self.useMockAIKey) }
+    }
+    private static let useMockAIKey = "WidenUseMockAI"
+
+    /// The active SQL generation backend.
+    public var sqlGenerator: any SQLGenerator {
+        if useMockAI { return MockSQLGenerator() }
+        #if canImport(FoundationModels)
+            return FoundationModelsSQLGenerator()
+        #else
+            return MockSQLGenerator()
+        #endif
+    }
+
+    /// nil when AI generation is ready; otherwise a user-readable reason.
+    public var modelAvailabilityMessage: String? {
+        if useMockAI { return nil }
+        #if canImport(FoundationModels)
+            return FoundationModelsSQLGenerator.availabilityMessage
+        #else
+            return
+                "This build does not include FoundationModels (SDK too old). Mock mode is the only AI option."
+        #endif
+    }
+
     public let connectionStore = ConnectionStore()
     public let keychain = KeychainService()
     public let postgres = PostgresService()
