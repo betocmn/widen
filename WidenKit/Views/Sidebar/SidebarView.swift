@@ -1,7 +1,8 @@
 import SwiftUI
 
-/// Conductor-style sidebar: one section per configured database, each
-/// listing its persistent query sessions.
+/// Conductor-style sidebar: one group per configured database — the
+/// database itself is a selectable row for schema browsing, with its
+/// persistent query sessions indented beneath it.
 public struct SidebarView: View {
     @Environment(AppState.self) private var appState
     @State private var renamingSessionID: UUID?
@@ -28,31 +29,31 @@ public struct SidebarView: View {
         List(selection: selectionBinding) {
             ForEach(appState.connections) { connection in
                 Section {
-                    let sessions = appState.sessions(for: connection.id)
-                    if sessions.isEmpty {
-                        Text("No sessions — press + to start")
-                            .font(.caption)
-                            .foregroundStyle(.tertiary)
-                            .selectionDisabled()
-                    }
-                    ForEach(sessions) { session in
-                        SessionRow(session: session, renamingSessionID: $renamingSessionID)
-                            .tag(session.id)
-                    }
-                } header: {
                     DatabaseGroupRow(connection: connection)
+                        .tag(SidebarItem.database(connection.id))
+                    ForEach(appState.sessions(for: connection.id)) { session in
+                        SessionRow(session: session, renamingSessionID: $renamingSessionID)
+                            .tag(SidebarItem.session(session.id))
+                    }
                 }
             }
         }
         .listStyle(.sidebar)
     }
 
-    /// Routes sidebar selection through `selectSession` so controllers are
-    /// snapshotted/created and the database connects lazily.
-    private var selectionBinding: Binding<UUID?> {
+    /// Routes sidebar selection through AppState so controllers are
+    /// snapshotted/created and the database connects lazily. A nil set
+    /// (clicks on empty space) keeps the current selection.
+    private var selectionBinding: Binding<SidebarItem?> {
         Binding(
-            get: { appState.selectedSessionID },
-            set: { appState.selectSession($0) }
+            get: { appState.sidebarSelection },
+            set: { item in
+                switch item {
+                case .database(let id): appState.selectDatabase(id)
+                case .session(let id): appState.selectSession(id)
+                case nil: break
+                }
+            }
         )
     }
 }

@@ -68,7 +68,7 @@ public struct SchemaInspectorView: View {
 
         if activeConnectionID == nil {
             VStack(spacing: 8) {
-                Text("Select a session to browse its database schema.")
+                Text("Select a database to browse its schema.")
                     .font(.callout)
                     .foregroundStyle(.secondary)
                     .multilineTextAlignment(.center)

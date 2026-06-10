@@ -113,6 +113,10 @@ public struct MainView: View {
     private var detailContent: some View {
         if let controller = appState.selectedController {
             SessionDetailView(controller: controller)
+        } else if let databaseID = appState.selectedDatabaseID,
+            let config = appState.connection(for: databaseID)
+        {
+            DatabaseOverviewView(connection: config)
         } else {
             ContentUnavailableView {
                 Label("Select a session", systemImage: "text.bubble")
