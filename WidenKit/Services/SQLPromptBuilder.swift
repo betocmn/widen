@@ -54,10 +54,12 @@ public enum SQLPromptBuilder {
         var omittedTables = 0
 
         for table in schema.tables {
-            var lines = ["Table \(table.qualifiedName)"]
+            var lines = ["Table \(qualifiedIdentifier(schema: table.schema, name: table.name))"]
             for column in table.columns {
                 let nullability = column.isNullable ? "" : " not null"
-                lines.append("- \(column.name) \(column.dataType.lowercased())\(nullability)")
+                lines.append(
+                    "- \(quotedIdentifier(column.name)) \(column.dataType.lowercased())\(nullability)"
+                )
             }
             let section = lines.joined(separator: "\n")
             if used + section.count + 2 > maxCharacters {
@@ -75,7 +77,7 @@ public enum SQLPromptBuilder {
                 includedTables.contains("\($0.sourceSchema).\($0.sourceTable)")
                     && includedTables.contains("\($0.targetSchema).\($0.targetTable)")
             }
-            .map { "- \($0.summary)" }
+            .map { foreignKeyLine($0) }
         if !fkLines.isEmpty {
             let section = (["Foreign keys:"] + fkLines).joined(separator: "\n")
             if used + section.count + 2 <= maxCharacters {
@@ -98,5 +100,35 @@ public enum SQLPromptBuilder {
     ) -> Bool {
         schemaSummary(schema, maxCharacters: maxCharacters)
             .contains("(Schema truncated:")
+    }
+
+    private static func foreignKeyLine(_ foreignKey: ForeignKeyInfo) -> String {
+        let source = qualifiedIdentifier(
+            schema: foreignKey.sourceSchema,
+            name: foreignKey.sourceTable,
+            column: foreignKey.sourceColumn
+        )
+        let target = qualifiedIdentifier(
+            schema: foreignKey.targetSchema,
+            name: foreignKey.targetTable,
+            column: foreignKey.targetColumn
+        )
+        return "- \(source) -> \(target)"
+    }
+
+    private static func qualifiedIdentifier(
+        schema: String,
+        name: String,
+        column: String? = nil
+    ) -> String {
+        var parts = [schema, name].map(quotedIdentifier)
+        if let column {
+            parts.append(quotedIdentifier(column))
+        }
+        return parts.joined(separator: ".")
+    }
+
+    private static func quotedIdentifier(_ identifier: String) -> String {
+        "\"\(identifier.replacingOccurrences(of: "\"", with: "\"\""))\""
     }
 }

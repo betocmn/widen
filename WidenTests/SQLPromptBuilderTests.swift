@@ -52,14 +52,41 @@ struct SQLPromptBuilderTests {
 
     @Test func schemaSummaryIncludesTablesColumnsTypesAndForeignKeys() {
         let summary = SQLPromptBuilder.schemaSummary(makeSampleSchema())
-        #expect(summary.contains("Table public.users"))
-        #expect(summary.contains("- id integer not null"))
-        #expect(summary.contains("- email text not null"))
+        #expect(summary.contains("Table \"public\".\"users\""))
+        #expect(summary.contains("- \"id\" integer not null"))
+        #expect(summary.contains("- \"email\" text not null"))
         // Nullable columns get no suffix, matching the roadmap format.
-        #expect(summary.contains("- name text\n"))
-        #expect(summary.contains("Table public.orders"))
+        #expect(summary.contains("- \"name\" text\n"))
+        #expect(summary.contains("Table \"public\".\"orders\""))
         #expect(summary.contains("Foreign keys:"))
-        #expect(summary.contains("- public.orders.user_id -> public.users.id"))
+        #expect(summary.contains("- \"public\".\"orders\".\"user_id\" -> \"public\".\"users\".\"id\""))
+    }
+
+    @Test func schemaSummaryQuotesPostgresIdentifiers() {
+        let table = TableInfo(
+            schema: "Sales Data",
+            name: "Q1.Orders",
+            type: .baseTable,
+            columns: [
+                ColumnInfo(
+                    tableSchema: "Sales Data", tableName: "Q1.Orders", name: "select",
+                    dataType: "text", isNullable: true, ordinalPosition: 1),
+                ColumnInfo(
+                    tableSchema: "Sales Data", tableName: "Q1.Orders", name: "quoted\"name",
+                    dataType: "integer", isNullable: false, ordinalPosition: 2),
+            ]
+        )
+        let schema = DatabaseSchema(
+            schemas: [SchemaInfo(name: "Sales Data")],
+            tables: [table],
+            foreignKeys: []
+        )
+
+        let summary = SQLPromptBuilder.schemaSummary(schema)
+
+        #expect(summary.contains("Table \"Sales Data\".\"Q1.Orders\""))
+        #expect(summary.contains("- \"select\" text"))
+        #expect(summary.contains("- \"quoted\"\"name\" integer not null"))
     }
 
     @Test func promptContainsQuestionAndSchema() {
@@ -118,7 +145,7 @@ struct SQLPromptBuilderTests {
         schema.tables[0].columns.append(contentsOf: hugeColumns)
 
         let summary = SQLPromptBuilder.schemaSummary(schema, maxCharacters: 400)
-        #expect(!summary.contains("orders.user_id ->"))
+        #expect(!summary.contains("\"orders\".\"user_id\" ->"))
     }
 
     @Test func systemSchemasAreNotInTheSummary() {

@@ -26,6 +26,8 @@
 	<string>26.0</string>
 	<key>NSHumanReadableCopyright</key>
 	<string>Widen — local-only MVP</string>
+	<key>NSLocalNetworkUsageDescription</key>
+	<string>Widen connects to PostgreSQL databases you configure on your local network.</string>
 	<key>NSPrincipalClass</key>
 	<string>NSApplication</string>
 </dict>
