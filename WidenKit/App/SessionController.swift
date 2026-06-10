@@ -49,6 +49,7 @@ public final class SessionController: Identifiable {
 
     /// Generates SQL for the chat input against this session's connection.
     public func submit(appState: AppState) async {
+        let hadUserMessage = chatVM.messages.contains { $0.role == .user }
         await chatVM.submit(
             schema: appState.schemas[connectionID],
             generator: appState.sqlGenerator,
@@ -57,6 +58,14 @@ public final class SessionController: Identifiable {
             queryVM: queryVM
         )
         appState.sessionDidChange(sessionID)
+
+        // Auto-name the session after its very first question.
+        if !hadUserMessage,
+            let firstQuestion = chatVM.messages.first(where: { $0.role == .user })?.text
+        {
+            let sessionID = sessionID
+            Task { await appState.autoTitleSession(sessionID, question: firstQuestion) }
+        }
     }
 
     /// Runs the SQL editor contents against this session's connection.

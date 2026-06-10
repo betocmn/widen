@@ -1,5 +1,20 @@
 import Foundation
 
+/// Generates a short session title from the user's first question.
+public protocol SessionTitleGenerating: Sendable {
+    func generateTitle(for question: String) async throws -> String
+}
+
+/// Deterministic stand-in for the real model. Used in tests and behind the
+/// "Use mock AI" developer toggle.
+public struct MockTitleGenerator: SessionTitleGenerating {
+    public init() {}
+
+    public func generateTitle(for question: String) async throws -> String {
+        SessionTitleFallback.title(from: question)
+    }
+}
+
 /// Deterministic session-title helpers: a fallback title derived from the
 /// user's question, and a sanitizer for model-generated titles.
 public enum SessionTitleFallback {

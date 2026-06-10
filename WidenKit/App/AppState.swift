@@ -74,6 +74,18 @@ public final class AppState {
         #endif
     }
 
+    /// The active session-title backend. Overridable for tests.
+    public var titleGenerator: any SessionTitleGenerating {
+        if let titleGeneratorOverride { return titleGeneratorOverride }
+        if useMockAI { return MockTitleGenerator() }
+        #if canImport(FoundationModels)
+            return FoundationModelsTitleGenerator()
+        #else
+            return MockTitleGenerator()
+        #endif
+    }
+    var titleGeneratorOverride: (any SessionTitleGenerating)?
+
     /// nil when AI generation is ready; otherwise a user-readable reason.
     public var modelAvailabilityMessage: String? {
         if useMockAI { return nil }
@@ -382,6 +394,23 @@ public final class AppState {
         sessions[index].title = title
         sessions[index].updatedAt = Date()
         flushSessions()
+    }
+
+    /// Names a session after its first question. The model's title is
+    /// sanitized; on failure (or an unusable result) the truncated question
+    /// is used instead.
+    public func autoTitleSession(_ id: UUID, question: String) async {
+        guard let session = session(for: id),
+            !session.titleWasManuallySet,
+            session.title == QuerySession.placeholderTitle
+        else { return }
+        let generated = try? await titleGenerator.generateTitle(for: question)
+        let title =
+            generated.flatMap(SessionTitleFallback.sanitize)
+            ?? SessionTitleFallback.title(from: question)
+        // applyGeneratedTitle re-checks the guards — the user may have
+        // renamed the session while the title was generating.
+        applyGeneratedTitle(title, to: id)
     }
 
     public func archiveSession(_ id: UUID) {
