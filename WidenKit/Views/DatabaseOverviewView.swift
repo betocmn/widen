@@ -18,10 +18,10 @@ public struct DatabaseOverviewView: View {
                 .foregroundStyle(.tertiary)
                 .padding(.bottom, 8)
 
-            Text(connection.name)
+            Text(connection.database)
                 .font(.title2.weight(.semibold))
 
-            Text("\(connection.database) @ \(connection.host):\(String(connection.port))")
+            Text("\(connection.name) · \(connection.host):\(String(connection.port))")
                 .font(.callout.monospaced())
                 .foregroundStyle(.secondary)
 

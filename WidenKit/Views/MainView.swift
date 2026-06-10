@@ -84,13 +84,13 @@ public struct MainView: View {
                 Circle()
                     .fill(statusColor(status))
                     .frame(width: 8, height: 8)
-                Text(config.name)
+                Text(config.database)
                     .font(.callout)
             }
             .padding(.horizontal, 10)
             .padding(.vertical, 5)
             .glassEffect(.regular, in: .capsule)
-            .help("\(config.database) @ \(config.host) — \(status.label)")
+            .help("\(config.name) · \(config.host):\(String(config.port)) — \(status.label)")
         }
     }
 

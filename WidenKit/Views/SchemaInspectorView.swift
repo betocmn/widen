@@ -12,8 +12,10 @@ public struct SchemaInspectorView: View {
 
         VStack(alignment: .leading, spacing: 0) {
             HStack(spacing: 8) {
-                Text("Schema")
+                Text(title)
                     .font(.headline)
+                    .lineLimit(1)
+                    .truncationMode(.middle)
                 Spacer()
                 Button {
                     if let id = appState.activeConnectionID {
@@ -46,6 +48,14 @@ public struct SchemaInspectorView: View {
         // The inspector pane lays its content out slightly wider than its
         // visible width, so compensate to keep a trailing margin.
         .padding(.trailing, 10)
+    }
+
+    /// "<database> Schema" for the active connection, plain "Schema" if none.
+    private var title: String {
+        if let id = activeConnectionID, let config = appState.connection(for: id) {
+            return "\(config.database) Schema"
+        }
+        return "Schema"
     }
 
     private var activeConnectionID: UUID? {
