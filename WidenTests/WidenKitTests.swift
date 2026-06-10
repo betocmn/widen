@@ -3,10 +3,41 @@ import Testing
 @testable import WidenKit
 
 @Suite("WidenKit smoke")
+@MainActor
 struct WidenKitSmokeTests {
     @Test func appStateInitialStatus() async throws {
-        let state = await AppState()
-        await #expect(state.connectionStatus == .notConnected)
+        let state = AppState()
+        #expect(state.connectionStatus == .notConnected)
+    }
+
+    @Test func refreshSchemaClearsStaleSchemaWhenIntrospectionFails() async {
+        let state = AppState()
+        state.connectionStatus = .connected
+        state.schema = makeSchema()
+        state.schemaVM.selectedTableID = "public.users"
+
+        await state.refreshSchema()
+
+        #expect(state.schema == nil)
+        #expect(state.schemaVM.selectedTableID == nil)
+        #expect(state.errorBanner != nil)
+        #expect(state.isLoadingSchema == false)
+    }
+
+    private func makeSchema() -> DatabaseSchema {
+        DatabaseSchema(
+            schemas: [SchemaInfo(name: "public")],
+            tables: [
+                TableInfo(
+                    schema: "public", name: "users", type: .baseTable,
+                    columns: [
+                        ColumnInfo(
+                            tableSchema: "public", tableName: "users", name: "id",
+                            dataType: "integer", isNullable: false, ordinalPosition: 1)
+                    ])
+            ],
+            foreignKeys: []
+        )
     }
 }
 
