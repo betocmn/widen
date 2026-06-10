@@ -30,6 +30,7 @@ public struct QueryResultsView: View {
                     NSPasteboard.general.clearContents()
                     NSPasteboard.general.setString(result.csv(), forType: .string)
                 }
+                .buttonStyle(.glass)
             }
         }
     }

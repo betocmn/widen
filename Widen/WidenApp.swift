@@ -5,6 +5,8 @@ import WidenKit
 @main
 struct WidenApp: App {
     @State private var appState = AppState()
+    @AppStorage(AppearancePreference.storageKey)
+    private var appearanceRaw = AppearancePreference.system.rawValue
 
     init() {
         // Make sure the app fronts properly even when launched from a bare
@@ -17,6 +19,7 @@ struct WidenApp: App {
         WindowGroup {
             MainView()
                 .environment(appState)
+                .preferredColorScheme(appearance.colorScheme)
         }
         .commands {
             CommandGroup(replacing: .newItem) {
@@ -69,5 +72,9 @@ struct WidenApp: App {
 
     private var activeConnectionState: AppState.ConnectionStatus {
         appState.activeConnectionID.map { appState.connectionState($0) } ?? .notConnected
+    }
+
+    private var appearance: AppearancePreference {
+        AppearancePreference(rawValue: appearanceRaw) ?? .system
     }
 }
