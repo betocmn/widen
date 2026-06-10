@@ -186,6 +186,45 @@ struct AppStateSessionTests {
         #expect(state.session(for: session.id)?.title == "My Title")
     }
 
+    @Test func selectingDatabaseMakesItTheActiveConnection() {
+        let (state, dir) = makeState()
+        defer { try? FileManager.default.removeItem(at: dir) }
+        let config = DatabaseConnectionConfig(database: "db", username: "u")
+        state.connections = [config]
+
+        state.selectDatabase(config.id)
+
+        #expect(state.sidebarSelection == .database(config.id))
+        #expect(state.activeConnectionID == config.id)
+        #expect(state.selectedSessionID == nil)
+        #expect(state.selectedController == nil)
+    }
+
+    @Test func selectingNilFallsBackToTheFirstDatabase() {
+        let (state, dir) = makeState()
+        defer { try? FileManager.default.removeItem(at: dir) }
+        let config = DatabaseConnectionConfig(database: "db", username: "u")
+        state.connections = [config]
+
+        state.selectSession(nil)
+
+        #expect(state.sidebarSelection == .database(config.id))
+        #expect(state.activeConnectionID == config.id)
+    }
+
+    @Test func archivingTheLastSessionSelectsItsDatabase() {
+        let (state, dir) = makeState()
+        defer { try? FileManager.default.removeItem(at: dir) }
+        let config = DatabaseConnectionConfig(database: "db", username: "u")
+        state.connections = [config]
+        let session = state.createSession(connectionID: config.id)
+
+        state.archiveSession(session.id)
+
+        #expect(state.sidebarSelection == .database(config.id))
+        #expect(state.selectedSessionID == nil)
+    }
+
     @Test func deleteConnectionCascadesToItsSessions() throws {
         let (state, dir) = makeState()
         defer { try? FileManager.default.removeItem(at: dir) }
