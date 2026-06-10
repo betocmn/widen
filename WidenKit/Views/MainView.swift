@@ -4,6 +4,7 @@ import SwiftUI
 
 public struct MainView: View {
     @Environment(AppState.self) private var appState
+    @Environment(\.openSettings) private var openSettings
 
     public init() {}
 
@@ -38,11 +39,11 @@ public struct MainView: View {
             }
         }
         .frame(minWidth: 900, minHeight: 560)
-        .sheet(isPresented: $appState.showSettings) {
-            ConnectionSettingsView()
-        }
         .task {
             await appState.onLaunch()
+        }
+        .onChange(of: appState.openSettingsRequest) {
+            openSettings()
         }
         .onReceive(
             NotificationCenter.default.publisher(for: NSApplication.willTerminateNotification)

@@ -19,12 +19,6 @@ struct WidenApp: App {
                 .environment(appState)
         }
         .commands {
-            CommandGroup(replacing: .appSettings) {
-                Button("Settings...") {
-                    appState.showSettings = true
-                }
-                .keyboardShortcut(",", modifiers: .command)
-            }
             CommandGroup(replacing: .newItem) {
                 Button("New Session") {
                     if let connectionID = appState.activeConnectionID
@@ -65,6 +59,11 @@ struct WidenApp: App {
                 }
                 .disabled(activeConnectionState != .connected)
             }
+        }
+
+        Settings {
+            SettingsView()
+                .environment(appState)
         }
     }
 
