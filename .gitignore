@@ -1,0 +1,19 @@
+# Build artifacts
+build/
+.build/
+DerivedData/
+
+# Xcode user state
+xcuserdata/
+*.xcuserstate
+*.xcscmblueprint
+
+# SwiftPM
+.swiftpm/
+
+# macOS
+.DS_Store
+
+# Conductor workspace context
+.context/
+.conductor/
