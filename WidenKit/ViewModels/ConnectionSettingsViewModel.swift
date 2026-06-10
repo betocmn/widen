@@ -112,9 +112,10 @@ public final class ConnectionSettingsViewModel {
 
     /// Saves the config (JSON) and password (Keychain). There is no eager
     /// connect — databases connect lazily when one of their sessions is
-    /// selected. Returns true on success.
-    public func save(appState: AppState) -> Bool {
-        guard let config = buildConfig() else { return false }
+    /// selected. Returns the saved config on success.
+    @discardableResult
+    public func save(appState: AppState) -> DatabaseConnectionConfig? {
+        guard let config = buildConfig() else { return nil }
         saveError = nil
         isSaving = true
         defer { isSaving = false }
@@ -122,9 +123,10 @@ public final class ConnectionSettingsViewModel {
             try appState.addOrUpdateConnection(config, password: password)
         } catch {
             saveError = error.localizedDescription
-            return false
+            return nil
         }
-        return true
+        existing = config
+        return config
     }
 
     /// Resets the form to its defaults for a brand-new connection.

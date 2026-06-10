@@ -50,7 +50,6 @@ public final class AppState {
 
     // MARK: - UI state
 
-    public var showSettings = false
     public var showSchemaInspector = true
     public var settingsTab: SettingsTab = .general
     /// Incremented to ask MainView to open the Settings window.
@@ -142,11 +141,11 @@ public final class AppState {
         }
     }
 
-    /// Asks the UI to show Settings on the given tab.
+    /// Asks the UI to show Settings on the given tab. MainView watches
+    /// `openSettingsRequest` and opens the Settings window.
     public func openSettings(tab: SettingsTab) {
         settingsTab = tab
         openSettingsRequest += 1
-        showSettings = true
     }
 
     // MARK: - Connection helpers
