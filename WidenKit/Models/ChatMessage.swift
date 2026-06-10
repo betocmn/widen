@@ -1,8 +1,9 @@
 import Foundation
 
-/// One entry in the (session-only, in-memory) chat transcript.
-public struct ChatMessage: Identifiable, Equatable, Sendable {
-    public enum Role: Equatable, Sendable {
+/// One entry in a session's chat transcript. Persisted as part of
+/// `QuerySession`, so the whole struct is Codable.
+public struct ChatMessage: Identifiable, Codable, Equatable, Sendable {
+    public enum Role: String, Codable, Equatable, Sendable {
         case user
         case assistant
         case error
