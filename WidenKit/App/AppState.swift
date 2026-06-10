@@ -23,12 +23,17 @@ public final class AppState {
 
     public var connectionStatus: ConnectionStatus = .notConnected
     public var config: DatabaseConnectionConfig?
+    public var schema: DatabaseSchema?
+    public var isLoadingSchema = false
     public var showSettings = false
     public var errorBanner: String?
 
     public let connectionStore = ConnectionStore()
     public let keychain = KeychainService()
     public let postgres = PostgresService()
+    public let schemaVM = SchemaViewModel()
+
+    private let introspection = SchemaIntrospectionService()
 
     private var didLaunch = false
 
@@ -68,6 +73,7 @@ public final class AppState {
         do {
             try await postgres.connect(config: config, password: password)
             connectionStatus = .connected
+            await refreshSchema()
         } catch {
             connectionStatus = .error(error.localizedDescription)
             errorBanner = error.localizedDescription
@@ -77,5 +83,18 @@ public final class AppState {
     public func disconnect() async {
         await postgres.disconnect()
         connectionStatus = .notConnected
+        schema = nil
+        schemaVM.selectedTableID = nil
+    }
+
+    public func refreshSchema() async {
+        guard connectionStatus == .connected else { return }
+        isLoadingSchema = true
+        defer { isLoadingSchema = false }
+        do {
+            schema = try await introspection.loadSchema(using: postgres)
+        } catch {
+            errorBanner = error.localizedDescription
+        }
     }
 }
