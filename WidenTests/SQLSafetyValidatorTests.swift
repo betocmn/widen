@@ -78,6 +78,18 @@ struct SQLSafetyValidatorTests {
         #expect(!validate("SELECT lo_export(1234, '/tmp/x')").isValid)
     }
 
+    @Test func rejectsQuotedDangerousFunctionCalls() {
+        #expect(!validate(#"SELECT "pg_sleep"(100)"#).isValid)
+        #expect(!validate(#"SELECT "pg_catalog"."pg_sleep"(100)"#).isValid)
+        #expect(validate(#"SELECT "pg_sleep" FROM metrics LIMIT 1"#).isValid)
+    }
+
+    @Test func rejectsSideEffectingAdminFunctions() {
+        #expect(!validate("SELECT pg_terminate_backend(123)").isValid)
+        #expect(!validate("SELECT pg_cancel_backend(123)").isValid)
+        #expect(!validate(#"SELECT "pg_terminate_backend"(123)"#).isValid)
+    }
+
     @Test func rejectsSelectForUpdateLockClause() {
         // FOR UPDATE takes row locks; the UPDATE token rejection is intended.
         #expect(!validate("SELECT * FROM users FOR UPDATE").isValid)
@@ -195,5 +207,20 @@ struct SQLSafetyValidatorTests {
         let result = validate("SELECT count(id) FROM users WHERE id > 0")
         #expect(result.isValid)
         #expect(!result.hasLimit)
+    }
+
+    @Test func nestedLimitDoesNotCountAsTopLevelLimit() {
+        let result = validate(
+            "WITH recent AS (SELECT id FROM orders LIMIT 10) SELECT * FROM users")
+        #expect(result.isValid)
+        #expect(!result.hasLimit)
+        #expect(result.warnings.contains { $0.contains("LIMIT") })
+    }
+
+    @Test func topLevelLimitAfterCTECounts() {
+        let result = validate(
+            "WITH recent AS (SELECT id FROM orders LIMIT 10) SELECT * FROM recent LIMIT 5")
+        #expect(result.isValid)
+        #expect(result.hasLimit)
     }
 }

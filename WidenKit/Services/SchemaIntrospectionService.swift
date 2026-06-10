@@ -111,13 +111,20 @@ public struct SchemaIntrospectionService: Sendable {
           tc.constraint_name
         FROM information_schema.table_constraints AS tc
         JOIN information_schema.key_column_usage AS kcu
-          ON tc.constraint_name = kcu.constraint_name
-         AND tc.table_schema = kcu.table_schema
-        JOIN information_schema.constraint_column_usage AS ccu
-          ON ccu.constraint_name = tc.constraint_name
-         AND ccu.table_schema = tc.table_schema
+          ON kcu.constraint_catalog = tc.constraint_catalog
+         AND kcu.constraint_schema = tc.constraint_schema
+         AND kcu.constraint_name = tc.constraint_name
+        JOIN information_schema.referential_constraints AS rc
+          ON rc.constraint_catalog = tc.constraint_catalog
+         AND rc.constraint_schema = tc.constraint_schema
+         AND rc.constraint_name = tc.constraint_name
+        JOIN information_schema.key_column_usage AS ccu
+          ON ccu.constraint_catalog = rc.unique_constraint_catalog
+         AND ccu.constraint_schema = rc.unique_constraint_schema
+         AND ccu.constraint_name = rc.unique_constraint_name
+         AND ccu.ordinal_position = kcu.position_in_unique_constraint
         WHERE tc.constraint_type = 'FOREIGN KEY'
           AND tc.table_schema NOT IN ('pg_catalog', 'information_schema')
-        ORDER BY tc.table_schema, tc.table_name, kcu.column_name
+        ORDER BY tc.table_schema, tc.table_name, tc.constraint_name, kcu.ordinal_position
         """
 }

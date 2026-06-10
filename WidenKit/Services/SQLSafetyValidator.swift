@@ -5,8 +5,8 @@ public struct SQLValidationResult: Equatable, Sendable {
     public var normalizedSQL: String?
     public var errors: [String]
     public var warnings: [String]
-    /// True when the stripped SQL contains a LIMIT token; the executor wraps
-    /// the query in a `LIMIT n` subquery when absent.
+    /// True when the stripped SQL contains a top-level LIMIT token; the
+    /// executor wraps the query in a `LIMIT n` subquery when absent.
     public var hasLimit: Bool
 
     public init(
@@ -36,7 +36,19 @@ public enum SQLSafetyValidator {
     ]
 
     public static let forbiddenFunctions: Set<String> = [
-        "PG_SLEEP", "DBLINK", "LO_IMPORT", "LO_EXPORT",
+        "PG_SLEEP", "DBLINK", "DBLINK_EXEC", "LO_IMPORT", "LO_EXPORT",
+        "PG_CANCEL_BACKEND", "PG_TERMINATE_BACKEND",
+        "PG_RELOAD_CONF", "PG_ROTATE_LOGFILE", "PG_PROMOTE",
+        "PG_SWITCH_WAL", "PG_CREATE_RESTORE_POINT",
+        "PG_START_BACKUP", "PG_STOP_BACKUP", "PG_BACKUP_START", "PG_BACKUP_STOP",
+        "PG_STAT_RESET", "PG_STAT_RESET_SHARED",
+        "PG_STAT_RESET_SINGLE_TABLE_COUNTERS", "PG_STAT_RESET_SINGLE_FUNCTION_COUNTERS",
+        "PG_STAT_RESET_REPLICATION_SLOT", "PG_REPLICATION_SLOT_ADVANCE",
+        "PG_NOTIFY",
+        "PG_ADVISORY_LOCK", "PG_ADVISORY_LOCK_SHARED", "PG_TRY_ADVISORY_LOCK",
+        "PG_TRY_ADVISORY_LOCK_SHARED", "PG_ADVISORY_UNLOCK",
+        "PG_ADVISORY_UNLOCK_SHARED", "PG_ADVISORY_UNLOCK_ALL",
+        "SET_CONFIG",
     ]
 
     public static func validate(_ sql: String) -> SQLValidationResult {
@@ -81,8 +93,13 @@ public enum SQLSafetyValidator {
                 errors.append("Forbidden function: \(token.lowercased())().")
             }
         }
+        for token in stripped.quotedFunctionTokens {
+            if forbiddenFunctions.contains(token), reported.insert(token).inserted {
+                errors.append("Forbidden function: \(token.lowercased())().")
+            }
+        }
 
-        let hasLimit = tokens.contains("LIMIT")
+        let hasLimit = hasTopLevelLimit(stripped.text)
         if errors.isEmpty {
             if !hasLimit {
                 warnings.append("No LIMIT clause — the default row limit will be applied.")
@@ -109,6 +126,7 @@ public enum SQLSafetyValidator {
     struct StripResult {
         var text: String
         var unterminated: Bool
+        var quotedFunctionTokens: [String]
     }
 
     /// Replaces string literals, quoted identifiers, dollar-quoted strings,
@@ -121,12 +139,51 @@ public enum SQLSafetyValidator {
     static func strip(_ sql: String) -> StripResult {
         var output = ""
         var unterminated = false
+        var quotedFunctionTokens: [String] = []
         let chars = Array(sql)
         let count = chars.count
         var i = 0
 
         func char(at offset: Int) -> Character? {
             offset < count ? chars[offset] : nil
+        }
+
+        func indexAfterTrivia(from offset: Int) -> Int {
+            var j = offset
+            while j < count {
+                if chars[j].isWhitespace {
+                    j += 1
+                    continue
+                }
+                if chars[j] == "-", char(at: j + 1) == "-" {
+                    j += 2
+                    while j < count, chars[j] != "\n" { j += 1 }
+                    continue
+                }
+                if chars[j] == "/", char(at: j + 1) == "*" {
+                    var depth = 1
+                    j += 2
+                    while j < count, depth > 0 {
+                        if chars[j] == "/", char(at: j + 1) == "*" {
+                            depth += 1
+                            j += 2
+                        } else if chars[j] == "*", char(at: j + 1) == "/" {
+                            depth -= 1
+                            j += 2
+                        } else {
+                            j += 1
+                        }
+                    }
+                    continue
+                }
+                break
+            }
+            return j
+        }
+
+        func isFunctionCall(after offset: Int) -> Bool {
+            let j = indexAfterTrivia(from: offset)
+            return j < count && chars[j] == "("
         }
 
         while i < count {
@@ -188,10 +245,12 @@ public enum SQLSafetyValidator {
             // a column named "drop table" cannot trip the keyword check.
             if c == "\"" {
                 i += 1
+                var identifier = ""
                 var closed = false
                 while i < count {
                     if chars[i] == "\"" {
                         if char(at: i + 1) == "\"" {
+                            identifier.append("\"")
                             i += 2
                             continue
                         }
@@ -199,9 +258,13 @@ public enum SQLSafetyValidator {
                         i += 1
                         break
                     }
+                    identifier.append(chars[i])
                     i += 1
                 }
                 if !closed { unterminated = true }
+                if closed, isFunctionCall(after: i) {
+                    quotedFunctionTokens.append(identifier.uppercased())
+                }
                 output.append(" ")
                 continue
             }
@@ -238,7 +301,11 @@ public enum SQLSafetyValidator {
             i += 1
         }
 
-        return StripResult(text: output, unterminated: unterminated)
+        return StripResult(
+            text: output,
+            unterminated: unterminated,
+            quotedFunctionTokens: quotedFunctionTokens
+        )
     }
 
     /// Word tokens (`[A-Za-z_][A-Za-z0-9_$]*`), uppercased. Identifiers like
@@ -267,5 +334,38 @@ public enum SQLSafetyValidator {
             of: #"(?i)\bselect\s+(distinct\s+)?\*"#,
             options: .regularExpression
         ) != nil
+    }
+
+    static func hasTopLevelLimit(_ strippedText: String) -> Bool {
+        var depth = 0
+        var current = ""
+        var found = false
+
+        func flush() {
+            if !current.isEmpty {
+                if depth == 0, current.uppercased() == "LIMIT" {
+                    found = true
+                }
+                current = ""
+            }
+        }
+
+        for char in strippedText {
+            if char.isLetter || char == "_"
+                || (!current.isEmpty && (char.isNumber || char == "$"))
+            {
+                current.append(char)
+            } else {
+                flush()
+                if char == "(" {
+                    depth += 1
+                } else if char == ")", depth > 0 {
+                    depth -= 1
+                }
+            }
+            if found { return true }
+        }
+        flush()
+        return found
     }
 }
