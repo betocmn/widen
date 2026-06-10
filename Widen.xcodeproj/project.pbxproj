@@ -13,6 +13,7 @@
 		090D0AA08F031227E6C2A327 /* WidenKit.framework in Embed Frameworks */ = {isa = PBXBuildFile; fileRef = A287B7ABA46C2CE732510671 /* WidenKit.framework */; settings = {ATTRIBUTES = (CodeSignOnCopy, RemoveHeadersOnCopy, ); }; };
 		094449A6D12D44D491D1D497 /* Assets.xcassets in Resources */ = {isa = PBXBuildFile; fileRef = E271C5B65AC35B837AD0BD6C /* Assets.xcassets */; };
 		16E7184CC8CEBDD110063DD0 /* QueryResult.swift in Sources */ = {isa = PBXBuildFile; fileRef = 62528AEFE710F6485BD8680B /* QueryResult.swift */; };
+		1B7ED3BD37EE6A5727850143 /* SQLPromptBuilder.swift in Sources */ = {isa = PBXBuildFile; fileRef = 6BA8E6CFAEE004F6DB3C4D6B /* SQLPromptBuilder.swift */; };
 		1D500705EAC9A667A2702299 /* SchemaBrowserView.swift in Sources */ = {isa = PBXBuildFile; fileRef = ABCA8C831C2698A2155AD49F /* SchemaBrowserView.swift */; };
 		228E62E9A95EA87F3CE126EC /* SidebarView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 0328EA82E396A03346D54AE9 /* SidebarView.swift */; };
 		2C8F8995D28211876451B162 /* ConnectionSettingsViewModel.swift in Sources */ = {isa = PBXBuildFile; fileRef = 75E1E0F5761DB6F974FB9494 /* ConnectionSettingsViewModel.swift */; };
@@ -44,6 +45,7 @@
 		DF579B887E407DE86D520359 /* SchemaViewModel.swift in Sources */ = {isa = PBXBuildFile; fileRef = 09FE1736941871937B17D50F /* SchemaViewModel.swift */; };
 		ED5BCEF2845478E58F7E3758 /* AppState.swift in Sources */ = {isa = PBXBuildFile; fileRef = 766339FF7AE746B877592F59 /* AppState.swift */; };
 		EF753E2965C53200E0302956 /* DatabaseSchema.swift in Sources */ = {isa = PBXBuildFile; fileRef = F09E72C449EE7A5A9A66BD9F /* DatabaseSchema.swift */; };
+		EF9CE627C80199A8351EF201 /* SQLPromptBuilderTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 352C4B3A2C622CAEC8466E27 /* SQLPromptBuilderTests.swift */; };
 		F56A4AE65EBEE8EA32929E7F /* ErrorBannerView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 980EE95F99B9CDF2F26BBC47 /* ErrorBannerView.swift */; };
 /* End PBXBuildFile section */
 
@@ -96,6 +98,7 @@
 		21DDF1337274FDB5AB132977 /* WidenTests.xctest */ = {isa = PBXFileReference; explicitFileType = wrapper.cfbundle; includeInIndex = 0; path = WidenTests.xctest; sourceTree = BUILT_PRODUCTS_DIR; };
 		25C6B47E5418CF6D55AE34FD /* WidenKitTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = WidenKitTests.swift; sourceTree = "<group>"; };
 		2B82C454D2705BD1520A0263 /* TableInfo.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = TableInfo.swift; sourceTree = "<group>"; };
+		352C4B3A2C622CAEC8466E27 /* SQLPromptBuilderTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SQLPromptBuilderTests.swift; sourceTree = "<group>"; };
 		4089BA52528E9EEAC2396AB2 /* Widen.app */ = {isa = PBXFileReference; explicitFileType = wrapper.application; includeInIndex = 0; path = Widen.app; sourceTree = BUILT_PRODUCTS_DIR; };
 		420B7A0BDD583B0ABE7D2E25 /* Info.plist */ = {isa = PBXFileReference; lastKnownFileType = text.plist; path = Info.plist; sourceTree = "<group>"; };
 		4D7DC9491F74000AE5458E39 /* ConnectionStoreTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ConnectionStoreTests.swift; sourceTree = "<group>"; };
@@ -103,6 +106,7 @@
 		53B157FCABED3A63DEE715A3 /* ForeignKeyInfo.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ForeignKeyInfo.swift; sourceTree = "<group>"; };
 		5A2C062CE92CC29EB34DC339 /* SchemaIntrospectionService.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SchemaIntrospectionService.swift; sourceTree = "<group>"; };
 		62528AEFE710F6485BD8680B /* QueryResult.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = QueryResult.swift; sourceTree = "<group>"; };
+		6BA8E6CFAEE004F6DB3C4D6B /* SQLPromptBuilder.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SQLPromptBuilder.swift; sourceTree = "<group>"; };
 		6DBE4DAF98A714DFDE7DF54E /* ConnectionStore.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ConnectionStore.swift; sourceTree = "<group>"; };
 		75E1E0F5761DB6F974FB9494 /* ConnectionSettingsViewModel.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ConnectionSettingsViewModel.swift; sourceTree = "<group>"; };
 		766339FF7AE746B877592F59 /* AppState.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AppState.swift; sourceTree = "<group>"; };
@@ -217,6 +221,7 @@
 			children = (
 				4D7DC9491F74000AE5458E39 /* ConnectionStoreTests.swift */,
 				526F33B4A497093D4F7A3300 /* PostgresIntegrationTests.swift */,
+				352C4B3A2C622CAEC8466E27 /* SQLPromptBuilderTests.swift */,
 				D7D4F66164E5E8028A9EA325 /* SQLSafetyValidatorTests.swift */,
 				25C6B47E5418CF6D55AE34FD /* WidenKitTests.swift */,
 			);
@@ -233,6 +238,7 @@
 				EC8949F7F4C8FC5E472D3909 /* PostgresService.swift */,
 				8D3B5C38E209E366A7B9413D /* QueryExecutionService.swift */,
 				5A2C062CE92CC29EB34DC339 /* SchemaIntrospectionService.swift */,
+				6BA8E6CFAEE004F6DB3C4D6B /* SQLPromptBuilder.swift */,
 				E89B4B4CFB39F399ABB908C7 /* SQLSafetyValidator.swift */,
 			);
 			path = Services;
@@ -408,6 +414,7 @@
 			files = (
 				974A50A3A65A15698A331AE2 /* ConnectionStoreTests.swift in Sources */,
 				05E75B10D5A5DAECC48EF104 /* PostgresIntegrationTests.swift in Sources */,
+				EF9CE627C80199A8351EF201 /* SQLPromptBuilderTests.swift in Sources */,
 				6A5DB748205AD6A08CB83BAE /* SQLSafetyValidatorTests.swift in Sources */,
 				ACB000D582647340280E01A3 /* WidenKitTests.swift in Sources */,
 			);
@@ -438,6 +445,7 @@
 				31AAD4FFD25B413C6BB2410E /* QueryResultViewModel.swift in Sources */,
 				BAE6AFEFDDE4AE20D82DF14C /* QueryResultsView.swift in Sources */,
 				B8ACB6DEC273130683C5911E /* SQLPreviewView.swift in Sources */,
+				1B7ED3BD37EE6A5727850143 /* SQLPromptBuilder.swift in Sources */,
 				344BEFD5BC2ABA6B9DE4371C /* SQLSafetyValidator.swift in Sources */,
 				1D500705EAC9A667A2702299 /* SchemaBrowserView.swift in Sources */,
 				B84A31F77577FA4DBD88D7D3 /* SchemaIntrospectionService.swift in Sources */,
