@@ -32,6 +32,7 @@ public struct SchemaBrowserView: View {
                         .foregroundStyle(.secondary)
                         .lineLimit(1)
                 }
+                .listRowSeparator(.hidden)
             }
             .listStyle(.plain)
         }

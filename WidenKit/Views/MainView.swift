@@ -61,6 +61,7 @@ public struct MainView: View {
         .frame(minWidth: 900, minHeight: 560)
         .task {
             await appState.onLaunch()
+            await nudgeWindowLayout()
         }
         .onChange(of: appState.openSettingsRequest) {
             openSettings()
@@ -99,6 +100,27 @@ public struct MainView: View {
         case .connecting: .yellow
         case .connected: .green
         case .error: .red
+        }
+    }
+
+    /// Works around a macOS 26 NavigationSplitView issue: at first launch the
+    /// sidebar and inspector content lay out without their glass safe-area
+    /// margins (clipping the leading icons) until the window is resized or
+    /// clicked. A 1pt width jiggle forces a clean second layout pass.
+    private func nudgeWindowLayout() async {
+        try? await Task.sleep(for: .milliseconds(300))
+        guard let window = NSApp.windows.first(where: { $0.isVisible && !($0 is NSPanel) }),
+            let contentView = window.contentView
+        else { return }
+        markNeedsLayout(contentView)
+        contentView.layoutSubtreeIfNeeded()
+    }
+
+    /// Recursively invalidates layout so every pane recomputes its margins.
+    private func markNeedsLayout(_ view: NSView) {
+        view.needsLayout = true
+        for subview in view.subviews {
+            markNeedsLayout(subview)
         }
     }
 
