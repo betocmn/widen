@@ -8,21 +8,23 @@ import Testing
 struct WidenKitSmokeTests {
     @Test func appStateInitialStatus() async throws {
         let state = AppState()
-        #expect(state.connectionStatus == .notConnected)
+        #expect(state.connections.isEmpty)
+        #expect(state.connectionState(UUID()) == .notConnected)
+        #expect(state.selectedSessionID == nil)
+        #expect(state.selectedController == nil)
     }
 
     @Test func refreshSchemaClearsStaleSchemaWhenIntrospectionFails() async {
         let state = AppState()
-        state.connectionStatus = .connected
-        state.schema = makeSchema()
-        state.schemaVM.selectedTableID = "public.users"
+        let id = UUID()
+        state.connectionStates[id] = .connected
+        state.schemas[id] = makeSchema()
 
-        await state.refreshSchema()
+        await state.refreshSchema(for: id)
 
-        #expect(state.schema == nil)
-        #expect(state.schemaVM.selectedTableID == nil)
+        #expect(state.schemas[id] == nil)
         #expect(state.errorBanner != nil)
-        #expect(state.isLoadingSchema == false)
+        #expect(!state.loadingSchemas.contains(id))
     }
 
     private func makeSchema() -> DatabaseSchema {
@@ -79,28 +81,65 @@ struct QueryResultViewModelTests {
     }
 
     @Test func invalidRunClearsPreviousResult() async {
-        let state = connectedAppState()
+        let postgres = PostgresService()
         let viewModel = QueryResultViewModel(executor: ImmediateExecutor())
         viewModel.sqlText = "SELECT 1"
 
-        viewModel.startRun(appState: state)
+        viewModel.startRun(
+            connection: DatabaseConnectionConfig(), postgres: postgres, isConnected: true)
         await waitUntil { viewModel.result != nil && !viewModel.isRunning }
         #expect(viewModel.result != nil)
 
         viewModel.sqlText = "DELETE FROM users"
-        viewModel.startRun(appState: state)
+        viewModel.startRun(
+            connection: DatabaseConnectionConfig(), postgres: postgres, isConnected: true)
         await waitUntil { !viewModel.isRunning }
 
         #expect(viewModel.result == nil)
         #expect(viewModel.validation?.isValid == false)
     }
 
+    @Test func notConnectedRunReportsError() async {
+        let viewModel = QueryResultViewModel(executor: ImmediateExecutor())
+        viewModel.sqlText = "SELECT 1"
+
+        viewModel.startRun(
+            connection: DatabaseConnectionConfig(), postgres: PostgresService(),
+            isConnected: false)
+        await waitUntil { !viewModel.isRunning }
+
+        #expect(viewModel.result == nil)
+        #expect(viewModel.runError == AppError.notConnected.errorDescription)
+    }
+
+    @Test func restoreRehydratesEditorWithoutResults() {
+        let viewModel = QueryResultViewModel(executor: ImmediateExecutor())
+        let generation = SQLGenerationResult(
+            sql: "SELECT 1",
+            explanation: "Constant.",
+            assumptions: [],
+            referencedTables: [],
+            confidence: 1.0,
+            riskLevel: .low,
+            needsClarification: false,
+            clarificationQuestion: nil
+        )
+
+        viewModel.restore(sqlText: "SELECT 1", generation: generation)
+
+        #expect(viewModel.sqlText == "SELECT 1")
+        #expect(viewModel.generation == generation)
+        #expect(viewModel.result == nil)
+        #expect(viewModel.validation?.isValid == true)
+    }
+
     @Test func cancelRunReleasesRunningStateImmediately() async {
-        let state = connectedAppState()
         let viewModel = QueryResultViewModel(executor: SlowExecutor())
         viewModel.sqlText = "SELECT 1"
 
-        viewModel.startRun(appState: state)
+        viewModel.startRun(
+            connection: DatabaseConnectionConfig(), postgres: PostgresService(),
+            isConnected: true)
         #expect(viewModel.isRunning)
 
         viewModel.cancelRun()
@@ -109,13 +148,6 @@ struct QueryResultViewModelTests {
         #expect(viewModel.runError?.contains("Stopped waiting") == true)
         await Task.yield()
         #expect(viewModel.result == nil)
-    }
-
-    private func connectedAppState() -> AppState {
-        let state = AppState()
-        state.connectionStatus = .connected
-        state.config = DatabaseConnectionConfig()
-        return state
     }
 
     private func waitUntil(_ condition: @MainActor @escaping () -> Bool) async {

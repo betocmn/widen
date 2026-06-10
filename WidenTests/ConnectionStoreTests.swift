@@ -15,14 +15,13 @@ struct ConnectionStoreTests {
         let (store, dir) = makeTempStore()
         defer { try? FileManager.default.removeItem(at: dir) }
         #expect(try store.load().isEmpty)
-        #expect(try store.loadPrimary() == nil)
     }
 
-    @Test func saveAndLoadRoundTrip() throws {
+    @Test func saveAndLoadRoundTripPreservesMultipleConnections() throws {
         let (store, dir) = makeTempStore()
         defer { try? FileManager.default.removeItem(at: dir) }
 
-        var config = DatabaseConnectionConfig(
+        var first = DatabaseConnectionConfig(
             name: "Test",
             host: "localhost",
             port: 5433,
@@ -32,11 +31,15 @@ struct ConnectionStoreTests {
             defaultRowLimit: 250,
             statementTimeoutSeconds: 30
         )
-        config.updatedAt = Date(timeIntervalSince1970: 1_750_000_000)
-        try store.savePrimary(config)
+        first.updatedAt = Date(timeIntervalSince1970: 1_750_000_000)
+        let second = DatabaseConnectionConfig(
+            name: "Staging", host: "10.0.0.5", database: "staging", username: "svc")
+        try store.save([first, second])
 
-        let loaded = try #require(try store.loadPrimary())
-        #expect(loaded.id == config.id)
+        let all = try store.load()
+        #expect(all.count == 2)
+        let loaded = try #require(all.first)
+        #expect(loaded.id == first.id)
         #expect(loaded.name == "Test")
         #expect(loaded.host == "localhost")
         #expect(loaded.port == 5433)
@@ -45,23 +48,25 @@ struct ConnectionStoreTests {
         #expect(loaded.sslMode == .prefer)
         #expect(loaded.defaultRowLimit == 250)
         #expect(loaded.statementTimeoutSeconds == 30)
+        #expect(all.last?.id == second.id)
+        #expect(all.last?.name == "Staging")
     }
 
     @Test func savedFileNeverContainsPasswordField() throws {
         let (store, dir) = makeTempStore()
         defer { try? FileManager.default.removeItem(at: dir) }
 
-        try store.savePrimary(DatabaseConnectionConfig(database: "db", username: "user"))
+        try store.save([DatabaseConnectionConfig(database: "db", username: "user")])
         let raw = try String(contentsOf: store.fileURL, encoding: .utf8)
         #expect(!raw.lowercased().contains("password"))
     }
 
-    @Test func savePrimaryOverwritesPreviousConnection() throws {
+    @Test func saveOverwritesPreviousContents() throws {
         let (store, dir) = makeTempStore()
         defer { try? FileManager.default.removeItem(at: dir) }
 
-        try store.savePrimary(DatabaseConnectionConfig(name: "One", database: "a", username: "u"))
-        try store.savePrimary(DatabaseConnectionConfig(name: "Two", database: "b", username: "u"))
+        try store.save([DatabaseConnectionConfig(name: "One", database: "a", username: "u")])
+        try store.save([DatabaseConnectionConfig(name: "Two", database: "b", username: "u")])
         let all = try store.load()
         #expect(all.count == 1)
         #expect(all.first?.name == "Two")

@@ -5,6 +5,8 @@ import WidenKit
 @main
 struct WidenApp: App {
     @State private var appState = AppState()
+    @AppStorage(AppearancePreference.storageKey)
+    private var appearanceRaw = AppearancePreference.system.rawValue
 
     init() {
         // Make sure the app fronts properly even when launched from a bare
@@ -17,35 +19,62 @@ struct WidenApp: App {
         WindowGroup {
             MainView()
                 .environment(appState)
+                .preferredColorScheme(appearance.colorScheme)
         }
         .commands {
-            CommandGroup(replacing: .appSettings) {
-                Button("Settings...") {
-                    appState.showSettings = true
+            CommandGroup(replacing: .newItem) {
+                Button("New Session") {
+                    if let connectionID = appState.activeConnectionID
+                        ?? appState.connections.first?.id
+                    {
+                        appState.createSession(connectionID: connectionID)
+                    }
                 }
-                .keyboardShortcut(",", modifiers: .command)
+                .keyboardShortcut("n", modifiers: .command)
+                .disabled(appState.connections.isEmpty)
             }
             CommandMenu("Database") {
                 Button("Refresh Schema") {
-                    Task { await appState.refreshSchema() }
+                    if let id = appState.activeConnectionID {
+                        Task { await appState.refreshSchema(for: id) }
+                    }
                 }
                 .keyboardShortcut("r", modifiers: .command)
-                .disabled(appState.connectionStatus != .connected)
+                .disabled(activeConnectionState != .connected)
 
                 Divider()
 
                 Button("Connect") {
-                    if let config = appState.config {
-                        Task { await appState.connect(config) }
+                    if let id = appState.activeConnectionID {
+                        Task { await appState.connectIfNeeded(id) }
                     }
                 }
-                .disabled(appState.config == nil || appState.connectionStatus == .connected)
+                .disabled(
+                    appState.activeConnectionID == nil
+                        || activeConnectionState == .connected
+                        || activeConnectionState == .connecting
+                )
 
                 Button("Disconnect") {
-                    Task { await appState.disconnect() }
+                    if let id = appState.activeConnectionID {
+                        Task { await appState.disconnect(id) }
+                    }
                 }
-                .disabled(appState.connectionStatus != .connected)
+                .disabled(activeConnectionState != .connected)
             }
         }
+
+        Settings {
+            SettingsView()
+                .environment(appState)
+        }
+    }
+
+    private var activeConnectionState: AppState.ConnectionStatus {
+        appState.activeConnectionID.map { appState.connectionState($0) } ?? .notConnected
+    }
+
+    private var appearance: AppearancePreference {
+        AppearancePreference(rawValue: appearanceRaw) ?? .system
     }
 }

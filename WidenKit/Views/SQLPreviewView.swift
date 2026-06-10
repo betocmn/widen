@@ -4,11 +4,14 @@ import SwiftUI
 /// Editable SQL area with validation status and run controls.
 public struct SQLPreviewView: View {
     @Environment(AppState.self) private var appState
+    private let controller: SessionController
 
-    public init() {}
+    public init(controller: SessionController) {
+        self.controller = controller
+    }
 
     public var body: some View {
-        @Bindable var queryVM = appState.queryVM
+        @Bindable var queryVM = controller.queryVM
 
         VStack(alignment: .leading, spacing: 8) {
             HStack(spacing: 8) {
@@ -19,24 +22,27 @@ public struct SQLPreviewView: View {
                 Button("Validate") {
                     queryVM.validate()
                 }
+                .buttonStyle(.glass)
                 Button("Copy SQL") {
                     NSPasteboard.general.clearContents()
                     NSPasteboard.general.setString(queryVM.sqlText, forType: .string)
                 }
+                .buttonStyle(.glass)
                 .disabled(queryVM.sqlText.isEmpty)
                 Button("Clear") {
                     queryVM.clear()
                 }
+                .buttonStyle(.glass)
                 .disabled(queryVM.sqlText.isEmpty)
                 Button("Run") {
-                    queryVM.startRun(appState: appState)
+                    controller.runQuery(appState: appState)
                 }
-                .buttonStyle(.borderedProminent)
+                .buttonStyle(.glassProminent)
                 .keyboardShortcut(.return, modifiers: .command)
                 .disabled(
                     queryVM.isRunning
                         || queryVM.sqlText.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
-                        || appState.connectionStatus != .connected
+                        || appState.connectionState(controller.connectionID) != .connected
                 )
             }
 
@@ -45,10 +51,10 @@ public struct SQLPreviewView: View {
                 .autocorrectionDisabled()
                 .scrollContentBackground(.hidden)
                 .padding(6)
-                .background(.quaternary.opacity(0.4), in: RoundedRectangle(cornerRadius: 6))
+                .background(.thinMaterial, in: RoundedRectangle(cornerRadius: 8))
                 .frame(minHeight: 70)
 
-            if let validation = appState.queryVM.validation {
+            if let validation = controller.queryVM.validation {
                 VStack(alignment: .leading, spacing: 2) {
                     ForEach(validation.errors, id: \.self) { error in
                         Label(error, systemImage: "xmark.octagon.fill")
@@ -63,7 +69,7 @@ public struct SQLPreviewView: View {
                 }
             }
 
-            if let generation = appState.queryVM.generation {
+            if let generation = controller.queryVM.generation {
                 generationDetails(generation)
             }
         }
@@ -125,7 +131,7 @@ public struct SQLPreviewView: View {
 
     @ViewBuilder
     private var validationBadge: some View {
-        if let validation = appState.queryVM.validation {
+        if let validation = controller.queryVM.validation {
             if validation.isValid {
                 Label(
                     validation.warnings.isEmpty ? "Valid" : "Valid with warnings",

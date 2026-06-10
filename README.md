@@ -16,6 +16,13 @@ it safely - all locally.
 - **Private.** Prompts go to Apple's local Foundation Model through macOS.
   Your schema and queries never leave your machine. Passwords live in the
   macOS Keychain, never on disk in plaintext.
+- **Multiple databases, persistent sessions.** Configure any number of
+  PostgreSQL connections in Settings; each one is a group in the sidebar.
+  Select a database to browse its schema, or press "+" on it to start a
+  query session — a persistent chat + SQL + results workspace that survives
+  restarts and is auto-named by the local model after your first question.
+- **Modern macOS 26 look.** Liquid Glass styling, a schema inspector panel,
+  and a light/dark toggle in the toolbar (or follow the system).
 
 ## Requirements
 
@@ -93,19 +100,36 @@ plus a few rows. Good first questions to try:
 
 ## Connecting
 
-On first launch Widen shows the connection screen. For a default Postgres.app
+On first launch Widen opens Settings › Databases. For a default Postgres.app
 setup: host `localhost`, port `5432`, database `widen_test`, username = your
 macOS username, empty password (Postgres.app uses trust auth locally), SSL
-mode Disabled.
+mode Disabled. Add as many databases as you like with the "+" button;
+deleting one warns you first — its sessions are deleted with it.
 
 > **Safety tip:** connect with a read-only Postgres user when using
 > AI-generated SQL. Widen enforces read-only execution itself, but defense in
 > depth is cheap.
 
 Non-secret connection settings are stored in
-`~/Library/Application Support/Widen/connections.json`; the password is stored
-in the macOS Keychain (service `Widen`). The MVP supports one saved
-connection.
+`~/Library/Application Support/Widen/connections.json`; passwords are stored
+in the macOS Keychain (service `Widen`).
+
+## Sessions
+
+Each database in the sidebar lists its query sessions. Selecting the
+database itself opens its schema in the inspector; press the hover "+"
+(or Cmd+N) to start a session — the database connects lazily, so nothing
+happens until a session or schema browse needs it. A session keeps its chat transcript, SQL editor
+contents, and generation metadata in
+`~/Library/Application Support/Widen/sessions.json` (query results are
+deliberately not persisted). The local model names the session after your
+first question; rename it manually (right-click › Rename) and the auto-name
+never overwrites yours. Right-click › Archive hides a session; restore it or
+delete it forever from Settings › Archived Sessions.
+
+The schema browser lives in a right-hand inspector — toggle it from the
+toolbar. The sun/moon toolbar button flips light/dark mode; pick "System" in
+Settings › General to follow macOS again.
 
 ## How a query runs
 
@@ -123,7 +147,8 @@ connection.
 5. Results render as text in a simple grid; Copy CSV exports them.
 
 Keyboard: **Enter** in the chat field generates SQL; **Cmd+Enter** runs the
-query in the editor; **Cmd+R** refreshes the schema.
+query in the editor; **Cmd+N** starts a new session; **Cmd+R** refreshes the
+active database's schema; **Cmd+,** opens Settings.
 
 ## Development notes and caveats
 
@@ -143,19 +168,19 @@ query in the editor; **Cmd+R** refreshes the schema.
   certs. "Disabled" is the default for local Postgres.
 - **Model availability** is checked before each generation. If Apple
   Intelligence is off or the model is not downloaded, Widen says so and you
-  can keep writing SQL manually or enable mock mode (Settings > AI).
+  can keep writing SQL manually or enable mock mode (Settings › General).
 - The Foundation Models context window is small (~4k tokens). Very large
   schemas are truncated whole-table-at-a-time in the prompt; Widen retries
   once with a tighter budget if the window is exceeded.
 
 ## MVP limitations
 
-- One saved connection; PostgreSQL only.
+- PostgreSQL only.
 - Results are stringified text (no typed grid, no export-to-file).
-- No query history or saved queries.
 - No SQL syntax highlighting.
-- Chat history is in-memory for the current session only; prompts are not
-  persisted.
+- Query results are not persisted across restarts (transcripts, SQL text,
+  and generation metadata are; rerun a session's query to repopulate the
+  grid).
 
 ## License
 
