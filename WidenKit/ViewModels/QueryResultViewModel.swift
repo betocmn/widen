@@ -10,6 +10,8 @@ public final class QueryResultViewModel {
     public private(set) var result: QueryResult?
     public private(set) var isRunning = false
     public private(set) var runError: String?
+    /// Metadata of the last model generation that filled the editor.
+    public private(set) var generation: SQLGenerationResult?
 
     private var runTask: Task<Void, Never>?
     private let executor = QueryExecutionService()
@@ -39,11 +41,14 @@ public final class QueryResultViewModel {
         validation = nil
         result = nil
         runError = nil
+        generation = nil
     }
 
-    /// Called by the chat flow when the model fills the editor.
-    public func setGeneratedSQL(_ sql: String) {
-        sqlText = sql
+    /// Called by the chat flow when the model fills the editor. The generated
+    /// SQL is validated immediately so the user sees its status before Run.
+    public func setGeneration(_ generation: SQLGenerationResult) {
+        self.generation = generation
+        sqlText = generation.sql
         result = nil
         runError = nil
         validate()
