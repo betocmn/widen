@@ -94,6 +94,10 @@ struct SQLSafetyValidatorTests {
         #expect(!validate("SELECT pg_read_file('/etc/passwd')").isValid)
         #expect(!validate("SELECT pg_read_binary_file('/etc/passwd')").isValid)
         #expect(!validate("SELECT pg_ls_dir('.')").isValid)
+        #expect(!validate("SELECT pg_ls_logdir()").isValid)
+        #expect(!validate("SELECT pg_ls_waldir()").isValid)
+        #expect(!validate("SELECT pg_ls_archive_statusdir()").isValid)
+        #expect(!validate("SELECT pg_ls_tmpdir()").isValid)
         #expect(!validate("SELECT pg_stat_file('/etc/passwd')").isValid)
     }
 
@@ -241,5 +245,20 @@ struct SQLSafetyValidatorTests {
             "WITH recent AS (SELECT id FROM orders LIMIT 10) SELECT * FROM recent LIMIT 5")
         #expect(result.isValid)
         #expect(result.hasLimit)
+    }
+
+    @Test func limitAllAndNullDoNotCountAsBoundedLimits() {
+        let limitAll = validate("SELECT * FROM users LIMIT ALL")
+        #expect(limitAll.isValid)
+        #expect(!limitAll.hasLimit)
+        #expect(limitAll.warnings.contains { $0.contains("LIMIT") })
+
+        let limitNull = validate("SELECT * FROM users LIMIT NULL")
+        #expect(limitNull.isValid)
+        #expect(!limitNull.hasLimit)
+
+        let parenthesizedNull = validate("SELECT * FROM users LIMIT (NULL)")
+        #expect(parenthesizedNull.isValid)
+        #expect(!parenthesizedNull.hasLimit)
     }
 }
