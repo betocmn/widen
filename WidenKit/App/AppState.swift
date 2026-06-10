@@ -8,6 +8,13 @@ public enum SettingsTab: String, Hashable, Sendable {
     case archived
 }
 
+/// What the sidebar has selected: a whole database (for schema browsing)
+/// or one of its query sessions.
+public enum SidebarItem: Hashable, Sendable {
+    case database(UUID)
+    case session(UUID)
+}
+
 /// Root application state. Owns the services, the configured connections,
 /// and the persistent query sessions shared across views.
 @MainActor
@@ -43,10 +50,23 @@ public final class AppState {
 
     /// Every session, including archived ones.
     public var sessions: [QuerySession] = []
-    public var selectedSessionID: UUID?
+    /// The sidebar selection: a database row or a session row.
+    public var sidebarSelection: SidebarItem?
     /// Runtime containers, cached so switching sessions never loses
     /// in-flight generations or query runs.
     private var controllers: [UUID: SessionController] = [:]
+
+    /// The selected session, when the sidebar selection is a session.
+    public var selectedSessionID: UUID? {
+        if case .session(let id) = sidebarSelection { return id }
+        return nil
+    }
+
+    /// The selected database, when the sidebar selection is a database row.
+    public var selectedDatabaseID: UUID? {
+        if case .database(let id) = sidebarSelection { return id }
+        return nil
+    }
 
     // MARK: - UI state
 
@@ -170,9 +190,14 @@ public final class AppState {
         connectionStates[id] ?? .notConnected
     }
 
-    /// The connection of the selected session, if any.
+    /// The connection behind the sidebar selection: the selected database
+    /// itself, or the selected session's database.
     public var activeConnectionID: UUID? {
-        selectedSessionID.flatMap { session(for: $0)?.connectionID }
+        switch sidebarSelection {
+        case .database(let id): id
+        case .session(let id): session(for: id)?.connectionID
+        case nil: nil
+        }
     }
 
     /// Lazily creates and caches one `PostgresService` per connection.
@@ -290,8 +315,13 @@ public final class AppState {
         sessions.removeAll { removedSessionIDs.contains($0.id) }
         connections.removeAll { $0.id == id }
 
-        if let selectedSessionID, removedSessionIDs.contains(selectedSessionID) {
+        switch sidebarSelection {
+        case .session(let sessionID) where removedSessionIDs.contains(sessionID):
             selectSession(mostRecentVisibleSession()?.id)
+        case .database(let databaseID) where databaseID == id:
+            selectSession(mostRecentVisibleSession()?.id)
+        default:
+            break
         }
 
         do {
@@ -351,26 +381,41 @@ public final class AppState {
     }
 
     /// Selects a session: snapshots the outgoing controller, restores or
-    /// creates the incoming one, and lazily connects its database.
+    /// creates the incoming one, and lazily connects its database. Passing
+    /// nil (or an unknown id) falls back to browsing the first database.
     public func selectSession(_ id: UUID?) {
         if let outgoingID = selectedSessionID, outgoingID != id {
             sessionDidChange(outgoingID)
         }
 
-        if let id, let session = session(for: id), controllers[id] == nil {
+        guard let id, let session = session(for: id) else {
+            UserDefaults.standard.removeObject(forKey: Self.selectedSessionKey)
+            if let first = connections.first {
+                selectDatabase(first.id)
+            } else {
+                sidebarSelection = nil
+            }
+            return
+        }
+
+        if controllers[id] == nil {
             controllers[id] = SessionController(session: session)
         }
-        selectedSessionID = id
+        sidebarSelection = .session(id)
+        UserDefaults.standard.set(id.uuidString, forKey: Self.selectedSessionKey)
+        Task { await connectIfNeeded(session.connectionID) }
+    }
 
-        if let id {
-            UserDefaults.standard.set(id.uuidString, forKey: Self.selectedSessionKey)
-        } else {
-            UserDefaults.standard.removeObject(forKey: Self.selectedSessionKey)
+    /// Selects a database row for schema browsing — no session involved.
+    /// The database connects lazily so its schema fills the inspector.
+    public func selectDatabase(_ id: UUID) {
+        guard connection(for: id) != nil else { return }
+        if let outgoingID = selectedSessionID {
+            sessionDidChange(outgoingID)
         }
-
-        if let id, let session = session(for: id) {
-            Task { await connectIfNeeded(session.connectionID) }
-        }
+        sidebarSelection = .database(id)
+        UserDefaults.standard.removeObject(forKey: Self.selectedSessionKey)
+        Task { await connectIfNeeded(id) }
     }
 
     public func renameSession(_ id: UUID, to newTitle: String) {
@@ -422,8 +467,13 @@ public final class AppState {
         controllers[id] = nil
         if selectedSessionID == id {
             let connectionID = sessions[index].connectionID
-            let next = sessions(for: connectionID).first ?? mostRecentVisibleSession()
-            selectSession(next?.id)
+            if let next = sessions(for: connectionID).first ?? mostRecentVisibleSession() {
+                selectSession(next.id)
+            } else if connection(for: connectionID) != nil {
+                selectDatabase(connectionID)
+            } else {
+                selectSession(nil)
+            }
         }
         flushSessions()
     }
