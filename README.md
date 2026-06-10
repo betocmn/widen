@@ -48,6 +48,9 @@ The committed `Widen.xcodeproj` is generated - edit `project.yml` and run
 project in Xcode directly, make sure it is **Xcode 26**, not an older default
 Xcode (older SDKs have no FoundationModels and a lower deployment target).
 
+For codebase onboarding and implementation details, see
+[docs/implementation-guide.md](docs/implementation-guide.md).
+
 ## Sample test database
 
 With Postgres.app running (its default server on `localhost:5432`):
