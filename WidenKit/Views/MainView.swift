@@ -119,7 +119,7 @@ public struct MainView: View {
             DatabaseOverviewView(connection: config)
         } else {
             ContentUnavailableView {
-                Label("Select a session", systemImage: "text.bubble")
+                Label("Select a session", systemImage: "terminal")
             } description: {
                 Text("Pick a session in the sidebar, or press + on a database to start one.")
             }
