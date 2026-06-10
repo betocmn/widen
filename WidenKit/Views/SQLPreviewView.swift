@@ -1,0 +1,86 @@
+import AppKit
+import SwiftUI
+
+/// Editable SQL area with validation status and run controls.
+public struct SQLPreviewView: View {
+    @Environment(AppState.self) private var appState
+
+    public init() {}
+
+    public var body: some View {
+        @Bindable var queryVM = appState.queryVM
+
+        VStack(alignment: .leading, spacing: 8) {
+            HStack(spacing: 8) {
+                Text("SQL")
+                    .font(.headline)
+                validationBadge
+                Spacer()
+                Button("Validate") {
+                    queryVM.validate()
+                }
+                Button("Copy SQL") {
+                    NSPasteboard.general.clearContents()
+                    NSPasteboard.general.setString(queryVM.sqlText, forType: .string)
+                }
+                .disabled(queryVM.sqlText.isEmpty)
+                Button("Clear") {
+                    queryVM.clear()
+                }
+                .disabled(queryVM.sqlText.isEmpty)
+                Button("Run") {
+                    queryVM.startRun(appState: appState)
+                }
+                .buttonStyle(.borderedProminent)
+                .keyboardShortcut(.return, modifiers: .command)
+                .disabled(
+                    queryVM.isRunning
+                        || queryVM.sqlText.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+                        || appState.connectionStatus != .connected
+                )
+            }
+
+            TextEditor(text: $queryVM.sqlText)
+                .font(.system(.body, design: .monospaced))
+                .autocorrectionDisabled()
+                .scrollContentBackground(.hidden)
+                .padding(6)
+                .background(.quaternary.opacity(0.4), in: RoundedRectangle(cornerRadius: 6))
+                .frame(minHeight: 70)
+
+            if let validation = appState.queryVM.validation {
+                VStack(alignment: .leading, spacing: 2) {
+                    ForEach(validation.errors, id: \.self) { error in
+                        Label(error, systemImage: "xmark.octagon.fill")
+                            .font(.caption)
+                            .foregroundStyle(.red)
+                    }
+                    ForEach(validation.warnings, id: \.self) { warning in
+                        Label(warning, systemImage: "exclamationmark.triangle.fill")
+                            .font(.caption)
+                            .foregroundStyle(.orange)
+                    }
+                }
+            }
+        }
+        .padding(10)
+    }
+
+    @ViewBuilder
+    private var validationBadge: some View {
+        if let validation = appState.queryVM.validation {
+            if validation.isValid {
+                Label(
+                    validation.warnings.isEmpty ? "Valid" : "Valid with warnings",
+                    systemImage: "checkmark.seal.fill"
+                )
+                .font(.caption)
+                .foregroundStyle(validation.warnings.isEmpty ? .green : .orange)
+            } else {
+                Label("Blocked", systemImage: "xmark.seal.fill")
+                    .font(.caption)
+                    .foregroundStyle(.red)
+            }
+        }
+    }
+}

@@ -65,6 +65,80 @@ public actor PostgresService {
         }
     }
 
+    /// Executes a validated query inside a read-only transaction with a
+    /// statement timeout, pinned to a single pooled connection.
+    ///
+    /// When `hasLimit` is false the query is wrapped in a
+    /// `LIMIT rowLimit + 1` subquery: the extra row only signals truncation
+    /// and is dropped from the returned result.
+    public func executeReadOnly(
+        sql: String,
+        hasLimit: Bool,
+        rowLimit: Int,
+        timeoutSeconds: Int
+    ) async throws -> QueryResult {
+        guard let client else { throw AppError.notConnected }
+        let logger = logger
+        let start = ContinuousClock.now
+        do {
+            return try await client.withConnection { connection in
+                try await connection.query("BEGIN READ ONLY", logger: logger)
+                do {
+                    // SET cannot take bind parameters; timeoutSeconds is
+                    // app-validated (1…120).
+                    try await connection.query(
+                        PostgresQuery(unsafeSQL: "SET LOCAL statement_timeout = \(timeoutSeconds * 1000)"),
+                        logger: logger
+                    )
+
+                    let finalSQL =
+                        hasLimit
+                        ? sql
+                        : "SELECT * FROM (\n\(sql)\n) AS widen_subquery LIMIT \(rowLimit + 1)"
+                    let stream = try await connection.query(
+                        PostgresQuery(unsafeSQL: finalSQL),
+                        logger: logger
+                    )
+
+                    var columns: [String] = []
+                    var rows: [[String?]] = []
+                    for try await row in stream {
+                        let randomAccess = row.makeRandomAccess()
+                        if columns.isEmpty {
+                            columns = (0..<randomAccess.count).map { randomAccess[$0].columnName }
+                        }
+                        rows.append(
+                            (0..<randomAccess.count).map {
+                                PostgresCellFormatter.string(for: randomAccess[$0])
+                            }
+                        )
+                    }
+                    try await connection.query("COMMIT", logger: logger)
+
+                    var truncated = false
+                    if !hasLimit, rows.count > rowLimit {
+                        truncated = true
+                        rows.removeLast()
+                    }
+                    let elapsed = start.duration(to: .now)
+                    return QueryResult(
+                        columns: columns,
+                        rows: rows,
+                        rowCount: rows.count,
+                        truncated: truncated,
+                        executionTimeMs: Int(elapsed / .milliseconds(1))
+                    )
+                } catch {
+                    // Leave the pooled connection in a clean state.
+                    try? await connection.query("ROLLBACK", logger: logger)
+                    throw error
+                }
+            }
+        } catch {
+            throw PostgresErrorMapper.map(error)
+        }
+    }
+
     // MARK: - Configuration
 
     static func makeLogger(label: String) -> Logger {
