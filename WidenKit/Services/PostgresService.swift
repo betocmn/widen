@@ -4,12 +4,68 @@ import NIOSSL
 import PostgresNIO
 
 /// Owns the PostgreSQL client lifecycle and runs queries.
+///
+/// Lifecycle: `connect` creates a pooled `PostgresClient` and starts its
+/// `run()` loop in a long-lived task; `disconnect` cancels that task, which
+/// closes the client. A client is never reused after its run task is
+/// cancelled — reconnecting always builds a fresh client.
 public actor PostgresService {
+    private var client: PostgresClient?
+    private var runTask: Task<Void, Never>?
     let logger: Logger
 
     public init() {
         self.logger = Self.makeLogger(label: "widen.postgres")
     }
+
+    public var isConnected: Bool { client != nil }
+
+    /// Establishes a new client and verifies connectivity, so authentication
+    /// and missing-database errors surface immediately.
+    public func connect(config: DatabaseConnectionConfig, password: String?) async throws {
+        disconnect()
+        // Probe with a single throwaway connection first: the pooled client
+        // retries failed connections in the background, so server FATALs
+        // (bad credentials, missing database) would otherwise only surface as
+        // a generic timeout.
+        try await Self.probe(config: config, password: password)
+
+        let client = PostgresClient(
+            configuration: Self.makeConfiguration(config, password: password),
+            backgroundLogger: logger
+        )
+        self.client = client
+        // `run()` must be called exactly once per client; cancelling the task
+        // closes the client and its connections.
+        self.runTask = Task { await client.run() }
+    }
+
+    public func disconnect() {
+        runTask?.cancel()
+        runTask = nil
+        client = nil
+    }
+
+    /// Runs a read query and decodes every row inside the actor, so only
+    /// `Sendable` values cross the actor boundary.
+    public func query<T: Sendable>(
+        _ sql: String,
+        decode: @escaping @Sendable (PostgresRandomAccessRow) throws -> T
+    ) async throws -> [T] {
+        guard let client else { throw AppError.notConnected }
+        do {
+            let rows = try await client.query(PostgresQuery(unsafeSQL: sql), logger: logger)
+            var results: [T] = []
+            for try await row in rows {
+                results.append(try decode(row.makeRandomAccess()))
+            }
+            return results
+        } catch {
+            throw PostgresErrorMapper.map(error)
+        }
+    }
+
+    // MARK: - Configuration
 
     static func makeLogger(label: String) -> Logger {
         var logger = Logger(label: label)
@@ -48,27 +104,67 @@ public actor PostgresService {
         return configuration
     }
 
-    /// One-shot connectivity check used by the settings screen. Builds a
-    /// transient client, runs `SELECT 1`, and tears everything down. Never
-    /// touches the live client.
+    /// One-shot connectivity check used by the settings screen. Never touches
+    /// the live client.
     public static func testConnection(
         config: DatabaseConnectionConfig,
         password: String?
     ) async throws {
-        let logger = makeLogger(label: "widen.postgres.test")
-        let client = PostgresClient(
-            configuration: makeConfiguration(config, password: password),
-            backgroundLogger: logger
-        )
-        let runTask = Task { await client.run() }
-        defer { runTask.cancel() }
+        try await probe(config: config, password: password)
+    }
+
+    /// Opens a single direct connection, runs `SELECT 1`, and closes it.
+    /// Unlike the pooled client, a direct connection throws the server's real
+    /// error (authentication failure, unknown database, refused connection)
+    /// immediately.
+    static func probe(config: DatabaseConnectionConfig, password: String?) async throws {
+        let logger = makeLogger(label: "widen.postgres.probe")
         do {
+            let configuration = try makeConnectionConfiguration(config, password: password)
             try await withTimeout(seconds: 15) {
-                _ = try await client.query("SELECT 1 AS ok", logger: logger).collect()
+                let connection = try await PostgresConnection.connect(
+                    on: PostgresConnection.defaultEventLoopGroup.any(),
+                    configuration: configuration,
+                    id: 1,
+                    logger: logger
+                )
+                do {
+                    _ = try await connection.query("SELECT 1 AS ok", logger: logger).collect()
+                    try await connection.close()
+                } catch {
+                    try? await connection.close()
+                    throw error
+                }
             }
         } catch {
             throw PostgresErrorMapper.map(error)
         }
+    }
+
+    nonisolated static func makeConnectionConfiguration(
+        _ config: DatabaseConnectionConfig,
+        password: String?
+    ) throws -> PostgresConnection.Configuration {
+        let tls: PostgresConnection.Configuration.TLS
+        switch config.sslMode {
+        case .disable:
+            tls = .disable
+        case .prefer, .require:
+            var tlsConfig = TLSConfiguration.makeClientConfiguration()
+            tlsConfig.certificateVerification = .none
+            // Unlike the pooled client, the direct-connection API takes a
+            // pre-built NIOSSLContext.
+            let sslContext = try NIOSSLContext(configuration: tlsConfig)
+            tls = config.sslMode == .prefer ? .prefer(sslContext) : .require(sslContext)
+        }
+        return PostgresConnection.Configuration(
+            host: config.host,
+            port: config.port,
+            username: config.username,
+            password: (password?.isEmpty ?? true) ? nil : password,
+            database: config.database.isEmpty ? nil : config.database,
+            tls: tls
+        )
     }
 
     /// Races `body` against a wall-clock timeout so the UI can never hang on a
