@@ -138,10 +138,15 @@ public final class AppState {
         }
 
         if connections.isEmpty {
-            settingsTab = .databases
-            openSettingsRequest += 1
-            showSettings = true
+            openSettings(tab: .databases)
         }
+    }
+
+    /// Asks the UI to show Settings on the given tab.
+    public func openSettings(tab: SettingsTab) {
+        settingsTab = tab
+        openSettingsRequest += 1
+        showSettings = true
     }
 
     // MARK: - Connection helpers
