@@ -88,6 +88,7 @@ public final class AppState {
     }
 
     public func connect(_ config: DatabaseConnectionConfig) async {
+        clearLoadedSchema()
         connectionStatus = .connecting
         errorBanner = nil
 
@@ -120,12 +121,26 @@ public final class AppState {
 
     public func refreshSchema() async {
         guard connectionStatus == .connected else { return }
+        let previousSelection = schemaVM.selectedTableID
+        clearLoadedSchema()
         isLoadingSchema = true
         defer { isLoadingSchema = false }
         do {
-            schema = try await introspection.loadSchema(using: postgres)
+            let loadedSchema = try await introspection.loadSchema(using: postgres)
+            schema = loadedSchema
+            if let previousSelection,
+                loadedSchema.tables.contains(where: { $0.id == previousSelection })
+            {
+                schemaVM.selectedTableID = previousSelection
+            }
         } catch {
+            clearLoadedSchema()
             errorBanner = error.localizedDescription
         }
+    }
+
+    private func clearLoadedSchema() {
+        schema = nil
+        schemaVM.selectedTableID = nil
     }
 }
