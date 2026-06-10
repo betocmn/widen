@@ -18,5 +18,34 @@ struct WidenApp: App {
             MainView()
                 .environment(appState)
         }
+        .commands {
+            CommandGroup(replacing: .appSettings) {
+                Button("Settings...") {
+                    appState.showSettings = true
+                }
+                .keyboardShortcut(",", modifiers: .command)
+            }
+            CommandMenu("Database") {
+                Button("Refresh Schema") {
+                    Task { await appState.refreshSchema() }
+                }
+                .keyboardShortcut("r", modifiers: .command)
+                .disabled(appState.connectionStatus != .connected)
+
+                Divider()
+
+                Button("Connect") {
+                    if let config = appState.config {
+                        Task { await appState.connect(config) }
+                    }
+                }
+                .disabled(appState.config == nil || appState.connectionStatus == .connected)
+
+                Button("Disconnect") {
+                    Task { await appState.disconnect() }
+                }
+                .disabled(appState.connectionStatus != .connected)
+            }
+        }
     }
 }

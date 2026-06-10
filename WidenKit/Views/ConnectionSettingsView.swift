@@ -58,6 +58,14 @@ public struct ConnectionSettingsView: View {
                     .foregroundStyle(.secondary)
                 }
 
+                Section("Privacy") {
+                    Text(
+                        "Widen runs locally. It sends prompts to Apple's local Foundation Model through macOS. It does not send your database schema or queries to our servers. This MVP has no backend."
+                    )
+                    .font(.callout)
+                    .foregroundStyle(.secondary)
+                }
+
                 if !viewModel.validationErrors.isEmpty {
                     Section {
                         ForEach(viewModel.validationErrors, id: \.self) { error in
@@ -124,7 +132,7 @@ public struct ConnectionSettingsView: View {
         case .testing:
             HStack(spacing: 8) {
                 ProgressView().controlSize(.small)
-                Text("Testing connection…")
+                Text("Testing connection...")
             }
         case .success:
             Label("Connection succeeded.", systemImage: "checkmark.circle.fill")
