@@ -39,6 +39,22 @@ public struct SidebarView: View {
             }
         }
         .listStyle(.sidebar)
+        .safeAreaInset(edge: .bottom, spacing: 0) {
+            VStack(spacing: 0) {
+                Divider()
+                Button {
+                    appState.openSettings(tab: .databases)
+                } label: {
+                    Label("Add Database", systemImage: "plus.circle")
+                        .font(.system(size: 12))
+                }
+                .buttonStyle(.borderless)
+                .foregroundStyle(.secondary)
+                .frame(maxWidth: .infinity, alignment: .leading)
+                .padding(.horizontal, 12)
+                .padding(.vertical, 9)
+            }
+        }
     }
 
     /// Routes sidebar selection through AppState so controllers are
