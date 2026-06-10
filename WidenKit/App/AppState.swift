@@ -53,6 +53,29 @@ public final class AppState {
     }
 
     public func connect(_ config: DatabaseConnectionConfig) async {
-        // Implemented with the Postgres service milestone.
+        connectionStatus = .connecting
+        errorBanner = nil
+
+        var password: String?
+        do {
+            password = try keychain.loadPassword(for: config.id)
+        } catch {
+            // Continue with no password — local trust auth may still work —
+            // but tell the user the Keychain read failed.
+            errorBanner = error.localizedDescription
+        }
+
+        do {
+            try await postgres.connect(config: config, password: password)
+            connectionStatus = .connected
+        } catch {
+            connectionStatus = .error(error.localizedDescription)
+            errorBanner = error.localizedDescription
+        }
+    }
+
+    public func disconnect() async {
+        await postgres.disconnect()
+        connectionStatus = .notConnected
     }
 }
