@@ -3,9 +3,11 @@ import SwiftUI
 
 /// Simple scrollable grid of stringified result values.
 public struct QueryResultsView: View {
-    @Environment(AppState.self) private var appState
+    private let controller: SessionController
 
-    public init() {}
+    public init(controller: SessionController) {
+        self.controller = controller
+    }
 
     public var body: some View {
         VStack(alignment: .leading, spacing: 6) {
@@ -20,7 +22,7 @@ public struct QueryResultsView: View {
             Text("Results")
                 .font(.headline)
             Spacer()
-            if let result = appState.queryVM.result {
+            if let result = controller.queryVM.result {
                 Text(summary(for: result))
                     .font(.caption)
                     .foregroundStyle(.secondary)
@@ -28,6 +30,7 @@ public struct QueryResultsView: View {
                     NSPasteboard.general.clearContents()
                     NSPasteboard.general.setString(result.csv(), forType: .string)
                 }
+                .buttonStyle(.glass)
             }
         }
     }
@@ -45,7 +48,7 @@ public struct QueryResultsView: View {
 
     @ViewBuilder
     private var content: some View {
-        let queryVM = appState.queryVM
+        let queryVM = controller.queryVM
         if queryVM.isRunning {
             VStack(spacing: 8) {
                 LoadingView(label: "Running query…")

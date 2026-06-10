@@ -65,6 +65,28 @@ struct FoundationModelsSmokeTests {
         #endif
     }
 
+    @Test(.timeLimit(.minutes(2)))
+    func modelGeneratesUsableSessionTitle() async throws {
+        #if canImport(FoundationModels)
+            let model = SystemLanguageModel.default
+            guard model.isAvailable else {
+                Issue.record("Model unavailable: \(model.availability)")
+                return
+            }
+
+            let generator = FoundationModelsTitleGenerator()
+            let raw = try await generator.generateTitle(
+                for: "Which users have spent the most money this year?")
+            print("Generated session title: \(raw)")
+
+            let title = SessionTitleFallback.sanitize(raw)
+            #expect(title?.isEmpty == false)
+            #expect((title?.count ?? 0) <= 60)
+        #else
+            Issue.record("FoundationModels is not available at compile time")
+        #endif
+    }
+
     @Test func mockGeneratorReturnsSafeConstantQuery() async throws {
         let result = try await MockSQLGenerator().generateSQL(
             question: "anything",

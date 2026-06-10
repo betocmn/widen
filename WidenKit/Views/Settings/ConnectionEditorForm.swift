@@ -1,12 +1,13 @@
 import SwiftUI
 
-public struct ConnectionSettingsView: View {
+/// Connection editor form: the connection fields, query defaults, validation
+/// feedback, and Test Connection / Save actions.
+struct ConnectionEditorForm: View {
     @Environment(AppState.self) private var appState
-    @State private var viewModel = ConnectionSettingsViewModel()
+    @Bindable var viewModel: ConnectionSettingsViewModel
+    var onSaved: (DatabaseConnectionConfig) -> Void
 
-    public init() {}
-
-    public var body: some View {
+    var body: some View {
         VStack(spacing: 0) {
             Form {
                 Section("Connection") {
@@ -26,44 +27,6 @@ public struct ConnectionSettingsView: View {
                 Section("Query defaults") {
                     TextField("Default row limit", text: $viewModel.rowLimitText)
                     TextField("Statement timeout (seconds)", text: $viewModel.timeoutText)
-                }
-
-                Section("AI") {
-                    @Bindable var appState = appState
-                    Toggle("Use mock AI (developer)", isOn: $appState.useMockAI)
-                    if let message = appState.modelAvailabilityMessage {
-                        Label(message, systemImage: "exclamationmark.triangle")
-                            .font(.callout)
-                            .foregroundStyle(.orange)
-                    } else if appState.useMockAI {
-                        Text("Generation returns a constant test query while mock mode is on.")
-                            .font(.callout)
-                            .foregroundStyle(.secondary)
-                    } else {
-                        Label(
-                            "Apple's on-device model is ready.",
-                            systemImage: "checkmark.circle"
-                        )
-                        .font(.callout)
-                        .foregroundStyle(.secondary)
-                    }
-                }
-
-                Section {
-                    Label(
-                        "For safety, connect with a read-only Postgres user when using AI-generated SQL.",
-                        systemImage: "lock.shield"
-                    )
-                    .font(.callout)
-                    .foregroundStyle(.secondary)
-                }
-
-                Section("Privacy") {
-                    Text(
-                        "Widen runs locally. It sends prompts to Apple's local Foundation Model through macOS. It does not send your database schema or queries to our servers. This MVP has no backend."
-                    )
-                    .font(.callout)
-                    .foregroundStyle(.secondary)
                 }
 
                 if !viewModel.validationErrors.isEmpty {
@@ -98,28 +61,15 @@ public struct ConnectionSettingsView: View {
 
                 Spacer()
 
-                Button("Cancel") {
-                    appState.showSettings = false
-                }
-                .keyboardShortcut(.cancelAction)
-
-                Button("Save and Connect") {
-                    Task {
-                        if await viewModel.saveAndConnect(appState: appState) {
-                            appState.showSettings = false
-                        }
+                Button("Save") {
+                    if let saved = viewModel.save(appState: appState) {
+                        onSaved(saved)
                     }
                 }
                 .keyboardShortcut(.defaultAction)
                 .disabled(viewModel.isSaving)
             }
             .padding()
-        }
-        .frame(width: 480, height: 600)
-        .onAppear {
-            if let config = appState.config {
-                viewModel.load(from: config)
-            }
         }
     }
 

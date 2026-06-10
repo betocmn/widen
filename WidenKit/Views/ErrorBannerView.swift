@@ -13,21 +13,21 @@ public struct ErrorBannerView: View {
     public var body: some View {
         HStack(alignment: .firstTextBaseline, spacing: 8) {
             Image(systemName: "exclamationmark.triangle.fill")
-                .foregroundStyle(.white)
+                .foregroundStyle(.red)
             Text(message)
-                .foregroundStyle(.white)
+                .foregroundStyle(.primary)
                 .frame(maxWidth: .infinity, alignment: .leading)
                 .textSelection(.enabled)
             Button {
                 onDismiss()
             } label: {
                 Image(systemName: "xmark.circle.fill")
-                    .foregroundStyle(.white.opacity(0.85))
+                    .foregroundStyle(.secondary)
             }
             .buttonStyle(.plain)
         }
         .padding(10)
-        .background(Color.red.opacity(0.85), in: RoundedRectangle(cornerRadius: 8))
+        .glassEffect(.regular.tint(.red.opacity(0.35)), in: .rect(cornerRadius: 10))
         .padding([.horizontal, .top], 10)
     }
 }

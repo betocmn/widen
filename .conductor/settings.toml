@@ -1,7 +1,11 @@
 "$schema" = "https://conductor.build/schemas/settings.repo.schema.json"
+file_include_globs = ".env\n.env.local\n"
+
+[prompts]
+general = "Make sure to auto-commit after every change with semantic commit messages, without a parenthesis detail. And never add claude or codex as co-author or in the message on commits and branch names.\n\nWhenever you have a ticket ID, start the branch name with the uppercase ticket ID."
 
 [scripts]
+archive = 'make clean'
+run = 'make run'
+run_mode = 'nonconcurrent'
 setup = 'DEVELOPER_DIR="${DEVELOPER_DIR:-/Applications/Xcode-26.app/Contents/Developer}" xcodebuild -resolvePackageDependencies -project Widen.xcodeproj -scheme Widen -derivedDataPath build'
-run = "make run"
-archive = "make clean"
-run_mode = "nonconcurrent"
