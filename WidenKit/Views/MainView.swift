@@ -32,15 +32,12 @@ public struct MainView: View {
 
     @ViewBuilder
     private var detailContent: some View {
-        // The chat / SQL / results panels arrive with the next milestones.
-        VStack(spacing: 12) {
-            Text("Widen")
-                .font(.largeTitle.bold())
-            Text("Ask your PostgreSQL database questions in plain English.")
-                .foregroundStyle(.secondary)
-            Text(appState.connectionStatus.label)
-                .font(.callout)
+        // The chat panel arrives with the chat milestone.
+        VSplitView {
+            SQLPreviewView()
+                .frame(minHeight: 150, idealHeight: 200)
+            QueryResultsView()
+                .frame(minHeight: 180, maxHeight: .infinity)
         }
-        .frame(maxWidth: .infinity, maxHeight: .infinity)
     }
 }

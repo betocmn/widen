@@ -32,6 +32,7 @@ public final class AppState {
     public let keychain = KeychainService()
     public let postgres = PostgresService()
     public let schemaVM = SchemaViewModel()
+    public let queryVM = QueryResultViewModel()
 
     private let introspection = SchemaIntrospectionService()
 
@@ -81,6 +82,7 @@ public final class AppState {
     }
 
     public func disconnect() async {
+        queryVM.cancelRun()
         await postgres.disconnect()
         connectionStatus = .notConnected
         schema = nil
