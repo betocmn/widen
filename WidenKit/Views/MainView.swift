@@ -26,6 +26,10 @@ public struct MainView: View {
                 }
                 detailContent
             }
+            // Cap the detail pane's ideal width: if the split view's total
+            // ideal exceeds the screen, macOS 26 keeps the content laid out
+            // wider than the clamped window and the panes clip their edges.
+            .frame(minWidth: 420, idealWidth: 560)
             .inspector(isPresented: $appState.showSchemaInspector) {
                 SchemaInspectorView()
                     .inspectorColumnWidth(min: 240, ideal: 300, max: 420)
@@ -58,10 +62,14 @@ public struct MainView: View {
                 .help("Show or hide the schema inspector")
             }
         }
-        .frame(minWidth: 900, minHeight: 560)
+        // The explicit ideal size caps the window's preferred content width.
+        // Without it the split view's ideal (sidebar + detail + inspector)
+        // can exceed the screen; macOS 26 then keeps the content laid out
+        // wider than the clamped window and the panes clip their leading
+        // and trailing edges.
+        .frame(minWidth: 900, idealWidth: 1100, minHeight: 560, idealHeight: 700)
         .task {
             await appState.onLaunch()
-            await nudgeWindowLayout()
         }
         .onChange(of: appState.openSettingsRequest) {
             openSettings()
@@ -100,27 +108,6 @@ public struct MainView: View {
         case .connecting: .yellow
         case .connected: .green
         case .error: .red
-        }
-    }
-
-    /// Works around a macOS 26 NavigationSplitView issue: at first launch the
-    /// sidebar and inspector content lay out without their glass safe-area
-    /// margins (clipping the leading icons) until the window is resized or
-    /// clicked. A 1pt width jiggle forces a clean second layout pass.
-    private func nudgeWindowLayout() async {
-        try? await Task.sleep(for: .milliseconds(300))
-        guard let window = NSApp.windows.first(where: { $0.isVisible && !($0 is NSPanel) }),
-            let contentView = window.contentView
-        else { return }
-        markNeedsLayout(contentView)
-        contentView.layoutSubtreeIfNeeded()
-    }
-
-    /// Recursively invalidates layout so every pane recomputes its margins.
-    private func markNeedsLayout(_ view: NSView) {
-        view.needsLayout = true
-        for subview in view.subviews {
-            markNeedsLayout(subview)
         }
     }
 
