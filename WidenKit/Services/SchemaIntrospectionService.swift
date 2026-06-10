@@ -81,7 +81,8 @@ public struct SchemaIntrospectionService: Sendable {
           table_name,
           table_type
         FROM information_schema.tables
-        WHERE table_schema NOT IN ('pg_catalog', 'information_schema')
+        WHERE table_schema <> 'information_schema'
+          AND table_schema NOT LIKE 'pg\\_%' ESCAPE '\\'
           AND table_type IN ('BASE TABLE', 'VIEW')
         ORDER BY table_schema, table_name
         """
@@ -96,7 +97,8 @@ public struct SchemaIntrospectionService: Sendable {
           is_nullable,
           ordinal_position
         FROM information_schema.columns
-        WHERE table_schema NOT IN ('pg_catalog', 'information_schema')
+        WHERE table_schema <> 'information_schema'
+          AND table_schema NOT LIKE 'pg\\_%' ESCAPE '\\'
         ORDER BY table_schema, table_name, ordinal_position
         """
 
@@ -124,7 +126,10 @@ public struct SchemaIntrospectionService: Sendable {
          AND ccu.constraint_name = rc.unique_constraint_name
          AND ccu.ordinal_position = kcu.position_in_unique_constraint
         WHERE tc.constraint_type = 'FOREIGN KEY'
-          AND tc.table_schema NOT IN ('pg_catalog', 'information_schema')
+          AND tc.table_schema <> 'information_schema'
+          AND tc.table_schema NOT LIKE 'pg\\_%' ESCAPE '\\'
+          AND ccu.table_schema <> 'information_schema'
+          AND ccu.table_schema NOT LIKE 'pg\\_%' ESCAPE '\\'
         ORDER BY tc.table_schema, tc.table_name, tc.constraint_name, kcu.ordinal_position
         """
 }

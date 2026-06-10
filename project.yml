@@ -50,6 +50,7 @@ targets:
         LSApplicationCategoryType: public.app-category.developer-tools
         NSPrincipalClass: NSApplication
         NSHumanReadableCopyright: "Widen — local-only MVP"
+        NSLocalNetworkUsageDescription: "Widen connects to PostgreSQL databases you configure on your local network."
     settings:
       base:
         PRODUCT_BUNDLE_IDENTIFIER: dev.widen.Widen

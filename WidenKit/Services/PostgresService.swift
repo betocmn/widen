@@ -100,13 +100,10 @@ public actor PostgresService {
                         logger: logger
                     )
 
-                    var columns: [String] = []
+                    let columns = stream.columns.map(\.name)
                     var rows: [[String?]] = []
                     for try await row in stream {
                         let randomAccess = row.makeRandomAccess()
-                        if columns.isEmpty {
-                            columns = (0..<randomAccess.count).map { randomAccess[$0].columnName }
-                        }
                         rows.append(
                             (0..<randomAccess.count).map {
                                 PostgresCellFormatter.string(for: randomAccess[$0])
@@ -247,17 +244,97 @@ public actor PostgresService {
         seconds: Int,
         _ body: @escaping @Sendable () async throws -> T
     ) async throws -> T {
-        try await withThrowingTaskGroup(of: T.self) { group in
-            group.addTask { try await body() }
-            group.addTask {
-                try await Task.sleep(for: .seconds(seconds))
-                throw AppError.connectionFailed("Timed out waiting for the server to respond.")
+        let state = TimeoutRaceState<T>()
+        return try await withTaskCancellationHandler {
+            try await withCheckedThrowingContinuation { continuation in
+                let workerTask = Task {
+                    do {
+                        let value = try await body()
+                        state.complete(.success(value), cancelWorker: false)
+                    } catch {
+                        state.complete(.failure(error), cancelWorker: false)
+                    }
+                }
+                let timerTask = Task {
+                    do {
+                        try await Task.sleep(for: .seconds(seconds))
+                        state.complete(
+                            .failure(
+                                AppError.connectionFailed(
+                                    "Timed out waiting for the server to respond.")),
+                            cancelWorker: true
+                        )
+                    } catch {
+                        // The worker completed or the caller cancelled first.
+                    }
+                }
+                state.install(
+                    continuation: continuation,
+                    workerTask: workerTask,
+                    timerTask: timerTask
+                )
             }
-            guard let result = try await group.next() else {
-                throw AppError.connectionFailed("Timed out waiting for the server to respond.")
-            }
-            group.cancelAll()
-            return result
+        } onCancel: {
+            state.complete(.failure(CancellationError()), cancelWorker: true)
         }
+    }
+}
+
+private final class TimeoutRaceState<T: Sendable>: @unchecked Sendable {
+    private let lock = NSLock()
+    private var continuation: CheckedContinuation<T, any Error>?
+    private var workerTask: Task<Void, Never>?
+    private var timerTask: Task<Void, Never>?
+    private var result: Result<T, any Error>?
+
+    func install(
+        continuation: CheckedContinuation<T, any Error>,
+        workerTask: Task<Void, Never>,
+        timerTask: Task<Void, Never>
+    ) {
+        let completed: Result<T, any Error>?
+
+        lock.lock()
+        if let result {
+            completed = result
+        } else {
+            completed = nil
+            self.continuation = continuation
+            self.workerTask = workerTask
+            self.timerTask = timerTask
+        }
+        lock.unlock()
+
+        if let completed {
+            workerTask.cancel()
+            timerTask.cancel()
+            continuation.resume(with: completed)
+        }
+    }
+
+    func complete(_ result: Result<T, any Error>, cancelWorker: Bool) {
+        let continuationToResume: CheckedContinuation<T, any Error>?
+        let workerTaskToCancel: Task<Void, Never>?
+        let timerTaskToCancel: Task<Void, Never>?
+
+        lock.lock()
+        guard self.result == nil else {
+            lock.unlock()
+            return
+        }
+        self.result = result
+        continuationToResume = continuation
+        workerTaskToCancel = workerTask
+        timerTaskToCancel = timerTask
+        continuation = nil
+        workerTask = nil
+        timerTask = nil
+        lock.unlock()
+
+        if cancelWorker {
+            workerTaskToCancel?.cancel()
+        }
+        timerTaskToCancel?.cancel()
+        continuationToResume?.resume(with: result)
     }
 }

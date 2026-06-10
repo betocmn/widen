@@ -1,9 +1,17 @@
 import Foundation
 
+protocol QueryExecuting: Sendable {
+    func run(
+        sql: String,
+        config: DatabaseConnectionConfig,
+        postgres: PostgresService
+    ) async throws -> QueryResult
+}
+
 /// Validates and executes user- or AI-written SQL. The model is never
 /// trusted: every statement goes through `SQLSafetyValidator` before reaching
 /// the database, and always runs read-only with a statement timeout.
-public struct QueryExecutionService: Sendable {
+public struct QueryExecutionService: QueryExecuting, Sendable {
     public init() {}
 
     public func run(

@@ -107,7 +107,7 @@ struct PostgresIntegrationTests {
         #expect(schema.schemas.contains { $0.name == "public" })
         #expect(
             !schema.tables.contains {
-                $0.schema == "pg_catalog" || $0.schema == "information_schema"
+                $0.schema.hasPrefix("pg_") || $0.schema == "information_schema"
             })
     }
 
@@ -225,6 +225,20 @@ struct QueryExecutionIntegrationTests {
         }
         #expect(result.rowCount == 1)
         #expect(!result.truncated)
+    }
+
+    @Test func emptySelectPreservesColumnHeaders() async throws {
+        let config = makeConfig()
+        let result = try await withService(config: config) { service in
+            try await QueryExecutionService().run(
+                sql: "SELECT id, email FROM users WHERE false",
+                config: config,
+                postgres: service
+            )
+        }
+        #expect(result.columns == ["id", "email"])
+        #expect(result.rows.isEmpty)
+        #expect(result.csv() == "id,email")
     }
 
     @Test func mutatingSQLIsBlockedBeforeReachingTheServer() async throws {
