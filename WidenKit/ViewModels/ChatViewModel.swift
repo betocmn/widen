@@ -12,16 +12,6 @@ public final class ChatViewModel {
 
     /// Submits the current input: appends the user message, generates SQL,
     /// appends the assistant explanation, and fills the SQL preview.
-    public func submit(appState: AppState) async {
-        await submit(
-            schema: appState.schema,
-            generator: appState.sqlGenerator,
-            config: SQLGenerationConfig(
-                defaultRowLimit: appState.config?.defaultRowLimit ?? 100),
-            queryVM: appState.queryVM
-        )
-    }
-
     func submit(
         schema: DatabaseSchema?,
         generator: any SQLGenerator,

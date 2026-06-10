@@ -103,11 +103,9 @@ public struct ConnectionSettingsView: View {
                 }
                 .keyboardShortcut(.cancelAction)
 
-                Button("Save and Connect") {
-                    Task {
-                        if await viewModel.saveAndConnect(appState: appState) {
-                            appState.showSettings = false
-                        }
+                Button("Save") {
+                    if viewModel.save(appState: appState) {
+                        appState.showSettings = false
                     }
                 }
                 .keyboardShortcut(.defaultAction)
@@ -117,7 +115,8 @@ public struct ConnectionSettingsView: View {
         }
         .frame(width: 480, height: 600)
         .onAppear {
-            if let config = appState.config {
+            let activeConfig = appState.activeConnectionID.flatMap { appState.connection(for: $0) }
+            if let config = activeConfig ?? appState.connections.first {
                 viewModel.load(from: config)
             }
         }

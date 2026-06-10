@@ -2,20 +2,24 @@ import SwiftUI
 
 public struct ChatView: View {
     @Environment(AppState.self) private var appState
+    private let controller: SessionController
 
-    public init() {}
+    public init(controller: SessionController) {
+        self.controller = controller
+    }
 
     public var body: some View {
-        @Bindable var chatVM = appState.chatVM
+        @Bindable var chatVM = controller.chatVM
 
         VStack(spacing: 8) {
             HStack {
                 Text("Ask your database")
                     .font(.headline)
                 Spacer()
-                if !appState.chatVM.messages.isEmpty {
+                if !controller.chatVM.messages.isEmpty {
                     Button("Clear Chat") {
-                        appState.chatVM.clearConversation()
+                        controller.chatVM.clearConversation()
+                        appState.sessionDidChange(controller.sessionID)
                     }
                     .controlSize(.small)
                 }
@@ -31,14 +35,14 @@ public struct ChatView: View {
             ScrollViewReader { proxy in
                 ScrollView {
                     LazyVStack(alignment: .leading, spacing: 8) {
-                        if appState.chatVM.messages.isEmpty {
+                        if controller.chatVM.messages.isEmpty {
                             emptyState
                         }
-                        ForEach(appState.chatVM.messages) { message in
+                        ForEach(controller.chatVM.messages) { message in
                             MessageBubble(message: message)
                                 .id(message.id)
                         }
-                        if appState.chatVM.isGenerating {
+                        if controller.chatVM.isGenerating {
                             LoadingView(label: "Generating SQL with the local model…")
                                 .id("generating")
                         }
@@ -46,8 +50,8 @@ public struct ChatView: View {
                     .frame(maxWidth: .infinity, alignment: .leading)
                     .padding(.vertical, 4)
                 }
-                .onChange(of: appState.chatVM.messages.count) {
-                    if let lastID = appState.chatVM.messages.last?.id {
+                .onChange(of: controller.chatVM.messages.count) {
+                    if let lastID = controller.chatVM.messages.last?.id {
                         withAnimation { proxy.scrollTo(lastID, anchor: .bottom) }
                     }
                 }
@@ -60,15 +64,15 @@ public struct ChatView: View {
                 )
                 .textFieldStyle(.roundedBorder)
                 .onSubmit { generate() }
-                .disabled(appState.chatVM.isGenerating)
+                .disabled(controller.chatVM.isGenerating)
 
                 Button("Generate SQL") {
                     generate()
                 }
                 .buttonStyle(.borderedProminent)
                 .disabled(
-                    appState.chatVM.isGenerating
-                        || appState.chatVM.input.trimmingCharacters(in: .whitespaces).isEmpty
+                    controller.chatVM.isGenerating
+                        || controller.chatVM.input.trimmingCharacters(in: .whitespaces).isEmpty
                 )
             }
         }
@@ -76,7 +80,7 @@ public struct ChatView: View {
     }
 
     private func generate() {
-        Task { await appState.chatVM.submit(appState: appState) }
+        Task { await controller.submit(appState: appState) }
     }
 
     private var emptyState: some View {

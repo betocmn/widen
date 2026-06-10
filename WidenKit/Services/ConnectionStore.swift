@@ -34,15 +34,4 @@ public struct ConnectionStore: Sendable {
         let data = try encoder.encode(configs)
         try data.write(to: fileURL, options: .atomic)
     }
-
-    // The MVP supports a single saved connection; the array on disk keeps the
-    // format forward-compatible with multiple connections later.
-
-    public func loadPrimary() throws -> DatabaseConnectionConfig? {
-        try load().first
-    }
-
-    public func savePrimary(_ config: DatabaseConnectionConfig) throws {
-        try save([config])
-    }
 }
