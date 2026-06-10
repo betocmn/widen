@@ -61,6 +61,7 @@ public final class AppState {
     public let postgres = PostgresService()
     public let schemaVM = SchemaViewModel()
     public let queryVM = QueryResultViewModel()
+    public let chatVM = ChatViewModel()
 
     private let introspection = SchemaIntrospectionService()
 
