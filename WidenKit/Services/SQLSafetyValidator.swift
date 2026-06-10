@@ -40,7 +40,9 @@ public enum SQLSafetyValidator {
         "PG_CANCEL_BACKEND", "PG_TERMINATE_BACKEND",
         "PG_RELOAD_CONF", "PG_ROTATE_LOGFILE", "PG_PROMOTE",
         "PG_SWITCH_WAL", "PG_CREATE_RESTORE_POINT",
-        "PG_READ_FILE", "PG_READ_BINARY_FILE", "PG_LS_DIR", "PG_STAT_FILE",
+        "PG_READ_FILE", "PG_READ_BINARY_FILE", "PG_LS_DIR",
+        "PG_LS_LOGDIR", "PG_LS_WALDIR", "PG_LS_ARCHIVE_STATUSDIR", "PG_LS_TMPDIR",
+        "PG_STAT_FILE",
         "PG_START_BACKUP", "PG_STOP_BACKUP", "PG_BACKUP_START", "PG_BACKUP_STOP",
         "PG_STAT_RESET", "PG_STAT_RESET_SHARED",
         "PG_STAT_RESET_SINGLE_TABLE_COUNTERS", "PG_STAT_RESET_SINGLE_FUNCTION_COUNTERS",
@@ -348,35 +350,57 @@ public enum SQLSafetyValidator {
     }
 
     static func hasTopLevelLimit(_ strippedText: String) -> Bool {
+        let chars = Array(strippedText)
         var depth = 0
-        var current = ""
-        var found = false
+        var i = 0
 
-        func flush() {
-            if !current.isEmpty {
-                if depth == 0, current.uppercased() == "LIMIT" {
-                    found = true
+        while i < chars.count {
+            let char = chars[i]
+            if isWordStart(char) {
+                var token = ""
+                while i < chars.count, isWordPart(chars[i], tokenStarted: !token.isEmpty) {
+                    token.append(chars[i])
+                    i += 1
                 }
-                current = ""
+                if depth == 0, token.uppercased() == "LIMIT" {
+                    return topLevelLimitIsBounded(chars, after: i)
+                }
+                continue
             }
+            if char == "(" {
+                depth += 1
+            } else if char == ")", depth > 0 {
+                depth -= 1
+            }
+            i += 1
+        }
+        return false
+    }
+
+    private static func topLevelLimitIsBounded(_ chars: [Character], after offset: Int) -> Bool {
+        var i = offset
+        while i < chars.count {
+            if chars[i].isWhitespace || chars[i] == "(" {
+                i += 1
+                continue
+            }
+            break
         }
 
-        for char in strippedText {
-            if char.isLetter || char == "_"
-                || (!current.isEmpty && (char.isNumber || char == "$"))
-            {
-                current.append(char)
-            } else {
-                flush()
-                if char == "(" {
-                    depth += 1
-                } else if char == ")", depth > 0 {
-                    depth -= 1
-                }
-            }
-            if found { return true }
+        var token = ""
+        while i < chars.count, isWordPart(chars[i], tokenStarted: !token.isEmpty) {
+            token.append(chars[i])
+            i += 1
         }
-        flush()
-        return found
+        let uppercased = token.uppercased()
+        return uppercased != "ALL" && uppercased != "NULL"
+    }
+
+    private static func isWordStart(_ char: Character) -> Bool {
+        char.isLetter || char == "_"
+    }
+
+    private static func isWordPart(_ char: Character, tokenStarted: Bool) -> Bool {
+        char.isLetter || char == "_" || (tokenStarted && (char.isNumber || char == "$"))
     }
 }
