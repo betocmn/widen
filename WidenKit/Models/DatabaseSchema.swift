@@ -1,0 +1,31 @@
+import Foundation
+
+public struct SchemaInfo: Identifiable, Codable, Equatable, Hashable, Sendable {
+    public var id: String { name }
+    public var name: String
+
+    public init(name: String) {
+        self.name = name
+    }
+}
+
+/// A snapshot of the connected database's structure, used by both the sidebar
+/// browser and the SQL-generation prompt.
+public struct DatabaseSchema: Codable, Equatable, Sendable {
+    public var schemas: [SchemaInfo]
+    public var tables: [TableInfo]
+    public var foreignKeys: [ForeignKeyInfo]
+    public var loadedAt: Date
+
+    public init(
+        schemas: [SchemaInfo] = [],
+        tables: [TableInfo] = [],
+        foreignKeys: [ForeignKeyInfo] = [],
+        loadedAt: Date = Date()
+    ) {
+        self.schemas = schemas
+        self.tables = tables
+        self.foreignKeys = foreignKeys
+        self.loadedAt = loadedAt
+    }
+}
