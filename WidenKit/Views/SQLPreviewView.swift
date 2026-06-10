@@ -22,19 +22,22 @@ public struct SQLPreviewView: View {
                 Button("Validate") {
                     queryVM.validate()
                 }
+                .buttonStyle(.glass)
                 Button("Copy SQL") {
                     NSPasteboard.general.clearContents()
                     NSPasteboard.general.setString(queryVM.sqlText, forType: .string)
                 }
+                .buttonStyle(.glass)
                 .disabled(queryVM.sqlText.isEmpty)
                 Button("Clear") {
                     queryVM.clear()
                 }
+                .buttonStyle(.glass)
                 .disabled(queryVM.sqlText.isEmpty)
                 Button("Run") {
                     controller.runQuery(appState: appState)
                 }
-                .buttonStyle(.borderedProminent)
+                .buttonStyle(.glassProminent)
                 .keyboardShortcut(.return, modifiers: .command)
                 .disabled(
                     queryVM.isRunning
@@ -48,7 +51,7 @@ public struct SQLPreviewView: View {
                 .autocorrectionDisabled()
                 .scrollContentBackground(.hidden)
                 .padding(6)
-                .background(.quaternary.opacity(0.4), in: RoundedRectangle(cornerRadius: 6))
+                .background(.thinMaterial, in: RoundedRectangle(cornerRadius: 8))
                 .frame(minHeight: 70)
 
             if let validation = controller.queryVM.validation {

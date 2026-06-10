@@ -21,6 +21,7 @@ public struct ChatView: View {
                         controller.chatVM.clearConversation()
                         appState.sessionDidChange(controller.sessionID)
                     }
+                    .buttonStyle(.glass)
                     .controlSize(.small)
                 }
             }
@@ -57,23 +58,28 @@ public struct ChatView: View {
                 }
             }
 
-            HStack(spacing: 8) {
-                TextField(
-                    "e.g. “Which users have spent the most?”",
-                    text: $chatVM.input
-                )
-                .textFieldStyle(.roundedBorder)
-                .onSubmit { generate() }
-                .disabled(controller.chatVM.isGenerating)
+            GlassEffectContainer(spacing: 8) {
+                HStack(spacing: 8) {
+                    TextField(
+                        "e.g. “Which users have spent the most?”",
+                        text: $chatVM.input
+                    )
+                    .textFieldStyle(.plain)
+                    .padding(.horizontal, 12)
+                    .padding(.vertical, 6)
+                    .glassEffect(.regular, in: .capsule)
+                    .onSubmit { generate() }
+                    .disabled(controller.chatVM.isGenerating)
 
-                Button("Generate SQL") {
-                    generate()
+                    Button("Generate SQL") {
+                        generate()
+                    }
+                    .buttonStyle(.glassProminent)
+                    .disabled(
+                        controller.chatVM.isGenerating
+                            || controller.chatVM.input.trimmingCharacters(in: .whitespaces).isEmpty
+                    )
                 }
-                .buttonStyle(.borderedProminent)
-                .disabled(
-                    controller.chatVM.isGenerating
-                        || controller.chatVM.input.trimmingCharacters(in: .whitespaces).isEmpty
-                )
             }
         }
         .padding(10)
@@ -101,33 +107,50 @@ private struct MessageBubble: View {
     var body: some View {
         HStack {
             if message.role == .user { Spacer(minLength: 60) }
-            VStack(alignment: .leading, spacing: 4) {
-                Text(message.text)
-                    .textSelection(.enabled)
-                if let generation = message.generation, message.role == .assistant {
-                    if generation.needsClarification {
-                        Label("Needs clarification", systemImage: "questionmark.bubble")
-                            .font(.caption2)
-                            .foregroundStyle(.secondary)
-                    } else {
-                        Text("SQL added to the editor below — review it, then press Run.")
-                            .font(.caption2)
-                            .foregroundStyle(.secondary)
-                    }
-                }
-            }
-            .padding(.horizontal, 10)
-            .padding(.vertical, 6)
-            .background(background, in: RoundedRectangle(cornerRadius: 8))
+            bubble
             if message.role != .user { Spacer(minLength: 60) }
         }
     }
 
-    private var background: some ShapeStyle {
-        switch message.role {
-        case .user: AnyShapeStyle(Color.accentColor.opacity(0.18))
-        case .assistant: AnyShapeStyle(.quaternary.opacity(0.5))
-        case .error: AnyShapeStyle(Color.red.opacity(0.15))
+    /// The user bubble gets real glass; assistant and error bubbles use a
+    /// plain material — they live in a scrolling LazyVStack, where stacked
+    /// glass is needlessly expensive.
+    @ViewBuilder
+    private var bubble: some View {
+        if message.role == .user {
+            content
+                .glassEffect(
+                    .regular.tint(Color.accentColor.opacity(0.35)),
+                    in: .rect(cornerRadius: 14))
+        } else {
+            content
+                .background(.regularMaterial, in: RoundedRectangle(cornerRadius: 14))
+                .overlay {
+                    if message.role == .error {
+                        RoundedRectangle(cornerRadius: 14)
+                            .strokeBorder(Color.red.opacity(0.4))
+                    }
+                }
         }
+    }
+
+    private var content: some View {
+        VStack(alignment: .leading, spacing: 4) {
+            Text(message.text)
+                .textSelection(.enabled)
+            if let generation = message.generation, message.role == .assistant {
+                if generation.needsClarification {
+                    Label("Needs clarification", systemImage: "questionmark.bubble")
+                        .font(.caption2)
+                        .foregroundStyle(.secondary)
+                } else {
+                    Text("SQL added to the editor below — review it, then press Run.")
+                        .font(.caption2)
+                        .foregroundStyle(.secondary)
+                }
+            }
+        }
+        .padding(.horizontal, 10)
+        .padding(.vertical, 6)
     }
 }

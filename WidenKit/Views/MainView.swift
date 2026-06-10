@@ -5,6 +5,9 @@ import SwiftUI
 public struct MainView: View {
     @Environment(AppState.self) private var appState
     @Environment(\.openSettings) private var openSettings
+    @Environment(\.colorScheme) private var colorScheme
+    @AppStorage(AppearancePreference.storageKey)
+    private var appearanceRaw = AppearancePreference.system.rawValue
 
     public init() {}
 
@@ -29,6 +32,23 @@ public struct MainView: View {
             }
         }
         .toolbar {
+            ToolbarItem(placement: .navigation) {
+                connectionChip
+            }
+            ToolbarItem(placement: .primaryAction) {
+                Button {
+                    toggleAppearance()
+                } label: {
+                    Label(
+                        colorScheme == .dark ? "Switch to Light Mode" : "Switch to Dark Mode",
+                        systemImage: colorScheme == .dark ? "sun.max" : "moon"
+                    )
+                }
+                .help(
+                    colorScheme == .dark
+                        ? "Switch to light mode (reset to System in Settings › General)"
+                        : "Switch to dark mode (reset to System in Settings › General)")
+            }
             ToolbarItem(placement: .primaryAction) {
                 Button {
                     appState.showSchemaInspector.toggle()
@@ -50,6 +70,43 @@ public struct MainView: View {
         ) { _ in
             appState.flushSessions()
         }
+    }
+
+    /// Status dot + name of the selected session's database.
+    @ViewBuilder
+    private var connectionChip: some View {
+        if let id = appState.activeConnectionID,
+            let config = appState.connection(for: id)
+        {
+            let status = appState.connectionState(id)
+            HStack(spacing: 6) {
+                Circle()
+                    .fill(statusColor(status))
+                    .frame(width: 8, height: 8)
+                Text(config.name)
+                    .font(.callout)
+            }
+            .padding(.horizontal, 10)
+            .padding(.vertical, 5)
+            .glassEffect(.regular, in: .capsule)
+            .help("\(config.database) @ \(config.host) — \(status.label)")
+        }
+    }
+
+    private func statusColor(_ status: AppState.ConnectionStatus) -> Color {
+        switch status {
+        case .notConnected: .gray
+        case .connecting: .yellow
+        case .connected: .green
+        case .error: .red
+        }
+    }
+
+    /// Flips to the opposite of the effective scheme. The "follow System"
+    /// reset lives in Settings › General.
+    private func toggleAppearance() {
+        let next: AppearancePreference = colorScheme == .dark ? .light : .dark
+        appearanceRaw = next.rawValue
     }
 
     @ViewBuilder
