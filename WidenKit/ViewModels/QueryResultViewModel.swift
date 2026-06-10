@@ -32,7 +32,11 @@ public final class QueryResultViewModel {
 
     /// Starts the query in a cancellable task. Cancellation only stops the app
     /// from waiting — the server-side guard is the statement timeout.
-    public func startRun(appState: AppState) {
+    public func startRun(
+        connection: DatabaseConnectionConfig?,
+        postgres: PostgresService,
+        isConnected: Bool
+    ) {
         guard !isRunning else { return }
         nextRunID += 1
         let runID = nextRunID
@@ -41,7 +45,9 @@ public final class QueryResultViewModel {
         runError = nil
         isRunning = true
         runTask = Task {
-            await run(appState: appState, runID: runID)
+            await run(
+                connection: connection, postgres: postgres,
+                isConnected: isConnected, runID: runID)
         }
     }
 
@@ -73,13 +79,31 @@ public final class QueryResultViewModel {
         validate()
     }
 
-    private func run(appState: AppState, runID: Int) async {
+    /// Restores persisted editor state when a session is rehydrated. Unlike
+    /// `setGeneration`, this never treats the SQL as a fresh generation.
+    public func restore(sqlText: String, generation: SQLGenerationResult?) {
+        self.sqlText = sqlText
+        self.generation = generation
+        result = nil
+        runError = nil
+        validation = nil
+        if !sqlText.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+            validate()
+        }
+    }
+
+    private func run(
+        connection: DatabaseConnectionConfig?,
+        postgres: PostgresService,
+        isConnected: Bool,
+        runID: Int
+    ) async {
         validate()
         guard let validation, validation.isValid else {
             finishRun(runID)
             return
         }
-        guard appState.connectionStatus == .connected, let config = appState.config else {
+        guard isConnected, let config = connection else {
             if isActiveRun(runID) {
                 runError = AppError.notConnected.errorDescription
             }
@@ -91,7 +115,7 @@ public final class QueryResultViewModel {
             let newResult = try await executor.run(
                 sql: sqlText,
                 config: config,
-                postgres: appState.postgres
+                postgres: postgres
             )
             if isActiveRun(runID) {
                 result = newResult

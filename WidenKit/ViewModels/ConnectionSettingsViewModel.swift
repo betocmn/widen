@@ -110,22 +110,37 @@ public final class ConnectionSettingsViewModel {
         }
     }
 
-    /// Saves the config (JSON) and password (Keychain), then asks the app to
-    /// connect. Returns true when the sheet should close.
-    public func saveAndConnect(appState: AppState) async -> Bool {
+    /// Saves the config (JSON) and password (Keychain). There is no eager
+    /// connect — databases connect lazily when one of their sessions is
+    /// selected. Returns true on success.
+    public func save(appState: AppState) -> Bool {
         guard let config = buildConfig() else { return false }
         saveError = nil
         isSaving = true
         defer { isSaving = false }
         do {
-            try appState.keychain.savePassword(password, for: config.id)
-            try appState.connectionStore.savePrimary(config)
+            try appState.addOrUpdateConnection(config, password: password)
         } catch {
             saveError = error.localizedDescription
             return false
         }
-        appState.config = config
-        await appState.connect(config)
         return true
+    }
+
+    /// Resets the form to its defaults for a brand-new connection.
+    public func startNew() {
+        existing = nil
+        name = "Local Postgres"
+        host = "localhost"
+        portText = "5432"
+        database = ""
+        username = NSUserName()
+        password = ""
+        sslMode = .disable
+        rowLimitText = "100"
+        timeoutText = "10"
+        validationErrors = []
+        testState = .idle
+        saveError = nil
     }
 }

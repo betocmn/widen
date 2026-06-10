@@ -25,27 +25,50 @@ struct WidenApp: App {
                 }
                 .keyboardShortcut(",", modifiers: .command)
             }
+            CommandGroup(replacing: .newItem) {
+                Button("New Session") {
+                    if let connectionID = appState.activeConnectionID
+                        ?? appState.connections.first?.id
+                    {
+                        appState.createSession(connectionID: connectionID)
+                    }
+                }
+                .keyboardShortcut("n", modifiers: .command)
+                .disabled(appState.connections.isEmpty)
+            }
             CommandMenu("Database") {
                 Button("Refresh Schema") {
-                    Task { await appState.refreshSchema() }
+                    if let id = appState.activeConnectionID {
+                        Task { await appState.refreshSchema(for: id) }
+                    }
                 }
                 .keyboardShortcut("r", modifiers: .command)
-                .disabled(appState.connectionStatus != .connected)
+                .disabled(activeConnectionState != .connected)
 
                 Divider()
 
                 Button("Connect") {
-                    if let config = appState.config {
-                        Task { await appState.connect(config) }
+                    if let id = appState.activeConnectionID {
+                        Task { await appState.connectIfNeeded(id) }
                     }
                 }
-                .disabled(appState.config == nil || appState.connectionStatus == .connected)
+                .disabled(
+                    appState.activeConnectionID == nil
+                        || activeConnectionState == .connected
+                        || activeConnectionState == .connecting
+                )
 
                 Button("Disconnect") {
-                    Task { await appState.disconnect() }
+                    if let id = appState.activeConnectionID {
+                        Task { await appState.disconnect(id) }
+                    }
                 }
-                .disabled(appState.connectionStatus != .connected)
+                .disabled(activeConnectionState != .connected)
             }
         }
+    }
+
+    private var activeConnectionState: AppState.ConnectionStatus {
+        appState.activeConnectionID.map { appState.connectionState($0) } ?? .notConnected
     }
 }

@@ -1,3 +1,5 @@
+import AppKit
+import Combine
 import SwiftUI
 
 public struct MainView: View {
@@ -28,17 +30,23 @@ public struct MainView: View {
         .task {
             await appState.onLaunch()
         }
+        .onReceive(
+            NotificationCenter.default.publisher(for: NSApplication.willTerminateNotification)
+        ) { _ in
+            appState.flushSessions()
+        }
     }
 
     @ViewBuilder
     private var detailContent: some View {
-        VSplitView {
-            ChatView()
-                .frame(minHeight: 150, idealHeight: 210)
-            SQLPreviewView()
-                .frame(minHeight: 150, idealHeight: 210)
-            QueryResultsView()
-                .frame(minHeight: 170, maxHeight: .infinity)
+        if let controller = appState.selectedController {
+            SessionDetailView(controller: controller)
+        } else {
+            ContentUnavailableView {
+                Label("Select a session", systemImage: "text.bubble")
+            } description: {
+                Text("Pick a session in the sidebar, or press + on a database to start one.")
+            }
         }
     }
 }
