@@ -23,6 +23,9 @@ struct SQLCardView: View {
             }
         }
         .padding(10)
+        // Accent tint over the material so the pending SQL stands apart
+        // from the bubbles and the pane background.
+        .background(Color.accentColor.opacity(0.12), in: RoundedRectangle(cornerRadius: 12))
         .background(.thinMaterial, in: RoundedRectangle(cornerRadius: 12))
         .overlay {
             RoundedRectangle(cornerRadius: 12)
