@@ -30,6 +30,38 @@ public struct MainView: View {
             // ideal exceeds the screen, macOS 26 keeps the content laid out
             // wider than the clamped window and the panes clip their edges.
             .frame(minWidth: 420, idealWidth: 560)
+            // Declared on the detail content (not the split view) so the
+            // items belong to the middle panel's toolbar section: the
+            // primary action then sits at the section's trailing edge —
+            // against the inspector divider — mirroring the system sidebar
+            // toggle on the left.
+            .toolbar {
+                ToolbarItem(placement: .navigation) {
+                    breadcrumb
+                }
+                ToolbarItem(placement: .navigation) {
+                    Button {
+                        toggleAppearance()
+                    } label: {
+                        Label(
+                            colorScheme == .dark ? "Switch to Light Mode" : "Switch to Dark Mode",
+                            systemImage: colorScheme == .dark ? "sun.max" : "moon"
+                        )
+                    }
+                    .help(
+                        colorScheme == .dark
+                            ? "Switch to light mode (reset to System in Settings › General)"
+                            : "Switch to dark mode (reset to System in Settings › General)")
+                }
+                // When the inspector is open its own toolbar section carries
+                // the toggle (right against the divider); this fallback only
+                // exists so the inspector can be reopened once hidden.
+                if !appState.showSchemaInspector {
+                    ToolbarItem(placement: .primaryAction) {
+                        SchemaInspectorToggle()
+                    }
+                }
+            }
             .inspector(isPresented: $appState.showSchemaInspector) {
                 SchemaInspectorView()
                     .inspectorColumnWidth(min: 240, ideal: 300, max: 420)
@@ -40,34 +72,6 @@ public struct MainView: View {
         // sections — removing it entirely collapses the primary-action
         // buttons next to the breadcrumb.
         .navigationTitle("")
-        .toolbar {
-            ToolbarItem(placement: .navigation) {
-                breadcrumb
-            }
-            ToolbarItem(placement: .primaryAction) {
-                Button {
-                    toggleAppearance()
-                } label: {
-                    Label(
-                        colorScheme == .dark ? "Switch to Light Mode" : "Switch to Dark Mode",
-                        systemImage: colorScheme == .dark ? "sun.max" : "moon"
-                    )
-                }
-                .help(
-                    colorScheme == .dark
-                        ? "Switch to light mode (reset to System in Settings › General)"
-                        : "Switch to dark mode (reset to System in Settings › General)")
-            }
-            // Trailing edge, mirroring the system sidebar toggle on the left.
-            ToolbarItem(placement: .primaryAction) {
-                Button {
-                    appState.showSchemaInspector.toggle()
-                } label: {
-                    Label("Schema", systemImage: "sidebar.right")
-                }
-                .help("Show or hide the schema inspector")
-            }
-        }
         // The explicit ideal size caps the window's preferred content width.
         // Without it the split view's ideal (sidebar + detail + inspector)
         // can exceed the screen; macOS 26 then keeps the content laid out
@@ -168,5 +172,22 @@ public struct MainView: View {
                 Text("Pick a session in the sidebar, or press + on a database to start one.")
             }
         }
+    }
+}
+
+/// Shows or hides the schema inspector. Sits at the leading edge of the
+/// inspector's header while it is open (against the divider, mirroring the
+/// system sidebar toggle) and in the detail toolbar while it is hidden.
+struct SchemaInspectorToggle: View {
+    @Environment(AppState.self) private var appState
+
+    var body: some View {
+        Button {
+            appState.showSchemaInspector.toggle()
+        } label: {
+            Label("Schema", systemImage: "sidebar.right")
+                .labelStyle(.iconOnly)
+        }
+        .help("Show or hide the schema inspector")
     }
 }
