@@ -197,4 +197,14 @@ struct ConnectionSettingsViewModelTests {
         #expect(saved?.name == "widen_test")
         #expect(state.connections.first?.name == "widen_test")
     }
+
+    @Test func testConnectionValidationUsesFooterState() async {
+        let viewModel = ConnectionSettingsViewModel()
+        viewModel.startNew()
+
+        await viewModel.testConnection()
+
+        #expect(viewModel.validationErrors.isEmpty)
+        #expect(viewModel.testState == .failure("Database is required."))
+    }
 }
