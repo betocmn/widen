@@ -12,6 +12,10 @@ public final class SessionController: Identifiable {
     public let connectionID: UUID
     public let chatVM = ChatViewModel()
     public let queryVM: QueryResultViewModel
+    /// Materialized results keyed by their run-record message, so every run
+    /// of this live session keeps its full table in the transcript. Never
+    /// persisted — after a relaunch the records render as summary rows.
+    public private(set) var results: [UUID: QueryResult] = [:]
 
     public convenience init(session: QuerySession) {
         self.init(session: session, executor: QueryExecutionService())
@@ -93,17 +97,25 @@ public final class SessionController: Identifiable {
         ) { [weak self, weak appState] result, errorMessage in
             guard let self else { return }
             if let result {
-                self.chatVM.appendRunRecord(
+                let record = self.chatVM.appendRunRecord(
                     ChatMessage.RunSummary(
                         rowCount: result.rowCount,
                         executionTimeMs: result.executionTimeMs,
                         truncated: result.truncated,
                         sql: sql
                     ))
+                self.results[record.id] = result
             } else if let errorMessage {
                 self.chatVM.appendRunError(errorMessage)
             }
             appState?.sessionDidChange(self.sessionID)
         }
+    }
+
+    /// Wipes the transcript, the SQL preview, and the per-run result cache.
+    public func clearConversation() {
+        chatVM.clearConversation()
+        queryVM.clear()
+        results.removeAll()
     }
 }

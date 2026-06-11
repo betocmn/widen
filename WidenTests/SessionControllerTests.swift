@@ -43,7 +43,7 @@ struct SessionControllerTests {
         )
     }
 
-    @Test func completedRunAppendsResultRecordWithSnapshottedSQL() async {
+    @Test func completedRunAppendsResultRecordWithSnapshottedSQL() async throws {
         let connectionID = UUID()
         let (state, dir) = makeState(connectionID: connectionID, connected: true)
         defer { try? FileManager.default.removeItem(at: dir) }
@@ -58,8 +58,10 @@ struct SessionControllerTests {
         #expect(record?.runSummary?.rowCount == 2)
         #expect(record?.runSummary?.executionTimeMs == 5)
         #expect(record?.runSummary?.sql == "SELECT id FROM users")
-        // The materialized result stays available for the inline card.
-        #expect(controller.queryVM.result != nil)
+        // The materialized result is kept per record, so every run's card
+        // stays in the transcript for the life of the session.
+        let recordID = try #require(record?.id)
+        #expect(controller.results[recordID]?.rowCount == 2)
     }
 
     @Test func failedRunAppendsErrorMessage() async {

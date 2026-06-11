@@ -1,15 +1,12 @@
 import SwiftUI
 
 /// One transcript entry. User/assistant/error messages render as bubbles;
-/// `.result` records render as a compact full-width row. (The latest run
-/// record is rendered by the transcript as a full `ResultsCardView` instead,
-/// while its result is still in memory.)
+/// `.result` records render as a compact full-width row. (Run records whose
+/// result is still in memory are rendered by the transcript as a full
+/// `ResultsCardView` instead, and SQL-bearing messages get their card from
+/// the transcript too.)
 struct MessageBubbleView: View {
     let message: ChatMessage
-    /// Restores an older generation into the active SQL card.
-    var onUseSQL: ((SQLGenerationResult) -> Void)?
-
-    @State private var showSQL = false
 
     var body: some View {
         if message.role == .result {
@@ -59,46 +56,16 @@ struct MessageBubbleView: View {
         VStack(alignment: .leading, spacing: 4) {
             Text(message.text)
                 .textSelection(.enabled)
-            if let generation = message.generation, message.role == .assistant {
-                if generation.needsClarification {
-                    Label("Needs clarification", systemImage: "questionmark.bubble")
-                        .font(.caption2)
-                        .foregroundStyle(.secondary)
-                } else if !generation.sql.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
-                    sqlDisclosure(generation)
-                }
+            if let generation = message.generation,
+                message.role == .assistant,
+                generation.needsClarification
+            {
+                Label("Needs clarification", systemImage: "questionmark.bubble")
+                    .font(.caption2)
+                    .foregroundStyle(.secondary)
             }
         }
         .padding(.horizontal, 10)
         .padding(.vertical, 6)
-    }
-
-    /// Collapsed by default so old generations don't clutter the transcript.
-    private func sqlDisclosure(_ generation: SQLGenerationResult) -> some View {
-        VStack(alignment: .leading, spacing: 4) {
-            Button {
-                withAnimation { showSQL.toggle() }
-            } label: {
-                Label("View SQL", systemImage: showSQL ? "chevron.down" : "chevron.right")
-                    .font(.caption2)
-                    .foregroundStyle(.secondary)
-            }
-            .buttonStyle(.plain)
-            if showSQL {
-                Text(generation.sql)
-                    .font(.system(.caption, design: .monospaced))
-                    .textSelection(.enabled)
-                    .padding(6)
-                    .frame(maxWidth: .infinity, alignment: .leading)
-                    .background(.quaternary.opacity(0.3), in: RoundedRectangle(cornerRadius: 6))
-                if onUseSQL != nil {
-                    Button("Use this SQL") {
-                        onUseSQL?(generation)
-                    }
-                    .buttonStyle(.link)
-                    .font(.caption2)
-                }
-            }
-        }
     }
 }
