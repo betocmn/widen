@@ -76,6 +76,16 @@ struct ConnectionStoreTests {
 @Suite("ConnectionSettingsViewModel validation")
 @MainActor
 struct ConnectionSettingsViewModelTests {
+    private func makeState() -> (AppState, URL) {
+        let dir = FileManager.default.temporaryDirectory
+            .appendingPathComponent("widen-tests-\(UUID().uuidString)", isDirectory: true)
+        let state = AppState(
+            connectionStore: ConnectionStore(directory: dir),
+            sessionStore: SessionStore(directory: dir)
+        )
+        return (state, dir)
+    }
+
     private func makeValidViewModel() -> ConnectionSettingsViewModel {
         let viewModel = ConnectionSettingsViewModel()
         viewModel.host = "localhost"
@@ -124,5 +134,53 @@ struct ConnectionSettingsViewModelTests {
         let viewModel = makeValidViewModel()
         viewModel.password = ""
         #expect(viewModel.buildConfig() != nil)
+    }
+
+    @Test func newFormStartsCleanAndTracksEdits() {
+        let viewModel = ConnectionSettingsViewModel()
+        viewModel.startNew()
+
+        #expect(!viewModel.hasUnsavedChanges)
+
+        viewModel.database = "widen_test"
+        #expect(viewModel.hasUnsavedChanges)
+
+        viewModel.startNew()
+        #expect(!viewModel.hasUnsavedChanges)
+    }
+
+    @Test func loadedFormStartsCleanAndTracksEdits() {
+        let config = DatabaseConnectionConfig(
+            name: "Local",
+            host: "localhost",
+            database: "widen_test",
+            username: NSUserName()
+        )
+        let viewModel = ConnectionSettingsViewModel()
+
+        viewModel.load(from: config)
+        #expect(!viewModel.hasUnsavedChanges)
+
+        viewModel.host = "127.0.0.1"
+        #expect(viewModel.hasUnsavedChanges)
+
+        viewModel.load(from: config)
+        #expect(!viewModel.hasUnsavedChanges)
+    }
+
+    @Test func successfulSaveUpdatesCleanSnapshot() {
+        let (state, dir) = makeState()
+        defer { try? FileManager.default.removeItem(at: dir) }
+        let viewModel = makeValidViewModel()
+
+        #expect(viewModel.hasUnsavedChanges)
+
+        let saved = viewModel.save(appState: state)
+
+        #expect(saved != nil)
+        #expect(!viewModel.hasUnsavedChanges)
+
+        viewModel.rowLimitText = "250"
+        #expect(viewModel.hasUnsavedChanges)
     }
 }
