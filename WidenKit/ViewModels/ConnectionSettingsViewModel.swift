@@ -11,6 +11,18 @@ public final class ConnectionSettingsViewModel {
         case failure(String)
     }
 
+    private struct FormSnapshot: Equatable {
+        var name: String
+        var host: String
+        var portText: String
+        var database: String
+        var username: String
+        var password: String
+        var sslMode: SSLMode
+        var rowLimitText: String
+        var timeoutText: String
+    }
+
     public var name = "Local Postgres"
     public var host = "localhost"
     public var portText = "5432"
@@ -27,9 +39,16 @@ public final class ConnectionSettingsViewModel {
     public private(set) var isSaving = false
 
     private var existing: DatabaseConnectionConfig?
+    private var cleanSnapshot: FormSnapshot?
     private let keychain = KeychainService()
 
-    public init() {}
+    public var hasUnsavedChanges: Bool {
+        cleanSnapshot != currentSnapshot
+    }
+
+    public init() {
+        markClean()
+    }
 
     /// Prefills the form from a saved connection (password from the Keychain).
     public func load(from config: DatabaseConnectionConfig) {
@@ -46,6 +65,7 @@ public final class ConnectionSettingsViewModel {
         validationErrors = []
         testState = .idle
         saveError = nil
+        markClean()
     }
 
     /// Validates the form per the roadmap rules and builds a config, or
@@ -126,6 +146,7 @@ public final class ConnectionSettingsViewModel {
             return nil
         }
         existing = config
+        markClean()
         return config
     }
 
@@ -144,5 +165,24 @@ public final class ConnectionSettingsViewModel {
         validationErrors = []
         testState = .idle
         saveError = nil
+        markClean()
+    }
+
+    private var currentSnapshot: FormSnapshot {
+        FormSnapshot(
+            name: name,
+            host: host,
+            portText: portText,
+            database: database,
+            username: username,
+            password: password,
+            sslMode: sslMode,
+            rowLimitText: rowLimitText,
+            timeoutText: timeoutText
+        )
+    }
+
+    private func markClean() {
+        cleanSnapshot = currentSnapshot
     }
 }

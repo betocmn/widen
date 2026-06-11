@@ -24,7 +24,7 @@ public struct SettingsView: View {
                 .tabItem { Label("Archived Sessions", systemImage: "archivebox") }
                 .tag(SettingsTab.archived)
         }
-        .frame(width: 620, height: 520)
+        .frame(width: 720, height: 560)
         .preferredColorScheme(
             (AppearancePreference(rawValue: appearanceRaw) ?? .system).colorScheme)
     }
