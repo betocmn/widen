@@ -62,6 +62,18 @@ public final class ChatViewModel {
             return
         }
 
+        // Built before appending the new question: the on-device model is
+        // stateless per request, so follow-ups ("just last week", "the query
+        // is failing") only work if the prompt carries what they refer to.
+        let context = SQLGenerationContext(
+            recentQuestions: messages.filter { $0.role == .user }.suffix(3).map(\.text),
+            currentSQL: queryVM.sqlText
+                .trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+                ? nil : queryVM.sqlText,
+            lastRunError: queryVM.runError
+                ?? (messages.last?.role == .error ? messages.last?.text : nil)
+        )
+
         input = ""
         messages.append(ChatMessage(role: .user, text: question))
         isGenerating = true
@@ -69,7 +81,7 @@ public final class ChatViewModel {
 
         do {
             let result = try await generator.generateSQL(
-                question: question, schema: schema, config: config)
+                question: question, schema: schema, context: context, config: config)
 
             if result.needsClarification,
                 let clarification = result.clarificationQuestion,
