@@ -10,6 +10,35 @@ public final class ChatViewModel {
 
     public init() {}
 
+    /// True when the trimmed input reads as raw SQL: a leading SELECT or
+    /// WITH word. Word-boundary match, so "SELECTED users last week" is
+    /// natural language. SQL that opens with a comment is treated as natural
+    /// language — the model path still produces runnable SQL for it.
+    public static func isDirectSQL(_ input: String) -> Bool {
+        input
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+            .range(of: #"^(?i)(select|with)\b"#, options: .regularExpression) != nil
+    }
+
+    /// Direct-SQL path: records the user's SQL in the transcript and loads it
+    /// straight into the preview — no model call, no assistant reply.
+    func submitDirectSQL(queryVM: QueryResultViewModel) {
+        let sql = input.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !sql.isEmpty, !isGenerating else { return }
+        input = ""
+        messages.append(ChatMessage(role: .user, text: sql))
+        queryVM.setDirectSQL(sql)
+    }
+
+    /// Appends the persistent history record for a finished run.
+    func appendRunRecord(_ summary: ChatMessage.RunSummary) {
+        messages.append(.runRecord(summary))
+    }
+
+    func appendRunError(_ message: String) {
+        messages.append(ChatMessage(role: .error, text: message))
+    }
+
     /// Submits the current input: appends the user message, generates SQL,
     /// appends the assistant explanation, and fills the SQL preview.
     func submit(
