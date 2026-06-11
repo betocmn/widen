@@ -35,9 +35,10 @@ public struct MainView: View {
                     .inspectorColumnWidth(min: 240, ideal: 300, max: 420)
             }
         }
+        .toolbar(removing: .title)
         .toolbar {
             ToolbarItem(placement: .navigation) {
-                connectionChip
+                breadcrumb
             }
             ToolbarItem(placement: .primaryAction) {
                 Button {
@@ -81,9 +82,11 @@ public struct MainView: View {
         }
     }
 
-    /// Status dot + name of the selected session's database.
+    /// Cursor-style breadcrumb: status dot · database › open schema. Plain
+    /// toolbar content on purpose — the macOS 26 toolbar already wraps items
+    /// in glass, so any custom capsule renders as a double rounded container.
     @ViewBuilder
-    private var connectionChip: some View {
+    private var breadcrumb: some View {
         if let id = appState.activeConnectionID,
             let config = appState.connection(for: id)
         {
@@ -94,12 +97,35 @@ public struct MainView: View {
                     .frame(width: 8, height: 8)
                 Text(config.database)
                     .font(.callout)
+                if let schemaName = appState.currentSchemaName(for: id) {
+                    Text("›")
+                        .font(.callout)
+                        .foregroundStyle(.tertiary)
+                    Menu {
+                        Picker("Schema", selection: schemaBinding(for: id)) {
+                            ForEach(appState.schemas[id]?.schemas ?? []) { schema in
+                                Text(schema.name).tag(schema.name)
+                            }
+                        }
+                        .pickerStyle(.inline)
+                    } label: {
+                        Text(schemaName)
+                            .font(.callout)
+                    }
+                    .menuStyle(.borderlessButton)
+                    .fixedSize()
+                    .help("Switch the open schema")
+                }
             }
-            .padding(.horizontal, 10)
-            .padding(.vertical, 5)
-            .glassEffect(.regular, in: .capsule)
             .help("\(config.name) · \(config.host):\(String(config.port)) — \(status.label)")
         }
+    }
+
+    private func schemaBinding(for id: UUID) -> Binding<String> {
+        Binding(
+            get: { appState.currentSchemaName(for: id) ?? "" },
+            set: { appState.selectSchema($0, for: id) }
+        )
     }
 
     private func statusColor(_ status: AppState.ConnectionStatus) -> Color {

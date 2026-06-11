@@ -70,6 +70,14 @@ public final class AppState {
 
     // MARK: - UI state
 
+    /// The schema the user has "open" per connection, persisted across
+    /// launches. Read through `currentSchemaName(for:)`, which falls back
+    /// when the stored choice no longer exists.
+    public var selectedSchemaNames: [UUID: String] = AppState.loadSelectedSchemaNames() {
+        didSet { Self.saveSelectedSchemaNames(selectedSchemaNames) }
+    }
+    private static let selectedSchemaNamesKey = "WidenSelectedSchemaNames"
+
     public var showSchemaInspector = true
     public var settingsTab: SettingsTab = .general
     /// Incremented to ask MainView to open the Settings window.
@@ -200,6 +208,53 @@ public final class AppState {
         }
     }
 
+    // MARK: - Schema selection
+
+    /// The effective open schema for a connection: the persisted choice when
+    /// it still exists in the loaded schema, else "public", else the first
+    /// schema. Self-validating on every read, so a refresh that drops the
+    /// chosen schema silently falls back.
+    public func currentSchemaName(for connectionID: UUID) -> String? {
+        guard let schema = schemas[connectionID], !schema.schemas.isEmpty else { return nil }
+        if let chosen = selectedSchemaNames[connectionID],
+            schema.schemas.contains(where: { $0.name == chosen })
+        {
+            return chosen
+        }
+        if schema.schemas.contains(where: { $0.name == "public" }) {
+            return "public"
+        }
+        return schema.schemas.first?.name
+    }
+
+    public func selectSchema(_ name: String, for connectionID: UUID) {
+        selectedSchemaNames[connectionID] = name
+    }
+
+    /// The schema handed to the SQL generator: the loaded schema narrowed to
+    /// the open schema, so generations only see what the user has open.
+    public func promptSchema(for connectionID: UUID) -> DatabaseSchema? {
+        guard let schema = schemas[connectionID] else { return nil }
+        guard let name = currentSchemaName(for: connectionID) else { return schema }
+        return schema.filtered(toSchema: name)
+    }
+
+    private static func loadSelectedSchemaNames() -> [UUID: String] {
+        guard
+            let raw = UserDefaults.standard.dictionary(forKey: selectedSchemaNamesKey)
+                as? [String: String]
+        else { return [:] }
+        return raw.reduce(into: [:]) { result, pair in
+            if let id = UUID(uuidString: pair.key) { result[id] = pair.value }
+        }
+    }
+
+    private static func saveSelectedSchemaNames(_ names: [UUID: String]) {
+        UserDefaults.standard.set(
+            Dictionary(uniqueKeysWithValues: names.map { ($0.key.uuidString, $0.value) }),
+            forKey: selectedSchemaNamesKey)
+    }
+
     /// Lazily creates and caches one `PostgresService` per connection.
     func postgres(for id: UUID) -> PostgresService {
         if let service = services[id] { return service }
@@ -305,6 +360,7 @@ public final class AppState {
         try? keychain.deletePassword(for: id)
         connectionStates[id] = nil
         schemas[id] = nil
+        selectedSchemaNames[id] = nil
         loadingSchemas.remove(id)
 
         let removedSessionIDs = Set(sessions.filter { $0.connectionID == id }.map(\.id))

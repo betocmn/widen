@@ -72,7 +72,7 @@ public final class SessionController: Identifiable {
             chatVM.submitDirectSQL(queryVM: queryVM)
         } else {
             await chatVM.submit(
-                schema: appState.schemas[connectionID],
+                schema: appState.promptSchema(for: connectionID),
                 generator: appState.sqlGenerator,
                 config: SQLGenerationConfig(
                     defaultRowLimit: appState.connection(for: connectionID)?.defaultRowLimit
