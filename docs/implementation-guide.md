@@ -97,6 +97,16 @@ per-session runtime container. It owns a `ChatViewModel` and a
 connection. Controllers are cached by `AppState`, so switching sessions
 never loses an in-flight generation or query run.
 
+`runQuery`, via the `startRun` completion hook, appends the outcome to the
+transcript: a `.result` `ChatMessage` (with a `RunSummary` of row count,
+duration, truncation, and the executed SQL) on success, or an `.error`
+message on failure or "stopped waiting" cancellation. The materialized
+result is cached in `SessionController.results` keyed by the record's
+message id, so every run of the live session keeps its full table card in
+the thread; the cache is never persisted — after a relaunch records render
+as compact summary rows. `clearConversation()` wipes transcript, preview,
+and cache together.
+
 The app's SwiftUI entry point is `Widen/WidenApp.swift`. It creates one
 `@State` `AppState`, injects it into the SwiftUI environment, registers the
 Settings scene plus commands for New Session, Refresh Schema, Connect, and
@@ -111,13 +121,20 @@ NavigationSplitView
     ErrorBannerView when needed
     DatabaseOverviewView when a database row is selected
     SessionDetailView for the selected session's controller
-      VSplitView
-        ChatView
-        SQLPreviewView
-        QueryResultsView
-    .inspector: SchemaInspectorView (toolbar-toggled)
-  toolbar: connection chip · light/dark toggle · inspector toggle
+      ChatModeView — one chronological chat thread:
+        messages, where SQL-bearing messages carry their card inline
+        (newest = runnable SQLCardView, earlier = StaticSQLCardView) and
+        run records render their ResultsCardView while cached
+        + ComposerView pinned at the bottom
+    .inspector: SchemaInspectorView (toolbar-toggled, scoped to the open schema)
+  toolbar: system sidebar toggle · breadcrumb (status dot · database › schema
+           menu) · light/dark toggle · inspector toggle (window trailing);
+           window title removed
 ```
+
+The breadcrumb is plain toolbar content on purpose: the macOS 26 toolbar
+already wraps items in glass, so any custom `.glassEffect` capsule renders
+as a double rounded container.
 
 On first render, `MainView` runs `await appState.onLaunch()`. It also
 watches `appState.openSettingsRequest` and opens the Settings window via
@@ -284,10 +301,21 @@ The service returns a `DatabaseSchema` containing:
 `TableInfo.qualifiedName` is used in prompts and UI display.
 
 `SchemaInspectorView`, `SchemaBrowserView`, and `SchemaViewModel` render the
-active connection's schema with search, table selection, and column details
-in a toolbar-toggled right inspector. Schemas are cached per connection in
+active connection's schema in a toolbar-toggled right inspector: a schema
+picker, a flat searchable table list scoped to the open schema, and the
+selected table's columns. Schemas are cached per connection in
 `AppState.schemas`; `refreshSchema(for:)` reloads only the given connection
 and preserves the table selection when it still exists.
+
+The "open schema" is per-connection UI state: `AppState.selectedSchemaNames`
+(persisted in UserDefaults under `"WidenSelectedSchemaNames"`), read through
+`currentSchemaName(for:)`, which falls back to `public`, then to the first
+schema, whenever the stored choice no longer exists in the loaded schema.
+It is switchable from the toolbar breadcrumb and the inspector picker (both
+bind through `selectSchema(_:for:)`). It scopes both the inspector table
+list and the generation prompt: `promptSchema(for:)` returns the cached
+schema narrowed by `DatabaseSchema.filtered(toSchema:)` — that schema's
+tables plus only the foreign keys whose both ends live in it.
 
 ## Chat-To-SQL Flow
 
@@ -297,24 +325,38 @@ orchestrated per session by `SessionController`.
 Flow:
 
 ```text
-ChatView submit
+ComposerView submit
   SessionController.submit(appState:)
-    ChatViewModel.submit(schema:generator:config:queryVM:)
-      trim input
-      require loaded schema
-      append user ChatMessage
-      call generator.generateSQL(...)
-      append assistant or clarification ChatMessage
-      queryVM.setGeneration(result)
+    ChatViewModel.isDirectSQL(input)?      // leading SELECT/WITH word
+      yes: ChatViewModel.submitDirectSQL(queryVM:)
+        append user ChatMessage (the SQL itself)
+        queryVM.setDirectSQL(sql)          // no model call
+      no: ChatViewModel.submit(schema:generator:config:queryVM:)
+        trim input
+        require loaded schema              // promptSchema(for:) — open schema only
+        append user ChatMessage
+        call generator.generateSQL(...)
+        append assistant or clarification ChatMessage
+        queryVM.setGeneration(result)
     sessionDidChange -> debounced save
     first user message -> autoTitleSession (fire-and-forget)
 ```
 
-Generated SQL is not executed automatically. It fills the editable SQL preview
-and is validated immediately. The user still reviews and clicks Run.
+Generated SQL is not executed automatically. It renders as the read-only
+`SQLCardView` right below the message that introduced it (dashed accent
+border, validation status icon with a popover for the messages, compact
+generation caption, Run button). Earlier SQL stays in the thread as
+`StaticSQLCardView` records — visible, copyable, but only the newest SQL can
+run. The user refines by chatting or by pasting new SQL into the composer.
+Run keeps the thread flowing: a "Running query…" indicator appears, and the
+outcome lands chronologically after the SQL — each run record renders its
+inline `ResultsCardView` (bordered table, "View more" past 10 rows,
+Copy/Export CSV) while its result is cached on the controller.
 
-Chat transcripts are persisted as part of the session (see "Sessions And
-Persistence"); query results are not.
+Chat transcripts — including `.result` run records — are persisted as part
+of the session (see "Sessions And Persistence"); materialized query results
+are not, so full results cards only render during the live session — after
+a relaunch the records show as compact summary rows.
 
 ## Prompt Construction
 
@@ -324,14 +366,31 @@ Prompt construction is pure and testable in
 It exposes:
 
 - `instructions(defaultRowLimit:)`
-- `prompt(question:schema:maxSchemaCharacters:)`
+- `prompt(question:schema:context:maxSchemaCharacters:)`
+- `contextSection(_:)`
 - `schemaSummary(_:maxCharacters:)`
 - `isSchemaTruncated(_:maxCharacters:)`
 
 The system instructions tell the model to produce one PostgreSQL `SELECT` or
-`WITH ... SELECT` query, avoid mutating/DDL/transaction keywords, include a
-LIMIT unless appropriate, use only the provided schema, and ask for
+`WITH ... SELECT` query, use PostgreSQL date/interval syntax (never MySQL
+idioms like `CURDATE()`), avoid mutating/DDL/transaction keywords, include a
+LIMIT unless appropriate, use only the provided schema, treat the question
+as a follow-up to any conversation context in the prompt, and ask for
 clarification when the schema cannot answer the question.
+
+The generator is stateless per request (a fresh session keeps the on-device
+context window small), so follow-ups work through `SQLGenerationContext`
+(defined with the `SQLGenerator` protocol): up to three earlier user
+questions, the SQL currently on screen, and the last run error, each with a
+tight character budget. `ChatViewModel.submit` assembles it from the
+transcript and `QueryResultViewModel` before appending the new question —
+this is what lets "the query is failing" produce a corrected version of the
+failing SQL instead of an unrelated query.
+
+Every on-device generation (full prompt plus structured outcome or error)
+is appended to `~/Library/Application Support/Widen/generation.log` by
+`GenerationLog` for debugging the local model. Plain text, local only,
+best-effort.
 
 `schemaSummary` renders tables as:
 
@@ -547,7 +606,7 @@ type/byte-count placeholder.
 - `executionTimeMs`
 
 It also exposes CSV rendering with standard quoting for commas, quotes, and
-newlines. `QueryResultsView` uses that for Copy CSV.
+newlines. `ResultsCardView` uses that for Copy as CSV and Export CSV.
 
 ## UI Responsibilities
 
@@ -563,20 +622,36 @@ Key views:
   footer.
 - `DatabaseOverviewView`: detail pane for a selected database row — the
   connection at a glance plus a New Session call to action.
-- `SessionDetailView`: hosts ChatView / SQLPreviewView / QueryResultsView for
-  one session's controller and reports edits via `sessionDidChange`.
+- `SessionDetailView`: hosts `ChatModeView` for one session's controller and
+  reports edits via `sessionDidChange`.
+- `Chat/ChatModeView`: the single chronological thread — messages with their
+  SQL cards inline (the newest runnable, earlier ones static), results cards
+  on cached run records, generating/running indicators, and the bottom-pinned
+  composer (empty sessions show only a centered hint). "Clear Conversation"
+  context menu, auto-scroll to bottom.
+- `Chat/ComposerView`: the large rounded input. Accepts plain English or raw
+  SQL; Return submits, Option+Return inserts a newline (no
+  `.keyboardShortcut(.defaultAction)` on the send button — it would
+  double-fire with `onSubmit`).
+- `Chat/MessageBubbleView`: user bubble is glass, assistant/error bubbles use
+  a plain material to keep scrolling cheap; `.result` records render as a
+  compact row when their result is no longer cached.
+- `Chat/SQLCardView`: the read-only active SQL card (dashed accent border,
+  validation status icon + popover, copy, Run, one-line generation caption,
+  explanation/assumptions behind an info popover). `StaticSQLCardView` is the
+  permanent record for superseded SQL: plain border, copy only, no Run.
+- `Results/ResultsCardView`: one run's result inline in the thread — same
+  tint family as the SQL card one shade lighter with a solid border, summary
+  caption, bordered table, "View more"/"View less" past 10 rows, Copy as
+  CSV, and Export CSV via `NSSavePanel`.
+- `Results/ResultsGridView`: content-sized bordered table (header row, cell
+  separators, measured column widths, horizontal scrolling, optional
+  `maxRows` cap).
 - `SchemaInspectorView` + `SchemaBrowserView`: toolbar-toggled inspector with
-  table search, table list, and selected table columns.
+  schema picker, table search, table list, and selected table columns.
 - `Settings/SettingsView` (+ General / Databases / Archived Sessions tabs,
   `ConnectionEditorForm`): appearance, AI toggle, connection CRUD with
   cascade-delete warning, archive restore / delete forever.
-- `ChatView`: natural language input and generated response history (glass
-  input bar; the user bubble is glass, assistant/error bubbles use a plain
-  material to keep scrolling cheap).
-- `SQLPreviewView`: editable SQL text, validation messages, generation
-  metadata, Validate, Run, Copy SQL, Clear.
-- `QueryResultsView`: result metadata, horizontal/vertical grid, Copy CSV,
-  empty/loading/error states.
 - `ErrorBannerView`: dismissible app-level error banner (red-tinted glass).
 - `LoadingView`: small reusable loading indicator.
 
@@ -584,14 +659,16 @@ Appearance: the `"WidenAppearance"` AppStorage key (`AppearancePreference`)
 drives `.preferredColorScheme` on the window and Settings roots. The toolbar
 sun/moon button flips to the opposite of the effective scheme; the "System"
 reset lives in Settings › General. Liquid Glass styling (`.glassEffect`,
-`.buttonStyle(.glass)/.glassProminent`, `GlassEffectContainer`) is used for
-chat input, primary buttons, the connection chip, and the error banner; the
-sidebar, inspector, and results grid intentionally keep system materials.
+`.buttonStyle(.glass)/.glassProminent`) is used for the composer, primary
+buttons, user chat bubbles, and the error banner; the toolbar breadcrumb,
+sidebar, inspector, transcript bubbles, and results grid intentionally keep
+plain system materials.
 
 Keyboard behavior:
 
-- Enter in chat submits for generation.
-- Cmd+Enter in the SQL editor runs the current SQL.
+- Enter in the composer submits (generation, or direct SQL when the input
+  starts with SELECT/WITH); Option+Enter inserts a newline.
+- Cmd+Enter runs the active SQL card.
 - Cmd+N creates a session on the active (or first) database.
 - Cmd+R refreshes the active connection's schema through the Database menu.
 
@@ -629,6 +706,14 @@ Main suites:
   create/select, controller-cache identity, snapshot-on-switch,
   archive/restore/delete, title guards, auto-title (stub generators), and
   connection cascade-delete.
+- `AppStateSchemaTests`: open-schema fallback chain (`public` → first),
+  vanished-selection fallback, prompt-schema scoping, cross-schema foreign
+  key filtering, cascade prune on delete, and `SchemaViewModel` table
+  filtering. These touch the real `WidenSelectedSchemaNames` UserDefaults
+  key and clean it up in `defer`.
+- `SessionControllerTests`: run records appended on success/failure with the
+  snapshotted SQL, and the direct-SQL submit path (via the
+  executor-injectable internal initializer).
 - `SessionTitleTests`: fallback truncation, sanitizer rules, mock generator
   determinism.
 - `PostgresIntegrationTests`: gated local PostgreSQL tests for connection,
@@ -636,9 +721,10 @@ Main suites:
 - `FoundationModelsSmokeTests`: gated local model availability, structured
   SQL generation, and session-title generation tests.
 - `ChatViewModelTests`: chat flow and preview population (the internal
-  `submit(schema:generator:config:queryVM:)` seam).
+  `submit(schema:generator:config:queryVM:)` seam), direct-SQL detection
+  and submission, and run-record/error appending.
 - `WidenKitTests`: smoke tests plus `QueryResultViewModel` run/restore
-  behavior.
+  behavior, the `onFinish` completion hook, and `setDirectSQL`.
 
 Default `make test` skips the gated suites unless the relevant environment
 variables are set by Make:
@@ -684,7 +770,8 @@ Add a result display feature:
 1. Extend `QueryResult` only if the data model really needs new state.
 2. Prefer formatting in `PostgresCellFormatter` or `QueryResult` rather than
    directly in SwiftUI views.
-3. Update `QueryResultsView`.
+3. Update `Results/ResultsGridView` (table cells) or `Results/ResultsCardView`
+   (summary, expansion, export around the table).
 4. Add unit tests if formatting or export behavior changes.
 
 Add another SQL generator:

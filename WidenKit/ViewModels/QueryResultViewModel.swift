@@ -5,6 +5,11 @@ import Observation
 @MainActor
 @Observable
 public final class QueryResultViewModel {
+    /// Called exactly once when a run finishes: `(result, nil)` on success,
+    /// `(nil, error)` on failure or cancellation, `(nil, nil)` when the run
+    /// never started because validation blocked it.
+    public typealias RunCompletion = @MainActor (QueryResult?, String?) -> Void
+
     public var sqlText = ""
     public private(set) var validation: SQLValidationResult?
     public private(set) var result: QueryResult?
@@ -16,6 +21,7 @@ public final class QueryResultViewModel {
     private var activeRunID: Int?
     private var nextRunID = 0
     private var runTask: Task<Void, Never>?
+    private var onFinish: RunCompletion?
     private let executor: any QueryExecuting
 
     public init() {
@@ -35,9 +41,14 @@ public final class QueryResultViewModel {
     public func startRun(
         connection: DatabaseConnectionConfig?,
         postgres: PostgresService,
-        isConnected: Bool
+        isConnected: Bool,
+        onFinish: RunCompletion? = nil
     ) {
+        // The guard must precede storing the callback, so a rejected start
+        // never clobbers the completion of the run already in flight.
         guard !isRunning else { return }
+        let runSQL = sqlText
+        self.onFinish = onFinish
         nextRunID += 1
         let runID = nextRunID
         activeRunID = runID
@@ -46,22 +57,39 @@ public final class QueryResultViewModel {
         isRunning = true
         runTask = Task {
             await run(
+                sql: runSQL,
                 connection: connection, postgres: postgres,
                 isConnected: isConnected, runID: runID)
         }
     }
 
     public func cancelRun() {
+        cancelActiveRun(reportError: true, fireCompletion: true)
+    }
+
+    private func discardActiveRun() {
+        cancelActiveRun(reportError: false, fireCompletion: false)
+    }
+
+    private func cancelActiveRun(reportError: Bool, fireCompletion shouldFire: Bool) {
         runTask?.cancel()
         runTask = nil
         activeRunID = nil
         if isRunning {
             isRunning = false
-            runError = "Stopped waiting for the query. The server may still finish it in the background."
+            if reportError {
+                runError = "Stopped waiting for the query. The server may still finish it in the background."
+            }
+        }
+        if shouldFire {
+            fireCompletion()
+        } else {
+            onFinish = nil
         }
     }
 
     public func clear() {
+        discardActiveRun()
         sqlText = ""
         validation = nil
         result = nil
@@ -74,6 +102,16 @@ public final class QueryResultViewModel {
     public func setGeneration(_ generation: SQLGenerationResult) {
         self.generation = generation
         sqlText = generation.sql
+        result = nil
+        runError = nil
+        validate()
+    }
+
+    /// Fills the editor with SQL the user typed directly — no generation
+    /// metadata. Validated immediately, like a generation.
+    public func setDirectSQL(_ sql: String) {
+        sqlText = sql
+        generation = nil
         result = nil
         runError = nil
         validate()
@@ -93,12 +131,13 @@ public final class QueryResultViewModel {
     }
 
     private func run(
+        sql: String,
         connection: DatabaseConnectionConfig?,
         postgres: PostgresService,
         isConnected: Bool,
         runID: Int
     ) async {
-        validate()
+        validation = SQLSafetyValidator.validate(sql)
         guard let validation, validation.isValid else {
             finishRun(runID)
             return
@@ -113,7 +152,7 @@ public final class QueryResultViewModel {
 
         do {
             let newResult = try await executor.run(
-                sql: sqlText,
+                sql: sql,
                 config: config,
                 postgres: postgres
             )
@@ -141,5 +180,15 @@ public final class QueryResultViewModel {
         isRunning = false
         runTask = nil
         activeRunID = nil
+        fireCompletion()
+    }
+
+    /// Fires the pending completion exactly once with the final state. The
+    /// stored callback is cleared before invoking, so a re-entrant start
+    /// inside the callback can never double-fire it.
+    private func fireCompletion() {
+        let callback = onFinish
+        onFinish = nil
+        callback?(result, runError)
     }
 }

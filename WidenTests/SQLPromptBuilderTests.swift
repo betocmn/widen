@@ -105,6 +105,60 @@ struct SQLPromptBuilderTests {
         #expect(instructions.contains("Never generate INSERT, UPDATE, DELETE"))
         #expect(instructions.contains("Do not include semicolons."))
         #expect(instructions.contains("needsClarification"))
+        // PostgreSQL dialect guardrails — the local model drifts into MySQL.
+        #expect(instructions.contains("CURDATE()"))
+        #expect(instructions.contains("INTERVAL '7 days'"))
+        // Follow-up handling for the conversation context section.
+        #expect(instructions.contains("follow-up"))
+    }
+
+    @Test func promptWithoutContextHasNoContextSection() {
+        let prompt = SQLPromptBuilder.prompt(
+            question: "Show me users.",
+            schema: makeSampleSchema()
+        )
+        #expect(!prompt.contains("Conversation context:"))
+    }
+
+    @Test func promptIncludesConversationContext() {
+        let context = SQLGenerationContext(
+            recentQuestions: ["max spend per customer?", "just the last week?"],
+            currentSQL: "SELECT MAX(total_cents) FROM public.orders",
+            lastRunError: "syntax error at or near \"30\""
+        )
+        let prompt = SQLPromptBuilder.prompt(
+            question: "the query is failing",
+            schema: makeSampleSchema(),
+            context: context
+        )
+
+        #expect(prompt.contains("Conversation context:"))
+        #expect(prompt.contains("- Earlier question: max spend per customer?"))
+        #expect(prompt.contains("- Earlier question: just the last week?"))
+        #expect(prompt.contains("Current SQL on screen:\nSELECT MAX(total_cents)"))
+        #expect(prompt.contains("failed with: syntax error at or near \"30\""))
+        // The question always comes last, after the context.
+        let questionRange = prompt.range(of: "User question:")
+        let contextRange = prompt.range(of: "Conversation context:")
+        #expect(contextRange!.lowerBound < questionRange!.lowerBound)
+    }
+
+    @Test func contextSectionTruncatesLongItemsAndKeepsLastThreeQuestions() {
+        let longSQL = String(repeating: "S", count: 2_000)
+        let context = SQLGenerationContext(
+            recentQuestions: ["q1", "q2", "q3", "q4", "q5"],
+            currentSQL: longSQL,
+            lastRunError: String(repeating: "e", count: 600)
+        )
+
+        let section = SQLPromptBuilder.contextSection(context)!
+
+        #expect(!section.contains("q1"))
+        #expect(!section.contains("q2"))
+        #expect(section.contains("q3"))
+        #expect(section.contains("q5"))
+        #expect(section.count < 1_400)
+        #expect(section.contains("…"))
     }
 
     @Test func truncatesWholeTablesWhenOverBudget() {

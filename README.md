@@ -119,8 +119,8 @@ in the macOS Keychain (service `Widen`).
 Each database in the sidebar lists its query sessions. Selecting the
 database itself opens its schema in the inspector; press the hover "+"
 (or Cmd+N) to start a session — the database connects lazily, so nothing
-happens until a session or schema browse needs it. A session keeps its chat transcript, SQL editor
-contents, and generation metadata in
+happens until a session or schema browse needs it. A session keeps its chat
+transcript (including run records), active SQL, and generation metadata in
 `~/Library/Application Support/Widen/sessions.json` (query results are
 deliberately not persisted). The local model names the session after your
 first question; rename it manually (right-click › Rename) and the auto-name
@@ -128,27 +128,35 @@ never overwrites yours. Right-click › Archive hides a session; restore it or
 delete it forever from Settings › Archived Sessions.
 
 The schema browser lives in a right-hand inspector — toggle it from the
-toolbar. The sun/moon toolbar button flips light/dark mode; pick "System" in
-Settings › General to follow macOS again.
+toolbar. The toolbar breadcrumb (`database › schema`) and the inspector's
+picker both switch the open schema; the table list and the AI's context are
+scoped to it. The sun/moon toolbar button flips light/dark mode; pick
+"System" in Settings › General to follow macOS again.
 
 ## How a query runs
 
-1. You ask a question; Widen prompts the local model with your question, the
-   introspected schema (tables, columns, types, foreign keys - system schemas
-   excluded), and the safety rules.
-2. The model returns structured output: SQL, explanation, assumptions,
-   referenced tables, confidence, and risk level.
-3. The SQL lands in an editable preview and is validated deterministically:
-   only a single `SELECT`/`WITH` statement, no semicolons, no
-   mutation/DDL/transaction keywords, no `pg_sleep`/`dblink`/`lo_*`.
+1. You type into the composer: a plain-English question, or raw SQL
+   (anything starting with `SELECT`/`WITH` skips the model entirely).
+2. For questions, Widen prompts the local model with the open schema's
+   tables, columns, types, and foreign keys (system schemas excluded) plus
+   the safety rules, and gets structured output back: SQL, explanation,
+   assumptions, referenced tables, confidence, and risk level.
+3. The SQL appears in the chat as a read-only dashed card, validated
+   deterministically: only a single `SELECT`/`WITH` statement, no
+   semicolons, no mutation/DDL/transaction keywords, no
+   `pg_sleep`/`dblink`/`lo_*`. Validation issues sit behind the card's
+   status icon. Keep chatting (or paste corrected SQL) until it's right.
 4. Run executes it in a `BEGIN READ ONLY` transaction with
    `SET LOCAL statement_timeout` (default 10s). Queries without a `LIMIT` are
    wrapped in a subquery with your default row limit (default 100).
-5. Results render as text in a simple grid; Copy CSV exports them.
+5. The results flow into the same chat thread: a bordered table card appears
+   where the run happened (first 10 rows, "View more" for the rest), with
+   Copy as CSV and Export CSV. Every run is recorded in the transcript, and
+   the conversation just keeps going underneath.
 
-Keyboard: **Enter** in the chat field generates SQL; **Cmd+Enter** runs the
-query in the editor; **Cmd+N** starts a new session; **Cmd+R** refreshes the
-active database's schema; **Cmd+,** opens Settings.
+Keyboard: **Enter** in the composer submits (Option+Enter for a newline);
+**Cmd+Enter** runs the active SQL; **Cmd+N** starts a new session; **Cmd+R**
+refreshes the active database's schema; **Cmd+,** opens Settings.
 
 ## Development notes and caveats
 

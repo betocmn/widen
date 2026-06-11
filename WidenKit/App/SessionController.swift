@@ -11,11 +11,20 @@ public final class SessionController: Identifiable {
     public let sessionID: UUID
     public let connectionID: UUID
     public let chatVM = ChatViewModel()
-    public let queryVM = QueryResultViewModel()
+    public let queryVM: QueryResultViewModel
+    /// Materialized results keyed by their run-record message, so every run
+    /// of this live session keeps its full table in the transcript. Never
+    /// persisted — after a relaunch the records render as summary rows.
+    public private(set) var results: [UUID: QueryResult] = [:]
 
-    public init(session: QuerySession) {
+    public convenience init(session: QuerySession) {
+        self.init(session: session, executor: QueryExecutionService())
+    }
+
+    init(session: QuerySession, executor: any QueryExecuting) {
         self.sessionID = session.id
         self.connectionID = session.connectionID
+        self.queryVM = QueryResultViewModel(executor: executor)
         hydrate(from: session)
     }
 
@@ -47,16 +56,23 @@ public final class SessionController: Identifiable {
         return changed
     }
 
-    /// Generates SQL for the chat input against this session's connection.
+    /// Submits the chat input: raw SQL goes straight to the preview, anything
+    /// else is generated against this session's connection.
     public func submit(appState: AppState) async {
+        guard !queryVM.isRunning else { return }
         let hadUserMessage = chatVM.messages.contains { $0.role == .user }
-        await chatVM.submit(
-            schema: appState.schemas[connectionID],
-            generator: appState.sqlGenerator,
-            config: SQLGenerationConfig(
-                defaultRowLimit: appState.connection(for: connectionID)?.defaultRowLimit ?? 100),
-            queryVM: queryVM
-        )
+        if ChatViewModel.isDirectSQL(chatVM.input) {
+            chatVM.submitDirectSQL(queryVM: queryVM)
+        } else {
+            await chatVM.submit(
+                schema: appState.promptSchema(for: connectionID),
+                generator: appState.sqlGenerator,
+                config: SQLGenerationConfig(
+                    defaultRowLimit: appState.connection(for: connectionID)?.defaultRowLimit
+                        ?? 100),
+                queryVM: queryVM
+            )
+        }
         appState.sessionDidChange(sessionID)
 
         // Auto-name the session after its very first question.
@@ -68,12 +84,39 @@ public final class SessionController: Identifiable {
         }
     }
 
-    /// Runs the SQL editor contents against this session's connection.
+    /// Runs the SQL preview contents against this session's connection. The
+    /// outcome — row count or error, including the "stopped waiting"
+    /// cancellation — is appended to the chat transcript so the history
+    /// records every run; the latest result renders inline as a card.
     public func runQuery(appState: AppState) {
+        guard !queryVM.isRunning else { return }
+        let sql = queryVM.sqlText
         queryVM.startRun(
             connection: appState.connection(for: connectionID),
             postgres: appState.postgres(for: connectionID),
             isConnected: appState.connectionState(connectionID) == .connected
-        )
+        ) { [weak self, weak appState] result, errorMessage in
+            guard let self else { return }
+            if let result {
+                let record = self.chatVM.appendRunRecord(
+                    ChatMessage.RunSummary(
+                        rowCount: result.rowCount,
+                        executionTimeMs: result.executionTimeMs,
+                        truncated: result.truncated,
+                        sql: sql
+                    ))
+                self.results[record.id] = result
+            } else if let errorMessage {
+                self.chatVM.appendRunError(errorMessage)
+            }
+            appState?.sessionDidChange(self.sessionID)
+        }
+    }
+
+    /// Wipes the transcript, the SQL preview, and the per-run result cache.
+    public func clearConversation() {
+        queryVM.clear()
+        chatVM.clearConversation()
+        results.removeAll()
     }
 }

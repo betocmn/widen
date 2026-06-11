@@ -1,8 +1,9 @@
 import SwiftUI
 
-/// Detail pane for one query session: chat, SQL editor, and results, all
-/// backed by the session's runtime controller. Editor and transcript changes
-/// schedule a debounced save through `sessionDidChange`.
+/// Detail pane for one query session: a single chat thread with the composer
+/// pinned at the bottom. The active SQL and the latest run's results render
+/// inline in the transcript. Editor and transcript changes schedule a
+/// debounced save through `sessionDidChange`.
 public struct SessionDetailView: View {
     @Environment(AppState.self) private var appState
     private let controller: SessionController
@@ -12,20 +13,13 @@ public struct SessionDetailView: View {
     }
 
     public var body: some View {
-        VSplitView {
-            ChatView(controller: controller)
-                .frame(minHeight: 150, idealHeight: 210)
-            SQLPreviewView(controller: controller)
-                .frame(minHeight: 150, idealHeight: 210)
-            QueryResultsView(controller: controller)
-                .frame(minHeight: 170, maxHeight: .infinity)
-        }
-        .onChange(of: controller.queryVM.sqlText) {
-            appState.sessionDidChange(controller.sessionID)
-        }
-        .onChange(of: controller.chatVM.messages.count) {
-            appState.sessionDidChange(controller.sessionID)
-        }
-        .id(controller.sessionID)
+        ChatModeView(controller: controller)
+            .onChange(of: controller.queryVM.sqlText) {
+                appState.sessionDidChange(controller.sessionID)
+            }
+            .onChange(of: controller.chatVM.messages.count) {
+                appState.sessionDidChange(controller.sessionID)
+            }
+            .id(controller.sessionID)
     }
 }

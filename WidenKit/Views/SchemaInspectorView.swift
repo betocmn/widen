@@ -1,7 +1,7 @@
 import SwiftUI
 
-/// Right-hand inspector with the active connection's schema: searchable
-/// table list plus the selected table's columns.
+/// Right-hand inspector scoped to the open schema: a schema picker, a
+/// searchable table list, and the selected table's columns.
 public struct SchemaInspectorView: View {
     @Environment(AppState.self) private var appState
 
@@ -32,6 +32,18 @@ public struct SchemaInspectorView: View {
 
             Divider()
 
+            if let id = activeConnectionID, appState.currentSchemaName(for: id) != nil {
+                Picker("Schema", selection: schemaBinding(for: id)) {
+                    ForEach(activeSchema?.schemas ?? []) { schema in
+                        Text(schema.name).tag(schema.name)
+                    }
+                }
+                .pickerStyle(.menu)
+                .padding(.horizontal, 10)
+                .padding(.top, 8)
+                .help("The open schema — the table list and AI context are scoped to it")
+            }
+
             TextField("Search tables", text: $schemaVM.searchText)
                 .textFieldStyle(.roundedBorder)
                 .padding(.horizontal, 10)
@@ -45,15 +57,24 @@ public struct SchemaInspectorView: View {
                     .frame(maxHeight: 260)
             }
         }
+        // A table selected under another schema would keep stale columns on
+        // screen after switching — drop it.
+        .onChange(of: selectedSchemaName) {
+            if let table = appState.schemaVM.selectedTable(in: activeSchema),
+                table.schema != selectedSchemaName
+            {
+                appState.schemaVM.selectedTableID = nil
+            }
+        }
         // The inspector pane lays its content out slightly wider than its
         // visible width, so compensate to keep a trailing margin.
         .padding(.trailing, 10)
     }
 
-    /// "<database> Schema" for the active connection, plain "Schema" if none.
+    /// The database name; the schema picker on the next line says the rest.
     private var title: String {
         if let id = activeConnectionID, let config = appState.connection(for: id) {
-            return "\(config.database) Schema"
+            return config.database
         }
         return "Schema"
     }
@@ -66,6 +87,10 @@ public struct SchemaInspectorView: View {
         activeConnectionID.flatMap { appState.schemas[$0] }
     }
 
+    private var selectedSchemaName: String? {
+        activeConnectionID.flatMap { appState.currentSchemaName(for: $0) }
+    }
+
     private var activeStatus: AppState.ConnectionStatus {
         activeConnectionID.map { appState.connectionState($0) } ?? .notConnected
     }
@@ -74,10 +99,17 @@ public struct SchemaInspectorView: View {
         activeConnectionID.map { appState.loadingSchemas.contains($0) } ?? false
     }
 
+    private func schemaBinding(for id: UUID) -> Binding<String> {
+        Binding(
+            get: { appState.currentSchemaName(for: id) ?? "" },
+            set: { appState.selectSchema($0, for: id) }
+        )
+    }
+
     @ViewBuilder
     private var tableList: some View {
         @Bindable var schemaVM = appState.schemaVM
-        let groups = appState.schemaVM.groupedTables(in: activeSchema)
+        let tables = appState.schemaVM.tables(in: activeSchema, schemaName: selectedSchemaName)
 
         if activeConnectionID == nil {
             VStack(spacing: 8) {
@@ -105,26 +137,26 @@ public struct SchemaInspectorView: View {
                 }
             }
             .frame(maxWidth: .infinity, maxHeight: .infinity)
-        } else if groups.isEmpty {
-            Text("No tables match the search.")
-                .font(.callout)
-                .foregroundStyle(.secondary)
-                .frame(maxWidth: .infinity, maxHeight: .infinity)
+        } else if tables.isEmpty {
+            Text(
+                appState.schemaVM.searchText.trimmingCharacters(in: .whitespaces).isEmpty
+                    ? "No tables in this schema."
+                    : "No tables match the search."
+            )
+            .font(.callout)
+            .foregroundStyle(.secondary)
+            .frame(maxWidth: .infinity, maxHeight: .infinity)
         } else {
             List(selection: $schemaVM.selectedTableID) {
-                ForEach(groups) { group in
-                    Section(group.schema) {
-                        ForEach(group.tables) { table in
-                            HStack(spacing: 6) {
-                                Image(systemName: table.type == .view ? "eye" : "tablecells")
-                                    .foregroundStyle(.secondary)
-                                    .imageScale(.small)
-                                Text(table.name)
-                            }
-                            .tag(table.id)
-                            .listRowSeparator(.hidden)
-                        }
+                ForEach(tables) { table in
+                    HStack(spacing: 6) {
+                        Image(systemName: table.type == .view ? "eye" : "tablecells")
+                            .foregroundStyle(.secondary)
+                            .imageScale(.small)
+                        Text(table.name)
                     }
+                    .tag(table.id)
+                    .listRowSeparator(.hidden)
                 }
             }
         }

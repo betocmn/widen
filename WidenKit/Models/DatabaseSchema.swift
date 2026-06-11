@@ -28,4 +28,18 @@ public struct DatabaseSchema: Codable, Equatable, Sendable {
         self.foreignKeys = foreignKeys
         self.loadedAt = loadedAt
     }
+
+    /// A copy narrowed to one schema: its tables, and only the foreign keys
+    /// whose both ends live in it. Used to scope the generation prompt and
+    /// the schema browser to the schema the user has open.
+    public func filtered(toSchema name: String) -> DatabaseSchema {
+        DatabaseSchema(
+            schemas: schemas.filter { $0.name == name },
+            tables: tables.filter { $0.schema == name },
+            foreignKeys: foreignKeys.filter {
+                $0.sourceSchema == name && $0.targetSchema == name
+            },
+            loadedAt: loadedAt
+        )
+    }
 }

@@ -61,6 +61,7 @@
         public func generateSQL(
             question: String,
             schema: DatabaseSchema,
+            context: SQLGenerationContext,
             config: SQLGenerationConfig
         ) async throws -> SQLGenerationResult {
             let model = SystemLanguageModel.default
@@ -73,7 +74,7 @@
 
             do {
                 return try await respond(
-                    question: question, schema: schema, config: config,
+                    question: question, schema: schema, context: context, config: config,
                     model: model, maxSchemaCharacters: 8_000)
             } catch let error as LanguageModelSession.GenerationError {
                 if case .exceededContextWindowSize = error {
@@ -81,7 +82,7 @@
                     // surfacing the error.
                     do {
                         return try await respond(
-                            question: question, schema: schema, config: config,
+                            question: question, schema: schema, context: context, config: config,
                             model: model, maxSchemaCharacters: 4_000)
                     } catch let retryError as LanguageModelSession.GenerationError {
                         throw Self.map(retryError)
@@ -94,12 +95,14 @@
         private func respond(
             question: String,
             schema: DatabaseSchema,
+            context: SQLGenerationContext,
             config: SQLGenerationConfig,
             model: SystemLanguageModel,
             maxSchemaCharacters: Int
         ) async throws -> SQLGenerationResult {
             // A fresh session per request keeps the context window small and
-            // the generation stateless.
+            // the generation stateless; follow-up awareness comes from the
+            // compact context section in the prompt instead.
             let session = LanguageModelSession(
                 model: model,
                 instructions: SQLPromptBuilder.instructions(defaultRowLimit: config.defaultRowLimit)
@@ -107,14 +110,40 @@
             let prompt = SQLPromptBuilder.prompt(
                 question: question,
                 schema: schema,
+                context: context,
                 maxSchemaCharacters: maxSchemaCharacters
             )
-            let response = try await session.respond(
-                to: prompt,
-                generating: GeneratedSQLResponse.self,
-                options: GenerationOptions(sampling: .greedy, maximumResponseTokens: 1_024)
-            )
-            return Self.result(from: response.content)
+            let started = Date()
+            do {
+                let response = try await session.respond(
+                    to: prompt,
+                    generating: GeneratedSQLResponse.self,
+                    options: GenerationOptions(sampling: .greedy, maximumResponseTokens: 1_024)
+                )
+                let result = Self.result(from: response.content)
+                await GenerationLog.shared.append(
+                    prompt: prompt,
+                    outcome: Self.outcomeDescription(result),
+                    durationMs: Int(Date().timeIntervalSince(started) * 1_000))
+                return result
+            } catch {
+                await GenerationLog.shared.append(
+                    prompt: prompt,
+                    outcome: "error: \(error)",
+                    durationMs: Int(Date().timeIntervalSince(started) * 1_000))
+                throw error
+            }
+        }
+
+        private static func outcomeDescription(_ result: SQLGenerationResult) -> String {
+            """
+            sql: \(result.sql)
+            explanation: \(result.explanation)
+            assumptions: \(result.assumptions.joined(separator: " | "))
+            referencedTables: \(result.referencedTables.joined(separator: ", "))
+            confidence: \(result.confidence) · risk: \(result.riskLevel.rawValue) · needsClarification: \(result.needsClarification)
+            clarificationQuestion: \(result.clarificationQuestion ?? "-")
+            """
         }
 
         private static func result(from generated: GeneratedSQLResponse) -> SQLGenerationResult {
