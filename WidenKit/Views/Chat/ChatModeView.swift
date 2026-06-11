@@ -66,6 +66,10 @@ struct ChatModeView: View {
 
     private var transcript: some View {
         ScrollViewReader { proxy in
+            // Content fills from the top on purpose. `.defaultScrollAnchor(.bottom)`
+            // translates short content to the bottom visually but leaves the hit-test
+            // regions top-aligned on macOS 26, making every button in the
+            // transcript unclickable.
             ScrollView {
                 LazyVStack(alignment: .leading, spacing: 10) {
                     ForEach(controller.chatVM.messages) { message in
@@ -89,7 +93,10 @@ struct ChatModeView: View {
                 }
                 .padding(12)
             }
-            .defaultScrollAnchor(.bottom)
+            .onAppear {
+                // LazyVStack needs a layout pass before scrollTo can resolve ids.
+                Task { @MainActor in scrollToBottom(proxy, animated: false) }
+            }
             .onChange(of: controller.chatVM.messages.count) { scrollToBottom(proxy) }
             .onChange(of: controller.chatVM.isGenerating) { scrollToBottom(proxy) }
             .onChange(of: controller.queryVM.sqlText) { scrollToBottom(proxy) }
@@ -103,8 +110,8 @@ struct ChatModeView: View {
         }
     }
 
-    private func scrollToBottom(_ proxy: ScrollViewProxy) {
-        withAnimation {
+    private func scrollToBottom(_ proxy: ScrollViewProxy, animated: Bool = true) {
+        withAnimation(animated ? .default : nil) {
             if hasActiveSQL {
                 proxy.scrollTo(Self.activeCardID, anchor: .bottom)
             } else if controller.chatVM.isGenerating {
