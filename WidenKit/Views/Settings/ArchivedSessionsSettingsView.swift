@@ -18,7 +18,7 @@ struct ArchivedSessionsSettingsView: View {
                 List(appState.archivedSessions) { session in
                     HStack(spacing: 8) {
                         VStack(alignment: .leading, spacing: 2) {
-                            Text(session.title)
+                            Text(session.displayTitle)
                             Text(subtitle(for: session))
                                 .font(.caption)
                                 .foregroundStyle(.secondary)
@@ -61,7 +61,7 @@ struct ArchivedSessionsSettingsView: View {
     }
 
     private var pendingDeleteTitle: String {
-        pendingDeleteID.flatMap { appState.session(for: $0)?.title } ?? "session"
+        pendingDeleteID.flatMap { appState.session(for: $0)?.displayTitle } ?? "session"
     }
 
     private var deleteConfirmationBinding: Binding<Bool> {

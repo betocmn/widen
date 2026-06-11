@@ -13,6 +13,7 @@ import UniformTypeIdentifiers
 struct ResultsCardView: View {
     @Environment(AppState.self) private var appState
     let result: QueryResult
+    let sessionTitle: String
     var isLatest = false
     @State private var isExpanded = false
 
@@ -58,14 +59,7 @@ struct ResultsCardView: View {
                 .font(.caption)
                 .foregroundStyle(.secondary)
             Spacer()
-            Button {
-                NSPasteboard.general.clearContents()
-                NSPasteboard.general.setString(result.csv(), forType: .string)
-            } label: {
-                Image(systemName: "doc.on.doc")
-            }
-            .buttonStyle(.borderless)
-            .help("Copy as CSV")
+            AnimatedCopyButton(text: result.csv(), help: "Copy as CSV")
             Button("Export CSV") {
                 exportCSV(result)
             }
@@ -88,7 +82,7 @@ struct ResultsCardView: View {
     private func exportCSV(_ result: QueryResult) {
         let panel = NSSavePanel()
         panel.allowedContentTypes = [.commaSeparatedText]
-        panel.nameFieldStringValue = "results.csv"
+        panel.nameFieldStringValue = QueryResultExport.csvFilename(for: sessionTitle)
         guard panel.runModal() == .OK, let url = panel.url else { return }
         do {
             try result.csv().write(to: url, atomically: true, encoding: .utf8)

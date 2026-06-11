@@ -23,7 +23,7 @@ public enum SessionTitleFallback {
     /// ellipsis when truncated).
     public static func title(from question: String) -> String {
         let collapsed = collapseWhitespace(question)
-        guard collapsed.count > 40 else { return collapsed }
+        guard collapsed.count > 40 else { return titleCase(collapsed) }
         let prefix = String(collapsed.prefix(40))
         // Cut back to the last full word so the ellipsis never splits one.
         let truncated =
@@ -32,7 +32,7 @@ public enum SessionTitleFallback {
             } else {
                 prefix
             }
-        return truncated + "…"
+        return titleCase(truncated) + "…"
     }
 
     /// Cleans a model-generated title: strips wrapping quotes and trailing
@@ -49,7 +49,13 @@ public enum SessionTitleFallback {
         if text.count > 60 {
             text = String(text.prefix(60)).trimmingCharacters(in: .whitespaces)
         }
-        return text.isEmpty ? nil : text
+        return text.isEmpty ? nil : titleCase(text)
+    }
+
+    public static func titleCase(_ raw: String) -> String {
+        let collapsed = collapseWhitespace(raw)
+        guard !collapsed.isEmpty else { return collapsed }
+        return collapsed.capitalized(with: Locale(identifier: "en_US_POSIX"))
     }
 
     private static func collapseWhitespace(_ text: String) -> String {

@@ -121,7 +121,7 @@ struct AppStateSessionTests {
         defer { try? FileManager.default.removeItem(at: dir) }
         let session = state.createSession(connectionID: UUID())
 
-        state.renameSession(session.id, to: "My Title")
+        state.renameSession(session.id, to: "MY TITLE")
         state.applyGeneratedTitle("Generated Title", to: session.id)
 
         #expect(state.session(for: session.id)?.title == "My Title")
@@ -171,7 +171,7 @@ struct AppStateSessionTests {
 
         await state.autoTitleSession(session.id, question: "Which users have spent the most?")
 
-        #expect(state.session(for: session.id)?.title == "Which users have spent the most?")
+        #expect(state.session(for: session.id)?.title == "Which Users Have Spent The Most?")
     }
 
     @Test func autoTitleNeverOverridesAManualRename() async {

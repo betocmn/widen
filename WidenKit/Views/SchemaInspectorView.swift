@@ -22,11 +22,16 @@ public struct SchemaInspectorView: View {
                         Task { await appState.refreshSchema(for: id) }
                     }
                 } label: {
-                    Image(systemName: "arrow.clockwise")
+                    if isLoadingSchema {
+                        ProgressView()
+                            .controlSize(.small)
+                    } else {
+                        Image(systemName: "arrow.clockwise")
+                    }
                 }
                 .buttonStyle(.borderless)
-                .help("Refresh Schema")
-                .disabled(activeStatus != .connected)
+                .help(isLoadingSchema ? "Loading schema" : "Refresh Schema")
+                .disabled(activeStatus != .connected || isLoadingSchema)
             }
             .padding(10)
 
@@ -44,10 +49,12 @@ public struct SchemaInspectorView: View {
                 .help("The open schema — the table list and AI context are scoped to it")
             }
 
-            TextField("Search tables", text: $schemaVM.searchText)
-                .textFieldStyle(.roundedBorder)
-                .padding(.horizontal, 10)
-                .padding(.vertical, 8)
+            if activeSchema != nil {
+                TextField("Search tables", text: $schemaVM.searchText)
+                    .textFieldStyle(.roundedBorder)
+                    .padding(.horizontal, 10)
+                    .padding(.vertical, 8)
+            }
 
             tableList
 
@@ -124,15 +131,46 @@ public struct SchemaInspectorView: View {
             VStack(spacing: 8) {
                 if isLoadingSchema {
                     LoadingView(label: "Loading schema…")
+                    Text("Tables and columns will appear here when introspection finishes.")
+                        .font(.caption)
+                        .foregroundStyle(.tertiary)
+                        .multilineTextAlignment(.center)
+                        .padding(.horizontal)
                 } else {
-                    Text(
-                        activeStatus == .connected
-                            ? "No schema loaded yet."
-                            : "Connect to the database to browse its tables."
-                    )
-                    .font(.callout)
-                    .foregroundStyle(.secondary)
-                    .multilineTextAlignment(.center)
+                    VStack(spacing: 10) {
+                        Image(
+                            systemName: activeStatus == .connected
+                                ? "exclamationmark.triangle" : "cable.connector"
+                        )
+                        .font(.system(size: 24, weight: .semibold))
+                        .foregroundStyle(activeStatus == .connected ? Color.orange : Color.secondary)
+
+                        Text(
+                            activeStatus == .connected
+                                ? "Schema Not Loaded"
+                                : "Connect to browse tables"
+                        )
+                        .font(.callout.weight(.semibold))
+
+                        Text(
+                            activeStatus == .connected
+                                ? "Refresh the schema to load tables and columns for browsing and AI context."
+                                : "The table list appears after the database connects and the schema loads."
+                        )
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                        .multilineTextAlignment(.center)
+                        .frame(maxWidth: 260)
+
+                        if activeStatus == .connected {
+                            Button("Refresh Schema") {
+                                if let id = activeConnectionID {
+                                    Task { await appState.refreshSchema(for: id) }
+                                }
+                            }
+                            .controlSize(.small)
+                        }
+                    }
                     .padding()
                 }
             }
