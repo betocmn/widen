@@ -10,6 +10,7 @@ struct ResultsGridView: View {
     var maxRows: Int?
 
     private static let lineColor = Color.primary.opacity(0.12)
+    private static let horizontalScrollerGutter: CGFloat = 16
 
     private var displayRows: [[String?]] {
         guard let maxRows else { return result.rows }
@@ -46,6 +47,9 @@ struct ResultsGridView: View {
                     .strokeBorder(Self.lineColor)
             }
             .padding(1)
+            // macOS can keep overlay scrollbars visible. Reserve a gutter so
+            // the horizontal scroller does not cover the last visible row.
+            .padding(.bottom, Self.horizontalScrollerGutter)
         }
     }
 
