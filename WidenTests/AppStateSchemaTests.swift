@@ -123,4 +123,24 @@ struct AppStateSchemaTests {
 
         #expect(state.selectedSchemaNames[config.id] == nil)
     }
+
+    @Test func schemaViewModelListsOnlyOpenSchemaTables() {
+        let schemaVM = SchemaViewModel()
+        let schema = makeSchema(schemas: ["analytics", "public"])
+
+        let tables = schemaVM.tables(in: schema, schemaName: "analytics")
+        #expect(tables.map(\.name) == ["orders", "users"])
+        #expect(tables.allSatisfy { $0.schema == "analytics" })
+
+        schemaVM.searchText = "use"
+        #expect(schemaVM.tables(in: schema, schemaName: "analytics").map(\.name) == ["users"])
+
+        // The schema name itself must not match every table.
+        schemaVM.searchText = "analytics"
+        #expect(schemaVM.tables(in: schema, schemaName: "analytics").isEmpty)
+
+        schemaVM.searchText = ""
+        #expect(schemaVM.tables(in: nil, schemaName: "analytics").isEmpty)
+        #expect(schemaVM.tables(in: schema, schemaName: nil).isEmpty)
+    }
 }
