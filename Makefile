@@ -45,7 +45,7 @@ run: build
 
 ## Build and launch the app, blocking until it quits (for Conductor run tab)
 run-conductor: build
-	open -W $(APP)
+	open -W -n $(APP)
 
 ## Open the project in Xcode 26
 xcode:
