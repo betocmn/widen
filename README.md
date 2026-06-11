@@ -149,9 +149,10 @@ scoped to it. The sun/moon toolbar button flips light/dark mode; pick
 4. Run executes it in a `BEGIN READ ONLY` transaction with
    `SET LOCAL statement_timeout` (default 10s). Queries without a `LIMIT` are
    wrapped in a subquery with your default row limit (default 100).
-5. The view flips to the results: the conversation collapses to a strip, the
-   grid takes the space, and the run outcome is recorded in the transcript.
-   Copy CSV exports the rows; typing again returns to the conversation.
+5. The results flow into the same chat thread: a bordered table card appears
+   where the run happened (first 10 rows, "View more" for the rest), with
+   Copy as CSV and Export CSV. Every run is recorded in the transcript, and
+   the conversation just keeps going underneath.
 
 Keyboard: **Enter** in the composer submits (Option+Enter for a newline);
 **Cmd+Enter** runs the active SQL; **Cmd+N** starts a new session; **Cmd+R**

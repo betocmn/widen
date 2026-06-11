@@ -97,14 +97,13 @@ per-session runtime container. It owns a `ChatViewModel` and a
 connection. Controllers are cached by `AppState`, so switching sessions
 never loses an in-flight generation or query run.
 
-`SessionController.focus` (`FocusMode`: `.chat` / `.results`) selects which
-face of the session the detail pane shows. It is ephemeral by design — never
-persisted, reset to `.chat` whenever a controller is recreated. `submit`
-always returns focus to `.chat`; `runQuery` flips it to `.results` and, via
-the `startRun` completion hook, appends the outcome to the transcript: a
-`.result` `ChatMessage` (with a `RunSummary` of row count, duration,
-truncation, and the executed SQL) on success, or an `.error` message on
-failure or "stopped waiting" cancellation.
+`runQuery`, via the `startRun` completion hook, appends the outcome to the
+transcript: a `.result` `ChatMessage` (with a `RunSummary` of row count,
+duration, truncation, and the executed SQL) on success, or an `.error`
+message on failure or "stopped waiting" cancellation. The latest run record
+renders inline as a full results card while `queryVM.result` is in memory;
+older records (and everything after a relaunch) render as compact summary
+rows.
 
 The app's SwiftUI entry point is `Widen/WidenApp.swift`. It creates one
 `@State` `AppState`, injects it into the SwiftUI environment, registers the
@@ -120,13 +119,13 @@ NavigationSplitView
     ErrorBannerView when needed
     DatabaseOverviewView when a database row is selected
     SessionDetailView for the selected session's controller
-      switch controller.focus
-        .chat:    ChatModeView (transcript + active SQLCardView + ComposerView)
-        .results: ResultsModeView (CollapsedChatStrip + SQLSnippetView +
-                  ResultsGridView + ComposerView)
+      ChatModeView — one chat thread:
+        messages (latest run record renders as ResultsCardView inline)
+        + active SQLCardView + ComposerView pinned at the bottom
     .inspector: SchemaInspectorView (toolbar-toggled, scoped to the open schema)
-  toolbar: breadcrumb (status dot · database › schema menu) ·
-           light/dark toggle · inspector toggle; window title removed
+  toolbar: system sidebar toggle · breadcrumb (status dot · database › schema
+           menu) · light/dark toggle · inspector toggle (window trailing);
+           window title removed
 ```
 
 The breadcrumb is plain toolbar content on purpose: the macOS 26 toolbar
@@ -322,9 +321,8 @@ orchestrated per session by `SessionController`.
 Flow:
 
 ```text
-ComposerView submit (chat or results mode)
+ComposerView submit
   SessionController.submit(appState:)
-    focus = .chat
     ChatViewModel.isDirectSQL(input)?      // leading SELECT/WITH word
       yes: ChatViewModel.submitDirectSQL(queryVM:)
         append user ChatMessage (the SQL itself)
@@ -345,13 +343,15 @@ Generated SQL is not executed automatically. It renders as the read-only
 icon with a popover for the messages, compact generation caption, Run
 button). The user refines it by chatting, by pasting new SQL into the
 composer, or by restoring an older generation via "Use this SQL" on an
-assistant message. Run flips the controller to results mode and appends the
-outcome to the transcript when it finishes.
+assistant message. Run keeps the thread flowing: a "Running query…"
+indicator appears in the transcript, and the outcome lands there too — the
+latest run record renders as an inline `ResultsCardView` (bordered table,
+"View more" past 10 rows, Copy/Export CSV).
 
 Chat transcripts — including `.result` run records — are persisted as part
 of the session (see "Sessions And Persistence"); materialized query results
-are not, so "View results" on the latest run record only renders while the
-result is still in memory.
+are not, so the full results card only renders while the result is still in
+memory — afterwards the record shows as a compact summary row.
 
 ## Prompt Construction
 
@@ -584,7 +584,7 @@ type/byte-count placeholder.
 - `executionTimeMs`
 
 It also exposes CSV rendering with standard quoting for commas, quotes, and
-newlines. `ResultsModeView` uses that for Copy CSV.
+newlines. `ResultsCardView` uses that for Copy as CSV and Export CSV.
 
 ## UI Responsibilities
 
@@ -600,33 +600,30 @@ Key views:
   footer.
 - `DatabaseOverviewView`: detail pane for a selected database row — the
   connection at a glance plus a New Session call to action.
-- `SessionDetailView`: switches one session's controller between
-  `ChatModeView` and `ResultsModeView` on `controller.focus` and reports
-  edits via `sessionDidChange`. Exactly one mode is mounted at a time — both
-  declare ⌘Return on their run buttons.
-- `Chat/ChatModeView`: full-height transcript (empty sessions show only a
-  centered hint), bottom-pinned composer, "Clear Conversation" context menu,
-  bottom-anchored auto-scroll.
-- `Chat/ComposerView`: the large rounded input shared by both modes. Accepts
-  plain English or raw SQL; Return submits, Option+Return inserts a newline
-  (no `.keyboardShortcut(.defaultAction)` on the send button — it would
+- `SessionDetailView`: hosts `ChatModeView` for one session's controller and
+  reports edits via `sessionDidChange`.
+- `Chat/ChatModeView`: the single chat thread — messages, generating and
+  running indicators, the latest run's `ResultsCardView` inline, the active
+  `SQLCardView`, and the bottom-pinned composer (empty sessions show only a
+  centered hint). "Clear Conversation" context menu, auto-scroll to bottom.
+- `Chat/ComposerView`: the large rounded input. Accepts plain English or raw
+  SQL; Return submits, Option+Return inserts a newline (no
+  `.keyboardShortcut(.defaultAction)` on the send button — it would
   double-fire with `onSubmit`).
 - `Chat/MessageBubbleView`: user bubble is glass, assistant/error bubbles use
   a plain material to keep scrolling cheap; `.result` records render as a
-  compact row with "View results" on the latest one; assistant generations
-  collapse behind a "View SQL" disclosure with "Use this SQL".
+  compact row; assistant generations collapse behind a "View SQL" disclosure
+  with "Use this SQL".
 - `Chat/SQLCardView`: the read-only active SQL card (dashed accent border,
   validation status icon + popover, copy, Run, one-line generation caption,
   explanation/assumptions behind an info popover).
-- `Results/ResultsModeView`: collapsed chat strip, compact SQL snippet,
-  result summary + Copy CSV, grid, and the composer; running/error/empty
-  states live here.
-- `Results/CollapsedChatStrip`: one clickable row ("N messages · last
-  question") returning to chat mode.
-- `Results/SQLSnippetView`: three-line read-only SQL with expand, copy, and
-  Re-run.
-- `Results/ResultsGridView`: horizontal/vertical grid with pinned header and
-  measured column widths.
+- `Results/ResultsCardView`: the latest result inline in the thread — same
+  tint family as the SQL card one shade lighter with a solid border, summary
+  caption, bordered table, "View more"/"View less" past 10 rows, Copy as
+  CSV, and Export CSV via `NSSavePanel`.
+- `Results/ResultsGridView`: content-sized bordered table (header row, cell
+  separators, measured column widths, horizontal scrolling, optional
+  `maxRows` cap).
 - `SchemaInspectorView` + `SchemaBrowserView`: toolbar-toggled inspector with
   schema picker, table search, table list, and selected table columns.
 - `Settings/SettingsView` (+ General / Databases / Archived Sessions tabs,
@@ -648,7 +645,7 @@ Keyboard behavior:
 
 - Enter in the composer submits (generation, or direct SQL when the input
   starts with SELECT/WITH); Option+Enter inserts a newline.
-- Cmd+Enter runs the active SQL (chat mode's Run, results mode's Re-run).
+- Cmd+Enter runs the active SQL card.
 - Cmd+N creates a session on the active (or first) database.
 - Cmd+R refreshes the active connection's schema through the Database menu.
 
@@ -692,8 +689,8 @@ Main suites:
   filtering. These touch the real `WidenSelectedSchemaNames` UserDefaults
   key and clean it up in `defer`.
 - `SessionControllerTests`: run records appended on success/failure with the
-  snapshotted SQL, focus transitions, and the direct-SQL submit path (via
-  the executor-injectable internal initializer).
+  snapshotted SQL, and the direct-SQL submit path (via the
+  executor-injectable internal initializer).
 - `SessionTitleTests`: fallback truncation, sanitizer rules, mock generator
   determinism.
 - `PostgresIntegrationTests`: gated local PostgreSQL tests for connection,
@@ -750,8 +747,8 @@ Add a result display feature:
 1. Extend `QueryResult` only if the data model really needs new state.
 2. Prefer formatting in `PostgresCellFormatter` or `QueryResult` rather than
    directly in SwiftUI views.
-3. Update `Results/ResultsGridView` (grid cells) or `Results/ResultsModeView`
-   (summary, states around the grid).
+3. Update `Results/ResultsGridView` (table cells) or `Results/ResultsCardView`
+   (summary, expansion, export around the table).
 4. Add unit tests if formatting or export behavior changes.
 
 Add another SQL generator:
