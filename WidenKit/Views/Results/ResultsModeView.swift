@@ -54,7 +54,8 @@ struct ResultsModeView: View {
                     header(for: result)
                     ResultsGridView(result: result)
                 }
-                .padding(10)
+                .padding(.horizontal, 12)
+                .padding(.vertical, 8)
             }
         } else {
             Text("Run a query to see results here.")
