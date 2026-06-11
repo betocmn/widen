@@ -9,6 +9,7 @@ public struct MockSQLGenerator: SQLGenerator {
     public func generateSQL(
         question: String,
         schema: DatabaseSchema,
+        context: SQLGenerationContext,
         config: SQLGenerationConfig
     ) async throws -> SQLGenerationResult {
         SQLGenerationResult(
