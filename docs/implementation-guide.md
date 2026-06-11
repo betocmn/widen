@@ -366,14 +366,31 @@ Prompt construction is pure and testable in
 It exposes:
 
 - `instructions(defaultRowLimit:)`
-- `prompt(question:schema:maxSchemaCharacters:)`
+- `prompt(question:schema:context:maxSchemaCharacters:)`
+- `contextSection(_:)`
 - `schemaSummary(_:maxCharacters:)`
 - `isSchemaTruncated(_:maxCharacters:)`
 
 The system instructions tell the model to produce one PostgreSQL `SELECT` or
-`WITH ... SELECT` query, avoid mutating/DDL/transaction keywords, include a
-LIMIT unless appropriate, use only the provided schema, and ask for
+`WITH ... SELECT` query, use PostgreSQL date/interval syntax (never MySQL
+idioms like `CURDATE()`), avoid mutating/DDL/transaction keywords, include a
+LIMIT unless appropriate, use only the provided schema, treat the question
+as a follow-up to any conversation context in the prompt, and ask for
 clarification when the schema cannot answer the question.
+
+The generator is stateless per request (a fresh session keeps the on-device
+context window small), so follow-ups work through `SQLGenerationContext`
+(defined with the `SQLGenerator` protocol): up to three earlier user
+questions, the SQL currently on screen, and the last run error, each with a
+tight character budget. `ChatViewModel.submit` assembles it from the
+transcript and `QueryResultViewModel` before appending the new question —
+this is what lets "the query is failing" produce a corrected version of the
+failing SQL instead of an unrelated query.
+
+Every on-device generation (full prompt plus structured outcome or error)
+is appended to `~/Library/Application Support/Widen/generation.log` by
+`GenerationLog` for debugging the local model. Plain text, local only,
+best-effort.
 
 `schemaSummary` renders tables as:
 
