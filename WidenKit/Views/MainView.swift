@@ -8,20 +8,15 @@ public struct MainView: View {
     @Environment(\.colorScheme) private var colorScheme
     @AppStorage(AppearancePreference.storageKey)
     private var appearanceRaw = AppearancePreference.system.rawValue
-    @State private var columnVisibility: NavigationSplitViewVisibility = .all
 
     public init() {}
 
     public var body: some View {
         @Bindable var appState = appState
 
-        NavigationSplitView(columnVisibility: $columnVisibility) {
+        NavigationSplitView {
             SidebarView()
                 .navigationSplitViewColumnWidth(min: 230, ideal: 280, max: 400)
-                // The system toggle is replaced by the custom one in the
-                // detail toolbar; removing it must happen on the sidebar
-                // content itself.
-                .toolbar(removing: .sidebarToggle)
         } detail: {
             VStack(spacing: 0) {
                 if let message = appState.errorBanner {
@@ -35,18 +30,10 @@ public struct MainView: View {
             // ideal exceeds the screen, macOS 26 keeps the content laid out
             // wider than the clamped window and the panes clip their edges.
             .frame(minWidth: 420, idealWidth: 560)
-            // Both panel toggles live in the middle panel's toolbar, one at
-            // each side. The system sidebar toggle is removed below so the
-            // left one can sit here, leading — consistent with the right.
+            // The sidebar keeps the system toggle in its own section; the
+            // inspector toggle sits at the window's trailing corner — the
+            // only spot macOS allows trailing toolbar items.
             .toolbar {
-                ToolbarItem(placement: .navigation) {
-                    Button {
-                        columnVisibility = columnVisibility == .detailOnly ? .all : .detailOnly
-                    } label: {
-                        Label("Sidebar", systemImage: "sidebar.left")
-                    }
-                    .help("Show or hide the sidebar")
-                }
                 ToolbarItem(placement: .navigation) {
                     breadcrumb
                 }
