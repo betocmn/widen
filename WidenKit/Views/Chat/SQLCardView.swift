@@ -197,6 +197,7 @@ private struct HoverPopoverAnchor<Label: View, Content: View>: View {
     @State private var isPresented = false
     @State private var isHoveringLabel = false
     @State private var isHoveringPopover = false
+    @State private var closeTask: Task<Void, Never>?
 
     var body: some View {
         label()
@@ -208,12 +209,26 @@ private struct HoverPopoverAnchor<Label: View, Content: View>: View {
                     .onHover { isHoveringPopover = $0; syncPresentation() }
             }
             .onChange(of: isEnabled) { _, enabled in
-                if !enabled { isPresented = false }
+                if !enabled {
+                    closeTask?.cancel()
+                    isPresented = false
+                }
             }
     }
 
     private func syncPresentation() {
-        isPresented = isEnabled && (isHoveringLabel || isHoveringPopover)
+        closeTask?.cancel()
+        if isEnabled && (isHoveringLabel || isHoveringPopover) {
+            isPresented = true
+        } else {
+            // Grace period so the pointer can cross the gap between the
+            // anchor and the popover without dismissing it.
+            closeTask = Task {
+                try? await Task.sleep(for: .milliseconds(250))
+                guard !Task.isCancelled else { return }
+                isPresented = false
+            }
+        }
     }
 }
 
