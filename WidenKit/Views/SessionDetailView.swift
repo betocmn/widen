@@ -1,8 +1,10 @@
 import SwiftUI
 
-/// Detail pane for one query session: chat, SQL editor, and results, all
-/// backed by the session's runtime controller. Editor and transcript changes
-/// schedule a debounced save through `sessionDidChange`.
+/// Detail pane for one query session. Chat mode is the default: a transcript
+/// with the composer pinned at the bottom and the active SQL inline. Running
+/// a query flips to results mode, where the conversation collapses to a strip
+/// and the grid takes the space. Editor and transcript changes schedule a
+/// debounced save through `sessionDidChange`.
 public struct SessionDetailView: View {
     @Environment(AppState.self) private var appState
     private let controller: SessionController
@@ -12,13 +14,15 @@ public struct SessionDetailView: View {
     }
 
     public var body: some View {
-        VSplitView {
-            ChatView(controller: controller)
-                .frame(minHeight: 150, idealHeight: 210)
-            SQLPreviewView(controller: controller)
-                .frame(minHeight: 150, idealHeight: 210)
-            QueryResultsView(controller: controller)
-                .frame(minHeight: 170, maxHeight: .infinity)
+        Group {
+            // Exactly one mode is mounted at a time — both declare ⌘Return
+            // on their run buttons, which is only safe unduplicated.
+            switch controller.focus {
+            case .chat:
+                ChatModeView(controller: controller)
+            case .results:
+                ResultsModeView(controller: controller)
+            }
         }
         .onChange(of: controller.queryVM.sqlText) {
             appState.sessionDidChange(controller.sessionID)
