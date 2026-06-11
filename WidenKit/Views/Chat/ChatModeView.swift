@@ -32,7 +32,10 @@ struct ChatModeView: View {
                 transcript
             }
 
-            ComposerView(text: $chatVM.input, isBusy: controller.chatVM.isGenerating) {
+            ComposerView(
+                text: $chatVM.input,
+                isBusy: controller.chatVM.isGenerating || controller.queryVM.isRunning
+            ) {
                 Task { await controller.submit(appState: appState) }
             }
         }

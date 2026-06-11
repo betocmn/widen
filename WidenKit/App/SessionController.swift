@@ -59,6 +59,7 @@ public final class SessionController: Identifiable {
     /// Submits the chat input: raw SQL goes straight to the preview, anything
     /// else is generated against this session's connection.
     public func submit(appState: AppState) async {
+        guard !queryVM.isRunning else { return }
         let hadUserMessage = chatVM.messages.contains { $0.role == .user }
         if ChatViewModel.isDirectSQL(chatVM.input) {
             chatVM.submitDirectSQL(queryVM: queryVM)
@@ -114,8 +115,8 @@ public final class SessionController: Identifiable {
 
     /// Wipes the transcript, the SQL preview, and the per-run result cache.
     public func clearConversation() {
-        chatVM.clearConversation()
         queryVM.clear()
+        chatVM.clearConversation()
         results.removeAll()
     }
 }

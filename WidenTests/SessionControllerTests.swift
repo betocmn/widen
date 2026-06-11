@@ -22,6 +22,23 @@ struct SessionControllerTests {
         }
     }
 
+    private struct SlowExecutor: QueryExecuting {
+        func run(
+            sql: String,
+            config: DatabaseConnectionConfig,
+            postgres: PostgresService
+        ) async throws -> QueryResult {
+            try await Task.sleep(for: .seconds(30))
+            return QueryResult(
+                columns: ["value"],
+                rows: [["1"]],
+                rowCount: 1,
+                truncated: false,
+                executionTimeMs: 1
+            )
+        }
+    }
+
     private func makeState(connectionID: UUID, connected: Bool) -> (AppState, URL) {
         let dir = FileManager.default.temporaryDirectory
             .appendingPathComponent("widen-tests-\(UUID().uuidString)", isDirectory: true)
@@ -36,10 +53,13 @@ struct SessionControllerTests {
         return (state, dir)
     }
 
-    private func makeController(connectionID: UUID) -> SessionController {
+    private func makeController(
+        connectionID: UUID,
+        executor: any QueryExecuting = ImmediateExecutor()
+    ) -> SessionController {
         SessionController(
             session: QuerySession(connectionID: connectionID),
-            executor: ImmediateExecutor()
+            executor: executor
         )
     }
 
@@ -93,6 +113,45 @@ struct SessionControllerTests {
         #expect(controller.chatVM.messages[0].role == .user)
         #expect(controller.queryVM.sqlText == "select id from users")
         #expect(controller.queryVM.generation == nil)
+    }
+
+    @Test func clearConversationCancelsActiveRunWithoutAppendingCompletion() async {
+        let connectionID = UUID()
+        let (state, dir) = makeState(connectionID: connectionID, connected: true)
+        defer { try? FileManager.default.removeItem(at: dir) }
+        let controller = makeController(connectionID: connectionID, executor: SlowExecutor())
+        controller.queryVM.setDirectSQL("SELECT id FROM users")
+
+        controller.runQuery(appState: state)
+        #expect(controller.queryVM.isRunning)
+
+        controller.clearConversation()
+        await Task.yield()
+
+        #expect(controller.queryVM.isRunning == false)
+        #expect(controller.chatVM.messages.isEmpty)
+        #expect(controller.queryVM.sqlText.isEmpty)
+        #expect(controller.queryVM.runError == nil)
+        #expect(controller.results.isEmpty)
+    }
+
+    @Test func submitIsIgnoredWhileQueryIsRunning() async {
+        let connectionID = UUID()
+        let (state, dir) = makeState(connectionID: connectionID, connected: true)
+        defer { try? FileManager.default.removeItem(at: dir) }
+        let controller = makeController(connectionID: connectionID, executor: SlowExecutor())
+        controller.queryVM.setDirectSQL("SELECT id FROM users")
+        controller.runQuery(appState: state)
+        controller.chatVM.input = "SELECT email FROM users"
+
+        await controller.submit(appState: state)
+
+        #expect(controller.queryVM.isRunning)
+        #expect(controller.queryVM.sqlText == "SELECT id FROM users")
+        #expect(controller.chatVM.input == "SELECT email FROM users")
+        #expect(controller.chatVM.messages.isEmpty)
+
+        controller.queryVM.cancelRun()
     }
 
     private func waitUntil(_ condition: @MainActor @escaping () -> Bool) async {
