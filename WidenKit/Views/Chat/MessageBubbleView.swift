@@ -1,13 +1,11 @@
 import SwiftUI
 
 /// One transcript entry. User/assistant/error messages render as bubbles;
-/// `.result` records render as a compact full-width row.
+/// `.result` records render as a compact full-width row. (The latest run
+/// record is rendered by the transcript as a full `ResultsCardView` instead,
+/// while its result is still in memory.)
 struct MessageBubbleView: View {
     let message: ChatMessage
-    /// True when this is the latest run record and its result is still in
-    /// memory, so "View results" can reopen the results pane.
-    var showViewResults = false
-    var onViewResults: (() -> Void)?
     /// Restores an older generation into the active SQL card.
     var onUseSQL: ((SQLGenerationResult) -> Void)?
 
@@ -30,13 +28,6 @@ struct MessageBubbleView: View {
             Label(message.text, systemImage: "tablecells")
                 .font(.caption)
                 .foregroundStyle(.secondary)
-            if showViewResults {
-                Button("View results") {
-                    onViewResults?()
-                }
-                .buttonStyle(.link)
-                .font(.caption)
-            }
             Spacer()
         }
         .padding(.vertical, 2)

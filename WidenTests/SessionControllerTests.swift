@@ -58,7 +58,8 @@ struct SessionControllerTests {
         #expect(record?.runSummary?.rowCount == 2)
         #expect(record?.runSummary?.executionTimeMs == 5)
         #expect(record?.runSummary?.sql == "SELECT id FROM users")
-        #expect(controller.focus == .results)
+        // The materialized result stays available for the inline card.
+        #expect(controller.queryVM.result != nil)
     }
 
     @Test func failedRunAppendsErrorMessage() async {
@@ -77,17 +78,15 @@ struct SessionControllerTests {
                 == AppError.notConnected.errorDescription)
     }
 
-    @Test func submitWithDirectSQLSkipsGeneratorAndReturnsToChat() async {
+    @Test func submitWithDirectSQLSkipsGenerator() async {
         let connectionID = UUID()
         let (state, dir) = makeState(connectionID: connectionID, connected: true)
         defer { try? FileManager.default.removeItem(at: dir) }
         let controller = makeController(connectionID: connectionID)
-        controller.focus = .results
         controller.chatVM.input = "select id from users"
 
         await controller.submit(appState: state)
 
-        #expect(controller.focus == .chat)
         #expect(controller.chatVM.messages.count == 1)
         #expect(controller.chatVM.messages[0].role == .user)
         #expect(controller.queryVM.sqlText == "select id from users")
