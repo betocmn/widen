@@ -53,8 +53,8 @@ public struct MainView: View {
                             ? "Switch to light mode (reset to System in Settings › General)"
                             : "Switch to dark mode (reset to System in Settings › General)")
                 }
-                // When the inspector is open its own toolbar section carries
-                // the toggle (right against the divider); this fallback only
+                // When the inspector is open it carries the toggle itself in
+                // its title-bar row (against the divider); this fallback only
                 // exists so the inspector can be reopened once hidden.
                 if !appState.showSchemaInspector {
                     ToolbarItem(placement: .primaryAction) {
