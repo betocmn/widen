@@ -37,6 +37,7 @@
 		44DC2644E6C9B468A01B836C /* PostgresErrorMapper.swift in Sources */ = {isa = PBXBuildFile; fileRef = D02148CFD54DB234244D6960 /* PostgresErrorMapper.swift */; };
 		45493C26C7093C53E7FA6CA7 /* ForeignKeyInfo.swift in Sources */ = {isa = PBXBuildFile; fileRef = 53B157FCABED3A63DEE715A3 /* ForeignKeyInfo.swift */; };
 		48022A27EFAA78F2CBCC864D /* SidebarView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 55003AE18B47B04247233530 /* SidebarView.swift */; };
+		4A75EC7A4C514B92BE04945E /* ResultsGridView.swift in Sources */ = {isa = PBXBuildFile; fileRef = A0D6E491DE3F8E28E3DE6BA0 /* ResultsGridView.swift */; };
 		603D1C66B3804DB8772F9B9C /* ChatViewModel.swift in Sources */ = {isa = PBXBuildFile; fileRef = 45FEB67F1A613C00B3549BE5 /* ChatViewModel.swift */; };
 		6A5DB748205AD6A08CB83BAE /* SQLSafetyValidatorTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = D7D4F66164E5E8028A9EA325 /* SQLSafetyValidatorTests.swift */; };
 		6D0F36CCCD8C402EB80DA83D /* SessionStore.swift in Sources */ = {isa = PBXBuildFile; fileRef = DA1AA29704A0DF0B0D92E56E /* SessionStore.swift */; };
@@ -160,6 +161,7 @@
 		8D3B5C38E209E366A7B9413D /* QueryExecutionService.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = QueryExecutionService.swift; sourceTree = "<group>"; };
 		980EE95F99B9CDF2F26BBC47 /* ErrorBannerView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ErrorBannerView.swift; sourceTree = "<group>"; };
 		9A9887B52211CBB6839046D7 /* SQLPreviewView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SQLPreviewView.swift; sourceTree = "<group>"; };
+		A0D6E491DE3F8E28E3DE6BA0 /* ResultsGridView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ResultsGridView.swift; sourceTree = "<group>"; };
 		A181CFBD27E3620C8C3C902E /* MainView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MainView.swift; sourceTree = "<group>"; };
 		A287B7ABA46C2CE732510671 /* WidenKit.framework */ = {isa = PBXFileReference; explicitFileType = wrapper.framework; includeInIndex = 0; path = WidenKit.framework; sourceTree = BUILT_PRODUCTS_DIR; };
 		A3B9A1CC6E0205BFB23382B5 /* KeychainService.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = KeychainService.swift; sourceTree = "<group>"; };
@@ -263,6 +265,7 @@
 				725DE507622217A36A82A235 /* SchemaInspectorView.swift */,
 				003537221E8D09444ADD7EAD /* SessionDetailView.swift */,
 				9A9887B52211CBB6839046D7 /* SQLPreviewView.swift */,
+				8EF0FC0A318B799BB7D9C2B0 /* Results */,
 				6D3F3AF0D6866578C40832D5 /* Settings */,
 				A0AE56A39456C067B76EDA60 /* Sidebar */,
 			);
@@ -338,6 +341,14 @@
 				6DEA98F4ACDF85280BE79B53 /* WidenTests */,
 				03FCBDFDB9E7B3428651C8A0 /* Products */,
 			);
+			sourceTree = "<group>";
+		};
+		8EF0FC0A318B799BB7D9C2B0 /* Results */ = {
+			isa = PBXGroup;
+			children = (
+				A0D6E491DE3F8E28E3DE6BA0 /* ResultsGridView.swift */,
+			);
+			path = Results;
 			sourceTree = "<group>";
 		};
 		A0AE56A39456C067B76EDA60 /* Sidebar */ = {
@@ -563,6 +574,7 @@
 				31AAD4FFD25B413C6BB2410E /* QueryResultViewModel.swift in Sources */,
 				BAE6AFEFDDE4AE20D82DF14C /* QueryResultsView.swift in Sources */,
 				17B58BDBFC1AD9599BE083EC /* QuerySession.swift in Sources */,
+				4A75EC7A4C514B92BE04945E /* ResultsGridView.swift in Sources */,
 				AEBB14B823EC2DF0490DC5B8 /* SQLGenerationResult.swift in Sources */,
 				799DCAF1B34F0A3CD18F70FB /* SQLGenerator.swift in Sources */,
 				B8ACB6DEC273130683C5911E /* SQLPreviewView.swift in Sources */,
