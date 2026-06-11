@@ -3,8 +3,8 @@ import SwiftUI
 
 /// The newest SQL, the only runnable one, rendered inline in the chat
 /// transcript. Read-only by design — the user refines it by chatting or by
-/// pasting new SQL into the composer. Validation issues hide behind the
-/// status icon; generation metadata collapses to one caption row.
+/// pasting new SQL into the composer. Validation issues and generation
+/// details appear on hover; referenced tables sit in a single caption row.
 ///
 /// Color system: the user owns blue, settled AI output is plain gray, and a
 /// muted green marks the single item awaiting attention. This card carries
@@ -14,8 +14,6 @@ struct SQLCardView: View {
     @Environment(AppState.self) private var appState
     let controller: SessionController
     var isAwaitingRun = true
-    @State private var showIssues = false
-    @State private var showDetails = false
 
     var body: some View {
         VStack(alignment: .leading, spacing: 8) {
@@ -50,14 +48,7 @@ struct SQLCardView: View {
                 .foregroundStyle(.secondary)
             statusIcon
             Spacer()
-            Button {
-                NSPasteboard.general.clearContents()
-                NSPasteboard.general.setString(controller.queryVM.sqlText, forType: .string)
-            } label: {
-                Image(systemName: "doc.on.doc")
-            }
-            .buttonStyle(.borderless)
-            .help("Copy SQL")
+            CopySQLButton(text: controller.queryVM.sqlText)
             Button("Run") {
                 controller.runQuery(appState: appState)
             }
@@ -76,15 +67,12 @@ struct SQLCardView: View {
             || appState.connectionState(controller.connectionID) != .connected
     }
 
-    /// Compact validation status. The messages themselves only appear when
-    /// the user clicks the icon.
+    /// Compact validation status. The messages themselves appear on hover.
     @ViewBuilder
     private var statusIcon: some View {
         if let validation = controller.queryVM.validation {
             let issueCount = validation.errors.count + validation.warnings.count
-            Button {
-                showIssues = true
-            } label: {
+            HoverPopoverAnchor(isEnabled: issueCount > 0) {
                 HStack(spacing: 3) {
                     Image(systemName: statusSymbol(validation))
                     if issueCount > 0 {
@@ -93,14 +81,9 @@ struct SQLCardView: View {
                     }
                 }
                 .foregroundStyle(statusColor(validation))
-            }
-            .buttonStyle(.plain)
-            .disabled(issueCount == 0)
-            .help(statusHelp(validation))
-            .popover(isPresented: $showIssues, arrowEdge: .bottom) {
+                .help(statusHelp(validation))
+            } content: {
                 issuesList(validation)
-                    .padding(12)
-                    .frame(width: 320, alignment: .leading)
             }
         }
     }
@@ -132,17 +115,20 @@ struct SQLCardView: View {
     }
 
     private func statusHelp(_ validation: SQLValidationResult) -> String {
-        if !validation.isValid { return "Blocked — click for details" }
-        return validation.warnings.isEmpty ? "Valid" : "Valid with warnings — click for details"
+        if !validation.isValid { return "Blocked — hover for details" }
+        return validation.warnings.isEmpty ? "Valid" : "Valid with warnings — hover for details"
     }
 
     private func footer(_ generation: SQLGenerationResult) -> some View {
         HStack(spacing: 10) {
-            Label(
-                "\(Int((generation.confidence * 100).rounded()))%",
-                systemImage: "gauge.with.needle")
-            Label(generation.riskLevel.rawValue, systemImage: riskIcon(generation.riskLevel))
-                .foregroundStyle(riskColor(generation.riskLevel))
+            if !generation.explanation.isEmpty || !generation.assumptions.isEmpty {
+                HoverPopoverAnchor(isEnabled: true) {
+                    Image(systemName: "info.circle")
+                        .help("Explanation and assumptions")
+                } content: {
+                    detailsView(generation)
+                }
+            }
             if !generation.referencedTables.isEmpty {
                 Label(
                     generation.referencedTables.joined(separator: ", "),
@@ -152,20 +138,6 @@ struct SQLCardView: View {
                 .truncationMode(.middle)
             }
             Spacer()
-            if !generation.explanation.isEmpty || !generation.assumptions.isEmpty {
-                Button {
-                    showDetails = true
-                } label: {
-                    Image(systemName: "info.circle")
-                }
-                .buttonStyle(.plain)
-                .help("Explanation and assumptions")
-                .popover(isPresented: $showDetails, arrowEdge: .bottom) {
-                    detailsView(generation)
-                        .padding(12)
-                        .frame(width: 320, alignment: .leading)
-                }
-            }
         }
         .font(.caption)
         .foregroundStyle(.secondary)
@@ -185,22 +157,6 @@ struct SQLCardView: View {
             }
         }
     }
-
-    private func riskIcon(_ risk: SQLRiskLevel) -> String {
-        switch risk {
-        case .low: "checkmark.shield"
-        case .medium: "exclamationmark.shield"
-        case .high: "xmark.shield"
-        }
-    }
-
-    private func riskColor(_ risk: SQLRiskLevel) -> Color {
-        switch risk {
-        case .low: .secondary
-        case .medium: .orange
-        case .high: .red
-        }
-    }
 }
 
 /// A superseded SQL statement, kept in the transcript as a permanent record.
@@ -216,14 +172,7 @@ struct StaticSQLCardView: View {
                     .fontWeight(.semibold)
                     .foregroundStyle(.secondary)
                 Spacer()
-                Button {
-                    NSPasteboard.general.clearContents()
-                    NSPasteboard.general.setString(sql, forType: .string)
-                } label: {
-                    Image(systemName: "doc.on.doc")
-                }
-                .buttonStyle(.borderless)
-                .help("Copy SQL")
+                CopySQLButton(text: sql)
             }
             Text(sql)
                 .font(.system(.body, design: .monospaced))
@@ -236,5 +185,61 @@ struct StaticSQLCardView: View {
             RoundedRectangle(cornerRadius: 12)
                 .strokeBorder(Color.primary.opacity(0.12))
         }
+    }
+}
+
+/// Shows a popover while the pointer is over the label or the popover itself.
+private struct HoverPopoverAnchor<Label: View, Content: View>: View {
+    let isEnabled: Bool
+    @ViewBuilder let label: () -> Label
+    @ViewBuilder let content: () -> Content
+
+    @State private var isPresented = false
+    @State private var isHoveringLabel = false
+    @State private var isHoveringPopover = false
+
+    var body: some View {
+        label()
+            .onHover { isHoveringLabel = $0; syncPresentation() }
+            .popover(isPresented: $isPresented, arrowEdge: .bottom) {
+                content()
+                    .padding(12)
+                    .frame(width: 320, alignment: .leading)
+                    .onHover { isHoveringPopover = $0; syncPresentation() }
+            }
+            .onChange(of: isEnabled) { _, enabled in
+                if !enabled { isPresented = false }
+            }
+    }
+
+    private func syncPresentation() {
+        isPresented = isEnabled && (isHoveringLabel || isHoveringPopover)
+    }
+}
+
+private struct CopySQLButton: View {
+    let text: String
+    @State private var didCopy = false
+
+    var body: some View {
+        Button {
+            NSPasteboard.general.clearContents()
+            NSPasteboard.general.setString(text, forType: .string)
+            withAnimation(.easeInOut(duration: 0.2)) {
+                didCopy = true
+            }
+            Task {
+                try? await Task.sleep(for: .seconds(1.2))
+                withAnimation(.easeInOut(duration: 0.2)) {
+                    didCopy = false
+                }
+            }
+        } label: {
+            Image(systemName: didCopy ? "checkmark" : "doc.on.doc")
+                .foregroundStyle(didCopy ? Color.green : Color.primary)
+                .contentTransition(.symbolEffect(.replace))
+        }
+        .buttonStyle(.borderless)
+        .help(didCopy ? "Copied" : "Copy SQL")
     }
 }
