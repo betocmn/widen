@@ -9,7 +9,8 @@ struct ChatViewModelTests {
     private struct StubGenerator: SQLGenerator {
         var result: SQLGenerationResult
         func generateSQL(
-            question: String, schema: DatabaseSchema, config: SQLGenerationConfig
+            question: String, schema: DatabaseSchema,
+            context: SQLGenerationContext, config: SQLGenerationConfig
         ) async throws -> SQLGenerationResult {
             result
         }
@@ -17,9 +18,28 @@ struct ChatViewModelTests {
 
     private struct FailingGenerator: SQLGenerator {
         func generateSQL(
-            question: String, schema: DatabaseSchema, config: SQLGenerationConfig
+            question: String, schema: DatabaseSchema,
+            context: SQLGenerationContext, config: SQLGenerationConfig
         ) async throws -> SQLGenerationResult {
             throw AppError.modelUnavailable("Local Apple model is unavailable.")
+        }
+    }
+
+    /// Captures the context the view model hands to the generator.
+    private final class RecordingGenerator: SQLGenerator, @unchecked Sendable {
+        var result: SQLGenerationResult
+        var recordedContext: SQLGenerationContext?
+
+        init(result: SQLGenerationResult) {
+            self.result = result
+        }
+
+        func generateSQL(
+            question: String, schema: DatabaseSchema,
+            context: SQLGenerationContext, config: SQLGenerationConfig
+        ) async throws -> SQLGenerationResult {
+            recordedContext = context
+            return result
         }
     }
 
@@ -142,5 +162,93 @@ struct ChatViewModelTests {
             queryVM: QueryResultViewModel()
         )
         #expect(chatVM.messages.isEmpty)
+    }
+
+    @Test func submitPassesConversationContextToGenerator() async {
+        let chatVM = ChatViewModel()
+        let queryVM = QueryResultViewModel()
+        let generator = RecordingGenerator(result: makeGeneration())
+
+        // An earlier exchange whose SQL is on screen and whose run failed.
+        chatVM.messages = [
+            ChatMessage(role: .user, text: "what's the max spend per customer?"),
+            ChatMessage(role: .assistant, text: "Explains.", generation: makeGeneration()),
+            ChatMessage(role: .error, text: "Query failed: syntax error at or near \"30\""),
+        ]
+        queryVM.setDirectSQL("SELECT MAX(total_cents) FROM public.orders")
+        chatVM.input = "the query is failing"
+
+        await chatVM.submit(
+            schema: makeSchema(),
+            generator: generator,
+            config: SQLGenerationConfig(),
+            queryVM: queryVM
+        )
+
+        let context = generator.recordedContext
+        #expect(context?.recentQuestions == ["what's the max spend per customer?"])
+        #expect(context?.currentSQL == "SELECT MAX(total_cents) FROM public.orders")
+        #expect(context?.lastRunError == "Query failed: syntax error at or near \"30\"")
+    }
+
+    @Test func submitWithFreshSessionPassesEmptyContext() async {
+        let chatVM = ChatViewModel()
+        let generator = RecordingGenerator(result: makeGeneration())
+        chatVM.input = "show users"
+
+        await chatVM.submit(
+            schema: makeSchema(),
+            generator: generator,
+            config: SQLGenerationConfig(),
+            queryVM: QueryResultViewModel()
+        )
+
+        #expect(generator.recordedContext?.isEmpty == true)
+    }
+
+    @Test(arguments: [
+        ("select * from users", true),
+        ("  SELECT id\nFROM users", true),
+        ("WITH x AS (SELECT 1) SELECT * FROM x", true),
+        ("with totals as (select 1) select * from totals", true),
+        ("SELECTED users last week", false),
+        ("show me users", false),
+        ("Withdrawals by month", false),
+        ("-- comment\nSELECT 1", false),
+        ("", false),
+    ])
+    func directSQLDetection(input: String, expected: Bool) {
+        #expect(ChatViewModel.isDirectSQL(input) == expected)
+    }
+
+    @Test func submitDirectSQLRecordsUserMessageAndFillsPreview() {
+        let chatVM = ChatViewModel()
+        let queryVM = QueryResultViewModel()
+        chatVM.input = "  select id from users  "
+
+        chatVM.submitDirectSQL(queryVM: queryVM)
+
+        #expect(chatVM.messages.count == 1)
+        #expect(chatVM.messages[0].role == .user)
+        #expect(chatVM.messages[0].text == "select id from users")
+        #expect(chatVM.input.isEmpty)
+        #expect(queryVM.sqlText == "select id from users")
+        #expect(queryVM.validation?.isValid == true)
+        #expect(queryVM.generation == nil)
+    }
+
+    @Test func appendRunRecordAndErrorLandInTranscript() {
+        let chatVM = ChatViewModel()
+
+        chatVM.appendRunRecord(
+            ChatMessage.RunSummary(
+                rowCount: 3, executionTimeMs: 12, truncated: false, sql: "SELECT 1"))
+        chatVM.appendRunError("boom")
+
+        #expect(chatVM.messages.count == 2)
+        #expect(chatVM.messages[0].role == .result)
+        #expect(chatVM.messages[0].runSummary?.rowCount == 3)
+        #expect(chatVM.messages[1].role == .error)
+        #expect(chatVM.messages[1].text == "boom")
     }
 }

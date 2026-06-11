@@ -1,12 +1,11 @@
 import SwiftUI
 
 /// Selectable database row: icon with a status badge, the custom name,
-/// the host/database caption, and a hover "+" button that starts a new session.
+/// the host/database caption, and a "+" button that starts a new session.
 /// Selecting the row opens the database's schema in the inspector.
 struct DatabaseGroupRow: View {
     @Environment(AppState.self) private var appState
     let connection: DatabaseConnectionConfig
-    @State private var isHovering = false
 
     var body: some View {
         HStack(spacing: 9) {
@@ -47,10 +46,8 @@ struct DatabaseGroupRow: View {
             }
             .buttonStyle(.borderless)
             .help("New Session")
-            .opacity(isHovering ? 1 : 0)
         }
         .padding(.vertical, 3)
-        .onHover { isHovering = $0 }
         .contextMenu {
             Button("New Session") {
                 appState.createSession(connectionID: connection.id)

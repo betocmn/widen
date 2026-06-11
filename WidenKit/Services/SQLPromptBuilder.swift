@@ -12,6 +12,7 @@ public enum SQLPromptBuilder {
 
         Rules:
         - Generate PostgreSQL syntax only.
+        - Use PostgreSQL date and time syntax: CURRENT_DATE, CURRENT_TIMESTAMP, NOW(), and quoted intervals like INTERVAL '7 days'. Never use MySQL functions such as CURDATE(), DATE_SUB(), or unquoted interval units like INTERVAL 7 DAY.
         - Generate SELECT or WITH ... SELECT only.
         - Never generate INSERT, UPDATE, DELETE, MERGE, ALTER, DROP, CREATE, TRUNCATE, GRANT, REVOKE, CALL, DO, COPY, EXECUTE, PREPARE, VACUUM, ANALYZE, REINDEX, REFRESH, SET, RESET, BEGIN, COMMIT, or ROLLBACK.
         - Do not include semicolons.
@@ -21,23 +22,54 @@ public enum SQLPromptBuilder {
         - Prefer readable column aliases.
         - Include LIMIT unless the query is an aggregate query that naturally returns a small number of rows.
         - Use a default LIMIT of \(defaultRowLimit).
+        - The prompt may include conversation context: earlier questions, the current SQL, and the error of its last run. Treat the user's question as a follow-up to that context — adjust the current SQL when asked, and when an error is shown, produce a corrected version of that query that still answers the earlier questions.
         - If the request is ambiguous, make the safest reasonable assumption and include it in assumptions.
         - If the request cannot be answered from the schema, set needsClarification to true and ask a concise clarification question.
         - Output only the requested structured result.
         """
     }
 
-    /// The per-question prompt: schema summary plus the user's question.
+    /// The per-question prompt: schema summary, compact conversation context
+    /// (when present), and the user's question.
     public static func prompt(
         question: String,
         schema: DatabaseSchema,
+        context: SQLGenerationContext = SQLGenerationContext(),
         maxSchemaCharacters: Int = 8_000
     ) -> String {
-        """
-        \(schemaSummary(schema, maxCharacters: maxSchemaCharacters))
+        var sections = [schemaSummary(schema, maxCharacters: maxSchemaCharacters)]
+        if let contextSection = contextSection(context) {
+            sections.append(contextSection)
+        }
+        sections.append("User question: \(question)")
+        return sections.joined(separator: "\n\n")
+    }
 
-        User question: \(question)
-        """
+    /// Renders the conversation context with tight per-item budgets — the
+    /// on-device model's context window is small, so follow-ups get the
+    /// minimum they need: a few earlier questions, the SQL on screen, and
+    /// the last error.
+    static func contextSection(_ context: SQLGenerationContext) -> String? {
+        guard !context.isEmpty else { return nil }
+        var lines = ["Conversation context:"]
+        for question in context.recentQuestions.suffix(3) {
+            lines.append("- Earlier question: \(truncated(question, to: 200))")
+        }
+        if let sql = context.currentSQL,
+            !sql.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+        {
+            lines.append("- Current SQL on screen:\n\(truncated(sql, to: 700))")
+        }
+        if let error = context.lastRunError,
+            !error.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+        {
+            lines.append("- The last run of that SQL failed with: \(truncated(error, to: 300))")
+        }
+        return lines.joined(separator: "\n")
+    }
+
+    private static func truncated(_ text: String, to limit: Int) -> String {
+        text.count <= limit ? text : String(text.prefix(limit)) + "…"
     }
 
     /// Renders the schema in the concise text format the model is prompted

@@ -63,6 +63,37 @@ struct QueryResultViewModelTests {
         }
     }
 
+    private actor SQLRecorder {
+        private var statements: [String] = []
+
+        func record(_ sql: String) {
+            statements.append(sql)
+        }
+
+        func all() -> [String] {
+            statements
+        }
+    }
+
+    private struct RecordingExecutor: QueryExecuting {
+        let recorder: SQLRecorder
+
+        func run(
+            sql: String,
+            config: DatabaseConnectionConfig,
+            postgres: PostgresService
+        ) async throws -> QueryResult {
+            await recorder.record(sql)
+            return QueryResult(
+                columns: ["value"],
+                rows: [["1"]],
+                rowCount: 1,
+                truncated: false,
+                executionTimeMs: 1
+            )
+        }
+    }
+
     private struct SlowExecutor: QueryExecuting {
         func run(
             sql: String,
@@ -97,6 +128,21 @@ struct QueryResultViewModelTests {
 
         #expect(viewModel.result == nil)
         #expect(viewModel.validation?.isValid == false)
+    }
+
+    @Test func runExecutesSQLSnapshottedAtStart() async {
+        let recorder = SQLRecorder()
+        let viewModel = QueryResultViewModel(executor: RecordingExecutor(recorder: recorder))
+        viewModel.sqlText = "SELECT 1"
+
+        viewModel.startRun(
+            connection: DatabaseConnectionConfig(), postgres: PostgresService(), isConnected: true)
+        viewModel.sqlText = "DELETE FROM users"
+        await waitUntil { !viewModel.isRunning }
+
+        let statements = await recorder.all()
+        #expect(statements == ["SELECT 1"])
+        #expect(viewModel.result?.rowCount == 1)
     }
 
     @Test func notConnectedRunReportsError() async {
@@ -148,6 +194,90 @@ struct QueryResultViewModelTests {
         #expect(viewModel.runError?.contains("Stopped waiting") == true)
         await Task.yield()
         #expect(viewModel.result == nil)
+    }
+
+    @Test func onFinishReceivesResultOnSuccess() async {
+        let viewModel = QueryResultViewModel(executor: ImmediateExecutor())
+        viewModel.sqlText = "SELECT 1"
+        var completions: [(QueryResult?, String?)] = []
+
+        viewModel.startRun(
+            connection: DatabaseConnectionConfig(), postgres: PostgresService(),
+            isConnected: true
+        ) { result, error in
+            completions.append((result, error))
+        }
+        await waitUntil { !viewModel.isRunning }
+
+        #expect(completions.count == 1)
+        #expect(completions.first?.0?.rowCount == 1)
+        #expect(completions.first?.1 == nil)
+
+        // A second run must not re-fire the first run's completion.
+        viewModel.startRun(
+            connection: DatabaseConnectionConfig(), postgres: PostgresService(),
+            isConnected: true)
+        await waitUntil { !viewModel.isRunning }
+        #expect(completions.count == 1)
+    }
+
+    @Test func onFinishReceivesErrorWhenNotConnected() async {
+        let viewModel = QueryResultViewModel(executor: ImmediateExecutor())
+        viewModel.sqlText = "SELECT 1"
+        var completions: [(QueryResult?, String?)] = []
+
+        viewModel.startRun(
+            connection: DatabaseConnectionConfig(), postgres: PostgresService(),
+            isConnected: false
+        ) { result, error in
+            completions.append((result, error))
+        }
+        await waitUntil { !viewModel.isRunning }
+
+        #expect(completions.count == 1)
+        #expect(completions.first?.0 == nil)
+        #expect(completions.first?.1 == AppError.notConnected.errorDescription)
+    }
+
+    @Test func onFinishFiresOnCancel() async {
+        let viewModel = QueryResultViewModel(executor: SlowExecutor())
+        viewModel.sqlText = "SELECT 1"
+        var completions: [(QueryResult?, String?)] = []
+
+        viewModel.startRun(
+            connection: DatabaseConnectionConfig(), postgres: PostgresService(),
+            isConnected: true
+        ) { result, error in
+            completions.append((result, error))
+        }
+        viewModel.cancelRun()
+
+        #expect(completions.count == 1)
+        #expect(completions.first?.0 == nil)
+        #expect(completions.first?.1?.contains("Stopped waiting") == true)
+    }
+
+    @Test func setDirectSQLClearsGenerationAndValidates() {
+        let viewModel = QueryResultViewModel(executor: ImmediateExecutor())
+        viewModel.restore(
+            sqlText: "SELECT 2",
+            generation: SQLGenerationResult(
+                sql: "SELECT 2",
+                explanation: "Constant.",
+                assumptions: [],
+                referencedTables: [],
+                confidence: 1.0,
+                riskLevel: .low,
+                needsClarification: false,
+                clarificationQuestion: nil
+            ))
+
+        viewModel.setDirectSQL("SELECT 1")
+
+        #expect(viewModel.sqlText == "SELECT 1")
+        #expect(viewModel.generation == nil)
+        #expect(viewModel.result == nil)
+        #expect(viewModel.validation?.isValid == true)
     }
 
     private func waitUntil(_ condition: @MainActor @escaping () -> Bool) async {
