@@ -8,19 +8,10 @@ import Observation
 @MainActor
 @Observable
 public final class SessionController: Identifiable {
-    /// Which face of the session the detail pane shows. Ephemeral by design:
-    /// never persisted, and reset to `.chat` whenever a controller is
-    /// recreated (relaunch, archive eviction).
-    public enum FocusMode: Equatable, Sendable {
-        case chat
-        case results
-    }
-
     public let sessionID: UUID
     public let connectionID: UUID
     public let chatVM = ChatViewModel()
     public let queryVM: QueryResultViewModel
-    public var focus: FocusMode = .chat
 
     public convenience init(session: QuerySession) {
         self.init(session: session, executor: QueryExecutionService())
@@ -62,11 +53,8 @@ public final class SessionController: Identifiable {
     }
 
     /// Submits the chat input: raw SQL goes straight to the preview, anything
-    /// else is generated against this session's connection. Always returns
-    /// the pane to chat mode — submitting from results mode resumes the
-    /// conversation.
+    /// else is generated against this session's connection.
     public func submit(appState: AppState) async {
-        focus = .chat
         let hadUserMessage = chatVM.messages.contains { $0.role == .user }
         if ChatViewModel.isDirectSQL(chatVM.input) {
             chatVM.submitDirectSQL(queryVM: queryVM)
@@ -91,13 +79,12 @@ public final class SessionController: Identifiable {
         }
     }
 
-    /// Runs the SQL preview contents against this session's connection,
-    /// switching the pane to results mode. The outcome — row count or error,
-    /// including the "stopped waiting" cancellation — is appended to the chat
-    /// transcript so the history records every run.
+    /// Runs the SQL preview contents against this session's connection. The
+    /// outcome — row count or error, including the "stopped waiting"
+    /// cancellation — is appended to the chat transcript so the history
+    /// records every run; the latest result renders inline as a card.
     public func runQuery(appState: AppState) {
         guard !queryVM.isRunning else { return }
-        focus = .results
         let sql = queryVM.sqlText
         queryVM.startRun(
             connection: appState.connection(for: connectionID),

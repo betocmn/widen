@@ -9,6 +9,7 @@ struct ChatModeView: View {
 
     private static let activeCardID = "activeSQLCard"
     private static let generatingID = "generating"
+    private static let runningID = "runningQuery"
 
     var body: some View {
         @Bindable var chatVM = controller.chatVM
@@ -73,18 +74,37 @@ struct ChatModeView: View {
             ScrollView {
                 LazyVStack(alignment: .leading, spacing: 10) {
                     ForEach(controller.chatVM.messages) { message in
-                        MessageBubbleView(
-                            message: message,
-                            showViewResults: message.id == latestResultMessageID
-                                && controller.queryVM.result != nil,
-                            onViewResults: { controller.focus = .results },
-                            onUseSQL: { controller.queryVM.setGeneration($0) }
-                        )
+                        Group {
+                            // The latest run record carries its result inline
+                            // while the result is still in memory; older
+                            // records render as compact summary rows.
+                            if message.role == .result,
+                                message.id == latestResultMessageID,
+                                controller.queryVM.result != nil
+                            {
+                                ResultsCardView(controller: controller)
+                            } else {
+                                MessageBubbleView(
+                                    message: message,
+                                    onUseSQL: { controller.queryVM.setGeneration($0) }
+                                )
+                            }
+                        }
                         .id(message.id)
                     }
                     if controller.chatVM.isGenerating {
                         LoadingView(label: "Generating SQL with the local model…")
                             .id(Self.generatingID)
+                    }
+                    if controller.queryVM.isRunning {
+                        HStack(spacing: 8) {
+                            LoadingView(label: "Running query…")
+                            Button("Stop waiting") {
+                                controller.queryVM.cancelRun()
+                            }
+                            .controlSize(.small)
+                        }
+                        .id(Self.runningID)
                     }
                     if hasActiveSQL {
                         SQLCardView(controller: controller)
@@ -99,6 +119,7 @@ struct ChatModeView: View {
             }
             .onChange(of: controller.chatVM.messages.count) { scrollToBottom(proxy) }
             .onChange(of: controller.chatVM.isGenerating) { scrollToBottom(proxy) }
+            .onChange(of: controller.queryVM.isRunning) { scrollToBottom(proxy) }
             .onChange(of: controller.queryVM.sqlText) { scrollToBottom(proxy) }
             .contextMenu {
                 Button("Clear Conversation") {

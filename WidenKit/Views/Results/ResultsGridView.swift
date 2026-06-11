@@ -1,42 +1,47 @@
 import SwiftUI
 
-/// Scrollable, pinned-header grid of one materialized result's stringified
-/// values.
+/// Bordered table of one materialized result's stringified values, sized to
+/// its content so it can sit inline in the chat thread. Scrolls horizontally
+/// for wide results; `maxRows` caps how many rows render (for the collapsed
+/// "View more" state).
 struct ResultsGridView: View {
     let result: QueryResult
+    var maxRows: Int?
+
+    private static let lineColor = Color.primary.opacity(0.12)
+
+    private var displayRows: [[String?]] {
+        guard let maxRows else { return result.rows }
+        return Array(result.rows.prefix(maxRows))
+    }
 
     var body: some View {
         let widths = columnWidths(for: result)
-        // A two-axis ScrollView centers content smaller than the viewport;
-        // the GeometryReader-sized frame pins small results to the top
-        // leading corner instead.
-        GeometryReader { geometry in
-            ScrollView([.horizontal, .vertical]) {
-                LazyVStack(alignment: .leading, spacing: 0, pinnedViews: .sectionHeaders) {
-                    Section {
-                        ForEach(result.rows.indices, id: \.self) { rowIndex in
-                            rowView(
-                                cells: result.rows[rowIndex],
-                                widths: widths,
-                                background: rowIndex.isMultiple(of: 2)
-                                    ? Color.clear
-                                    : Color.primary.opacity(0.04)
-                            )
-                        }
-                    } header: {
-                        rowView(
-                            cells: result.columns,
-                            widths: widths,
-                            background: Color.primary.opacity(0.08),
-                            isHeader: true
-                        )
-                    }
+        ScrollView(.horizontal) {
+            VStack(alignment: .leading, spacing: 0) {
+                rowView(
+                    cells: result.columns,
+                    widths: widths,
+                    background: Color.primary.opacity(0.08),
+                    isHeader: true
+                )
+                ForEach(displayRows.indices, id: \.self) { rowIndex in
+                    rowView(
+                        cells: displayRows[rowIndex],
+                        widths: widths,
+                        background: rowIndex.isMultiple(of: 2)
+                            ? Color.clear
+                            : Color.primary.opacity(0.04),
+                        showTopSeparator: true
+                    )
                 }
-                .frame(
-                    minWidth: geometry.size.width,
-                    minHeight: geometry.size.height,
-                    alignment: .topLeading)
             }
+            .clipShape(RoundedRectangle(cornerRadius: 6))
+            .overlay {
+                RoundedRectangle(cornerRadius: 6)
+                    .strokeBorder(Self.lineColor)
+            }
+            .padding(1)
         }
     }
 
@@ -44,7 +49,8 @@ struct ResultsGridView: View {
         cells: [String?],
         widths: [CGFloat],
         background: Color,
-        isHeader: Bool = false
+        isHeader: Bool = false,
+        showTopSeparator: Bool = false
     ) -> some View {
         HStack(spacing: 0) {
             ForEach(cells.indices, id: \.self) { index in
@@ -59,22 +65,34 @@ struct ResultsGridView: View {
                     .padding(.horizontal, 8)
                     .padding(.vertical, 4)
                     .frame(width: widths[index], alignment: .leading)
+                    .overlay(alignment: .leading) {
+                        if index > 0 {
+                            Self.lineColor.frame(width: 1)
+                        }
+                    }
             }
         }
         .background(background)
+        .overlay(alignment: .top) {
+            if showTopSeparator {
+                Self.lineColor.frame(height: 1)
+            }
+        }
     }
 
     private func rowView(
         cells: [String],
         widths: [CGFloat],
         background: Color,
-        isHeader: Bool = false
+        isHeader: Bool = false,
+        showTopSeparator: Bool = false
     ) -> some View {
         rowView(
             cells: cells.map(Optional.some),
             widths: widths,
             background: background,
-            isHeader: isHeader
+            isHeader: isHeader,
+            showTopSeparator: showTopSeparator
         )
     }
 
