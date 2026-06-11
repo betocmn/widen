@@ -11,19 +11,6 @@ public struct SchemaInspectorView: View {
         @Bindable var schemaVM = appState.schemaVM
 
         VStack(alignment: .leading, spacing: 0) {
-            // Occupies the title-bar row (via the safe-area override below):
-            // the toggle sits at the panel's leading edge against the
-            // divider, mirroring the system sidebar toggle's position, size,
-            // and margins on the left.
-            HStack {
-                SchemaInspectorToggle()
-                    .buttonStyle(.borderless)
-                    .imageScale(.large)
-                Spacer()
-            }
-            .padding(.leading, 8)
-            .frame(height: 36)
-
             HStack(spacing: 8) {
                 Text(title)
                     .font(.headline)
@@ -82,9 +69,6 @@ public struct SchemaInspectorView: View {
         // The inspector pane lays its content out slightly wider than its
         // visible width, so compensate to keep a trailing margin.
         .padding(.trailing, 10)
-        // Let the toggle row above flow up into the (otherwise empty)
-        // title-bar area over the inspector.
-        .ignoresSafeArea(.container, edges: .top)
     }
 
     /// "<database> Schema" for the active connection, plain "Schema" if none.
