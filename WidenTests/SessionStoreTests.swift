@@ -128,5 +128,51 @@ struct ChatMessageCodableTests {
         #expect(ChatMessage.Role.user.rawValue == "user")
         #expect(ChatMessage.Role.assistant.rawValue == "assistant")
         #expect(ChatMessage.Role.error.rawValue == "error")
+        #expect(ChatMessage.Role.result.rawValue == "result")
+    }
+
+    @Test func runRecordRoundTripPreservesSummary() throws {
+        let summary = ChatMessage.RunSummary(
+            rowCount: 42, executionTimeMs: 123, truncated: true,
+            sql: "SELECT id FROM users LIMIT 100")
+        var message = ChatMessage.runRecord(summary)
+        message.timestamp = Date(timeIntervalSince1970: 1_750_000_000)
+
+        let encoder = JSONEncoder()
+        encoder.dateEncodingStrategy = .iso8601
+        let decoder = JSONDecoder()
+        decoder.dateDecodingStrategy = .iso8601
+        let decoded = try decoder.decode(ChatMessage.self, from: encoder.encode(message))
+
+        #expect(decoded == message)
+        #expect(decoded.role == .result)
+        #expect(decoded.runSummary == summary)
+        #expect(decoded.text == "Returned 42 rows in 123 ms (truncated at row limit)")
+    }
+
+    @Test func runRecordTextForSingleUntruncatedRow() {
+        let message = ChatMessage.runRecord(
+            ChatMessage.RunSummary(
+                rowCount: 1, executionTimeMs: 7, truncated: false, sql: "SELECT 1"))
+        #expect(message.text == "Returned 1 row in 7 ms")
+    }
+
+    @Test func legacyMessageWithoutRunSummaryDecodes() throws {
+        // A pre-runSummary message as written by older builds.
+        let legacy = """
+            {
+              "id": "11111111-2222-3333-4444-555555555555",
+              "role": "assistant",
+              "text": "Lists user ids.",
+              "timestamp": "2025-06-15T12:00:00Z"
+            }
+            """
+        let decoder = JSONDecoder()
+        decoder.dateDecodingStrategy = .iso8601
+        let decoded = try decoder.decode(ChatMessage.self, from: Data(legacy.utf8))
+
+        #expect(decoded.role == .assistant)
+        #expect(decoded.runSummary == nil)
+        #expect(decoded.generation == nil)
     }
 }
