@@ -143,4 +143,50 @@ struct ChatViewModelTests {
         )
         #expect(chatVM.messages.isEmpty)
     }
+
+    @Test(arguments: [
+        ("select * from users", true),
+        ("  SELECT id\nFROM users", true),
+        ("WITH x AS (SELECT 1) SELECT * FROM x", true),
+        ("with totals as (select 1) select * from totals", true),
+        ("SELECTED users last week", false),
+        ("show me users", false),
+        ("Withdrawals by month", false),
+        ("-- comment\nSELECT 1", false),
+        ("", false),
+    ])
+    func directSQLDetection(input: String, expected: Bool) {
+        #expect(ChatViewModel.isDirectSQL(input) == expected)
+    }
+
+    @Test func submitDirectSQLRecordsUserMessageAndFillsPreview() {
+        let chatVM = ChatViewModel()
+        let queryVM = QueryResultViewModel()
+        chatVM.input = "  select id from users  "
+
+        chatVM.submitDirectSQL(queryVM: queryVM)
+
+        #expect(chatVM.messages.count == 1)
+        #expect(chatVM.messages[0].role == .user)
+        #expect(chatVM.messages[0].text == "select id from users")
+        #expect(chatVM.input.isEmpty)
+        #expect(queryVM.sqlText == "select id from users")
+        #expect(queryVM.validation?.isValid == true)
+        #expect(queryVM.generation == nil)
+    }
+
+    @Test func appendRunRecordAndErrorLandInTranscript() {
+        let chatVM = ChatViewModel()
+
+        chatVM.appendRunRecord(
+            ChatMessage.RunSummary(
+                rowCount: 3, executionTimeMs: 12, truncated: false, sql: "SELECT 1"))
+        chatVM.appendRunError("boom")
+
+        #expect(chatVM.messages.count == 2)
+        #expect(chatVM.messages[0].role == .result)
+        #expect(chatVM.messages[0].runSummary?.rowCount == 3)
+        #expect(chatVM.messages[1].role == .error)
+        #expect(chatVM.messages[1].text == "boom")
+    }
 }
