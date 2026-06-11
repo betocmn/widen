@@ -41,12 +41,19 @@ public final class ConnectionSettingsViewModel {
     private var existing: DatabaseConnectionConfig?
     private var cleanSnapshot: FormSnapshot?
     private let keychain = KeychainService()
+    private let connectionTester: @Sendable (DatabaseConnectionConfig, String) async throws -> Void
 
     public var hasUnsavedChanges: Bool {
         cleanSnapshot != currentSnapshot
     }
 
-    public init() {
+    public init(
+        connectionTester: @escaping @Sendable (DatabaseConnectionConfig, String) async throws ->
+            Void = { config, password in
+                try await PostgresService.testConnection(config: config, password: password)
+            }
+    ) {
+        self.connectionTester = connectionTester
         markClean()
     }
 
@@ -86,7 +93,7 @@ public final class ConnectionSettingsViewModel {
         validationErrors = []
         testState = .testing
         do {
-            try await PostgresService.testConnection(config: config, password: password)
+            try await connectionTester(config, password)
             testState = .success
         } catch {
             testState = .failure(error.localizedDescription)
