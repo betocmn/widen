@@ -1,13 +1,19 @@
 import AppKit
 import SwiftUI
 
-/// The active SQL awaiting approval, rendered inline at the end of the chat
+/// The newest SQL, the only runnable one, rendered inline in the chat
 /// transcript. Read-only by design — the user refines it by chatting or by
 /// pasting new SQL into the composer. Validation issues hide behind the
 /// status icon; generation metadata collapses to one caption row.
+///
+/// Color system: the user owns blue, settled AI output is plain gray, and
+/// purple marks the single item awaiting attention. This card carries the
+/// purple only until its run answers it; the dashed border stays as the
+/// "runnable" marker.
 struct SQLCardView: View {
     @Environment(AppState.self) private var appState
     let controller: SessionController
+    var isAwaitingRun = true
     @State private var showIssues = false
     @State private var showDetails = false
 
@@ -23,14 +29,15 @@ struct SQLCardView: View {
             }
         }
         .padding(10)
-        // Accent tint over the material so the pending SQL stands apart
-        // from the bubbles and the pane background.
-        .background(Color.accentColor.opacity(0.12), in: RoundedRectangle(cornerRadius: 12))
-        .background(.thinMaterial, in: RoundedRectangle(cornerRadius: 12))
+        .background(
+            isAwaitingRun ? Color.purple.opacity(0.12) : Color.clear,
+            in: RoundedRectangle(cornerRadius: 12)
+        )
+        .background(.regularMaterial, in: RoundedRectangle(cornerRadius: 12))
         .overlay {
             RoundedRectangle(cornerRadius: 12)
                 .strokeBorder(
-                    Color.accentColor.opacity(0.5),
+                    isAwaitingRun ? Color.purple.opacity(0.5) : Color.primary.opacity(0.2),
                     style: StrokeStyle(lineWidth: 1, dash: [5, 4]))
         }
     }
@@ -55,6 +62,7 @@ struct SQLCardView: View {
                 controller.runQuery(appState: appState)
             }
             .buttonStyle(.glassProminent)
+            .tint(.purple)
             .keyboardShortcut(.return, modifiers: .command)
             .disabled(runDisabled)
             .help("Approve and execute this query")
@@ -197,7 +205,7 @@ struct SQLCardView: View {
 }
 
 /// A superseded SQL statement, kept in the transcript as a permanent record.
-/// Plain border and no tint — only the newest SQL card is runnable.
+/// Settled AI gray, copy only — the newest SQL card is the only runnable one.
 struct StaticSQLCardView: View {
     let sql: String
 
@@ -224,10 +232,10 @@ struct StaticSQLCardView: View {
                 .frame(maxWidth: .infinity, alignment: .leading)
         }
         .padding(10)
-        .background(.thinMaterial, in: RoundedRectangle(cornerRadius: 12))
+        .background(.regularMaterial, in: RoundedRectangle(cornerRadius: 12))
         .overlay {
             RoundedRectangle(cornerRadius: 12)
-                .strokeBorder(Color.primary.opacity(0.15))
+                .strokeBorder(Color.primary.opacity(0.12))
         }
     }
 }

@@ -66,6 +66,18 @@ struct ChatModeView: View {
         })?.id
     }
 
+    /// True until something answers the active SQL (a result or an error
+    /// after its anchor) — while waiting, the card carries the highlight.
+    private var activeSQLAwaitingRun: Bool {
+        let messages = controller.chatVM.messages
+        guard let anchorID = activeSQLAnchorID,
+            let anchorIndex = messages.firstIndex(where: { $0.id == anchorID })
+        else { return true }
+        return !messages[(anchorIndex + 1)...].contains {
+            $0.role == .result || $0.role == .error
+        }
+    }
+
     private var emptyHint: some View {
         VStack(spacing: 6) {
             Text("Ask your database anything")
@@ -139,11 +151,14 @@ struct ChatModeView: View {
     @ViewBuilder
     private func messageGroup(_ message: ChatMessage) -> some View {
         if message.role == .result, let result = controller.results[message.id] {
-            ResultsCardView(result: result)
+            ResultsCardView(
+                result: result,
+                isLatest: message.id == controller.chatVM.messages.last?.id
+            )
         } else if message.id == activeSQLAnchorID, hasActiveSQL {
             VStack(alignment: .leading, spacing: 10) {
                 MessageBubbleView(message: message)
-                SQLCardView(controller: controller)
+                SQLCardView(controller: controller, isAwaitingRun: activeSQLAwaitingRun)
             }
         } else if message.role == .assistant,
             let sql = message.generation?.sql,
