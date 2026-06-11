@@ -100,10 +100,12 @@ never loses an in-flight generation or query run.
 `runQuery`, via the `startRun` completion hook, appends the outcome to the
 transcript: a `.result` `ChatMessage` (with a `RunSummary` of row count,
 duration, truncation, and the executed SQL) on success, or an `.error`
-message on failure or "stopped waiting" cancellation. The latest run record
-renders inline as a full results card while `queryVM.result` is in memory;
-older records (and everything after a relaunch) render as compact summary
-rows.
+message on failure or "stopped waiting" cancellation. The materialized
+result is cached in `SessionController.results` keyed by the record's
+message id, so every run of the live session keeps its full table card in
+the thread; the cache is never persisted — after a relaunch records render
+as compact summary rows. `clearConversation()` wipes transcript, preview,
+and cache together.
 
 The app's SwiftUI entry point is `Widen/WidenApp.swift`. It creates one
 `@State` `AppState`, injects it into the SwiftUI environment, registers the
@@ -119,9 +121,11 @@ NavigationSplitView
     ErrorBannerView when needed
     DatabaseOverviewView when a database row is selected
     SessionDetailView for the selected session's controller
-      ChatModeView — one chat thread:
-        messages (latest run record renders as ResultsCardView inline)
-        + active SQLCardView + ComposerView pinned at the bottom
+      ChatModeView — one chronological chat thread:
+        messages, where SQL-bearing messages carry their card inline
+        (newest = runnable SQLCardView, earlier = StaticSQLCardView) and
+        run records render their ResultsCardView while cached
+        + ComposerView pinned at the bottom
     .inspector: SchemaInspectorView (toolbar-toggled, scoped to the open schema)
   toolbar: system sidebar toggle · breadcrumb (status dot · database › schema
            menu) · light/dark toggle · inspector toggle (window trailing);
@@ -339,19 +343,20 @@ ComposerView submit
 ```
 
 Generated SQL is not executed automatically. It renders as the read-only
-`SQLCardView` at the end of the transcript (dashed border, validation status
-icon with a popover for the messages, compact generation caption, Run
-button). The user refines it by chatting, by pasting new SQL into the
-composer, or by restoring an older generation via "Use this SQL" on an
-assistant message. Run keeps the thread flowing: a "Running query…"
-indicator appears in the transcript, and the outcome lands there too — the
-latest run record renders as an inline `ResultsCardView` (bordered table,
-"View more" past 10 rows, Copy/Export CSV).
+`SQLCardView` right below the message that introduced it (dashed accent
+border, validation status icon with a popover for the messages, compact
+generation caption, Run button). Earlier SQL stays in the thread as
+`StaticSQLCardView` records — visible, copyable, but only the newest SQL can
+run. The user refines by chatting or by pasting new SQL into the composer.
+Run keeps the thread flowing: a "Running query…" indicator appears, and the
+outcome lands chronologically after the SQL — each run record renders its
+inline `ResultsCardView` (bordered table, "View more" past 10 rows,
+Copy/Export CSV) while its result is cached on the controller.
 
 Chat transcripts — including `.result` run records — are persisted as part
 of the session (see "Sessions And Persistence"); materialized query results
-are not, so the full results card only renders while the result is still in
-memory — afterwards the record shows as a compact summary row.
+are not, so full results cards only render during the live session — after
+a relaunch the records show as compact summary rows.
 
 ## Prompt Construction
 
@@ -602,22 +607,23 @@ Key views:
   connection at a glance plus a New Session call to action.
 - `SessionDetailView`: hosts `ChatModeView` for one session's controller and
   reports edits via `sessionDidChange`.
-- `Chat/ChatModeView`: the single chat thread — messages, generating and
-  running indicators, the latest run's `ResultsCardView` inline, the active
-  `SQLCardView`, and the bottom-pinned composer (empty sessions show only a
-  centered hint). "Clear Conversation" context menu, auto-scroll to bottom.
+- `Chat/ChatModeView`: the single chronological thread — messages with their
+  SQL cards inline (the newest runnable, earlier ones static), results cards
+  on cached run records, generating/running indicators, and the bottom-pinned
+  composer (empty sessions show only a centered hint). "Clear Conversation"
+  context menu, auto-scroll to bottom.
 - `Chat/ComposerView`: the large rounded input. Accepts plain English or raw
   SQL; Return submits, Option+Return inserts a newline (no
   `.keyboardShortcut(.defaultAction)` on the send button — it would
   double-fire with `onSubmit`).
 - `Chat/MessageBubbleView`: user bubble is glass, assistant/error bubbles use
   a plain material to keep scrolling cheap; `.result` records render as a
-  compact row; assistant generations collapse behind a "View SQL" disclosure
-  with "Use this SQL".
+  compact row when their result is no longer cached.
 - `Chat/SQLCardView`: the read-only active SQL card (dashed accent border,
   validation status icon + popover, copy, Run, one-line generation caption,
-  explanation/assumptions behind an info popover).
-- `Results/ResultsCardView`: the latest result inline in the thread — same
+  explanation/assumptions behind an info popover). `StaticSQLCardView` is the
+  permanent record for superseded SQL: plain border, copy only, no Run.
+- `Results/ResultsCardView`: one run's result inline in the thread — same
   tint family as the SQL card one shade lighter with a solid border, summary
   caption, bordered table, "View more"/"View less" past 10 rows, Copy as
   CSV, and Export CSV via `NSSavePanel`.
