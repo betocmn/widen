@@ -40,7 +40,11 @@ public struct MainView: View {
             ToolbarItem(placement: .navigation) {
                 breadcrumb
             }
-            ToolbarItem(placement: .primaryAction) {
+            // With the window title removed there is nothing separating the
+            // leading and trailing regions, so the action buttons collapse
+            // next to the breadcrumb without an explicit flexible spacer.
+            ToolbarSpacer(.flexible)
+            ToolbarItem {
                 Button {
                     toggleAppearance()
                 } label: {
@@ -54,7 +58,8 @@ public struct MainView: View {
                         ? "Switch to light mode (reset to System in Settings › General)"
                         : "Switch to dark mode (reset to System in Settings › General)")
             }
-            ToolbarItem(placement: .primaryAction) {
+            // Trailing edge, mirroring the system sidebar toggle on the left.
+            ToolbarItem {
                 Button {
                     appState.showSchemaInspector.toggle()
                 } label: {
@@ -117,6 +122,10 @@ public struct MainView: View {
                     .help("Switch the open schema")
                 }
             }
+            // Breathing room inside the system-provided glass pill — without
+            // it the text touches the rounded container's edges.
+            .padding(.horizontal, 10)
+            .padding(.vertical, 2)
             .help("\(config.name) · \(config.host):\(String(config.port)) — \(status.label)")
         }
     }
