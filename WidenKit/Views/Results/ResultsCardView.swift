@@ -4,8 +4,9 @@ import UniformTypeIdentifiers
 
 /// One run's results, rendered inline in the chat thread where its run
 /// record sits — a permanent entry that scrolls up with the conversation.
-/// The just-returned result is the item to look at, so it carries the
-/// purple highlight (a lighter shade than the SQL card's); once the
+/// The just-returned result is the item to look at, so it carries the muted
+/// yellow highlight (a lighter shade than the SQL card's) on the section
+/// around the table — the table itself keeps a neutral background. Once the
 /// conversation moves on it settles to the same gray as the rest of the AI
 /// output. Long results collapse to the first rows with a "View more"
 /// toggle; Export CSV saves the full result.
@@ -40,14 +41,14 @@ struct ResultsCardView: View {
         }
         .padding(10)
         .background(
-            isLatest ? Color.purple.opacity(0.08) : Color.clear,
+            isLatest ? Color.yellow.opacity(0.06) : Color.clear,
             in: RoundedRectangle(cornerRadius: 12)
         )
         .background(.regularMaterial, in: RoundedRectangle(cornerRadius: 12))
         .overlay {
             RoundedRectangle(cornerRadius: 12)
                 .strokeBorder(
-                    isLatest ? Color.purple.opacity(0.35) : Color.primary.opacity(0.12))
+                    isLatest ? Color.yellow.opacity(0.3) : Color.primary.opacity(0.12))
         }
     }
 
