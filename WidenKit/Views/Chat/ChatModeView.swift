@@ -1,8 +1,10 @@
 import SwiftUI
 
 /// Chat-first face of a session: a full-height transcript with the composer
-/// pinned at the bottom. The active SQL renders as a card at the end of the
-/// transcript; a fresh session is just a hint and the composer.
+/// pinned at the bottom. SQL and results render inline at their
+/// chronological position in the thread — permanent entries that scroll up
+/// as the conversation grows. Only the newest SQL card is runnable; a fresh
+/// session is just a hint and the composer.
 struct ChatModeView: View {
     @Environment(AppState.self) private var appState
     let controller: SessionController
@@ -47,8 +49,21 @@ struct ChatModeView: View {
             && !controller.chatVM.isGenerating
     }
 
-    private var latestResultMessageID: UUID? {
-        controller.chatVM.messages.last(where: { $0.role == .result })?.id
+    /// The message that introduced the SQL currently in the preview — the
+    /// last generation, or the last directly-typed SQL. The active card
+    /// renders right after it, keeping the thread chronological.
+    private var activeSQLAnchorID: UUID? {
+        controller.chatVM.messages.last(where: { message in
+            switch message.role {
+            case .assistant:
+                return !(message.generation?.sql ?? "")
+                    .trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+            case .user:
+                return ChatViewModel.isDirectSQL(message.text)
+            case .error, .result:
+                return false
+            }
+        })?.id
     }
 
     private var emptyHint: some View {
@@ -74,23 +89,8 @@ struct ChatModeView: View {
             ScrollView {
                 LazyVStack(alignment: .leading, spacing: 10) {
                     ForEach(controller.chatVM.messages) { message in
-                        Group {
-                            // The latest run record carries its result inline
-                            // while the result is still in memory; older
-                            // records render as compact summary rows.
-                            if message.role == .result,
-                                message.id == latestResultMessageID,
-                                controller.queryVM.result != nil
-                            {
-                                ResultsCardView(controller: controller)
-                            } else {
-                                MessageBubbleView(
-                                    message: message,
-                                    onUseSQL: { controller.queryVM.setGeneration($0) }
-                                )
-                            }
-                        }
-                        .id(message.id)
+                        messageGroup(message)
+                            .id(message.id)
                     }
                     if controller.chatVM.isGenerating {
                         LoadingView(label: "Generating SQL with the local model…")
@@ -106,7 +106,9 @@ struct ChatModeView: View {
                         }
                         .id(Self.runningID)
                     }
-                    if hasActiveSQL {
+                    // Restored sessions can carry SQL whose introducing
+                    // message is gone; keep it runnable at the end.
+                    if hasActiveSQL && activeSQLAnchorID == nil {
                         SQLCardView(controller: controller)
                             .id(Self.activeCardID)
                     }
@@ -123,20 +125,47 @@ struct ChatModeView: View {
             .onChange(of: controller.queryVM.sqlText) { scrollToBottom(proxy) }
             .contextMenu {
                 Button("Clear Conversation") {
-                    controller.chatVM.clearConversation()
-                    controller.queryVM.clear()
+                    controller.clearConversation()
                     appState.sessionDidChange(controller.sessionID)
                 }
             }
         }
     }
 
+    /// One chronological transcript entry: run records render their full
+    /// results card while the result is in memory; the SQL-introducing
+    /// messages carry their card right below the bubble — the newest one
+    /// runnable, earlier ones as permanent read-only records.
+    @ViewBuilder
+    private func messageGroup(_ message: ChatMessage) -> some View {
+        if message.role == .result, let result = controller.results[message.id] {
+            ResultsCardView(result: result)
+        } else if message.id == activeSQLAnchorID, hasActiveSQL {
+            VStack(alignment: .leading, spacing: 10) {
+                MessageBubbleView(message: message)
+                SQLCardView(controller: controller)
+            }
+        } else if message.role == .assistant,
+            let sql = message.generation?.sql,
+            !sql.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+        {
+            VStack(alignment: .leading, spacing: 10) {
+                MessageBubbleView(message: message)
+                StaticSQLCardView(sql: sql)
+            }
+        } else {
+            MessageBubbleView(message: message)
+        }
+    }
+
     private func scrollToBottom(_ proxy: ScrollViewProxy, animated: Bool = true) {
         withAnimation(animated ? .default : nil) {
-            if hasActiveSQL {
-                proxy.scrollTo(Self.activeCardID, anchor: .bottom)
+            if controller.queryVM.isRunning {
+                proxy.scrollTo(Self.runningID, anchor: .bottom)
             } else if controller.chatVM.isGenerating {
                 proxy.scrollTo(Self.generatingID, anchor: .bottom)
+            } else if hasActiveSQL && activeSQLAnchorID == nil {
+                proxy.scrollTo(Self.activeCardID, anchor: .bottom)
             } else if let lastID = controller.chatVM.messages.last?.id {
                 proxy.scrollTo(lastID, anchor: .bottom)
             }

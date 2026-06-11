@@ -30,9 +30,13 @@ public final class ChatViewModel {
         queryVM.setDirectSQL(sql)
     }
 
-    /// Appends the persistent history record for a finished run.
-    func appendRunRecord(_ summary: ChatMessage.RunSummary) {
-        messages.append(.runRecord(summary))
+    /// Appends the persistent history record for a finished run and returns
+    /// it, so callers can key ephemeral state (the materialized result) to it.
+    @discardableResult
+    func appendRunRecord(_ summary: ChatMessage.RunSummary) -> ChatMessage {
+        let record = ChatMessage.runRecord(summary)
+        messages.append(record)
+        return record
     }
 
     func appendRunError(_ message: String) {

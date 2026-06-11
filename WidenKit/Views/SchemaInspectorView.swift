@@ -71,10 +71,10 @@ public struct SchemaInspectorView: View {
         .padding(.trailing, 10)
     }
 
-    /// "<database> Schema" for the active connection, plain "Schema" if none.
+    /// The database name; the schema picker on the next line says the rest.
     private var title: String {
         if let id = activeConnectionID, let config = appState.connection(for: id) {
-            return "\(config.database) Schema"
+            return config.database
         }
         return "Schema"
     }
