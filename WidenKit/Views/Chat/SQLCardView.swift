@@ -6,10 +6,10 @@ import SwiftUI
 /// pasting new SQL into the composer. Validation issues hide behind the
 /// status icon; generation metadata collapses to one caption row.
 ///
-/// Color system: the user owns blue, settled AI output is plain gray, and
-/// purple marks the single item awaiting attention. This card carries the
-/// purple only until its run answers it; the dashed border stays as the
-/// "runnable" marker.
+/// Color system: the user owns blue, settled AI output is plain gray, and a
+/// muted yellow marks the single item awaiting attention. This card carries
+/// the highlight only until its run answers it; the dashed border stays as
+/// the "runnable" marker.
 struct SQLCardView: View {
     @Environment(AppState.self) private var appState
     let controller: SessionController
@@ -30,14 +30,14 @@ struct SQLCardView: View {
         }
         .padding(10)
         .background(
-            isAwaitingRun ? Color.purple.opacity(0.12) : Color.clear,
+            isAwaitingRun ? Color.yellow.opacity(0.08) : Color.clear,
             in: RoundedRectangle(cornerRadius: 12)
         )
         .background(.regularMaterial, in: RoundedRectangle(cornerRadius: 12))
         .overlay {
             RoundedRectangle(cornerRadius: 12)
                 .strokeBorder(
-                    isAwaitingRun ? Color.purple.opacity(0.5) : Color.primary.opacity(0.2),
+                    isAwaitingRun ? Color.yellow.opacity(0.45) : Color.primary.opacity(0.2),
                     style: StrokeStyle(lineWidth: 1, dash: [5, 4]))
         }
     }
@@ -62,7 +62,6 @@ struct SQLCardView: View {
                 controller.runQuery(appState: appState)
             }
             .buttonStyle(.glassProminent)
-            .tint(.purple)
             .keyboardShortcut(.return, modifiers: .command)
             .disabled(runDisabled)
             .help("Approve and execute this query")

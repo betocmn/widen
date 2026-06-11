@@ -1,3 +1,4 @@
+import AppKit
 import SwiftUI
 
 /// Bordered table of one materialized result's stringified values, sized to
@@ -36,6 +37,9 @@ struct ResultsGridView: View {
                     )
                 }
             }
+            // Opaque content background: any highlight tint on the card
+            // around the table must not bleed through the data cells.
+            .background(Color(nsColor: .textBackgroundColor))
             .clipShape(RoundedRectangle(cornerRadius: 6))
             .overlay {
                 RoundedRectangle(cornerRadius: 6)
