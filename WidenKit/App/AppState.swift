@@ -82,6 +82,8 @@ public final class AppState {
     public var settingsTab: SettingsTab = .general
     /// Incremented to ask MainView to open the Settings window.
     public var openSettingsRequest = 0
+    /// Incremented to ask Settings > Databases to start an unsaved draft.
+    public var newDatabaseSettingsRequest = 0
     public var errorBanner: String?
 
     /// Developer toggle: use the deterministic mock generator instead of the
@@ -185,6 +187,14 @@ public final class AppState {
     /// `openSettingsRequest` and opens the Settings window.
     public func openSettings(tab: SettingsTab) {
         settingsTab = tab
+        openSettingsRequest += 1
+    }
+
+    /// Opens Settings on Databases and starts the same draft flow as the
+    /// Databases tab's "+" button.
+    public func openNewDatabaseSettings() {
+        settingsTab = .databases
+        newDatabaseSettingsRequest += 1
         openSettingsRequest += 1
     }
 

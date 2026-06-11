@@ -141,6 +141,8 @@ struct ConnectionSettingsViewModelTests {
         viewModel.startNew()
 
         #expect(!viewModel.hasUnsavedChanges)
+        #expect(viewModel.name.isEmpty)
+        #expect(viewModel.username == "postgres")
 
         viewModel.database = "widen_test"
         #expect(viewModel.hasUnsavedChanges)
@@ -182,5 +184,17 @@ struct ConnectionSettingsViewModelTests {
 
         viewModel.rowLimitText = "250"
         #expect(viewModel.hasUnsavedChanges)
+    }
+
+    @Test func emptyNicknameFallsBackToDatabaseNameOnSave() {
+        let (state, dir) = makeState()
+        defer { try? FileManager.default.removeItem(at: dir) }
+        let viewModel = makeValidViewModel()
+        viewModel.name = " "
+
+        let saved = viewModel.save(appState: state)
+
+        #expect(saved?.name == "widen_test")
+        #expect(state.connections.first?.name == "widen_test")
     }
 }

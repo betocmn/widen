@@ -23,11 +23,11 @@ public final class ConnectionSettingsViewModel {
         var timeoutText: String
     }
 
-    public var name = "Local Postgres"
+    public var name = ""
     public var host = "localhost"
     public var portText = "5432"
     public var database = ""
-    public var username = NSUserName()
+    public var username = "postgres"
     public var password = ""
     public var sslMode: SSLMode = .disable
     public var rowLimitText = "100"
@@ -104,7 +104,7 @@ public final class ConnectionSettingsViewModel {
 
         var config = existing ?? DatabaseConnectionConfig()
         let trimmedName = name.trimmingCharacters(in: .whitespaces)
-        config.name = trimmedName.isEmpty ? "Local Postgres" : trimmedName
+        config.name = trimmedName.isEmpty ? trimmedDatabase : trimmedName
         config.host = trimmedHost
         config.port = port
         config.database = trimmedDatabase
@@ -153,11 +153,11 @@ public final class ConnectionSettingsViewModel {
     /// Resets the form to its defaults for a brand-new connection.
     public func startNew() {
         existing = nil
-        name = "Local Postgres"
+        name = ""
         host = "localhost"
         portText = "5432"
         database = ""
-        username = NSUserName()
+        username = "postgres"
         password = ""
         sslMode = .disable
         rowLimitText = "100"

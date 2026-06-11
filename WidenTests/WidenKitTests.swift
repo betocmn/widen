@@ -14,6 +14,16 @@ struct WidenKitSmokeTests {
         #expect(state.selectedController == nil)
     }
 
+    @Test func openNewDatabaseSettingsSelectsDatabasesAndRequestsDraft() {
+        let state = AppState()
+
+        state.openNewDatabaseSettings()
+
+        #expect(state.settingsTab == .databases)
+        #expect(state.openSettingsRequest == 1)
+        #expect(state.newDatabaseSettingsRequest == 1)
+    }
+
     @Test func refreshSchemaClearsStaleSchemaWhenIntrospectionFails() async {
         let state = AppState()
         let id = UUID()

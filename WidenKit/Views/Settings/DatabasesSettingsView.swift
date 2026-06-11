@@ -24,6 +24,7 @@ struct DatabasesSettingsView: View {
     @State private var confirmDiscard = false
     @State private var didInitialize = false
     @State private var pendingNavigation: PendingNavigation?
+    @State private var handledNewDatabaseRequest = 0
 
     var body: some View {
         HSplitView {
@@ -35,6 +36,10 @@ struct DatabasesSettingsView: View {
         }
         .onAppear {
             initializeSelectionIfNeeded()
+            handleNewDatabaseRequestIfNeeded()
+        }
+        .onChange(of: appState.newDatabaseSettingsRequest) {
+            handleNewDatabaseRequestIfNeeded()
         }
         .confirmationDialog(
             "Delete “\(selectedConnectionName)”?",
@@ -71,7 +76,7 @@ struct DatabasesSettingsView: View {
             List {
                 if isAddingNew {
                     ConnectionSidebarRow(
-                        title: "New Database",
+                        title: draftTitle,
                         subtitle: "Not saved yet",
                         systemImage: "plus.circle",
                         isSelected: selection == .draft
@@ -166,6 +171,11 @@ struct DatabasesSettingsView: View {
         return "Remove Database"
     }
 
+    private var draftTitle: String {
+        let trimmed = editor.name.trimmingCharacters(in: .whitespacesAndNewlines)
+        return trimmed.isEmpty ? "New Database" : trimmed
+    }
+
     private func subtitle(for connection: DatabaseConnectionConfig) -> String {
         "\(connection.database) @ \(connection.host)"
     }
@@ -178,6 +188,12 @@ struct DatabasesSettingsView: View {
         } else {
             startNew()
         }
+    }
+
+    private func handleNewDatabaseRequestIfNeeded() {
+        guard handledNewDatabaseRequest != appState.newDatabaseSettingsRequest else { return }
+        handledNewDatabaseRequest = appState.newDatabaseSettingsRequest
+        request(.startNew)
     }
 
     private func request(_ action: PendingNavigation) {
