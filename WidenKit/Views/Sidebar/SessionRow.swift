@@ -20,16 +20,16 @@ struct SessionRow: View {
                     .onSubmit { commitRename() }
                     .onExitCommand { renamingSessionID = nil }
                     .onAppear {
-                        draftTitle = session.title
+                        draftTitle = session.displayTitle
                         renameFieldFocused = true
                     }
             } else if session.title == QuerySession.placeholderTitle {
-                Text(session.title)
+                Text(session.displayTitle)
                     .font(.system(size: 13))
                     .italic()
                     .foregroundStyle(.secondary)
             } else {
-                Text(session.title)
+                Text(session.displayTitle)
                     .font(.system(size: 13))
                     .lineLimit(1)
             }

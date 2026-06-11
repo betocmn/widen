@@ -40,3 +40,14 @@ public struct QueryResult: Equatable, Sendable {
         return value
     }
 }
+
+public enum QueryResultExport {
+    public static func csvFilename(for sessionTitle: String) -> String {
+        let words = sessionTitle
+            .lowercased()
+            .components(separatedBy: CharacterSet.alphanumerics.inverted)
+            .filter { !$0.isEmpty }
+        let base = words.isEmpty ? "results" : words.joined(separator: "-")
+        return "\(base).csv"
+    }
+}

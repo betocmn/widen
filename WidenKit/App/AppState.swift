@@ -512,7 +512,7 @@ public final class AppState {
         guard !trimmed.isEmpty,
             let index = sessions.firstIndex(where: { $0.id == id })
         else { return }
-        sessions[index].title = trimmed
+        sessions[index].title = SessionTitleFallback.titleCase(trimmed)
         sessions[index].titleWasManuallySet = true
         sessions[index].updatedAt = Date()
         flushSessions()
@@ -525,7 +525,7 @@ public final class AppState {
             !sessions[index].titleWasManuallySet,
             sessions[index].title == QuerySession.placeholderTitle
         else { return }
-        sessions[index].title = title
+        sessions[index].title = SessionTitleFallback.titleCase(title)
         sessions[index].updatedAt = Date()
         flushSessions()
     }
