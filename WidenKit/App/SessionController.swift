@@ -8,14 +8,28 @@ import Observation
 @MainActor
 @Observable
 public final class SessionController: Identifiable {
+    /// Which face of the session the detail pane shows. Ephemeral by design:
+    /// never persisted, and reset to `.chat` whenever a controller is
+    /// recreated (relaunch, archive eviction).
+    public enum FocusMode: Equatable, Sendable {
+        case chat
+        case results
+    }
+
     public let sessionID: UUID
     public let connectionID: UUID
     public let chatVM = ChatViewModel()
-    public let queryVM = QueryResultViewModel()
+    public let queryVM: QueryResultViewModel
+    public var focus: FocusMode = .chat
 
-    public init(session: QuerySession) {
+    public convenience init(session: QuerySession) {
+        self.init(session: session, executor: QueryExecutionService())
+    }
+
+    init(session: QuerySession, executor: any QueryExecuting) {
         self.sessionID = session.id
         self.connectionID = session.connectionID
+        self.queryVM = QueryResultViewModel(executor: executor)
         hydrate(from: session)
     }
 
@@ -47,16 +61,25 @@ public final class SessionController: Identifiable {
         return changed
     }
 
-    /// Generates SQL for the chat input against this session's connection.
+    /// Submits the chat input: raw SQL goes straight to the preview, anything
+    /// else is generated against this session's connection. Always returns
+    /// the pane to chat mode — submitting from results mode resumes the
+    /// conversation.
     public func submit(appState: AppState) async {
+        focus = .chat
         let hadUserMessage = chatVM.messages.contains { $0.role == .user }
-        await chatVM.submit(
-            schema: appState.schemas[connectionID],
-            generator: appState.sqlGenerator,
-            config: SQLGenerationConfig(
-                defaultRowLimit: appState.connection(for: connectionID)?.defaultRowLimit ?? 100),
-            queryVM: queryVM
-        )
+        if ChatViewModel.isDirectSQL(chatVM.input) {
+            chatVM.submitDirectSQL(queryVM: queryVM)
+        } else {
+            await chatVM.submit(
+                schema: appState.schemas[connectionID],
+                generator: appState.sqlGenerator,
+                config: SQLGenerationConfig(
+                    defaultRowLimit: appState.connection(for: connectionID)?.defaultRowLimit
+                        ?? 100),
+                queryVM: queryVM
+            )
+        }
         appState.sessionDidChange(sessionID)
 
         // Auto-name the session after its very first question.
@@ -68,12 +91,32 @@ public final class SessionController: Identifiable {
         }
     }
 
-    /// Runs the SQL editor contents against this session's connection.
+    /// Runs the SQL preview contents against this session's connection,
+    /// switching the pane to results mode. The outcome — row count or error,
+    /// including the "stopped waiting" cancellation — is appended to the chat
+    /// transcript so the history records every run.
     public func runQuery(appState: AppState) {
+        guard !queryVM.isRunning else { return }
+        focus = .results
+        let sql = queryVM.sqlText
         queryVM.startRun(
             connection: appState.connection(for: connectionID),
             postgres: appState.postgres(for: connectionID),
             isConnected: appState.connectionState(connectionID) == .connected
-        )
+        ) { [weak self, weak appState] result, errorMessage in
+            guard let self else { return }
+            if let result {
+                self.chatVM.appendRunRecord(
+                    ChatMessage.RunSummary(
+                        rowCount: result.rowCount,
+                        executionTimeMs: result.executionTimeMs,
+                        truncated: result.truncated,
+                        sql: sql
+                    ))
+            } else if let errorMessage {
+                self.chatVM.appendRunError(errorMessage)
+            }
+            appState?.sessionDidChange(self.sessionID)
+        }
     }
 }

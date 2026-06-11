@@ -58,6 +58,7 @@
 		97F621F20475215531A2FE1D /* SessionController.swift in Sources */ = {isa = PBXBuildFile; fileRef = 4E3224013C3BD2A7894756D9 /* SessionController.swift */; };
 		982986ED6DA188054F14BCE9 /* MainView.swift in Sources */ = {isa = PBXBuildFile; fileRef = A181CFBD27E3620C8C3C902E /* MainView.swift */; };
 		98CECE67670288333751B170 /* QueryExecutionService.swift in Sources */ = {isa = PBXBuildFile; fileRef = 8D3B5C38E209E366A7B9413D /* QueryExecutionService.swift */; };
+		AAE2F5B4C2AA310AC576E408 /* SessionControllerTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = FAEB9A30055B7E3FE372CD61 /* SessionControllerTests.swift */; };
 		ACB000D582647340280E01A3 /* WidenKitTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 25C6B47E5418CF6D55AE34FD /* WidenKitTests.swift */; };
 		AEBB14B823EC2DF0490DC5B8 /* SQLGenerationResult.swift in Sources */ = {isa = PBXBuildFile; fileRef = 2DAAF8DAFFED5A966828C8C4 /* SQLGenerationResult.swift */; };
 		AFA418FA05A4579D14F1DA77 /* PostgresService.swift in Sources */ = {isa = PBXBuildFile; fileRef = EC8949F7F4C8FC5E472D3909 /* PostgresService.swift */; };
@@ -184,6 +185,7 @@
 		EFE23C70D785D014C2E39969 /* DatabasesSettingsView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = DatabasesSettingsView.swift; sourceTree = "<group>"; };
 		F09E72C449EE7A5A9A66BD9F /* DatabaseSchema.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = DatabaseSchema.swift; sourceTree = "<group>"; };
 		F2CC4ADDFBD0372E41CBC1A4 /* SessionStoreTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SessionStoreTests.swift; sourceTree = "<group>"; };
+		FAEB9A30055B7E3FE372CD61 /* SessionControllerTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SessionControllerTests.swift; sourceTree = "<group>"; };
 		FEEE256B4F338B9961551C99 /* QueryResultsView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = QueryResultsView.swift; sourceTree = "<group>"; };
 /* End PBXFileReference section */
 
@@ -296,6 +298,7 @@
 				4D7DC9491F74000AE5458E39 /* ConnectionStoreTests.swift */,
 				C776863B980AE74374EED3DD /* FoundationModelsSmokeTests.swift */,
 				526F33B4A497093D4F7A3300 /* PostgresIntegrationTests.swift */,
+				FAEB9A30055B7E3FE372CD61 /* SessionControllerTests.swift */,
 				F2CC4ADDFBD0372E41CBC1A4 /* SessionStoreTests.swift */,
 				7DB60DBB4528001882E57C20 /* SessionTitleTests.swift */,
 				352C4B3A2C622CAEC8466E27 /* SQLPromptBuilderTests.swift */,
@@ -516,6 +519,7 @@
 				05E75B10D5A5DAECC48EF104 /* PostgresIntegrationTests.swift in Sources */,
 				EF9CE627C80199A8351EF201 /* SQLPromptBuilderTests.swift in Sources */,
 				6A5DB748205AD6A08CB83BAE /* SQLSafetyValidatorTests.swift in Sources */,
+				AAE2F5B4C2AA310AC576E408 /* SessionControllerTests.swift in Sources */,
 				7DBEF4C3F5F26F43884DDC1A /* SessionStoreTests.swift in Sources */,
 				945C5CE81A388F43EE3709DC /* SessionTitleTests.swift in Sources */,
 				ACB000D582647340280E01A3 /* WidenKitTests.swift in Sources */,
