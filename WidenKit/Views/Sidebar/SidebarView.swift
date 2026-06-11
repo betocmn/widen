@@ -17,7 +17,7 @@ public struct SidebarView: View {
                 Text("Add a PostgreSQL connection to get started.")
             } actions: {
                 Button("Add Database…") {
-                    appState.openSettings(tab: .databases)
+                    appState.openNewDatabaseSettings()
                 }
             }
         } else {
@@ -43,7 +43,7 @@ public struct SidebarView: View {
             VStack(spacing: 0) {
                 Divider()
                 Button {
-                    appState.openSettings(tab: .databases)
+                    appState.openNewDatabaseSettings()
                 } label: {
                     Label("Add Database", systemImage: "plus.circle")
                         .font(.system(size: 12))

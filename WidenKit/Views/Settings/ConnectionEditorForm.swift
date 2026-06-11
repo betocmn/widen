@@ -12,7 +12,7 @@ struct ConnectionEditorForm: View {
             ScrollView {
                 VStack(alignment: .leading, spacing: 14) {
                     SettingsSectionPanel(title: "Connection", systemImage: "cylinder.split.1x2") {
-                        textRow("Name", text: $viewModel.name)
+                        textRow("Nickname", text: $viewModel.name)
                         Divider()
                         textRow("Host", text: $viewModel.host)
                         Divider()
@@ -61,8 +61,6 @@ struct ConnectionEditorForm: View {
                                 .font(.callout)
                         }
                     }
-
-                    testStatusView
                 }
                 .padding(20)
             }
@@ -71,35 +69,6 @@ struct ConnectionEditorForm: View {
             Divider()
 
             actionBar
-        }
-    }
-
-    @ViewBuilder
-    private var testStatusView: some View {
-        MessagePanel(systemImage: testStatusIcon, color: testStatusColor) {
-            testStatusContent
-        }
-    }
-
-    @ViewBuilder
-    private var testStatusContent: some View {
-        switch viewModel.testState {
-        case .idle:
-            Text("Connection has not been tested yet")
-                .font(.callout)
-                .foregroundStyle(.secondary)
-        case .testing:
-            HStack(spacing: 8) {
-                ProgressView().controlSize(.small)
-                Text("Testing connection...")
-                    .font(.callout)
-            }
-        case .success:
-            Text("Connection succeeded")
-                .font(.callout)
-        case .failure(let message):
-            Text(message)
-                .font(.callout)
         }
     }
 
@@ -114,6 +83,8 @@ struct ConnectionEditorForm: View {
                 )
             }
             .disabled(viewModel.testState == .testing)
+
+            testStatusBadge
 
             Spacer()
 
@@ -139,20 +110,29 @@ struct ConnectionEditorForm: View {
         .background(.bar)
     }
 
-    private var testStatusIcon: String {
+    @ViewBuilder
+    private var testStatusBadge: some View {
         switch viewModel.testState {
-        case .idle: "info.circle"
-        case .testing: "clock"
-        case .success: "checkmark.circle.fill"
-        case .failure: "xmark.octagon.fill"
-        }
-    }
-
-    private var testStatusColor: Color {
-        switch viewModel.testState {
-        case .idle, .testing: .secondary
-        case .success: .green
-        case .failure: .red
+        case .idle:
+            EmptyView()
+        case .testing:
+            HStack(spacing: 6) {
+                ProgressView()
+                    .controlSize(.small)
+                Text("Testing")
+                    .font(.caption.weight(.medium))
+                    .foregroundStyle(.secondary)
+            }
+        case .success:
+            Label("Success", systemImage: "checkmark.circle.fill")
+                .font(.caption.weight(.medium))
+                .foregroundStyle(.green)
+                .help("Connection succeeded.")
+        case .failure(let message):
+            Label("Failed", systemImage: "xmark.octagon.fill")
+                .font(.caption.weight(.medium))
+                .foregroundStyle(.red)
+                .help(message)
         }
     }
 
