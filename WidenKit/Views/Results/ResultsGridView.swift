@@ -7,26 +7,35 @@ struct ResultsGridView: View {
 
     var body: some View {
         let widths = columnWidths(for: result)
-        ScrollView([.horizontal, .vertical]) {
-            LazyVStack(alignment: .leading, spacing: 0, pinnedViews: .sectionHeaders) {
-                Section {
-                    ForEach(result.rows.indices, id: \.self) { rowIndex in
+        // A two-axis ScrollView centers content smaller than the viewport;
+        // the GeometryReader-sized frame pins small results to the top
+        // leading corner instead.
+        GeometryReader { geometry in
+            ScrollView([.horizontal, .vertical]) {
+                LazyVStack(alignment: .leading, spacing: 0, pinnedViews: .sectionHeaders) {
+                    Section {
+                        ForEach(result.rows.indices, id: \.self) { rowIndex in
+                            rowView(
+                                cells: result.rows[rowIndex],
+                                widths: widths,
+                                background: rowIndex.isMultiple(of: 2)
+                                    ? Color.clear
+                                    : Color.primary.opacity(0.04)
+                            )
+                        }
+                    } header: {
                         rowView(
-                            cells: result.rows[rowIndex],
+                            cells: result.columns,
                             widths: widths,
-                            background: rowIndex.isMultiple(of: 2)
-                                ? Color.clear
-                                : Color.primary.opacity(0.04)
+                            background: Color.primary.opacity(0.08),
+                            isHeader: true
                         )
                     }
-                } header: {
-                    rowView(
-                        cells: result.columns,
-                        widths: widths,
-                        background: Color.primary.opacity(0.08),
-                        isHeader: true
-                    )
                 }
+                .frame(
+                    minWidth: geometry.size.width,
+                    minHeight: geometry.size.height,
+                    alignment: .topLeading)
             }
         }
     }
