@@ -35,16 +35,16 @@ public struct MainView: View {
                     .inspectorColumnWidth(min: 240, ideal: 300, max: 420)
             }
         }
-        .toolbar(removing: .title)
+        // An empty title (instead of `.toolbar(removing: .title)`) keeps the
+        // flexible title region between the leading and trailing toolbar
+        // sections — removing it entirely collapses the primary-action
+        // buttons next to the breadcrumb.
+        .navigationTitle("")
         .toolbar {
             ToolbarItem(placement: .navigation) {
                 breadcrumb
             }
-            // With the window title removed there is nothing separating the
-            // leading and trailing regions, so the action buttons collapse
-            // next to the breadcrumb without an explicit flexible spacer.
-            ToolbarSpacer(.flexible)
-            ToolbarItem {
+            ToolbarItem(placement: .primaryAction) {
                 Button {
                     toggleAppearance()
                 } label: {
@@ -59,7 +59,7 @@ public struct MainView: View {
                         : "Switch to dark mode (reset to System in Settings › General)")
             }
             // Trailing edge, mirroring the system sidebar toggle on the left.
-            ToolbarItem {
+            ToolbarItem(placement: .primaryAction) {
                 Button {
                     appState.showSchemaInspector.toggle()
                 } label: {
