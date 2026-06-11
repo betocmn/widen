@@ -71,6 +71,29 @@ public final class ConnectionSettingsViewModel {
     /// Validates the form per the roadmap rules and builds a config, or
     /// records the validation errors and returns nil.
     public func buildConfig() -> DatabaseConnectionConfig? {
+        let result = makeConfig()
+        validationErrors = result.errors
+        return result.config
+    }
+
+    public func testConnection() async {
+        let result = makeConfig()
+        guard let config = result.config else {
+            validationErrors = []
+            testState = .failure(result.errors.joined(separator: "\n"))
+            return
+        }
+        validationErrors = []
+        testState = .testing
+        do {
+            try await PostgresService.testConnection(config: config, password: password)
+            testState = .success
+        } catch {
+            testState = .failure(error.localizedDescription)
+        }
+    }
+
+    private func makeConfig() -> (config: DatabaseConnectionConfig?, errors: [String]) {
         var errors: [String] = []
 
         let trimmedHost = host.trimmingCharacters(in: .whitespaces)
@@ -99,8 +122,9 @@ public final class ConnectionSettingsViewModel {
             errors.append("Timeout must be between 1 and 120 seconds.")
         }
 
-        validationErrors = errors
-        guard errors.isEmpty, let port, let rowLimit, let timeout else { return nil }
+        guard errors.isEmpty, let port, let rowLimit, let timeout else {
+            return (nil, errors)
+        }
 
         var config = existing ?? DatabaseConnectionConfig()
         let trimmedName = name.trimmingCharacters(in: .whitespaces)
@@ -113,21 +137,7 @@ public final class ConnectionSettingsViewModel {
         config.defaultRowLimit = rowLimit
         config.statementTimeoutSeconds = timeout
         config.updatedAt = Date()
-        return config
-    }
-
-    public func testConnection() async {
-        guard let config = buildConfig() else {
-            testState = .idle
-            return
-        }
-        testState = .testing
-        do {
-            try await PostgresService.testConnection(config: config, password: password)
-            testState = .success
-        } catch {
-            testState = .failure(error.localizedDescription)
-        }
+        return (config, [])
     }
 
     /// Saves the config (JSON) and password (Keychain). There is no eager

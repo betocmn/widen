@@ -132,6 +132,7 @@ struct DatabasesSettingsView: View {
             }
             .padding(.horizontal, 8)
             .padding(.vertical, 7)
+            .frame(height: 58)
             .background(.bar)
         }
     }
