@@ -13,31 +13,37 @@ struct ComposerView: View {
     }
 
     var body: some View {
-        HStack(alignment: .bottom, spacing: 8) {
+        // Conductor-style tall box: text grows from the top, the send button
+        // sits in its own bottom-right row.
+        VStack(alignment: .leading, spacing: 8) {
             TextField(
                 "Ask in plain English, or write SQL directly…",
                 text: $text,
                 axis: .vertical
             )
             .textFieldStyle(.plain)
-            .lineLimit(1...8)
+            .lineLimit(3...12)
             .onSubmit(submit)
             .disabled(isBusy)
+            .frame(maxWidth: .infinity, alignment: .topLeading)
 
-            // No .keyboardShortcut(.defaultAction) here — the text field's
-            // onSubmit already handles Return; both would double-fire.
-            Button(action: submit) {
-                Image(systemName: "arrow.up")
-                    .font(.system(size: 13, weight: .semibold))
-                    .frame(width: 24, height: 24)
+            HStack {
+                Spacer()
+                // No .keyboardShortcut(.defaultAction) here — the text field's
+                // onSubmit already handles Return; both would double-fire.
+                Button(action: submit) {
+                    Image(systemName: "arrow.up")
+                        .font(.system(size: 13, weight: .semibold))
+                        .frame(width: 24, height: 24)
+                }
+                .buttonStyle(.glassProminent)
+                .buttonBorderShape(.circle)
+                .disabled(!canSubmit)
+                .help("Send")
             }
-            .buttonStyle(.glassProminent)
-            .buttonBorderShape(.circle)
-            .disabled(!canSubmit)
-            .help("Send")
         }
         .padding(.horizontal, 14)
-        .padding(.vertical, 10)
+        .padding(.vertical, 12)
         .glassEffect(.regular, in: .rect(cornerRadius: 18))
         .padding([.horizontal, .bottom], 12)
     }
