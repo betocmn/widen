@@ -63,6 +63,37 @@ struct QueryResultViewModelTests {
         }
     }
 
+    private actor SQLRecorder {
+        private var statements: [String] = []
+
+        func record(_ sql: String) {
+            statements.append(sql)
+        }
+
+        func all() -> [String] {
+            statements
+        }
+    }
+
+    private struct RecordingExecutor: QueryExecuting {
+        let recorder: SQLRecorder
+
+        func run(
+            sql: String,
+            config: DatabaseConnectionConfig,
+            postgres: PostgresService
+        ) async throws -> QueryResult {
+            await recorder.record(sql)
+            return QueryResult(
+                columns: ["value"],
+                rows: [["1"]],
+                rowCount: 1,
+                truncated: false,
+                executionTimeMs: 1
+            )
+        }
+    }
+
     private struct SlowExecutor: QueryExecuting {
         func run(
             sql: String,
@@ -97,6 +128,21 @@ struct QueryResultViewModelTests {
 
         #expect(viewModel.result == nil)
         #expect(viewModel.validation?.isValid == false)
+    }
+
+    @Test func runExecutesSQLSnapshottedAtStart() async {
+        let recorder = SQLRecorder()
+        let viewModel = QueryResultViewModel(executor: RecordingExecutor(recorder: recorder))
+        viewModel.sqlText = "SELECT 1"
+
+        viewModel.startRun(
+            connection: DatabaseConnectionConfig(), postgres: PostgresService(), isConnected: true)
+        viewModel.sqlText = "DELETE FROM users"
+        await waitUntil { !viewModel.isRunning }
+
+        let statements = await recorder.all()
+        #expect(statements == ["SELECT 1"])
+        #expect(viewModel.result?.rowCount == 1)
     }
 
     @Test func notConnectedRunReportsError() async {

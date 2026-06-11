@@ -24,7 +24,7 @@ public final class ChatViewModel {
     /// straight into the preview — no model call, no assistant reply.
     func submitDirectSQL(queryVM: QueryResultViewModel) {
         let sql = input.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard !sql.isEmpty, !isGenerating else { return }
+        guard !sql.isEmpty, !isGenerating, !queryVM.isRunning else { return }
         input = ""
         messages.append(ChatMessage(role: .user, text: sql))
         queryVM.setDirectSQL(sql)
@@ -52,7 +52,7 @@ public final class ChatViewModel {
         queryVM: QueryResultViewModel
     ) async {
         let question = input.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard !question.isEmpty, !isGenerating else { return }
+        guard !question.isEmpty, !isGenerating, !queryVM.isRunning else { return }
         guard let schema, !schema.tables.isEmpty else {
             messages.append(
                 ChatMessage(

@@ -47,6 +47,7 @@ public final class QueryResultViewModel {
         // The guard must precede storing the callback, so a rejected start
         // never clobbers the completion of the run already in flight.
         guard !isRunning else { return }
+        let runSQL = sqlText
         self.onFinish = onFinish
         nextRunID += 1
         let runID = nextRunID
@@ -56,23 +57,39 @@ public final class QueryResultViewModel {
         isRunning = true
         runTask = Task {
             await run(
+                sql: runSQL,
                 connection: connection, postgres: postgres,
                 isConnected: isConnected, runID: runID)
         }
     }
 
     public func cancelRun() {
+        cancelActiveRun(reportError: true, fireCompletion: true)
+    }
+
+    private func discardActiveRun() {
+        cancelActiveRun(reportError: false, fireCompletion: false)
+    }
+
+    private func cancelActiveRun(reportError: Bool, fireCompletion shouldFire: Bool) {
         runTask?.cancel()
         runTask = nil
         activeRunID = nil
         if isRunning {
             isRunning = false
-            runError = "Stopped waiting for the query. The server may still finish it in the background."
+            if reportError {
+                runError = "Stopped waiting for the query. The server may still finish it in the background."
+            }
         }
-        fireCompletion()
+        if shouldFire {
+            fireCompletion()
+        } else {
+            onFinish = nil
+        }
     }
 
     public func clear() {
+        discardActiveRun()
         sqlText = ""
         validation = nil
         result = nil
@@ -114,12 +131,13 @@ public final class QueryResultViewModel {
     }
 
     private func run(
+        sql: String,
         connection: DatabaseConnectionConfig?,
         postgres: PostgresService,
         isConnected: Bool,
         runID: Int
     ) async {
-        validate()
+        validation = SQLSafetyValidator.validate(sql)
         guard let validation, validation.isValid else {
             finishRun(runID)
             return
@@ -134,7 +152,7 @@ public final class QueryResultViewModel {
 
         do {
             let newResult = try await executor.run(
-                sql: sqlText,
+                sql: sql,
                 config: config,
                 postgres: postgres
             )
