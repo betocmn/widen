@@ -12,11 +12,15 @@ XCODEBUILD := xcodebuild -project Widen.xcodeproj -scheme Widen -configuration D
 
 APP := build/Build/Products/Debug/Widen.app
 
-.PHONY: project build test test-db test-fm run xcode clean
+.PHONY: project build test test-db test-fm setup run run-conductor xcode clean
 
 ## Regenerate Widen.xcodeproj from project.yml
 project:
 	xcodegen generate
+
+## Resolve Swift package dependencies
+setup:
+	$(XCODEBUILD) -resolvePackageDependencies
 
 ## Build the app (Debug)
 build:
@@ -38,6 +42,10 @@ test-fm:
 ## Build and launch the app
 run: build
 	open $(APP)
+
+## Build and launch the app, blocking until it quits (for Conductor run tab)
+run-conductor: build
+	open -W -n $(APP)
 
 ## Open the project in Xcode 26
 xcode:
