@@ -76,6 +76,16 @@ struct ConnectionStoreTests {
 @Suite("ConnectionSettingsViewModel validation")
 @MainActor
 struct ConnectionSettingsViewModelTests {
+    private func makeState() -> (AppState, URL) {
+        let dir = FileManager.default.temporaryDirectory
+            .appendingPathComponent("widen-tests-\(UUID().uuidString)", isDirectory: true)
+        let state = AppState(
+            connectionStore: ConnectionStore(directory: dir),
+            sessionStore: SessionStore(directory: dir)
+        )
+        return (state, dir)
+    }
+
     private func makeValidViewModel() -> ConnectionSettingsViewModel {
         let viewModel = ConnectionSettingsViewModel()
         viewModel.host = "localhost"
@@ -124,5 +134,96 @@ struct ConnectionSettingsViewModelTests {
         let viewModel = makeValidViewModel()
         viewModel.password = ""
         #expect(viewModel.buildConfig() != nil)
+    }
+
+    @Test func newFormStartsCleanAndTracksEdits() {
+        let viewModel = ConnectionSettingsViewModel()
+        viewModel.startNew()
+
+        #expect(!viewModel.hasUnsavedChanges)
+        #expect(viewModel.name.isEmpty)
+        #expect(viewModel.username == "postgres")
+
+        viewModel.database = "widen_test"
+        #expect(viewModel.hasUnsavedChanges)
+
+        viewModel.startNew()
+        #expect(!viewModel.hasUnsavedChanges)
+    }
+
+    @Test func loadedFormStartsCleanAndTracksEdits() {
+        let config = DatabaseConnectionConfig(
+            name: "Local",
+            host: "localhost",
+            database: "widen_test",
+            username: NSUserName()
+        )
+        let viewModel = ConnectionSettingsViewModel()
+
+        viewModel.load(from: config)
+        #expect(!viewModel.hasUnsavedChanges)
+
+        viewModel.host = "127.0.0.1"
+        #expect(viewModel.hasUnsavedChanges)
+
+        viewModel.load(from: config)
+        #expect(!viewModel.hasUnsavedChanges)
+    }
+
+    @Test func successfulSaveUpdatesCleanSnapshot() {
+        let (state, dir) = makeState()
+        defer { try? FileManager.default.removeItem(at: dir) }
+        let viewModel = makeValidViewModel()
+
+        #expect(viewModel.hasUnsavedChanges)
+
+        let saved = viewModel.save(appState: state)
+
+        #expect(saved != nil)
+        #expect(!viewModel.hasUnsavedChanges)
+
+        viewModel.rowLimitText = "250"
+        #expect(viewModel.hasUnsavedChanges)
+    }
+
+    @Test func emptyNicknameFallsBackToDatabaseNameOnSave() {
+        let (state, dir) = makeState()
+        defer { try? FileManager.default.removeItem(at: dir) }
+        let viewModel = makeValidViewModel()
+        viewModel.name = " "
+
+        let saved = viewModel.save(appState: state)
+
+        #expect(saved?.name == "widen_test")
+        #expect(state.connections.first?.name == "widen_test")
+    }
+
+    @Test func testConnectionValidationUsesFooterState() async {
+        let viewModel = ConnectionSettingsViewModel()
+        viewModel.startNew()
+
+        await viewModel.testConnection()
+
+        #expect(viewModel.validationErrors.isEmpty)
+        #expect(viewModel.testState == .failure("Database is required."))
+    }
+
+    @Test func saveStillWorksAfterConnectionTestFailure() async {
+        let (state, dir) = makeState()
+        defer { try? FileManager.default.removeItem(at: dir) }
+        let viewModel = ConnectionSettingsViewModel { _, _ in
+            throw AppError.notConnected
+        }
+        viewModel.host = "localhost"
+        viewModel.portText = "5432"
+        viewModel.database = "widen_test"
+        viewModel.username = "postgres"
+
+        await viewModel.testConnection()
+        let saved = viewModel.save(appState: state)
+
+        #expect(saved != nil)
+        #expect(state.connections.map(\.id) == [saved?.id])
+        #expect(viewModel.testState == .failure(AppError.notConnected.errorDescription ?? ""))
     }
 }

@@ -6,13 +6,13 @@ import Testing
 @Suite("SessionTitleFallback")
 struct SessionTitleFallbackTests {
     @Test func shortQuestionIsUsedVerbatim() {
-        #expect(SessionTitleFallback.title(from: "Show me all users") == "Show me all users")
+        #expect(SessionTitleFallback.title(from: "Show me all users") == "Show Me All Users")
     }
 
     @Test func whitespaceIsCollapsed() {
         #expect(
             SessionTitleFallback.title(from: "  Show   me\nall\tusers  ")
-                == "Show me all users")
+                == "Show Me All Users")
     }
 
     @Test func longQuestionTruncatesAtWordBoundary() {
@@ -21,7 +21,7 @@ struct SessionTitleFallbackTests {
         #expect(title.hasSuffix("…"))
         #expect(title.count <= 41)  // 40 characters + ellipsis
         // Never cuts a word in half: dropping the ellipsis leaves whole words.
-        #expect(title == "Which customers placed the most orders…")
+        #expect(title == "Which Customers Placed The Most Orders…")
     }
 
     @Test func longSingleWordStillTruncates() {
@@ -32,12 +32,17 @@ struct SessionTitleFallbackTests {
 
     @Test func sanitizeStripsQuotesAndPeriods() {
         #expect(SessionTitleFallback.sanitize("\"Top Spenders.\"") == "Top Spenders")
-        #expect(SessionTitleFallback.sanitize("“Orders by Status”") == "Orders by Status")
+        #expect(SessionTitleFallback.sanitize("“Orders by Status”") == "Orders By Status")
         #expect(SessionTitleFallback.sanitize("'Recent Signups...'") == "Recent Signups")
     }
 
     @Test func sanitizeCollapsesWhitespace() {
         #expect(SessionTitleFallback.sanitize("  Top \n Spenders  ") == "Top Spenders")
+    }
+
+    @Test func titleCaseNormalizesAllCaps() {
+        #expect(SessionTitleFallback.titleCase("SHOW MESSAGES") == "Show Messages")
+        #expect(SessionTitleFallback.sanitize("SHOW MESSAGES") == "Show Messages")
     }
 
     @Test func sanitizeCapsLengthAtSixtyCharacters() {
@@ -63,6 +68,16 @@ struct MockTitleGeneratorTests {
         let second = try await generator.generateTitle(for: question)
 
         #expect(first == second)
-        #expect(first == "Which users have spent the most?")
+        #expect(first == "Which Users Have Spent The Most?")
+    }
+}
+
+@Suite("QueryResultExport")
+struct QueryResultExportTests {
+    @Test func csvFilenameUsesSessionSlug() {
+        #expect(QueryResultExport.csvFilename(for: "Show Messages") == "show-messages.csv")
+        #expect(
+            QueryResultExport.csvFilename(for: "  Max Spend / Customer  ")
+                == "max-spend-customer.csv")
     }
 }

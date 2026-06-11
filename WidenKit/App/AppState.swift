@@ -8,6 +8,11 @@ public enum SettingsTab: String, Hashable, Sendable {
     case archived
 }
 
+public enum DatabaseSettingsRequest: Equatable, Sendable {
+    case new
+    case edit(UUID)
+}
+
 /// What the sidebar has selected: a whole database (for schema browsing)
 /// or one of its query sessions.
 public enum SidebarItem: Hashable, Sendable {
@@ -82,6 +87,14 @@ public final class AppState {
     public var settingsTab: SettingsTab = .general
     /// Incremented to ask MainView to open the Settings window.
     public var openSettingsRequest = 0
+    /// Incremented to ask Settings > Databases to start an unsaved draft.
+    public var newDatabaseSettingsRequest = 0
+    /// Incremented to ask Settings > Databases to select a specific connection.
+    public var editDatabaseSettingsRequest = 0
+    public var editDatabaseSettingsID: UUID?
+    /// Incremented to ask Settings > Databases to consume the latest request.
+    public var databaseSettingsRequest = 0
+    public var pendingDatabaseSettingsRequest: DatabaseSettingsRequest?
     public var errorBanner: String?
 
     /// Developer toggle: use the deterministic mock generator instead of the
@@ -185,6 +198,26 @@ public final class AppState {
     /// `openSettingsRequest` and opens the Settings window.
     public func openSettings(tab: SettingsTab) {
         settingsTab = tab
+        openSettingsRequest += 1
+    }
+
+    /// Opens Settings on Databases and starts the same draft flow as the
+    /// Databases tab's "+" button.
+    public func openNewDatabaseSettings() {
+        settingsTab = .databases
+        pendingDatabaseSettingsRequest = .new
+        databaseSettingsRequest += 1
+        newDatabaseSettingsRequest += 1
+        openSettingsRequest += 1
+    }
+
+    /// Opens Settings on Databases and selects the requested connection.
+    public func openDatabaseSettings(connectionID: UUID) {
+        settingsTab = .databases
+        pendingDatabaseSettingsRequest = .edit(connectionID)
+        databaseSettingsRequest += 1
+        editDatabaseSettingsID = connectionID
+        editDatabaseSettingsRequest += 1
         openSettingsRequest += 1
     }
 
@@ -479,7 +512,7 @@ public final class AppState {
         guard !trimmed.isEmpty,
             let index = sessions.firstIndex(where: { $0.id == id })
         else { return }
-        sessions[index].title = trimmed
+        sessions[index].title = SessionTitleFallback.titleCase(trimmed)
         sessions[index].titleWasManuallySet = true
         sessions[index].updatedAt = Date()
         flushSessions()
@@ -492,7 +525,7 @@ public final class AppState {
             !sessions[index].titleWasManuallySet,
             sessions[index].title == QuerySession.placeholderTitle
         else { return }
-        sessions[index].title = title
+        sessions[index].title = SessionTitleFallback.titleCase(title)
         sessions[index].updatedAt = Date()
         flushSessions()
     }

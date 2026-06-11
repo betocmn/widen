@@ -23,6 +23,11 @@ public struct QuerySession: Identifiable, Codable, Equatable, Sendable {
     public var createdAt: Date
     public var updatedAt: Date
 
+    public var displayTitle: String {
+        guard title != Self.placeholderTitle else { return title }
+        return SessionTitleFallback.titleCase(title)
+    }
+
     public init(
         id: UUID = UUID(),
         connectionID: UUID,

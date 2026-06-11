@@ -26,6 +26,14 @@ struct ChatModeView: View {
                     .padding(.top, 8)
             }
 
+            if !isEmpty, let schemaStatus {
+                SchemaStatusBanner(status: schemaStatus) {
+                    Task { await appState.refreshSchema(for: controller.connectionID) }
+                }
+                .padding(.horizontal, 12)
+                .padding(.top, 8)
+            }
+
             if isEmpty {
                 emptyHint
             } else {
@@ -34,7 +42,9 @@ struct ChatModeView: View {
 
             ComposerView(
                 text: $chatVM.input,
-                isBusy: controller.chatVM.isGenerating || controller.queryVM.isRunning
+                isBusy: controller.chatVM.isGenerating
+                    || controller.queryVM.isRunning
+                    || isSchemaPreparing
             ) {
                 Task { await controller.submit(appState: appState) }
             }
@@ -50,6 +60,35 @@ struct ChatModeView: View {
         controller.chatVM.messages.isEmpty
             && !hasActiveSQL
             && !controller.chatVM.isGenerating
+    }
+
+    private var sessionTitle: String {
+        appState.session(for: controller.sessionID)?.displayTitle ?? QuerySession.placeholderTitle
+    }
+
+    private var connectionStatus: AppState.ConnectionStatus {
+        appState.connectionState(controller.connectionID)
+    }
+
+    private var isSchemaPreparing: Bool {
+        connectionStatus == .connecting || appState.loadingSchemas.contains(controller.connectionID)
+    }
+
+    private var hasLoadedSchema: Bool {
+        appState.schemas[controller.connectionID] != nil
+    }
+
+    private var schemaStatus: SchemaStatus? {
+        if isSchemaPreparing {
+            return .loading
+        }
+        if case .error(let message) = connectionStatus {
+            return .connectionError(message)
+        }
+        if connectionStatus == .connected && !hasLoadedSchema {
+            return .missing
+        }
+        return nil
     }
 
     /// The message that introduced the SQL currently in the preview — the
@@ -82,14 +121,20 @@ struct ChatModeView: View {
     }
 
     private var emptyHint: some View {
-        VStack(spacing: 6) {
-            Text("Ask your database anything")
-                .font(.title3)
-                .foregroundStyle(.secondary)
-            Text("Type a question in plain English, or paste a SELECT to run it as-is.")
-                .font(.callout)
-                .foregroundStyle(.tertiary)
-                .multilineTextAlignment(.center)
+        VStack(spacing: 10) {
+            if let schemaStatus {
+                SchemaEmptyStatusView(status: schemaStatus) {
+                    Task { await appState.refreshSchema(for: controller.connectionID) }
+                }
+            } else {
+                Text("Ask your database anything")
+                    .font(.title3)
+                    .foregroundStyle(.secondary)
+                Text("Type a question in plain English, or paste a SELECT to run it as-is.")
+                    .font(.callout)
+                    .foregroundStyle(.tertiary)
+                    .multilineTextAlignment(.center)
+            }
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity)
         .padding(20)
@@ -156,6 +201,7 @@ struct ChatModeView: View {
         if message.role == .result, let result = controller.results[message.id] {
             ResultsCardView(
                 result: result,
+                sessionTitle: sessionTitle,
                 isLatest: message.id == controller.chatVM.messages.last?.id
             )
         } else if message.id == activeSQLAnchorID, hasActiveSQL {
@@ -186,6 +232,131 @@ struct ChatModeView: View {
                 proxy.scrollTo(Self.activeCardID, anchor: .bottom)
             } else if let lastID = controller.chatVM.messages.last?.id {
                 proxy.scrollTo(lastID, anchor: .bottom)
+            }
+        }
+    }
+}
+
+private enum SchemaStatus: Equatable {
+    case loading
+    case missing
+    case connectionError(String)
+
+    var title: String {
+        switch self {
+        case .loading:
+            return "Loading Database Schema"
+        case .missing:
+            return "Schema Not Loaded"
+        case .connectionError:
+            return "Database Connection Failed"
+        }
+    }
+
+    var message: String {
+        switch self {
+        case .loading:
+            return "Tables and columns are loading. Natural-language questions will be available once the schema is ready."
+        case .missing:
+            return "Natural-language questions need table and column context. Direct SELECT queries can still be pasted and run."
+        case .connectionError(let message):
+            return message
+        }
+    }
+
+    var systemImage: String {
+        switch self {
+        case .loading:
+            return "tablecells.badge.ellipsis"
+        case .missing:
+            return "exclamationmark.triangle"
+        case .connectionError:
+            return "xmark.octagon"
+        }
+    }
+
+    var tint: Color {
+        switch self {
+        case .loading:
+            return .accentColor
+        case .missing:
+            return .orange
+        case .connectionError:
+            return .red
+        }
+    }
+
+    var canRefresh: Bool {
+        self == .missing
+    }
+}
+
+private struct SchemaStatusBanner: View {
+    let status: SchemaStatus
+    let refresh: () -> Void
+
+    var body: some View {
+        HStack(spacing: 10) {
+            if status == .loading {
+                ProgressView()
+                    .controlSize(.small)
+            } else {
+                Image(systemName: status.systemImage)
+                    .font(.system(size: 14, weight: .semibold))
+                    .foregroundStyle(status.tint)
+            }
+
+            VStack(alignment: .leading, spacing: 2) {
+                Text(status.title)
+                    .font(.caption.weight(.semibold))
+                Text(status.message)
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+                    .lineLimit(2)
+            }
+
+            Spacer(minLength: 8)
+
+            if status.canRefresh {
+                Button("Refresh Schema", action: refresh)
+                    .controlSize(.small)
+            }
+        }
+        .padding(10)
+        .background(status.tint.opacity(0.08), in: RoundedRectangle(cornerRadius: 10))
+        .overlay {
+            RoundedRectangle(cornerRadius: 10)
+                .strokeBorder(status.tint.opacity(0.22))
+        }
+    }
+}
+
+private struct SchemaEmptyStatusView: View {
+    let status: SchemaStatus
+    let refresh: () -> Void
+
+    var body: some View {
+        VStack(spacing: 10) {
+            if status == .loading {
+                LoadingView(label: status.title)
+            } else {
+                Image(systemName: status.systemImage)
+                    .font(.system(size: 28, weight: .semibold))
+                    .foregroundStyle(status.tint)
+                Text(status.title)
+                    .font(.title3)
+                    .foregroundStyle(.secondary)
+            }
+
+            Text(status.message)
+                .font(.callout)
+                .foregroundStyle(.tertiary)
+                .multilineTextAlignment(.center)
+                .frame(maxWidth: 460)
+
+            if status.canRefresh {
+                Button("Refresh Schema", action: refresh)
+                    .buttonStyle(.glass)
             }
         }
     }

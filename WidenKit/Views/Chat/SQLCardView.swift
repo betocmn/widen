@@ -48,7 +48,7 @@ struct SQLCardView: View {
                 .foregroundStyle(.secondary)
             statusIcon
             Spacer()
-            CopySQLButton(text: controller.queryVM.sqlText)
+            AnimatedCopyButton(text: controller.queryVM.sqlText, help: "Copy SQL")
             Button("Run") {
                 controller.runQuery(appState: appState)
             }
@@ -172,7 +172,7 @@ struct StaticSQLCardView: View {
                     .fontWeight(.semibold)
                     .foregroundStyle(.secondary)
                 Spacer()
-                CopySQLButton(text: sql)
+                AnimatedCopyButton(text: sql, help: "Copy SQL")
             }
             Text(sql)
                 .font(.system(.body, design: .monospaced))
@@ -232,8 +232,9 @@ private struct HoverPopoverAnchor<Label: View, Content: View>: View {
     }
 }
 
-private struct CopySQLButton: View {
+struct AnimatedCopyButton: View {
     let text: String
+    let help: String
     @State private var didCopy = false
 
     var body: some View {
@@ -255,6 +256,6 @@ private struct CopySQLButton: View {
                 .contentTransition(.symbolEffect(.replace))
         }
         .buttonStyle(.borderless)
-        .help(didCopy ? "Copied" : "Copy SQL")
+        .help(didCopy ? "Copied" : help)
     }
 }

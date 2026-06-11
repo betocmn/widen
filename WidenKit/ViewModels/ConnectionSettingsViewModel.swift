@@ -11,11 +11,23 @@ public final class ConnectionSettingsViewModel {
         case failure(String)
     }
 
-    public var name = "Local Postgres"
+    private struct FormSnapshot: Equatable {
+        var name: String
+        var host: String
+        var portText: String
+        var database: String
+        var username: String
+        var password: String
+        var sslMode: SSLMode
+        var rowLimitText: String
+        var timeoutText: String
+    }
+
+    public var name = ""
     public var host = "localhost"
     public var portText = "5432"
     public var database = ""
-    public var username = NSUserName()
+    public var username = "postgres"
     public var password = ""
     public var sslMode: SSLMode = .disable
     public var rowLimitText = "100"
@@ -27,9 +39,23 @@ public final class ConnectionSettingsViewModel {
     public private(set) var isSaving = false
 
     private var existing: DatabaseConnectionConfig?
+    private var cleanSnapshot: FormSnapshot?
     private let keychain = KeychainService()
+    private let connectionTester: @Sendable (DatabaseConnectionConfig, String) async throws -> Void
 
-    public init() {}
+    public var hasUnsavedChanges: Bool {
+        cleanSnapshot != currentSnapshot
+    }
+
+    public init(
+        connectionTester: @escaping @Sendable (DatabaseConnectionConfig, String) async throws ->
+            Void = { config, password in
+                try await PostgresService.testConnection(config: config, password: password)
+            }
+    ) {
+        self.connectionTester = connectionTester
+        markClean()
+    }
 
     /// Prefills the form from a saved connection (password from the Keychain).
     public func load(from config: DatabaseConnectionConfig) {
@@ -46,11 +72,35 @@ public final class ConnectionSettingsViewModel {
         validationErrors = []
         testState = .idle
         saveError = nil
+        markClean()
     }
 
     /// Validates the form per the roadmap rules and builds a config, or
     /// records the validation errors and returns nil.
     public func buildConfig() -> DatabaseConnectionConfig? {
+        let result = makeConfig()
+        validationErrors = result.errors
+        return result.config
+    }
+
+    public func testConnection() async {
+        let result = makeConfig()
+        guard let config = result.config else {
+            validationErrors = []
+            testState = .failure(result.errors.joined(separator: "\n"))
+            return
+        }
+        validationErrors = []
+        testState = .testing
+        do {
+            try await connectionTester(config, password)
+            testState = .success
+        } catch {
+            testState = .failure(error.localizedDescription)
+        }
+    }
+
+    private func makeConfig() -> (config: DatabaseConnectionConfig?, errors: [String]) {
         var errors: [String] = []
 
         let trimmedHost = host.trimmingCharacters(in: .whitespaces)
@@ -79,12 +129,13 @@ public final class ConnectionSettingsViewModel {
             errors.append("Timeout must be between 1 and 120 seconds.")
         }
 
-        validationErrors = errors
-        guard errors.isEmpty, let port, let rowLimit, let timeout else { return nil }
+        guard errors.isEmpty, let port, let rowLimit, let timeout else {
+            return (nil, errors)
+        }
 
         var config = existing ?? DatabaseConnectionConfig()
         let trimmedName = name.trimmingCharacters(in: .whitespaces)
-        config.name = trimmedName.isEmpty ? "Local Postgres" : trimmedName
+        config.name = trimmedName.isEmpty ? trimmedDatabase : trimmedName
         config.host = trimmedHost
         config.port = port
         config.database = trimmedDatabase
@@ -93,21 +144,7 @@ public final class ConnectionSettingsViewModel {
         config.defaultRowLimit = rowLimit
         config.statementTimeoutSeconds = timeout
         config.updatedAt = Date()
-        return config
-    }
-
-    public func testConnection() async {
-        guard let config = buildConfig() else {
-            testState = .idle
-            return
-        }
-        testState = .testing
-        do {
-            try await PostgresService.testConnection(config: config, password: password)
-            testState = .success
-        } catch {
-            testState = .failure(error.localizedDescription)
-        }
+        return (config, [])
     }
 
     /// Saves the config (JSON) and password (Keychain). There is no eager
@@ -126,17 +163,18 @@ public final class ConnectionSettingsViewModel {
             return nil
         }
         existing = config
+        markClean()
         return config
     }
 
     /// Resets the form to its defaults for a brand-new connection.
     public func startNew() {
         existing = nil
-        name = "Local Postgres"
+        name = ""
         host = "localhost"
         portText = "5432"
         database = ""
-        username = NSUserName()
+        username = "postgres"
         password = ""
         sslMode = .disable
         rowLimitText = "100"
@@ -144,5 +182,24 @@ public final class ConnectionSettingsViewModel {
         validationErrors = []
         testState = .idle
         saveError = nil
+        markClean()
+    }
+
+    private var currentSnapshot: FormSnapshot {
+        FormSnapshot(
+            name: name,
+            host: host,
+            portText: portText,
+            database: database,
+            username: username,
+            password: password,
+            sslMode: sslMode,
+            rowLimitText: rowLimitText,
+            timeoutText: timeoutText
+        )
+    }
+
+    private func markClean() {
+        cleanSnapshot = currentSnapshot
     }
 }
