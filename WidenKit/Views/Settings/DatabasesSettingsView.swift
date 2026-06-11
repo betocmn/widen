@@ -24,7 +24,7 @@ struct DatabasesSettingsView: View {
     @State private var confirmDiscard = false
     @State private var didInitialize = false
     @State private var pendingNavigation: PendingNavigation?
-    @State private var handledNewDatabaseRequest = 0
+    @State private var handledDatabaseSettingsRequest = 0
 
     var body: some View {
         HSplitView {
@@ -36,10 +36,10 @@ struct DatabasesSettingsView: View {
         }
         .onAppear {
             initializeSelectionIfNeeded()
-            handleNewDatabaseRequestIfNeeded()
+            handleDatabaseSettingsRequestIfNeeded()
         }
-        .onChange(of: appState.newDatabaseSettingsRequest) {
-            handleNewDatabaseRequestIfNeeded()
+        .onChange(of: appState.databaseSettingsRequest) {
+            handleDatabaseSettingsRequestIfNeeded()
         }
         .confirmationDialog(
             "Delete “\(selectedConnectionName)”?",
@@ -140,7 +140,7 @@ struct DatabasesSettingsView: View {
     @ViewBuilder
     private var editorPane: some View {
         if selection != nil {
-            ConnectionEditorForm(viewModel: editor) { saved in
+            ConnectionEditorForm(viewModel: editor, onCancel: cancelEdits) { saved in
                 isAddingNew = false
                 selection = .connection(saved.id)
             }
@@ -191,10 +191,18 @@ struct DatabasesSettingsView: View {
         }
     }
 
-    private func handleNewDatabaseRequestIfNeeded() {
-        guard handledNewDatabaseRequest != appState.newDatabaseSettingsRequest else { return }
-        handledNewDatabaseRequest = appState.newDatabaseSettingsRequest
-        request(.startNew)
+    private func handleDatabaseSettingsRequestIfNeeded() {
+        guard handledDatabaseSettingsRequest != appState.databaseSettingsRequest else { return }
+        handledDatabaseSettingsRequest = appState.databaseSettingsRequest
+        guard let requestToHandle = appState.pendingDatabaseSettingsRequest else { return }
+        appState.pendingDatabaseSettingsRequest = nil
+        switch requestToHandle {
+        case .new:
+            request(.startNew)
+        case .edit(let id):
+            guard selection != .connection(id) else { return }
+            request(.selectConnection(id))
+        }
     }
 
     private func request(_ action: PendingNavigation) {
@@ -231,6 +239,17 @@ struct DatabasesSettingsView: View {
             if let config = appState.connection(for: id) {
                 editor.load(from: config)
             }
+        case nil:
+            break
+        }
+    }
+
+    private func cancelEdits() {
+        switch selection {
+        case .draft:
+            cancelDraft()
+        case .connection(let id):
+            loadConnection(id)
         case nil:
             break
         }

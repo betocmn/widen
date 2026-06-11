@@ -8,6 +8,11 @@ public enum SettingsTab: String, Hashable, Sendable {
     case archived
 }
 
+public enum DatabaseSettingsRequest: Equatable, Sendable {
+    case new
+    case edit(UUID)
+}
+
 /// What the sidebar has selected: a whole database (for schema browsing)
 /// or one of its query sessions.
 public enum SidebarItem: Hashable, Sendable {
@@ -84,6 +89,12 @@ public final class AppState {
     public var openSettingsRequest = 0
     /// Incremented to ask Settings > Databases to start an unsaved draft.
     public var newDatabaseSettingsRequest = 0
+    /// Incremented to ask Settings > Databases to select a specific connection.
+    public var editDatabaseSettingsRequest = 0
+    public var editDatabaseSettingsID: UUID?
+    /// Incremented to ask Settings > Databases to consume the latest request.
+    public var databaseSettingsRequest = 0
+    public var pendingDatabaseSettingsRequest: DatabaseSettingsRequest?
     public var errorBanner: String?
 
     /// Developer toggle: use the deterministic mock generator instead of the
@@ -194,7 +205,19 @@ public final class AppState {
     /// Databases tab's "+" button.
     public func openNewDatabaseSettings() {
         settingsTab = .databases
+        pendingDatabaseSettingsRequest = .new
+        databaseSettingsRequest += 1
         newDatabaseSettingsRequest += 1
+        openSettingsRequest += 1
+    }
+
+    /// Opens Settings on Databases and selects the requested connection.
+    public func openDatabaseSettings(connectionID: UUID) {
+        settingsTab = .databases
+        pendingDatabaseSettingsRequest = .edit(connectionID)
+        databaseSettingsRequest += 1
+        editDatabaseSettingsID = connectionID
+        editDatabaseSettingsRequest += 1
         openSettingsRequest += 1
     }
 

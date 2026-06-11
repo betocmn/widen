@@ -5,6 +5,7 @@ import SwiftUI
 struct ConnectionEditorForm: View {
     @Environment(AppState.self) private var appState
     @Bindable var viewModel: ConnectionSettingsViewModel
+    var onCancel: () -> Void
     var onSaved: (DatabaseConnectionConfig) -> Void
 
     var body: some View {
@@ -92,6 +93,12 @@ struct ConnectionEditorForm: View {
                 Text("Unsaved changes")
                     .font(.caption)
                     .foregroundStyle(.secondary)
+
+                Button("Cancel") {
+                    onCancel()
+                }
+                .keyboardShortcut(.cancelAction)
+                .disabled(viewModel.isSaving)
             }
 
             Button {
@@ -103,7 +110,7 @@ struct ConnectionEditorForm: View {
             }
             .buttonStyle(.borderedProminent)
             .keyboardShortcut(.defaultAction)
-            .disabled(viewModel.isSaving)
+            .disabled(!viewModel.hasUnsavedChanges || viewModel.isSaving)
         }
         .padding(.horizontal, 20)
         .padding(.vertical, 12)

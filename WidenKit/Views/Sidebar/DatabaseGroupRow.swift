@@ -73,7 +73,7 @@ struct DatabaseGroupRow: View {
             Divider()
 
             Button("Edit in Settings…") {
-                appState.openSettings(tab: .databases)
+                appState.openDatabaseSettings(connectionID: connection.id)
             }
         }
     }
