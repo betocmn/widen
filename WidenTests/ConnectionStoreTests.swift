@@ -207,4 +207,23 @@ struct ConnectionSettingsViewModelTests {
         #expect(viewModel.validationErrors.isEmpty)
         #expect(viewModel.testState == .failure("Database is required."))
     }
+
+    @Test func saveStillWorksAfterConnectionTestFailure() async {
+        let (state, dir) = makeState()
+        defer { try? FileManager.default.removeItem(at: dir) }
+        let viewModel = ConnectionSettingsViewModel { _, _ in
+            throw AppError.notConnected
+        }
+        viewModel.host = "localhost"
+        viewModel.portText = "5432"
+        viewModel.database = "widen_test"
+        viewModel.username = "postgres"
+
+        await viewModel.testConnection()
+        let saved = viewModel.save(appState: state)
+
+        #expect(saved != nil)
+        #expect(state.connections.map(\.id) == [saved?.id])
+        #expect(viewModel.testState == .failure(AppError.notConnected.errorDescription ?? ""))
+    }
 }
