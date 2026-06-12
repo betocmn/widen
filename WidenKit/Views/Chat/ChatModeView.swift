@@ -153,7 +153,9 @@ struct ChatModeView: View {
                             .id(message.id)
                     }
                     if controller.chatVM.isGenerating {
-                        LoadingView(label: "Generating SQL with the local model…")
+                        LoadingView(
+                            label: "Generating SQL with the \(appState.activeBackendDisplayName)…"
+                        )
                             .id(Self.generatingID)
                     }
                     if controller.queryVM.isRunning {

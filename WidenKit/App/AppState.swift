@@ -105,14 +105,123 @@ public final class AppState {
     private static let useMockAIKey = "WidenUseMockAI"
     private static let selectedSessionKey = "WidenSelectedSessionID"
 
-    /// The active SQL generation backend.
+    /// Whether SQL generation uses the on-device model or the configured
+    /// cloud pro backend. The toolbar toggle flips this.
+    public var aiBackendMode: AIBackendMode =
+        AIBackendMode(
+            rawValue: UserDefaults.standard.string(forKey: AppState.aiBackendModeKey) ?? "")
+        ?? .local
+    {
+        didSet { UserDefaults.standard.set(aiBackendMode.rawValue, forKey: Self.aiBackendModeKey) }
+    }
+    private static let aiBackendModeKey = "WidenAIBackendMode"
+
+    /// Which provider serves cloud generations. Defaults to Apple's Private
+    /// Cloud Compute where the OS offers it, OpenRouter everywhere else.
+    public var cloudProvider: CloudAIProvider =
+        CloudAIProvider(
+            rawValue: UserDefaults.standard.string(forKey: AppState.cloudProviderKey) ?? "")
+        ?? (PCCSupport.isRuntimeSupported ? .applePCC : .openRouter)
+    {
+        didSet { UserDefaults.standard.set(cloudProvider.rawValue, forKey: Self.cloudProviderKey) }
+    }
+    private static let cloudProviderKey = "WidenCloudAIProvider"
+
+    /// The OpenRouter model ID used for cloud generations.
+    public var openRouterModelID: String =
+        UserDefaults.standard.string(forKey: AppState.openRouterModelIDKey)
+        ?? OpenRouterCatalog.defaultModelID
+    {
+        didSet {
+            UserDefaults.standard.set(openRouterModelID, forKey: Self.openRouterModelIDKey)
+        }
+    }
+    private static let openRouterModelIDKey = "WidenOpenRouterModelID"
+
+    /// Test seam, mirrors `titleGeneratorOverride`: `.some(value)` replaces
+    /// the Keychain lookup, including `.some(nil)` to force "no key stored".
+    var openRouterAPIKeyOverride: String??
+
+    /// Whether the chosen cloud provider can serve requests right now.
+    public var cloudBackendStatus: CloudBackendStatus {
+        switch cloudProvider {
+        case .applePCC:
+            if let message = PCCSupport.availabilityMessage {
+                return .unavailable(message)
+            }
+            return .ready
+        case .openRouter:
+            guard let key = openRouterAPIKey, !key.isEmpty else {
+                return .notConfigured("Add an OpenRouter API key in Settings › AI.")
+            }
+            guard !openRouterModelID.trimmingCharacters(in: .whitespaces).isEmpty else {
+                return .notConfigured("Choose an OpenRouter model in Settings › AI.")
+            }
+            return .ready
+        }
+    }
+
+    private var openRouterAPIKey: String? {
+        if let openRouterAPIKeyOverride { return openRouterAPIKeyOverride }
+        return (try? keychain.loadOpenRouterAPIKey()) ?? nil
+    }
+
+    /// Saves (empty deletes) the OpenRouter API key. Keychain only; the key
+    /// never touches UserDefaults.
+    public func setOpenRouterAPIKey(_ key: String) {
+        do {
+            try keychain.saveOpenRouterAPIKey(key)
+        } catch {
+            errorBanner = error.localizedDescription
+        }
+    }
+
+    /// The stored OpenRouter API key, for the Settings field.
+    public func loadOpenRouterAPIKey() -> String? {
+        do {
+            return try keychain.loadOpenRouterAPIKey()
+        } catch {
+            errorBanner = error.localizedDescription
+            return nil
+        }
+    }
+
+    /// The active SQL generation backend: mock wins, then the cloud backend
+    /// when selected and ready, then the on-device model.
     public var sqlGenerator: any SQLGenerator {
         if useMockAI { return MockSQLGenerator() }
+        if aiBackendMode == .cloud, case .ready = cloudBackendStatus {
+            switch cloudProvider {
+            case .openRouter:
+                if let key = openRouterAPIKey, !key.isEmpty {
+                    return OpenRouterSQLGenerator(apiKey: key, model: openRouterModelID)
+                }
+            case .applePCC:
+                if let generator = PCCSupport.makeGenerator() {
+                    return generator
+                }
+            }
+        }
         #if canImport(FoundationModels)
             return FoundationModelsSQLGenerator()
         #else
             return MockSQLGenerator()
         #endif
+    }
+
+    /// Short label for the backend now serving generations, used in the
+    /// generation spinner.
+    public var activeBackendDisplayName: String {
+        if useMockAI { return "mock generator" }
+        if aiBackendMode == .cloud, case .ready = cloudBackendStatus {
+            switch cloudProvider {
+            case .applePCC:
+                return "Apple Private Cloud Compute"
+            case .openRouter:
+                return "OpenRouter (\(OpenRouterCatalog.displayName(for: openRouterModelID)))"
+            }
+        }
+        return "local model"
     }
 
     /// The active session-title backend. Overridable for tests.
@@ -128,8 +237,19 @@ public final class AppState {
     var titleGeneratorOverride: (any SessionTitleGenerating)?
 
     /// nil when AI generation is ready; otherwise a user-readable reason.
+    /// In cloud mode an unusable provider surfaces here while generation
+    /// silently falls back to the on-device model.
     public var modelAvailabilityMessage: String? {
         if useMockAI { return nil }
+        if aiBackendMode == .cloud {
+            if let message = cloudBackendStatus.message {
+                return "\(message) Using the on-device model until then."
+            }
+            if cloudProvider == .applePCC {
+                return PCCSupport.quotaWarning
+            }
+            return nil
+        }
         #if canImport(FoundationModels)
             return FoundationModelsSQLGenerator.availabilityMessage
         #else
