@@ -151,10 +151,11 @@ NavigationSplitView
         run records render their ResultsCardView while cached
         + ComposerView pinned at the bottom
     .inspector: SchemaInspectorView (toolbar-toggled, scoped to the open schema)
-  toolbar: system sidebar toggle · breadcrumb (status dot · database › schema
-           menu) · local/cloud LLM toggle · inspector toggle (detail
-           trailing); window title removed. The light/dark toggle lives in
-           the sidebar footer next to "Add Database".
+  toolbar: custom sidebar toggle (system one removed — it lacks the glass
+           container) · breadcrumb (status dot · database › schema menu) ·
+           local/cloud LLM toggle · inspector toggle (detail trailing);
+           window title removed. The System/Light/Dark appearance switch
+           lives in the sidebar footer next to "Add Database".
 ```
 
 The breadcrumb is plain toolbar content on purpose: the macOS 26 toolbar
@@ -480,7 +481,7 @@ There are four implementations:
 when `aiBackendMode == .cloud` and `cloudBackendStatus == .ready`, then the
 local model. An unusable cloud selection falls back to local silently while
 `modelAvailabilityMessage` explains why (shown in the chat banner and
-Settings › AI). Session titles always use the on-device generator.
+Settings › LLM). Session titles always use the on-device generator.
 
 Preferences and secrets:
 
@@ -491,9 +492,9 @@ Preferences and secrets:
 | OpenRouter model ID | UserDefaults | `WidenOpenRouterModelID` |
 | OpenRouter API key | Keychain, service `Widen` | `openrouter-api-key` |
 
-The UI surface is the Settings › AI tab (`AISettingsView`) plus the
+The UI surface is the Settings › LLM tab (`LLMSettingsView`) plus the
 `AIBackendToggle` toolbar segmented control, which chooses local/cloud and
-opens Settings › AI when the cloud backend needs setup.
+opens Settings › LLM when the cloud backend needs setup.
 
 ### Private Cloud Compute entitlement and signing
 

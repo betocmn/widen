@@ -1,8 +1,9 @@
 import SwiftUI
 
-/// Model selection (local vs cloud pro), cloud provider configuration, and
-/// the developer mock toggle.
-struct AISettingsView: View {
+/// Configuration for the two LLM backends — the on-device model and the
+/// cloud pro provider — plus the developer mock toggle. Switching between
+/// Local and Cloud happens with the toolbar toggle, not here.
+struct LLMSettingsView: View {
     @Environment(AppState.self) private var appState
     @State private var apiKeyDraft = ""
     @State private var hasStoredKey = false
@@ -12,16 +13,25 @@ struct AISettingsView: View {
         @Bindable var appState = appState
 
         Form {
-            Section("Model") {
-                Picker("Model", selection: $appState.aiBackendMode) {
-                    Text("Local").tag(AIBackendMode.local)
-                    Text("Cloud Pro").tag(AIBackendMode.cloud)
+            Section("Local LLM") {
+                LabeledContent("Model", value: Self.localModelName)
+                Text(
+                    "Free and included with your Mac. Generation runs entirely on this device — your questions and schema never leave it, and it works offline."
+                )
+                .font(.callout)
+                .foregroundStyle(.secondary)
+                if let message = appState.localModelAvailabilityMessage {
+                    Label(message, systemImage: "exclamationmark.triangle")
+                        .font(.callout)
+                        .foregroundStyle(.orange)
+                } else {
+                    Label("The on-device model is ready.", systemImage: "checkmark.circle")
+                        .font(.callout)
+                        .foregroundStyle(.secondary)
                 }
-                .pickerStyle(.segmented)
-                statusLine
             }
 
-            Section("Cloud Provider") {
+            Section("Cloud LLM") {
                 Picker("Provider", selection: $appState.cloudProvider) {
                     ForEach(CloudAIProvider.allCases) { provider in
                         Text(provider.displayName).tag(provider)
@@ -46,7 +56,7 @@ struct AISettingsView: View {
 
             Section {
                 Text(
-                    "Cloud models are used for SQL generation only. Session titles always use the on-device model."
+                    "Switch between Local and Cloud with the toggle in the toolbar. Cloud models are used for SQL generation only; session titles always use the on-device model."
                 )
                 .font(.callout)
                 .foregroundStyle(.secondary)
@@ -56,20 +66,11 @@ struct AISettingsView: View {
         .onAppear(perform: load)
     }
 
-    @ViewBuilder
-    private var statusLine: some View {
-        if let message = appState.modelAvailabilityMessage {
-            Label(message, systemImage: "exclamationmark.triangle")
-                .font(.callout)
-                .foregroundStyle(.orange)
-        } else {
-            Label(
-                "Ready — generating SQL with \(appState.activeBackendDisplayName).",
-                systemImage: "checkmark.circle"
-            )
-            .font(.callout)
-            .foregroundStyle(.secondary)
-        }
+    /// e.g. "Apple Foundation Model · macOS 26.5" — the on-device model is
+    /// versioned by the OS that ships it.
+    private static var localModelName: String {
+        let version = ProcessInfo.processInfo.operatingSystemVersion
+        return "Apple Foundation Model · macOS \(version.majorVersion).\(version.minorVersion)"
     }
 
     @ViewBuilder
@@ -149,6 +150,25 @@ struct AISettingsView: View {
                 prompt: Text("provider/model-id")
             )
             .autocorrectionDisabled()
+        }
+
+        switch appState.cloudBackendStatus {
+        case .ready:
+            Label(
+                "OpenRouter is ready — \(OpenRouterCatalog.displayName(for: appState.openRouterModelID)).",
+                systemImage: "checkmark.circle"
+            )
+            .font(.callout)
+            .foregroundStyle(.secondary)
+        case .notConfigured(let message), .unavailable(let message):
+            // The shared status text points at this pane; "above" reads
+            // better when already here.
+            Label(
+                message.replacingOccurrences(of: " in Settings › LLM.", with: " above."),
+                systemImage: "exclamationmark.triangle"
+            )
+            .font(.callout)
+            .foregroundStyle(.orange)
         }
     }
 

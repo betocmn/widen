@@ -102,7 +102,7 @@ public final class OpenRouterSQLGenerator: SQLGenerator, Sendable {
             throw ResponseFormatUnsupported()
         case 401, 403:
             throw AppError.modelUnavailable(
-                "OpenRouter rejected the API key. Check it in Settings › AI.")
+                "OpenRouter rejected the API key. Check it in Settings › LLM.")
         case 402:
             throw AppError.modelUnavailable(
                 "Your OpenRouter account is out of credits. Add credits at openrouter.ai and try again."
@@ -214,7 +214,7 @@ public final class OpenRouterSQLGenerator: SQLGenerator, Sendable {
 
     private static func result(from data: Data) throws -> SQLGenerationResult {
         let parseFailure = AppError.modelGenerationFailed(
-            "The cloud model returned an unparseable response. Try again or pick a different model in Settings › AI."
+            "The cloud model returned an unparseable response. Try again or pick a different model in Settings › LLM."
         )
         guard
             let completion = try? JSONDecoder().decode(ChatResponse.self, from: data),

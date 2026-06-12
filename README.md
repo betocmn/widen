@@ -12,7 +12,7 @@ it safely - all locally.
 - **Optional cloud pro models.** Flip the toolbar cloud toggle to generate
   with a bigger model: **Apple Private Cloud Compute** (macOS 27+, free with
   a daily limit) or any model via your own **OpenRouter** API key. Configure
-  in Settings › AI; everything keeps working fully local if you never turn
+  in Settings › LLM; everything keeps working fully local if you never turn
   it on.
 - **Read-only by design.** Every statement (yours or the model's) goes through
   a deterministic safety validator: single `SELECT`/`WITH` statements only,
@@ -187,7 +187,7 @@ refreshes the active database's schema; **Cmd+,** opens Settings.
   certs. "Disabled" is the default for local Postgres.
 - **Model availability** is checked before each generation. If Apple
   Intelligence is off or the model is not downloaded, Widen says so and you
-  can keep writing SQL manually, configure a cloud model (Settings › AI), or
+  can keep writing SQL manually, configure a cloud model (Settings › LLM), or
   enable mock mode.
 - The on-device Foundation Models context window is small (~4k tokens). Very
   large schemas are truncated whole-table-at-a-time in the prompt; Widen

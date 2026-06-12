@@ -6,7 +6,7 @@ import SwiftUI
 /// to cramped icon-only segments. Plain content + a flat selection highlight
 /// keeps the system glass pill as the only rounded container.
 ///
-/// When no cloud backend is usable, choosing Cloud opens Settings › AI
+/// When no cloud backend is usable, choosing Cloud opens Settings › LLM
 /// instead of silently failing; a cloud mode that broke after being enabled
 /// shows a warning icon and can still be returned to Local.
 struct AIBackendToggle: View {
@@ -77,7 +77,7 @@ struct AIBackendToggle: View {
             if case .ready = appState.cloudBackendStatus {
                 appState.aiBackendMode = .cloud
             } else {
-                appState.openSettings(tab: .ai)
+                appState.openSettings(tab: .llm)
             }
         }
     }
@@ -91,7 +91,7 @@ struct AIBackendToggle: View {
         case .ready:
             "Generate SQL with \(appState.cloudProvider == .applePCC ? CloudAIProvider.applePCC.displayName : "\(OpenRouterCatalog.displayName(for: appState.openRouterModelID)) via OpenRouter"). Only your question and the relevant schema are sent to that provider — your database connection and query results never leave this Mac."
         case .notConfigured(let message), .unavailable(let message):
-            "\(message) Click to open Settings › AI. This switch only picks the LLM used for SQL generation."
+            "\(message) Click to open Settings › LLM. This switch only picks the LLM used for SQL generation."
         }
     }
 }

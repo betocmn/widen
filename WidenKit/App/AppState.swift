@@ -4,7 +4,7 @@ import Observation
 /// Which tab the Settings UI shows.
 public enum SettingsTab: String, Hashable, Sendable {
     case general
-    case ai
+    case llm
     case databases
     case archived
 }
@@ -117,12 +117,13 @@ public final class AppState {
     }
     private static let aiBackendModeKey = "WidenAIBackendMode"
 
-    /// Which provider serves cloud generations. Defaults to Apple's Private
-    /// Cloud Compute where the OS offers it, OpenRouter everywhere else.
+    /// Which provider serves cloud generations. Defaults to OpenRouter —
+    /// it works on every Mac today; Apple's Private Cloud Compute is an
+    /// explicit opt-in (and only surfaces its requirements once selected).
     public var cloudProvider: CloudAIProvider =
         CloudAIProvider(
             rawValue: UserDefaults.standard.string(forKey: AppState.cloudProviderKey) ?? "")
-        ?? (PCCSupport.isRuntimeSupported ? .applePCC : .openRouter)
+        ?? .openRouter
     {
         didSet { UserDefaults.standard.set(cloudProvider.rawValue, forKey: Self.cloudProviderKey) }
     }
@@ -153,10 +154,10 @@ public final class AppState {
             return .ready
         case .openRouter:
             guard let key = openRouterAPIKey, !key.isEmpty else {
-                return .notConfigured("Add an OpenRouter API key in Settings › AI.")
+                return .notConfigured("Add an OpenRouter API key in Settings › LLM.")
             }
             guard !openRouterModelID.trimmingCharacters(in: .whitespaces).isEmpty else {
-                return .notConfigured("Choose an OpenRouter model in Settings › AI.")
+                return .notConfigured("Choose an OpenRouter model in Settings › LLM.")
             }
             return .ready
         }
@@ -251,6 +252,13 @@ public final class AppState {
             }
             return nil
         }
+        return localModelAvailabilityMessage
+    }
+
+    /// nil when the on-device model is ready; otherwise a user-readable
+    /// reason. Mode-independent — Settings › LLM shows it for the Local
+    /// section regardless of the active backend.
+    public var localModelAvailabilityMessage: String? {
         #if canImport(FoundationModels)
             return FoundationModelsSQLGenerator.availabilityMessage
         #else

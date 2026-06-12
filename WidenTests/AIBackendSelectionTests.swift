@@ -118,6 +118,16 @@ struct AIBackendSelectionTests {
         #expect(state.activeBackendDisplayName == "the local model")
     }
 
+    /// OpenRouter works on every Mac today, so it is the default; Apple
+    /// PCC is an explicit opt-in.
+    @Test func defaultCloudProviderIsOpenRouter() {
+        clearDefaults()
+        let (state, dir) = makeState()
+        defer { cleanUp(dir) }
+
+        #expect(state.cloudProvider == .openRouter)
+    }
+
     @Test func backendPreferencesPersistAcrossStates() {
         clearDefaults()
         let (state, dir) = makeState()

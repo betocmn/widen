@@ -42,7 +42,6 @@
 		434A383C87AEEBA026425998 /* WidenKit.framework in Frameworks */ = {isa = PBXBuildFile; fileRef = A287B7ABA46C2CE732510671 /* WidenKit.framework */; };
 		44DC2644E6C9B468A01B836C /* PostgresErrorMapper.swift in Sources */ = {isa = PBXBuildFile; fileRef = D02148CFD54DB234244D6960 /* PostgresErrorMapper.swift */; };
 		45493C26C7093C53E7FA6CA7 /* ForeignKeyInfo.swift in Sources */ = {isa = PBXBuildFile; fileRef = 53B157FCABED3A63DEE715A3 /* ForeignKeyInfo.swift */; };
-		477E7A6EC25055FD81171E9B /* AISettingsView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 8C1EDE78DB5D390FD84A2D1E /* AISettingsView.swift */; };
 		48022A27EFAA78F2CBCC864D /* SidebarView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 55003AE18B47B04247233530 /* SidebarView.swift */; };
 		49D036B9E3F976916C4023DC /* SchemaStore.swift in Sources */ = {isa = PBXBuildFile; fileRef = F63EE53E94C2C5F8EDC5DD47 /* SchemaStore.swift */; };
 		4A75EC7A4C514B92BE04945E /* ResultsGridView.swift in Sources */ = {isa = PBXBuildFile; fileRef = A0D6E491DE3F8E28E3DE6BA0 /* ResultsGridView.swift */; };
@@ -52,6 +51,7 @@
 		6A5DB748205AD6A08CB83BAE /* SQLSafetyValidatorTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = D7D4F66164E5E8028A9EA325 /* SQLSafetyValidatorTests.swift */; };
 		6D0F36CCCD8C402EB80DA83D /* SessionStore.swift in Sources */ = {isa = PBXBuildFile; fileRef = DA1AA29704A0DF0B0D92E56E /* SessionStore.swift */; };
 		6EC15D2180D5E4E77FC806BC /* ArchivedSessionsSettingsView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 7F39F1CE52C85BAF2835DDB3 /* ArchivedSessionsSettingsView.swift */; };
+		753031F9DD6A8D6D27BCC293 /* LLMSettingsView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 9548C6FFDED1BB0553160789 /* LLMSettingsView.swift */; };
 		754F4B9CADE8E81CF7B3612F /* SessionDetailView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 003537221E8D09444ADD7EAD /* SessionDetailView.swift */; };
 		768DAF6FD7B82571653BDBDB /* ColumnInfo.swift in Sources */ = {isa = PBXBuildFile; fileRef = E36D97979AC640D93B5C30B6 /* ColumnInfo.swift */; };
 		769ABC9198C3975F0BC73673 /* SettingsView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 60016B4C1BD9B80A992A73A4 /* SettingsView.swift */; };
@@ -182,9 +182,9 @@
 		7DB60DBB4528001882E57C20 /* SessionTitleTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SessionTitleTests.swift; sourceTree = "<group>"; };
 		7F39F1CE52C85BAF2835DDB3 /* ArchivedSessionsSettingsView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ArchivedSessionsSettingsView.swift; sourceTree = "<group>"; };
 		82222A95EEF524D441242FD5 /* AIBackendSelectionTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AIBackendSelectionTests.swift; sourceTree = "<group>"; };
-		8C1EDE78DB5D390FD84A2D1E /* AISettingsView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AISettingsView.swift; sourceTree = "<group>"; };
 		8D3B5C38E209E366A7B9413D /* QueryExecutionService.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = QueryExecutionService.swift; sourceTree = "<group>"; };
 		8ED849CA57ABBA33C736A628 /* ResultsCardView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ResultsCardView.swift; sourceTree = "<group>"; };
+		9548C6FFDED1BB0553160789 /* LLMSettingsView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = LLMSettingsView.swift; sourceTree = "<group>"; };
 		980EE95F99B9CDF2F26BBC47 /* ErrorBannerView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ErrorBannerView.swift; sourceTree = "<group>"; };
 		9D65EBBAD5352C90A92D303B /* AIBackendPreferences.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AIBackendPreferences.swift; sourceTree = "<group>"; };
 		A0D6E491DE3F8E28E3DE6BA0 /* ResultsGridView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ResultsGridView.swift; sourceTree = "<group>"; };
@@ -319,11 +319,11 @@
 		6D3F3AF0D6866578C40832D5 /* Settings */ = {
 			isa = PBXGroup;
 			children = (
-				8C1EDE78DB5D390FD84A2D1E /* AISettingsView.swift */,
 				7F39F1CE52C85BAF2835DDB3 /* ArchivedSessionsSettingsView.swift */,
 				CAEBEF243DB2BC29B6767858 /* ConnectionEditorForm.swift */,
 				EFE23C70D785D014C2E39969 /* DatabasesSettingsView.swift */,
 				E15C23EAA90F2205B06AA400 /* GeneralSettingsView.swift */,
+				9548C6FFDED1BB0553160789 /* LLMSettingsView.swift */,
 				60016B4C1BD9B80A992A73A4 /* SettingsView.swift */,
 			);
 			path = Settings;
@@ -608,7 +608,6 @@
 			files = (
 				34F78902BE58D5CB8EC09301 /* AIBackendPreferences.swift in Sources */,
 				31F2B0EC39FE62106BB1B4DE /* AIBackendToggle.swift in Sources */,
-				477E7A6EC25055FD81171E9B /* AISettingsView.swift in Sources */,
 				91721D00C35BBE6A1B3B7BC5 /* AppError.swift in Sources */,
 				ED5BCEF2845478E58F7E3758 /* AppState.swift in Sources */,
 				0560EC58BEE91D9F98F5AC32 /* AppearancePreference.swift in Sources */,
@@ -635,6 +634,7 @@
 				677AC815A764B633F9F22D26 /* GenerationLog.swift in Sources */,
 				ADC54918FA78A02A2935BA0D /* HTTPTransport.swift in Sources */,
 				431CE0A39E21D2C174350BC7 /* KeychainService.swift in Sources */,
+				753031F9DD6A8D6D27BCC293 /* LLMSettingsView.swift in Sources */,
 				8C7B53F2B10338BB399CA9FA /* LoadingView.swift in Sources */,
 				982986ED6DA188054F14BCE9 /* MainView.swift in Sources */,
 				A8CC6487A4E0350CA83142BA /* MessageBubbleView.swift in Sources */,
