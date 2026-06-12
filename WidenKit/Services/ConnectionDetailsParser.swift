@@ -28,7 +28,6 @@ public enum ConnectionAutofillPromptBuilder {
         - For sslMode answer exactly one of: disable, prefer, require, unknown. \
         Map allow to prefer, and verify-ca or verify-full to require. \
         Answer unknown when SSL is not mentioned.
-        - Suggest a nickname only when the text clearly names the database or app; otherwise leave it empty.
         """
     }
 

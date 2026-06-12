@@ -6,11 +6,6 @@
     /// Structured output schema for paste-autofill extraction.
     @Generable(description: "PostgreSQL connection details found in the pasted text.")
     struct GeneratedConnectionDetails {
-        @Guide(
-            description:
-                "A short nickname for the connection, only when the text clearly names the database or app.")
-        var name: String?
-
         @Guide(description: "Hostname or IP address of the PostgreSQL server.")
         var host: String?
 
@@ -71,23 +66,26 @@
                     generating: GeneratedConnectionDetails.self,
                     options: GenerationOptions(sampling: .greedy, maximumResponseTokens: 512)
                 )
-                return Self.details(from: response.content)
+                return Self.details(from: response.content, pastedText: text)
             } catch let error as LanguageModelSession.GenerationError {
                 throw Self.map(error)
             }
         }
 
         private static func details(
-            from generated: GeneratedConnectionDetails
+            from generated: GeneratedConnectionDetails, pastedText: String
         ) -> ParsedConnectionDetails {
-            .sanitized(
-                name: generated.name,
+            // The small model sometimes answers an sslMode even when SSL never
+            // appears in the text, which would silently flip the user's SSL
+            // selection. Trust it only when the text mentions ssl.
+            let mentionsSSL = pastedText.range(of: "ssl", options: .caseInsensitive) != nil
+            return .sanitized(
                 host: generated.host,
                 port: generated.port,
                 database: generated.database,
                 username: generated.username,
                 password: generated.password,
-                sslModeText: generated.sslMode
+                sslModeText: mentionsSSL ? generated.sslMode : nil
             )
         }
 
