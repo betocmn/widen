@@ -6,9 +6,7 @@ import SwiftUI
 struct ComposerView: View {
     @Binding var text: String
     var isBusy: Bool
-    var databaseContext: String
     var onSubmit: () -> Void
-    var onEditContext: () -> Void
 
     @FocusState private var isComposerFocused: Bool
     @State private var didRequestInitialFocus = false
@@ -17,13 +15,9 @@ struct ComposerView: View {
         !isBusy && !text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
     }
 
-    private var hasDatabaseContext: Bool {
-        !databaseContext.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
-    }
-
     var body: some View {
-        // Conductor-style tall box: text grows from the top while low-emphasis
-        // context controls and the primary send action sit along the bottom.
+        // Conductor-style tall box: text grows from the top, with the primary
+        // send action sitting along the bottom edge.
         VStack(alignment: .leading, spacing: 8) {
             TextField(
                 "Ask in plain English, or write SQL directly…",
@@ -38,41 +32,6 @@ struct ComposerView: View {
             .frame(maxWidth: .infinity, alignment: .topLeading)
 
             HStack {
-                Button(action: onEditContext) {
-                    Label(
-                        hasDatabaseContext ? "Context added" : "Add context",
-                        systemImage: hasDatabaseContext
-                            ? "text.book.closed.fill" : "text.book.closed"
-                    )
-                    .font(.caption.weight(.medium))
-                    .padding(.horizontal, 9)
-                    .padding(.vertical, 6)
-                }
-                .buttonStyle(.plain)
-                .foregroundStyle(hasDatabaseContext ? Color.accentColor : Color.secondary)
-                .background {
-                    Capsule()
-                        .fill(
-                            hasDatabaseContext
-                                ? Color.accentColor.opacity(0.12)
-                                : Color.primary.opacity(0.06)
-                        )
-                }
-                .overlay {
-                    Capsule()
-                        .strokeBorder(
-                            hasDatabaseContext
-                                ? Color.accentColor.opacity(0.2)
-                                : Color.primary.opacity(0.1),
-                            lineWidth: 1
-                        )
-                }
-                .help(
-                    hasDatabaseContext
-                        ? "Edit extra context sent with natural-language questions"
-                        : "Add optional context for natural-language questions"
-                )
-
                 Spacer()
                 // No .keyboardShortcut(.defaultAction) here — the text field's
                 // onSubmit already handles Return; both would double-fire.

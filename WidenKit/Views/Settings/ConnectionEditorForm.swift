@@ -49,20 +49,31 @@ struct ConnectionEditorForm: View {
                                 .font(.caption)
                                 .foregroundStyle(.secondary)
 
-                            TextEditor(text: $viewModel.databaseContext)
-                                .font(.body)
-                                .scrollContentBackground(.hidden)
-                                .padding(6)
-                                .frame(minHeight: 120)
-                                .background(
-                                    Color(nsColor: .textBackgroundColor),
-                                    in: RoundedRectangle(cornerRadius: 6)
-                                )
-                                .overlay {
-                                    RoundedRectangle(cornerRadius: 6)
-                                        .stroke(Color.primary.opacity(0.12), lineWidth: 1)
+                            ZStack(alignment: .topLeading) {
+                                TextEditor(text: $viewModel.databaseContext)
+                                    .font(.body)
+                                    .scrollContentBackground(.hidden)
+                                    .padding(6)
+
+                                if viewModel.databaseContext.isEmpty {
+                                    Text("Optional additional context")
+                                        .font(.body)
+                                        .foregroundStyle(.tertiary)
+                                        .padding(.horizontal, 11)
+                                        .padding(.vertical, 14)
+                                        .allowsHitTesting(false)
                                 }
-                                .help("Included in the local model prompt before each text-to-SQL generation.")
+                            }
+                            .frame(minHeight: 120)
+                            .background(
+                                Color(nsColor: .textBackgroundColor),
+                                in: RoundedRectangle(cornerRadius: 6)
+                            )
+                            .overlay {
+                                RoundedRectangle(cornerRadius: 6)
+                                    .stroke(Color.primary.opacity(0.12), lineWidth: 1)
+                            }
+                            .help("Included in the local model prompt before each text-to-SQL generation.")
 
                             Text("\(viewModel.databaseContext.count) / \(SQLPromptBuilder.maxDatabaseContextCharacters.formatted()) characters")
                                 .font(.caption2.monospacedDigit())

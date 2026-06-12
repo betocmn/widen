@@ -44,12 +44,9 @@ struct ChatModeView: View {
                 text: $chatVM.input,
                 isBusy: controller.chatVM.isGenerating
                     || controller.queryVM.isRunning
-                    || isSchemaPreparing,
-                databaseContext: databaseContext
+                    || isSchemaPreparing
             ) {
                 Task { await controller.submit(appState: appState) }
-            } onEditContext: {
-                appState.openDatabaseSettings(connectionID: controller.connectionID)
             }
         }
     }
@@ -71,10 +68,6 @@ struct ChatModeView: View {
 
     private var connectionStatus: AppState.ConnectionStatus {
         appState.connectionState(controller.connectionID)
-    }
-
-    private var databaseContext: String {
-        appState.connection(for: controller.connectionID)?.databaseContext ?? ""
     }
 
     private var isSchemaPreparing: Bool {
