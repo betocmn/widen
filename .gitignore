@@ -17,3 +17,4 @@ xcuserdata/
 # Conductor
 .context/
 .conductor/settings.local.toml
+build-xcode27/

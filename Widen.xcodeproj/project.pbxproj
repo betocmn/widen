@@ -18,6 +18,7 @@
 		1674AC3275D4BD3B75C9F226 /* DatabaseOverviewView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 761F73A4F49799F8CADA0C29 /* DatabaseOverviewView.swift */; };
 		16E278E74057D1472B29CCFA /* AppStateSessionTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 0E1E314A98E9C24DB275395B /* AppStateSessionTests.swift */; };
 		16E7184CC8CEBDD110063DD0 /* QueryResult.swift in Sources */ = {isa = PBXBuildFile; fileRef = 62528AEFE710F6485BD8680B /* QueryResult.swift */; };
+		16FF5393670F9E93FD53B778 /* PrivateCloudComputeSQLGenerator.swift in Sources */ = {isa = PBXBuildFile; fileRef = 6D97D661282C7D49C7D9844A /* PrivateCloudComputeSQLGenerator.swift */; };
 		174D9DBB71A59BDCC9E707B8 /* OpenRouterSQLGenerator.swift in Sources */ = {isa = PBXBuildFile; fileRef = F6F18482BAFDA08E3E215F02 /* OpenRouterSQLGenerator.swift */; };
 		17B58BDBFC1AD9599BE083EC /* QuerySession.swift in Sources */ = {isa = PBXBuildFile; fileRef = 0B7BA9550419C079DAB74703 /* QuerySession.swift */; };
 		1B4AF2DDDDEF130CA473EE1F /* AppStateSchemaTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = A8D7D7EDCCE8B5638DAF4989 /* AppStateSchemaTests.swift */; };
@@ -83,6 +84,7 @@
 		DE0A58308400EE1367A39D5A /* FoundationModelsSQLGenerator.swift in Sources */ = {isa = PBXBuildFile; fileRef = 238DB6D552B7AF2D295338FD /* FoundationModelsSQLGenerator.swift */; };
 		DF579B887E407DE86D520359 /* SchemaViewModel.swift in Sources */ = {isa = PBXBuildFile; fileRef = 09FE1736941871937B17D50F /* SchemaViewModel.swift */; };
 		ED5BCEF2845478E58F7E3758 /* AppState.swift in Sources */ = {isa = PBXBuildFile; fileRef = 766339FF7AE746B877592F59 /* AppState.swift */; };
+		EE5904EE1D6F99457023AD50 /* PCCSupport.swift in Sources */ = {isa = PBXBuildFile; fileRef = C38FD0CDC37E536A0ACD0BBD /* PCCSupport.swift */; };
 		EF753E2965C53200E0302956 /* DatabaseSchema.swift in Sources */ = {isa = PBXBuildFile; fileRef = F09E72C449EE7A5A9A66BD9F /* DatabaseSchema.swift */; };
 		EF9CE627C80199A8351EF201 /* SQLPromptBuilderTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 352C4B3A2C622CAEC8466E27 /* SQLPromptBuilderTests.swift */; };
 		F56A4AE65EBEE8EA32929E7F /* ErrorBannerView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 980EE95F99B9CDF2F26BBC47 /* ErrorBannerView.swift */; };
@@ -145,6 +147,7 @@
 		2B82C454D2705BD1520A0263 /* TableInfo.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = TableInfo.swift; sourceTree = "<group>"; };
 		2DAAF8DAFFED5A966828C8C4 /* SQLGenerationResult.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SQLGenerationResult.swift; sourceTree = "<group>"; };
 		352C4B3A2C622CAEC8466E27 /* SQLPromptBuilderTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SQLPromptBuilderTests.swift; sourceTree = "<group>"; };
+		3F4D5F2F87350CA819E01F58 /* Widen.entitlements */ = {isa = PBXFileReference; lastKnownFileType = text.plist.entitlements; path = Widen.entitlements; sourceTree = "<group>"; };
 		4089BA52528E9EEAC2396AB2 /* Widen.app */ = {isa = PBXFileReference; explicitFileType = wrapper.application; includeInIndex = 0; path = Widen.app; sourceTree = BUILT_PRODUCTS_DIR; };
 		420B7A0BDD583B0ABE7D2E25 /* Info.plist */ = {isa = PBXFileReference; lastKnownFileType = text.plist; path = Info.plist; sourceTree = "<group>"; };
 		45FEB67F1A613C00B3549BE5 /* ChatViewModel.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ChatViewModel.swift; sourceTree = "<group>"; };
@@ -161,6 +164,7 @@
 		6399B3911003C49C8E5A23BB /* FoundationModelsTitleGenerator.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = FoundationModelsTitleGenerator.swift; sourceTree = "<group>"; };
 		6765AEA72CE58BC6D644FE4C /* SchemaStoreTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SchemaStoreTests.swift; sourceTree = "<group>"; };
 		6BA8E6CFAEE004F6DB3C4D6B /* SQLPromptBuilder.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SQLPromptBuilder.swift; sourceTree = "<group>"; };
+		6D97D661282C7D49C7D9844A /* PrivateCloudComputeSQLGenerator.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PrivateCloudComputeSQLGenerator.swift; sourceTree = "<group>"; };
 		6DBE4DAF98A714DFDE7DF54E /* ConnectionStore.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ConnectionStore.swift; sourceTree = "<group>"; };
 		6E93D92D37A8796CFBFBD827 /* SessionTitleGenerator.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SessionTitleGenerator.swift; sourceTree = "<group>"; };
 		6E9720CC8F348FC64D404436 /* SQLCardView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SQLCardView.swift; sourceTree = "<group>"; };
@@ -185,6 +189,7 @@
 		B5703BAB8838F625973C3D22 /* ComposerView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ComposerView.swift; sourceTree = "<group>"; };
 		B594613B4437F5693FC5294D /* GenerationLog.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = GenerationLog.swift; sourceTree = "<group>"; };
 		B99D0685D8BE2B80381201F0 /* OpenRouterSQLGeneratorTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = OpenRouterSQLGeneratorTests.swift; sourceTree = "<group>"; };
+		C38FD0CDC37E536A0ACD0BBD /* PCCSupport.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PCCSupport.swift; sourceTree = "<group>"; };
 		C69FF94E360E9E0F027F2AAA /* MockSQLGenerator.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MockSQLGenerator.swift; sourceTree = "<group>"; };
 		C776863B980AE74374EED3DD /* FoundationModelsSmokeTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = FoundationModelsSmokeTests.swift; sourceTree = "<group>"; };
 		CAEBEF243DB2BC29B6767858 /* ConnectionEditorForm.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ConnectionEditorForm.swift; sourceTree = "<group>"; };
@@ -343,9 +348,11 @@
 				A3B9A1CC6E0205BFB23382B5 /* KeychainService.swift */,
 				C69FF94E360E9E0F027F2AAA /* MockSQLGenerator.swift */,
 				F6F18482BAFDA08E3E215F02 /* OpenRouterSQLGenerator.swift */,
+				C38FD0CDC37E536A0ACD0BBD /* PCCSupport.swift */,
 				AFAE5FF61F0206972133B567 /* PostgresCellFormatter.swift */,
 				D02148CFD54DB234244D6960 /* PostgresErrorMapper.swift */,
 				EC8949F7F4C8FC5E472D3909 /* PostgresService.swift */,
+				6D97D661282C7D49C7D9844A /* PrivateCloudComputeSQLGenerator.swift */,
 				8D3B5C38E209E366A7B9413D /* QueryExecutionService.swift */,
 				5A2C062CE92CC29EB34DC339 /* SchemaIntrospectionService.swift */,
 				F63EE53E94C2C5F8EDC5DD47 /* SchemaStore.swift */,
@@ -392,6 +399,7 @@
 			children = (
 				E271C5B65AC35B837AD0BD6C /* Assets.xcassets */,
 				420B7A0BDD583B0ABE7D2E25 /* Info.plist */,
+				3F4D5F2F87350CA819E01F58 /* Widen.entitlements */,
 				0F3DF98ED93232966E34F946 /* WidenApp.swift */,
 			);
 			path = Widen;
@@ -613,9 +621,11 @@
 				7B8853EF36A5A764F648AF6C /* MockSQLGenerator.swift in Sources */,
 				4C68CAA36470F5443E52AC15 /* OpenRouterCatalog.swift in Sources */,
 				174D9DBB71A59BDCC9E707B8 /* OpenRouterSQLGenerator.swift in Sources */,
+				EE5904EE1D6F99457023AD50 /* PCCSupport.swift in Sources */,
 				C502AEC63AC48859043019A9 /* PostgresCellFormatter.swift in Sources */,
 				44DC2644E6C9B468A01B836C /* PostgresErrorMapper.swift in Sources */,
 				AFA418FA05A4579D14F1DA77 /* PostgresService.swift in Sources */,
+				16FF5393670F9E93FD53B778 /* PrivateCloudComputeSQLGenerator.swift in Sources */,
 				98CECE67670288333751B170 /* QueryExecutionService.swift in Sources */,
 				16E7184CC8CEBDD110063DD0 /* QueryResult.swift in Sources */,
 				31AAD4FFD25B413C6BB2410E /* QueryResultViewModel.swift in Sources */,

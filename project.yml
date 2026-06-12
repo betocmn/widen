@@ -57,6 +57,15 @@ targets:
         ASSETCATALOG_COMPILER_APPICON_NAME: AppIcon
         ENABLE_HARDENED_RUNTIME: NO
         LD_RUNPATH_SEARCH_PATHS: "$(inherited) @executable_path/../Frameworks"
+        # Private Cloud Compute needs the Apple-managed entitlement in
+        # Widen/Widen.entitlements, which cannot ship on an ad-hoc signed
+        # build (macOS kills the app at launch). Once Apple grants access
+        # (https://developer.apple.com/private-cloud-compute/) and a real
+        # signing identity exists, add here:
+        #   CODE_SIGN_ENTITLEMENTS: Widen/Widen.entitlements
+        #   CODE_SIGN_STYLE: Automatic
+        #   DEVELOPMENT_TEAM: <team id>
+        # and build with Xcode 27+ so the PCC code path is compiled in.
 
   WidenTests:
     type: bundle.unit-test
