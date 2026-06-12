@@ -61,6 +61,30 @@ the MVP so it can connect to local PostgreSQL without provisioning. See the
 README for user-facing caveats around Keychain prompts and Postgres.app client
 permissions.
 
+### Dual toolchains: Xcode 26 and Xcode 27 beta
+
+The Private Cloud Compute backend uses APIs that only exist in the macOS 27
+SDK (Xcode 27, Swift 6.4). The project must keep building with both
+toolchains:
+
+```sh
+# Default toolchain (Xcode 26): users build with this today.
+make project && make build && make test
+
+# Xcode 27 beta: compiles the PCC code path in. Separate derived data so
+# SDK caches never mix; build-xcode27/ is gitignored.
+DEVELOPER_DIR=/Applications/Xcode-beta.app/Contents/Developer \
+  xcodebuild -project Widen.xcodeproj -scheme Widen -configuration Debug \
+  -derivedDataPath build-xcode27 build
+```
+
+All PCC symbols live behind `#if compiler(>=6.4) && canImport(FoundationModels)`
+(compile gate) plus `#available(macOS 27.0, *)` (runtime gate). The deployment
+target stays macOS 26.0: a 27-SDK build still runs on macOS 26 and reports PCC
+as unavailable there. Everything outside `PrivateCloudComputeSQLGenerator.swift`
+reaches PCC only through the always-compiled `PCCSupport` facade — keep it that
+way, or Xcode 26 builds break.
+
 ## Runtime Object Graph
 
 The central object is `AppState` in `WidenKit/App/AppState.swift`.
@@ -430,12 +454,62 @@ public protocol SQLGenerator: Sendable {
 }
 ```
 
-There are two implementations:
+There are four implementations:
 
 - `MockSQLGenerator`: deterministic development fallback returning a safe
   `SELECT 1 AS test_value` query.
 - `FoundationModelsSQLGenerator`: real local generation using Apple's
   Foundation Models framework.
+- `OpenRouterSQLGenerator`: cloud generation through OpenRouter's
+  OpenAI-compatible chat-completions API, with the user's API key and chosen
+  model (`OpenRouterCatalog` curates the picker; any custom ID works). Strict
+  JSON-schema output mirroring `GeneratedSQLResponse`, one retry without
+  `response_format` for models that reject it, and a 60,000-character schema
+  budget. HTTP goes through the injectable `HTTPTransport` seam so tests stub
+  the network.
+- `PrivateCloudComputeSQLGenerator`: Apple's server-side foundation model on
+  Private Cloud Compute (announced WWDC 2026) — the same session and
+  `@Generable` shape as the local generator with a 24,000-character schema
+  budget. Compile-gated to the macOS 27 SDK and runtime-gated to macOS 27;
+  see "Dual toolchains" above and "Cloud backend selection" below.
+
+### Cloud backend selection
+
+`AppState.sqlGenerator` picks the backend: mock wins, then the cloud provider
+when `aiBackendMode == .cloud` and `cloudBackendStatus == .ready`, then the
+local model. An unusable cloud selection falls back to local silently while
+`modelAvailabilityMessage` explains why (shown in the chat banner and
+Settings › AI). Session titles always use the on-device generator.
+
+Preferences and secrets:
+
+| What | Where | Key / account |
+|---|---|---|
+| Backend mode (`local`/`cloud`) | UserDefaults | `WidenAIBackendMode` |
+| Cloud provider (`applePCC`/`openRouter`) | UserDefaults | `WidenCloudAIProvider` |
+| OpenRouter model ID | UserDefaults | `WidenOpenRouterModelID` |
+| OpenRouter API key | Keychain, service `Widen` | `openrouter-api-key` |
+
+The UI surface is the Settings › AI tab (`AISettingsView`) plus the
+`AIBackendToggle` toolbar button, which flips local/cloud and opens
+Settings › AI when the cloud backend needs setup.
+
+### Private Cloud Compute entitlement and signing
+
+PCC requires the Apple-managed entitlement
+`com.apple.developer.private-cloud-compute` (request access at
+https://developer.apple.com/private-cloud-compute/). The entitlements file is
+committed at `Widen/Widen.entitlements` but **not wired into the build**: a
+restricted entitlement on an ad-hoc signed binary without a provisioning
+profile makes macOS kill the app at launch. Once Apple grants access and a
+real signing identity exists, set `CODE_SIGN_ENTITLEMENTS`, a real
+`DEVELOPMENT_TEAM`, and automatic signing in `project.yml` (see the comment
+there), and build with Xcode 27+.
+
+What cannot be verified on a macOS 26 machine: actual PCC generation, the
+quota UI, and entitlement behavior. The PCC path is exercised only to its
+availability checks; everything reports through
+`PCCSupport.availabilityMessage`.
 
 `FoundationModelsSQLGenerator` is conditionally compiled with:
 

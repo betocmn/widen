@@ -1,28 +1,35 @@
 # Widen
 
 Free, local and open-source Postgres GUI for your Mac, with natural language
-to SQL support, fully offline.
+to SQL support — fully offline by default, with optional cloud pro models.
 
 Widen introspects your schema, drafts a read-only SQL query with **Apple's
 on-device Foundation Model**, shows you the SQL to review and edit, and runs
 it safely - all locally.
 
-- **Local-only.** No backend, no accounts, no analytics, no external LLM APIs.
-  The only network connection is the PostgreSQL connection you configure.
+- **Local by default.** No backend, no accounts, no analytics. Out of the box
+  the only network connection is the PostgreSQL connection you configure.
+- **Optional cloud pro models.** Flip the toolbar cloud toggle to generate
+  with a bigger model: **Apple Private Cloud Compute** (macOS 27+, free with
+  a daily limit) or any model via your own **OpenRouter** API key. Configure
+  in Settings › AI; everything keeps working fully local if you never turn
+  it on.
 - **Read-only by design.** Every statement (yours or the model's) goes through
   a deterministic safety validator: single `SELECT`/`WITH` statements only,
   executed inside a `READ ONLY` transaction with a statement timeout and a row
   limit.
-- **Private.** Prompts go to Apple's local Foundation Model through macOS.
-  Your schema and queries never leave your machine. Passwords live in the
-  macOS Keychain, never on disk in plaintext.
+- **Private.** By default prompts go to Apple's local Foundation Model through
+  macOS and your schema and queries never leave your machine. With a cloud pro
+  model enabled, your questions and the relevant schema go to the provider you
+  chose — query results still never leave your Mac. Passwords and API keys
+  live in the macOS Keychain, never on disk in plaintext.
 - **Multiple databases, persistent sessions.** Configure any number of
   PostgreSQL connections in Settings; each one is a group in the sidebar.
   Select a database to browse its schema, or press "+" on it to start a
   query session — a persistent chat + SQL + results workspace that survives
   restarts and is auto-named by the local model after your first question.
 - **Modern macOS 26 look.** Liquid Glass styling, a schema inspector panel,
-  and a light/dark toggle in the toolbar (or follow the system).
+  and light/dark and local/cloud toggles in the toolbar.
 
 ## Requirements
 
@@ -179,10 +186,17 @@ refreshes the active database's schema; **Cmd+,** opens Settings.
   certs. "Disabled" is the default for local Postgres.
 - **Model availability** is checked before each generation. If Apple
   Intelligence is off or the model is not downloaded, Widen says so and you
-  can keep writing SQL manually or enable mock mode (Settings › General).
-- The Foundation Models context window is small (~4k tokens). Very large
-  schemas are truncated whole-table-at-a-time in the prompt; Widen retries
-  once with a tighter budget if the window is exceeded.
+  can keep writing SQL manually, configure a cloud model (Settings › AI), or
+  enable mock mode.
+- The on-device Foundation Models context window is small (~4k tokens). Very
+  large schemas are truncated whole-table-at-a-time in the prompt; Widen
+  retries once with a tighter budget if the window is exceeded. Cloud models
+  get a much larger schema budget.
+- **Apple Private Cloud Compute** (announced WWDC 2026) needs macOS 27, a
+  build made with Xcode 27, and Apple's `com.apple.developer.private-cloud-compute`
+  entitlement on a properly signed build — see
+  [docs/implementation-guide.md](docs/implementation-guide.md). On macOS 26,
+  use OpenRouter for cloud generation instead.
 
 ## MVP limitations
 
