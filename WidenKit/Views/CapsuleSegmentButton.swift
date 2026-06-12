@@ -48,15 +48,17 @@ struct CapsuleSegmentButton: View {
     }
 }
 
-/// Capsule hover tint for borderless buttons (footer, inline headers),
-/// which macOS leaves without any hover feedback.
+/// Capsule hover tint for borderless buttons (footer, inline headers, row
+/// icons), which macOS leaves without any hover feedback.
 struct HoverHighlight: ViewModifier {
+    var horizontalPadding: CGFloat = 6
+    var verticalPadding: CGFloat = 3
     @State private var isHovering = false
 
     func body(content: Content) -> some View {
         content
-            .padding(.horizontal, 6)
-            .padding(.vertical, 3)
+            .padding(.horizontal, horizontalPadding)
+            .padding(.vertical, verticalPadding)
             .background {
                 if isHovering {
                     Capsule().fill(.primary.opacity(0.07))
@@ -66,8 +68,26 @@ struct HoverHighlight: ViewModifier {
     }
 }
 
+/// Hover feedback for buttons that draw their own shape (glass, bordered):
+/// a slight brightness lift instead of an extra background.
+struct HoverBrightness: ViewModifier {
+    @State private var isHovering = false
+
+    func body(content: Content) -> some View {
+        content
+            .brightness(isHovering ? 0.08 : 0)
+            .onHover { isHovering = $0 }
+    }
+}
+
 extension View {
-    func hoverHighlight() -> some View {
-        modifier(HoverHighlight())
+    func hoverHighlight(horizontalPadding: CGFloat = 6, verticalPadding: CGFloat = 3) -> some View {
+        modifier(
+            HoverHighlight(
+                horizontalPadding: horizontalPadding, verticalPadding: verticalPadding))
+    }
+
+    func hoverBrightness() -> some View {
+        modifier(HoverBrightness())
     }
 }

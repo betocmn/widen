@@ -42,6 +42,7 @@ struct ComposerView: View {
                 }
                 .buttonStyle(.glassProminent)
                 .buttonBorderShape(.circle)
+                .hoverBrightness()
                 .disabled(!canSubmit)
                 .help("Send")
             }

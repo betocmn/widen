@@ -165,6 +165,7 @@ struct ChatModeView: View {
                                 controller.queryVM.cancelRun()
                             }
                             .controlSize(.small)
+                            .hoverBrightness()
                         }
                         .id(Self.runningID)
                     }
@@ -359,6 +360,7 @@ private struct SchemaEmptyStatusView: View {
             if status.canRefresh {
                 Button("Refresh Schema", action: refresh)
                     .buttonStyle(.glass)
+                    .hoverBrightness()
             }
         }
     }
