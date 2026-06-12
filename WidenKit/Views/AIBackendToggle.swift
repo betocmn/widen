@@ -1,39 +1,72 @@
 import SwiftUI
 
 /// Toolbar switch between the on-device model and the configured cloud pro
-/// model. When no cloud backend is usable, choosing Cloud guides the user to
-/// Settings › AI instead of silently failing; a cloud mode that broke after
-/// being enabled shows a warning icon and can still be returned to Local.
+/// model, drawn as a two-segment capsule with icon + label per side. Custom
+/// control on purpose: a segmented `Picker` in the macOS 26 toolbar collapses
+/// to cramped icon-only segments. Plain content + a flat selection highlight
+/// keeps the system glass pill as the only rounded container.
+///
+/// When no cloud backend is usable, choosing Cloud opens Settings › AI
+/// instead of silently failing; a cloud mode that broke after being enabled
+/// shows a warning icon and can still be returned to Local.
 struct AIBackendToggle: View {
     @Environment(AppState.self) private var appState
 
     var body: some View {
-        Picker("LLM", selection: backendMode) {
-            Label("Local", systemImage: "lock.shield")
-                .tag(AIBackendMode.local)
-            Label("Cloud", systemImage: cloudIcon)
-                .tag(AIBackendMode.cloud)
+        HStack(spacing: 2) {
+            segment(
+                mode: .local,
+                title: "Local",
+                icon: "shield.lefthalf.filled",
+                help: localHelp
+            )
+            segment(
+                mode: .cloud,
+                title: "Cloud",
+                icon: isCloudBroken ? "exclamationmark.icloud.fill" : "cloud.fill",
+                help: cloudHelp
+            )
         }
-        .pickerStyle(.segmented)
-        .controlSize(.small)
-        .fixedSize()
-        .help(helpText)
+        .padding(.horizontal, 4)
+        .accessibilityElement(children: .contain)
         .accessibilityLabel("LLM backend")
     }
 
-    private var backendMode: Binding<AIBackendMode> {
-        Binding(
-            get: { appState.aiBackendMode },
-            set: { select($0) }
-        )
+    private func segment(
+        mode: AIBackendMode, title: String, icon: String, help: String
+    ) -> some View {
+        let isSelected = appState.aiBackendMode == mode
+        let isWarning = mode == .cloud && isCloudBroken
+        return Button {
+            select(mode)
+        } label: {
+            HStack(spacing: 5) {
+                Image(systemName: icon)
+                    .font(.system(size: 11, weight: .medium))
+                Text(title)
+                    .font(.callout)
+            }
+            .foregroundStyle(
+                isWarning
+                    ? AnyShapeStyle(.orange)
+                    : (isSelected ? AnyShapeStyle(.primary) : AnyShapeStyle(.secondary))
+            )
+            .padding(.horizontal, 10)
+            .padding(.vertical, 4)
+            .background {
+                if isSelected {
+                    Capsule().fill(.primary.opacity(0.12))
+                }
+            }
+            .contentShape(Capsule())
+        }
+        .buttonStyle(.plain)
+        .help(help)
+        .accessibilityAddTraits(isSelected ? .isSelected : [])
     }
 
-    private var cloudIcon: String {
-        if appState.aiBackendMode == .cloud, appState.cloudBackendStatus != .ready {
-            "exclamationmark.icloud"
-        } else {
-            "cloud"
-        }
+    private var isCloudBroken: Bool {
+        appState.aiBackendMode == .cloud && appState.cloudBackendStatus != .ready
     }
 
     private func select(_ mode: AIBackendMode) {
@@ -49,16 +82,16 @@ struct AIBackendToggle: View {
         }
     }
 
-    private var helpText: String {
-        switch (appState.aiBackendMode, appState.cloudBackendStatus) {
-        case (.cloud, .ready):
-            "Using \(appState.activeBackendDisplayName) for LLM SQL generation. Questions and relevant schema may go to the selected provider; database connections and query results do not."
-        case (.cloud, _):
-            "\(appState.cloudBackendStatus.message ?? "The cloud model is unavailable.") This setting only controls the LLM used for SQL generation; choose Local to keep generation on this Mac."
-        case (.local, .ready):
-            "Using the local model for LLM SQL generation. This does not send everything to the cloud; choose Cloud only to use \(appState.cloudProvider.displayName) for generation."
-        case (.local, _):
-            "Using the local model for LLM SQL generation. Cloud needs setup in Settings › AI; this toggle only affects the model that turns questions into SQL."
+    private var localHelp: String {
+        "Generate SQL with Apple's on-device model — your questions and schema stay on this Mac. This switch only picks the LLM that turns questions into SQL; nothing else moves to the cloud."
+    }
+
+    private var cloudHelp: String {
+        switch appState.cloudBackendStatus {
+        case .ready:
+            "Generate SQL with \(appState.cloudProvider == .applePCC ? CloudAIProvider.applePCC.displayName : "\(OpenRouterCatalog.displayName(for: appState.openRouterModelID)) via OpenRouter"). Only your question and the relevant schema are sent to that provider — your database connection and query results never leave this Mac."
+        case .notConfigured(let message), .unavailable(let message):
+            "\(message) Click to open Settings › AI. This switch only picks the LLM used for SQL generation."
         }
     }
 }
