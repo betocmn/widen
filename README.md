@@ -130,8 +130,11 @@ delete it forever from Settings › Archived Sessions.
 The schema browser lives in a right-hand inspector — toggle it from the
 toolbar. The toolbar breadcrumb (`database › schema`) and the inspector's
 picker both switch the open schema; the table list and the AI's context are
-scoped to it. The sun/moon toolbar button flips light/dark mode; pick
-"System" in Settings › General to follow macOS again.
+scoped to it. Schema snapshots are cached in
+`~/Library/Application Support/Widen/schemas.json` so the last known schema is
+available immediately on relaunch; Refresh Schema fetches the live structure
+and updates that cache. The sun/moon toolbar button flips light/dark mode;
+pick "System" in Settings › General to follow macOS again.
 
 ## How a query runs
 
