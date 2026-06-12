@@ -31,30 +31,17 @@ public struct MainView: View {
             // wider than the clamped window and the panes clip their edges.
             .frame(minWidth: 420, idealWidth: 560)
             // The sidebar keeps the system toggle in its own section; the
-            // inspector toggle sits at the window's trailing corner — the
-            // only spot macOS allows trailing toolbar items.
+            // appearance and inspector toggles sit at the detail column's
+            // trailing edge.
             .toolbar {
                 ToolbarItem(placement: .navigation) {
                     breadcrumb
                 }
                 ToolbarItem(placement: .navigation) {
-                    Button {
-                        toggleAppearance()
-                    } label: {
-                        Label(
-                            colorScheme == .dark ? "Switch to Light Mode" : "Switch to Dark Mode",
-                            systemImage: colorScheme == .dark ? "sun.max" : "moon"
-                        )
-                    }
-                    .help(
-                        colorScheme == .dark
-                            ? "Switch to light mode (reset to System in Settings › General)"
-                            : "Switch to dark mode (reset to System in Settings › General)")
-                }
-                ToolbarItem(placement: .navigation) {
                     AIBackendToggle()
                 }
-                ToolbarItem(placement: .primaryAction) {
+                ToolbarItemGroup(placement: .primaryAction) {
+                    appearanceToggle
                     SchemaInspectorToggle()
                 }
             }
@@ -153,6 +140,22 @@ public struct MainView: View {
     private func toggleAppearance() {
         let next: AppearancePreference = colorScheme == .dark ? .light : .dark
         appearanceRaw = next.rawValue
+    }
+
+    private var appearanceToggle: some View {
+        Button {
+            toggleAppearance()
+        } label: {
+            Label(
+                colorScheme == .dark ? "Switch to Light Mode" : "Switch to Dark Mode",
+                systemImage: colorScheme == .dark ? "sun.max" : "moon"
+            )
+            .labelStyle(.iconOnly)
+        }
+        .help(
+            colorScheme == .dark
+                ? "Switch to light mode (reset to System in Settings › General)"
+                : "Switch to dark mode (reset to System in Settings › General)")
     }
 
     @ViewBuilder

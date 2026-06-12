@@ -152,8 +152,8 @@ NavigationSplitView
         + ComposerView pinned at the bottom
     .inspector: SchemaInspectorView (toolbar-toggled, scoped to the open schema)
   toolbar: system sidebar toggle · breadcrumb (status dot · database › schema
-           menu) · light/dark toggle · inspector toggle (window trailing);
-           window title removed
+           menu) · local/cloud LLM segmented toggle · light/dark toggle ·
+           inspector toggle (detail trailing); window title removed
 ```
 
 The breadcrumb is plain toolbar content on purpose: the macOS 26 toolbar
@@ -491,8 +491,8 @@ Preferences and secrets:
 | OpenRouter API key | Keychain, service `Widen` | `openrouter-api-key` |
 
 The UI surface is the Settings › AI tab (`AISettingsView`) plus the
-`AIBackendToggle` toolbar button, which flips local/cloud and opens
-Settings › AI when the cloud backend needs setup.
+`AIBackendToggle` toolbar segmented control, which chooses local/cloud and
+opens Settings › AI when the cloud backend needs setup.
 
 ### Private Cloud Compute entitlement and signing
 
@@ -730,9 +730,9 @@ Key views:
 - `LoadingView`: small reusable loading indicator.
 
 Appearance: the `"WidenAppearance"` AppStorage key (`AppearancePreference`)
-drives `.preferredColorScheme` on the window and Settings roots. The toolbar
-sun/moon button flips to the opposite of the effective scheme; the "System"
-reset lives in Settings › General. Liquid Glass styling (`.glassEffect`,
+drives `.preferredColorScheme` on the window and Settings roots. The detail
+toolbar sun/moon button flips to the opposite of the effective scheme; the
+"System" reset lives in Settings › General. Liquid Glass styling (`.glassEffect`,
 `.buttonStyle(.glass)/.glassProminent`) is used for the composer, primary
 buttons, user chat bubbles, and the error banner; the toolbar breadcrumb,
 sidebar, inspector, transcript bubbles, and results grid intentionally keep
