@@ -1,0 +1,98 @@
+import SwiftUI
+
+/// Paste-autofill sheet: the user pastes connection details in any format
+/// (URL, .env entries, prose) and the local model fills the editor form.
+/// Only reachable when a local parser is available — the pasted text never
+/// leaves the Mac.
+struct ConnectionAutofillSheet: View {
+    @Bindable var viewModel: ConnectionSettingsViewModel
+    var parser: any ConnectionDetailsParsing
+    var onDone: () -> Void
+
+    @FocusState private var editorFocused: Bool
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 12) {
+            Label("Paste Connection Details", systemImage: "doc.on.clipboard")
+                .font(.headline)
+
+            Text(
+                "Paste a connection URL, .env entries, or any text that mentions the host, database, and credentials. Apple's on-device model reads it and fills the form — nothing leaves this Mac."
+            )
+            .font(.caption)
+            .foregroundStyle(.secondary)
+            .fixedSize(horizontal: false, vertical: true)
+
+            ZStack(alignment: .topLeading) {
+                TextEditor(text: $viewModel.autofillText)
+                    .font(.body.monospaced())
+                    .scrollContentBackground(.hidden)
+                    .padding(6)
+                    .focused($editorFocused)
+
+                if viewModel.autofillText.isEmpty {
+                    Text("postgres://user:password@host:5432/database?sslmode=require\n\nor\n\nDB_HOST=…\nDB_NAME=…\nDB_PASSWORD=…")
+                        .font(.body.monospaced())
+                        .foregroundStyle(.tertiary)
+                        .padding(.horizontal, 11)
+                        .padding(.vertical, 14)
+                        .allowsHitTesting(false)
+                }
+            }
+            .frame(minHeight: 150)
+            .background(
+                Color(nsColor: .textBackgroundColor),
+                in: RoundedRectangle(cornerRadius: 6)
+            )
+            .overlay {
+                RoundedRectangle(cornerRadius: 6)
+                    .stroke(Color.primary.opacity(0.12), lineWidth: 1)
+            }
+
+            if case .failure(let message) = viewModel.autofillState {
+                Label(message, systemImage: "exclamationmark.triangle.fill")
+                    .font(.callout)
+                    .foregroundStyle(.red)
+                    .fixedSize(horizontal: false, vertical: true)
+            }
+
+            HStack(spacing: 12) {
+                if viewModel.autofillState == .parsing {
+                    ProgressView()
+                        .controlSize(.small)
+                    Text("Reading details…")
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                }
+
+                Spacer()
+
+                Button("Cancel") {
+                    viewModel.resetAutofill()
+                    onDone()
+                }
+                .keyboardShortcut(.cancelAction)
+
+                Button {
+                    Task {
+                        if await viewModel.autofill(using: parser) {
+                            onDone()
+                        }
+                    }
+                } label: {
+                    Label("Fill Form", systemImage: "wand.and.stars")
+                }
+                .buttonStyle(.borderedProminent)
+                .keyboardShortcut(.defaultAction)
+                .disabled(
+                    viewModel.autofillState == .parsing
+                        || viewModel.autofillText
+                            .trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+                )
+            }
+        }
+        .padding(20)
+        .frame(width: 480)
+        .onAppear { editorFocused = true }
+    }
+}
