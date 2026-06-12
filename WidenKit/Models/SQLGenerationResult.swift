@@ -38,6 +38,21 @@ public struct SQLGenerationResult: Codable, Equatable, Sendable {
     }
 }
 
+extension SQLGenerationResult {
+    /// Multi-line summary for the generation debug log, shared by every
+    /// generator backend.
+    var logDescription: String {
+        """
+        sql: \(sql)
+        explanation: \(explanation)
+        assumptions: \(assumptions.joined(separator: " | "))
+        referencedTables: \(referencedTables.joined(separator: ", "))
+        confidence: \(confidence) · risk: \(riskLevel.rawValue) · needsClarification: \(needsClarification)
+        clarificationQuestion: \(clarificationQuestion ?? "-")
+        """
+    }
+}
+
 public struct SQLGenerationConfig: Equatable, Sendable {
     public var defaultRowLimit: Int
 
