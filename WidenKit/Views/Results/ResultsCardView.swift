@@ -8,16 +8,14 @@ import UniformTypeIdentifiers
 /// green highlight (a lighter shade than the SQL card's) on the section
 /// around the table — the table itself keeps a neutral background. Once the
 /// conversation moves on it settles to the same gray as the rest of the AI
-/// output. Long results collapse to the first rows with a "View more"
-/// toggle; Export CSV saves the full result.
+/// output. Long results page through the materialized rows; Export CSV saves
+/// the full result.
 struct ResultsCardView: View {
     @Environment(AppState.self) private var appState
     let result: QueryResult
     let sessionTitle: String
     var isLatest = false
-    @State private var isExpanded = false
-
-    private static let collapsedRowCount = 10
+    @State private var page = 0
 
     var body: some View {
         VStack(alignment: .leading, spacing: 8) {
@@ -29,14 +27,10 @@ struct ResultsCardView: View {
             } else {
                 ResultsGridView(
                     result: result,
-                    maxRows: isExpanded ? nil : Self.collapsedRowCount
+                    rows: QueryResultDisplayPolicy.rows(result.rows, page: currentPage)
                 )
-                if result.rows.count > Self.collapsedRowCount {
-                    Button(isExpanded ? "View less" : "View more (\(result.rows.count - Self.collapsedRowCount) more rows)") {
-                        withAnimation { isExpanded.toggle() }
-                    }
-                    .buttonStyle(.link)
-                    .font(.caption)
+                if result.rows.count > QueryResultDisplayPolicy.maxRowsPerPage {
+                    paginationBar
                 }
             }
         }
@@ -53,18 +47,73 @@ struct ResultsCardView: View {
         }
     }
 
+    private var currentPage: Int {
+        QueryResultDisplayPolicy.clampedPage(page, rowCount: result.rows.count)
+    }
+
+    private var pageCount: Int {
+        QueryResultDisplayPolicy.pageCount(forRowCount: result.rows.count)
+    }
+
+    private var pageRangeText: String {
+        guard
+            let range = QueryResultDisplayPolicy.visibleRange(
+                forRowCount: result.rows.count,
+                page: currentPage
+            )
+        else { return "No rows" }
+        return "Rows \(range.lowerBound + 1)-\(range.upperBound) of \(result.rows.count)"
+    }
+
     private func header(_ result: QueryResult) -> some View {
         HStack(spacing: 8) {
             Label(summary(for: result), systemImage: "tablecells")
                 .font(.caption)
                 .foregroundStyle(.secondary)
             Spacer()
-            AnimatedCopyButton(text: result.csv(), help: "Copy as CSV")
+            AnimatedCopyButton(text: result.csv(), help: "Copy all rows as CSV")
             Button("Export CSV") {
                 exportCSV(result)
             }
             .buttonStyle(.glass)
             .controlSize(.small)
+        }
+    }
+
+    private var paginationBar: some View {
+        HStack(spacing: 8) {
+            Text(pageRangeText)
+                .font(.caption)
+                .foregroundStyle(.secondary)
+
+            Spacer(minLength: 8)
+
+            Button {
+                page = max(currentPage - 1, 0)
+            } label: {
+                Label("Previous page", systemImage: "chevron.left")
+                    .labelStyle(.iconOnly)
+                    .frame(width: 24, height: 24)
+            }
+            .buttonStyle(.borderless)
+            .disabled(currentPage == 0)
+            .help("Previous page")
+
+            Text("\(currentPage + 1) / \(pageCount)")
+                .font(.caption.monospacedDigit())
+                .foregroundStyle(.secondary)
+                .frame(minWidth: 44)
+
+            Button {
+                page = min(currentPage + 1, pageCount - 1)
+            } label: {
+                Label("Next page", systemImage: "chevron.right")
+                    .labelStyle(.iconOnly)
+                    .frame(width: 24, height: 24)
+            }
+            .buttonStyle(.borderless)
+            .disabled(currentPage >= pageCount - 1)
+            .help("Next page")
         }
     }
 

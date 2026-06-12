@@ -28,6 +28,7 @@ public struct DatabaseConnectionConfig: Identifiable, Codable, Equatable, Sendab
     public var sslMode: SSLMode
     public var defaultRowLimit: Int
     public var statementTimeoutSeconds: Int
+    public var databaseContext: String
     public var createdAt: Date
     public var updatedAt: Date
 
@@ -41,6 +42,7 @@ public struct DatabaseConnectionConfig: Identifiable, Codable, Equatable, Sendab
         sslMode: SSLMode = .disable,
         defaultRowLimit: Int = 100,
         statementTimeoutSeconds: Int = 10,
+        databaseContext: String = "",
         createdAt: Date = Date(),
         updatedAt: Date = Date()
     ) {
@@ -53,7 +55,55 @@ public struct DatabaseConnectionConfig: Identifiable, Codable, Equatable, Sendab
         self.sslMode = sslMode
         self.defaultRowLimit = defaultRowLimit
         self.statementTimeoutSeconds = statementTimeoutSeconds
+        self.databaseContext = databaseContext
         self.createdAt = createdAt
         self.updatedAt = updatedAt
+    }
+
+    private enum CodingKeys: String, CodingKey {
+        case id
+        case name
+        case host
+        case port
+        case database
+        case username
+        case sslMode
+        case defaultRowLimit
+        case statementTimeoutSeconds
+        case databaseContext
+        case createdAt
+        case updatedAt
+    }
+
+    public init(from decoder: any Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        id = try container.decode(UUID.self, forKey: .id)
+        name = try container.decode(String.self, forKey: .name)
+        host = try container.decode(String.self, forKey: .host)
+        port = try container.decode(Int.self, forKey: .port)
+        database = try container.decode(String.self, forKey: .database)
+        username = try container.decode(String.self, forKey: .username)
+        sslMode = try container.decode(SSLMode.self, forKey: .sslMode)
+        defaultRowLimit = try container.decode(Int.self, forKey: .defaultRowLimit)
+        statementTimeoutSeconds = try container.decode(Int.self, forKey: .statementTimeoutSeconds)
+        databaseContext = try container.decodeIfPresent(String.self, forKey: .databaseContext) ?? ""
+        createdAt = try container.decode(Date.self, forKey: .createdAt)
+        updatedAt = try container.decode(Date.self, forKey: .updatedAt)
+    }
+
+    public func encode(to encoder: any Encoder) throws {
+        var container = encoder.container(keyedBy: CodingKeys.self)
+        try container.encode(id, forKey: .id)
+        try container.encode(name, forKey: .name)
+        try container.encode(host, forKey: .host)
+        try container.encode(port, forKey: .port)
+        try container.encode(database, forKey: .database)
+        try container.encode(username, forKey: .username)
+        try container.encode(sslMode, forKey: .sslMode)
+        try container.encode(defaultRowLimit, forKey: .defaultRowLimit)
+        try container.encode(statementTimeoutSeconds, forKey: .statementTimeoutSeconds)
+        try container.encode(databaseContext, forKey: .databaseContext)
+        try container.encode(createdAt, forKey: .createdAt)
+        try container.encode(updatedAt, forKey: .updatedAt)
     }
 }

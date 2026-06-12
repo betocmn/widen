@@ -40,8 +40,10 @@ public struct SQLGenerationResult: Codable, Equatable, Sendable {
 
 public struct SQLGenerationConfig: Equatable, Sendable {
     public var defaultRowLimit: Int
+    public var databaseContext: String
 
-    public init(defaultRowLimit: Int = 100) {
+    public init(defaultRowLimit: Int = 100, databaseContext: String = "") {
         self.defaultRowLimit = defaultRowLimit
+        self.databaseContext = databaseContext
     }
 }

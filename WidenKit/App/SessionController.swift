@@ -64,12 +64,14 @@ public final class SessionController: Identifiable {
         if ChatViewModel.isDirectSQL(chatVM.input) {
             chatVM.submitDirectSQL(queryVM: queryVM)
         } else {
+            let connection = appState.connection(for: connectionID)
             await chatVM.submit(
                 schema: appState.promptSchema(for: connectionID),
                 generator: appState.sqlGenerator,
                 config: SQLGenerationConfig(
-                    defaultRowLimit: appState.connection(for: connectionID)?.defaultRowLimit
-                        ?? 100),
+                    defaultRowLimit: connection?.defaultRowLimit ?? 100,
+                    databaseContext: connection?.databaseContext ?? ""
+                ),
                 queryVM: queryVM
             )
         }

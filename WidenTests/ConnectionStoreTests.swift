@@ -29,7 +29,8 @@ struct ConnectionStoreTests {
             username: "beto",
             sslMode: .prefer,
             defaultRowLimit: 250,
-            statementTimeoutSeconds: 30
+            statementTimeoutSeconds: 30,
+            databaseContext: "orders.user_id joins users.id"
         )
         first.updatedAt = Date(timeIntervalSince1970: 1_750_000_000)
         let second = DatabaseConnectionConfig(
@@ -48,8 +49,38 @@ struct ConnectionStoreTests {
         #expect(loaded.sslMode == .prefer)
         #expect(loaded.defaultRowLimit == 250)
         #expect(loaded.statementTimeoutSeconds == 30)
+        #expect(loaded.databaseContext == "orders.user_id joins users.id")
         #expect(all.last?.id == second.id)
         #expect(all.last?.name == "Staging")
+    }
+
+    @Test func legacyConnectionsWithoutDatabaseContextDecode() throws {
+        let (store, dir) = makeTempStore()
+        defer { try? FileManager.default.removeItem(at: dir) }
+        try FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
+        let legacy = """
+            [
+              {
+                "id": "11111111-2222-3333-4444-555555555555",
+                "name": "Legacy",
+                "host": "localhost",
+                "port": 5432,
+                "database": "legacy_db",
+                "username": "postgres",
+                "sslMode": "disable",
+                "defaultRowLimit": 100,
+                "statementTimeoutSeconds": 10,
+                "createdAt": "2025-06-15T12:00:00Z",
+                "updatedAt": "2025-06-15T12:00:00Z"
+              }
+            ]
+            """
+        try Data(legacy.utf8).write(to: store.fileURL)
+
+        let loaded = try #require(store.load().first)
+
+        #expect(loaded.name == "Legacy")
+        #expect(loaded.databaseContext == "")
     }
 
     @Test func savedFileNeverContainsPasswordField() throws {
@@ -106,6 +137,15 @@ struct ConnectionSettingsViewModelTests {
         #expect(config?.statementTimeoutSeconds == 10)
     }
 
+    @Test func queryContextIsTrimmedAndSaved() {
+        let viewModel = makeValidViewModel()
+        viewModel.databaseContext = "  orders.user_id joins users.id\n"
+
+        let config = viewModel.buildConfig()
+
+        #expect(config?.databaseContext == "orders.user_id joins users.id")
+    }
+
     @Test func invalidPortIsRejected() {
         let viewModel = makeValidViewModel()
         viewModel.portText = "70000"
@@ -129,6 +169,17 @@ struct ConnectionSettingsViewModelTests {
         #expect(viewModel.buildConfig() == nil)
         #expect(viewModel.validationErrors.contains { $0.contains("Row limit") })
         #expect(viewModel.validationErrors.contains { $0.contains("Timeout") })
+    }
+
+    @Test func queryContextLengthIsEnforced() {
+        let viewModel = makeValidViewModel()
+        viewModel.databaseContext = String(
+            repeating: "x",
+            count: SQLPromptBuilder.maxDatabaseContextCharacters + 1
+        )
+
+        #expect(viewModel.buildConfig() == nil)
+        #expect(viewModel.validationErrors.contains { $0.contains("Query context") })
     }
 
     @Test func emptyPasswordIsAllowed() {

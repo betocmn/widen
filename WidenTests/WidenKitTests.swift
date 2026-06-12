@@ -78,6 +78,32 @@ struct WidenKitSmokeTests {
     }
 }
 
+@Suite("QueryResultDisplayPolicy")
+struct QueryResultDisplayPolicyTests {
+    @Test func displayRowsAreCappedButCSVKeepsAllRows() {
+        let rows = (1...45).map { [Optional("\($0)")] }
+        let result = QueryResult(
+            columns: ["id"],
+            rows: rows,
+            rowCount: rows.count,
+            truncated: false,
+            executionTimeMs: 1
+        )
+
+        let firstPage = QueryResultDisplayPolicy.rows(result.rows, page: 0)
+        let secondPage = QueryResultDisplayPolicy.rows(result.rows, page: 1)
+        let lastPage = QueryResultDisplayPolicy.rows(result.rows, page: 99)
+
+        #expect(QueryResultDisplayPolicy.maxRowsPerPage == 20)
+        #expect(QueryResultDisplayPolicy.pageCount(forRowCount: result.rows.count) == 3)
+        #expect(firstPage.count == 20)
+        #expect(secondPage[0][0] == "21")
+        #expect(lastPage.count == 5)
+        #expect(lastPage[4][0] == "45")
+        #expect(result.csv().split(separator: "\n").count == 46)
+    }
+}
+
 @Suite("QueryResultViewModel")
 @MainActor
 struct QueryResultViewModelTests {

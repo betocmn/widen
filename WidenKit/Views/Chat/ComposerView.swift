@@ -16,8 +16,8 @@ struct ComposerView: View {
     }
 
     var body: some View {
-        // Conductor-style tall box: text grows from the top, the send button
-        // sits in its own bottom-right row.
+        // Conductor-style tall box: text grows from the top, with the primary
+        // send action sitting along the bottom edge.
         VStack(alignment: .leading, spacing: 8) {
             TextField(
                 "Ask in plain English, or write SQL directly…",
@@ -37,10 +37,10 @@ struct ComposerView: View {
                 // onSubmit already handles Return; both would double-fire.
                 Button(action: submit) {
                     Image(systemName: "arrow.up")
-                        .font(.system(size: 13, weight: .semibold))
-                        .frame(width: 24, height: 24)
+                        .font(.system(size: 15, weight: .bold))
+                        .frame(width: 32, height: 32)
                 }
-                .buttonStyle(.glassProminent)
+                .buttonStyle(.borderedProminent)
                 .buttonBorderShape(.circle)
                 .disabled(!canSubmit)
                 .help("Send")
