@@ -30,6 +30,7 @@
 		2DEB15A6FB12058AEB8EA4C3 /* PostgresNIO in Frameworks */ = {isa = PBXBuildFile; productRef = 529F1F207D19D87065B1C548 /* PostgresNIO */; };
 		2ECF4D6E459FE689FF8F6D4C /* TableInfo.swift in Sources */ = {isa = PBXBuildFile; fileRef = 2B82C454D2705BD1520A0263 /* TableInfo.swift */; };
 		31AAD4FFD25B413C6BB2410E /* QueryResultViewModel.swift in Sources */ = {isa = PBXBuildFile; fileRef = CD9A4AC6A2353BABF87696E2 /* QueryResultViewModel.swift */; };
+		31F2B0EC39FE62106BB1B4DE /* AIBackendToggle.swift in Sources */ = {isa = PBXBuildFile; fileRef = 4C1644FE0720C6F12CB46ED8 /* AIBackendToggle.swift */; };
 		33DCCAB3D5776014CF30B619 /* SessionTitleGenerator.swift in Sources */ = {isa = PBXBuildFile; fileRef = 6E93D92D37A8796CFBFBD827 /* SessionTitleGenerator.swift */; };
 		344BEFD5BC2ABA6B9DE4371C /* SQLSafetyValidator.swift in Sources */ = {isa = PBXBuildFile; fileRef = E89B4B4CFB39F399ABB908C7 /* SQLSafetyValidator.swift */; };
 		34F78902BE58D5CB8EC09301 /* AIBackendPreferences.swift in Sources */ = {isa = PBXBuildFile; fileRef = 9D65EBBAD5352C90A92D303B /* AIBackendPreferences.swift */; };
@@ -155,6 +156,7 @@
 		420B7A0BDD583B0ABE7D2E25 /* Info.plist */ = {isa = PBXFileReference; lastKnownFileType = text.plist; path = Info.plist; sourceTree = "<group>"; };
 		45FEB67F1A613C00B3549BE5 /* ChatViewModel.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ChatViewModel.swift; sourceTree = "<group>"; };
 		4668054A3CDE423568E1A4F4 /* SQLGenerator.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SQLGenerator.swift; sourceTree = "<group>"; };
+		4C1644FE0720C6F12CB46ED8 /* AIBackendToggle.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AIBackendToggle.swift; sourceTree = "<group>"; };
 		4D7DC9491F74000AE5458E39 /* ConnectionStoreTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ConnectionStoreTests.swift; sourceTree = "<group>"; };
 		4E3224013C3BD2A7894756D9 /* SessionController.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SessionController.swift; sourceTree = "<group>"; };
 		526F33B4A497093D4F7A3300 /* PostgresIntegrationTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PostgresIntegrationTests.swift; sourceTree = "<group>"; };
@@ -286,6 +288,7 @@
 		54D1C9A383B032FB7C0878D5 /* Views */ = {
 			isa = PBXGroup;
 			children = (
+				4C1644FE0720C6F12CB46ED8 /* AIBackendToggle.swift */,
 				761F73A4F49799F8CADA0C29 /* DatabaseOverviewView.swift */,
 				980EE95F99B9CDF2F26BBC47 /* ErrorBannerView.swift */,
 				CB98264D45BE6021646B47AA /* LoadingView.swift */,
@@ -601,6 +604,7 @@
 			buildActionMask = 2147483647;
 			files = (
 				34F78902BE58D5CB8EC09301 /* AIBackendPreferences.swift in Sources */,
+				31F2B0EC39FE62106BB1B4DE /* AIBackendToggle.swift in Sources */,
 				477E7A6EC25055FD81171E9B /* AISettingsView.swift in Sources */,
 				91721D00C35BBE6A1B3B7BC5 /* AppError.swift in Sources */,
 				ED5BCEF2845478E58F7E3758 /* AppState.swift in Sources */,

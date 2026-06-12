@@ -51,6 +51,9 @@ public struct MainView: View {
                             ? "Switch to light mode (reset to System in Settings › General)"
                             : "Switch to dark mode (reset to System in Settings › General)")
                 }
+                ToolbarItem(placement: .navigation) {
+                    AIBackendToggle()
+                }
                 ToolbarItem(placement: .primaryAction) {
                     SchemaInspectorToggle()
                 }
