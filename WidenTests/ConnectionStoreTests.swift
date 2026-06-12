@@ -81,7 +81,8 @@ struct ConnectionSettingsViewModelTests {
             .appendingPathComponent("widen-tests-\(UUID().uuidString)", isDirectory: true)
         let state = AppState(
             connectionStore: ConnectionStore(directory: dir),
-            sessionStore: SessionStore(directory: dir)
+            sessionStore: SessionStore(directory: dir),
+            schemaStore: SchemaStore(directory: dir)
         )
         return (state, dir)
     }

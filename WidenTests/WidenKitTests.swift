@@ -40,15 +40,23 @@ struct WidenKitSmokeTests {
         #expect(state.pendingDatabaseSettingsRequest == .edit(id))
     }
 
-    @Test func refreshSchemaClearsStaleSchemaWhenIntrospectionFails() async {
-        let state = AppState()
+    @Test func refreshSchemaPreservesCachedSchemaWhenIntrospectionFails() async {
+        let dir = FileManager.default.temporaryDirectory
+            .appendingPathComponent("widen-tests-\(UUID().uuidString)", isDirectory: true)
+        defer { try? FileManager.default.removeItem(at: dir) }
+        let state = AppState(
+            connectionStore: ConnectionStore(directory: dir),
+            sessionStore: SessionStore(directory: dir),
+            schemaStore: SchemaStore(directory: dir)
+        )
         let id = UUID()
+        let cachedSchema = makeSchema()
         state.connectionStates[id] = .connected
-        state.schemas[id] = makeSchema()
+        state.schemas[id] = cachedSchema
 
         await state.refreshSchema(for: id)
 
-        #expect(state.schemas[id] == nil)
+        #expect(state.schemas[id] == cachedSchema)
         #expect(state.errorBanner != nil)
         #expect(!state.loadingSchemas.contains(id))
     }

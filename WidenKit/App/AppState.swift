@@ -140,6 +140,7 @@ public final class AppState {
 
     public let connectionStore: ConnectionStore
     public let sessionStore: SessionStore
+    public let schemaStore: SchemaStore
     public let keychain = KeychainService()
     public let schemaVM = SchemaViewModel()
 
@@ -150,12 +151,17 @@ public final class AppState {
     public init() {
         self.connectionStore = ConnectionStore()
         self.sessionStore = SessionStore()
+        self.schemaStore = SchemaStore()
     }
 
     /// Test initializer: points both stores at a temporary directory.
-    init(connectionStore: ConnectionStore, sessionStore: SessionStore) {
+    init(
+        connectionStore: ConnectionStore, sessionStore: SessionStore,
+        schemaStore: SchemaStore
+    ) {
         self.connectionStore = connectionStore
         self.sessionStore = sessionStore
+        self.schemaStore = schemaStore
     }
 
     // MARK: - Launch
@@ -171,27 +177,20 @@ public final class AppState {
             errorBanner = "Could not load the saved connections: \(error.localizedDescription)"
         }
         do {
+            let cachedSchemas = try schemaStore.load()
+            let connectionIDs = Set(connections.map(\.id))
+            schemas = cachedSchemas.filter { connectionIDs.contains($0.key) }
+        } catch {
+            errorBanner = "Could not load the saved schema cache: \(error.localizedDescription)"
+        }
+        do {
             sessions = try sessionStore.load()
         } catch {
             errorBanner = "Could not load the saved sessions: \(error.localizedDescription)"
         }
 
-        let restoredID = UserDefaults.standard
-            .string(forKey: Self.selectedSessionKey)
-            .flatMap(UUID.init(uuidString:))
-        if let restoredID,
-            let restored = session(for: restoredID),
-            !restored.isArchived,
-            connection(for: restored.connectionID) != nil
-        {
-            selectSession(restoredID)
-        } else {
-            selectSession(mostRecentVisibleSession()?.id)
-        }
-
-        if connections.isEmpty {
-            openSettings(tab: .databases)
-        }
+        UserDefaults.standard.removeObject(forKey: Self.selectedSessionKey)
+        sidebarSelection = nil
     }
 
     /// Asks the UI to show Settings on the given tab. MainView watches
@@ -342,22 +341,22 @@ public final class AppState {
     public func refreshSchema(for id: UUID) async {
         guard connectionState(id) == .connected else { return }
         let previousSelection = schemaVM.selectedTableID
-        schemas[id] = nil
-        if activeConnectionID == id {
-            schemaVM.selectedTableID = nil
-        }
         loadingSchemas.insert(id)
         defer { loadingSchemas.remove(id) }
         do {
             let loadedSchema = try await introspection.loadSchema(using: postgres(for: id))
             schemas[id] = loadedSchema
-            if let previousSelection,
-                loadedSchema.tables.contains(where: { $0.id == previousSelection })
-            {
-                schemaVM.selectedTableID = previousSelection
+            persistSchemas()
+            if activeConnectionID == id {
+                if let previousSelection,
+                    loadedSchema.tables.contains(where: { $0.id == previousSelection })
+                {
+                    schemaVM.selectedTableID = previousSelection
+                } else {
+                    schemaVM.selectedTableID = nil
+                }
             }
         } catch {
-            schemas[id] = nil
             errorBanner = error.localizedDescription
         }
     }
@@ -376,6 +375,7 @@ public final class AppState {
             connections[index] = config
             if Self.endpointChanged(from: previous, to: config) {
                 schemas[config.id] = nil
+                persistSchemas()
                 Task { await disconnect(config.id) }
             }
         } else {
@@ -393,6 +393,7 @@ public final class AppState {
         try? keychain.deletePassword(for: id)
         connectionStates[id] = nil
         schemas[id] = nil
+        persistSchemas()
         selectedSchemaNames[id] = nil
         loadingSchemas.remove(id)
 
@@ -416,6 +417,7 @@ public final class AppState {
         do {
             try connectionStore.save(connections)
             try sessionStore.save(sessions)
+            try schemaStore.save(schemas)
         } catch {
             errorBanner = error.localizedDescription
         }
@@ -615,6 +617,14 @@ public final class AppState {
             try sessionStore.save(sessions)
         } catch {
             errorBanner = "Could not save sessions: \(error.localizedDescription)"
+        }
+    }
+
+    private func persistSchemas() {
+        do {
+            try schemaStore.save(schemas)
+        } catch {
+            errorBanner = "Could not save schema cache: \(error.localizedDescription)"
         }
     }
 }

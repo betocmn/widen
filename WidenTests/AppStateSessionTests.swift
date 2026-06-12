@@ -24,7 +24,8 @@ struct AppStateSessionTests {
             .appendingPathComponent("widen-tests-\(UUID().uuidString)", isDirectory: true)
         let state = AppState(
             connectionStore: ConnectionStore(directory: dir),
-            sessionStore: SessionStore(directory: dir)
+            sessionStore: SessionStore(directory: dir),
+            schemaStore: SchemaStore(directory: dir)
         )
         return (state, dir)
     }
@@ -184,6 +185,39 @@ struct AppStateSessionTests {
         await state.autoTitleSession(session.id, question: "anything")
 
         #expect(state.session(for: session.id)?.title == "My Title")
+    }
+
+    @Test func launchDoesNotAutoSelectRestoredSessionOrFirstDatabase() async throws {
+        UserDefaults.standard.removeObject(forKey: "WidenSelectedSessionID")
+        let (state, dir) = makeState()
+        defer {
+            UserDefaults.standard.removeObject(forKey: "WidenSelectedSessionID")
+            try? FileManager.default.removeItem(at: dir)
+        }
+        let config = DatabaseConnectionConfig(database: "db", username: "u")
+        let session = QuerySession(connectionID: config.id)
+        try state.connectionStore.save([config])
+        try state.sessionStore.save([session])
+        UserDefaults.standard.set(session.id.uuidString, forKey: "WidenSelectedSessionID")
+
+        await state.onLaunch()
+
+        #expect(state.connections.map(\.id) == [config.id])
+        #expect(state.sessions.map(\.id) == [session.id])
+        #expect(state.sidebarSelection == nil)
+        #expect(state.activeConnectionID == nil)
+        #expect(state.openSettingsRequest == 0)
+    }
+
+    @Test func launchWithNoDatabasesLeavesWelcomeState() async {
+        let (state, dir) = makeState()
+        defer { try? FileManager.default.removeItem(at: dir) }
+
+        await state.onLaunch()
+
+        #expect(state.connections.isEmpty)
+        #expect(state.sidebarSelection == nil)
+        #expect(state.openSettingsRequest == 0)
     }
 
     @Test func selectingDatabaseMakesItTheActiveConnection() {

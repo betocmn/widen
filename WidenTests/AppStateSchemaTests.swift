@@ -11,12 +11,16 @@ struct AppStateSchemaTests {
             .appendingPathComponent("widen-tests-\(UUID().uuidString)", isDirectory: true)
         let state = AppState(
             connectionStore: ConnectionStore(directory: dir),
-            sessionStore: SessionStore(directory: dir)
+            sessionStore: SessionStore(directory: dir),
+            schemaStore: SchemaStore(directory: dir)
         )
         return (state, dir)
     }
 
-    private func makeSchema(schemas: [String]) -> DatabaseSchema {
+    private func makeSchema(
+        schemas: [String],
+        loadedAt: Date = Date()
+    ) -> DatabaseSchema {
         DatabaseSchema(
             schemas: schemas.map(SchemaInfo.init(name:)),
             tables: schemas.flatMap { schema in
@@ -42,7 +46,8 @@ struct AppStateSchemaTests {
                     constraintName: "orders_user_id_fkey",
                     sourceSchema: schema, sourceTable: "orders", sourceColumn: "user_id",
                     targetSchema: schema, targetTable: "users", targetColumn: "id")
-            }
+            },
+            loadedAt: loadedAt
         )
     }
 
@@ -97,6 +102,56 @@ struct AppStateSchemaTests {
         #expect(prompt?.foreignKeys.allSatisfy { $0.sourceSchema == "analytics" } == true)
     }
 
+    @Test func launchHydratesCachedSchemasForConfiguredConnections() async throws {
+        defer { cleanDefaults() }
+        let dir = FileManager.default.temporaryDirectory
+            .appendingPathComponent("widen-tests-\(UUID().uuidString)", isDirectory: true)
+        defer { try? FileManager.default.removeItem(at: dir) }
+        let connectionStore = ConnectionStore(directory: dir)
+        let sessionStore = SessionStore(directory: dir)
+        let schemaStore = SchemaStore(directory: dir)
+        let config = DatabaseConnectionConfig(database: "db", username: "u")
+        let cachedSchema = makeSchema(
+            schemas: ["public"], loadedAt: Date(timeIntervalSince1970: 1_750_000_000))
+        try connectionStore.save([config])
+        try schemaStore.save([config.id: cachedSchema])
+        let state = AppState(
+            connectionStore: connectionStore, sessionStore: sessionStore,
+            schemaStore: schemaStore)
+
+        await state.onLaunch()
+
+        #expect(state.schemas[config.id] == cachedSchema)
+    }
+
+    @Test func launchIgnoresCachedSchemasForMissingConnections() async throws {
+        defer { cleanDefaults() }
+        let dir = FileManager.default.temporaryDirectory
+            .appendingPathComponent("widen-tests-\(UUID().uuidString)", isDirectory: true)
+        defer { try? FileManager.default.removeItem(at: dir) }
+        let connectionStore = ConnectionStore(directory: dir)
+        let sessionStore = SessionStore(directory: dir)
+        let schemaStore = SchemaStore(directory: dir)
+        let config = DatabaseConnectionConfig(database: "db", username: "u")
+        let staleID = UUID()
+        let cachedSchema = makeSchema(
+            schemas: ["public"], loadedAt: Date(timeIntervalSince1970: 1_750_000_000))
+        try connectionStore.save([config])
+        try schemaStore.save([
+            config.id: cachedSchema,
+            staleID: makeSchema(
+                schemas: ["analytics"], loadedAt: Date(timeIntervalSince1970: 1_750_000_100)),
+        ])
+        let state = AppState(
+            connectionStore: connectionStore, sessionStore: sessionStore,
+            schemaStore: schemaStore)
+
+        await state.onLaunch()
+
+        #expect(state.schemas[config.id] == cachedSchema)
+        #expect(state.schemas[staleID] == nil)
+    }
+
     @Test func filteredDropsCrossSchemaForeignKeys() {
         var schema = makeSchema(schemas: ["public", "analytics"])
         schema.foreignKeys.append(
@@ -111,17 +166,37 @@ struct AppStateSchemaTests {
         #expect(filtered.foreignKeys.first?.constraintName == "orders_user_id_fkey")
     }
 
-    @Test func deleteConnectionPrunesSchemaSelection() {
+    @Test func deleteConnectionPrunesSchemaSelectionAndCache() throws {
         defer { cleanDefaults() }
         let (state, dir) = makeState()
         defer { try? FileManager.default.removeItem(at: dir) }
         let config = DatabaseConnectionConfig(id: UUID())
         state.connections = [config]
         state.selectSchema("analytics", for: config.id)
+        state.schemas[config.id] = makeSchema(schemas: ["analytics"])
+        try state.schemaStore.save(state.schemas)
 
         state.deleteConnection(config.id)
 
         #expect(state.selectedSchemaNames[config.id] == nil)
+        #expect(state.schemas[config.id] == nil)
+        #expect(try state.schemaStore.load()[config.id] == nil)
+    }
+
+    @Test func endpointEditClearsPersistedSchemaCache() throws {
+        defer { cleanDefaults() }
+        let (state, dir) = makeState()
+        defer { try? FileManager.default.removeItem(at: dir) }
+        var config = DatabaseConnectionConfig(database: "db", username: "u")
+        state.connections = [config]
+        state.schemas[config.id] = makeSchema(schemas: ["public"])
+        try state.schemaStore.save(state.schemas)
+
+        config.database = "other"
+        try state.addOrUpdateConnection(config, password: "")
+
+        #expect(state.schemas[config.id] == nil)
+        #expect(try state.schemaStore.load()[config.id] == nil)
     }
 
     @Test func schemaViewModelListsOnlyOpenSchemaTables() {

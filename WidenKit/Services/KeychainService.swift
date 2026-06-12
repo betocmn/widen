@@ -10,6 +10,30 @@ import Security
 public struct KeychainService: Sendable {
     public static let service = "Widen"
 
+    private enum CachedPassword: Sendable {
+        case missing
+        case value(String)
+    }
+
+    private final class PasswordCache: @unchecked Sendable {
+        private let lock = NSLock()
+        private var entries: [UUID: CachedPassword] = [:]
+
+        func cachedPassword(for connectionID: UUID) -> CachedPassword? {
+            lock.withLock {
+                entries[connectionID]
+            }
+        }
+
+        func store(_ password: String?, for connectionID: UUID) {
+            lock.withLock {
+                entries[connectionID] = password.map(CachedPassword.value) ?? .missing
+            }
+        }
+    }
+
+    private static let passwordCache = PasswordCache()
+
     public init() {}
 
     static func account(for connectionID: UUID) -> String {
@@ -38,9 +62,17 @@ public struct KeychainService: Sendable {
         guard status == errSecSuccess else {
             throw AppError.keychainFailed(Self.message(for: status))
         }
+        Self.passwordCache.store(password, for: connectionID)
     }
 
     public func loadPassword(for connectionID: UUID) throws -> String? {
+        if let cached = Self.passwordCache.cachedPassword(for: connectionID) {
+            switch cached {
+            case .missing: return nil
+            case .value(let password): return password
+            }
+        }
+
         let query: [String: Any] = [
             kSecClass as String: kSecClassGenericPassword,
             kSecAttrService as String: Self.service,
@@ -53,8 +85,11 @@ public struct KeychainService: Sendable {
         switch status {
         case errSecSuccess:
             guard let data = item as? Data else { return nil }
-            return String(data: data, encoding: .utf8)
+            let password = String(data: data, encoding: .utf8)
+            Self.passwordCache.store(password, for: connectionID)
+            return password
         case errSecItemNotFound:
+            Self.passwordCache.store(nil, for: connectionID)
             return nil
         default:
             throw AppError.keychainFailed(Self.message(for: status))
@@ -71,6 +106,7 @@ public struct KeychainService: Sendable {
         guard status == errSecSuccess || status == errSecItemNotFound else {
             throw AppError.keychainFailed(Self.message(for: status))
         }
+        Self.passwordCache.store(nil, for: connectionID)
     }
 
     static func message(for status: OSStatus) -> String {

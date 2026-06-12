@@ -161,12 +161,38 @@ public struct MainView: View {
         {
             DatabaseOverviewView(connection: config)
         } else {
-            ContentUnavailableView {
-                Label("Select a session", systemImage: "terminal")
-            } description: {
-                Text("Pick a session in the sidebar, or press + on a database to start one.")
+            WelcomeDetailView(
+                hasConnections: !appState.connections.isEmpty,
+                addDatabase: appState.openNewDatabaseSettings
+            )
+        }
+    }
+}
+
+private struct WelcomeDetailView: View {
+    let hasConnections: Bool
+    let addDatabase: () -> Void
+
+    var body: some View {
+        VStack(spacing: 16) {
+            Image(nsImage: NSApplication.shared.applicationIconImage)
+                .resizable()
+                .frame(width: 88, height: 88)
+                .accessibilityHidden(true)
+
+            Text(hasConnections ? "Choose a database on the left" : "Add your first database")
+                .font(.title3.weight(.semibold))
+                .multilineTextAlignment(.center)
+
+            if !hasConnections {
+                Button(action: addDatabase) {
+                    Label("Add Database", systemImage: "plus")
+                }
+                .buttonStyle(.glassProminent)
             }
         }
+        .frame(maxWidth: .infinity, maxHeight: .infinity)
+        .padding(32)
     }
 }
 
