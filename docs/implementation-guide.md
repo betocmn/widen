@@ -151,11 +151,14 @@ NavigationSplitView
         run records render their ResultsCardView while cached
         + ComposerView pinned at the bottom
     .inspector: SchemaInspectorView (toolbar-toggled, scoped to the open schema)
-  toolbar: custom sidebar toggle (system one removed — it lacks the glass
-           container) · breadcrumb (status dot · database › schema menu) ·
-           local/cloud LLM toggle · inspector toggle (detail trailing);
-           window title removed. The System/Light/Dark appearance switch
-           lives in the sidebar footer next to "Add Database".
+  toolbar: breadcrumb (status dot · database › schema menu) · local/cloud
+           LLM toggle; window title removed. The panel toggles are
+           container-less and live in their panels' top corners facing the
+           content while open (sidebar: trailing toolbar corner via a custom
+           toggle, system one removed; inspector: inside its header), and
+           fall back to the matching edge of the detail toolbar while
+           closed. The System/Light/Dark appearance switch lives in the
+           sidebar footer next to "Add Database".
 ```
 
 The breadcrumb is plain toolbar content on purpose: the macOS 26 toolbar

@@ -5,19 +5,36 @@ import SwiftUI
 public struct MainView: View {
     @Environment(AppState.self) private var appState
     @Environment(\.openSettings) private var openSettings
+    /// Tracked so exactly one sidebar toggle renders: in the sidebar's
+    /// header while open, in the detail toolbar while collapsed (a collapsed
+    /// column's toolbar items don't survive relaunch).
+    @State private var columnVisibility: NavigationSplitViewVisibility = .all
 
     public init() {}
 
     public var body: some View {
         @Bindable var appState = appState
 
-        NavigationSplitView {
+        NavigationSplitView(columnVisibility: $columnVisibility) {
             SidebarView()
                 .navigationSplitViewColumnWidth(min: 230, ideal: 280, max: 400)
-                // The system sidebar toggle renders without the glass
-                // container the other toolbar buttons get on macOS 26;
-                // it is replaced by SidebarToggle in the detail toolbar.
+                // Replace the system sidebar toggle with our own at the
+                // sidebar's trailing corner (the side facing the content),
+                // mirroring the inspector toggle — and without the glass
+                // container, so neither panel toggle merges into the
+                // neighbouring toolbar pills.
                 .toolbar(removing: .sidebarToggle)
+                .toolbar {
+                    if columnVisibility != .detailOnly {
+                        // The flexible spacer pushes the toggle to the
+                        // sidebar's trailing corner, against the divider.
+                        ToolbarSpacer(.flexible)
+                        ToolbarItem {
+                            SidebarToggle(columnVisibility: $columnVisibility)
+                        }
+                        .sharedBackgroundVisibility(.hidden)
+                    }
+                }
         } detail: {
             VStack(spacing: 0) {
                 if let message = appState.errorBanner {
@@ -31,14 +48,16 @@ public struct MainView: View {
             // ideal exceeds the screen, macOS 26 keeps the content laid out
             // wider than the clamped window and the panes clip their edges.
             .frame(minWidth: 420, idealWidth: 560)
-            // The sidebar keeps the system toggle in its own section; the
-            // inspector toggle sits alone at the detail column's trailing
-            // edge. The appearance toggle lives in the sidebar footer.
+            // Each panel toggle lives in its own panel's header while open,
+            // on the side facing the content, and falls back to the
+            // matching edge of this toolbar while its panel is closed. The
+            // appearance toggle lives in the sidebar footer.
             .toolbar {
-                // In the detail toolbar (not the sidebar's) so it stays
-                // visible — and usable — while the sidebar is collapsed.
-                ToolbarItem(placement: .navigation) {
-                    SidebarToggle()
+                if columnVisibility == .detailOnly {
+                    ToolbarItem(placement: .navigation) {
+                        SidebarToggle(columnVisibility: $columnVisibility)
+                    }
+                    .sharedBackgroundVisibility(.hidden)
                 }
                 ToolbarItem(placement: .navigation) {
                     breadcrumb
@@ -46,14 +65,20 @@ public struct MainView: View {
                 ToolbarItem(placement: .navigation) {
                     AIBackendToggle()
                 }
-                ToolbarItem(placement: .primaryAction) {
-                    SchemaInspectorToggle()
+                if !appState.showSchemaInspector {
+                    ToolbarItem(placement: .primaryAction) {
+                        SchemaInspectorToggle()
+                    }
+                    .sharedBackgroundVisibility(.hidden)
                 }
             }
         }
         // Attached to the split view (not the detail content) so the detail
         // column's trailing toolbar items stay left of the inspector divider.
         .inspector(isPresented: $appState.showSchemaInspector) {
+            // While open, the inspector's toggle sits inside its header at
+            // the leading corner (SchemaInspectorView); while closed, the
+            // fallback item in the detail toolbar brings it back.
             SchemaInspectorView()
                 .inspectorColumnWidth(min: 240, ideal: 300, max: 420)
         }
@@ -184,13 +209,16 @@ private struct WelcomeDetailView: View {
     }
 }
 
-/// Shows or hides the sidebar. Replaces the system toggle so it renders with
-/// the same glass container as every other toolbar button.
+/// Shows or hides the sidebar. Replaces the system toggle so its placement
+/// and (lack of) background match the inspector's toggle.
 struct SidebarToggle: View {
+    @Binding var columnVisibility: NavigationSplitViewVisibility
+
     var body: some View {
         Button {
-            NSApp.sendAction(
-                #selector(NSSplitViewController.toggleSidebar(_:)), to: nil, from: nil)
+            withAnimation {
+                columnVisibility = columnVisibility == .detailOnly ? .all : .detailOnly
+            }
         } label: {
             Label("Sidebar", systemImage: "sidebar.left")
                 .labelStyle(.iconOnly)
