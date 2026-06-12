@@ -180,15 +180,9 @@ private struct WelcomeDetailView: View {
                 .frame(width: 88, height: 88)
                 .accessibilityHidden(true)
 
-            VStack(spacing: 6) {
-                Text(hasConnections ? "Choose a database" : "Add your first database")
-                    .font(.title3.weight(.semibold))
-                Text(message)
-                    .font(.callout)
-                    .foregroundStyle(.secondary)
-                    .multilineTextAlignment(.center)
-                    .frame(maxWidth: 420)
-            }
+            Text(hasConnections ? "Choose a database on the left" : "Add your first database")
+                .font(.title3.weight(.semibold))
+                .multilineTextAlignment(.center)
 
             if !hasConnections {
                 Button(action: addDatabase) {
@@ -199,13 +193,6 @@ private struct WelcomeDetailView: View {
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity)
         .padding(32)
-    }
-
-    private var message: String {
-        if hasConnections {
-            return "Select a database in the sidebar to browse its schema, or start a session from a database row."
-        }
-        return "Connect a PostgreSQL database to browse schemas and ask questions."
     }
 }
 
