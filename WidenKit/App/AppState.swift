@@ -189,22 +189,8 @@ public final class AppState {
             errorBanner = "Could not load the saved sessions: \(error.localizedDescription)"
         }
 
-        let restoredID = UserDefaults.standard
-            .string(forKey: Self.selectedSessionKey)
-            .flatMap(UUID.init(uuidString:))
-        if let restoredID,
-            let restored = session(for: restoredID),
-            !restored.isArchived,
-            connection(for: restored.connectionID) != nil
-        {
-            selectSession(restoredID)
-        } else {
-            selectSession(mostRecentVisibleSession()?.id)
-        }
-
-        if connections.isEmpty {
-            openSettings(tab: .databases)
-        }
+        UserDefaults.standard.removeObject(forKey: Self.selectedSessionKey)
+        sidebarSelection = nil
     }
 
     /// Asks the UI to show Settings on the given tab. MainView watches

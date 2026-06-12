@@ -161,12 +161,51 @@ public struct MainView: View {
         {
             DatabaseOverviewView(connection: config)
         } else {
-            ContentUnavailableView {
-                Label("Select a session", systemImage: "terminal")
-            } description: {
-                Text("Pick a session in the sidebar, or press + on a database to start one.")
+            WelcomeDetailView(
+                hasConnections: !appState.connections.isEmpty,
+                addDatabase: appState.openNewDatabaseSettings
+            )
+        }
+    }
+}
+
+private struct WelcomeDetailView: View {
+    let hasConnections: Bool
+    let addDatabase: () -> Void
+
+    var body: some View {
+        VStack(spacing: 16) {
+            Image(nsImage: NSApplication.shared.applicationIconImage)
+                .resizable()
+                .frame(width: 88, height: 88)
+                .accessibilityHidden(true)
+
+            VStack(spacing: 6) {
+                Text(hasConnections ? "Choose a database" : "Add your first database")
+                    .font(.title3.weight(.semibold))
+                Text(message)
+                    .font(.callout)
+                    .foregroundStyle(.secondary)
+                    .multilineTextAlignment(.center)
+                    .frame(maxWidth: 420)
+            }
+
+            if !hasConnections {
+                Button(action: addDatabase) {
+                    Label("Add Database", systemImage: "plus")
+                }
+                .buttonStyle(.glassProminent)
             }
         }
+        .frame(maxWidth: .infinity, maxHeight: .infinity)
+        .padding(32)
+    }
+
+    private var message: String {
+        if hasConnections {
+            return "Select a database in the sidebar to browse its schema, or start a session from a database row."
+        }
+        return "Connect a PostgreSQL database to browse schemas and ask questions."
     }
 }
 
