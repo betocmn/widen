@@ -12,10 +12,6 @@ public struct SchemaInspectorView: View {
 
         VStack(alignment: .leading, spacing: 0) {
             HStack(spacing: 8) {
-                // The panel's own toggle, at its leading corner — the side
-                // facing the content, mirroring the sidebar's.
-                SchemaInspectorToggle()
-                    .buttonStyle(.borderless)
                 Text(title)
                     .font(.headline)
                     .lineLimit(1)

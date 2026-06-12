@@ -48,10 +48,10 @@ public struct MainView: View {
             // ideal exceeds the screen, macOS 26 keeps the content laid out
             // wider than the clamped window and the panes clip their edges.
             .frame(minWidth: 420, idealWidth: 560)
-            // Each panel toggle lives in its own panel's header while open,
-            // on the side facing the content, and falls back to the
-            // matching edge of this toolbar while its panel is closed. The
-            // appearance toggle lives in the sidebar footer.
+            // Both panel toggles sit container-less in the one toolbar row:
+            // the sidebar's at its trailing corner (or here, leading, while
+            // collapsed) and the inspector's at the window's trailing
+            // corner. The appearance toggle lives in the sidebar footer.
             .toolbar {
                 if columnVisibility == .detailOnly {
                     ToolbarItem(placement: .navigation) {
@@ -65,20 +65,15 @@ public struct MainView: View {
                 ToolbarItem(placement: .navigation) {
                     AIBackendToggle()
                 }
-                if !appState.showSchemaInspector {
-                    ToolbarItem(placement: .primaryAction) {
-                        SchemaInspectorToggle()
-                    }
-                    .sharedBackgroundVisibility(.hidden)
+                ToolbarItem(placement: .primaryAction) {
+                    SchemaInspectorToggle()
                 }
+                .sharedBackgroundVisibility(.hidden)
             }
         }
         // Attached to the split view (not the detail content) so the detail
         // column's trailing toolbar items stay left of the inspector divider.
         .inspector(isPresented: $appState.showSchemaInspector) {
-            // While open, the inspector's toggle sits inside its header at
-            // the leading corner (SchemaInspectorView); while closed, the
-            // fallback item in the detail toolbar brings it back.
             SchemaInspectorView()
                 .inspectorColumnWidth(min: 240, ideal: 300, max: 420)
         }
