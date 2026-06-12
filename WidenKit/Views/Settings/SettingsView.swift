@@ -1,6 +1,6 @@
 import SwiftUI
 
-/// The Settings window: General, Databases, and Archived Sessions tabs.
+/// The Settings window: General, AI, Databases, and Archived Sessions tabs.
 public struct SettingsView: View {
     @Environment(AppState.self) private var appState
     @AppStorage(AppearancePreference.storageKey)
@@ -15,6 +15,10 @@ public struct SettingsView: View {
             GeneralSettingsView()
                 .tabItem { Label("General", systemImage: "gearshape") }
                 .tag(SettingsTab.general)
+
+            AISettingsView()
+                .tabItem { Label("AI", systemImage: "sparkles") }
+                .tag(SettingsTab.ai)
 
             DatabasesSettingsView()
                 .tabItem { Label("Databases", systemImage: "cylinder.split.1x2") }

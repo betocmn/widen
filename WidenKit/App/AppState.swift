@@ -4,6 +4,7 @@ import Observation
 /// Which tab the Settings UI shows.
 public enum SettingsTab: String, Hashable, Sendable {
     case general
+    case ai
     case databases
     case archived
 }
@@ -209,19 +210,19 @@ public final class AppState {
         #endif
     }
 
-    /// Short label for the backend now serving generations, used in the
-    /// generation spinner.
+    /// Label for the backend now serving generations, phrased to follow
+    /// "Generating SQL with …" in the spinner and Settings.
     public var activeBackendDisplayName: String {
-        if useMockAI { return "mock generator" }
+        if useMockAI { return "the mock generator" }
         if aiBackendMode == .cloud, case .ready = cloudBackendStatus {
             switch cloudProvider {
             case .applePCC:
                 return "Apple Private Cloud Compute"
             case .openRouter:
-                return "OpenRouter (\(OpenRouterCatalog.displayName(for: openRouterModelID)))"
+                return "\(OpenRouterCatalog.displayName(for: openRouterModelID)) via OpenRouter"
             }
         }
-        return "local model"
+        return "the local model"
     }
 
     /// The active session-title backend. Overridable for tests.

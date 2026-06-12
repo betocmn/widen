@@ -154,7 +154,7 @@ struct ChatModeView: View {
                     }
                     if controller.chatVM.isGenerating {
                         LoadingView(
-                            label: "Generating SQL with the \(appState.activeBackendDisplayName)…"
+                            label: "Generating SQL with \(appState.activeBackendDisplayName)…"
                         )
                             .id(Self.generatingID)
                     }

@@ -43,7 +43,7 @@ struct AIBackendSelectionTests {
         state.openRouterAPIKeyOverride = .some("sk-test")
 
         #expect(state.sqlGenerator is MockSQLGenerator)
-        #expect(state.activeBackendDisplayName == "mock generator")
+        #expect(state.activeBackendDisplayName == "the mock generator")
         #expect(state.modelAvailabilityMessage == nil)
         state.useMockAI = false
     }
@@ -59,7 +59,7 @@ struct AIBackendSelectionTests {
 
         #expect(state.cloudBackendStatus == .ready)
         #expect(state.sqlGenerator is OpenRouterSQLGenerator)
-        #expect(state.activeBackendDisplayName.hasPrefix("OpenRouter"))
+        #expect(state.activeBackendDisplayName.contains("via OpenRouter"))
         #expect(state.modelAvailabilityMessage == nil)
     }
 
@@ -77,7 +77,7 @@ struct AIBackendSelectionTests {
             return
         }
         #expect(!(state.sqlGenerator is OpenRouterSQLGenerator))
-        #expect(state.activeBackendDisplayName == "local model")
+        #expect(state.activeBackendDisplayName == "the local model")
         #expect(state.modelAvailabilityMessage?.contains("API key") == true)
         #expect(state.modelAvailabilityMessage?.contains("on-device") == true)
     }
@@ -101,7 +101,7 @@ struct AIBackendSelectionTests {
         }
         #expect(message.contains("OpenRouter"))
         #expect(!(state.sqlGenerator is OpenRouterSQLGenerator))
-        #expect(state.activeBackendDisplayName == "local model")
+        #expect(state.activeBackendDisplayName == "the local model")
         #expect(state.modelAvailabilityMessage?.contains("on-device") == true)
     }
 
@@ -115,7 +115,7 @@ struct AIBackendSelectionTests {
         state.openRouterAPIKeyOverride = .some("sk-test")
 
         #expect(!(state.sqlGenerator is OpenRouterSQLGenerator))
-        #expect(state.activeBackendDisplayName == "local model")
+        #expect(state.activeBackendDisplayName == "the local model")
     }
 
     @Test func backendPreferencesPersistAcrossStates() {
