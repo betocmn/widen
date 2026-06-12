@@ -1,29 +1,46 @@
 import SwiftUI
 
-/// Flips light/dark mode (sun/moon icon). Lives in the sidebar footer; the
-/// "follow System" reset stays in Settings › General.
+/// Three-segment System / Light / Dark switch in the sidebar footer, drawn
+/// in the same capsule style as the toolbar's Local/Cloud toggle. Unlike the
+/// toolbar control it sits outside the system glass, so it carries its own
+/// subtle track.
 struct AppearanceToggle: View {
-    @Environment(\.colorScheme) private var colorScheme
     @AppStorage(AppearancePreference.storageKey)
     private var appearanceRaw = AppearancePreference.system.rawValue
 
     var body: some View {
-        Button {
-            let next: AppearancePreference = colorScheme == .dark ? .light : .dark
-            appearanceRaw = next.rawValue
-        } label: {
-            Label(
-                colorScheme == .dark ? "Switch to Light Mode" : "Switch to Dark Mode",
-                systemImage: colorScheme == .dark ? "sun.max" : "moon"
-            )
-            .labelStyle(.iconOnly)
-            .font(.system(size: 12))
+        HStack(spacing: 1) {
+            segment(.system, icon: "circle.lefthalf.filled", help: "Follow the system appearance")
+            segment(.light, icon: "sun.max", help: "Light mode")
+            segment(.dark, icon: "moon", help: "Dark mode")
         }
-        .buttonStyle(.borderless)
-        .foregroundStyle(.secondary)
-        .help(
-            colorScheme == .dark
-                ? "Switch to light mode (reset to System in Settings › General)"
-                : "Switch to dark mode (reset to System in Settings › General)")
+        .padding(2)
+        .background(Capsule().fill(.primary.opacity(0.06)))
+        .accessibilityElement(children: .contain)
+        .accessibilityLabel("Appearance")
+    }
+
+    private func segment(
+        _ preference: AppearancePreference, icon: String, help: String
+    ) -> some View {
+        let isSelected = appearanceRaw == preference.rawValue
+        return Button {
+            appearanceRaw = preference.rawValue
+        } label: {
+            Image(systemName: icon)
+                .font(.system(size: 10, weight: .medium))
+                .foregroundStyle(isSelected ? .primary : .secondary)
+                .padding(.horizontal, 7)
+                .padding(.vertical, 3.5)
+                .background {
+                    if isSelected {
+                        Capsule().fill(.primary.opacity(0.12))
+                    }
+                }
+                .contentShape(Capsule())
+        }
+        .buttonStyle(.plain)
+        .help(help)
+        .accessibilityAddTraits(isSelected ? .isSelected : [])
     }
 }

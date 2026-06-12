@@ -14,6 +14,10 @@ public struct MainView: View {
         NavigationSplitView {
             SidebarView()
                 .navigationSplitViewColumnWidth(min: 230, ideal: 280, max: 400)
+                // The system sidebar toggle renders without the glass
+                // container the other toolbar buttons get on macOS 26;
+                // it is replaced by SidebarToggle in the detail toolbar.
+                .toolbar(removing: .sidebarToggle)
         } detail: {
             VStack(spacing: 0) {
                 if let message = appState.errorBanner {
@@ -31,6 +35,11 @@ public struct MainView: View {
             // inspector toggle sits alone at the detail column's trailing
             // edge. The appearance toggle lives in the sidebar footer.
             .toolbar {
+                // In the detail toolbar (not the sidebar's) so it stays
+                // visible — and usable — while the sidebar is collapsed.
+                ToolbarItem(placement: .navigation) {
+                    SidebarToggle()
+                }
                 ToolbarItem(placement: .navigation) {
                     breadcrumb
                 }
@@ -172,6 +181,21 @@ private struct WelcomeDetailView: View {
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity)
         .padding(32)
+    }
+}
+
+/// Shows or hides the sidebar. Replaces the system toggle so it renders with
+/// the same glass container as every other toolbar button.
+struct SidebarToggle: View {
+    var body: some View {
+        Button {
+            NSApp.sendAction(
+                #selector(NSSplitViewController.toggleSidebar(_:)), to: nil, from: nil)
+        } label: {
+            Label("Sidebar", systemImage: "sidebar.left")
+                .labelStyle(.iconOnly)
+        }
+        .help("Show or hide the sidebar")
     }
 }
 
