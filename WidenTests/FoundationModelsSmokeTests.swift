@@ -87,6 +87,67 @@ struct FoundationModelsSmokeTests {
         #endif
     }
 
+    @Test(.timeLimit(.minutes(2)))
+    func modelExtractsConnectionDetailsFromPastedURL() async throws {
+        #if canImport(FoundationModels)
+            let model = SystemLanguageModel.default
+            guard model.isAvailable else {
+                Issue.record("Model unavailable: \(model.availability)")
+                return
+            }
+
+            let parser = FoundationModelsConnectionParser()
+            let details = try await parser.parse(
+                """
+                Hey, here are the staging credentials:
+                DATABASE_URL=postgres://widen_app:s3cret@db.staging.internal:6543/analytics?sslmode=require
+                """)
+            print("Extracted details: \(details)")
+
+            #expect(details.host == "db.staging.internal")
+            #expect(details.port == 6543)
+            #expect(details.database == "analytics")
+            #expect(details.username == "widen_app")
+            #expect(details.password == "s3cret")
+            #expect(details.sslMode == .require)
+        #else
+            Issue.record("FoundationModels is not available at compile time")
+        #endif
+    }
+
+    @Test(.timeLimit(.minutes(2)))
+    func modelExtractsConnectionDetailsFromEnvLines() async throws {
+        #if canImport(FoundationModels)
+            let model = SystemLanguageModel.default
+            guard model.isAvailable else {
+                Issue.record("Model unavailable: \(model.availability)")
+                return
+            }
+
+            let parser = FoundationModelsConnectionParser()
+            let details = try await parser.parse(
+                """
+                POSTGRES_HOST=10.1.2.3
+                POSTGRES_PORT=5432
+                POSTGRES_DB=warehouse
+                POSTGRES_USER=etl
+                POSTGRES_PASSWORD=hunter2
+                """)
+            print("Extracted details: \(details)")
+
+            #expect(details.host == "10.1.2.3")
+            #expect(details.port == 5432)
+            #expect(details.database == "warehouse")
+            #expect(details.username == "etl")
+            #expect(details.password == "hunter2")
+            // SSL is never mentioned, so the parser must not guess a mode.
+            #expect(details.sslMode == nil)
+            #expect(details.name == nil)
+        #else
+            Issue.record("FoundationModels is not available at compile time")
+        #endif
+    }
+
     @Test func mockGeneratorReturnsSafeConstantQuery() async throws {
         let result = try await MockSQLGenerator().generateSQL(
             question: "anything",
