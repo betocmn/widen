@@ -45,7 +45,7 @@ struct ConnectionEditorForm: View {
 
                     SettingsSectionPanel(title: "Query Context", systemImage: "text.book.closed") {
                         VStack(alignment: .leading, spacing: 8) {
-                            Text("Database relationships, business rules, and data notes sent with natural-language questions.")
+                            Text("Widen already sends the loaded database schema, including tables, columns, and foreign keys, with each natural-language question. Add optional notes here only when extra business logic, relationships, or data meaning would help the model.")
                                 .font(.caption)
                                 .foregroundStyle(.secondary)
 
