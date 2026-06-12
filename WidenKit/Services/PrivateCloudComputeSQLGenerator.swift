@@ -29,12 +29,18 @@
             }
         }
 
-        /// A short warning when the user is near or past the daily limit.
-        static var quotaWarning: String? {
+        /// A blocker when the user has exhausted the daily limit.
+        static var quotaLimitReachedMessage: String? {
             let usage = PrivateCloudComputeLanguageModel().quotaUsage
             if usage.isLimitReached {
                 return quotaReachedMessage(resetDate: usage.resetDate)
             }
+            return nil
+        }
+
+        /// A short warning when the user is near the daily limit.
+        static var quotaWarning: String? {
+            let usage = PrivateCloudComputeLanguageModel().quotaUsage
             if case .belowLimit(let info) = usage.status, info.isApproachingLimit {
                 return "You're approaching today's Private Cloud Compute limit."
             }

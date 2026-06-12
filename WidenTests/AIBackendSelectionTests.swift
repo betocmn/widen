@@ -63,6 +63,27 @@ struct AIBackendSelectionTests {
         #expect(state.modelAvailabilityMessage == nil)
     }
 
+    @Test func cloudApplePCCQuotaReachedIsUnavailable() {
+        clearDefaults()
+        let (state, dir) = makeState()
+        defer { cleanUp(dir) }
+
+        state.aiBackendMode = .cloud
+        state.cloudProvider = .applePCC
+        state.pccAvailabilityMessageOverride = .some(nil)
+        state.pccQuotaLimitReachedMessageOverride =
+            .some("You've reached today's Private Cloud Compute limit.")
+        state.localModelAvailabilityMessageOverride = .some(nil)
+
+        guard case .unavailable(let message) = state.cloudBackendStatus else {
+            Issue.record("expected unavailable, got \(state.cloudBackendStatus)")
+            return
+        }
+        #expect(message.contains("limit"))
+        #expect(state.activeBackendDisplayName == "the local model")
+        #expect(state.modelAvailabilityMessage?.contains("on-device model") == true)
+    }
+
     @Test func cloudOpenRouterWithoutKeyFallsBackToLocal() {
         clearDefaults()
         let (state, dir) = makeState()
@@ -80,6 +101,23 @@ struct AIBackendSelectionTests {
         #expect(state.activeBackendDisplayName == "the local model")
         #expect(state.modelAvailabilityMessage?.contains("API key") == true)
         #expect(state.modelAvailabilityMessage?.contains("on-device") == true)
+    }
+
+    @Test func cloudFallbackReportsWhenLocalModelIsAlsoUnavailable() {
+        clearDefaults()
+        let (state, dir) = makeState()
+        defer { cleanUp(dir) }
+
+        state.aiBackendMode = .cloud
+        state.cloudProvider = .openRouter
+        state.openRouterAPIKeyOverride = .some(nil)
+        state.localModelAvailabilityMessageOverride = .some("Local model is unavailable.")
+
+        let message = state.modelAvailabilityMessage ?? ""
+        #expect(message.contains("API key"))
+        #expect(message.contains("on-device fallback is also unavailable"))
+        #expect(message.contains("Local model is unavailable."))
+        #expect(!message.contains("Using the on-device model until then."))
     }
 
     /// True under both toolchains on this machine: a macOS 26 SDK build has

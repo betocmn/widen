@@ -143,12 +143,19 @@ public final class AppState {
     /// Test seam, mirrors `titleGeneratorOverride`: `.some(value)` replaces
     /// the Keychain lookup, including `.some(nil)` to force "no key stored".
     var openRouterAPIKeyOverride: String??
+    /// Test seams for host-dependent model availability.
+    var pccAvailabilityMessageOverride: String??
+    var pccQuotaLimitReachedMessageOverride: String??
+    var localModelAvailabilityMessageOverride: String??
 
     /// Whether the chosen cloud provider can serve requests right now.
     public var cloudBackendStatus: CloudBackendStatus {
         switch cloudProvider {
         case .applePCC:
-            if let message = PCCSupport.availabilityMessage {
+            if let message = pccAvailabilityMessage {
+                return .unavailable(message)
+            }
+            if let message = pccQuotaLimitReachedMessage {
                 return .unavailable(message)
             }
             return .ready
@@ -168,13 +175,26 @@ public final class AppState {
         return (try? keychain.loadOpenRouterAPIKey()) ?? nil
     }
 
+    private var pccAvailabilityMessage: String? {
+        if let pccAvailabilityMessageOverride { return pccAvailabilityMessageOverride }
+        return PCCSupport.availabilityMessage
+    }
+
+    private var pccQuotaLimitReachedMessage: String? {
+        if let pccQuotaLimitReachedMessageOverride { return pccQuotaLimitReachedMessageOverride }
+        return PCCSupport.quotaLimitReachedMessage
+    }
+
     /// Saves (empty deletes) the OpenRouter API key. Keychain only; the key
     /// never touches UserDefaults.
-    public func setOpenRouterAPIKey(_ key: String) {
+    @discardableResult
+    public func setOpenRouterAPIKey(_ key: String) -> Bool {
         do {
             try keychain.saveOpenRouterAPIKey(key)
+            return true
         } catch {
             errorBanner = error.localizedDescription
+            return false
         }
     }
 
@@ -245,6 +265,10 @@ public final class AppState {
         if useMockAI { return nil }
         if aiBackendMode == .cloud {
             if let message = cloudBackendStatus.message {
+                if let localMessage = localModelAvailabilityMessage {
+                    return
+                        "\(message) The on-device fallback is also unavailable: \(localMessage)"
+                }
                 return "\(message) Using the on-device model until then."
             }
             if cloudProvider == .applePCC {
@@ -259,6 +283,7 @@ public final class AppState {
     /// reason. Mode-independent — Settings › LLM shows it for the Local
     /// section regardless of the active backend.
     public var localModelAvailabilityMessage: String? {
+        if let localModelAvailabilityMessageOverride { return localModelAvailabilityMessageOverride }
         #if canImport(FoundationModels)
             return FoundationModelsSQLGenerator.availabilityMessage
         #else

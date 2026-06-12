@@ -75,11 +75,8 @@ struct LLMSettingsView: View {
 
     @ViewBuilder
     private var pccConfiguration: some View {
-        if let message = PCCSupport.availabilityMessage {
-            Label(message, systemImage: "exclamationmark.triangle")
-                .font(.callout)
-                .foregroundStyle(.orange)
-        } else {
+        switch appState.cloudBackendStatus {
+        case .ready:
             Label(
                 "Private Cloud Compute is ready. Generations are private and free, with a daily limit.",
                 systemImage: "checkmark.circle"
@@ -99,6 +96,10 @@ struct LLMSettingsView: View {
                     }
                 }
             }
+        case .notConfigured(let message), .unavailable(let message):
+            Label(message, systemImage: "exclamationmark.triangle")
+                .font(.callout)
+                .foregroundStyle(.orange)
         }
         Text(
             "Apple's server-side foundation model, announced at WWDC 2026. Requires macOS 27, Apple Intelligence, and a build signed with Apple's Private Cloud Compute entitlement."
@@ -184,13 +185,15 @@ struct LLMSettingsView: View {
     private func saveKey() {
         let key = apiKeyDraft.trimmingCharacters(in: .whitespacesAndNewlines)
         apiKeyDraft = key
-        appState.setOpenRouterAPIKey(key)
-        hasStoredKey = !key.isEmpty
+        if appState.setOpenRouterAPIKey(key) {
+            hasStoredKey = !key.isEmpty
+        }
     }
 
     private func removeKey() {
-        apiKeyDraft = ""
-        appState.setOpenRouterAPIKey("")
-        hasStoredKey = false
+        if appState.setOpenRouterAPIKey("") {
+            apiKeyDraft = ""
+            hasStoredKey = false
+        }
     }
 }

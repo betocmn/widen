@@ -39,8 +39,19 @@ public enum PCCSupport {
         #endif
     }
 
-    /// A short warning when the user is near or past the daily limit; nil
-    /// otherwise (including whenever PCC itself is unavailable).
+    /// A blocker when the user has exhausted the daily limit; nil otherwise
+    /// (including whenever PCC itself is unavailable).
+    public static var quotaLimitReachedMessage: String? {
+        #if compiler(>=6.4) && canImport(FoundationModels)
+            guard #available(macOS 27.0, *) else { return nil }
+            return PrivateCloudComputeSQLGenerator.quotaLimitReachedMessage
+        #else
+            return nil
+        #endif
+    }
+
+    /// A short warning when the user is near the daily limit; nil otherwise
+    /// (including when the limit is already exhausted).
     public static var quotaWarning: String? {
         #if compiler(>=6.4) && canImport(FoundationModels)
             guard #available(macOS 27.0, *) else { return nil }
