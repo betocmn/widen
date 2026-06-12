@@ -14,55 +14,27 @@ struct AIBackendToggle: View {
 
     var body: some View {
         HStack(spacing: 2) {
-            segment(
-                mode: .local,
-                title: "Local",
+            CapsuleSegmentButton(
                 icon: "shield.lefthalf.filled",
+                title: "Local",
+                isSelected: appState.aiBackendMode == .local,
                 help: localHelp
-            )
-            segment(
-                mode: .cloud,
-                title: "Cloud",
+            ) {
+                select(.local)
+            }
+            CapsuleSegmentButton(
                 icon: isCloudBroken ? "exclamationmark.icloud.fill" : "cloud.fill",
+                title: "Cloud",
+                isSelected: appState.aiBackendMode == .cloud,
+                isWarning: isCloudBroken,
                 help: cloudHelp
-            )
+            ) {
+                select(.cloud)
+            }
         }
         .padding(.horizontal, 4)
         .accessibilityElement(children: .contain)
         .accessibilityLabel("LLM backend")
-    }
-
-    private func segment(
-        mode: AIBackendMode, title: String, icon: String, help: String
-    ) -> some View {
-        let isSelected = appState.aiBackendMode == mode
-        let isWarning = mode == .cloud && isCloudBroken
-        return Button {
-            select(mode)
-        } label: {
-            HStack(spacing: 5) {
-                Image(systemName: icon)
-                    .font(.system(size: 11, weight: .medium))
-                Text(title)
-                    .font(.callout)
-            }
-            .foregroundStyle(
-                isWarning
-                    ? AnyShapeStyle(.orange)
-                    : (isSelected ? AnyShapeStyle(.primary) : AnyShapeStyle(.secondary))
-            )
-            .padding(.horizontal, 10)
-            .padding(.vertical, 4)
-            .background {
-                if isSelected {
-                    Capsule().fill(.primary.opacity(0.12))
-                }
-            }
-            .contentShape(Capsule())
-        }
-        .buttonStyle(.plain)
-        .help(help)
-        .accessibilityAddTraits(isSelected ? .isSelected : [])
     }
 
     private var isCloudBroken: Bool {

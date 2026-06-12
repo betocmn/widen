@@ -25,6 +25,7 @@
 		1B4AF2DDDDEF130CA473EE1F /* AppStateSchemaTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = A8D7D7EDCCE8B5638DAF4989 /* AppStateSchemaTests.swift */; };
 		1B7ED3BD37EE6A5727850143 /* SQLPromptBuilder.swift in Sources */ = {isa = PBXBuildFile; fileRef = 6BA8E6CFAEE004F6DB3C4D6B /* SQLPromptBuilder.swift */; };
 		1D500705EAC9A667A2702299 /* SchemaBrowserView.swift in Sources */ = {isa = PBXBuildFile; fileRef = ABCA8C831C2698A2155AD49F /* SchemaBrowserView.swift */; };
+		223A191A64938643DCB02C11 /* CapsuleSegmentButton.swift in Sources */ = {isa = PBXBuildFile; fileRef = 5C80647687D414D4445762EE /* CapsuleSegmentButton.swift */; };
 		2A486A59E00812C4F538DE85 /* FoundationModelsTitleGenerator.swift in Sources */ = {isa = PBXBuildFile; fileRef = 6399B3911003C49C8E5A23BB /* FoundationModelsTitleGenerator.swift */; };
 		2C8F8995D28211876451B162 /* ConnectionSettingsViewModel.swift in Sources */ = {isa = PBXBuildFile; fileRef = 75E1E0F5761DB6F974FB9494 /* ConnectionSettingsViewModel.swift */; };
 		2DEB15A6FB12058AEB8EA4C3 /* PostgresNIO in Frameworks */ = {isa = PBXBuildFile; productRef = 529F1F207D19D87065B1C548 /* PostgresNIO */; };
@@ -166,6 +167,7 @@
 		55003AE18B47B04247233530 /* SidebarView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SidebarView.swift; sourceTree = "<group>"; };
 		590FC9E47C8F0984E7168920 /* ChatViewModelTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ChatViewModelTests.swift; sourceTree = "<group>"; };
 		5A2C062CE92CC29EB34DC339 /* SchemaIntrospectionService.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SchemaIntrospectionService.swift; sourceTree = "<group>"; };
+		5C80647687D414D4445762EE /* CapsuleSegmentButton.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CapsuleSegmentButton.swift; sourceTree = "<group>"; };
 		60016B4C1BD9B80A992A73A4 /* SettingsView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SettingsView.swift; sourceTree = "<group>"; };
 		62528AEFE710F6485BD8680B /* QueryResult.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = QueryResult.swift; sourceTree = "<group>"; };
 		6399B3911003C49C8E5A23BB /* FoundationModelsTitleGenerator.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = FoundationModelsTitleGenerator.swift; sourceTree = "<group>"; };
@@ -292,6 +294,7 @@
 			children = (
 				4C1644FE0720C6F12CB46ED8 /* AIBackendToggle.swift */,
 				230B04423A505F20C3D79EF5 /* AppearanceToggle.swift */,
+				5C80647687D414D4445762EE /* CapsuleSegmentButton.swift */,
 				761F73A4F49799F8CADA0C29 /* DatabaseOverviewView.swift */,
 				980EE95F99B9CDF2F26BBC47 /* ErrorBannerView.swift */,
 				CB98264D45BE6021646B47AA /* LoadingView.swift */,
@@ -613,6 +616,7 @@
 				0560EC58BEE91D9F98F5AC32 /* AppearancePreference.swift in Sources */,
 				9FC5F80BD37E41A1A2235094 /* AppearanceToggle.swift in Sources */,
 				6EC15D2180D5E4E77FC806BC /* ArchivedSessionsSettingsView.swift in Sources */,
+				223A191A64938643DCB02C11 /* CapsuleSegmentButton.swift in Sources */,
 				04D45723ACD2DBFB2A44561F /* ChatMessage.swift in Sources */,
 				B61F1D2B5F5495A14A7D6F82 /* ChatModeView.swift in Sources */,
 				603D1C66B3804DB8772F9B9C /* ChatViewModel.swift in Sources */,

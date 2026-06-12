@@ -30,6 +30,7 @@ public struct SchemaInspectorView: View {
                     }
                 }
                 .buttonStyle(.borderless)
+                .hoverHighlight()
                 .help(isLoadingSchema ? "Loading schema" : "Refresh Schema")
                 .disabled(activeStatus != .connected || isLoadingSchema)
             }

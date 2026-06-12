@@ -51,13 +51,14 @@ public struct SidebarView: View {
                     }
                     .buttonStyle(.borderless)
                     .foregroundStyle(.secondary)
+                    .hoverHighlight()
                     Spacer()
                     AppearanceToggle()
                 }
                 // Leading padding keeps the icon clear of the window's
                 // rounded bottom corner and aligned with the list rows.
-                .padding(.horizontal, 16)
-                .padding(.vertical, 13)
+                .padding(.horizontal, 12)
+                .padding(.vertical, 12)
             }
         }
     }
