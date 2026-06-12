@@ -42,19 +42,22 @@ public struct SidebarView: View {
         .safeAreaInset(edge: .bottom, spacing: 0) {
             VStack(spacing: 0) {
                 Divider()
-                Button {
-                    appState.openNewDatabaseSettings()
-                } label: {
-                    Label("Add Database", systemImage: "plus.circle")
-                        .font(.system(size: 12))
+                HStack {
+                    Button {
+                        appState.openNewDatabaseSettings()
+                    } label: {
+                        Label("Add Database", systemImage: "plus.circle")
+                            .font(.system(size: 12))
+                    }
+                    .buttonStyle(.borderless)
+                    .foregroundStyle(.secondary)
+                    Spacer()
+                    AppearanceToggle()
                 }
-                .buttonStyle(.borderless)
-                .foregroundStyle(.secondary)
-                .frame(maxWidth: .infinity, alignment: .leading)
                 // Leading padding keeps the icon clear of the window's
                 // rounded bottom corner and aligned with the list rows.
                 .padding(.horizontal, 16)
-                .padding(.vertical, 9)
+                .padding(.vertical, 13)
             }
         }
     }

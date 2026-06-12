@@ -152,8 +152,9 @@ NavigationSplitView
         + ComposerView pinned at the bottom
     .inspector: SchemaInspectorView (toolbar-toggled, scoped to the open schema)
   toolbar: system sidebar toggle · breadcrumb (status dot · database › schema
-           menu) · local/cloud LLM segmented toggle · light/dark toggle ·
-           inspector toggle (detail trailing); window title removed
+           menu) · local/cloud LLM toggle · inspector toggle (detail
+           trailing); window title removed. The light/dark toggle lives in
+           the sidebar footer next to "Add Database".
 ```
 
 The breadcrumb is plain toolbar content on purpose: the macOS 26 toolbar

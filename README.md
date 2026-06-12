@@ -29,7 +29,8 @@ it safely - all locally.
   query session — a persistent chat + SQL + results workspace that survives
   restarts and is auto-named by the local model after your first question.
 - **Modern macOS 26 look.** Liquid Glass styling, a schema inspector panel,
-  and light/dark and local/cloud toggles in the toolbar.
+  a local/cloud LLM toggle in the toolbar, and a light/dark toggle in the
+  sidebar footer.
 
 ## Requirements
 
@@ -140,8 +141,8 @@ picker both switch the open schema; the table list and the AI's context are
 scoped to it. Schema snapshots are cached in
 `~/Library/Application Support/Widen/schemas.json` so the last known schema is
 available immediately on relaunch; Refresh Schema fetches the live structure
-and updates that cache. The sun/moon toolbar button flips light/dark mode;
-pick "System" in Settings › General to follow macOS again.
+and updates that cache. The sun/moon button in the sidebar footer flips
+light/dark mode; pick "System" in Settings › General to follow macOS again.
 
 ## How a query runs
 
