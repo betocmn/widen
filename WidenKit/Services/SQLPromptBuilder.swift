@@ -3,6 +3,8 @@ import Foundation
 /// Builds the instructions and prompt text for SQL generation. Pure functions,
 /// so output is unit-testable and identical for every generator backend.
 public enum SQLPromptBuilder {
+    public static let maxDatabaseContextCharacters = 2_000
+
     /// System instructions for the model, with the app's safety rules.
     public static func instructions(defaultRowLimit: Int) -> String {
         """
@@ -22,6 +24,7 @@ public enum SQLPromptBuilder {
         - Prefer readable column aliases.
         - Include LIMIT unless the query is an aggregate query that naturally returns a small number of rows.
         - Use a default LIMIT of \(defaultRowLimit).
+        - If a Database context section is present, use it as user-provided guidance about relationships, business rules, data meaning, and preferred filters. The schema remains authoritative for available tables and columns.
         - The prompt may include conversation context: earlier questions, the current SQL, and the error of its last run. Treat the user's question as a follow-up to that context — adjust the current SQL when asked, and when an error is shown, produce a corrected version of that query that still answers the earlier questions.
         - If the request is ambiguous, make the safest reasonable assumption and include it in assumptions.
         - If the request cannot be answered from the schema, set needsClarification to true and ask a concise clarification question.
@@ -35,9 +38,13 @@ public enum SQLPromptBuilder {
         question: String,
         schema: DatabaseSchema,
         context: SQLGenerationContext = SQLGenerationContext(),
+        databaseContext: String? = nil,
         maxSchemaCharacters: Int = 8_000
     ) -> String {
         var sections = [schemaSummary(schema, maxCharacters: maxSchemaCharacters)]
+        if let databaseContextSection = databaseContextSection(databaseContext) {
+            sections.append(databaseContextSection)
+        }
         if let contextSection = contextSection(context) {
             sections.append(contextSection)
         }
@@ -66,6 +73,19 @@ public enum SQLPromptBuilder {
             lines.append("- The last run of that SQL failed with: \(truncated(error, to: 300))")
         }
         return lines.joined(separator: "\n")
+    }
+
+    /// Renders user-authored database guidance from settings. This is capped
+    /// separately from the schema budget so saved notes cannot consume the
+    /// full local model context window.
+    static func databaseContextSection(
+        _ databaseContext: String?,
+        maxCharacters: Int = maxDatabaseContextCharacters
+    ) -> String? {
+        guard let databaseContext else { return nil }
+        let trimmed = databaseContext.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmed.isEmpty else { return nil }
+        return "Database context:\n\(truncated(trimmed, to: maxCharacters))"
     }
 
     private static func truncated(_ text: String, to limit: Int) -> String {

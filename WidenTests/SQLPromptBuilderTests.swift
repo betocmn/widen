@@ -102,6 +102,7 @@ struct SQLPromptBuilderTests {
         let instructions = SQLPromptBuilder.instructions(defaultRowLimit: 250)
         #expect(instructions.contains("SELECT or WITH ... SELECT only"))
         #expect(instructions.contains("Use a default LIMIT of 250."))
+        #expect(instructions.contains("Database context"))
         #expect(instructions.contains("Never generate INSERT, UPDATE, DELETE"))
         #expect(instructions.contains("Do not include semicolons."))
         #expect(instructions.contains("needsClarification"))
@@ -118,6 +119,35 @@ struct SQLPromptBuilderTests {
             schema: makeSampleSchema()
         )
         #expect(!prompt.contains("Conversation context:"))
+    }
+
+    @Test func promptIncludesDatabaseContextBeforeConversationAndQuestion() {
+        let context = SQLGenerationContext(recentQuestions: ["last question"])
+        let prompt = SQLPromptBuilder.prompt(
+            question: "Show active customers.",
+            schema: makeSampleSchema(),
+            context: context,
+            databaseContext: "  Active customers have orders in the last 90 days.\n"
+        )
+
+        #expect(prompt.contains("Database context:\nActive customers have orders in the last 90 days."))
+        let databaseContextRange = prompt.range(of: "Database context:")
+        let conversationRange = prompt.range(of: "Conversation context:")
+        let questionRange = prompt.range(of: "User question:")
+        #expect(databaseContextRange!.lowerBound < conversationRange!.lowerBound)
+        #expect(conversationRange!.lowerBound < questionRange!.lowerBound)
+    }
+
+    @Test func emptyDatabaseContextIsOmittedAndLongContextIsTruncated() {
+        #expect(SQLPromptBuilder.databaseContextSection("   \n") == nil)
+
+        let section = SQLPromptBuilder.databaseContextSection(
+            String(repeating: "x", count: SQLPromptBuilder.maxDatabaseContextCharacters + 10)
+        )
+
+        #expect(section?.contains("Database context:") == true)
+        #expect(section?.contains("…") == true)
+        #expect((section?.count ?? 0) < SQLPromptBuilder.maxDatabaseContextCharacters + 30)
     }
 
     @Test func promptIncludesConversationContext() {

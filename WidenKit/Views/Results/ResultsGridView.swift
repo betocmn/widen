@@ -3,18 +3,17 @@ import SwiftUI
 
 /// Bordered table of one materialized result's stringified values, sized to
 /// its content so it can sit inline in the chat thread. Scrolls horizontally
-/// for wide results; `maxRows` caps how many rows render (for the collapsed
-/// "View more" state).
+/// for wide results. The view always caps visible records to the hard display
+/// page size; export and copy continue to use the full materialized result.
 struct ResultsGridView: View {
     let result: QueryResult
-    var maxRows: Int?
+    let rows: [[String?]]
 
     private static let lineColor = Color.primary.opacity(0.12)
     private static let horizontalScrollerGutter: CGFloat = 16
 
     private var displayRows: [[String?]] {
-        guard let maxRows else { return result.rows }
-        return Array(result.rows.prefix(maxRows))
+        Array(rows.prefix(QueryResultDisplayPolicy.maxRowsPerPage))
     }
 
     var body: some View {

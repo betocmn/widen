@@ -34,6 +34,12 @@ struct ChatModeView: View {
                 .padding(.top, 8)
             }
 
+            QueryContextStatusBar(context: databaseContext) {
+                appState.openDatabaseSettings(connectionID: controller.connectionID)
+            }
+            .padding(.horizontal, 12)
+            .padding(.top, 8)
+
             if isEmpty {
                 emptyHint
             } else {
@@ -68,6 +74,10 @@ struct ChatModeView: View {
 
     private var connectionStatus: AppState.ConnectionStatus {
         appState.connectionState(controller.connectionID)
+    }
+
+    private var databaseContext: String {
+        appState.connection(for: controller.connectionID)?.databaseContext ?? ""
     }
 
     private var isSchemaPreparing: Bool {
@@ -288,6 +298,60 @@ private enum SchemaStatus: Equatable {
 
     var canRefresh: Bool {
         self == .missing
+    }
+}
+
+private struct QueryContextStatusBar: View {
+    let context: String
+    let edit: () -> Void
+
+    private var trimmedContext: String {
+        context.trimmingCharacters(in: .whitespacesAndNewlines)
+    }
+
+    private var statusText: String {
+        trimmedContext.isEmpty ? "Not configured" : trimmedContext
+    }
+
+    private var editLabel: String {
+        trimmedContext.isEmpty ? "Configure" : "Edit"
+    }
+
+    var body: some View {
+        HStack(spacing: 10) {
+            Image(systemName: "text.book.closed")
+                .font(.system(size: 14, weight: .semibold))
+                .foregroundStyle(.secondary)
+                .frame(width: 18)
+
+            VStack(alignment: .leading, spacing: 2) {
+                Text("Query Context")
+                    .font(.caption.weight(.semibold))
+                Text(statusText)
+                    .font(.caption)
+                    .foregroundStyle(
+                        trimmedContext.isEmpty ? Color.secondary.opacity(0.7) : Color.secondary
+                    )
+                    .lineLimit(1)
+                    .truncationMode(.tail)
+            }
+
+            Spacer(minLength: 8)
+
+            Button {
+                edit()
+            } label: {
+                Label(editLabel, systemImage: "square.and.pencil")
+            }
+            .controlSize(.small)
+            .help("\(editLabel) query context")
+        }
+        .padding(10)
+        .background(Color.primary.opacity(0.05), in: RoundedRectangle(cornerRadius: 10))
+        .overlay {
+            RoundedRectangle(cornerRadius: 10)
+                .strokeBorder(Color.primary.opacity(0.12))
+        }
     }
 }
 

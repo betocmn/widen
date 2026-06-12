@@ -41,6 +41,34 @@ public struct QueryResult: Equatable, Sendable {
     }
 }
 
+public enum QueryResultDisplayPolicy {
+    public static let maxRowsPerPage = 20
+
+    public static func pageCount(forRowCount rowCount: Int) -> Int {
+        max(1, (max(rowCount, 0) + maxRowsPerPage - 1) / maxRowsPerPage)
+    }
+
+    public static func clampedPage(_ page: Int, rowCount: Int) -> Int {
+        min(max(page, 0), pageCount(forRowCount: rowCount) - 1)
+    }
+
+    public static func rows(_ rows: [[String?]], page: Int) -> [[String?]] {
+        let page = clampedPage(page, rowCount: rows.count)
+        let start = page * maxRowsPerPage
+        guard start < rows.count else { return [] }
+        let end = min(start + maxRowsPerPage, rows.count)
+        return Array(rows[start..<end])
+    }
+
+    public static func visibleRange(forRowCount rowCount: Int, page: Int) -> Range<Int>? {
+        guard rowCount > 0 else { return nil }
+        let page = clampedPage(page, rowCount: rowCount)
+        let start = page * maxRowsPerPage
+        let end = min(start + maxRowsPerPage, rowCount)
+        return start..<end
+    }
+}
+
 public enum QueryResultExport {
     public static func csvFilename(for sessionTitle: String) -> String {
         let words = sessionTitle

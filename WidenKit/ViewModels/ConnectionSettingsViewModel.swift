@@ -21,6 +21,7 @@ public final class ConnectionSettingsViewModel {
         var sslMode: SSLMode
         var rowLimitText: String
         var timeoutText: String
+        var databaseContext: String
     }
 
     public var name = ""
@@ -32,6 +33,7 @@ public final class ConnectionSettingsViewModel {
     public var sslMode: SSLMode = .disable
     public var rowLimitText = "100"
     public var timeoutText = "10"
+    public var databaseContext = ""
 
     public private(set) var validationErrors: [String] = []
     public private(set) var testState: TestState = .idle
@@ -68,6 +70,7 @@ public final class ConnectionSettingsViewModel {
         sslMode = config.sslMode
         rowLimitText = String(config.defaultRowLimit)
         timeoutText = String(config.statementTimeoutSeconds)
+        databaseContext = config.databaseContext
         password = (try? keychain.loadPassword(for: config.id)) ?? ""
         validationErrors = []
         testState = .idle
@@ -128,6 +131,12 @@ public final class ConnectionSettingsViewModel {
         if timeout.map({ (1...120).contains($0) }) != true {
             errors.append("Timeout must be between 1 and 120 seconds.")
         }
+        let trimmedDatabaseContext = databaseContext.trimmingCharacters(in: .whitespacesAndNewlines)
+        if trimmedDatabaseContext.count > SQLPromptBuilder.maxDatabaseContextCharacters {
+            errors.append(
+                "Query context must be \(SQLPromptBuilder.maxDatabaseContextCharacters.formatted()) characters or fewer."
+            )
+        }
 
         guard errors.isEmpty, let port, let rowLimit, let timeout else {
             return (nil, errors)
@@ -143,6 +152,7 @@ public final class ConnectionSettingsViewModel {
         config.sslMode = sslMode
         config.defaultRowLimit = rowLimit
         config.statementTimeoutSeconds = timeout
+        config.databaseContext = trimmedDatabaseContext
         config.updatedAt = Date()
         return (config, [])
     }
@@ -179,6 +189,7 @@ public final class ConnectionSettingsViewModel {
         sslMode = .disable
         rowLimitText = "100"
         timeoutText = "10"
+        databaseContext = ""
         validationErrors = []
         testState = .idle
         saveError = nil
@@ -195,7 +206,8 @@ public final class ConnectionSettingsViewModel {
             password: password,
             sslMode: sslMode,
             rowLimitText: rowLimitText,
-            timeoutText: timeoutText
+            timeoutText: timeoutText,
+            databaseContext: databaseContext
         )
     }
 

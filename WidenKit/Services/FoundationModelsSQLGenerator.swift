@@ -111,6 +111,7 @@
                 question: question,
                 schema: schema,
                 context: context,
+                databaseContext: config.databaseContext,
                 maxSchemaCharacters: maxSchemaCharacters
             )
             let started = Date()

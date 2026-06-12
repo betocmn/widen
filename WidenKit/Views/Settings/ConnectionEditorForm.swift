@@ -43,6 +43,38 @@ struct ConnectionEditorForm: View {
                         textRow("Statement timeout (seconds)", text: $viewModel.timeoutText, width: 120)
                     }
 
+                    SettingsSectionPanel(title: "Query Context", systemImage: "text.book.closed") {
+                        VStack(alignment: .leading, spacing: 8) {
+                            Text("Database relationships, business rules, and data notes sent with natural-language questions.")
+                                .font(.caption)
+                                .foregroundStyle(.secondary)
+
+                            TextEditor(text: $viewModel.databaseContext)
+                                .font(.body)
+                                .scrollContentBackground(.hidden)
+                                .padding(6)
+                                .frame(minHeight: 120)
+                                .background(
+                                    Color(nsColor: .textBackgroundColor),
+                                    in: RoundedRectangle(cornerRadius: 6)
+                                )
+                                .overlay {
+                                    RoundedRectangle(cornerRadius: 6)
+                                        .stroke(Color.primary.opacity(0.12), lineWidth: 1)
+                                }
+                                .help("Included in the local model prompt before each text-to-SQL generation.")
+
+                            Text("\(viewModel.databaseContext.count) / \(SQLPromptBuilder.maxDatabaseContextCharacters.formatted()) characters")
+                                .font(.caption2.monospacedDigit())
+                                .foregroundStyle(
+                                    viewModel.databaseContext.count
+                                        > SQLPromptBuilder.maxDatabaseContextCharacters
+                                        ? Color.red : Color.secondary.opacity(0.7)
+                                )
+                        }
+                        .frame(maxWidth: .infinity, alignment: .leading)
+                    }
+
                     if !viewModel.validationErrors.isEmpty {
                         MessagePanel(systemImage: "exclamationmark.triangle.fill", color: .red) {
                             VStack(alignment: .leading, spacing: 4) {
