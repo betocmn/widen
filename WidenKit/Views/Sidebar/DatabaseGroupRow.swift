@@ -6,6 +6,7 @@ import SwiftUI
 struct DatabaseGroupRow: View {
     @Environment(AppState.self) private var appState
     let connection: DatabaseConnectionConfig
+    @State private var isHovering = false
 
     var body: some View {
         HStack(spacing: 9) {
@@ -45,9 +46,12 @@ struct DatabaseGroupRow: View {
                     .font(.system(size: 11, weight: .semibold))
             }
             .buttonStyle(.borderless)
+            .hoverHighlight(horizontalPadding: 3, verticalPadding: 3)
             .help("New Session")
         }
         .padding(.vertical, 3)
+        .onHover { isHovering = $0 }
+        .listRowBackground(rowHoverBackground)
         .contextMenu {
             Button("New Session") {
                 appState.createSession(connectionID: connection.id)
@@ -75,6 +79,19 @@ struct DatabaseGroupRow: View {
             Button("Edit in Settings…") {
                 appState.openDatabaseSettings(connectionID: connection.id)
             }
+        }
+    }
+
+    /// Hover tint behind the row, shaped like the sidebar selection pill;
+    /// suppressed while selected so the two highlights never stack.
+    @ViewBuilder
+    private var rowHoverBackground: some View {
+        if isHovering, appState.sidebarSelection != .database(connection.id) {
+            RoundedRectangle(cornerRadius: 6)
+                .fill(.primary.opacity(0.06))
+                .padding(.horizontal, 5)
+        } else {
+            Color.clear
         }
     }
 

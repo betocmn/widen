@@ -26,6 +26,7 @@ struct SessionRow: View {
                         .frame(width: 20, height: 20)
                 }
                 .buttonStyle(.borderless)
+                .hoverHighlight(horizontalPadding: 0, verticalPadding: 0)
                 .foregroundStyle(.secondary)
                 .help("Archive Session")
             } else {
@@ -37,6 +38,7 @@ struct SessionRow: View {
         .padding(.leading, 29)
         .padding(.vertical, 1)
         .onHover { isHovering = $0 }
+        .listRowBackground(rowHoverBackground)
         .contextMenu {
             Button("Rename") {
                 renamingSessionID = session.id
@@ -56,6 +58,19 @@ struct SessionRow: View {
             Button("Cancel", role: .cancel) {}
         } message: {
             Text("Archived sessions are hidden from the sidebar and can be restored from Settings.")
+        }
+    }
+
+    /// Hover tint behind the row, shaped like the sidebar selection pill;
+    /// suppressed while selected so the two highlights never stack.
+    @ViewBuilder
+    private var rowHoverBackground: some View {
+        if isHovering, appState.sidebarSelection != .session(session.id) {
+            RoundedRectangle(cornerRadius: 6)
+                .fill(.primary.opacity(0.06))
+                .padding(.horizontal, 5)
+        } else {
+            Color.clear
         }
     }
 

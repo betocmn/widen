@@ -53,6 +53,7 @@ struct SQLCardView: View {
                 controller.runQuery(appState: appState)
             }
             .buttonStyle(.glassProminent)
+            .hoverBrightness()
             .keyboardShortcut(.return, modifiers: .command)
             .disabled(runDisabled)
             .help("Approve and execute this query")
@@ -256,6 +257,7 @@ struct AnimatedCopyButton: View {
                 .contentTransition(.symbolEffect(.replace))
         }
         .buttonStyle(.borderless)
+        .hoverHighlight(horizontalPadding: 4, verticalPadding: 3)
         .help(didCopy ? "Copied" : help)
     }
 }
