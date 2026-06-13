@@ -7,41 +7,13 @@ public struct MockConnectionDetailsParser: ConnectionDetailsParsing {
     public init() {}
 
     public func parse(_ text: String) async throws -> ParsedConnectionDetails {
-        if let url = Self.firstConnectionURL(in: text),
-            let details = Self.details(from: url)
-        {
-            return details
+        // A pasted URL is parsed deterministically and wins over the
+        // KEY=VALUE scan, matching the on-device parser's merge.
+        let keyValues = Self.details(fromKeyValues: text)
+        if let url = ConnectionURLParser.details(in: text) {
+            return keyValues.overridden(by: url)
         }
-        return Self.details(fromKeyValues: text)
-    }
-
-    /// Finds the first postgres:// or postgresql:// URL, including one on the
-    /// right-hand side of an assignment like DATABASE_URL=postgres://…
-    static func firstConnectionURL(in text: String) -> URL? {
-        for token in text.split(whereSeparator: { $0.isWhitespace || $0 == "\"" || $0 == "'" }) {
-            for scheme in ["postgresql://", "postgres://"] {
-                if let range = token.range(of: scheme, options: .caseInsensitive) {
-                    return URL(string: String(token[range.lowerBound...]))
-                }
-            }
-        }
-        return nil
-    }
-
-    static func details(from url: URL) -> ParsedConnectionDetails? {
-        guard let components = URLComponents(url: url, resolvingAgainstBaseURL: false) else {
-            return nil
-        }
-        let sslModeText = components.queryItems?
-            .first { $0.name.lowercased() == "sslmode" }?.value
-        return .sanitized(
-            host: components.host,
-            port: components.port,
-            database: components.path,
-            username: components.user,
-            password: components.password,
-            sslModeText: sslModeText
-        )
+        return keyValues
     }
 
     static func details(fromKeyValues text: String) -> ParsedConnectionDetails {

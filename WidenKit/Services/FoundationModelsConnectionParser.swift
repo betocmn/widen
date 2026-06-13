@@ -66,7 +66,17 @@
                     generating: GeneratedConnectionDetails.self,
                     options: GenerationOptions(sampling: .greedy, maximumResponseTokens: 512)
                 )
-                return Self.details(from: response.content, pastedText: text)
+                let modelDetails = Self.details(from: response.content, pastedText: text)
+                // A connection URL is structured, so parse it deterministically
+                // and let it win: the small model sometimes truncates a dotted
+                // username (e.g. Supabase's postgres.<project-ref>) or
+                // mis-splits the password. The model still covers free-form
+                // .env/prose, and any field the URL omits — like a password on
+                // a separate line — survives the merge.
+                if let urlDetails = ConnectionURLParser.details(in: text) {
+                    return modelDetails.overridden(by: urlDetails)
+                }
+                return modelDetails
             } catch let error as LanguageModelSession.GenerationError {
                 throw Self.map(error)
             }

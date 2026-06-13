@@ -35,6 +35,21 @@ public struct ParsedConnectionDetails: Equatable, Sendable {
             && username == nil && password == nil && sslMode == nil
     }
 
+    /// Returns a copy where every non-nil field of `override` replaces this
+    /// one. Used to let a deterministically parsed connection URL win over the
+    /// model's guess while keeping the fields the URL did not specify.
+    public func overridden(by override: ParsedConnectionDetails) -> ParsedConnectionDetails {
+        ParsedConnectionDetails(
+            name: override.name ?? name,
+            host: override.host ?? host,
+            port: override.port ?? port,
+            database: override.database ?? database,
+            username: override.username ?? username,
+            password: override.password ?? password,
+            sslMode: override.sslMode ?? sslMode
+        )
+    }
+
     /// Builds details from raw extracted values: trims whitespace, drops
     /// empty strings, validates the port range, strips a leading slash from
     /// the database (URL paths), and maps libpq sslmode spellings onto the
