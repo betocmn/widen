@@ -130,9 +130,11 @@ public final class ConnectionSettingsViewModel {
         do {
             details = try await parser.parse(text)
         } catch {
+            if Task.isCancelled { return cancelAutofillResult() }
             autofillState = .failure(error.localizedDescription)
             return false
         }
+        guard !Task.isCancelled else { return cancelAutofillResult() }
         guard !details.isEmpty else {
             autofillState = .failure(
                 "No connection details were found in the pasted text. Check that it mentions at least a host, database, or user."
@@ -160,6 +162,13 @@ public final class ConnectionSettingsViewModel {
     public func resetAutofill() {
         autofillText = ""
         autofillState = .idle
+    }
+
+    private func cancelAutofillResult() -> Bool {
+        if autofillState == .parsing {
+            autofillState = .idle
+        }
+        return false
     }
 
     private func makeConfig() -> (config: DatabaseConnectionConfig?, errors: [String]) {

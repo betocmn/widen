@@ -31,7 +31,7 @@ public struct MockConnectionDetailsParser: ConnectionDetailsParsing {
             let value = trimmed[trimmed.index(after: separator)...]
                 .trimmingCharacters(in: .whitespaces)
                 .trimmingCharacters(in: CharacterSet(charactersIn: "\"'"))
-            guard !key.isEmpty, !value.isEmpty else { continue }
+            guard !key.isEmpty else { continue }
             values[key] = value
         }
 
@@ -45,14 +45,16 @@ public struct MockConnectionDetailsParser: ConnectionDetailsParsing {
                 .value
         }
 
+        let password = value(containing: "pass")
         return .sanitized(
             host: value(containing: "host"),
             port: value(containing: "port").flatMap { Int($0) },
             database: values["dbname"] ?? values["db"]
                 ?? value(containing: "database") ?? value(containing: "db_name"),
             username: value(containing: "user"),
-            password: value(containing: "pass"),
-            sslModeText: value(containing: "ssl")
+            password: password,
+            sslModeText: value(containing: "ssl"),
+            preservesEmptyPassword: password != nil
         )
     }
 }

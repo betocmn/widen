@@ -24,7 +24,7 @@ public enum ConnectionURLParser {
         for token in text.split(whereSeparator: { $0.isWhitespace || $0 == "\"" || $0 == "'" }) {
             for scheme in ["postgresql://", "postgres://"] {
                 if let range = token.range(of: scheme, options: .caseInsensitive) {
-                    return String(token[range.lowerBound...])
+                    return trimmedURLToken(String(token[range.lowerBound...]))
                 }
             }
         }
@@ -86,7 +86,8 @@ public enum ConnectionURLParser {
             database: database.map(decoded),
             username: user.map(decoded),
             password: password.map(decoded),
-            sslModeText: sslMode(inQuery: query)
+            sslModeText: sslMode(inQuery: query),
+            preservesEmptyPassword: password != nil
         )
     }
 
@@ -104,5 +105,14 @@ public enum ConnectionURLParser {
     /// contains a stray `%` that is not valid percent-encoding.
     private static func decoded(_ value: String) -> String {
         value.removingPercentEncoding ?? value
+    }
+
+    private static func trimmedURLToken(_ token: String) -> String {
+        var value = token
+        let delimiters = CharacterSet(charactersIn: ".,;)]}>`")
+        while let last = value.unicodeScalars.last, delimiters.contains(last) {
+            value.removeLast()
+        }
+        return value
     }
 }

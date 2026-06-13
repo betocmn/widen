@@ -53,7 +53,9 @@ public struct ParsedConnectionDetails: Equatable, Sendable {
     /// Builds details from raw extracted values: trims whitespace, drops
     /// empty strings, validates the port range, strips a leading slash from
     /// the database (URL paths), and maps libpq sslmode spellings onto the
-    /// app's three modes.
+    /// app's three modes. Empty passwords are normally treated as missing
+    /// model output, but deterministic parsers can preserve them when the
+    /// source explicitly specified an empty password.
     public static func sanitized(
         name: String? = nil,
         host: String? = nil,
@@ -61,7 +63,8 @@ public struct ParsedConnectionDetails: Equatable, Sendable {
         database: String? = nil,
         username: String? = nil,
         password: String? = nil,
-        sslModeText: String? = nil
+        sslModeText: String? = nil,
+        preservesEmptyPassword: Bool = false
     ) -> ParsedConnectionDetails {
         let cleanedDatabase = normalized(database).flatMap { value -> String? in
             let stripped = value.hasPrefix("/") ? String(value.dropFirst()) : value
@@ -73,7 +76,7 @@ public struct ParsedConnectionDetails: Equatable, Sendable {
             port: port.flatMap { (1...65535).contains($0) ? $0 : nil },
             database: cleanedDatabase,
             username: normalized(username),
-            password: normalized(password),
+            password: normalized(password, preservesEmpty: preservesEmptyPassword),
             sslMode: sslMode(from: sslModeText)
         )
     }
@@ -94,10 +97,12 @@ public struct ParsedConnectionDetails: Equatable, Sendable {
         }
     }
 
-    private static func normalized(_ value: String?) -> String? {
+    private static func normalized(_ value: String?, preservesEmpty: Bool = false) -> String? {
         guard let trimmed = value?.trimmingCharacters(in: .whitespacesAndNewlines),
-            !trimmed.isEmpty
-        else { return nil }
+            preservesEmpty || !trimmed.isEmpty
+        else {
+            return nil
+        }
         return trimmed
     }
 }

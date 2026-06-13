@@ -24,6 +24,14 @@ struct ParsedConnectionDetailsTests {
         #expect(details.sslMode == .require)
     }
 
+    @Test func sanitizedPreservesExplicitEmptyPasswordsWhenRequested() {
+        #expect(ParsedConnectionDetails.sanitized(password: "").password == nil)
+        #expect(
+            ParsedConnectionDetails.sanitized(
+                password: "", preservesEmptyPassword: true
+            ).password == "")
+    }
+
     @Test func sanitizedRejectsOutOfRangePorts() {
         #expect(ParsedConnectionDetails.sanitized(port: 0).port == nil)
         #expect(ParsedConnectionDetails.sanitized(port: 70_000).port == nil)
@@ -113,6 +121,24 @@ struct ConnectionURLParserTests {
         #expect(details?.port == nil)
     }
 
+    @Test func parsesExplicitEmptyPassword() {
+        let details = ConnectionURLParser.details(in: "postgres://u:@host/db")
+        #expect(details?.host == "host")
+        #expect(details?.username == "u")
+        #expect(details?.password == "")
+        #expect(details?.database == "db")
+    }
+
+    @Test func trimsTrailingProsePunctuation() {
+        let details = ConnectionURLParser.details(
+            in: "Use postgres://u:p@host/db?sslmode=require.")
+        #expect(details?.host == "host")
+        #expect(details?.username == "u")
+        #expect(details?.password == "p")
+        #expect(details?.database == "db")
+        #expect(details?.sslMode == .require)
+    }
+
     @Test func parsesURLWithoutCredentials() {
         let details = ConnectionURLParser.details(in: "postgres://localhost:5432/analytics")
         #expect(details?.host == "localhost")
@@ -184,6 +210,16 @@ struct MockConnectionDetailsParserTests {
         #expect(details.sslMode == .prefer)
     }
 
+    @Test func parsesExplicitEmptyPasswordFromKeyValue() async throws {
+        let details = try await MockConnectionDetailsParser().parse(
+            """
+            DB_HOST=localhost
+            DB_PASSWORD=
+            """)
+        #expect(details.host == "localhost")
+        #expect(details.password == "")
+    }
+
     @Test func returnsEmptyDetailsForUnrelatedText() async throws {
         let details = try await MockConnectionDetailsParser().parse("hello world")
         #expect(details.isEmpty)
@@ -195,6 +231,13 @@ private struct StubParser: ConnectionDetailsParsing {
 
     func parse(_ text: String) async throws -> ParsedConnectionDetails {
         try result.get()
+    }
+}
+
+private struct CancellationIgnoringParser: ConnectionDetailsParsing {
+    func parse(_ text: String) async throws -> ParsedConnectionDetails {
+        try? await Task.sleep(nanoseconds: 1_000_000)
+        return ParsedConnectionDetails(host: "late-host", password: "late-password")
     }
 }
 
@@ -242,6 +285,22 @@ struct ConnectionAutofillViewModelTests {
         #expect(filled)
         #expect(viewModel.host == "old-host")
         #expect(viewModel.password == "hunter2")
+    }
+
+    @Test func canceledAutofillDoesNotApplyLateParserResult() async {
+        let viewModel = ConnectionSettingsViewModel(connectionTester: { _, _ in })
+        viewModel.autofillText = "postgres://late-host/app"
+
+        let task = Task {
+            await viewModel.autofill(using: CancellationIgnoringParser())
+        }
+        task.cancel()
+        let filled = await task.value
+
+        #expect(!filled)
+        #expect(viewModel.host == "localhost")
+        #expect(viewModel.password == "")
+        #expect(viewModel.autofillState == .idle)
     }
 
     @Test func failsOnEmptyPaste() async {

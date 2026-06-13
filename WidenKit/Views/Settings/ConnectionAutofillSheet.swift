@@ -9,6 +9,7 @@ struct ConnectionAutofillSheet: View {
     var parser: any ConnectionDetailsParsing
     var onDone: () -> Void
 
+    @State private var autofillTask: Task<Void, Never>?
     @FocusState private var editorFocused: Bool
 
     var body: some View {
@@ -68,17 +69,12 @@ struct ConnectionAutofillSheet: View {
                 Spacer()
 
                 Button("Cancel") {
-                    viewModel.resetAutofill()
-                    onDone()
+                    cancelAutofill()
                 }
                 .keyboardShortcut(.cancelAction)
 
                 Button {
-                    Task {
-                        if await viewModel.autofill(using: parser) {
-                            onDone()
-                        }
-                    }
+                    startAutofill()
                 } label: {
                     Label("Fill Form", systemImage: "wand.and.stars")
                 }
@@ -94,5 +90,26 @@ struct ConnectionAutofillSheet: View {
         .padding(20)
         .frame(width: 480)
         .onAppear { editorFocused = true }
+        .onDisappear {
+            autofillTask?.cancel()
+            autofillTask = nil
+        }
+    }
+
+    private func startAutofill() {
+        autofillTask?.cancel()
+        autofillTask = Task { @MainActor in
+            if await viewModel.autofill(using: parser), !Task.isCancelled {
+                onDone()
+            }
+            autofillTask = nil
+        }
+    }
+
+    private func cancelAutofill() {
+        autofillTask?.cancel()
+        autofillTask = nil
+        viewModel.resetAutofill()
+        onDone()
     }
 }
