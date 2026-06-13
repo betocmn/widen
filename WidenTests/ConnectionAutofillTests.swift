@@ -52,6 +52,81 @@ struct ParsedConnectionDetailsTests {
     }
 }
 
+@Suite("ParsedConnectionDetails override")
+struct ParsedConnectionDetailsOverrideTests {
+    @Test func overrideReplacesOnlyNonNilFields() {
+        let base = ParsedConnectionDetails(
+            host: "old-host", port: 5432, username: "model-user", password: "from-prose")
+        let override = ParsedConnectionDetails(host: "url-host", username: "postgres.ref")
+
+        let merged = base.overridden(by: override)
+
+        #expect(merged.host == "url-host")  // overridden
+        #expect(merged.username == "postgres.ref")  // overridden
+        #expect(merged.port == 5432)  // kept
+        #expect(merged.password == "from-prose")  // kept: override had nil
+    }
+}
+
+@Suite("ConnectionURLParser")
+struct ConnectionURLParserTests {
+    @Test func keepsDottedSupabasePoolerUsername() {
+        let details = ConnectionURLParser.details(
+            in:
+                "postgresql://postgres.flzyzmgitfdwaunkugxs:wEb6OkcHF5XBzN8i@aws-1-ap-southeast-2.pooler.supabase.com:6543/postgres"
+        )
+        #expect(details?.username == "postgres.flzyzmgitfdwaunkugxs")
+        #expect(details?.password == "wEb6OkcHF5XBzN8i")
+        #expect(details?.host == "aws-1-ap-southeast-2.pooler.supabase.com")
+        #expect(details?.port == 6543)
+        #expect(details?.database == "postgres")
+        #expect(details?.sslMode == nil)
+    }
+
+    @Test func decodesPercentEncodedPassword() {
+        let details = ConnectionURLParser.details(
+            in: "postgres://widen:p%40ss@db.internal:5432/app?sslmode=require")
+        #expect(details?.username == "widen")
+        #expect(details?.password == "p@ss")
+        #expect(details?.sslMode == .require)
+    }
+
+    @Test func keepsUnencodedSpecialCharactersInPassword() {
+        // Real passwords contain unencoded "@" and "/"; the host must still be
+        // taken from after the last "@".
+        let details = ConnectionURLParser.details(
+            in: "postgres://admin:p@ss/word@10.0.0.5:5432/warehouse")
+        #expect(details?.username == "admin")
+        #expect(details?.password == "p@ss/word")
+        #expect(details?.host == "10.0.0.5")
+        #expect(details?.port == 5432)
+        #expect(details?.database == "warehouse")
+    }
+
+    @Test func findsURLInsideEnvAssignment() {
+        let details = ConnectionURLParser.details(
+            in: "DATABASE_URL=postgres://u:p@host/db\nOTHER=1")
+        #expect(details?.host == "host")
+        #expect(details?.username == "u")
+        #expect(details?.password == "p")
+        #expect(details?.database == "db")
+        #expect(details?.port == nil)
+    }
+
+    @Test func parsesURLWithoutCredentials() {
+        let details = ConnectionURLParser.details(in: "postgres://localhost:5432/analytics")
+        #expect(details?.host == "localhost")
+        #expect(details?.port == 5432)
+        #expect(details?.database == "analytics")
+        #expect(details?.username == nil)
+        #expect(details?.password == nil)
+    }
+
+    @Test func returnsNilWithoutURL() {
+        #expect(ConnectionURLParser.details(in: "just some prose with no url") == nil)
+    }
+}
+
 @Suite("ConnectionAutofillPromptBuilder")
 struct ConnectionAutofillPromptBuilderTests {
     @Test func promptEmbedsPastedText() {

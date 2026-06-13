@@ -148,6 +148,34 @@ struct FoundationModelsSmokeTests {
         #endif
     }
 
+    @Test(.timeLimit(.minutes(2)))
+    func extractsSupabasePoolerUsernameVerbatim() async throws {
+        #if canImport(FoundationModels)
+            let model = SystemLanguageModel.default
+            guard model.isAvailable else {
+                Issue.record("Model unavailable: \(model.availability)")
+                return
+            }
+
+            // The pooler username is `postgres.<project-ref>`; the model alone
+            // truncates it at the dot, so the deterministic URL override must
+            // restore the full value.
+            let parser = FoundationModelsConnectionParser()
+            let details = try await parser.parse(
+                "postgresql://postgres.flzyzmgitfdwaunkugxs:wEb6OkcHF5XBzN8i@aws-1-ap-southeast-2.pooler.supabase.com:6543/postgres"
+            )
+            print("Extracted details: \(details)")
+
+            #expect(details.username == "postgres.flzyzmgitfdwaunkugxs")
+            #expect(details.password == "wEb6OkcHF5XBzN8i")
+            #expect(details.host == "aws-1-ap-southeast-2.pooler.supabase.com")
+            #expect(details.port == 6543)
+            #expect(details.database == "postgres")
+        #else
+            Issue.record("FoundationModels is not available at compile time")
+        #endif
+    }
+
     @Test func mockGeneratorReturnsSafeConstantQuery() async throws {
         let result = try await MockSQLGenerator().generateSQL(
             question: "anything",
