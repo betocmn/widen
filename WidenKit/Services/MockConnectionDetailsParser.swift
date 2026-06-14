@@ -27,7 +27,9 @@ public struct MockConnectionDetailsParser: ConnectionDetailsParsing {
                 continue
             }
             let key = trimmed[..<separator]
-                .trimmingCharacters(in: .whitespaces).lowercased()
+                .trimmingCharacters(in: .whitespaces)
+                .trimmingCharacters(in: CharacterSet(charactersIn: "\"'"))
+                .lowercased()
             let value = Self.cleanedValue(String(trimmed[trimmed.index(after: separator)...]))
             guard !key.isEmpty else { continue }
             values[key] = value
@@ -41,6 +43,9 @@ public struct MockConnectionDetailsParser: ConnectionDetailsParsing {
             sortedValues
                 .first { matches($0.key) && !$0.value.contains("://") }?
                 .value
+        }
+        func value(exactly key: String) -> String? {
+            value { $0 == key }
         }
         func value(containing fragment: String) -> String? {
             value { $0.contains(fragment) }
@@ -56,8 +61,9 @@ public struct MockConnectionDetailsParser: ConnectionDetailsParsing {
             host: value(containing: "host"),
             port: value(containing: "port").flatMap { Int($0) },
             database: values["dbname"] ?? values["db"]
-                ?? value(containing: "database") ?? value(containing: "db_name")
-                ?? value(endingWith: "_db"),
+                ?? value(exactly: "database") ?? value(endingWith: "database_name")
+                ?? value(endingWith: "db_name") ?? value(endingWith: "_db")
+                ?? value(containing: "database"),
             username: value(containing: "user"),
             password: password,
             sslModeText: sslMode,
@@ -66,9 +72,13 @@ public struct MockConnectionDetailsParser: ConnectionDetailsParsing {
     }
 
     private static func cleanedValue(_ rawValue: String) -> String {
-        stripUnquotedComment(from: rawValue)
+        var value = stripUnquotedComment(from: rawValue)
             .trimmingCharacters(in: .whitespaces)
-            .trimmingCharacters(in: CharacterSet(charactersIn: "\"'"))
+        while value.last == "," {
+            value.removeLast()
+            value = value.trimmingCharacters(in: .whitespaces)
+        }
+        return value.trimmingCharacters(in: CharacterSet(charactersIn: "\"'"))
     }
 
     private static func stripUnquotedComment(from value: String) -> String {

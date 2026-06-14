@@ -53,24 +53,17 @@ public enum ConnectionURLParser {
 
     /// Splits `scheme://[user[:password]@]host[:port][/database][?query]` by
     /// hand. The boundaries are found in an order that tolerates unencoded
-    /// special characters in the password: the query is removed first, the
-    /// userinfo is taken up to the *last* `@` (host and path never contain
-    /// one), and only then is the path split off the host part.
+    /// special characters in the password: userinfo is taken up to the *last*
+    /// `@` (host and path never contain one), and only then are query and path
+    /// split off the host part.
     static func details(fromURLString string: String) -> ParsedConnectionDetails {
         guard let schemeRange = string.range(of: "://") else {
             return ParsedConnectionDetails()
         }
         var rest = String(string[schemeRange.upperBound...])
 
-        // Query string (?sslmode=require&…).
-        var query = ""
-        if let mark = rest.firstIndex(of: "?") {
-            query = String(rest[rest.index(after: mark)...])
-            rest = String(rest[..<mark])
-        }
-
         // Userinfo up to the last "@": real passwords contain unencoded "@"
-        // and "/", but the host and path never do.
+        // and punctuation, but the host and path never do.
         var user: String?
         var password: String?
         var hostPart = rest
@@ -83,6 +76,14 @@ public enum ConnectionURLParser {
             } else {
                 user = userinfo
             }
+        }
+
+        // Query string (?sslmode=require&…) belongs to the host/path side, so
+        // split it only after userinfo has been isolated.
+        var query = ""
+        if let mark = hostPart.firstIndex(of: "?") {
+            query = String(hostPart[hostPart.index(after: mark)...])
+            hostPart = String(hostPart[..<mark])
         }
 
         // Path (database) is the first "/" in the host part.

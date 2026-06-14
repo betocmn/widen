@@ -89,9 +89,10 @@ public struct ParsedConnectionDetails: Equatable, Sendable {
         switch text?.trimmingCharacters(in: .whitespacesAndNewlines).lowercased() {
         case "disable", "disabled", "off", "false":
             .disable
-        case "allow", "prefer", "preferred", "on", "true":
+        case "allow", "prefer", "preferred":
             .prefer
-        case "require", "required", "verify-ca", "verify-full", "verify_ca", "verify_full":
+        case "require", "required", "verify-ca", "verify-full", "verify_ca", "verify_full",
+            "on", "true":
             .require
         default:
             nil

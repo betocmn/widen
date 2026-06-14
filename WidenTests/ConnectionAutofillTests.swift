@@ -53,6 +53,9 @@ struct ParsedConnectionDetailsTests {
         #expect(ParsedConnectionDetails.sslMode(from: "PREFER") == .prefer)
         #expect(ParsedConnectionDetails.sslMode(from: "verify-full") == .require)
         #expect(ParsedConnectionDetails.sslMode(from: "verify-ca") == .require)
+        #expect(ParsedConnectionDetails.sslMode(from: "true") == .require)
+        #expect(ParsedConnectionDetails.sslMode(from: "on") == .require)
+        #expect(ParsedConnectionDetails.sslMode(from: "false") == .disable)
         #expect(ParsedConnectionDetails.sslMode(from: "unknown") == nil)
         #expect(ParsedConnectionDetails.sslMode(from: nil) == nil)
     }
@@ -128,6 +131,16 @@ struct ConnectionURLParserTests {
         #expect(details?.password == "p'ass")
         #expect(details?.host == "db.internal")
         #expect(details?.database == "warehouse")
+    }
+
+    @Test func keepsQuestionMarkInPassword() {
+        let details = ConnectionURLParser.details(
+            in: "postgres://admin:p?ss@db.internal/warehouse?sslmode=require")
+        #expect(details?.username == "admin")
+        #expect(details?.password == "p?ss")
+        #expect(details?.host == "db.internal")
+        #expect(details?.database == "warehouse")
+        #expect(details?.sslMode == .require)
     }
 
     @Test func trimsWrappingQuoteWithoutSplittingPassword() {
@@ -288,6 +301,16 @@ struct MockConnectionDetailsParserTests {
         #expect(details.password == "p#ss")
     }
 
+    @Test func prefersDatabaseNameOverDatabaseHost() async throws {
+        let details = try await MockConnectionDetailsParser().parse(
+            """
+            DATABASE_HOST=db.internal
+            DATABASE_NAME=warehouse
+            """)
+        #expect(details.host == "db.internal")
+        #expect(details.database == "warehouse")
+    }
+
     @Test func prefersSSLModeOverOtherSSLKeys() async throws {
         let details = try await MockConnectionDetailsParser().parse(
             """
@@ -295,6 +318,28 @@ struct MockConnectionDetailsParserTests {
             PGSSLMODE=require
             """)
         #expect(details.sslMode == .require)
+    }
+
+    @Test func booleanSSLRequiresTLS() async throws {
+        let details = try await MockConnectionDetailsParser().parse(
+            """
+            DB_SSL=true
+            """)
+        #expect(details.sslMode == .require)
+    }
+
+    @Test func stripsJSONCommasBeforeQuotes() async throws {
+        let details = try await MockConnectionDetailsParser().parse(
+            """
+            "host": "db.internal",
+            "port": 5433,
+            "database": "warehouse",
+            "user": "etl"
+            """)
+        #expect(details.host == "db.internal")
+        #expect(details.port == 5433)
+        #expect(details.database == "warehouse")
+        #expect(details.username == "etl")
     }
 
     @Test func parsesPostgresDatabaseKey() async throws {
