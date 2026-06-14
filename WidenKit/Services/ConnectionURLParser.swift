@@ -72,13 +72,7 @@ public enum ConnectionURLParser {
             hostPart = String(hostPart[..<slash])
         }
 
-        // host[:port]
-        var host = hostPart
-        var port: Int?
-        if let colon = hostPart.lastIndex(of: ":") {
-            host = String(hostPart[..<colon])
-            port = Int(hostPart[hostPart.index(after: colon)...])
-        }
+        let (host, port) = hostAndPort(in: hostPart)
 
         return .sanitized(
             host: decoded(host),
@@ -101,6 +95,30 @@ public enum ConnectionURLParser {
         return nil
     }
 
+    private static func hostAndPort(in hostPart: String) -> (host: String, port: Int?) {
+        if hostPart.hasPrefix("["),
+            let closeBracket = hostPart.firstIndex(of: "]")
+        {
+            let host = String(hostPart[hostPart.index(after: hostPart.startIndex)..<closeBracket])
+            let remainder = hostPart[hostPart.index(after: closeBracket)...]
+            let port =
+                remainder.first == ":"
+                ? Int(remainder.dropFirst())
+                : nil
+            return (host, port)
+        }
+
+        guard hostPart.filter({ $0 == ":" }).count == 1,
+            let colon = hostPart.lastIndex(of: ":")
+        else {
+            return (hostPart, nil)
+        }
+        return (
+            String(hostPart[..<colon]),
+            Int(hostPart[hostPart.index(after: colon)...])
+        )
+    }
+
     /// Percent-decodes a component, falling back to the raw value when it
     /// contains a stray `%` that is not valid percent-encoding.
     private static func decoded(_ value: String) -> String {
@@ -111,8 +129,15 @@ public enum ConnectionURLParser {
         var value = token
         let delimiters = CharacterSet(charactersIn: ".,;)]}>`")
         while let last = value.unicodeScalars.last, delimiters.contains(last) {
+            if last == "]", !hasUnmatchedClosingBracket(value) {
+                break
+            }
             value.removeLast()
         }
         return value
+    }
+
+    private static func hasUnmatchedClosingBracket(_ value: String) -> Bool {
+        value.filter { $0 == "]" }.count > value.filter { $0 == "[" }.count
     }
 }

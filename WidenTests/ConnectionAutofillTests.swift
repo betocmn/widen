@@ -129,6 +129,28 @@ struct ConnectionURLParserTests {
         #expect(details?.database == "db")
     }
 
+    @Test func parsesBracketedIPv6HostWithoutPort() {
+        let details = ConnectionURLParser.details(in: "postgres://u:p@[::1]/db")
+        #expect(details?.host == "::1")
+        #expect(details?.port == nil)
+        #expect(details?.username == "u")
+        #expect(details?.password == "p")
+        #expect(details?.database == "db")
+    }
+
+    @Test func parsesBracketedIPv6HostWithPort() {
+        let details = ConnectionURLParser.details(in: "postgres://u:p@[2001:db8::1]:6543/db")
+        #expect(details?.host == "2001:db8::1")
+        #expect(details?.port == 6543)
+        #expect(details?.database == "db")
+    }
+
+    @Test func keepsIPv6BracketWhenTrimmingTrailingPunctuation() {
+        let details = ConnectionURLParser.details(in: "postgres://u:p@[::1].")
+        #expect(details?.host == "::1")
+        #expect(details?.password == "p")
+    }
+
     @Test func trimsTrailingProsePunctuation() {
         let details = ConnectionURLParser.details(
             in: "Use postgres://u:p@host/db?sslmode=require.")

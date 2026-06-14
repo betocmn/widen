@@ -46,11 +46,13 @@
         }
 
         public func parse(_ text: String) async throws -> ParsedConnectionDetails {
+            let urlDetails = ConnectionURLParser.details(in: text)
             let model = SystemLanguageModel.default
             switch model.availability {
             case .available:
                 break
             case .unavailable(let reason):
+                if let urlDetails { return urlDetails }
                 throw AppError.modelUnavailable(Self.message(for: reason))
             }
 
@@ -73,11 +75,12 @@
                 // mis-splits the password. The model still covers free-form
                 // .env/prose, and any field the URL omits — like a password on
                 // a separate line — survives the merge.
-                if let urlDetails = ConnectionURLParser.details(in: text) {
+                if let urlDetails {
                     return modelDetails.overridden(by: urlDetails)
                 }
                 return modelDetails
             } catch let error as LanguageModelSession.GenerationError {
+                if let urlDetails { return urlDetails }
                 throw Self.map(error)
             }
         }
