@@ -131,7 +131,7 @@ public enum ConnectionURLParser {
             let parts = pair.split(
                 separator: "=", maxSplits: 1, omittingEmptySubsequences: false)
             guard parts.count == 2 else { continue }
-            values[decoded(String(parts[0])).lowercased()] = decoded(String(parts[1]))
+            values[decoded(String(parts[0])).lowercased()] = String(parts[1])
         }
         return values
     }
@@ -179,6 +179,9 @@ public enum ConnectionURLParser {
         }
 
         let suffix = rest[rest.index(after: delimiter)...]
+        if hasPasswordAtSignAfterQuestionBeforePath(in: suffix) {
+            return false
+        }
         let beforeQuery =
             suffix.firstIndex(of: "?").map { suffix[..<$0] } ?? suffix[...]
         guard !beforeQuery.contains("@") else { return false }
@@ -203,6 +206,19 @@ public enum ConnectionURLParser {
     private static func isPlausibleHostToken(_ hostToken: Substring) -> Bool {
         !hostToken.isEmpty
             && !hostToken.contains { $0.isWhitespace || $0 == "&" || $0 == "=" }
+    }
+
+    private static func hasPasswordAtSignAfterQuestionBeforePath(in suffix: Substring) -> Bool {
+        guard let question = suffix.firstIndex(of: "?") else { return false }
+        let slash = suffix.firstIndex(of: "/") ?? suffix.endIndex
+        guard question < slash,
+            let laterAt = suffix[suffix.index(after: question)..<slash].firstIndex(of: "@")
+        else {
+            return false
+        }
+
+        let queryPrefix = suffix[suffix.index(after: question)..<laterAt]
+        return !queryPrefix.contains("=")
     }
 
     /// Percent-decodes a component, falling back to the raw value when it

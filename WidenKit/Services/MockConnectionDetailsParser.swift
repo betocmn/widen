@@ -21,6 +21,7 @@ public struct MockConnectionDetailsParser: ConnectionDetailsParsing {
         if values.isEmpty {
             for line in text.split(whereSeparator: \.isNewline) {
                 var trimmed = line.trimmingCharacters(in: .whitespaces)
+                guard !trimmed.hasPrefix("#") else { continue }
                 if trimmed.hasPrefix("export ") {
                     trimmed = String(trimmed.dropFirst("export ".count))
                 }
@@ -49,13 +50,13 @@ public struct MockConnectionDetailsParser: ConnectionDetailsParsing {
             value { $0.hasSuffix(suffix) }
         }
 
-        let password = value(containing: "pass")
+        let password = value(where: isPasswordKey)
         let sslMode = value(endingWith: "sslmode") ?? value(endingWith: "ssl_mode")
             ?? value(containing: "ssl")
         return .sanitized(
             host: value(containing: "host"),
             port: value(containing: "port").flatMap { Int($0) },
-            database: values["dbname"] ?? values["db"]
+            database: values["dbname"] ?? values["db"] ?? values["pgdatabase"]
                 ?? value(exactly: "database") ?? value(endingWith: "database_name")
                 ?? value(endingWith: "_database") ?? value(endingWith: "db_name")
                 ?? value(endingWith: "_db"),
@@ -133,7 +134,11 @@ public struct MockConnectionDetailsParser: ConnectionDetailsParsing {
         }
 
         while index < line.endIndex {
-            if line[index] == "," || startsInlineComment(in: line, at: index, after: valueStart) {
+            if line[index] == "," {
+                let next = indexAfterPairDelimiter(in: line, from: index)
+                if beginsKeyValuePair(in: line, at: next) { break }
+            }
+            if startsInlineComment(in: line, at: index, after: valueStart) {
                 break
             }
             if line[index].isWhitespace {
@@ -161,6 +166,14 @@ public struct MockConnectionDetailsParser: ConnectionDetailsParsing {
 
     private static func indexAfterSpaces(in line: String, from index: String.Index) -> String.Index {
         var next = index
+        skipSpaces(in: line, from: &next)
+        return next
+    }
+
+    private static func indexAfterPairDelimiter(
+        in line: String, from index: String.Index
+    ) -> String.Index {
+        var next = line.index(after: index)
         skipSpaces(in: line, from: &next)
         return next
     }
@@ -254,6 +267,13 @@ public struct MockConnectionDetailsParser: ConnectionDetailsParsing {
 
     private static func isURLBearingValue(key: String, value: String) -> Bool {
         key.contains("url") && value.contains("://")
+    }
+
+    private static func isPasswordKey(_ key: String) -> Bool {
+        key.contains("pass")
+            && !key.contains("passfile")
+            && !key.contains("pass_file")
+            && !key.contains("password_file")
     }
 
     private static func jsonObjectValues(from text: String) -> [String: String]? {

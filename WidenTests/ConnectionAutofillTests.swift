@@ -143,6 +143,15 @@ struct ConnectionURLParserTests {
         #expect(details?.sslMode == .require)
     }
 
+    @Test func keepsAtSignBeforeQuestionMarkInPassword() {
+        let details = ConnectionURLParser.details(
+            in: "postgres://admin:p@ss?word@db.internal/warehouse")
+        #expect(details?.username == "admin")
+        #expect(details?.password == "p@ss?word")
+        #expect(details?.host == "db.internal")
+        #expect(details?.database == "warehouse")
+    }
+
     @Test func ignoresAtSignInQueryWhenFindingCredentials() {
         let details = ConnectionURLParser.details(
             in:
@@ -175,6 +184,13 @@ struct ConnectionURLParserTests {
         #expect(details?.host == "db.internal")
         #expect(details?.database == "warehouse")
         #expect(details?.sslMode == .require)
+    }
+
+    @Test func decodesQueryCredentialsOnlyOnce() {
+        let details = ConnectionURLParser.details(
+            in: "postgres://db.internal/warehouse?user=etl&password=p%2540ss")
+        #expect(details?.username == "etl")
+        #expect(details?.password == "p%40ss")
     }
 
     @Test func trimsWrappingQuoteWithoutSplittingPassword() {
@@ -345,6 +361,16 @@ struct MockConnectionDetailsParserTests {
         #expect(details.password == "p#ss")
     }
 
+    @Test func preservesCommaInUnquotedPasswordValues() async throws {
+        let details = try await MockConnectionDetailsParser().parse(
+            """
+            DB_HOST=db.internal
+            DB_PASSWORD=p,ss
+            """)
+        #expect(details.host == "db.internal")
+        #expect(details.password == "p,ss")
+    }
+
     @Test func preservesURLLikePasswordValues() async throws {
         let details = try await MockConnectionDetailsParser().parse(
             """
@@ -353,6 +379,27 @@ struct MockConnectionDetailsParserTests {
             """)
         #expect(details.host == "db.internal")
         #expect(details.password == "abc://def")
+    }
+
+    @Test func ignoresCommentedOutKeyValuePairs() async throws {
+        let details = try await MockConnectionDetailsParser().parse(
+            """
+            DB_HOST=db.internal
+            # DB_PASSWORD=oldsecret
+            """)
+        #expect(details.host == "db.internal")
+        #expect(details.password == nil)
+    }
+
+    @Test func passfileKeysDoNotBecomePasswords() async throws {
+        let details = try await MockConnectionDetailsParser().parse(
+            """
+            PGHOST=db.internal
+            PGPASSFILE=/Users/me/.pgpass
+            POSTGRES_PASSWORD_FILE=/run/secrets/db_password
+            """)
+        #expect(details.host == "db.internal")
+        #expect(details.password == nil)
     }
 
     @Test func prefersDatabaseNameOverDatabaseHost() async throws {
@@ -374,6 +421,20 @@ struct MockConnectionDetailsParserTests {
             """)
         #expect(details.host == "db.internal")
         #expect(details.database == nil)
+        #expect(details.username == "etl")
+        #expect(details.password == "secret")
+    }
+
+    @Test func parsesLibpqEnvironmentKeys() async throws {
+        let details = try await MockConnectionDetailsParser().parse(
+            """
+            PGHOST=db.internal
+            PGDATABASE=warehouse
+            PGUSER=etl
+            PGPASSWORD=secret
+            """)
+        #expect(details.host == "db.internal")
+        #expect(details.database == "warehouse")
         #expect(details.username == "etl")
         #expect(details.password == "secret")
     }
