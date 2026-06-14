@@ -121,6 +121,23 @@ struct ConnectionURLParserTests {
         #expect(details?.database == "warehouse")
     }
 
+    @Test func keepsApostropheInPassword() {
+        let details = ConnectionURLParser.details(
+            in: "postgres://admin:p'ass@db.internal/warehouse")
+        #expect(details?.username == "admin")
+        #expect(details?.password == "p'ass")
+        #expect(details?.host == "db.internal")
+        #expect(details?.database == "warehouse")
+    }
+
+    @Test func trimsWrappingQuoteWithoutSplittingPassword() {
+        let details = ConnectionURLParser.details(
+            in: "DATABASE_URL='postgres://admin:p'ass@db.internal/warehouse'")
+        #expect(details?.password == "p'ass")
+        #expect(details?.host == "db.internal")
+        #expect(details?.database == "warehouse")
+    }
+
     @Test func findsURLInsideEnvAssignment() {
         let details = ConnectionURLParser.details(
             in: "DATABASE_URL=postgres://u:p@host/db\nOTHER=1")
@@ -252,6 +269,34 @@ struct MockConnectionDetailsParserTests {
         #expect(details.password == "")
     }
 
+    @Test func stripsInlineCommentsOutsideQuotes() async throws {
+        let details = try await MockConnectionDetailsParser().parse(
+            """
+            DB_HOST=db.internal # staging
+            DB_PASSWORD='p # ss' # keep quoted hash
+            """)
+        #expect(details.host == "db.internal")
+        #expect(details.password == "p # ss")
+    }
+
+    @Test func preservesUnspacedHashInValues() async throws {
+        let details = try await MockConnectionDetailsParser().parse(
+            """
+            DB_HOST=db.internal
+            DB_PASSWORD=p#ss
+            """)
+        #expect(details.password == "p#ss")
+    }
+
+    @Test func prefersSSLModeOverOtherSSLKeys() async throws {
+        let details = try await MockConnectionDetailsParser().parse(
+            """
+            PGSSLCERT=/tmp/client.crt
+            PGSSLMODE=require
+            """)
+        #expect(details.sslMode == .require)
+    }
+
     @Test func parsesPostgresDatabaseKey() async throws {
         let details = try await MockConnectionDetailsParser().parse(
             """
@@ -279,6 +324,23 @@ struct MockConnectionDetailsParserTests {
             #expect(FoundationModelsConnectionParser.mentionsSSLSetting(in: "TLS required"))
             #expect(FoundationModelsConnectionParser.mentionsSSLSetting(in: "sslmode=require"))
             #expect(!FoundationModelsConnectionParser.mentionsSSLSetting(in: "use a password"))
+        }
+
+        @Test func deterministicKeyValuesCanClearModelPassword() {
+            let modelDetails = ParsedConnectionDetails(host: "model-host", password: "old-password")
+            let deterministicDetails = FoundationModelsConnectionParser.deterministicDetails(
+                in:
+                    """
+                    DB_HOST=db.internal
+                    DB_PASSWORD=
+                    """,
+                urlDetails: nil
+            )
+
+            let merged = modelDetails.overridden(by: deterministicDetails!)
+
+            #expect(merged.host == "db.internal")
+            #expect(merged.password == "")
         }
     }
 #endif

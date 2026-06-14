@@ -70,14 +70,12 @@
                     options: GenerationOptions(sampling: .greedy, maximumResponseTokens: 512)
                 )
                 let modelDetails = Self.details(from: response.content, pastedText: text)
-                // A connection URL is structured, so parse it deterministically
-                // and let it win: the small model sometimes truncates a dotted
-                // username (e.g. Supabase's postgres.<project-ref>) or
-                // mis-splits the password. The model still covers free-form
-                // .env/prose, and any field the URL omits — like a password on
-                // a separate line — survives the merge.
-                if let urlDetails {
-                    return modelDetails.overridden(by: urlDetails)
+                // Structured URL and KEY=VALUE details are parsed
+                // deterministically and win over the model: the small model
+                // sometimes truncates dotted usernames or drops explicit empty
+                // passwords. The model still covers free-form prose.
+                if let deterministicDetails {
+                    return modelDetails.overridden(by: deterministicDetails)
                 }
                 return modelDetails
             } catch let error as LanguageModelSession.GenerationError {
@@ -86,7 +84,7 @@
             }
         }
 
-        private static func deterministicDetails(
+        static func deterministicDetails(
             in text: String, urlDetails: ParsedConnectionDetails?
         ) -> ParsedConnectionDetails? {
             let keyValues = MockConnectionDetailsParser.details(fromKeyValues: text)

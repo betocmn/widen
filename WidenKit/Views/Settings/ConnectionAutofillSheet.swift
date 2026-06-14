@@ -92,6 +92,7 @@ struct ConnectionAutofillSheet: View {
         .onDisappear {
             autofillTask?.cancel()
             autofillTask = nil
+            viewModel.resetAutofill()
         }
     }
 

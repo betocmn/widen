@@ -18,17 +18,37 @@ public enum ConnectionURLParser {
         return details.isEmpty ? nil : details
     }
 
-    /// The first whitespace/quote-delimited token containing a postgres scheme,
+    /// The first whitespace-delimited token containing a postgres scheme,
     /// trimmed to start at the scheme so `DATABASE_URL=postgres://…` works.
+    /// Quote characters can wrap the URL, but after the scheme they can also
+    /// be valid userinfo characters.
     static func firstConnectionURL(in text: String) -> String? {
-        for token in text.split(whereSeparator: { $0.isWhitespace || $0 == "\"" || $0 == "'" }) {
-            for scheme in ["postgresql://", "postgres://"] {
-                if let range = token.range(of: scheme, options: .caseInsensitive) {
-                    return trimmedURLToken(String(token[range.lowerBound...]))
+        let schemes = ["postgresql://", "postgres://"]
+        let firstScheme = schemes
+            .compactMap { text.range(of: $0, options: .caseInsensitive) }
+            .min { $0.lowerBound < $1.lowerBound }
+        guard let firstScheme else { return nil }
+
+        let wrappingQuote: Character? =
+            if firstScheme.lowerBound > text.startIndex {
+                switch text[text.index(before: firstScheme.lowerBound)] {
+                case "'", "\"":
+                    text[text.index(before: firstScheme.lowerBound)]
+                default:
+                    nil
                 }
+            } else {
+                nil
             }
+
+        var end = firstScheme.lowerBound
+        while end < text.endIndex, !text[end].isWhitespace {
+            end = text.index(after: end)
         }
-        return nil
+        return trimmedURLToken(
+            String(text[firstScheme.lowerBound..<end]),
+            wrappingQuote: wrappingQuote
+        )
     }
 
     /// Splits `scheme://[user[:password]@]host[:port][/database][?query]` by
@@ -125,13 +145,16 @@ public enum ConnectionURLParser {
         value.removingPercentEncoding ?? value
     }
 
-    private static func trimmedURLToken(_ token: String) -> String {
+    private static func trimmedURLToken(_ token: String, wrappingQuote: Character?) -> String {
         var value = token
         let delimiters = CharacterSet(charactersIn: ".,;)]}>`")
         while let last = value.unicodeScalars.last, delimiters.contains(last) {
             if last == "]", !hasUnmatchedClosingBracket(value) {
                 break
             }
+            value.removeLast()
+        }
+        if let wrappingQuote, value.last == wrappingQuote {
             value.removeLast()
         }
         return value
