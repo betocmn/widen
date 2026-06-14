@@ -143,6 +143,29 @@ struct ConnectionURLParserTests {
         #expect(details?.sslMode == .require)
     }
 
+    @Test func ignoresAtSignInQueryWhenFindingCredentials() {
+        let details = ConnectionURLParser.details(
+            in:
+                "postgres://admin:secret@db.internal/warehouse?application_name=user@host&sslmode=require"
+        )
+        #expect(details?.username == "admin")
+        #expect(details?.password == "secret")
+        #expect(details?.host == "db.internal")
+        #expect(details?.database == "warehouse")
+        #expect(details?.sslMode == .require)
+    }
+
+    @Test func ignoresAtSignInQueryWithoutCredentials() {
+        let details = ConnectionURLParser.details(
+            in: "postgres://db.internal/warehouse?application_name=user@host&sslmode=require"
+        )
+        #expect(details?.username == nil)
+        #expect(details?.password == nil)
+        #expect(details?.host == "db.internal")
+        #expect(details?.database == "warehouse")
+        #expect(details?.sslMode == .require)
+    }
+
     @Test func trimsWrappingQuoteWithoutSplittingPassword() {
         let details = ConnectionURLParser.details(
             in: "DATABASE_URL='postgres://admin:p'ass@db.internal/warehouse'")
@@ -301,6 +324,16 @@ struct MockConnectionDetailsParserTests {
         #expect(details.password == "p#ss")
     }
 
+    @Test func preservesURLLikePasswordValues() async throws {
+        let details = try await MockConnectionDetailsParser().parse(
+            """
+            DB_HOST=db.internal
+            DB_PASSWORD=abc://def
+            """)
+        #expect(details.host == "db.internal")
+        #expect(details.password == "abc://def")
+    }
+
     @Test func prefersDatabaseNameOverDatabaseHost() async throws {
         let details = try await MockConnectionDetailsParser().parse(
             """
@@ -340,6 +373,17 @@ struct MockConnectionDetailsParserTests {
         #expect(details.port == 5433)
         #expect(details.database == "warehouse")
         #expect(details.username == "etl")
+    }
+
+    @Test func parsesCompactJSONObject() async throws {
+        let details = try await MockConnectionDetailsParser().parse(
+            #"{"host":"db.internal","port":5433,"database":"warehouse","username":"etl","password":"secret"}"#
+        )
+        #expect(details.host == "db.internal")
+        #expect(details.port == 5433)
+        #expect(details.database == "warehouse")
+        #expect(details.username == "etl")
+        #expect(details.password == "secret")
     }
 
     @Test func parsesPostgresDatabaseKey() async throws {

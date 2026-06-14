@@ -17,22 +17,24 @@ public struct MockConnectionDetailsParser: ConnectionDetailsParsing {
     }
 
     static func details(fromKeyValues text: String) -> ParsedConnectionDetails {
-        var values: [String: String] = [:]
-        for line in text.split(whereSeparator: \.isNewline) {
-            var trimmed = line.trimmingCharacters(in: .whitespaces)
-            if trimmed.hasPrefix("export ") {
-                trimmed = String(trimmed.dropFirst("export ".count))
+        var values = Self.jsonObjectValues(from: text) ?? [:]
+        if values.isEmpty {
+            for line in text.split(whereSeparator: \.isNewline) {
+                var trimmed = line.trimmingCharacters(in: .whitespaces)
+                if trimmed.hasPrefix("export ") {
+                    trimmed = String(trimmed.dropFirst("export ".count))
+                }
+                guard let separator = trimmed.firstIndex(where: { $0 == "=" || $0 == ":" }) else {
+                    continue
+                }
+                let key = trimmed[..<separator]
+                    .trimmingCharacters(in: .whitespaces)
+                    .trimmingCharacters(in: CharacterSet(charactersIn: "\"'{}"))
+                    .lowercased()
+                let value = Self.cleanedValue(String(trimmed[trimmed.index(after: separator)...]))
+                guard !key.isEmpty else { continue }
+                values[key] = value
             }
-            guard let separator = trimmed.firstIndex(where: { $0 == "=" || $0 == ":" }) else {
-                continue
-            }
-            let key = trimmed[..<separator]
-                .trimmingCharacters(in: .whitespaces)
-                .trimmingCharacters(in: CharacterSet(charactersIn: "\"'"))
-                .lowercased()
-            let value = Self.cleanedValue(String(trimmed[trimmed.index(after: separator)...]))
-            guard !key.isEmpty else { continue }
-            values[key] = value
         }
 
         // Sorted so repeated fragments resolve deterministically. Values
@@ -41,7 +43,7 @@ public struct MockConnectionDetailsParser: ConnectionDetailsParsing {
         let sortedValues = values.sorted { $0.key < $1.key }
         func value(where matches: (String) -> Bool) -> String? {
             sortedValues
-                .first { matches($0.key) && !$0.value.contains("://") }?
+                .first { matches($0.key) && !isURLBearingValue(key: $0.key, value: $0.value) }?
                 .value
         }
         func value(exactly key: String) -> String? {
@@ -122,5 +124,39 @@ public struct MockConnectionDetailsParser: ConnectionDetailsParsing {
     private static func startsComment(after prefix: String) -> Bool {
         prefix.trimmingCharacters(in: .whitespaces).isEmpty
             || prefix.last?.isWhitespace == true
+    }
+
+    private static func isURLBearingValue(key: String, value: String) -> Bool {
+        key.contains("url") && value.contains("://")
+    }
+
+    private static func jsonObjectValues(from text: String) -> [String: String]? {
+        let trimmed = text.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard trimmed.hasPrefix("{"), trimmed.hasSuffix("}"),
+            let data = trimmed.data(using: .utf8),
+            let object = try? JSONSerialization.jsonObject(with: data) as? [String: Any]
+        else {
+            return nil
+        }
+
+        var values: [String: String] = [:]
+        for (key, value) in object {
+            guard let stringValue = stringValue(from: value) else { continue }
+            values[key.lowercased()] = stringValue
+        }
+        return values
+    }
+
+    private static func stringValue(from value: Any) -> String? {
+        switch value {
+        case let value as String:
+            value
+        case let value as Bool:
+            value ? "true" : "false"
+        case let value as NSNumber:
+            value.stringValue
+        default:
+            nil
+        }
     }
 }

@@ -67,7 +67,7 @@ public enum ConnectionURLParser {
         var user: String?
         var password: String?
         var hostPart = rest
-        if let at = rest.lastIndex(of: "@") {
+        if let at = userinfoDelimiter(in: rest) {
             let userinfo = String(rest[..<at])
             hostPart = String(rest[rest.index(after: at)...])
             if let colon = userinfo.firstIndex(of: ":") {
@@ -138,6 +138,51 @@ public enum ConnectionURLParser {
             String(hostPart[..<colon]),
             Int(hostPart[hostPart.index(after: colon)...])
         )
+    }
+
+    private static func userinfoDelimiter(in rest: String) -> String.Index? {
+        var candidate = rest.startIndex
+        while candidate < rest.endIndex {
+            guard let at = rest[candidate...].firstIndex(of: "@") else { return nil }
+            if isValidUserinfoDelimiter(at, in: rest) { return at }
+            candidate = rest.index(after: at)
+        }
+        return nil
+    }
+
+    private static func isValidUserinfoDelimiter(
+        _ delimiter: String.Index, in rest: String
+    ) -> Bool {
+        let userinfo = rest[..<delimiter]
+        guard !userinfo.isEmpty, !looksLikeQueryAtSign(in: userinfo) else {
+            return false
+        }
+
+        let suffix = rest[rest.index(after: delimiter)...]
+        let beforeQuery =
+            suffix.firstIndex(of: "?").map { suffix[..<$0] } ?? suffix[...]
+        guard !beforeQuery.contains("@") else { return false }
+
+        let hostToken = beforeQuery.split(separator: "/", maxSplits: 1).first ?? ""
+        return isPlausibleHostToken(hostToken)
+    }
+
+    private static func looksLikeQueryAtSign(in userinfo: Substring) -> Bool {
+        guard let structural = userinfo.firstIndex(where: { $0 == "/" || $0 == "?" }) else {
+            return false
+        }
+        guard let colon = userinfo.firstIndex(of: ":"), colon < structural else {
+            return true
+        }
+
+        let valueBeforeStructural = userinfo[userinfo.index(after: colon)..<structural]
+        return !valueBeforeStructural.isEmpty
+            && valueBeforeStructural.allSatisfy(\.isNumber)
+    }
+
+    private static func isPlausibleHostToken(_ hostToken: Substring) -> Bool {
+        !hostToken.isEmpty
+            && !hostToken.contains { $0.isWhitespace || $0 == "&" || $0 == "=" }
     }
 
     /// Percent-decodes a component, falling back to the raw value when it
