@@ -17,7 +17,8 @@ public struct MockConnectionDetailsParser: ConnectionDetailsParsing {
     }
 
     static func details(fromKeyValues text: String) -> ParsedConnectionDetails {
-        var values = Self.jsonObjectValues(from: text) ?? [:]
+        let jsonValues = Self.jsonObjectValues(from: text)
+        var values = jsonValues ?? [:]
         if values.isEmpty {
             for line in text.split(whereSeparator: \.isNewline) {
                 var trimmed = line.trimmingCharacters(in: .whitespaces)
@@ -30,18 +31,24 @@ public struct MockConnectionDetailsParser: ConnectionDetailsParsing {
                 }
             }
         }
+        let urlDetails = jsonValues.flatMap(decodedURLDetails)
 
         // Sorted so repeated fragments resolve deterministically. Values
         // containing a URL scheme are skipped — a DATABASE_URL that failed
         // URL parsing should not land in a single field.
         let sortedValues = values.sorted { $0.key < $1.key }
+        func usableValue(for key: String) -> String? {
+            guard let value = values[key],
+                !isURLBearingValue(key: key, value: value)
+            else {
+                return nil
+            }
+            return value
+        }
         func value(where matches: (String) -> Bool) -> String? {
             sortedValues
                 .first { matches($0.key) && !isURLBearingValue(key: $0.key, value: $0.value) }?
                 .value
-        }
-        func value(exactly key: String) -> String? {
-            value { $0 == key }
         }
         func value(containing fragment: String) -> String? {
             value { $0.contains(fragment) }
@@ -49,22 +56,64 @@ public struct MockConnectionDetailsParser: ConnectionDetailsParsing {
         func value(endingWith suffix: String) -> String? {
             value { $0.hasSuffix(suffix) }
         }
+        func preferredValue(
+            keys preferredKeys: [String],
+            fallback matches: (String) -> Bool
+        ) -> String? {
+            for key in preferredKeys {
+                if let value = usableValue(for: key) { return value }
+            }
+            return value(where: matches)
+        }
 
-        let password = value(where: isPasswordKey)
+        let host = preferredValue(
+            keys: [
+                "host", "hostname", "db_host", "database_host", "pghost", "pg_host",
+                "postgres_host", "postgresql_host",
+            ],
+            fallback: { $0.contains("host") })
+        let port = preferredValue(
+            keys: [
+                "port", "db_port", "database_port", "pgport", "pg_port", "postgres_port",
+                "postgresql_port",
+            ],
+            fallback: { $0.contains("port") })
+        let database = preferredValue(
+            keys: [
+                "dbname", "db", "database", "database_name", "db_name", "db_database",
+                "pgdatabase", "pg_database", "postgres_db", "postgres_database",
+                "postgresql_db", "postgresql_database",
+            ],
+            fallback: {
+                $0.hasSuffix("database_name") || $0.hasSuffix("_database")
+                    || $0.hasSuffix("db_name") || $0.hasSuffix("_db")
+            })
+        let username = preferredValue(
+            keys: [
+                "user", "username", "db_user", "db_username", "database_user",
+                "database_username", "pguser", "pg_user", "pgusername", "pg_username",
+                "postgres_user", "postgres_username", "postgresql_user",
+                "postgresql_username",
+            ],
+            fallback: { $0.contains("user") })
+        let password = preferredValue(
+            keys: [
+                "password", "db_password", "database_password", "pgpassword", "pg_password",
+                "postgres_password", "postgresql_password",
+            ],
+            fallback: isPasswordKey)
         let sslMode = value(endingWith: "sslmode") ?? value(endingWith: "ssl_mode")
             ?? value(containing: "ssl")
-        return .sanitized(
-            host: value(containing: "host"),
-            port: value(containing: "port").flatMap { Int($0) },
-            database: values["dbname"] ?? values["db"] ?? values["pgdatabase"]
-                ?? value(exactly: "database") ?? value(endingWith: "database_name")
-                ?? value(endingWith: "_database") ?? value(endingWith: "db_name")
-                ?? value(endingWith: "_db"),
-            username: value(containing: "user"),
+        let keyValueDetails = ParsedConnectionDetails.sanitized(
+            host: host,
+            port: port.flatMap { Int($0) },
+            database: database,
+            username: username,
             password: password,
             sslModeText: sslMode,
             preservesEmptyPassword: password != nil
         )
+        return urlDetails.map { keyValueDetails.overridden(by: $0) } ?? keyValueDetails
     }
 
     private static func keyValuePairs(in line: String) -> [(key: String, value: String)] {
@@ -291,6 +340,15 @@ public struct MockConnectionDetailsParser: ConnectionDetailsParsing {
             values[key.lowercased()] = stringValue
         }
         return values
+    }
+
+    private static func decodedURLDetails(in values: [String: String]) -> ParsedConnectionDetails? {
+        for (_, value) in values.sorted(by: { $0.key < $1.key }) {
+            if let details = ConnectionURLParser.details(in: value) {
+                return details
+            }
+        }
+        return nil
     }
 
     private static func stringValue(from value: Any) -> String? {

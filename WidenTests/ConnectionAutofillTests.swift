@@ -143,6 +143,22 @@ struct ConnectionURLParserTests {
         #expect(details?.sslMode == .require)
     }
 
+    @Test func keepsNumericPasswordPrefixBeforeQuestionMark() {
+        let details = ConnectionURLParser.details(in: "postgres://u:123?abc@db.internal/app")
+        #expect(details?.username == "u")
+        #expect(details?.password == "123?abc")
+        #expect(details?.host == "db.internal")
+        #expect(details?.database == "app")
+    }
+
+    @Test func keepsNumericPasswordPrefixBeforeSlash() {
+        let details = ConnectionURLParser.details(in: "postgres://u:123/abc@db.internal/app")
+        #expect(details?.username == "u")
+        #expect(details?.password == "123/abc")
+        #expect(details?.host == "db.internal")
+        #expect(details?.database == "app")
+    }
+
     @Test func keepsAtSignBeforeQuestionMarkInPassword() {
         let details = ConnectionURLParser.details(
             in: "postgres://admin:p@ss?word@db.internal/warehouse")
@@ -164,6 +180,18 @@ struct ConnectionURLParserTests {
         #expect(details?.sslMode == .require)
     }
 
+    @Test func ignoresAtSignInQueryAfterHostPort() {
+        let details = ConnectionURLParser.details(
+            in:
+                "postgres://db.internal:5432/warehouse?application_name=user@host"
+        )
+        #expect(details?.username == nil)
+        #expect(details?.password == nil)
+        #expect(details?.host == "db.internal")
+        #expect(details?.port == 5432)
+        #expect(details?.database == "warehouse")
+    }
+
     @Test func ignoresAtSignInQueryWithoutCredentials() {
         let details = ConnectionURLParser.details(
             in: "postgres://db.internal/warehouse?application_name=user@host&sslmode=require"
@@ -183,6 +211,12 @@ struct ConnectionURLParserTests {
         #expect(details?.password == "secret")
         #expect(details?.host == "db.internal")
         #expect(details?.database == "warehouse")
+        #expect(details?.sslMode == .require)
+    }
+
+    @Test func parsesSSLQueryAlias() {
+        let details = ConnectionURLParser.details(
+            in: "postgres://u:p@db.internal/warehouse?ssl=true")
         #expect(details?.sslMode == .require)
     }
 
@@ -402,6 +436,21 @@ struct MockConnectionDetailsParserTests {
         #expect(details.password == nil)
     }
 
+    @Test func prefersDatabaseSpecificKeysOverOtherServiceKeys() async throws {
+        let details = try await MockConnectionDetailsParser().parse(
+            """
+            API_HOST=api.internal
+            API_USER=api
+            API_PASSWORD=api-secret
+            DB_HOST=db.internal
+            DB_USER=etl
+            DB_PASSWORD=db-secret
+            """)
+        #expect(details.host == "db.internal")
+        #expect(details.username == "etl")
+        #expect(details.password == "db-secret")
+    }
+
     @Test func prefersDatabaseNameOverDatabaseHost() async throws {
         let details = try await MockConnectionDetailsParser().parse(
             """
@@ -502,6 +551,16 @@ struct MockConnectionDetailsParserTests {
     @Test func parsesCompactJSONDatabaseURLWithoutAdjacentFields() async throws {
         let details = try await MockConnectionDetailsParser().parse(
             #"{"DATABASE_URL":"postgres://u:p@host/db","other":"x"}"#
+        )
+        #expect(details.host == "host")
+        #expect(details.database == "db")
+        #expect(details.username == "u")
+        #expect(details.password == "p")
+    }
+
+    @Test func parsesEscapedJSONDatabaseURL() async throws {
+        let details = try await MockConnectionDetailsParser().parse(
+            #"{"DATABASE_URL":"postgres:\/\/u:p@host\/db"}"#
         )
         #expect(details.host == "host")
         #expect(details.database == "db")

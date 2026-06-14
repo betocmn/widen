@@ -110,19 +110,14 @@ public enum ConnectionURLParser {
             database: database.map(decoded),
             username: parsedUser.map(decoded),
             password: parsedPassword.map(decoded),
-            sslModeText: sslMode(inQuery: query),
+            sslModeText: sslMode(in: queryValues),
             preservesEmptyPassword: parsedPassword != nil
         )
     }
 
-    private static func sslMode(inQuery query: String) -> String? {
-        for pair in query.split(separator: "&") {
-            let parts = pair.split(separator: "=", maxSplits: 1)
-            if parts.count == 2, parts[0].lowercased() == "sslmode" {
-                return decoded(String(parts[1]))
-            }
-        }
-        return nil
+    private static func sslMode(in queryValues: [String: String]) -> String? {
+        (queryValues["sslmode"] ?? queryValues["ssl_mode"] ?? queryValues["ssl"])
+            .map(decoded)
     }
 
     private static func queryParameters(in query: String) -> [String: String] {
@@ -199,8 +194,13 @@ public enum ConnectionURLParser {
         }
 
         let valueBeforeStructural = userinfo[userinfo.index(after: colon)..<structural]
-        return !valueBeforeStructural.isEmpty
-            && valueBeforeStructural.allSatisfy(\.isNumber)
+        guard !valueBeforeStructural.isEmpty,
+            valueBeforeStructural.allSatisfy(\.isNumber)
+        else {
+            return false
+        }
+
+        return containsQueryAssignment(after: structural, in: userinfo)
     }
 
     private static func isPlausibleHostToken(_ hostToken: Substring) -> Bool {
@@ -219,6 +219,22 @@ public enum ConnectionURLParser {
 
         let queryPrefix = suffix[suffix.index(after: question)..<laterAt]
         return !queryPrefix.contains("=")
+    }
+
+    private static func containsQueryAssignment(
+        after structural: Substring.Index, in userinfo: Substring
+    ) -> Bool {
+        let queryStart: Substring.Index
+        if userinfo[structural] == "?" {
+            queryStart = userinfo.index(after: structural)
+        } else {
+            guard let question = userinfo[userinfo.index(after: structural)...].firstIndex(of: "?")
+            else {
+                return false
+            }
+            queryStart = userinfo.index(after: question)
+        }
+        return userinfo[queryStart...].contains("=")
     }
 
     /// Percent-decodes a component, falling back to the raw value when it
