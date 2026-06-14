@@ -156,6 +156,8 @@ public final class ConnectionSettingsViewModel {
         if let username = details.username { self.username = username }
         if let password = details.password { self.password = password }
         if let sslMode = details.sslMode { self.sslMode = sslMode }
+        validationErrors = []
+        saveError = nil
         testState = .idle
     }
 

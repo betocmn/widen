@@ -166,12 +166,33 @@ struct ConnectionURLParserTests {
         #expect(details?.sslMode == .require)
     }
 
+    @Test func parsesCredentialsFromQueryParameters() {
+        let details = ConnectionURLParser.details(
+            in: "postgres://db.internal/warehouse?user=etl&password=secret&sslmode=require"
+        )
+        #expect(details?.username == "etl")
+        #expect(details?.password == "secret")
+        #expect(details?.host == "db.internal")
+        #expect(details?.database == "warehouse")
+        #expect(details?.sslMode == .require)
+    }
+
     @Test func trimsWrappingQuoteWithoutSplittingPassword() {
         let details = ConnectionURLParser.details(
             in: "DATABASE_URL='postgres://admin:p'ass@db.internal/warehouse'")
         #expect(details?.password == "p'ass")
         #expect(details?.host == "db.internal")
         #expect(details?.database == "warehouse")
+    }
+
+    @Test func stopsJSONURLTokenAtClosingQuote() {
+        let details = ConnectionURLParser.details(
+            in: #"{"DATABASE_URL":"postgres://u:p@host/db","other":"x"}"#
+        )
+        #expect(details?.host == "host")
+        #expect(details?.database == "db")
+        #expect(details?.username == "u")
+        #expect(details?.password == "p")
     }
 
     @Test func findsURLInsideEnvAssignment() {
@@ -344,6 +365,37 @@ struct MockConnectionDetailsParserTests {
         #expect(details.database == "warehouse")
     }
 
+    @Test func databaseMetadataKeysDoNotBecomeDatabaseName() async throws {
+        let details = try await MockConnectionDetailsParser().parse(
+            """
+            DATABASE_HOST=db.internal
+            DATABASE_USER=etl
+            DATABASE_PASSWORD=secret
+            """)
+        #expect(details.host == "db.internal")
+        #expect(details.database == nil)
+        #expect(details.username == "etl")
+        #expect(details.password == "secret")
+    }
+
+    @Test func parsesSpaceSeparatedInlinePairs() async throws {
+        let details = try await MockConnectionDetailsParser().parse(
+            "host=db.internal port=5433 dbname=warehouse user=etl password=secret")
+        #expect(details.host == "db.internal")
+        #expect(details.port == 5433)
+        #expect(details.database == "warehouse")
+        #expect(details.username == "etl")
+        #expect(details.password == "secret")
+    }
+
+    @Test func parsesCommaSeparatedColonPairs() async throws {
+        let details = try await MockConnectionDetailsParser().parse(
+            "host: db.internal, user: etl, password: secret")
+        #expect(details.host == "db.internal")
+        #expect(details.username == "etl")
+        #expect(details.password == "secret")
+    }
+
     @Test func prefersSSLModeOverOtherSSLKeys() async throws {
         let details = try await MockConnectionDetailsParser().parse(
             """
@@ -384,6 +436,16 @@ struct MockConnectionDetailsParserTests {
         #expect(details.database == "warehouse")
         #expect(details.username == "etl")
         #expect(details.password == "secret")
+    }
+
+    @Test func parsesCompactJSONDatabaseURLWithoutAdjacentFields() async throws {
+        let details = try await MockConnectionDetailsParser().parse(
+            #"{"DATABASE_URL":"postgres://u:p@host/db","other":"x"}"#
+        )
+        #expect(details.host == "host")
+        #expect(details.database == "db")
+        #expect(details.username == "u")
+        #expect(details.password == "p")
     }
 
     @Test func parsesPostgresDatabaseKey() async throws {
@@ -493,6 +555,25 @@ struct ConnectionAutofillViewModelTests {
         #expect(filled)
         #expect(viewModel.host == "old-host")
         #expect(viewModel.password == "hunter2")
+    }
+
+    @Test func successfulAutofillClearsStaleValidationErrors() async {
+        let viewModel = ConnectionSettingsViewModel(connectionTester: { _, _ in })
+        viewModel.host = ""
+        viewModel.database = ""
+        viewModel.username = ""
+        #expect(viewModel.buildConfig() == nil)
+        #expect(!viewModel.validationErrors.isEmpty)
+        viewModel.autofillText = "host=db.internal dbname=warehouse user=etl"
+
+        let filled = await viewModel.autofill(
+            using: StubParser(
+                result: .success(
+                    ParsedConnectionDetails(
+                        host: "db.internal", database: "warehouse", username: "etl"))))
+
+        #expect(filled)
+        #expect(viewModel.validationErrors.isEmpty)
     }
 
     @Test func canceledAutofillDoesNotApplyLateParserResult() async {

@@ -43,6 +43,12 @@ public enum ConnectionURLParser {
 
         var end = firstScheme.lowerBound
         while end < text.endIndex, !text[end].isWhitespace {
+            if let wrappingQuote,
+                text[end] == wrappingQuote,
+                isWrappingQuoteTerminator(in: text, at: end)
+            {
+                break
+            }
             end = text.index(after: end)
         }
         return trimmedURLToken(
@@ -94,15 +100,18 @@ public enum ConnectionURLParser {
         }
 
         let (host, port) = hostAndPort(in: hostPart)
+        let queryValues = queryParameters(in: query)
+        let parsedUser = user ?? queryValues["user"] ?? queryValues["username"]
+        let parsedPassword = password ?? queryValues["password"]
 
         return .sanitized(
             host: decoded(host),
             port: port,
             database: database.map(decoded),
-            username: user.map(decoded),
-            password: password.map(decoded),
+            username: parsedUser.map(decoded),
+            password: parsedPassword.map(decoded),
             sslModeText: sslMode(inQuery: query),
-            preservesEmptyPassword: password != nil
+            preservesEmptyPassword: parsedPassword != nil
         )
     }
 
@@ -114,6 +123,17 @@ public enum ConnectionURLParser {
             }
         }
         return nil
+    }
+
+    private static func queryParameters(in query: String) -> [String: String] {
+        var values: [String: String] = [:]
+        for pair in query.split(separator: "&", omittingEmptySubsequences: false) {
+            let parts = pair.split(
+                separator: "=", maxSplits: 1, omittingEmptySubsequences: false)
+            guard parts.count == 2 else { continue }
+            values[decoded(String(parts[0])).lowercased()] = decoded(String(parts[1]))
+        }
+        return values
     }
 
     private static func hostAndPort(in hostPart: String) -> (host: String, port: Int?) {
@@ -204,6 +224,14 @@ public enum ConnectionURLParser {
             value.removeLast()
         }
         return value
+    }
+
+    private static func isWrappingQuoteTerminator(
+        in text: String, at quoteIndex: String.Index
+    ) -> Bool {
+        let next = text.index(after: quoteIndex)
+        guard next < text.endIndex else { return true }
+        return text[next].isWhitespace || text[next] == "," || text[next] == "}" || text[next] == "]"
     }
 
     private static func hasUnmatchedClosingBracket(_ value: String) -> Bool {

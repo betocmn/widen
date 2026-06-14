@@ -24,16 +24,9 @@ public struct MockConnectionDetailsParser: ConnectionDetailsParsing {
                 if trimmed.hasPrefix("export ") {
                     trimmed = String(trimmed.dropFirst("export ".count))
                 }
-                guard let separator = trimmed.firstIndex(where: { $0 == "=" || $0 == ":" }) else {
-                    continue
+                for (key, value) in keyValuePairs(in: String(trimmed)) {
+                    values[key] = value
                 }
-                let key = trimmed[..<separator]
-                    .trimmingCharacters(in: .whitespaces)
-                    .trimmingCharacters(in: CharacterSet(charactersIn: "\"'{}"))
-                    .lowercased()
-                let value = Self.cleanedValue(String(trimmed[trimmed.index(after: separator)...]))
-                guard !key.isEmpty else { continue }
-                values[key] = value
             }
         }
 
@@ -64,13 +57,146 @@ public struct MockConnectionDetailsParser: ConnectionDetailsParsing {
             port: value(containing: "port").flatMap { Int($0) },
             database: values["dbname"] ?? values["db"]
                 ?? value(exactly: "database") ?? value(endingWith: "database_name")
-                ?? value(endingWith: "db_name") ?? value(endingWith: "_db")
-                ?? value(containing: "database"),
+                ?? value(endingWith: "_database") ?? value(endingWith: "db_name")
+                ?? value(endingWith: "_db"),
             username: value(containing: "user"),
             password: password,
             sslModeText: sslMode,
             preservesEmptyPassword: password != nil
         )
+    }
+
+    private static func keyValuePairs(in line: String) -> [(key: String, value: String)] {
+        var pairs: [(key: String, value: String)] = []
+        var index = line.startIndex
+
+        while index < line.endIndex {
+            skipPairDelimiters(in: line, from: &index)
+            guard index < line.endIndex else { break }
+
+            let keyStart = index
+            if line[index] == "\"" || line[index] == "'" {
+                let quote = line[index]
+                index = line.index(after: index)
+                while index < line.endIndex, line[index] != quote {
+                    index = line.index(after: index)
+                }
+                if index < line.endIndex { index = line.index(after: index) }
+            } else {
+                while index < line.endIndex,
+                    !line[index].isWhitespace,
+                    line[index] != "=",
+                    line[index] != ":",
+                    line[index] != ","
+                {
+                    index = line.index(after: index)
+                }
+            }
+
+            let rawKey = String(line[keyStart..<index])
+                .trimmingCharacters(in: .whitespaces)
+                .trimmingCharacters(in: CharacterSet(charactersIn: "\"'{}"))
+                .lowercased()
+            skipSpaces(in: line, from: &index)
+            guard index < line.endIndex, line[index] == "=" || line[index] == ":" else {
+                continue
+            }
+            index = line.index(after: index)
+            skipSpaces(in: line, from: &index)
+
+            let rawValue = rawValue(in: line, from: &index)
+            guard !rawKey.isEmpty else { continue }
+            pairs.append((rawKey, cleanedValue(rawValue)))
+        }
+        return pairs
+    }
+
+    private static func rawValue(in line: String, from index: inout String.Index) -> String {
+        let valueStart = index
+        if index < line.endIndex, line[index] == "\"" || line[index] == "'" {
+            let quote = line[index]
+            index = line.index(after: index)
+            var isEscaped = false
+            while index < line.endIndex {
+                let character = line[index]
+                if isEscaped {
+                    isEscaped = false
+                } else if character == "\\", quote == "\"" {
+                    isEscaped = true
+                } else if character == quote {
+                    index = line.index(after: index)
+                    break
+                }
+                index = line.index(after: index)
+            }
+            return String(line[valueStart..<index])
+        }
+
+        while index < line.endIndex {
+            if line[index] == "," || startsInlineComment(in: line, at: index, after: valueStart) {
+                break
+            }
+            if line[index].isWhitespace {
+                let next = indexAfterSpaces(in: line, from: index)
+                if beginsKeyValuePair(in: line, at: next) { break }
+            }
+            index = line.index(after: index)
+        }
+        return String(line[valueStart..<index])
+    }
+
+    private static func skipPairDelimiters(in line: String, from index: inout String.Index) {
+        while index < line.endIndex,
+            line[index].isWhitespace || line[index] == "," || line[index] == "{" || line[index] == "}"
+        {
+            index = line.index(after: index)
+        }
+    }
+
+    private static func skipSpaces(in line: String, from index: inout String.Index) {
+        while index < line.endIndex, line[index].isWhitespace {
+            index = line.index(after: index)
+        }
+    }
+
+    private static func indexAfterSpaces(in line: String, from index: String.Index) -> String.Index {
+        var next = index
+        skipSpaces(in: line, from: &next)
+        return next
+    }
+
+    private static func beginsKeyValuePair(in line: String, at index: String.Index) -> Bool {
+        var cursor = index
+        guard cursor < line.endIndex else { return false }
+
+        if line[cursor] == "\"" || line[cursor] == "'" {
+            let quote = line[cursor]
+            cursor = line.index(after: cursor)
+            while cursor < line.endIndex, line[cursor] != quote {
+                cursor = line.index(after: cursor)
+            }
+            guard cursor < line.endIndex else { return false }
+            cursor = line.index(after: cursor)
+        } else {
+            while cursor < line.endIndex,
+                !line[cursor].isWhitespace,
+                line[cursor] != "=",
+                line[cursor] != ":",
+                line[cursor] != ","
+            {
+                cursor = line.index(after: cursor)
+            }
+        }
+
+        skipSpaces(in: line, from: &cursor)
+        return cursor < line.endIndex && (line[cursor] == "=" || line[cursor] == ":")
+    }
+
+    private static func startsInlineComment(
+        in line: String, at index: String.Index, after valueStart: String.Index
+    ) -> Bool {
+        guard line[index] == "#" else { return false }
+        return startsComment(after: String(line[valueStart..<index]))
     }
 
     private static func cleanedValue(_ rawValue: String) -> String {
