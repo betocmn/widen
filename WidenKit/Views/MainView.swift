@@ -5,18 +5,36 @@ import SwiftUI
 public struct MainView: View {
     @Environment(AppState.self) private var appState
     @Environment(\.openSettings) private var openSettings
-    @Environment(\.colorScheme) private var colorScheme
-    @AppStorage(AppearancePreference.storageKey)
-    private var appearanceRaw = AppearancePreference.system.rawValue
+    /// Tracked so exactly one sidebar toggle renders: in the sidebar's
+    /// header while open, in the detail toolbar while collapsed (a collapsed
+    /// column's toolbar items don't survive relaunch).
+    @State private var columnVisibility: NavigationSplitViewVisibility = .all
 
     public init() {}
 
     public var body: some View {
         @Bindable var appState = appState
 
-        NavigationSplitView {
+        NavigationSplitView(columnVisibility: $columnVisibility) {
             SidebarView()
                 .navigationSplitViewColumnWidth(min: 230, ideal: 280, max: 400)
+                // Replace the system sidebar toggle with our own at the
+                // sidebar's trailing corner (the side facing the content),
+                // mirroring the inspector toggle — and without the glass
+                // container, so neither panel toggle merges into the
+                // neighbouring toolbar pills.
+                .toolbar(removing: .sidebarToggle)
+                .toolbar {
+                    if columnVisibility != .detailOnly {
+                        // The flexible spacer pushes the toggle to the
+                        // sidebar's trailing corner, against the divider.
+                        ToolbarSpacer(.flexible)
+                        ToolbarItem {
+                            SidebarToggle(columnVisibility: $columnVisibility)
+                        }
+                        .sharedBackgroundVisibility(.hidden)
+                    }
+                }
         } detail: {
             VStack(spacing: 0) {
                 if let message = appState.errorBanner {
@@ -30,30 +48,27 @@ public struct MainView: View {
             // ideal exceeds the screen, macOS 26 keeps the content laid out
             // wider than the clamped window and the panes clip their edges.
             .frame(minWidth: 420, idealWidth: 560)
-            // The sidebar keeps the system toggle in its own section; the
-            // inspector toggle sits at the window's trailing corner — the
-            // only spot macOS allows trailing toolbar items.
+            // Both panel toggles sit container-less in the one toolbar row:
+            // the sidebar's at its trailing corner (or here, leading, while
+            // collapsed) and the inspector's at the window's trailing
+            // corner. The appearance toggle lives in the sidebar footer.
             .toolbar {
+                if columnVisibility == .detailOnly {
+                    ToolbarItem(placement: .navigation) {
+                        SidebarToggle(columnVisibility: $columnVisibility)
+                    }
+                    .sharedBackgroundVisibility(.hidden)
+                }
                 ToolbarItem(placement: .navigation) {
                     breadcrumb
                 }
                 ToolbarItem(placement: .navigation) {
-                    Button {
-                        toggleAppearance()
-                    } label: {
-                        Label(
-                            colorScheme == .dark ? "Switch to Light Mode" : "Switch to Dark Mode",
-                            systemImage: colorScheme == .dark ? "sun.max" : "moon"
-                        )
-                    }
-                    .help(
-                        colorScheme == .dark
-                            ? "Switch to light mode (reset to System in Settings › General)"
-                            : "Switch to dark mode (reset to System in Settings › General)")
+                    AIBackendToggle()
                 }
                 ToolbarItem(placement: .primaryAction) {
                     SchemaInspectorToggle()
                 }
+                .sharedBackgroundVisibility(.hidden)
             }
         }
         // Attached to the split view (not the detail content) so the detail
@@ -145,13 +160,6 @@ public struct MainView: View {
         }
     }
 
-    /// Flips to the opposite of the effective scheme. The "follow System"
-    /// reset lives in Settings › General.
-    private func toggleAppearance() {
-        let next: AppearancePreference = colorScheme == .dark ? .light : .dark
-        appearanceRaw = next.rawValue
-    }
-
     @ViewBuilder
     private var detailContent: some View {
         if let controller = appState.selectedController {
@@ -193,6 +201,24 @@ private struct WelcomeDetailView: View {
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity)
         .padding(32)
+    }
+}
+
+/// Shows or hides the sidebar. Replaces the system toggle so its placement
+/// and (lack of) background match the inspector's toggle.
+struct SidebarToggle: View {
+    @Binding var columnVisibility: NavigationSplitViewVisibility
+
+    var body: some View {
+        Button {
+            withAnimation {
+                columnVisibility = columnVisibility == .detailOnly ? .all : .detailOnly
+            }
+        } label: {
+            Label("Sidebar", systemImage: "sidebar.left")
+                .labelStyle(.iconOnly)
+        }
+        .help("Show or hide the sidebar")
     }
 }
 

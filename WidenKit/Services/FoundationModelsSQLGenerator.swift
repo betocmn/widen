@@ -124,7 +124,7 @@
                 let result = Self.result(from: response.content)
                 await GenerationLog.shared.append(
                     prompt: prompt,
-                    outcome: Self.outcomeDescription(result),
+                    outcome: result.logDescription,
                     durationMs: Int(Date().timeIntervalSince(started) * 1_000))
                 return result
             } catch {
@@ -136,18 +136,9 @@
             }
         }
 
-        private static func outcomeDescription(_ result: SQLGenerationResult) -> String {
-            """
-            sql: \(result.sql)
-            explanation: \(result.explanation)
-            assumptions: \(result.assumptions.joined(separator: " | "))
-            referencedTables: \(result.referencedTables.joined(separator: ", "))
-            confidence: \(result.confidence) · risk: \(result.riskLevel.rawValue) · needsClarification: \(result.needsClarification)
-            clarificationQuestion: \(result.clarificationQuestion ?? "-")
-            """
-        }
-
-        private static func result(from generated: GeneratedSQLResponse) -> SQLGenerationResult {
+        /// Shared with `PrivateCloudComputeSQLGenerator`, which produces the
+        /// same structured response from the server-side model.
+        static func result(from generated: GeneratedSQLResponse) -> SQLGenerationResult {
             SQLGenerationResult(
                 sql: generated.sql.trimmingCharacters(in: .whitespacesAndNewlines),
                 explanation: generated.explanation,
@@ -160,7 +151,8 @@
             )
         }
 
-        private static func map(_ error: LanguageModelSession.GenerationError) -> AppError {
+        /// Shared with `PrivateCloudComputeSQLGenerator`.
+        static func map(_ error: LanguageModelSession.GenerationError) -> AppError {
             switch error {
             case .exceededContextWindowSize:
                 .modelGenerationFailed(

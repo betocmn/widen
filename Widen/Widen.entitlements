@@ -1,0 +1,13 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+    <!-- Apple-managed entitlement for the Private Cloud Compute model.
+         Request access at https://developer.apple.com/private-cloud-compute/.
+         NOT wired into the ad-hoc dev build: a restricted entitlement without
+         a provisioning profile would make macOS kill the app at launch. See
+         project.yml for how to enable it on a properly signed build. -->
+    <key>com.apple.developer.private-cloud-compute</key>
+    <true/>
+</dict>
+</plist>

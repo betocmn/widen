@@ -76,6 +76,7 @@ struct ResultsCardView: View {
                 exportCSV(result)
             }
             .buttonStyle(.glass)
+            .hoverBrightness()
             .controlSize(.small)
         }
     }

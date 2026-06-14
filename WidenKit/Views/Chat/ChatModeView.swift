@@ -153,7 +153,9 @@ struct ChatModeView: View {
                             .id(message.id)
                     }
                     if controller.chatVM.isGenerating {
-                        LoadingView(label: "Generating SQL with the local model…")
+                        LoadingView(
+                            label: "Generating SQL with \(appState.activeBackendDisplayName)…"
+                        )
                             .id(Self.generatingID)
                     }
                     if controller.queryVM.isRunning {
@@ -163,6 +165,7 @@ struct ChatModeView: View {
                                 controller.queryVM.cancelRun()
                             }
                             .controlSize(.small)
+                            .hoverBrightness()
                         }
                         .id(Self.runningID)
                     }
@@ -357,6 +360,7 @@ private struct SchemaEmptyStatusView: View {
             if status.canRefresh {
                 Button("Refresh Schema", action: refresh)
                     .buttonStyle(.glass)
+                    .hoverBrightness()
             }
         }
     }
