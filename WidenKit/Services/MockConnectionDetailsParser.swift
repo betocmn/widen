@@ -44,13 +44,20 @@ public struct MockConnectionDetailsParser: ConnectionDetailsParsing {
                 .first { $0.key.contains(fragment) && !$0.value.contains("://") }?
                 .value
         }
+        func value(endingWith suffix: String) -> String? {
+            values
+                .sorted { $0.key < $1.key }
+                .first { $0.key.hasSuffix(suffix) && !$0.value.contains("://") }?
+                .value
+        }
 
         let password = value(containing: "pass")
         return .sanitized(
             host: value(containing: "host"),
             port: value(containing: "port").flatMap { Int($0) },
             database: values["dbname"] ?? values["db"]
-                ?? value(containing: "database") ?? value(containing: "db_name"),
+                ?? value(containing: "database") ?? value(containing: "db_name")
+                ?? value(endingWith: "_db"),
             username: value(containing: "user"),
             password: password,
             sslModeText: value(containing: "ssl"),

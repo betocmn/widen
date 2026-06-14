@@ -128,9 +128,9 @@ struct ConnectionEditorForm: View {
         }
     }
 
-    /// Opens the paste-autofill sheet. Disabled — never silently rerouted to
-    /// a remote model — when the local model is unavailable; the tooltip
-    /// explains why.
+    /// Opens the paste-autofill sheet. Parsing stays local: structured URLs
+    /// and key-value entries are deterministic, and free-form text uses the
+    /// on-device model when available.
     private var autofillButton: some View {
         Button {
             showAutofillSheet = true
@@ -141,7 +141,7 @@ struct ConnectionEditorForm: View {
         .disabled(appState.connectionAutofillUnavailableMessage != nil)
         .help(
             appState.connectionAutofillUnavailableMessage
-                ?? "Paste a connection URL or .env details and let the local Apple model fill this form. Nothing leaves this Mac."
+                ?? "Paste a connection URL or .env details to fill this form locally. Nothing leaves this Mac."
         )
     }
 

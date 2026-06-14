@@ -53,9 +53,10 @@ public struct ParsedConnectionDetails: Equatable, Sendable {
     /// Builds details from raw extracted values: trims whitespace, drops
     /// empty strings, validates the port range, strips a leading slash from
     /// the database (URL paths), and maps libpq sslmode spellings onto the
-    /// app's three modes. Empty passwords are normally treated as missing
-    /// model output, but deterministic parsers can preserve them when the
-    /// source explicitly specified an empty password.
+    /// app's three modes. Empty or whitespace-padded passwords are normally
+    /// treated as missing or cleaned model output, but deterministic parsers
+    /// can preserve them exactly when the source explicitly specified a
+    /// password.
     public static func sanitized(
         name: String? = nil,
         host: String? = nil,
@@ -76,7 +77,7 @@ public struct ParsedConnectionDetails: Equatable, Sendable {
             port: port.flatMap { (1...65535).contains($0) ? $0 : nil },
             database: cleanedDatabase,
             username: normalized(username),
-            password: normalized(password, preservesEmpty: preservesEmptyPassword),
+            password: normalizedPassword(password, preservesExactValue: preservesEmptyPassword),
             sslMode: sslMode(from: sslModeText)
         )
     }
@@ -104,5 +105,13 @@ public struct ParsedConnectionDetails: Equatable, Sendable {
             return nil
         }
         return trimmed
+    }
+
+    private static func normalizedPassword(
+        _ value: String?, preservesExactValue: Bool
+    ) -> String? {
+        guard let value else { return nil }
+        if preservesExactValue { return value }
+        return normalized(value)
     }
 }

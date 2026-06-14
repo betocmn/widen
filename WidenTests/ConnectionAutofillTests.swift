@@ -30,6 +30,10 @@ struct ParsedConnectionDetailsTests {
             ParsedConnectionDetails.sanitized(
                 password: "", preservesEmptyPassword: true
             ).password == "")
+        #expect(
+            ParsedConnectionDetails.sanitized(
+                password: " secret ", preservesEmptyPassword: true
+            ).password == " secret ")
     }
 
     @Test func sanitizedRejectsOutOfRangePorts() {
@@ -97,6 +101,12 @@ struct ConnectionURLParserTests {
         #expect(details?.username == "widen")
         #expect(details?.password == "p@ss")
         #expect(details?.sslMode == .require)
+    }
+
+    @Test func preservesPercentEncodedPasswordWhitespace() {
+        let details = ConnectionURLParser.details(
+            in: "postgres://widen:%20secret%20@db.internal/app")
+        #expect(details?.password == " secret ")
     }
 
     @Test func keepsUnencodedSpecialCharactersInPassword() {
@@ -242,11 +252,36 @@ struct MockConnectionDetailsParserTests {
         #expect(details.password == "")
     }
 
+    @Test func parsesPostgresDatabaseKey() async throws {
+        let details = try await MockConnectionDetailsParser().parse(
+            """
+            POSTGRES_HOST=localhost
+            POSTGRES_DB=warehouse
+            POSTGRES_USER=etl
+            POSTGRES_PASSWORD=hunter2
+            """)
+        #expect(details.host == "localhost")
+        #expect(details.database == "warehouse")
+        #expect(details.username == "etl")
+        #expect(details.password == "hunter2")
+    }
+
     @Test func returnsEmptyDetailsForUnrelatedText() async throws {
         let details = try await MockConnectionDetailsParser().parse("hello world")
         #expect(details.isEmpty)
     }
 }
+
+#if canImport(FoundationModels)
+    @Suite("FoundationModelsConnectionParser helpers")
+    struct FoundationModelsConnectionParserHelperTests {
+        @Test func sslMentionAcceptsTLS() {
+            #expect(FoundationModelsConnectionParser.mentionsSSLSetting(in: "TLS required"))
+            #expect(FoundationModelsConnectionParser.mentionsSSLSetting(in: "sslmode=require"))
+            #expect(!FoundationModelsConnectionParser.mentionsSSLSetting(in: "use a password"))
+        }
+    }
+#endif
 
 private struct StubParser: ConnectionDetailsParsing {
     var result: Result<ParsedConnectionDetails, AppError>

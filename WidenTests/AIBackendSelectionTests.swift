@@ -156,6 +156,17 @@ struct AIBackendSelectionTests {
         #expect(state.activeBackendDisplayName == "the local model")
     }
 
+    @Test func connectionAutofillStaysAvailableWithoutLocalModel() {
+        clearDefaults()
+        let (state, dir) = makeState()
+        defer { cleanUp(dir) }
+
+        state.localModelAvailabilityMessageOverride = .some("Local model is unavailable.")
+
+        #expect(state.connectionDetailsParser != nil)
+        #expect(state.connectionAutofillUnavailableMessage == nil)
+    }
+
     /// OpenRouter works on every Mac today, so it is the default; Apple
     /// PCC is an explicit opt-in.
     @Test func defaultCloudProviderIsOpenRouter() {

@@ -47,12 +47,13 @@
 
         public func parse(_ text: String) async throws -> ParsedConnectionDetails {
             let urlDetails = ConnectionURLParser.details(in: text)
+            let deterministicDetails = Self.deterministicDetails(in: text, urlDetails: urlDetails)
             let model = SystemLanguageModel.default
             switch model.availability {
             case .available:
                 break
             case .unavailable(let reason):
-                if let urlDetails { return urlDetails }
+                if let deterministicDetails { return deterministicDetails }
                 throw AppError.modelUnavailable(Self.message(for: reason))
             }
 
@@ -80,26 +81,38 @@
                 }
                 return modelDetails
             } catch let error as LanguageModelSession.GenerationError {
-                if let urlDetails { return urlDetails }
+                if let deterministicDetails { return deterministicDetails }
                 throw Self.map(error)
             }
+        }
+
+        private static func deterministicDetails(
+            in text: String, urlDetails: ParsedConnectionDetails?
+        ) -> ParsedConnectionDetails? {
+            let keyValues = MockConnectionDetailsParser.details(fromKeyValues: text)
+            let details = urlDetails.map { keyValues.overridden(by: $0) } ?? keyValues
+            return details.isEmpty ? nil : details
         }
 
         private static func details(
             from generated: GeneratedConnectionDetails, pastedText: String
         ) -> ParsedConnectionDetails {
-            // The small model sometimes answers an sslMode even when SSL never
-            // appears in the text, which would silently flip the user's SSL
-            // selection. Trust it only when the text mentions ssl.
-            let mentionsSSL = pastedText.range(of: "ssl", options: .caseInsensitive) != nil
+            // The small model sometimes answers an sslMode even when SSL/TLS
+            // never appears in the text, which would silently flip the user's
+            // SSL selection. Trust it only when the text mentions the setting.
             return .sanitized(
                 host: generated.host,
                 port: generated.port,
                 database: generated.database,
                 username: generated.username,
                 password: generated.password,
-                sslModeText: mentionsSSL ? generated.sslMode : nil
+                sslModeText: mentionsSSLSetting(in: pastedText) ? generated.sslMode : nil
             )
+        }
+
+        static func mentionsSSLSetting(in text: String) -> Bool {
+            text.range(of: "ssl", options: .caseInsensitive) != nil
+                || text.range(of: "tls", options: .caseInsensitive) != nil
         }
 
         private static func map(_ error: LanguageModelSession.GenerationError) -> AppError {
