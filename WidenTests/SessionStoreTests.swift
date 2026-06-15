@@ -45,6 +45,7 @@ struct SessionStoreTests {
         ]
         session.sqlText = "SELECT id FROM users LIMIT 10"
         session.lastGeneration = makeGeneration()
+        session.viewDataTarget = QuerySession.ViewDataTarget(schema: "public", table: "users")
         session.isArchived = true
         session.createdAt = Date(timeIntervalSince1970: 1_750_000_000)
         session.updatedAt = Date(timeIntervalSince1970: 1_750_000_100)
@@ -63,9 +64,32 @@ struct SessionStoreTests {
         #expect(restored.messages[1].generation == makeGeneration())
         #expect(restored.sqlText == "SELECT id FROM users LIMIT 10")
         #expect(restored.lastGeneration == makeGeneration())
+        #expect(restored.viewDataTarget == QuerySession.ViewDataTarget(schema: "public", table: "users"))
         #expect(restored.isArchived)
         #expect(restored.createdAt == Date(timeIntervalSince1970: 1_750_000_000))
         #expect(restored.updatedAt == Date(timeIntervalSince1970: 1_750_000_100))
+    }
+
+    @Test func legacySessionWithoutViewDataTargetDecodes() throws {
+        let legacy = """
+            {
+              "id": "11111111-2222-3333-4444-555555555555",
+              "connectionID": "aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee",
+              "title": "New Session",
+              "titleWasManuallySet": false,
+              "messages": [],
+              "sqlText": "",
+              "isArchived": false,
+              "createdAt": "2025-06-15T12:00:00Z",
+              "updatedAt": "2025-06-15T12:00:00Z"
+            }
+            """
+        let decoder = JSONDecoder()
+        decoder.dateDecodingStrategy = .iso8601
+
+        let decoded = try decoder.decode(QuerySession.self, from: Data(legacy.utf8))
+
+        #expect(decoded.viewDataTarget == nil)
     }
 
     @Test func saveOverwritesPreviousContents() throws {

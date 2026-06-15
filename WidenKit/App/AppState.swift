@@ -148,6 +148,7 @@ public final class AppState {
     var pccQuotaLimitReachedMessageOverride: String??
     var localModelAvailabilityMessageOverride: String??
     var sqlGeneratorOverride: (any SQLGenerator)?
+    var queryExecutorOverride: (any QueryExecuting)?
 
     /// Whether the chosen cloud provider can serve requests right now.
     public var cloudBackendStatus: CloudBackendStatus {
@@ -476,10 +477,21 @@ public final class AppState {
 
     /// Connects the given database unless it is already connected or
     /// connecting. The schema is loaded only when it is not cached yet.
-    public func connectIfNeeded(_ id: UUID) async {
-        guard let config = connection(for: id) else { return }
+    @discardableResult
+    public func connectIfNeeded(_ id: UUID) async -> Bool {
+        guard let config = connection(for: id) else { return false }
         switch connectionState(id) {
-        case .connected, .connecting: return
+        case .connected:
+            return true
+        case .connecting:
+            while connectionState(id) == .connecting {
+                do {
+                    try await Task.sleep(for: .milliseconds(100))
+                } catch {
+                    return false
+                }
+            }
+            return connectionState(id) == .connected
         case .notConnected, .error: break
         }
 
@@ -499,9 +511,11 @@ public final class AppState {
             if schemas[id] == nil {
                 await refreshSchema(for: id)
             }
+            return true
         } catch {
             connectionStates[id] = .error(error.localizedDescription)
             errorBanner = error.localizedDescription
+            return false
         }
     }
 
@@ -642,12 +656,132 @@ public final class AppState {
     // MARK: - Session lifecycle
 
     @discardableResult
-    public func createSession(connectionID: UUID) -> QuerySession {
-        let session = QuerySession(connectionID: connectionID)
+    public func createSession(
+        connectionID: UUID,
+        title: String = QuerySession.placeholderTitle,
+        titleWasManuallySet: Bool = false,
+        viewDataTarget: QuerySession.ViewDataTarget? = nil
+    ) -> QuerySession {
+        let session = QuerySession(
+            connectionID: connectionID,
+            title: title,
+            titleWasManuallySet: titleWasManuallySet,
+            viewDataTarget: viewDataTarget
+        )
         sessions.append(session)
         selectSession(session.id)
         flushSessions()
         return session
+    }
+
+    /// Opens a deterministic session for browsing a table's rows. The SQL is
+    /// treated like user-entered direct SQL: no model generation or title
+    /// generation is involved.
+    public func viewData(for table: TableInfo, connectionID: UUID) async {
+        guard connection(for: connectionID) != nil else { return }
+        let sql = Self.viewDataSQL(for: table)
+        let target = QuerySession.ViewDataTarget(table: table)
+        let controller: SessionController
+        let viewDataSessionID: UUID
+        if let existingSessionID = existingViewDataSessionID(
+            connectionID: connectionID,
+            target: target,
+            sql: sql
+        ) {
+            selectSession(existingSessionID)
+            guard let selectedController = controllers[existingSessionID] else { return }
+            ensureViewDataTarget(target, on: existingSessionID)
+            selectSchemaTable(for: target, connectionID: connectionID)
+            viewDataSessionID = existingSessionID
+            controller = selectedController
+            guard !controller.queryVM.isRunning, !controller.chatVM.isGenerating else { return }
+            controller.queryVM.setDirectSQL(sql)
+            sessionDidChange(existingSessionID)
+        } else {
+            let session = createSession(
+                connectionID: connectionID,
+                title: "View \(table.qualifiedName)",
+                titleWasManuallySet: true,
+                viewDataTarget: target
+            )
+            guard let selectedController = controllers[session.id] else { return }
+            viewDataSessionID = session.id
+            controller = selectedController
+            controller.chatVM.input = sql
+            controller.chatVM.submitDirectSQL(queryVM: controller.queryVM)
+            sessionDidChange(session.id)
+        }
+
+        guard await connectIfNeeded(connectionID) else {
+            controller.chatVM.appendRunError(connectionFailureMessage(for: connectionID))
+            sessionDidChange(viewDataSessionID)
+            return
+        }
+
+        controller.runQuery(appState: self)
+    }
+
+    private func existingViewDataSessionID(
+        connectionID: UUID,
+        target: QuerySession.ViewDataTarget,
+        sql: String
+    ) -> UUID? {
+        if let selectedSessionID {
+            sessionDidChange(selectedSessionID)
+        }
+        return sessions(for: connectionID).first { session in
+            session.viewDataTarget == target || isLegacyViewDataSession(session, sql: sql)
+        }?.id
+    }
+
+    private func isLegacyViewDataSession(_ session: QuerySession, sql: String) -> Bool {
+        session.messages.first { $0.role == .user }?.text == sql
+    }
+
+    private func ensureViewDataTarget(_ target: QuerySession.ViewDataTarget, on sessionID: UUID) {
+        guard let index = sessions.firstIndex(where: { $0.id == sessionID }),
+            sessions[index].viewDataTarget != target
+        else { return }
+        sessions[index].viewDataTarget = target
+        sessions[index].updatedAt = Date()
+        flushSessions()
+    }
+
+    private func selectSchemaTableIfNeeded(for session: QuerySession) {
+        guard let target = viewDataTarget(for: session) else { return }
+        selectSchemaTable(for: target, connectionID: session.connectionID)
+        ensureViewDataTarget(target, on: session.id)
+    }
+
+    private func viewDataTarget(for session: QuerySession) -> QuerySession.ViewDataTarget? {
+        if let target = session.viewDataTarget {
+            return target
+        }
+        guard let schema = schemas[session.connectionID],
+            let firstSQL = session.messages.first(where: { $0.role == .user })?.text,
+            let table = schema.tables.first(where: { Self.viewDataSQL(for: $0) == firstSQL })
+        else { return nil }
+        return QuerySession.ViewDataTarget(table: table)
+    }
+
+    private func selectSchemaTable(
+        for target: QuerySession.ViewDataTarget,
+        connectionID: UUID
+    ) {
+        selectSchema(target.schema, for: connectionID)
+        schemaVM.selectedTableID = target.tableID
+    }
+
+    static func viewDataSQL(for table: TableInfo) -> String {
+        viewDataSQL(for: QuerySession.ViewDataTarget(table: table))
+    }
+
+    private static func viewDataSQL(for target: QuerySession.ViewDataTarget) -> String {
+        "SELECT * FROM \(quotedPostgresIdentifier(target.schema)).\(quotedPostgresIdentifier(target.table))"
+    }
+
+    private static func quotedPostgresIdentifier(_ identifier: String) -> String {
+        "\"\(identifier.replacingOccurrences(of: "\"", with: "\"\""))\""
     }
 
     /// Selects a session: snapshots the outgoing controller, restores or
@@ -669,11 +803,19 @@ public final class AppState {
         }
 
         if controllers[id] == nil {
-            controllers[id] = SessionController(session: session)
+            controllers[id] = makeSessionController(session)
         }
         sidebarSelection = .session(id)
+        selectSchemaTableIfNeeded(for: session)
         UserDefaults.standard.set(id.uuidString, forKey: Self.selectedSessionKey)
         Task { await connectIfNeeded(session.connectionID) }
+    }
+
+    private func makeSessionController(_ session: QuerySession) -> SessionController {
+        if let queryExecutorOverride {
+            return SessionController(session: session, executor: queryExecutorOverride)
+        }
+        return SessionController(session: session)
     }
 
     /// Selects a database row for schema browsing — no session involved.
@@ -804,6 +946,19 @@ public final class AppState {
             try schemaStore.save(schemas)
         } catch {
             errorBanner = "Could not save schema cache: \(error.localizedDescription)"
+        }
+    }
+
+    private func connectionFailureMessage(for id: UUID) -> String {
+        switch connectionState(id) {
+        case .error(let message):
+            message
+        case .connecting:
+            "Still connecting to the database."
+        case .connected:
+            AppError.notConnected.localizedDescription
+        case .notConnected:
+            AppError.notConnected.localizedDescription
         }
     }
 }

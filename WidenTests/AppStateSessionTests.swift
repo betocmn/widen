@@ -19,6 +19,57 @@ struct AppStateSessionTests {
         }
     }
 
+    private actor SQLRecorder {
+        private var statements: [String] = []
+
+        func record(_ sql: String) {
+            statements.append(sql)
+        }
+
+        func all() -> [String] {
+            statements
+        }
+    }
+
+    private struct RecordingExecutor: QueryExecuting {
+        let recorder: SQLRecorder
+
+        func run(
+            sql: String,
+            config: DatabaseConnectionConfig,
+            postgres: PostgresService
+        ) async throws -> QueryResult {
+            await recorder.record(sql)
+            return QueryResult(
+                columns: ["id"],
+                rows: [["1"], ["2"]],
+                rowCount: 2,
+                truncated: false,
+                executionTimeMs: 5
+            )
+        }
+    }
+
+    private struct SlowRecordingExecutor: QueryExecuting {
+        let recorder: SQLRecorder
+
+        func run(
+            sql: String,
+            config: DatabaseConnectionConfig,
+            postgres: PostgresService
+        ) async throws -> QueryResult {
+            await recorder.record(sql)
+            try await Task.sleep(for: .seconds(30))
+            return QueryResult(
+                columns: ["id"],
+                rows: [["1"]],
+                rowCount: 1,
+                truncated: false,
+                executionTimeMs: 1
+            )
+        }
+    }
+
     private func makeState() -> (AppState, URL) {
         let dir = FileManager.default.temporaryDirectory
             .appendingPathComponent("widen-tests-\(UUID().uuidString)", isDirectory: true)
@@ -42,6 +93,169 @@ struct AppStateSessionTests {
         #expect(state.selectedController?.sessionID == session.id)
         #expect(state.sessions(for: connectionID).map(\.id) == [session.id])
         #expect(try state.sessionStore.load().map(\.id) == [session.id])
+    }
+
+    @Test func viewDataCreatesSelectedSessionAndRunsSelectAll() async throws {
+        let (state, dir) = makeState()
+        defer { try? FileManager.default.removeItem(at: dir) }
+        let config = DatabaseConnectionConfig(database: "analytics", username: "u")
+        let recorder = SQLRecorder()
+        state.connections = [config]
+        state.connectionStates[config.id] = .connected
+        state.queryExecutorOverride = RecordingExecutor(recorder: recorder)
+
+        let table = TableInfo(schema: "public", name: "users", type: .baseTable, columns: [])
+
+        await state.viewData(for: table, connectionID: config.id)
+        await waitUntil {
+            state.selectedController?.queryVM.isRunning == false
+                && state.selectedController?.chatVM.messages.last?.role == .result
+        }
+
+        guard let sessionID = state.selectedSessionID,
+            let session = state.session(for: sessionID),
+            let controller = state.selectedController
+        else {
+            Issue.record("Expected a selected view-data session")
+            return
+        }
+
+        let expectedSQL = #"SELECT * FROM "public"."users""#
+        #expect(session.connectionID == config.id)
+        #expect(session.title == "View public.users")
+        #expect(session.titleWasManuallySet)
+        #expect(session.viewDataTarget == QuerySession.ViewDataTarget(schema: "public", table: "users"))
+        #expect(session.sqlText == expectedSQL)
+        #expect(controller.queryVM.sqlText == expectedSQL)
+        #expect(controller.queryVM.generation == nil)
+        #expect(controller.chatVM.messages.map(\.role) == [.user, .result])
+        #expect(controller.chatVM.messages.first?.text == expectedSQL)
+        #expect(controller.chatVM.messages.last?.runSummary?.sql == expectedSQL)
+        #expect(controller.results.count == 1)
+        #expect(await recorder.all() == [expectedSQL])
+    }
+
+    @Test func viewDataReusesExistingVisibleSelectAllSession() async throws {
+        let (state, dir) = makeState()
+        defer { try? FileManager.default.removeItem(at: dir) }
+        let config = DatabaseConnectionConfig(database: "analytics", username: "u")
+        let recorder = SQLRecorder()
+        state.connections = [config]
+        state.connectionStates[config.id] = .connected
+        state.queryExecutorOverride = RecordingExecutor(recorder: recorder)
+
+        let table = TableInfo(schema: "public", name: "users", type: .baseTable, columns: [])
+        let expectedSQL = #"SELECT * FROM "public"."users""#
+
+        await state.viewData(for: table, connectionID: config.id)
+        await waitUntil {
+            state.selectedController?.queryVM.isRunning == false
+                && state.selectedController?.chatVM.messages.last?.role == .result
+        }
+        let firstSessionID = state.selectedSessionID
+        state.selectedController?.chatVM.messages.append(
+            ChatMessage(role: .user, text: "Show only recent users")
+        )
+        state.selectedController?.queryVM.setDirectSQL("SELECT id FROM public.users")
+        if let firstSessionID {
+            state.sessionDidChange(firstSessionID)
+        }
+
+        await state.viewData(for: table, connectionID: config.id)
+        await waitUntil {
+            state.selectedController?.queryVM.isRunning == false
+                && state.selectedController?.chatVM.messages.count == 4
+        }
+
+        #expect(state.selectedSessionID == firstSessionID)
+        #expect(state.sessions(for: config.id).count == 1)
+        #expect(state.selectedController?.queryVM.sqlText == expectedSQL)
+        #expect(state.selectedController?.chatVM.messages.map(\.role) == [.user, .result, .user, .result])
+        #expect(state.selectedController?.chatVM.messages.last?.runSummary?.sql == expectedSQL)
+        #expect(await recorder.all() == [expectedSQL, expectedSQL])
+    }
+
+    @Test func viewDataDoesNotResetRunningReusedSession() async throws {
+        let (state, dir) = makeState()
+        defer { try? FileManager.default.removeItem(at: dir) }
+        let config = DatabaseConnectionConfig(database: "analytics", username: "u")
+        let recorder = SQLRecorder()
+        state.connections = [config]
+        state.connectionStates[config.id] = .connected
+        state.queryExecutorOverride = SlowRecordingExecutor(recorder: recorder)
+
+        let table = TableInfo(schema: "public", name: "users", type: .baseTable, columns: [])
+        let session = state.createSession(
+            connectionID: config.id,
+            title: "View public.users",
+            titleWasManuallySet: true,
+            viewDataTarget: QuerySession.ViewDataTarget(table: table)
+        )
+        let customSQL = "SELECT id FROM public.users"
+        let viewDataSQL = #"SELECT * FROM "public"."users""#
+        guard let controller = state.selectedController else {
+            Issue.record("Expected a selected session controller")
+            return
+        }
+        controller.queryVM.setDirectSQL(customSQL)
+        state.sessionDidChange(session.id)
+
+        controller.runQuery(appState: state)
+        await waitUntil { controller.queryVM.isRunning }
+        await waitUntilAsync { await recorder.all() == [customSQL] }
+
+        await state.viewData(for: table, connectionID: config.id)
+
+        #expect(state.selectedSessionID == session.id)
+        #expect(controller.queryVM.isRunning)
+        #expect(controller.queryVM.sqlText == customSQL)
+        #expect(state.session(for: session.id)?.sqlText == customSQL)
+        #expect(await recorder.all() == [customSQL])
+        #expect(controller.queryVM.sqlText != viewDataSQL)
+
+        controller.queryVM.cancelRun()
+    }
+
+    @Test func selectingViewDataSessionSelectsSchemaTable() async throws {
+        let (state, dir) = makeState()
+        defer { try? FileManager.default.removeItem(at: dir) }
+        let config = DatabaseConnectionConfig(database: "analytics", username: "u")
+        state.connections = [config]
+        state.schemas[config.id] = DatabaseSchema(
+            schemas: [SchemaInfo(name: "public"), SchemaInfo(name: "sales")],
+            tables: [
+                TableInfo(schema: "public", name: "users", type: .baseTable, columns: []),
+                TableInfo(schema: "sales", name: "orders", type: .baseTable, columns: []),
+            ],
+            foreignKeys: []
+        )
+        let session = state.createSession(
+            connectionID: config.id,
+            title: "View sales.orders",
+            titleWasManuallySet: true,
+            viewDataTarget: QuerySession.ViewDataTarget(schema: "sales", table: "orders")
+        )
+        state.selectSchema("public", for: config.id)
+        state.schemaVM.selectedTableID = "public.users"
+
+        state.selectSession(session.id)
+
+        #expect(state.currentSchemaName(for: config.id) == "sales")
+        #expect(state.schemaVM.selectedTableID == "sales.orders")
+    }
+
+    @Test func viewDataSQLQuotesPostgresIdentifiers() {
+        let table = TableInfo(
+            schema: "Sales Data",
+            name: "select \"odd\" table",
+            type: .baseTable,
+            columns: []
+        )
+
+        #expect(
+            AppState.viewDataSQL(for: table)
+                == "SELECT * FROM \"Sales Data\".\"select \"\"odd\"\" table\""
+        )
     }
 
     @Test func controllerCacheKeepsRuntimeStateAcrossSwitches() {
@@ -276,5 +490,21 @@ struct AppStateSessionTests {
         #expect(state.selectedSessionID == survivor.id)
         #expect(try state.sessionStore.load().map(\.id) == [survivor.id])
         #expect(try state.connectionStore.load().map(\.id) == [other.id])
+    }
+
+    private func waitUntil(_ condition: @MainActor @escaping () -> Bool) async {
+        for _ in 0..<100 {
+            if condition() { return }
+            try? await Task.sleep(for: .milliseconds(10))
+        }
+        Issue.record("Timed out waiting for condition")
+    }
+
+    private func waitUntilAsync(_ condition: @escaping () async -> Bool) async {
+        for _ in 0..<100 {
+            if await condition() { return }
+            try? await Task.sleep(for: .milliseconds(10))
+        }
+        Issue.record("Timed out waiting for async condition")
     }
 }

@@ -7,6 +7,23 @@ import Foundation
 public struct QuerySession: Identifiable, Codable, Equatable, Sendable {
     public static let placeholderTitle = "New Session"
 
+    public struct ViewDataTarget: Codable, Equatable, Sendable {
+        public var schema: String
+        public var table: String
+
+        public var tableID: String { "\(schema).\(table)" }
+        public var qualifiedName: String { "\(schema).\(table)" }
+
+        public init(schema: String, table: String) {
+            self.schema = schema
+            self.table = table
+        }
+
+        public init(table: TableInfo) {
+            self.init(schema: table.schema, table: table.name)
+        }
+    }
+
     public var id: UUID
     public var connectionID: UUID
     public var title: String
@@ -17,6 +34,9 @@ public struct QuerySession: Identifiable, Codable, Equatable, Sendable {
     public var sqlText: String
     /// Metadata of the last model generation that filled the editor.
     public var lastGeneration: SQLGenerationResult?
+    /// Present for deterministic "View Data" sessions so they can be reused
+    /// even after the user edits the SQL or continues the conversation.
+    public var viewDataTarget: ViewDataTarget?
     /// Archived sessions are hidden from the sidebar and recoverable from
     /// Settings.
     public var isArchived: Bool
@@ -36,6 +56,7 @@ public struct QuerySession: Identifiable, Codable, Equatable, Sendable {
         messages: [ChatMessage] = [],
         sqlText: String = "",
         lastGeneration: SQLGenerationResult? = nil,
+        viewDataTarget: ViewDataTarget? = nil,
         isArchived: Bool = false,
         createdAt: Date = Date(),
         updatedAt: Date = Date()
@@ -47,6 +68,7 @@ public struct QuerySession: Identifiable, Codable, Equatable, Sendable {
         self.messages = messages
         self.sqlText = sqlText
         self.lastGeneration = lastGeneration
+        self.viewDataTarget = viewDataTarget
         self.isArchived = isArchived
         self.createdAt = createdAt
         self.updatedAt = updatedAt
