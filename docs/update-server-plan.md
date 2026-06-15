@@ -151,7 +151,7 @@ This is the bridge between the two repos. It can run as a local script or a GitH
    length, and writes/updates `appcast.xml`:
    ```sh
    mkdir -p releases && mv "Widen-X.Y.Z.zip" releases/
-   ./generate_appcast releases/        # writes releases/appcast.xml
+   ./generate_appcast --download-url-prefix "https://widen.dev/releases/" releases/
    ```
    (Single-file alternative if hand-authoring the XML: `./sign_update Widen-X.Y.Z.zip` prints
    the `sparkle:edSignature` and `length` to paste into the `<enclosure>`.)

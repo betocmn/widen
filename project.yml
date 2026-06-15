@@ -43,6 +43,8 @@ targets:
       - target: WidenKit
         embed: true
         codeSign: true
+      # Xcode embeds Sparkle.framework from the Swift package automatically.
+      # Setting embed/codeSign here makes XcodeGen emit an invalid copy path.
       - package: Sparkle
     info:
       path: Widen/Info.plist
