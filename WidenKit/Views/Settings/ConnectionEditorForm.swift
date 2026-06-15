@@ -7,12 +7,17 @@ struct ConnectionEditorForm: View {
     @Bindable var viewModel: ConnectionSettingsViewModel
     var onCancel: () -> Void
     var onSaved: (DatabaseConnectionConfig) -> Void
+    @State private var showAutofillSheet = false
 
     var body: some View {
         VStack(spacing: 0) {
             ScrollView {
                 VStack(alignment: .leading, spacing: 14) {
-                    SettingsSectionPanel(title: "Connection", systemImage: "cylinder.split.1x2") {
+                    SettingsSectionPanel(
+                        title: "Connection", systemImage: "cylinder.split.1x2"
+                    ) {
+                        autofillButton
+                    } content: {
                         textRow("Nickname", text: $viewModel.name)
                         Divider()
                         textRow("Host", text: $viewModel.host)
@@ -114,6 +119,30 @@ struct ConnectionEditorForm: View {
 
             actionBar
         }
+        .sheet(isPresented: $showAutofillSheet) {
+            if let parser = appState.connectionDetailsParser {
+                ConnectionAutofillSheet(viewModel: viewModel, parser: parser) {
+                    showAutofillSheet = false
+                }
+            }
+        }
+    }
+
+    /// Opens the paste-autofill sheet. Parsing stays local: structured URLs
+    /// and key-value entries are deterministic, and free-form text uses the
+    /// on-device model when available.
+    private var autofillButton: some View {
+        Button {
+            showAutofillSheet = true
+        } label: {
+            Label("Paste Details…", systemImage: "doc.on.clipboard")
+                .font(.callout)
+        }
+        .disabled(appState.connectionAutofillUnavailableMessage != nil)
+        .help(
+            appState.connectionAutofillUnavailableMessage
+                ?? "Paste a connection URL or .env details to fill this form locally. Nothing leaves this Mac."
+        )
     }
 
     private var actionBar: some View {
@@ -207,25 +236,34 @@ struct ConnectionEditorForm: View {
     }
 }
 
-private struct SettingsSectionPanel<Content: View>: View {
+private struct SettingsSectionPanel<Accessory: View, Content: View>: View {
     var title: String
     var systemImage: String
+    let accessory: Accessory
     let content: Content
 
     init(
         title: String,
         systemImage: String,
+        @ViewBuilder accessory: () -> Accessory,
         @ViewBuilder content: () -> Content
     ) {
         self.title = title
         self.systemImage = systemImage
+        self.accessory = accessory()
         self.content = content()
     }
 
     var body: some View {
         VStack(alignment: .leading, spacing: 12) {
-            Label(title, systemImage: systemImage)
-                .font(.headline)
+            HStack(spacing: 8) {
+                Label(title, systemImage: systemImage)
+                    .font(.headline)
+
+                Spacer(minLength: 0)
+
+                accessory
+            }
 
             VStack(spacing: 0) {
                 content
@@ -241,6 +279,21 @@ private struct SettingsSectionPanel<Content: View>: View {
             RoundedRectangle(cornerRadius: 8)
                 .stroke(Color.primary.opacity(0.08), lineWidth: 1)
         }
+    }
+}
+
+extension SettingsSectionPanel where Accessory == EmptyView {
+    init(
+        title: String,
+        systemImage: String,
+        @ViewBuilder content: () -> Content
+    ) {
+        self.init(
+            title: title,
+            systemImage: systemImage,
+            accessory: { EmptyView() },
+            content: content
+        )
     }
 }
 
