@@ -114,6 +114,39 @@ struct AppStateSessionTests {
         #expect(await recorder.all() == [expectedSQL])
     }
 
+    @Test func viewDataReusesExistingVisibleSelectAllSession() async throws {
+        let (state, dir) = makeState()
+        defer { try? FileManager.default.removeItem(at: dir) }
+        let config = DatabaseConnectionConfig(database: "analytics", username: "u")
+        let recorder = SQLRecorder()
+        state.connections = [config]
+        state.connectionStates[config.id] = .connected
+        state.queryExecutorOverride = RecordingExecutor(recorder: recorder)
+
+        let table = TableInfo(schema: "public", name: "users", type: .baseTable, columns: [])
+        let expectedSQL = #"SELECT * FROM "public"."users""#
+
+        await state.viewData(for: table, connectionID: config.id)
+        await waitUntil {
+            state.selectedController?.queryVM.isRunning == false
+                && state.selectedController?.chatVM.messages.last?.role == .result
+        }
+        let firstSessionID = state.selectedSessionID
+
+        await state.viewData(for: table, connectionID: config.id)
+        await waitUntil {
+            state.selectedController?.queryVM.isRunning == false
+                && state.selectedController?.chatVM.messages.count == 3
+        }
+
+        #expect(state.selectedSessionID == firstSessionID)
+        #expect(state.sessions(for: config.id).count == 1)
+        #expect(state.selectedController?.queryVM.sqlText == expectedSQL)
+        #expect(state.selectedController?.chatVM.messages.map(\.role) == [.user, .result, .result])
+        #expect(state.selectedController?.chatVM.messages.last?.runSummary?.sql == expectedSQL)
+        #expect(await recorder.all() == [expectedSQL, expectedSQL])
+    }
+
     @Test func viewDataSQLQuotesPostgresIdentifiers() {
         let table = TableInfo(
             schema: "Sales Data",

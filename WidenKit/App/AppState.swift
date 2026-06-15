@@ -678,16 +678,25 @@ public final class AppState {
     public func viewData(for table: TableInfo, connectionID: UUID) async {
         guard connection(for: connectionID) != nil else { return }
         let sql = Self.viewDataSQL(for: table)
-        let session = createSession(
-            connectionID: connectionID,
-            title: "View \(table.qualifiedName)",
-            titleWasManuallySet: true
-        )
-        guard let controller = controllers[session.id] else { return }
-
-        controller.chatVM.input = sql
-        controller.chatVM.submitDirectSQL(queryVM: controller.queryVM)
-        sessionDidChange(session.id)
+        let controller: SessionController
+        if let existingSession = viewDataSession(connectionID: connectionID, sql: sql) {
+            selectSession(existingSession.id)
+            guard let selectedController = controllers[existingSession.id] else { return }
+            controller = selectedController
+            controller.queryVM.setDirectSQL(sql)
+            sessionDidChange(existingSession.id)
+        } else {
+            let session = createSession(
+                connectionID: connectionID,
+                title: "View \(table.qualifiedName)",
+                titleWasManuallySet: true
+            )
+            guard let selectedController = controllers[session.id] else { return }
+            controller = selectedController
+            controller.chatVM.input = sql
+            controller.chatVM.submitDirectSQL(queryVM: controller.queryVM)
+            sessionDidChange(session.id)
+        }
 
         guard await connectIfNeeded(connectionID) else {
             controller.chatVM.appendRunError(connectionFailureMessage(for: connectionID))
@@ -696,6 +705,15 @@ public final class AppState {
         }
 
         controller.runQuery(appState: self)
+    }
+
+    private func viewDataSession(connectionID: UUID, sql: String) -> QuerySession? {
+        if let selectedSessionID {
+            sessionDidChange(selectedSessionID)
+        }
+        return sessions(for: connectionID).first { session in
+            session.sqlText == sql
+        }
     }
 
     static func viewDataSQL(for table: TableInfo) -> String {

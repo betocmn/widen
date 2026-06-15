@@ -116,7 +116,6 @@ public struct SchemaInspectorView: View {
 
     @ViewBuilder
     private var tableList: some View {
-        @Bindable var schemaVM = appState.schemaVM
         let tables = appState.schemaVM.tables(in: activeSchema, schemaName: selectedSchemaName)
 
         if activeConnectionID == nil {
@@ -186,33 +185,55 @@ public struct SchemaInspectorView: View {
             .foregroundStyle(.secondary)
             .frame(maxWidth: .infinity, maxHeight: .infinity)
         } else {
-            List(selection: $schemaVM.selectedTableID) {
+            List {
                 ForEach(tables) { table in
-                    HStack(spacing: 6) {
-                        Image(systemName: table.type == .view ? "eye" : "tablecells")
-                            .foregroundStyle(.secondary)
-                            .imageScale(.small)
-                        Text(table.name)
-                    }
+                    tableRow(table)
                     .contentShape(Rectangle())
-                    .tag(table.id)
                     .listRowSeparator(.hidden)
+                    .listRowBackground(tableRowBackground(for: table))
                     .onTapGesture {
-                        schemaVM.selectedTableID = table.id
+                        selectTable(table)
                     }
-                    .onTapGesture(count: 2) {
-                        schemaVM.selectedTableID = table.id
-                        openViewData(for: table)
-                    }
+                    .simultaneousGesture(
+                        TapGesture(count: 2)
+                            .onEnded {
+                                selectTable(table)
+                                openViewData(for: table)
+                            }
+                    )
                     .contextMenu {
                         Button("View Data") {
-                            schemaVM.selectedTableID = table.id
+                            selectTable(table)
                             openViewData(for: table)
                         }
                     }
                 }
             }
         }
+    }
+
+    private func tableRow(_ table: TableInfo) -> some View {
+        HStack(spacing: 6) {
+            Image(systemName: table.type == .view ? "eye" : "tablecells")
+                .foregroundStyle(.secondary)
+                .imageScale(.small)
+            Text(table.name)
+        }
+    }
+
+    @ViewBuilder
+    private func tableRowBackground(for table: TableInfo) -> some View {
+        if appState.schemaVM.selectedTableID == table.id {
+            RoundedRectangle(cornerRadius: 6)
+                .fill(Color.accentColor.opacity(0.18))
+                .padding(.horizontal, 5)
+        } else {
+            Color.clear
+        }
+    }
+
+    private func selectTable(_ table: TableInfo) {
+        appState.schemaVM.selectedTableID = table.id
     }
 
     private func openViewData(for table: TableInfo) {
