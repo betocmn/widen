@@ -11,6 +11,12 @@ public final class ConnectionSettingsViewModel {
         case failure(String)
     }
 
+    public enum AutofillState: Equatable {
+        case idle
+        case parsing
+        case failure(String)
+    }
+
     private struct FormSnapshot: Equatable {
         var name: String
         var host: String
@@ -39,6 +45,11 @@ public final class ConnectionSettingsViewModel {
     public private(set) var testState: TestState = .idle
     public private(set) var saveError: String?
     public private(set) var isSaving = false
+
+    /// Text pasted into the autofill sheet. Cleared after a successful fill
+    /// — it can contain credentials.
+    public var autofillText = ""
+    public private(set) var autofillState: AutofillState = .idle
 
     private var existing: DatabaseConnectionConfig?
     private var cleanSnapshot: FormSnapshot?
@@ -75,6 +86,7 @@ public final class ConnectionSettingsViewModel {
         validationErrors = []
         testState = .idle
         saveError = nil
+        resetAutofill()
         markClean()
     }
 
@@ -101,6 +113,64 @@ public final class ConnectionSettingsViewModel {
         } catch {
             testState = .failure(error.localizedDescription)
         }
+    }
+
+    /// Parses the pasted text with the given local parser and fills the
+    /// matching form fields. Returns true on success so the caller can close
+    /// the paste sheet.
+    @discardableResult
+    public func autofill(using parser: any ConnectionDetailsParsing) async -> Bool {
+        let text = autofillText.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !text.isEmpty else {
+            autofillState = .failure("Paste the connection details first.")
+            return false
+        }
+        autofillState = .parsing
+        let details: ParsedConnectionDetails
+        do {
+            details = try await parser.parse(text)
+        } catch {
+            if Task.isCancelled { return cancelAutofillResult() }
+            autofillState = .failure(error.localizedDescription)
+            return false
+        }
+        guard !Task.isCancelled else { return cancelAutofillResult() }
+        guard !details.isEmpty else {
+            autofillState = .failure(
+                "No connection details were found in the pasted text. Check that it mentions at least a host, database, or user."
+            )
+            return false
+        }
+        apply(details)
+        resetAutofill()
+        return true
+    }
+
+    /// Overwrites only the fields the parsed details actually contain; the
+    /// rest of the form keeps its current values.
+    public func apply(_ details: ParsedConnectionDetails) {
+        if let name = details.name { self.name = name }
+        if let host = details.host { self.host = host }
+        if let port = details.port { portText = String(port) }
+        if let database = details.database { self.database = database }
+        if let username = details.username { self.username = username }
+        if let password = details.password { self.password = password }
+        if let sslMode = details.sslMode { self.sslMode = sslMode }
+        validationErrors = []
+        saveError = nil
+        testState = .idle
+    }
+
+    public func resetAutofill() {
+        autofillText = ""
+        autofillState = .idle
+    }
+
+    private func cancelAutofillResult() -> Bool {
+        if autofillState == .parsing {
+            autofillState = .idle
+        }
+        return false
     }
 
     private func makeConfig() -> (config: DatabaseConnectionConfig?, errors: [String]) {
@@ -193,6 +263,7 @@ public final class ConnectionSettingsViewModel {
         validationErrors = []
         testState = .idle
         saveError = nil
+        resetAutofill()
         markClean()
     }
 

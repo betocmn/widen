@@ -13,6 +13,7 @@ public enum AppError: Error, LocalizedError, Equatable, Sendable {
     case introspectionFailed(String)
     case modelUnavailable(String)
     case modelGenerationFailed(String)
+    case autofillFailed(String)
     case keychainFailed(String)
     case invalidInput([String])
 
@@ -38,6 +39,8 @@ public enum AppError: Error, LocalizedError, Equatable, Sendable {
             detail
         case .modelGenerationFailed(let detail):
             "SQL generation failed: \(detail)"
+        case .autofillFailed(let detail):
+            "Autofill failed: \(detail)"
         case .keychainFailed(let detail):
             "Keychain error: \(detail)"
         case .invalidInput(let errors):

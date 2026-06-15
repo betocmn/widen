@@ -258,6 +258,24 @@ public final class AppState {
     }
     var titleGeneratorOverride: (any SessionTitleGenerating)?
 
+    /// The paste-autofill backend. Local-only by design: pasted text can
+    /// contain credentials, so there is no cloud fallback. Deterministic URL
+    /// parsing still works when the on-device model is unavailable.
+    public var connectionDetailsParser: (any ConnectionDetailsParsing)? {
+        if useMockAI { return MockConnectionDetailsParser() }
+        #if canImport(FoundationModels)
+            return FoundationModelsConnectionParser()
+        #else
+            return MockConnectionDetailsParser()
+        #endif
+    }
+
+    /// nil when paste autofill is available; otherwise the user-readable
+    /// reason the feature is disabled.
+    public var connectionAutofillUnavailableMessage: String? {
+        nil
+    }
+
     /// nil when AI generation is ready; otherwise a user-readable reason.
     /// In cloud mode an unusable provider surfaces here while generation
     /// silently falls back to the on-device model.
