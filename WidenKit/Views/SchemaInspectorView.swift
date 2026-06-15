@@ -194,10 +194,24 @@ public struct SchemaInspectorView: View {
                             .imageScale(.small)
                         Text(table.name)
                     }
+                    .contentShape(Rectangle())
                     .tag(table.id)
                     .listRowSeparator(.hidden)
+                    .onTapGesture(count: 2) {
+                        openViewData(for: table)
+                    }
+                    .contextMenu {
+                        Button("View Data") {
+                            openViewData(for: table)
+                        }
+                    }
                 }
             }
         }
+    }
+
+    private func openViewData(for table: TableInfo) {
+        guard let activeConnectionID else { return }
+        Task { await appState.viewData(for: table, connectionID: activeConnectionID) }
     }
 }
