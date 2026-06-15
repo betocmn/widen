@@ -101,6 +101,11 @@ public enum SQLSafetyValidator {
                 errors.append("Forbidden function: \(token.lowercased())().")
             }
         }
+        if containsWindowFunctionInsideAggregate(stripped.text) {
+            errors.append(
+                "Aggregate functions cannot contain window functions. Count rows in a subquery or CTE, then aggregate those results in the outer SELECT."
+            )
+        }
 
         let hasLimit = hasTopLevelLimit(stripped.text)
         if errors.isEmpty {
@@ -375,6 +380,77 @@ public enum SQLSafetyValidator {
             i += 1
         }
         return false
+    }
+
+    static func containsWindowFunctionInsideAggregate(_ strippedText: String) -> Bool {
+        let aggregateFunctions: Set<String> = ["AVG", "SUM", "MIN", "MAX", "COUNT"]
+        let chars = Array(strippedText)
+        var i = 0
+
+        while i < chars.count {
+            guard isWordStart(chars[i]) else {
+                i += 1
+                continue
+            }
+
+            let tokenStart = i
+            var token = ""
+            while i < chars.count, isWordPart(chars[i], tokenStarted: !token.isEmpty) {
+                token.append(chars[i])
+                i += 1
+            }
+
+            guard aggregateFunctions.contains(token.uppercased()) else { continue }
+            let openIndex = indexOfOpeningParenthesis(chars, after: i)
+            guard let openIndex else { continue }
+            let closeIndex = matchingClosingParenthesis(chars, openingAt: openIndex)
+            guard let closeIndex else { continue }
+            let argumentText = String(chars[(openIndex + 1)..<closeIndex])
+            if tokenize(argumentText).contains("OVER") {
+                return true
+            }
+
+            // Continue after the function call so nested scans do not report
+            // the inner window aggregate itself, which may be valid.
+            i = max(closeIndex + 1, tokenStart + 1)
+        }
+
+        return false
+    }
+
+    private static func indexOfOpeningParenthesis(
+        _ chars: [Character],
+        after offset: Int
+    ) -> Int? {
+        var i = offset
+        while i < chars.count {
+            if chars[i].isWhitespace {
+                i += 1
+                continue
+            }
+            return chars[i] == "(" ? i : nil
+        }
+        return nil
+    }
+
+    private static func matchingClosingParenthesis(
+        _ chars: [Character],
+        openingAt openIndex: Int
+    ) -> Int? {
+        var depth = 0
+        var i = openIndex
+        while i < chars.count {
+            if chars[i] == "(" {
+                depth += 1
+            } else if chars[i] == ")" {
+                depth -= 1
+                if depth == 0 {
+                    return i
+                }
+            }
+            i += 1
+        }
+        return nil
     }
 
     private static func topLevelLimitIsBounded(_ chars: [Character], after offset: Int) -> Bool {

@@ -154,9 +154,10 @@ struct ChatModeView: View {
                     }
                     if controller.chatVM.isGenerating {
                         LoadingView(
-                            label: "Generating SQL with \(appState.activeBackendDisplayName)…"
+                            label: controller.chatVM.generationStatus
+                                ?? "Generating SQL with \(appState.activeBackendDisplayName)…"
                         )
-                            .id(Self.generatingID)
+                        .id(Self.generatingID)
                     }
                     if controller.queryVM.isRunning {
                         HStack(spacing: 8) {

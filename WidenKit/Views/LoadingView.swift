@@ -8,12 +8,15 @@ public struct LoadingView: View {
     }
 
     public var body: some View {
-        HStack(spacing: 8) {
+        HStack(alignment: .top, spacing: 8) {
             ProgressView()
                 .controlSize(.small)
+                .padding(.top, 1)
             Text(label)
                 .font(.callout)
                 .foregroundStyle(.secondary)
+                .textSelection(.enabled)
+                .fixedSize(horizontal: false, vertical: true)
         }
         .padding()
     }

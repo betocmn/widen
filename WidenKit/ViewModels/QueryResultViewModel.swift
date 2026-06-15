@@ -1,13 +1,18 @@
 import Foundation
 import Observation
 
+struct QueryExecutionAttempt {
+    var result: QueryResult?
+    var errorMessage: String?
+    var wasDiscarded = false
+}
+
 /// State for the SQL editor and results panels.
 @MainActor
 @Observable
 public final class QueryResultViewModel {
     /// Called exactly once when a run finishes: `(result, nil)` on success,
-    /// `(nil, error)` on failure or cancellation, `(nil, nil)` when the run
-    /// never started because validation blocked it.
+    /// `(nil, error)` on failure, cancellation, or local validation failure.
     public typealias RunCompletion = @MainActor (QueryResult?, String?) -> Void
 
     public var sqlText = ""
@@ -19,9 +24,11 @@ public final class QueryResultViewModel {
     public private(set) var generation: SQLGenerationResult?
 
     private var activeRunID: Int?
+    private var activeRunKind: ActiveRunKind?
     private var nextRunID = 0
     private var runTask: Task<Void, Never>?
     private var onFinish: RunCompletion?
+    private var onAttemptFinish: ((QueryExecutionAttempt) -> Void)?
     private let executor: any QueryExecuting
 
     public init() {
@@ -52,6 +59,7 @@ public final class QueryResultViewModel {
         nextRunID += 1
         let runID = nextRunID
         activeRunID = runID
+        activeRunKind = .visible
         result = nil
         runError = nil
         isRunning = true
@@ -72,19 +80,32 @@ public final class QueryResultViewModel {
     }
 
     private func cancelActiveRun(reportError: Bool, fireCompletion shouldFire: Bool) {
+        let runKind = activeRunKind
         runTask?.cancel()
         runTask = nil
         activeRunID = nil
+        activeRunKind = nil
         if isRunning {
             isRunning = false
             if reportError {
-                runError = "Stopped waiting for the query. The server may still finish it in the background."
+                runError = Self.stoppedWaitingMessage
             }
         }
         if shouldFire {
-            fireCompletion()
+            if runKind == .generatedSQLAttempt {
+                fireAttemptCompletion(
+                    QueryExecutionAttempt(result: nil, errorMessage: runError)
+                )
+            } else {
+                fireCompletion()
+            }
+        } else if runKind == .generatedSQLAttempt {
+            fireAttemptCompletion(
+                QueryExecutionAttempt(result: nil, errorMessage: nil, wasDiscarded: true)
+            )
         } else {
             onFinish = nil
+            onAttemptFinish = nil
         }
     }
 
@@ -130,6 +151,65 @@ public final class QueryResultViewModel {
         }
     }
 
+    /// Executes a generated repair attempt without filling the visible SQL
+    /// preview first. Failed attempts stay hidden while the model learns from
+    /// the database error and tries again.
+    func executeGeneratedSQLAttempt(
+        sql: String,
+        connection: DatabaseConnectionConfig?,
+        postgres: PostgresService,
+        isConnected: Bool
+    ) async -> QueryExecutionAttempt {
+        let validation = SQLSafetyValidator.validate(sql)
+        guard validation.isValid else {
+            return QueryExecutionAttempt(
+                result: nil,
+                errorMessage: AppError.validationFailed(validation.errors).localizedDescription
+            )
+        }
+        guard isConnected, let config = connection else {
+            return QueryExecutionAttempt(
+                result: nil,
+                errorMessage: AppError.notConnected.errorDescription
+            )
+        }
+        guard !isRunning else {
+            return QueryExecutionAttempt(
+                result: nil,
+                errorMessage: "A query is already running."
+            )
+        }
+
+        return await withCheckedContinuation { continuation in
+            startGeneratedSQLAttempt(
+                sql: sql,
+                config: config,
+                postgres: postgres
+            ) { attempt in
+                continuation.resume(returning: attempt)
+            }
+        }
+    }
+
+    private func startGeneratedSQLAttempt(
+        sql: String,
+        config: DatabaseConnectionConfig,
+        postgres: PostgresService,
+        onFinish: @escaping (QueryExecutionAttempt) -> Void
+    ) {
+        nextRunID += 1
+        let runID = nextRunID
+        activeRunID = runID
+        activeRunKind = .generatedSQLAttempt
+        onAttemptFinish = onFinish
+        result = nil
+        runError = nil
+        isRunning = true
+        runTask = Task {
+            await runGeneratedSQLAttempt(sql: sql, config: config, postgres: postgres, runID: runID)
+        }
+    }
+
     private func run(
         sql: String,
         connection: DatabaseConnectionConfig?,
@@ -139,6 +219,10 @@ public final class QueryResultViewModel {
     ) async {
         validation = SQLSafetyValidator.validate(sql)
         guard let validation, validation.isValid else {
+            if isActiveRun(runID) {
+                let errors = validation?.errors ?? ["SQL is invalid."]
+                runError = AppError.validationFailed(errors).localizedDescription
+            }
             finishRun(runID)
             return
         }
@@ -161,7 +245,7 @@ public final class QueryResultViewModel {
             }
         } catch is CancellationError {
             if isActiveRun(runID) {
-                runError = "Stopped waiting for the query. The server may still finish it in the background."
+                runError = Self.stoppedWaitingMessage
             }
         } catch {
             if isActiveRun(runID) {
@@ -169,6 +253,31 @@ public final class QueryResultViewModel {
             }
         }
         finishRun(runID)
+    }
+
+    private func runGeneratedSQLAttempt(
+        sql: String,
+        config: DatabaseConnectionConfig,
+        postgres: PostgresService,
+        runID: Int
+    ) async {
+        let attempt: QueryExecutionAttempt
+        do {
+            let newResult = try await executor.run(
+                sql: sql,
+                config: config,
+                postgres: postgres
+            )
+            attempt = QueryExecutionAttempt(result: newResult, errorMessage: nil)
+        } catch is CancellationError {
+            attempt = QueryExecutionAttempt(
+                result: nil,
+                errorMessage: Self.stoppedWaitingMessage
+            )
+        } catch {
+            attempt = QueryExecutionAttempt(result: nil, errorMessage: error.localizedDescription)
+        }
+        finishGeneratedSQLAttempt(runID, attempt: attempt)
     }
 
     private func isActiveRun(_ runID: Int) -> Bool {
@@ -180,7 +289,19 @@ public final class QueryResultViewModel {
         isRunning = false
         runTask = nil
         activeRunID = nil
+        activeRunKind = nil
         fireCompletion()
+    }
+
+    private func finishGeneratedSQLAttempt(_ runID: Int, attempt: QueryExecutionAttempt) {
+        guard isActiveRun(runID) else { return }
+        result = attempt.result
+        runError = attempt.errorMessage
+        isRunning = false
+        runTask = nil
+        activeRunID = nil
+        activeRunKind = nil
+        fireAttemptCompletion(attempt)
     }
 
     /// Fires the pending completion exactly once with the final state. The
@@ -191,4 +312,18 @@ public final class QueryResultViewModel {
         onFinish = nil
         callback?(result, runError)
     }
+
+    private func fireAttemptCompletion(_ attempt: QueryExecutionAttempt) {
+        let callback = onAttemptFinish
+        onAttemptFinish = nil
+        callback?(attempt)
+    }
+
+    private static let stoppedWaitingMessage =
+        "Stopped waiting for the query. The server may still finish it in the background."
+}
+
+private enum ActiveRunKind {
+    case visible
+    case generatedSQLAttempt
 }

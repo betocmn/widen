@@ -188,6 +188,7 @@ struct QueryResultViewModelTests {
 
         #expect(viewModel.result == nil)
         #expect(viewModel.validation?.isValid == false)
+        #expect(viewModel.runError?.contains("The SQL failed validation") == true)
     }
 
     @Test func runExecutesSQLSnapshottedAtStart() async {
@@ -297,6 +298,24 @@ struct QueryResultViewModelTests {
         #expect(completions.count == 1)
         #expect(completions.first?.0 == nil)
         #expect(completions.first?.1 == AppError.notConnected.errorDescription)
+    }
+
+    @Test func onFinishReceivesValidationErrorWhenRunIsBlocked() async {
+        let viewModel = QueryResultViewModel(executor: ImmediateExecutor())
+        viewModel.sqlText = "SELECT AVG(COUNT(*) OVER ()) FROM users"
+        var completions: [(QueryResult?, String?)] = []
+
+        viewModel.startRun(
+            connection: DatabaseConnectionConfig(), postgres: PostgresService(),
+            isConnected: true
+        ) { result, error in
+            completions.append((result, error))
+        }
+        await waitUntil { !viewModel.isRunning }
+
+        #expect(completions.count == 1)
+        #expect(completions.first?.0 == nil)
+        #expect(completions.first?.1?.contains("Aggregate functions cannot contain") == true)
     }
 
     @Test func onFinishFiresOnCancel() async {

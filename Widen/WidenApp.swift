@@ -14,13 +14,19 @@ struct WidenApp: App {
         // binary (e.g. during development without a full bundle).
         NSApplication.shared.setActivationPolicy(.regular)
         NSApp.activate(ignoringOtherApps: true)
+        // Theme the whole app before the first window draws, so it opens in
+        // the stored appearance instead of flashing the system one.
+        AppearancePreference.stored.apply()
     }
 
     var body: some Scene {
         WindowGroup {
             MainView()
                 .environment(appState)
-                .preferredColorScheme(appearance.colorScheme)
+                // Drive the app appearance from the preference rather than
+                // `.preferredColorScheme`, which leaves the window's materials
+                // and chrome out of sync with the content on a theme switch.
+                .onChange(of: appearanceRaw) { _, _ in appearance.apply() }
                 .onAppear { appState.updaterControl = updaterModel }
         }
         .commands {

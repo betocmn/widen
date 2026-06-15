@@ -39,6 +39,7 @@ public final class OpenRouterSQLGenerator: SQLGenerator, Sendable {
             question: question,
             schema: schema,
             context: context,
+            databaseContext: config.databaseContext,
             maxSchemaCharacters: Self.schemaCharacterBudget
         )
         let started = Date()

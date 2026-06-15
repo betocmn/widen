@@ -29,7 +29,11 @@ public struct SettingsView: View {
                 .tag(SettingsTab.archived)
         }
         .frame(width: 720, height: 560)
-        .preferredColorScheme(
-            (AppearancePreference(rawValue: appearanceRaw) ?? .system).colorScheme)
+        // The General tab changes the appearance too; re-theme the whole app
+        // (not just this window) so the change reaches the main window's
+        // chrome and materials. Idempotent with the main window's own handler.
+        .onChange(of: appearanceRaw) { _, newValue in
+            (AppearancePreference(rawValue: newValue) ?? .system).apply()
+        }
     }
 }

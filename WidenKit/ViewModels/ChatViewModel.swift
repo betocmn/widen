@@ -7,6 +7,7 @@ public final class ChatViewModel {
     public var messages: [ChatMessage] = []
     public var input = ""
     public private(set) var isGenerating = false
+    public private(set) var generationStatus: String?
 
     public init() {}
 
@@ -43,6 +44,20 @@ public final class ChatViewModel {
         messages.append(ChatMessage(role: .error, text: message))
     }
 
+    func beginGeneration(status: String? = nil) {
+        isGenerating = true
+        generationStatus = status
+    }
+
+    func updateGenerationStatus(_ status: String?) {
+        generationStatus = status
+    }
+
+    func finishGeneration() {
+        isGenerating = false
+        generationStatus = nil
+    }
+
     /// Submits the current input: appends the user message, generates SQL,
     /// appends the assistant explanation, and fills the SQL preview.
     func submit(
@@ -76,8 +91,8 @@ public final class ChatViewModel {
 
         input = ""
         messages.append(ChatMessage(role: .user, text: question))
-        isGenerating = true
-        defer { isGenerating = false }
+        beginGeneration()
+        defer { finishGeneration() }
 
         do {
             let result = try await generator.generateSQL(

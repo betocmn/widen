@@ -147,6 +147,7 @@ public final class AppState {
     var pccAvailabilityMessageOverride: String??
     var pccQuotaLimitReachedMessageOverride: String??
     var localModelAvailabilityMessageOverride: String??
+    var sqlGeneratorOverride: (any SQLGenerator)?
 
     /// Whether the chosen cloud provider can serve requests right now.
     public var cloudBackendStatus: CloudBackendStatus {
@@ -211,6 +212,7 @@ public final class AppState {
     /// The active SQL generation backend: mock wins, then the cloud backend
     /// when selected and ready, then the on-device model.
     public var sqlGenerator: any SQLGenerator {
+        if let sqlGeneratorOverride { return sqlGeneratorOverride }
         if useMockAI { return MockSQLGenerator() }
         if aiBackendMode == .cloud, case .ready = cloudBackendStatus {
             switch cloudProvider {

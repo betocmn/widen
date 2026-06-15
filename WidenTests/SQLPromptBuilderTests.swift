@@ -106,9 +106,13 @@ struct SQLPromptBuilderTests {
         #expect(instructions.contains("Never generate INSERT, UPDATE, DELETE"))
         #expect(instructions.contains("Do not include semicolons."))
         #expect(instructions.contains("needsClarification"))
+        #expect(instructions.contains("Use schema-qualified table names"))
         // PostgreSQL dialect guardrails — the local model drifts into MySQL.
         #expect(instructions.contains("CURDATE()"))
         #expect(instructions.contains("INTERVAL '7 days'"))
+        #expect(instructions.contains("DATE_TRUNC('day'"))
+        #expect(instructions.contains("first count rows per period"))
+        #expect(instructions.contains("Do not group or partition by CURRENT_DATE itself"))
         // Follow-up handling for the conversation context section.
         #expect(instructions.contains("follow-up"))
     }
@@ -171,6 +175,25 @@ struct SQLPromptBuilderTests {
         let questionRange = prompt.range(of: "User question:")
         let contextRange = prompt.range(of: "Conversation context:")
         #expect(contextRange!.lowerBound < questionRange!.lowerBound)
+    }
+
+    @Test func promptIncludesAggregateWindowRepairHint() {
+        let context = SQLGenerationContext(
+            currentSQL:
+                "SELECT AVG(COUNT(*) OVER (PARTITION BY created_at)) FROM public.orders",
+            lastRunError:
+                "Query failed: aggregate function calls cannot contain window function calls"
+        )
+
+        let prompt = SQLPromptBuilder.prompt(
+            question: "How many orders are we getting in average per day?",
+            schema: makeSampleSchema(),
+            context: context
+        )
+
+        #expect(prompt.contains("Repair requirement:"))
+        #expect(prompt.contains("Do not use OVER inside AVG"))
+        #expect(prompt.contains("WITH counts AS"))
     }
 
     @Test func contextSectionTruncatesLongItemsAndKeepsLastThreeQuestions() {
