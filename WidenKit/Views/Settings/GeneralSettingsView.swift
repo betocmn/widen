@@ -17,6 +17,22 @@ struct GeneralSettingsView: View {
                 .pickerStyle(.segmented)
             }
 
+            if let updater = appState.updaterControl {
+                Section("Updates") {
+                    Toggle(
+                        "Automatically check for updates",
+                        isOn: Binding(
+                            get: { updater.automaticallyChecksForUpdates },
+                            set: { updater.automaticallyChecksForUpdates = $0 }
+                        )
+                    )
+                    Button("Check for Updates Now…") {
+                        updater.checkForUpdates()
+                    }
+                    .disabled(!updater.canCheckForUpdates)
+                }
+            }
+
             Section {
                 Label(
                     "For safety, connect with a read-only Postgres user when using AI-generated SQL.",

@@ -5,6 +5,7 @@ import WidenKit
 @main
 struct WidenApp: App {
     @State private var appState = AppState()
+    @State private var updaterModel = UpdaterModel()
     @AppStorage(AppearancePreference.storageKey)
     private var appearanceRaw = AppearancePreference.system.rawValue
 
@@ -20,8 +21,12 @@ struct WidenApp: App {
             MainView()
                 .environment(appState)
                 .preferredColorScheme(appearance.colorScheme)
+                .onAppear { appState.updaterControl = updaterModel }
         }
         .commands {
+            CommandGroup(after: .appInfo) {
+                CheckForUpdatesView(updater: updaterModel)
+            }
             CommandGroup(replacing: .newItem) {
                 Button("New Session") {
                     if let connectionID = appState.activeConnectionID
