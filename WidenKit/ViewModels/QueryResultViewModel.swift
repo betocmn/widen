@@ -1,6 +1,11 @@
 import Foundation
 import Observation
 
+struct QueryExecutionAttempt {
+    var result: QueryResult?
+    var errorMessage: String?
+}
+
 /// State for the SQL editor and results panels.
 @MainActor
 @Observable
@@ -97,6 +102,15 @@ public final class QueryResultViewModel {
         generation = nil
     }
 
+    func clearGeneratedSQLForRetry() {
+        discardActiveRun()
+        sqlText = ""
+        validation = nil
+        result = nil
+        runError = nil
+        generation = nil
+    }
+
     /// Called by the chat flow when the model fills the editor. The generated
     /// SQL is validated immediately so the user sees its status before Run.
     public func setGeneration(_ generation: SQLGenerationResult) {
@@ -127,6 +141,47 @@ public final class QueryResultViewModel {
         validation = nil
         if !sqlText.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
             validate()
+        }
+    }
+
+    /// Executes a generated repair attempt without filling the visible SQL
+    /// preview first. Failed attempts stay hidden while the model learns from
+    /// the database error and tries again.
+    func executeGeneratedSQLAttempt(
+        sql: String,
+        connection: DatabaseConnectionConfig?,
+        postgres: PostgresService,
+        isConnected: Bool
+    ) async -> QueryExecutionAttempt {
+        let validation = SQLSafetyValidator.validate(sql)
+        guard validation.isValid else {
+            return QueryExecutionAttempt(
+                result: nil,
+                errorMessage: AppError.validationFailed(validation.errors).localizedDescription
+            )
+        }
+        guard isConnected, let config = connection else {
+            return QueryExecutionAttempt(
+                result: nil,
+                errorMessage: AppError.notConnected.errorDescription
+            )
+        }
+
+        do {
+            let result = try await executor.run(
+                sql: sql,
+                config: config,
+                postgres: postgres
+            )
+            return QueryExecutionAttempt(result: result, errorMessage: nil)
+        } catch is CancellationError {
+            return QueryExecutionAttempt(
+                result: nil,
+                errorMessage:
+                    "Stopped waiting for the query. The server may still finish it in the background."
+            )
+        } catch {
+            return QueryExecutionAttempt(result: nil, errorMessage: error.localizedDescription)
         }
     }
 
