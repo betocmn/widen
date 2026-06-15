@@ -694,6 +694,7 @@ public final class AppState {
             selectSchemaTable(for: target, connectionID: connectionID)
             viewDataSessionID = existingSessionID
             controller = selectedController
+            guard !controller.queryVM.isRunning, !controller.chatVM.isGenerating else { return }
             controller.queryVM.setDirectSQL(sql)
             sessionDidChange(existingSessionID)
         } else {

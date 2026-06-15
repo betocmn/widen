@@ -50,6 +50,26 @@ struct AppStateSessionTests {
         }
     }
 
+    private struct SlowRecordingExecutor: QueryExecuting {
+        let recorder: SQLRecorder
+
+        func run(
+            sql: String,
+            config: DatabaseConnectionConfig,
+            postgres: PostgresService
+        ) async throws -> QueryResult {
+            await recorder.record(sql)
+            try await Task.sleep(for: .seconds(30))
+            return QueryResult(
+                columns: ["id"],
+                rows: [["1"]],
+                rowCount: 1,
+                truncated: false,
+                executionTimeMs: 1
+            )
+        }
+    }
+
     private func makeState() -> (AppState, URL) {
         let dir = FileManager.default.temporaryDirectory
             .appendingPathComponent("widen-tests-\(UUID().uuidString)", isDirectory: true)
@@ -153,6 +173,47 @@ struct AppStateSessionTests {
         #expect(state.selectedController?.chatVM.messages.map(\.role) == [.user, .result, .user, .result])
         #expect(state.selectedController?.chatVM.messages.last?.runSummary?.sql == expectedSQL)
         #expect(await recorder.all() == [expectedSQL, expectedSQL])
+    }
+
+    @Test func viewDataDoesNotResetRunningReusedSession() async throws {
+        let (state, dir) = makeState()
+        defer { try? FileManager.default.removeItem(at: dir) }
+        let config = DatabaseConnectionConfig(database: "analytics", username: "u")
+        let recorder = SQLRecorder()
+        state.connections = [config]
+        state.connectionStates[config.id] = .connected
+        state.queryExecutorOverride = SlowRecordingExecutor(recorder: recorder)
+
+        let table = TableInfo(schema: "public", name: "users", type: .baseTable, columns: [])
+        let session = state.createSession(
+            connectionID: config.id,
+            title: "View public.users",
+            titleWasManuallySet: true,
+            viewDataTarget: QuerySession.ViewDataTarget(table: table)
+        )
+        let customSQL = "SELECT id FROM public.users"
+        let viewDataSQL = #"SELECT * FROM "public"."users""#
+        guard let controller = state.selectedController else {
+            Issue.record("Expected a selected session controller")
+            return
+        }
+        controller.queryVM.setDirectSQL(customSQL)
+        state.sessionDidChange(session.id)
+
+        controller.runQuery(appState: state)
+        await waitUntil { controller.queryVM.isRunning }
+        await waitUntilAsync { await recorder.all() == [customSQL] }
+
+        await state.viewData(for: table, connectionID: config.id)
+
+        #expect(state.selectedSessionID == session.id)
+        #expect(controller.queryVM.isRunning)
+        #expect(controller.queryVM.sqlText == customSQL)
+        #expect(state.session(for: session.id)?.sqlText == customSQL)
+        #expect(await recorder.all() == [customSQL])
+        #expect(controller.queryVM.sqlText != viewDataSQL)
+
+        controller.queryVM.cancelRun()
     }
 
     @Test func selectingViewDataSessionSelectsSchemaTable() async throws {
@@ -437,5 +498,13 @@ struct AppStateSessionTests {
             try? await Task.sleep(for: .milliseconds(10))
         }
         Issue.record("Timed out waiting for condition")
+    }
+
+    private func waitUntilAsync(_ condition: @escaping () async -> Bool) async {
+        for _ in 0..<100 {
+            if await condition() { return }
+            try? await Task.sleep(for: .milliseconds(10))
+        }
+        Issue.record("Timed out waiting for async condition")
     }
 }
