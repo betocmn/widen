@@ -7,6 +7,7 @@
 	objects = {
 
 /* Begin PBXBuildFile section */
+		0063C4373115744E24D4A8E3 /* AppearancePreferenceTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = F008F51E2B0886CE80331A26 /* AppearancePreferenceTests.swift */; };
 		01C0284CF143FB036E122995 /* AIBackendSelectionTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 82222A95EEF524D441242FD5 /* AIBackendSelectionTests.swift */; };
 		029C6E6F71C4BBEBAAFBD71D /* WidenKit.framework in Frameworks */ = {isa = PBXBuildFile; fileRef = A287B7ABA46C2CE732510671 /* WidenKit.framework */; };
 		043BA66DA315AD8515BD6D00 /* WidenKit.framework in Embed Frameworks */ = {isa = PBXBuildFile; fileRef = A287B7ABA46C2CE732510671 /* WidenKit.framework */; settings = {ATTRIBUTES = (CodeSignOnCopy, RemoveHeadersOnCopy, ); }; };
@@ -240,6 +241,7 @@
 		E89B4B4CFB39F399ABB908C7 /* SQLSafetyValidator.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SQLSafetyValidator.swift; sourceTree = "<group>"; };
 		EC8949F7F4C8FC5E472D3909 /* PostgresService.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PostgresService.swift; sourceTree = "<group>"; };
 		EFE23C70D785D014C2E39969 /* DatabasesSettingsView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = DatabasesSettingsView.swift; sourceTree = "<group>"; };
+		F008F51E2B0886CE80331A26 /* AppearancePreferenceTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AppearancePreferenceTests.swift; sourceTree = "<group>"; };
 		F09E72C449EE7A5A9A66BD9F /* DatabaseSchema.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = DatabaseSchema.swift; sourceTree = "<group>"; };
 		F2CC4ADDFBD0372E41CBC1A4 /* SessionStoreTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SessionStoreTests.swift; sourceTree = "<group>"; };
 		F63EE53E94C2C5F8EDC5DD47 /* SchemaStore.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SchemaStore.swift; sourceTree = "<group>"; };
@@ -365,6 +367,7 @@
 			isa = PBXGroup;
 			children = (
 				82222A95EEF524D441242FD5 /* AIBackendSelectionTests.swift */,
+				F008F51E2B0886CE80331A26 /* AppearancePreferenceTests.swift */,
 				A8D7D7EDCCE8B5638DAF4989 /* AppStateSchemaTests.swift */,
 				0E1E314A98E9C24DB275395B /* AppStateSessionTests.swift */,
 				590FC9E47C8F0984E7168920 /* ChatViewModelTests.swift */,
@@ -630,6 +633,7 @@
 				01C0284CF143FB036E122995 /* AIBackendSelectionTests.swift in Sources */,
 				1B4AF2DDDDEF130CA473EE1F /* AppStateSchemaTests.swift in Sources */,
 				16E278E74057D1472B29CCFA /* AppStateSessionTests.swift in Sources */,
+				0063C4373115744E24D4A8E3 /* AppearancePreferenceTests.swift in Sources */,
 				97765290AC859F9923EF7B20 /* ChatViewModelTests.swift in Sources */,
 				DEAE4DFF1E0C2D5E424359A4 /* ConnectionAutofillTests.swift in Sources */,
 				974A50A3A65A15698A331AE2 /* ConnectionStoreTests.swift in Sources */,
