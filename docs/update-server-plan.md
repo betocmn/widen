@@ -245,7 +245,8 @@ Required repo secrets: `DEVELOPER_ID_CERT_P12_BASE64`, `DEVELOPER_ID_CERT_PASSWO
 3. Launch Widen → **Widen ▸ Check for Updates…** → confirm: the update panel with release
    notes appears → it downloads → installs → prompts to relaunch → relaunches into the new
    version. (Auto-checks also fire on a schedule with `SUEnableAutomaticChecks=true`.)
-4. Sanity-check signatures: `./sign_update --verify Widen-X.Y.Z.zip` and confirm the app is
+4. Sanity-check signatures: copy the `sparkle:edSignature` from the generated appcast, run
+   `./sign_update --verify Widen-X.Y.Z.zip "<sparkle:edSignature>"`, and confirm the app is
    notarized: `spctl -a -vvv -t install Widen.app` → "accepted ... source=Notarized Developer ID".
 
 ---
