@@ -237,8 +237,16 @@ public final class SessionController: Identifiable {
                 chatVM.finishGeneration()
             }
         }
+        var finalGeneration = startingGeneration
+
+        func restoreFinalGeneration() {
+            guard let finalGeneration else { return }
+            appendAssistantGeneration(finalGeneration)
+            queryVM.setGeneration(finalGeneration)
+        }
 
         guard let schema = appState.promptSchema(for: connectionID), !schema.tables.isEmpty else {
+            restoreFinalGeneration()
             chatVM.appendRunError(
                 "I could not retry because the database schema is no longer available."
             )
@@ -257,7 +265,6 @@ public final class SessionController: Identifiable {
         var attempts = [
             GeneratedSQLRepairAttempt(label: "Initial run", error: firstError)
         ]
-        var finalGeneration = startingGeneration
 
         for attempt in 1...Self.generatedSQLRepairRetryLimit {
             chatVM.updateGenerationStatus(
@@ -278,6 +285,7 @@ public final class SessionController: Identifiable {
                     config: config
                 )
             } catch {
+                restoreFinalGeneration()
                 chatVM.appendRunError(error.localizedDescription)
                 appState.sessionDidChange(sessionID)
                 return
@@ -355,6 +363,7 @@ public final class SessionController: Identifiable {
                 continue
             }
             guard Self.isRetryableGeneratedSQLError(errorMessage) else {
+                restoreFinalGeneration()
                 chatVM.appendRunError(errorMessage)
                 appState.sessionDidChange(sessionID)
                 return

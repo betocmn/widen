@@ -105,6 +105,21 @@ struct SessionControllerTests {
         }
     }
 
+    private final class FailingRepairGenerator: SQLGenerator, @unchecked Sendable {
+        private(set) var contexts: [SQLGenerationContext] = []
+
+        func generateSQL(
+            question: String,
+            schema: DatabaseSchema,
+            context: SQLGenerationContext,
+            config: SQLGenerationConfig
+        ) async throws -> SQLGenerationResult {
+            contexts.append(context)
+            throw AppError.modelGenerationFailed(
+                "OpenRouter is rate-limiting requests. Try again in a moment.")
+        }
+    }
+
     private func makeState(connectionID: UUID, connected: Bool) -> (AppState, URL) {
         let dir = FileManager.default.temporaryDirectory
             .appendingPathComponent("widen-tests-\(UUID().uuidString)", isDirectory: true)
@@ -248,6 +263,46 @@ struct SessionControllerTests {
         #expect(controller.chatVM.messages.map(\.role) == [.user, .assistant, .result])
         #expect(controller.chatVM.messages[1].generation?.sql == fixedGeneration.sql)
         #expect(controller.chatVM.messages[2].runSummary?.sql == fixedGeneration.sql)
+    }
+
+    @Test func generatedRunErrorRestoresOriginalSQLWhenRepairGeneratorFails() async {
+        let connectionID = UUID()
+        let (state, dir) = makeState(connectionID: connectionID, connected: true)
+        defer { try? FileManager.default.removeItem(at: dir) }
+        state.schemas[connectionID] = makeSchema()
+        let badGeneration = makeGeneration(
+            sql: "SELECT id FROM public.bad_table",
+            explanation: "Uses the wrong table."
+        )
+        let generator = FailingRepairGenerator()
+        state.sqlGeneratorOverride = generator
+        let recorder = SQLRecorder()
+        let controller = makeController(
+            connectionID: connectionID,
+            executor: BadTableExecutor(recorder: recorder)
+        )
+        controller.chatVM.messages = [
+            ChatMessage(role: .user, text: "show users"),
+            ChatMessage(role: .assistant, text: badGeneration.explanation, generation: badGeneration),
+        ]
+        controller.queryVM.setGeneration(badGeneration)
+
+        controller.runQuery(appState: state)
+        await waitUntil {
+            !controller.queryVM.isRunning
+                && !controller.chatVM.isGenerating
+                && controller.chatVM.messages.last?.role == .error
+        }
+
+        let statements = await recorder.all()
+        #expect(statements == [badGeneration.sql])
+        #expect(generator.contexts.count == 1)
+        #expect(generator.contexts[0].currentSQL == badGeneration.sql)
+        #expect(controller.queryVM.sqlText == badGeneration.sql)
+        #expect(controller.queryVM.generation?.sql == badGeneration.sql)
+        #expect(controller.chatVM.messages.map(\.role) == [.user, .assistant, .error])
+        #expect(controller.chatVM.messages[1].generation?.sql == badGeneration.sql)
+        #expect(controller.chatVM.messages.last?.text.contains("rate-limiting") == true)
     }
 
     @Test func generatedValidationErrorRetriesAndShowsFixedResult() async {
