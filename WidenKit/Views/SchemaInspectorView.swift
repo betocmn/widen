@@ -197,11 +197,16 @@ public struct SchemaInspectorView: View {
                     .contentShape(Rectangle())
                     .tag(table.id)
                     .listRowSeparator(.hidden)
+                    .onTapGesture {
+                        schemaVM.selectedTableID = table.id
+                    }
                     .onTapGesture(count: 2) {
+                        schemaVM.selectedTableID = table.id
                         openViewData(for: table)
                     }
                     .contextMenu {
                         Button("View Data") {
+                            schemaVM.selectedTableID = table.id
                             openViewData(for: table)
                         }
                     }
