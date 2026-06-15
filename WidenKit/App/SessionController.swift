@@ -66,16 +66,7 @@ public final class SessionController: Identifiable {
         if ChatViewModel.isDirectSQL(chatVM.input) {
             chatVM.submitDirectSQL(queryVM: queryVM)
         } else {
-            let connection = appState.connection(for: connectionID)
-            await chatVM.submit(
-                schema: appState.promptSchema(for: connectionID),
-                generator: appState.sqlGenerator,
-                config: SQLGenerationConfig(
-                    defaultRowLimit: connection?.defaultRowLimit ?? 100,
-                    databaseContext: connection?.databaseContext ?? ""
-                ),
-                queryVM: queryVM
-            )
+            await submitGeneratedSQL(appState: appState)
         }
         appState.sessionDidChange(sessionID)
 
@@ -135,19 +126,117 @@ public final class SessionController: Identifiable {
         results.removeAll()
     }
 
+    private func submitGeneratedSQL(appState: AppState) async {
+        let question = chatVM.input.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !question.isEmpty, !chatVM.isGenerating, !queryVM.isRunning else { return }
+        guard let schema = appState.promptSchema(for: connectionID), !schema.tables.isEmpty else {
+            chatVM.appendRunError(
+                "Connect to a database and load its schema before asking questions."
+            )
+            return
+        }
+
+        let context = SQLGenerationContext(
+            recentQuestions: chatVM.messages.filter { $0.role == .user }.suffix(3).map(\.text),
+            currentSQL: queryVM.sqlText
+                .trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+                ? nil : queryVM.sqlText,
+            lastRunError: queryVM.runError
+                ?? (chatVM.messages.last?.role == .error ? chatVM.messages.last?.text : nil)
+        )
+        let connection = appState.connection(for: connectionID)
+        let config = SQLGenerationConfig(
+            defaultRowLimit: connection?.defaultRowLimit ?? 100,
+            databaseContext: connection?.databaseContext ?? ""
+        )
+
+        chatVM.input = ""
+        chatVM.messages.append(ChatMessage(role: .user, text: question))
+        chatVM.beginGeneration()
+        appState.sessionDidChange(sessionID)
+        defer {
+            chatVM.finishGeneration()
+            appState.sessionDidChange(sessionID)
+        }
+
+        do {
+            let result = try await appState.sqlGenerator.generateSQL(
+                question: question,
+                schema: schema,
+                context: context,
+                config: config
+            )
+            if result.needsClarification,
+                let clarification = result.clarificationQuestion,
+                !clarification.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+            {
+                chatVM.messages.append(
+                    ChatMessage(role: .assistant, text: clarification, generation: result)
+                )
+                return
+            }
+
+            let generatedSQL = result.sql.trimmingCharacters(in: .whitespacesAndNewlines)
+            guard !generatedSQL.isEmpty else {
+                appendAssistantGeneration(result)
+                return
+            }
+
+            let visibleGeneration = result.withSQL(generatedSQL)
+            let validation = SQLSafetyValidator.validate(generatedSQL)
+            guard validation.isValid else {
+                let firstError = AppError.validationFailed(validation.errors).localizedDescription
+                await repairGeneratedSQL(
+                    appState: appState,
+                    startingSQL: generatedSQL,
+                    firstError: firstError,
+                    startingGeneration: visibleGeneration,
+                    questionContext: (
+                        question: question,
+                        recentQuestions: Array(context.recentQuestions.suffix(3))
+                    ),
+                    mode: .validationOnly
+                )
+                return
+            }
+
+            appendAssistantGeneration(visibleGeneration)
+            queryVM.setGeneration(visibleGeneration)
+        } catch {
+            chatVM.appendRunError(error.localizedDescription)
+        }
+    }
+
     private func repairGeneratedSQL(
         appState: AppState,
         startingSQL: String,
-        firstError: String
+        firstError: String,
+        startingGeneration: SQLGenerationResult? = nil,
+        questionContext suppliedQuestionContext: (question: String, recentQuestions: [String])? = nil,
+        mode: GeneratedSQLRepairMode = .execution
     ) async {
-        let questionContext = questionContextForRepair(startingSQL: startingSQL)
-        let startingGeneration = generatedAssistant(matchingSQL: startingSQL)
+        let questionContext = suppliedQuestionContext ?? questionContextForRepair(startingSQL: startingSQL)
+        let startingGeneration = startingGeneration
+            ?? generatedAssistant(matchingSQL: startingSQL)
             ?? queryVM.generation?.withSQL(startingSQL)
         removeGeneratedAssistant(matchingSQL: startingSQL)
         queryVM.clearGeneratedSQLForRetry()
-        chatVM.beginGeneration(status: retryStatus(appState: appState, attempt: 1, error: firstError))
+        let ownsGenerationState = !chatVM.isGenerating
+        if ownsGenerationState {
+            chatVM.beginGeneration(
+                status: retryStatus(appState: appState, attempt: 1, error: firstError, mode: mode)
+            )
+        } else {
+            chatVM.updateGenerationStatus(
+                retryStatus(appState: appState, attempt: 1, error: firstError, mode: mode)
+            )
+        }
         appState.sessionDidChange(sessionID)
-        defer { chatVM.finishGeneration() }
+        defer {
+            if ownsGenerationState {
+                chatVM.finishGeneration()
+            }
+        }
 
         guard let schema = appState.promptSchema(for: connectionID), !schema.tables.isEmpty else {
             chatVM.appendRunError(
@@ -172,7 +261,7 @@ public final class SessionController: Identifiable {
 
         for attempt in 1...Self.generatedSQLRepairRetryLimit {
             chatVM.updateGenerationStatus(
-                retryStatus(appState: appState, attempt: attempt, error: lastError)
+                retryStatus(appState: appState, attempt: attempt, error: lastError, mode: mode)
             )
             let context = SQLGenerationContext(
                 recentQuestions: questionContext.recentQuestions,
@@ -216,6 +305,27 @@ public final class SessionController: Identifiable {
                         error: lastError
                     )
                 )
+                continue
+            }
+
+            if mode == .validationOnly {
+                let validation = SQLSafetyValidator.validate(generatedSQL)
+                if validation.isValid {
+                    let visibleGeneration = generation.withSQL(generatedSQL)
+                    appendAssistantGeneration(visibleGeneration)
+                    queryVM.setGeneration(visibleGeneration)
+                    appState.sessionDidChange(sessionID)
+                    return
+                }
+                let errorMessage = AppError.validationFailed(validation.errors).localizedDescription
+                attempts.append(
+                    GeneratedSQLRepairAttempt(
+                        label: "Retry \(attempt)/\(Self.generatedSQLRepairRetryLimit)",
+                        error: errorMessage
+                    )
+                )
+                failingSQL = generatedSQL
+                lastError = errorMessage
                 continue
             }
 
@@ -264,7 +374,7 @@ public final class SessionController: Identifiable {
             appendAssistantGeneration(finalGeneration)
             queryVM.setGeneration(finalGeneration)
         }
-        chatVM.appendRunError(repairFailureMessage(attempts: attempts))
+        chatVM.appendRunError(repairFailureMessage(attempts: attempts, mode: mode))
         appState.sessionDidChange(sessionID)
     }
 
@@ -292,22 +402,38 @@ public final class SessionController: Identifiable {
         results[record.id] = result
     }
 
-    private func retryStatus(appState: AppState, attempt: Int, error: String) -> String {
-        """
-        The query hit an error. Asking \(appState.activeBackendDisplayName) to fix it (retry \(attempt)/\(Self.generatedSQLRepairRetryLimit)).
+    private func retryStatus(
+        appState: AppState,
+        attempt: Int,
+        error: String,
+        mode: GeneratedSQLRepairMode
+    ) -> String {
+        let prefix =
+            mode == .validationOnly
+            ? "The generated SQL failed validation."
+            : "The query hit an error."
+        return """
+        \(prefix) Asking \(appState.activeBackendDisplayName) to fix it (retry \(attempt)/\(Self.generatedSQLRepairRetryLimit)).
         Last error: \(Self.truncated(error, to: 260))
         """
     }
 
-    private func repairFailureMessage(attempts: [GeneratedSQLRepairAttempt]) -> String {
+    private func repairFailureMessage(
+        attempts: [GeneratedSQLRepairAttempt],
+        mode: GeneratedSQLRepairMode
+    ) -> String {
         let lastError = attempts.last?.error ?? "Unknown database error."
         let history = attempts
             .map { attempt in
                 "- \(attempt.label): \(Self.truncated(attempt.error, to: 220))"
             }
             .joined(separator: "\n")
+        let failureReason =
+            mode == .validationOnly
+            ? "it still failed validation"
+            : "the database still rejected it"
         return """
-            I tried to repair the generated SQL \(Self.generatedSQLRepairRetryLimit) times, but the database still rejected it.
+            I tried to repair the generated SQL \(Self.generatedSQLRepairRetryLimit) times, but \(failureReason).
 
             Last error: \(lastError)
 
@@ -377,6 +503,11 @@ public final class SessionController: Identifiable {
 private struct GeneratedSQLRepairAttempt {
     var label: String
     var error: String
+}
+
+private enum GeneratedSQLRepairMode {
+    case validationOnly
+    case execution
 }
 
 private extension SQLGenerationResult {

@@ -292,6 +292,38 @@ struct SessionControllerTests {
         #expect(controller.chatVM.messages.map(\.role) == [.user, .assistant, .result])
     }
 
+    @Test func submitRetriesInvalidGeneratedSQLBeforeShowingPreview() async {
+        let connectionID = UUID()
+        let (state, dir) = makeState(connectionID: connectionID, connected: true)
+        defer { try? FileManager.default.removeItem(at: dir) }
+        state.schemas[connectionID] = makeSchema()
+        let badGeneration = makeGeneration(
+            sql: "SELECT AVG(COUNT(*) OVER ()) FROM public.users",
+            explanation: "Uses an invalid nested aggregate."
+        )
+        let fixedGeneration = makeGeneration(
+            sql: "SELECT id FROM public.users LIMIT 100",
+            explanation: "Lists users."
+        )
+        let generator = RecordingRepairGenerator(results: [badGeneration, fixedGeneration])
+        state.sqlGeneratorOverride = generator
+        let controller = makeController(connectionID: connectionID)
+        controller.chatVM.input = "average users"
+
+        await controller.submit(appState: state)
+
+        #expect(generator.contexts.count == 2)
+        #expect(generator.contexts[0].isEmpty)
+        #expect(generator.contexts[1].currentSQL == badGeneration.sql)
+        #expect(generator.contexts[1].lastRunError?.contains("Aggregate functions cannot contain") == true)
+        #expect(controller.queryVM.sqlText == fixedGeneration.sql)
+        #expect(controller.queryVM.generation?.sql == fixedGeneration.sql)
+        #expect(controller.queryVM.validation?.isValid == true)
+        #expect(controller.chatVM.messages.map(\.role) == [.user, .assistant])
+        #expect(controller.chatVM.messages[1].text == fixedGeneration.explanation)
+        #expect(controller.chatVM.messages[1].generation?.sql == fixedGeneration.sql)
+    }
+
     @Test func generatedRunErrorGivesUpAfterFiveRepairsAndShowsFinalSQLAndErrors() async {
         let connectionID = UUID()
         let (state, dir) = makeState(connectionID: connectionID, connected: true)
