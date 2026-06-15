@@ -219,8 +219,6 @@ public final class SessionController: Identifiable {
         let startingGeneration = startingGeneration
             ?? generatedAssistant(matchingSQL: startingSQL)
             ?? queryVM.generation?.withSQL(startingSQL)
-        removeGeneratedAssistant(matchingSQL: startingSQL)
-        queryVM.clearGeneratedSQLForRetry()
         let ownsGenerationState = !chatVM.isGenerating
         if ownsGenerationState {
             chatVM.beginGeneration(
@@ -239,14 +237,14 @@ public final class SessionController: Identifiable {
         }
         var finalGeneration = startingGeneration
 
-        func restoreFinalGeneration() {
-            guard let finalGeneration else { return }
-            appendAssistantGeneration(finalGeneration)
-            queryVM.setGeneration(finalGeneration)
+        func restoreStartingGeneration() {
+            guard let startingGeneration else { return }
+            replaceOrAppendAssistantGeneration(startingGeneration, replacingSQL: startingSQL)
+            queryVM.setGeneration(startingGeneration)
         }
 
         guard let schema = appState.promptSchema(for: connectionID), !schema.tables.isEmpty else {
-            restoreFinalGeneration()
+            restoreStartingGeneration()
             chatVM.appendRunError(
                 "I could not retry because the database schema is no longer available."
             )
@@ -285,7 +283,7 @@ public final class SessionController: Identifiable {
                     config: config
                 )
             } catch {
-                restoreFinalGeneration()
+                restoreStartingGeneration()
                 chatVM.appendRunError(error.localizedDescription)
                 appState.sessionDidChange(sessionID)
                 return
@@ -320,7 +318,7 @@ public final class SessionController: Identifiable {
                 let validation = SQLSafetyValidator.validate(generatedSQL)
                 if validation.isValid {
                     let visibleGeneration = generation.withSQL(generatedSQL)
-                    appendAssistantGeneration(visibleGeneration)
+                    replaceOrAppendAssistantGeneration(visibleGeneration, replacingSQL: startingSQL)
                     queryVM.setGeneration(visibleGeneration)
                     appState.sessionDidChange(sessionID)
                     return
@@ -343,9 +341,13 @@ public final class SessionController: Identifiable {
                 postgres: postgres,
                 isConnected: appState.connectionState(connectionID) == .connected
             )
+            if execution.wasDiscarded {
+                appState.sessionDidChange(sessionID)
+                return
+            }
             if let result = execution.result {
                 let visibleGeneration = generation.withSQL(generatedSQL)
-                appendAssistantGeneration(visibleGeneration)
+                replaceOrAppendAssistantGeneration(visibleGeneration, replacingSQL: startingSQL)
                 queryVM.setGeneration(visibleGeneration)
                 appendRunResult(result, sql: generatedSQL)
                 appState.sessionDidChange(sessionID)
@@ -363,7 +365,7 @@ public final class SessionController: Identifiable {
                 continue
             }
             guard Self.isRetryableGeneratedSQLError(errorMessage) else {
-                restoreFinalGeneration()
+                restoreStartingGeneration()
                 chatVM.appendRunError(errorMessage)
                 appState.sessionDidChange(sessionID)
                 return
@@ -380,7 +382,7 @@ public final class SessionController: Identifiable {
         }
 
         if let finalGeneration {
-            appendAssistantGeneration(finalGeneration)
+            replaceOrAppendAssistantGeneration(finalGeneration, replacingSQL: startingSQL)
             queryVM.setGeneration(finalGeneration)
         }
         chatVM.appendRunError(repairFailureMessage(attempts: attempts, mode: mode))
@@ -388,16 +390,31 @@ public final class SessionController: Identifiable {
     }
 
     private func appendAssistantGeneration(_ generation: SQLGenerationResult) {
-        let text: String
+        chatVM.messages.append(
+            ChatMessage(role: .assistant, text: assistantText(for: generation), generation: generation)
+        )
+    }
+
+    private func replaceOrAppendAssistantGeneration(
+        _ generation: SQLGenerationResult,
+        replacingSQL sql: String
+    ) {
+        guard let index = generatedAssistantIndex(matchingSQL: sql) else {
+            appendAssistantGeneration(generation)
+            return
+        }
+        chatVM.messages[index].text = assistantText(for: generation)
+        chatVM.messages[index].generation = generation
+    }
+
+    private func assistantText(for generation: SQLGenerationResult) -> String {
         if generation.needsClarification,
             let clarification = generation.clarificationQuestion,
             !clarification.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
         {
-            text = clarification
-        } else {
-            text = generation.explanation
+            return clarification
         }
-        chatVM.messages.append(ChatMessage(role: .assistant, text: text, generation: generation))
+        return generation.explanation
     }
 
     private func appendRunResult(_ result: QueryResult, sql: String) {
@@ -468,13 +485,12 @@ public final class SessionController: Identifiable {
         return (question, Array(userQuestions.dropLast().suffix(3)))
     }
 
-    private func removeGeneratedAssistant(matchingSQL sql: String) {
+    private func generatedAssistantIndex(matchingSQL sql: String) -> Int? {
         let normalized = Self.normalizedSQL(sql)
-        guard let index = chatVM.messages.lastIndex(where: { message in
+        return chatVM.messages.lastIndex(where: { message in
             message.role == .assistant
                 && Self.normalizedSQL(message.generation?.sql ?? "") == normalized
-        }) else { return }
-        chatVM.messages.remove(at: index)
+        })
     }
 
     private func generatedAssistant(matchingSQL sql: String) -> SQLGenerationResult? {

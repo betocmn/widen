@@ -86,6 +86,29 @@ struct SessionControllerTests {
         }
     }
 
+    private struct BadTableThenSlowExecutor: QueryExecuting {
+        let recorder: SQLRecorder
+
+        func run(
+            sql: String,
+            config: DatabaseConnectionConfig,
+            postgres: PostgresService
+        ) async throws -> QueryResult {
+            await recorder.record(sql)
+            if sql.contains("bad_table") {
+                throw AppError.executionFailed(#"relation "public.bad_table" does not exist"#)
+            }
+            try await Task.sleep(for: .seconds(30))
+            return QueryResult(
+                columns: ["id"],
+                rows: [["1"]],
+                rowCount: 1,
+                truncated: false,
+                executionTimeMs: 6
+            )
+        }
+    }
+
     private final class RecordingRepairGenerator: SQLGenerator, @unchecked Sendable {
         private let results: [SQLGenerationResult]
         private(set) var contexts: [SQLGenerationContext] = []
@@ -117,6 +140,28 @@ struct SessionControllerTests {
             contexts.append(context)
             throw AppError.modelGenerationFailed(
                 "OpenRouter is rate-limiting requests. Try again in a moment.")
+        }
+    }
+
+    private final class SuspendedRepairGenerator: SQLGenerator, @unchecked Sendable {
+        private var continuation: CheckedContinuation<SQLGenerationResult, any Error>?
+        private(set) var contexts: [SQLGenerationContext] = []
+
+        func generateSQL(
+            question: String,
+            schema: DatabaseSchema,
+            context: SQLGenerationContext,
+            config: SQLGenerationConfig
+        ) async throws -> SQLGenerationResult {
+            contexts.append(context)
+            return try await withCheckedThrowingContinuation { continuation in
+                self.continuation = continuation
+            }
+        }
+
+        func resume(returning result: SQLGenerationResult) {
+            continuation?.resume(returning: result)
+            continuation = nil
         }
     }
 
@@ -303,6 +348,109 @@ struct SessionControllerTests {
         #expect(controller.chatVM.messages.map(\.role) == [.user, .assistant, .error])
         #expect(controller.chatVM.messages[1].generation?.sql == badGeneration.sql)
         #expect(controller.chatVM.messages.last?.text.contains("rate-limiting") == true)
+    }
+
+    @Test func generatedRunErrorKeepsOriginalSQLWhileRepairGeneratorIsPending() async {
+        let connectionID = UUID()
+        let (state, dir) = makeState(connectionID: connectionID, connected: true)
+        defer { try? FileManager.default.removeItem(at: dir) }
+        state.schemas[connectionID] = makeSchema()
+        let badGeneration = makeGeneration(
+            sql: "SELECT id FROM public.bad_table",
+            explanation: "Uses the wrong table."
+        )
+        let fixedGeneration = makeGeneration(
+            sql: "SELECT id FROM public.users LIMIT 100",
+            explanation: "Uses the users table."
+        )
+        let generator = SuspendedRepairGenerator()
+        state.sqlGeneratorOverride = generator
+        let recorder = SQLRecorder()
+        let controller = makeController(
+            connectionID: connectionID,
+            executor: BadTableExecutor(recorder: recorder)
+        )
+        controller.chatVM.messages = [
+            ChatMessage(role: .user, text: "show users"),
+            ChatMessage(role: .assistant, text: badGeneration.explanation, generation: badGeneration),
+        ]
+        controller.queryVM.setGeneration(badGeneration)
+
+        controller.runQuery(appState: state)
+        await waitUntil {
+            generator.contexts.count == 1
+                && controller.chatVM.isGenerating
+                && !controller.queryVM.isRunning
+        }
+
+        var snapshot = QuerySession(connectionID: connectionID)
+        _ = controller.snapshot(into: &snapshot)
+
+        #expect(controller.queryVM.sqlText == badGeneration.sql)
+        #expect(controller.queryVM.generation?.sql == badGeneration.sql)
+        #expect(controller.chatVM.messages.map(\.role) == [.user, .assistant])
+        #expect(controller.chatVM.messages[1].generation?.sql == badGeneration.sql)
+        #expect(snapshot.sqlText == badGeneration.sql)
+        #expect(snapshot.lastGeneration?.sql == badGeneration.sql)
+        #expect(snapshot.messages.map(\.role) == [.user, .assistant])
+
+        generator.resume(returning: fixedGeneration)
+        await waitUntil {
+            !controller.queryVM.isRunning
+                && !controller.chatVM.isGenerating
+                && controller.chatVM.messages.last?.role == .result
+        }
+    }
+
+    @Test func generatedRepairExecutionCanBeCancelled() async {
+        let connectionID = UUID()
+        let (state, dir) = makeState(connectionID: connectionID, connected: true)
+        defer { try? FileManager.default.removeItem(at: dir) }
+        state.schemas[connectionID] = makeSchema()
+        let badGeneration = makeGeneration(
+            sql: "SELECT id FROM public.bad_table",
+            explanation: "Uses the wrong table."
+        )
+        let fixedGeneration = makeGeneration(
+            sql: "SELECT id FROM public.users LIMIT 100",
+            explanation: "Uses the users table."
+        )
+        let generator = RecordingRepairGenerator(results: [fixedGeneration])
+        state.sqlGeneratorOverride = generator
+        let recorder = SQLRecorder()
+        let controller = makeController(
+            connectionID: connectionID,
+            executor: BadTableThenSlowExecutor(recorder: recorder)
+        )
+        controller.chatVM.messages = [
+            ChatMessage(role: .user, text: "show users"),
+            ChatMessage(role: .assistant, text: badGeneration.explanation, generation: badGeneration),
+        ]
+        controller.queryVM.setGeneration(badGeneration)
+
+        controller.runQuery(appState: state)
+        await waitUntil {
+            controller.queryVM.isRunning
+                && controller.chatVM.isGenerating
+                && generator.contexts.count == 1
+        }
+
+        #expect(controller.queryVM.sqlText == badGeneration.sql)
+        #expect(controller.queryVM.generation?.sql == badGeneration.sql)
+
+        controller.queryVM.cancelRun()
+        await waitUntil {
+            !controller.queryVM.isRunning
+                && !controller.chatVM.isGenerating
+                && controller.chatVM.messages.last?.role == .error
+        }
+
+        let statements = await recorder.all()
+        #expect(statements == [badGeneration.sql, fixedGeneration.sql])
+        #expect(controller.queryVM.sqlText == badGeneration.sql)
+        #expect(controller.queryVM.generation?.sql == badGeneration.sql)
+        #expect(controller.chatVM.messages.map(\.role) == [.user, .assistant, .error])
+        #expect(controller.chatVM.messages.last?.text.contains("Stopped waiting") == true)
     }
 
     @Test func generatedValidationErrorRetriesAndShowsFixedResult() async {
