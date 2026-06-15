@@ -679,10 +679,12 @@ public final class AppState {
         guard connection(for: connectionID) != nil else { return }
         let sql = Self.viewDataSQL(for: table)
         let controller: SessionController
+        let viewDataSessionID: UUID
         if let existingSession = viewDataSession(connectionID: connectionID, sql: sql) {
             selectSession(existingSession.id)
             guard let selectedController = controllers[existingSession.id] else { return }
             controller = selectedController
+            viewDataSessionID = existingSession.id
             controller.queryVM.setDirectSQL(sql)
             sessionDidChange(existingSession.id)
         } else {
@@ -693,6 +695,7 @@ public final class AppState {
             )
             guard let selectedController = controllers[session.id] else { return }
             controller = selectedController
+            viewDataSessionID = session.id
             controller.chatVM.input = sql
             controller.chatVM.submitDirectSQL(queryVM: controller.queryVM)
             sessionDidChange(session.id)
@@ -700,7 +703,7 @@ public final class AppState {
 
         guard await connectIfNeeded(connectionID) else {
             controller.chatVM.appendRunError(connectionFailureMessage(for: connectionID))
-            sessionDidChange(session.id)
+            sessionDidChange(viewDataSessionID)
             return
         }
 
