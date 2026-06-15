@@ -250,7 +250,7 @@ struct SessionControllerTests {
         #expect(controller.chatVM.messages[2].runSummary?.sql == fixedGeneration.sql)
     }
 
-    @Test func generatedRunErrorGivesUpAfterFiveRepairsAndKeepsSQLHidden() async {
+    @Test func generatedRunErrorGivesUpAfterFiveRepairsAndShowsFinalSQLAndErrors() async {
         let connectionID = UUID()
         let (state, dir) = makeState(connectionID: connectionID, connected: true)
         defer { try? FileManager.default.removeItem(at: dir) }
@@ -281,10 +281,15 @@ struct SessionControllerTests {
         let statements = await recorder.all()
         #expect(statements.count == 6)
         #expect(generator.contexts.count == 5)
-        #expect(controller.queryVM.sqlText.isEmpty)
-        #expect(controller.queryVM.generation == nil)
-        #expect(controller.chatVM.messages.map(\.role) == [.user, .error])
-        #expect(controller.chatVM.messages.last?.text.contains("stopped retrying") == true)
+        #expect(controller.queryVM.sqlText == badGeneration.sql)
+        #expect(controller.queryVM.generation?.sql == badGeneration.sql)
+        #expect(controller.chatVM.messages.map(\.role) == [.user, .assistant, .error])
+        #expect(controller.chatVM.messages[1].generation?.sql == badGeneration.sql)
+        #expect(controller.chatVM.messages.last?.text.contains("repair the generated SQL 5 times") == true)
+        #expect(controller.chatVM.messages.last?.text.contains("Initial run") == true)
+        #expect(controller.chatVM.messages.last?.text.contains("Retry 5/5") == true)
+        #expect(controller.chatVM.messages.last?.text.contains("Last error:") == true)
+        #expect(controller.chatVM.messages.last?.text.contains("smarter cloud model") == true)
     }
 
     @Test func submitWithDirectSQLSkipsGenerator() async {

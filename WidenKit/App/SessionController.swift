@@ -9,8 +9,6 @@ import Observation
 @Observable
 public final class SessionController: Identifiable {
     private static let generatedSQLRepairRetryLimit = 5
-    private static let generatedSQLRepairFailureMessage =
-        "The database kept rejecting the generated SQL, so I stopped retrying. Try rephrasing the question or checking that the selected schema contains the tables you expect."
 
     public let sessionID: UUID
     public let connectionID: UUID
@@ -143,9 +141,11 @@ public final class SessionController: Identifiable {
         firstError: String
     ) async {
         let questionContext = questionContextForRepair(startingSQL: startingSQL)
+        let startingGeneration = generatedAssistant(matchingSQL: startingSQL)
+            ?? queryVM.generation?.withSQL(startingSQL)
         removeGeneratedAssistant(matchingSQL: startingSQL)
         queryVM.clearGeneratedSQLForRetry()
-        chatVM.beginGeneration(status: retryStatus(appState: appState, attempt: 1))
+        chatVM.beginGeneration(status: retryStatus(appState: appState, attempt: 1, error: firstError))
         appState.sessionDidChange(sessionID)
         defer { chatVM.finishGeneration() }
 
@@ -165,9 +165,15 @@ public final class SessionController: Identifiable {
         let postgres = appState.postgres(for: connectionID)
         var failingSQL = startingSQL
         var lastError = firstError
+        var attempts = [
+            GeneratedSQLRepairAttempt(label: "Initial run", error: firstError)
+        ]
+        var finalGeneration = startingGeneration
 
         for attempt in 1...Self.generatedSQLRepairRetryLimit {
-            chatVM.updateGenerationStatus(retryStatus(appState: appState, attempt: attempt))
+            chatVM.updateGenerationStatus(
+                retryStatus(appState: appState, attempt: attempt, error: lastError)
+            )
             let context = SQLGenerationContext(
                 recentQuestions: questionContext.recentQuestions,
                 currentSQL: failingSQL,
@@ -189,8 +195,17 @@ public final class SessionController: Identifiable {
             }
 
             let generatedSQL = generation.sql.trimmingCharacters(in: .whitespacesAndNewlines)
+            if !generatedSQL.isEmpty {
+                finalGeneration = generation.withSQL(generatedSQL)
+            }
             guard !generatedSQL.isEmpty, !generation.needsClarification else {
                 lastError = "The model did not return corrected SQL."
+                attempts.append(
+                    GeneratedSQLRepairAttempt(
+                        label: "Retry \(attempt)/\(Self.generatedSQLRepairRetryLimit)",
+                        error: lastError
+                    )
+                )
                 continue
             }
 
@@ -201,8 +216,7 @@ public final class SessionController: Identifiable {
                 isConnected: appState.connectionState(connectionID) == .connected
             )
             if let result = execution.result {
-                var visibleGeneration = generation
-                visibleGeneration.sql = generatedSQL
+                let visibleGeneration = generation.withSQL(generatedSQL)
                 appendAssistantGeneration(visibleGeneration)
                 queryVM.setGeneration(visibleGeneration)
                 appendRunResult(result, sql: generatedSQL)
@@ -212,6 +226,12 @@ public final class SessionController: Identifiable {
 
             guard let errorMessage = execution.errorMessage else {
                 lastError = "The query did not return a result."
+                attempts.append(
+                    GeneratedSQLRepairAttempt(
+                        label: "Retry \(attempt)/\(Self.generatedSQLRepairRetryLimit)",
+                        error: lastError
+                    )
+                )
                 continue
             }
             guard Self.isRetryableGeneratedSQLError(errorMessage) else {
@@ -220,11 +240,21 @@ public final class SessionController: Identifiable {
                 return
             }
 
+            attempts.append(
+                GeneratedSQLRepairAttempt(
+                    label: "Retry \(attempt)/\(Self.generatedSQLRepairRetryLimit)",
+                    error: errorMessage
+                )
+            )
             failingSQL = generatedSQL
             lastError = errorMessage
         }
 
-        chatVM.appendRunError(Self.generatedSQLRepairFailureMessage)
+        if let finalGeneration {
+            appendAssistantGeneration(finalGeneration)
+            queryVM.setGeneration(finalGeneration)
+        }
+        chatVM.appendRunError(repairFailureMessage(attempts: attempts))
         appState.sessionDidChange(sessionID)
     }
 
@@ -252,8 +282,30 @@ public final class SessionController: Identifiable {
         results[record.id] = result
     }
 
-    private func retryStatus(appState: AppState, attempt: Int) -> String {
-        "The query hit an error. Asking \(appState.activeBackendDisplayName) to fix it (\(attempt)/\(Self.generatedSQLRepairRetryLimit))…"
+    private func retryStatus(appState: AppState, attempt: Int, error: String) -> String {
+        """
+        The query hit an error. Asking \(appState.activeBackendDisplayName) to fix it (retry \(attempt)/\(Self.generatedSQLRepairRetryLimit)).
+        Last error: \(Self.truncated(error, to: 260))
+        """
+    }
+
+    private func repairFailureMessage(attempts: [GeneratedSQLRepairAttempt]) -> String {
+        let lastError = attempts.last?.error ?? "Unknown database error."
+        let history = attempts
+            .map { attempt in
+                "- \(attempt.label): \(Self.truncated(attempt.error, to: 220))"
+            }
+            .joined(separator: "\n")
+        return """
+            I tried to repair the generated SQL \(Self.generatedSQLRepairRetryLimit) times, but the database still rejected it.
+
+            Last error: \(lastError)
+
+            Errors seen:
+            \(history)
+
+            The final SQL is shown above. Add more context in chat so the model can adjust it, or switch to a smarter cloud model and try again.
+            """
     }
 
     private func questionContextForRepair(
@@ -280,8 +332,20 @@ public final class SessionController: Identifiable {
         chatVM.messages.remove(at: index)
     }
 
+    private func generatedAssistant(matchingSQL sql: String) -> SQLGenerationResult? {
+        let normalized = Self.normalizedSQL(sql)
+        return chatVM.messages.last(where: { message in
+            message.role == .assistant
+                && Self.normalizedSQL(message.generation?.sql ?? "") == normalized
+        })?.generation
+    }
+
     private static func normalizedSQL(_ sql: String) -> String {
         sql.trimmingCharacters(in: .whitespacesAndNewlines)
+    }
+
+    private static func truncated(_ text: String, to limit: Int) -> String {
+        text.count <= limit ? text : String(text.prefix(limit)) + "..."
     }
 
     private static func isRetryableGeneratedSQLError(_ message: String) -> Bool {
@@ -290,5 +354,18 @@ public final class SessionController: Identifiable {
         guard trimmed != AppError.notConnected.localizedDescription else { return false }
         guard !trimmed.contains("Stopped waiting for the query") else { return false }
         return true
+    }
+}
+
+private struct GeneratedSQLRepairAttempt {
+    var label: String
+    var error: String
+}
+
+private extension SQLGenerationResult {
+    func withSQL(_ sql: String) -> SQLGenerationResult {
+        var copy = self
+        copy.sql = sql
+        return copy
     }
 }

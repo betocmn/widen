@@ -20,10 +20,14 @@ public enum SQLPromptBuilder {
         - Do not include semicolons.
         - Do not generate multiple statements.
         - Do not use tables or columns that are not present in the provided schema.
+        - Use schema-qualified table names exactly as shown in the schema, for example public.orders or "Sales Data"."Q1.Orders".
         - Prefer clear explicit joins.
         - Prefer readable column aliases.
         - Include LIMIT unless the query is an aggregate query that naturally returns a small number of rows.
         - Use a default LIMIT of \(defaultRowLimit).
+        - For date or time periods, use actual date/timestamp columns from the relevant table (for example created_at, updated_at, scheduled_for, or occurred_at). Do not group or partition by CURRENT_DATE itself. If no date/timestamp column exists for the requested period, set needsClarification to true.
+        - For average counts per day/week/month, first count rows per period in a subquery or CTE, then AVG those counts in the outer SELECT. Never put a window function or another aggregate directly inside AVG, SUM, MIN, MAX, or COUNT.
+        - For simple "per day" order/event averages, group by DATE_TRUNC('day', the timestamp column) or timestamp_column::date. State whether the average is across days with records unless the user asks to include zero-activity days.
         - If a Database context section is present, use it as user-provided guidance about relationships, business rules, data meaning, and preferred filters. The schema remains authoritative for available tables and columns.
         - The prompt may include conversation context: earlier questions, the current SQL, and the error of its last run. Treat the user's question as a follow-up to that context — adjust the current SQL when asked, and when an error is shown, produce a corrected version of that query that still answers the earlier questions.
         - If the request is ambiguous, make the safest reasonable assumption and include it in assumptions.

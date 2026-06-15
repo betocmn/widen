@@ -106,9 +106,13 @@ struct SQLPromptBuilderTests {
         #expect(instructions.contains("Never generate INSERT, UPDATE, DELETE"))
         #expect(instructions.contains("Do not include semicolons."))
         #expect(instructions.contains("needsClarification"))
+        #expect(instructions.contains("Use schema-qualified table names"))
         // PostgreSQL dialect guardrails — the local model drifts into MySQL.
         #expect(instructions.contains("CURDATE()"))
         #expect(instructions.contains("INTERVAL '7 days'"))
+        #expect(instructions.contains("DATE_TRUNC('day'"))
+        #expect(instructions.contains("first count rows per period"))
+        #expect(instructions.contains("Do not group or partition by CURRENT_DATE itself"))
         // Follow-up handling for the conversation context section.
         #expect(instructions.contains("follow-up"))
     }

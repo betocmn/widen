@@ -36,6 +36,35 @@ struct FoundationModelsSmokeTests {
         )
     }
 
+    private func makeOrdersSchema() -> DatabaseSchema {
+        DatabaseSchema(
+            schemas: [SchemaInfo(name: "public")],
+            tables: [
+                TableInfo(
+                    schema: "public", name: "orders", type: .baseTable,
+                    columns: [
+                        ColumnInfo(
+                            tableSchema: "public", tableName: "orders", name: "id",
+                            dataType: "integer", isNullable: false, ordinalPosition: 1),
+                        ColumnInfo(
+                            tableSchema: "public", tableName: "orders", name: "user_id",
+                            dataType: "integer", isNullable: false, ordinalPosition: 2),
+                        ColumnInfo(
+                            tableSchema: "public", tableName: "orders", name: "total_cents",
+                            dataType: "integer", isNullable: false, ordinalPosition: 3),
+                        ColumnInfo(
+                            tableSchema: "public", tableName: "orders", name: "status",
+                            dataType: "text", isNullable: false, ordinalPosition: 4),
+                        ColumnInfo(
+                            tableSchema: "public", tableName: "orders", name: "created_at",
+                            dataType: "timestamp with time zone", isNullable: false,
+                            ordinalPosition: 5),
+                    ]),
+            ],
+            foreignKeys: []
+        )
+    }
+
     @Test(.timeLimit(.minutes(3)))
     func modelIsAvailableAndGeneratesValidSQL() async throws {
         #if canImport(FoundationModels)
@@ -60,6 +89,35 @@ struct FoundationModelsSmokeTests {
             #expect(result.sql.lowercased().contains("users"))
             let validation = SQLSafetyValidator.validate(result.sql)
             #expect(validation.isValid, "generated SQL failed validation: \(validation.errors)")
+        #else
+            Issue.record("FoundationModels is not available at compile time")
+        #endif
+    }
+
+    @Test(.timeLimit(.minutes(3)))
+    func modelGeneratesValidAverageOrdersPerDaySQL() async throws {
+        #if canImport(FoundationModels)
+            let model = SystemLanguageModel.default
+            guard model.isAvailable else {
+                Issue.record("Model unavailable: \(model.availability)")
+                return
+            }
+
+            let generator = FoundationModelsSQLGenerator()
+            let result = try await generator.generateSQL(
+                question: "How many orders are we getting in average per day?",
+                schema: makeOrdersSchema(),
+                config: SQLGenerationConfig(defaultRowLimit: 100)
+            )
+            print("Generated average orders SQL: \(result.sql)")
+
+            let validation = SQLSafetyValidator.validate(result.sql)
+            #expect(validation.isValid, "generated SQL failed validation: \(validation.errors)")
+            let lowercasedSQL = result.sql.lowercased()
+            #expect(lowercasedSQL.contains("orders"))
+            #expect(lowercasedSQL.contains("created_at"))
+            #expect(!lowercasedSQL.contains("avg(count("))
+            #expect(!lowercasedSQL.contains("over ("))
         #else
             Issue.record("FoundationModels is not available at compile time")
         #endif

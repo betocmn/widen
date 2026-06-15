@@ -78,7 +78,10 @@ struct OpenRouterSQLGeneratorTests {
             .success((try completion(content: goodContent), response(status: 200)))
         ])
         _ = try await makeGenerator(transport).generateSQL(
-            question: "show users", schema: makeSchema(), config: SQLGenerationConfig())
+            question: "show users",
+            schema: makeSchema(),
+            config: SQLGenerationConfig(databaseContext: "Only active users count.")
+        )
 
         let request = try #require(transport.requests.first)
         #expect(request.value(forHTTPHeaderField: "Authorization") == "Bearer test-key")
@@ -91,6 +94,7 @@ struct OpenRouterSQLGeneratorTests {
         #expect(messages?[0]["role"] == "system")
         #expect(messages?[0]["content"]?.contains("JSON object") == true)
         #expect(messages?[1]["content"]?.contains("Table \"public\".\"users\"") == true)
+        #expect(messages?[1]["content"]?.contains("Database context:\nOnly active users count.") == true)
         #expect(messages?[1]["content"]?.contains("User question: show users") == true)
     }
 
