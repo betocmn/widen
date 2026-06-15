@@ -77,7 +77,7 @@ public struct MockConnectionDetailsParser: ConnectionDetailsParsing {
                 "port", "db_port", "database_port", "pgport", "pg_port", "postgres_port",
                 "postgresql_port",
             ],
-            fallback: { $0.contains("port") })
+            fallback: { _ in false })
         let database = preferredValue(
             keys: [
                 "dbname", "db", "database", "database_name", "db_name", "db_database",
@@ -268,7 +268,18 @@ public struct MockConnectionDetailsParser: ConnectionDetailsParsing {
             value.removeLast()
             value = value.trimmingCharacters(in: .whitespaces)
         }
-        return value.trimmingCharacters(in: CharacterSet(charactersIn: "\"'"))
+        return stripMatchingOuterQuotes(from: value)
+    }
+
+    private static func stripMatchingOuterQuotes(from value: String) -> String {
+        guard value.count >= 2,
+            let first = value.first,
+            first == "\"" || first == "'",
+            value.last == first
+        else {
+            return value
+        }
+        return String(value.dropFirst().dropLast())
     }
 
     private static func stripUnquotedComment(from value: String) -> String {

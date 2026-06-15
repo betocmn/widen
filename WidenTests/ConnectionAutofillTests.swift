@@ -255,6 +255,18 @@ struct ConnectionURLParserTests {
         #expect(details?.port == nil)
     }
 
+    @Test func skipsCommentedOutURLBeforeActiveURL() {
+        let details = ConnectionURLParser.details(
+            in:
+                """
+                # DATABASE_URL=postgres://old:secret@old-host/old-db
+                DATABASE_URL=postgres://new:secret@new-host/new-db
+                """)
+        #expect(details?.username == "new")
+        #expect(details?.host == "new-host")
+        #expect(details?.database == "new-db")
+    }
+
     @Test func parsesExplicitEmptyPassword() {
         let details = ConnectionURLParser.details(in: "postgres://u:@host/db")
         #expect(details?.host == "host")
@@ -415,6 +427,16 @@ struct MockConnectionDetailsParserTests {
         #expect(details.password == "abc://def")
     }
 
+    @Test func preservesOppositeQuoteCharactersInsideQuotedPassword() async throws {
+        let details = try await MockConnectionDetailsParser().parse(
+            #"""
+            DB_HOST=db.internal
+            DB_PASSWORD="'secret'"
+            """#)
+        #expect(details.host == "db.internal")
+        #expect(details.password == "'secret'")
+    }
+
     @Test func ignoresCommentedOutKeyValuePairs() async throws {
         let details = try await MockConnectionDetailsParser().parse(
             """
@@ -449,6 +471,18 @@ struct MockConnectionDetailsParserTests {
         #expect(details.host == "db.internal")
         #expect(details.username == "etl")
         #expect(details.password == "db-secret")
+    }
+
+    @Test func doesNotUseUnrelatedServicePortFallback() async throws {
+        let details = try await MockConnectionDetailsParser().parse(
+            """
+            DB_HOST=db.internal
+            DB_NAME=warehouse
+            REDIS_PORT=6379
+            """)
+        #expect(details.host == "db.internal")
+        #expect(details.database == "warehouse")
+        #expect(details.port == nil)
     }
 
     @Test func prefersDatabaseNameOverDatabaseHost() async throws {

@@ -25,7 +25,7 @@ public enum ConnectionURLParser {
     static func firstConnectionURL(in text: String) -> String? {
         let schemes = ["postgresql://", "postgres://"]
         let firstScheme = schemes
-            .compactMap { text.range(of: $0, options: .caseInsensitive) }
+            .compactMap { firstUncommentedRange(of: $0, in: text) }
             .min { $0.lowerBound < $1.lowerBound }
         guard let firstScheme else { return nil }
 
@@ -55,6 +55,35 @@ public enum ConnectionURLParser {
             String(text[firstScheme.lowerBound..<end]),
             wrappingQuote: wrappingQuote
         )
+    }
+
+    private static func firstUncommentedRange(
+        of scheme: String, in text: String
+    ) -> Range<String.Index>? {
+        var searchStart = text.startIndex
+        while searchStart < text.endIndex,
+            let range = text.range(
+                of: scheme,
+                options: .caseInsensitive,
+                range: searchStart..<text.endIndex
+            )
+        {
+            if !isOnCommentedLine(range.lowerBound, in: text) {
+                return range
+            }
+            searchStart = range.upperBound
+        }
+        return nil
+    }
+
+    private static func isOnCommentedLine(
+        _ index: String.Index, in text: String
+    ) -> Bool {
+        let lineStart =
+            text[..<index].lastIndex(where: \.isNewline).map { text.index(after: $0) }
+            ?? text.startIndex
+        let prefix = text[lineStart..<index].trimmingCharacters(in: .whitespaces)
+        return prefix.hasPrefix("#")
     }
 
     /// Splits `scheme://[user[:password]@]host[:port][/database][?query]` by
