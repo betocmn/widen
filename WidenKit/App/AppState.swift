@@ -659,12 +659,14 @@ public final class AppState {
     public func createSession(
         connectionID: UUID,
         title: String = QuerySession.placeholderTitle,
-        titleWasManuallySet: Bool = false
+        titleWasManuallySet: Bool = false,
+        viewDataTarget: QuerySession.ViewDataTarget? = nil
     ) -> QuerySession {
         let session = QuerySession(
             connectionID: connectionID,
             title: title,
-            titleWasManuallySet: titleWasManuallySet
+            titleWasManuallySet: titleWasManuallySet,
+            viewDataTarget: viewDataTarget
         )
         sessions.append(session)
         selectSession(session.id)
@@ -678,24 +680,32 @@ public final class AppState {
     public func viewData(for table: TableInfo, connectionID: UUID) async {
         guard connection(for: connectionID) != nil else { return }
         let sql = Self.viewDataSQL(for: table)
+        let target = QuerySession.ViewDataTarget(table: table)
         let controller: SessionController
         let viewDataSessionID: UUID
-        if let existingSession = viewDataSession(connectionID: connectionID, sql: sql) {
-            selectSession(existingSession.id)
-            guard let selectedController = controllers[existingSession.id] else { return }
+        if let existingSessionID = existingViewDataSessionID(
+            connectionID: connectionID,
+            target: target,
+            sql: sql
+        ) {
+            selectSession(existingSessionID)
+            guard let selectedController = controllers[existingSessionID] else { return }
+            ensureViewDataTarget(target, on: existingSessionID)
+            selectSchemaTable(for: target, connectionID: connectionID)
+            viewDataSessionID = existingSessionID
             controller = selectedController
-            viewDataSessionID = existingSession.id
             controller.queryVM.setDirectSQL(sql)
-            sessionDidChange(existingSession.id)
+            sessionDidChange(existingSessionID)
         } else {
             let session = createSession(
                 connectionID: connectionID,
                 title: "View \(table.qualifiedName)",
-                titleWasManuallySet: true
+                titleWasManuallySet: true,
+                viewDataTarget: target
             )
             guard let selectedController = controllers[session.id] else { return }
-            controller = selectedController
             viewDataSessionID = session.id
+            controller = selectedController
             controller.chatVM.input = sql
             controller.chatVM.submitDirectSQL(queryVM: controller.queryVM)
             sessionDidChange(session.id)
@@ -710,17 +720,63 @@ public final class AppState {
         controller.runQuery(appState: self)
     }
 
-    private func viewDataSession(connectionID: UUID, sql: String) -> QuerySession? {
+    private func existingViewDataSessionID(
+        connectionID: UUID,
+        target: QuerySession.ViewDataTarget,
+        sql: String
+    ) -> UUID? {
         if let selectedSessionID {
             sessionDidChange(selectedSessionID)
         }
         return sessions(for: connectionID).first { session in
-            session.sqlText == sql
+            session.viewDataTarget == target || isLegacyViewDataSession(session, sql: sql)
+        }?.id
+    }
+
+    private func isLegacyViewDataSession(_ session: QuerySession, sql: String) -> Bool {
+        session.messages.first { $0.role == .user }?.text == sql
+    }
+
+    private func ensureViewDataTarget(_ target: QuerySession.ViewDataTarget, on sessionID: UUID) {
+        guard let index = sessions.firstIndex(where: { $0.id == sessionID }),
+            sessions[index].viewDataTarget != target
+        else { return }
+        sessions[index].viewDataTarget = target
+        sessions[index].updatedAt = Date()
+        flushSessions()
+    }
+
+    private func selectSchemaTableIfNeeded(for session: QuerySession) {
+        guard let target = viewDataTarget(for: session) else { return }
+        selectSchemaTable(for: target, connectionID: session.connectionID)
+        ensureViewDataTarget(target, on: session.id)
+    }
+
+    private func viewDataTarget(for session: QuerySession) -> QuerySession.ViewDataTarget? {
+        if let target = session.viewDataTarget {
+            return target
         }
+        guard let schema = schemas[session.connectionID],
+            let firstSQL = session.messages.first(where: { $0.role == .user })?.text,
+            let table = schema.tables.first(where: { Self.viewDataSQL(for: $0) == firstSQL })
+        else { return nil }
+        return QuerySession.ViewDataTarget(table: table)
+    }
+
+    private func selectSchemaTable(
+        for target: QuerySession.ViewDataTarget,
+        connectionID: UUID
+    ) {
+        selectSchema(target.schema, for: connectionID)
+        schemaVM.selectedTableID = target.tableID
     }
 
     static func viewDataSQL(for table: TableInfo) -> String {
-        "SELECT * FROM \(quotedPostgresIdentifier(table.schema)).\(quotedPostgresIdentifier(table.name))"
+        viewDataSQL(for: QuerySession.ViewDataTarget(table: table))
+    }
+
+    private static func viewDataSQL(for target: QuerySession.ViewDataTarget) -> String {
+        "SELECT * FROM \(quotedPostgresIdentifier(target.schema)).\(quotedPostgresIdentifier(target.table))"
     }
 
     private static func quotedPostgresIdentifier(_ identifier: String) -> String {
@@ -749,6 +805,7 @@ public final class AppState {
             controllers[id] = makeSessionController(session)
         }
         sidebarSelection = .session(id)
+        selectSchemaTableIfNeeded(for: session)
         UserDefaults.standard.set(id.uuidString, forKey: Self.selectedSessionKey)
         Task { await connectIfNeeded(session.connectionID) }
     }

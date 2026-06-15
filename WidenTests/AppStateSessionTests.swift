@@ -104,6 +104,7 @@ struct AppStateSessionTests {
         #expect(session.connectionID == config.id)
         #expect(session.title == "View public.users")
         #expect(session.titleWasManuallySet)
+        #expect(session.viewDataTarget == QuerySession.ViewDataTarget(schema: "public", table: "users"))
         #expect(session.sqlText == expectedSQL)
         #expect(controller.queryVM.sqlText == expectedSQL)
         #expect(controller.queryVM.generation == nil)
@@ -132,19 +133,54 @@ struct AppStateSessionTests {
                 && state.selectedController?.chatVM.messages.last?.role == .result
         }
         let firstSessionID = state.selectedSessionID
+        state.selectedController?.chatVM.messages.append(
+            ChatMessage(role: .user, text: "Show only recent users")
+        )
+        state.selectedController?.queryVM.setDirectSQL("SELECT id FROM public.users")
+        if let firstSessionID {
+            state.sessionDidChange(firstSessionID)
+        }
 
         await state.viewData(for: table, connectionID: config.id)
         await waitUntil {
             state.selectedController?.queryVM.isRunning == false
-                && state.selectedController?.chatVM.messages.count == 3
+                && state.selectedController?.chatVM.messages.count == 4
         }
 
         #expect(state.selectedSessionID == firstSessionID)
         #expect(state.sessions(for: config.id).count == 1)
         #expect(state.selectedController?.queryVM.sqlText == expectedSQL)
-        #expect(state.selectedController?.chatVM.messages.map(\.role) == [.user, .result, .result])
+        #expect(state.selectedController?.chatVM.messages.map(\.role) == [.user, .result, .user, .result])
         #expect(state.selectedController?.chatVM.messages.last?.runSummary?.sql == expectedSQL)
         #expect(await recorder.all() == [expectedSQL, expectedSQL])
+    }
+
+    @Test func selectingViewDataSessionSelectsSchemaTable() async throws {
+        let (state, dir) = makeState()
+        defer { try? FileManager.default.removeItem(at: dir) }
+        let config = DatabaseConnectionConfig(database: "analytics", username: "u")
+        state.connections = [config]
+        state.schemas[config.id] = DatabaseSchema(
+            schemas: [SchemaInfo(name: "public"), SchemaInfo(name: "sales")],
+            tables: [
+                TableInfo(schema: "public", name: "users", type: .baseTable, columns: []),
+                TableInfo(schema: "sales", name: "orders", type: .baseTable, columns: []),
+            ],
+            foreignKeys: []
+        )
+        let session = state.createSession(
+            connectionID: config.id,
+            title: "View sales.orders",
+            titleWasManuallySet: true,
+            viewDataTarget: QuerySession.ViewDataTarget(schema: "sales", table: "orders")
+        )
+        state.selectSchema("public", for: config.id)
+        state.schemaVM.selectedTableID = "public.users"
+
+        state.selectSession(session.id)
+
+        #expect(state.currentSchemaName(for: config.id) == "sales")
+        #expect(state.schemaVM.selectedTableID == "sales.orders")
     }
 
     @Test func viewDataSQLQuotesPostgresIdentifiers() {
