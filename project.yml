@@ -58,11 +58,9 @@ targets:
         # Sparkle auto-update. The feed and the zipped builds are hosted as
         # static files next to the marketing site (see docs/update-server-plan.md).
         SUFeedURL: "https://widen.dev/appcast.xml"
-        # EdDSA (Ed25519) public key Sparkle uses to verify every download.
-        # PLACEHOLDER — replace with the real key printed by Sparkle's
-        # `generate_keys` when the release pipeline is set up. The matching
-        # private key stays in the login Keychain and is NEVER committed.
-        SUPublicEDKey: "REPLACE_WITH_SPARKLE_PUBLIC_ED_KEY"
+        # Add SUPublicEDKey here only after generating the real Sparkle EdDSA
+        # key pair. Do not ship a placeholder key: Sparkle treats invalid keys
+        # as a fatal updater configuration error at launch.
         # Auto-check for updates on by default (opt-out in Settings ▸ General).
         # Setting this explicitly also suppresses Sparkle's first-run prompt.
         SUEnableAutomaticChecks: true

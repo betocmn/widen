@@ -34,7 +34,5 @@
 	<true/>
 	<key>SUFeedURL</key>
 	<string>https://widen.dev/appcast.xml</string>
-	<key>SUPublicEDKey</key>
-	<string>REPLACE_WITH_SPARKLE_PUBLIC_ED_KEY</string>
 </dict>
 </plist>

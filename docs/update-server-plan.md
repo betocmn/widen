@@ -34,16 +34,16 @@ These are set in the Widen app's `project.yml` → `targets.Widen.info.propertie
 | Info.plist key | Current value | Meaning |
 | --- | --- | --- |
 | `SUFeedURL` | `https://widen.dev/appcast.xml` | Where this repo must serve the feed. |
-| `SUPublicEDKey` | `REPLACE_WITH_SPARKLE_PUBLIC_ED_KEY` *(placeholder)* | EdDSA **public** key; must match the **private** key that signs releases. |
+| `SUPublicEDKey` | Not set yet | EdDSA **public** key; add the real generated key before public releases. |
 | `SUEnableAutomaticChecks` | `true` | Auto-check on by default. |
 
 > ⚠️ **Cross-repo coupling — read this twice.**
 > - `SUFeedURL` must equal the public URL where this repo serves `appcast.xml`. If you host the
 >   feed somewhere else or under a different path, the Widen repo's `SUFeedURL` must be updated
 >   (edit `project.yml`, run `make project`, rebuild).
-> - `SUPublicEDKey` in the Widen repo must be the public half of the EdDSA key generated in §3.
->   Until that placeholder is replaced, **shipped updates cannot be verified and will be
->   rejected by the client.** Replacing it is step §3 below.
+> - If `SUPublicEDKey` is added to the Widen repo, it must be the public half of the EdDSA key
+>   generated in §3. Do **not** commit a placeholder value: Sparkle treats invalid public keys as
+>   fatal updater configuration errors at launch.
 
 ---
 
@@ -51,7 +51,7 @@ These are set in the Widen app's `project.yml` → `targets.Widen.info.propertie
 
 Do these once, in order:
 
-- [ ] **§3** Generate the Sparkle EdDSA key pair; paste the public key into the Widen repo.
+- [ ] **§3** Generate the Sparkle EdDSA key pair; add the public key to the Widen repo.
 - [ ] **§4** Confirm/obtain Apple signing + notarization credentials.
 - [ ] **§6** Stand up hosting in this repo (serve `appcast.xml` + `/releases/*.zip` at `widen.dev`).
 - [ ] **§5** Run the release pipeline once to publish v0.1.0 (or the first real version).
@@ -88,7 +88,7 @@ A public key has been generated... Add this to your app's Info.plist (SUPublicED
 
 Then:
 
-1. In the **Widen repo**, replace the `SUPublicEDKey` placeholder in `project.yml`
+1. In the **Widen repo**, add `SUPublicEDKey` to `project.yml`
    (`targets.Widen.info.properties`) with that base64 string, run `make project`, commit.
 2. **Back up the private key** — without it you can never ship another update users will accept.
    Export it for safekeeping / CI:
