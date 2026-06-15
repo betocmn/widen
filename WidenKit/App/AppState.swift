@@ -316,6 +316,11 @@ public final class AppState {
     public let keychain = KeychainService()
     public let schemaVM = SchemaViewModel()
 
+    /// The app's auto-updater, injected at launch by the app target so
+    /// WidenKit's Settings UI can offer "check for updates" without depending
+    /// on Sparkle. Nil in tests and until the app wires it up.
+    public var updaterControl: (any UpdaterControlling)?
+
     private let introspection = SchemaIntrospectionService()
     private var saveTask: Task<Void, Never>?
     private var didLaunch = false

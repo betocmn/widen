@@ -9,6 +9,9 @@ packages:
   postgres-nio:
     url: https://github.com/vapor/postgres-nio.git
     from: 1.33.0
+  Sparkle:
+    url: https://github.com/sparkle-project/Sparkle.git
+    from: 2.6.0
 
 settings:
   base:
@@ -40,6 +43,9 @@ targets:
       - target: WidenKit
         embed: true
         codeSign: true
+      # Xcode embeds Sparkle.framework from the Swift package automatically.
+      # Setting embed/codeSign here makes XcodeGen emit an invalid copy path.
+      - package: Sparkle
     info:
       path: Widen/Info.plist
       properties:
@@ -51,6 +57,15 @@ targets:
         NSPrincipalClass: NSApplication
         NSHumanReadableCopyright: "Widen — local-only MVP"
         NSLocalNetworkUsageDescription: "Widen connects to PostgreSQL databases you configure on your local network."
+        # Sparkle auto-update. The feed and the zipped builds are hosted as
+        # static files next to the marketing site (see docs/update-server-plan.md).
+        SUFeedURL: "https://widen.dev/appcast.xml"
+        # Add SUPublicEDKey here only after generating the real Sparkle EdDSA
+        # key pair. Do not ship a placeholder key: Sparkle treats invalid keys
+        # as a fatal updater configuration error at launch.
+        # Auto-check for updates on by default (opt-out in Settings ▸ General).
+        # Setting this explicitly also suppresses Sparkle's first-run prompt.
+        SUEnableAutomaticChecks: true
     settings:
       base:
         PRODUCT_BUNDLE_IDENTIFIER: dev.widen.Widen

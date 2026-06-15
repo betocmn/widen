@@ -42,11 +42,13 @@
 		431CE0A39E21D2C174350BC7 /* KeychainService.swift in Sources */ = {isa = PBXBuildFile; fileRef = A3B9A1CC6E0205BFB23382B5 /* KeychainService.swift */; };
 		434A383C87AEEBA026425998 /* WidenKit.framework in Frameworks */ = {isa = PBXBuildFile; fileRef = A287B7ABA46C2CE732510671 /* WidenKit.framework */; };
 		44DC2644E6C9B468A01B836C /* PostgresErrorMapper.swift in Sources */ = {isa = PBXBuildFile; fileRef = D02148CFD54DB234244D6960 /* PostgresErrorMapper.swift */; };
+		44F00C34BF1464B074F5B3D0 /* Sparkle in Frameworks */ = {isa = PBXBuildFile; productRef = 876867DB69218F1F9C35B2DD /* Sparkle */; };
 		45493C26C7093C53E7FA6CA7 /* ForeignKeyInfo.swift in Sources */ = {isa = PBXBuildFile; fileRef = 53B157FCABED3A63DEE715A3 /* ForeignKeyInfo.swift */; };
 		48022A27EFAA78F2CBCC864D /* SidebarView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 55003AE18B47B04247233530 /* SidebarView.swift */; };
 		49D036B9E3F976916C4023DC /* SchemaStore.swift in Sources */ = {isa = PBXBuildFile; fileRef = F63EE53E94C2C5F8EDC5DD47 /* SchemaStore.swift */; };
 		4A75EC7A4C514B92BE04945E /* ResultsGridView.swift in Sources */ = {isa = PBXBuildFile; fileRef = A0D6E491DE3F8E28E3DE6BA0 /* ResultsGridView.swift */; };
 		4C68CAA36470F5443E52AC15 /* OpenRouterCatalog.swift in Sources */ = {isa = PBXBuildFile; fileRef = 0875D9B4DCE517781B097472 /* OpenRouterCatalog.swift */; };
+		57567D4146FBF59355F6ACF1 /* UpdaterModel.swift in Sources */ = {isa = PBXBuildFile; fileRef = 6D63609C7CFC8D581AD812BA /* UpdaterModel.swift */; };
 		5F0369487E4251C38AC4C383 /* FoundationModelsConnectionParser.swift in Sources */ = {isa = PBXBuildFile; fileRef = 870B967DD1A236C762771BCD /* FoundationModelsConnectionParser.swift */; };
 		603D1C66B3804DB8772F9B9C /* ChatViewModel.swift in Sources */ = {isa = PBXBuildFile; fileRef = 45FEB67F1A613C00B3549BE5 /* ChatViewModel.swift */; };
 		677AC815A764B633F9F22D26 /* GenerationLog.swift in Sources */ = {isa = PBXBuildFile; fileRef = B594613B4437F5693FC5294D /* GenerationLog.swift */; };
@@ -97,6 +99,7 @@
 		DF579B887E407DE86D520359 /* SchemaViewModel.swift in Sources */ = {isa = PBXBuildFile; fileRef = 09FE1736941871937B17D50F /* SchemaViewModel.swift */; };
 		E20C19B3790AC3CDE763C0F3 /* MockConnectionDetailsParser.swift in Sources */ = {isa = PBXBuildFile; fileRef = 1C82BFC72C1C05541743CC9D /* MockConnectionDetailsParser.swift */; };
 		ED5BCEF2845478E58F7E3758 /* AppState.swift in Sources */ = {isa = PBXBuildFile; fileRef = 766339FF7AE746B877592F59 /* AppState.swift */; };
+		EE1924EF18C4616FB2D046BB /* UpdaterControlling.swift in Sources */ = {isa = PBXBuildFile; fileRef = 85A8BC5B064230B8C18C5643 /* UpdaterControlling.swift */; };
 		EE5904EE1D6F99457023AD50 /* PCCSupport.swift in Sources */ = {isa = PBXBuildFile; fileRef = C38FD0CDC37E536A0ACD0BBD /* PCCSupport.swift */; };
 		EF753E2965C53200E0302956 /* DatabaseSchema.swift in Sources */ = {isa = PBXBuildFile; fileRef = F09E72C449EE7A5A9A66BD9F /* DatabaseSchema.swift */; };
 		EF9CE627C80199A8351EF201 /* SQLPromptBuilderTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 352C4B3A2C622CAEC8466E27 /* SQLPromptBuilderTests.swift */; };
@@ -182,6 +185,7 @@
 		6399B3911003C49C8E5A23BB /* FoundationModelsTitleGenerator.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = FoundationModelsTitleGenerator.swift; sourceTree = "<group>"; };
 		6765AEA72CE58BC6D644FE4C /* SchemaStoreTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SchemaStoreTests.swift; sourceTree = "<group>"; };
 		6BA8E6CFAEE004F6DB3C4D6B /* SQLPromptBuilder.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SQLPromptBuilder.swift; sourceTree = "<group>"; };
+		6D63609C7CFC8D581AD812BA /* UpdaterModel.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = UpdaterModel.swift; sourceTree = "<group>"; };
 		6D97D661282C7D49C7D9844A /* PrivateCloudComputeSQLGenerator.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PrivateCloudComputeSQLGenerator.swift; sourceTree = "<group>"; };
 		6DBE4DAF98A714DFDE7DF54E /* ConnectionStore.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ConnectionStore.swift; sourceTree = "<group>"; };
 		6E93D92D37A8796CFBFBD827 /* SessionTitleGenerator.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SessionTitleGenerator.swift; sourceTree = "<group>"; };
@@ -194,6 +198,7 @@
 		7F39F1CE52C85BAF2835DDB3 /* ArchivedSessionsSettingsView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ArchivedSessionsSettingsView.swift; sourceTree = "<group>"; };
 		82222A95EEF524D441242FD5 /* AIBackendSelectionTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AIBackendSelectionTests.swift; sourceTree = "<group>"; };
 		822DC2702C5356D72B37F3AE /* ConnectionURLParser.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ConnectionURLParser.swift; sourceTree = "<group>"; };
+		85A8BC5B064230B8C18C5643 /* UpdaterControlling.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = UpdaterControlling.swift; sourceTree = "<group>"; };
 		870B967DD1A236C762771BCD /* FoundationModelsConnectionParser.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = FoundationModelsConnectionParser.swift; sourceTree = "<group>"; };
 		8D3B5C38E209E366A7B9413D /* QueryExecutionService.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = QueryExecutionService.swift; sourceTree = "<group>"; };
 		8ED849CA57ABBA33C736A628 /* ResultsCardView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ResultsCardView.swift; sourceTree = "<group>"; };
@@ -264,6 +269,7 @@
 			buildActionMask = 2147483647;
 			files = (
 				029C6E6F71C4BBEBAAFBD71D /* WidenKit.framework in Frameworks */,
+				44F00C34BF1464B074F5B3D0 /* Sparkle in Frameworks */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
@@ -322,6 +328,14 @@
 				A0AE56A39456C067B76EDA60 /* Sidebar */,
 			);
 			path = Views;
+			sourceTree = "<group>";
+		};
+		5A66AE8142925479566194BD /* Updater */ = {
+			isa = PBXGroup;
+			children = (
+				6D63609C7CFC8D581AD812BA /* UpdaterModel.swift */,
+			);
+			path = Updater;
 			sourceTree = "<group>";
 		};
 		63268D5768D14D6DE20ED483 /* App */ = {
@@ -398,6 +412,7 @@
 				4668054A3CDE423568E1A4F4 /* SQLGenerator.swift */,
 				6BA8E6CFAEE004F6DB3C4D6B /* SQLPromptBuilder.swift */,
 				E89B4B4CFB39F399ABB908C7 /* SQLSafetyValidator.swift */,
+				85A8BC5B064230B8C18C5643 /* UpdaterControlling.swift */,
 			);
 			path = Services;
 			sourceTree = "<group>";
@@ -438,6 +453,7 @@
 				420B7A0BDD583B0ABE7D2E25 /* Info.plist */,
 				3F4D5F2F87350CA819E01F58 /* Widen.entitlements */,
 				0F3DF98ED93232966E34F946 /* WidenApp.swift */,
+				5A66AE8142925479566194BD /* Updater */,
 			);
 			path = Widen;
 			sourceTree = "<group>";
@@ -532,6 +548,7 @@
 			);
 			name = Widen;
 			packageProductDependencies = (
+				876867DB69218F1F9C35B2DD /* Sparkle */,
 			);
 			productName = Widen;
 			productReference = 4089BA52528E9EEAC2396AB2 /* Widen.app */;
@@ -570,6 +587,7 @@
 			mainGroup = 891357E77479656F738D67CB;
 			minimizedProjectReferenceProxies = 1;
 			packageReferences = (
+				D885A32F312EE7B6E7D30C57 /* XCRemoteSwiftPackageReference "Sparkle" */,
 				E7FCC23A638DB0CB7EC669A0 /* XCRemoteSwiftPackageReference "postgres-nio" */,
 			);
 			preferredProjectObjectVersion = 77;
@@ -600,6 +618,7 @@
 			isa = PBXSourcesBuildPhase;
 			buildActionMask = 2147483647;
 			files = (
+				57567D4146FBF59355F6ACF1 /* UpdaterModel.swift in Sources */,
 				419D3C46557E5EB02BFF1E16 /* WidenApp.swift in Sources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
@@ -702,6 +721,7 @@
 				769ABC9198C3975F0BC73673 /* SettingsView.swift in Sources */,
 				48022A27EFAA78F2CBCC864D /* SidebarView.swift in Sources */,
 				2ECF4D6E459FE689FF8F6D4C /* TableInfo.swift in Sources */,
+				EE1924EF18C4616FB2D046BB /* UpdaterControlling.swift in Sources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
@@ -984,6 +1004,14 @@
 /* End XCConfigurationList section */
 
 /* Begin XCRemoteSwiftPackageReference section */
+		D885A32F312EE7B6E7D30C57 /* XCRemoteSwiftPackageReference "Sparkle" */ = {
+			isa = XCRemoteSwiftPackageReference;
+			repositoryURL = "https://github.com/sparkle-project/Sparkle.git";
+			requirement = {
+				kind = upToNextMajorVersion;
+				minimumVersion = 2.6.0;
+			};
+		};
 		E7FCC23A638DB0CB7EC669A0 /* XCRemoteSwiftPackageReference "postgres-nio" */ = {
 			isa = XCRemoteSwiftPackageReference;
 			repositoryURL = "https://github.com/vapor/postgres-nio.git";
@@ -999,6 +1027,11 @@
 			isa = XCSwiftPackageProductDependency;
 			package = E7FCC23A638DB0CB7EC669A0 /* XCRemoteSwiftPackageReference "postgres-nio" */;
 			productName = PostgresNIO;
+		};
+		876867DB69218F1F9C35B2DD /* Sparkle */ = {
+			isa = XCSwiftPackageProductDependency;
+			package = D885A32F312EE7B6E7D30C57 /* XCRemoteSwiftPackageReference "Sparkle" */;
+			productName = Sparkle;
 		};
 /* End XCSwiftPackageProductDependency section */
 	};
