@@ -120,6 +120,23 @@ struct SQLSafetyValidatorTests {
         #expect(!validate("RESET ALL").isValid)
     }
 
+    @Test func rejectsAggregateWrappedAroundWindowFunction() {
+        let result = validate(
+            "SELECT AVG(COUNT(*) OVER (PARTITION BY created_at)) FROM public.orders"
+        )
+
+        #expect(!result.isValid)
+        #expect(result.errors.contains { $0.contains("Aggregate functions cannot contain") })
+    }
+
+    @Test func allowsAggregateUsedAsWindowFunction() {
+        let result = validate(
+            "SELECT AVG(total_cents) OVER (PARTITION BY user_id) FROM public.orders LIMIT 100"
+        )
+
+        #expect(result.isValid)
+    }
+
     // MARK: - Comments, strings, identifiers must not fool the checks
 
     @Test func keywordInsideLineCommentIsIgnored() {

@@ -76,7 +76,31 @@ public enum SQLPromptBuilder {
         {
             lines.append("- The last run of that SQL failed with: \(truncated(error, to: 300))")
         }
+        if let hint = repairHint(for: context) {
+            lines.append("- Repair requirement: \(hint)")
+        }
         return lines.joined(separator: "\n")
+    }
+
+    static func repairHint(for context: SQLGenerationContext) -> String? {
+        let sql = context.currentSQL ?? ""
+        let error = context.lastRunError ?? ""
+        let combined = "\(sql)\n\(error)"
+        if combined.localizedCaseInsensitiveContains(
+            "aggregate function calls cannot contain window function calls"
+        )
+            || SQLSafetyValidator.containsWindowFunctionInsideAggregate(
+                SQLSafetyValidator.strip(sql).text
+            )
+        {
+            return "PostgreSQL rejected an aggregate wrapped around a window function. Do not use OVER inside AVG, SUM, MIN, MAX, or COUNT. For average counts over time, use a CTE like WITH counts AS (SELECT DATE_TRUNC('day', created_at) AS period, COUNT(*) AS row_count FROM table GROUP BY 1) SELECT AVG(row_count) FROM counts."
+        }
+        if combined.localizedCaseInsensitiveContains("repeated the exact same SQL")
+            && combined.localizedCaseInsensitiveContains("window function")
+        {
+            return "Produce a structurally different query. Do not repeat the failed SQL or use OVER inside AVG, SUM, MIN, MAX, or COUNT."
+        }
+        return nil
     }
 
     /// Renders user-authored database guidance from settings. This is capped

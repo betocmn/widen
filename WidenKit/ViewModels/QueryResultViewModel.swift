@@ -11,8 +11,7 @@ struct QueryExecutionAttempt {
 @Observable
 public final class QueryResultViewModel {
     /// Called exactly once when a run finishes: `(result, nil)` on success,
-    /// `(nil, error)` on failure or cancellation, `(nil, nil)` when the run
-    /// never started because validation blocked it.
+    /// `(nil, error)` on failure, cancellation, or local validation failure.
     public typealias RunCompletion = @MainActor (QueryResult?, String?) -> Void
 
     public var sqlText = ""
@@ -194,6 +193,10 @@ public final class QueryResultViewModel {
     ) async {
         validation = SQLSafetyValidator.validate(sql)
         guard let validation, validation.isValid else {
+            if isActiveRun(runID) {
+                let errors = validation?.errors ?? ["SQL is invalid."]
+                runError = AppError.validationFailed(errors).localizedDescription
+            }
             finishRun(runID)
             return
         }

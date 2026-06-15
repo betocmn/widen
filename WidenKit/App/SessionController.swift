@@ -208,6 +208,16 @@ public final class SessionController: Identifiable {
                 )
                 continue
             }
+            if Self.normalizedSQL(generatedSQL) == Self.normalizedSQL(failingSQL) {
+                lastError = Self.repeatedSQLRepairMessage(previousError: lastError)
+                attempts.append(
+                    GeneratedSQLRepairAttempt(
+                        label: "Retry \(attempt)/\(Self.generatedSQLRepairRetryLimit)",
+                        error: lastError
+                    )
+                )
+                continue
+            }
 
             let execution = await queryVM.executeGeneratedSQLAttempt(
                 sql: generatedSQL,
@@ -346,6 +356,13 @@ public final class SessionController: Identifiable {
 
     private static func truncated(_ text: String, to limit: Int) -> String {
         text.count <= limit ? text : String(text.prefix(limit)) + "..."
+    }
+
+    private static func repeatedSQLRepairMessage(previousError: String) -> String {
+        """
+        The model repeated the exact same SQL after it failed. Produce a structurally different query.
+        Previous error: \(previousError)
+        """
     }
 
     private static func isRetryableGeneratedSQLError(_ message: String) -> Bool {

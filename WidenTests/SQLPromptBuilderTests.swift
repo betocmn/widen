@@ -177,6 +177,25 @@ struct SQLPromptBuilderTests {
         #expect(contextRange!.lowerBound < questionRange!.lowerBound)
     }
 
+    @Test func promptIncludesAggregateWindowRepairHint() {
+        let context = SQLGenerationContext(
+            currentSQL:
+                "SELECT AVG(COUNT(*) OVER (PARTITION BY created_at)) FROM public.orders",
+            lastRunError:
+                "Query failed: aggregate function calls cannot contain window function calls"
+        )
+
+        let prompt = SQLPromptBuilder.prompt(
+            question: "How many orders are we getting in average per day?",
+            schema: makeSampleSchema(),
+            context: context
+        )
+
+        #expect(prompt.contains("Repair requirement:"))
+        #expect(prompt.contains("Do not use OVER inside AVG"))
+        #expect(prompt.contains("WITH counts AS"))
+    }
+
     @Test func contextSectionTruncatesLongItemsAndKeepsLastThreeQuestions() {
         let longSQL = String(repeating: "S", count: 2_000)
         let context = SQLGenerationContext(

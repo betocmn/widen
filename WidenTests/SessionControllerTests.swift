@@ -250,6 +250,48 @@ struct SessionControllerTests {
         #expect(controller.chatVM.messages[2].runSummary?.sql == fixedGeneration.sql)
     }
 
+    @Test func generatedValidationErrorRetriesAndShowsFixedResult() async {
+        let connectionID = UUID()
+        let (state, dir) = makeState(connectionID: connectionID, connected: true)
+        defer { try? FileManager.default.removeItem(at: dir) }
+        state.schemas[connectionID] = makeSchema()
+        let badGeneration = makeGeneration(
+            sql: "SELECT AVG(COUNT(*) OVER ()) FROM public.users",
+            explanation: "Uses an invalid nested aggregate."
+        )
+        let fixedGeneration = makeGeneration(
+            sql: "WITH daily_counts AS (SELECT COUNT(*) AS row_count FROM public.users) SELECT AVG(row_count) FROM daily_counts",
+            explanation: "Counts rows first, then averages the counts."
+        )
+        let generator = RecordingRepairGenerator(results: [fixedGeneration])
+        state.sqlGeneratorOverride = generator
+        let recorder = SQLRecorder()
+        let controller = makeController(
+            connectionID: connectionID,
+            executor: BadTableExecutor(recorder: recorder)
+        )
+        controller.chatVM.messages = [
+            ChatMessage(role: .user, text: "average users"),
+            ChatMessage(role: .assistant, text: badGeneration.explanation, generation: badGeneration),
+        ]
+        controller.queryVM.setGeneration(badGeneration)
+
+        controller.runQuery(appState: state)
+        await waitUntil {
+            !controller.queryVM.isRunning
+                && !controller.chatVM.isGenerating
+                && controller.chatVM.messages.last?.role == .result
+        }
+
+        let statements = await recorder.all()
+        #expect(statements == [fixedGeneration.sql])
+        #expect(generator.contexts.count == 1)
+        #expect(generator.contexts[0].currentSQL == badGeneration.sql)
+        #expect(generator.contexts[0].lastRunError?.contains("Aggregate functions cannot contain") == true)
+        #expect(controller.queryVM.sqlText == fixedGeneration.sql)
+        #expect(controller.chatVM.messages.map(\.role) == [.user, .assistant, .result])
+    }
+
     @Test func generatedRunErrorGivesUpAfterFiveRepairsAndShowsFinalSQLAndErrors() async {
         let connectionID = UUID()
         let (state, dir) = makeState(connectionID: connectionID, connected: true)
@@ -279,8 +321,9 @@ struct SessionControllerTests {
         }
 
         let statements = await recorder.all()
-        #expect(statements.count == 6)
+        #expect(statements.count == 1)
         #expect(generator.contexts.count == 5)
+        #expect(generator.contexts.last?.lastRunError?.contains("repeated the exact same SQL") == true)
         #expect(controller.queryVM.sqlText == badGeneration.sql)
         #expect(controller.queryVM.generation?.sql == badGeneration.sql)
         #expect(controller.chatVM.messages.map(\.role) == [.user, .assistant, .error])
@@ -289,6 +332,7 @@ struct SessionControllerTests {
         #expect(controller.chatVM.messages.last?.text.contains("Initial run") == true)
         #expect(controller.chatVM.messages.last?.text.contains("Retry 5/5") == true)
         #expect(controller.chatVM.messages.last?.text.contains("Last error:") == true)
+        #expect(controller.chatVM.messages.last?.text.contains("repeated the exact same SQL") == true)
         #expect(controller.chatVM.messages.last?.text.contains("smarter cloud model") == true)
     }
 
