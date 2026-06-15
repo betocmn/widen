@@ -137,7 +137,8 @@ public struct MockConnectionDetailsParser: ConnectionDetailsParsing {
                     !line[index].isWhitespace,
                     line[index] != "=",
                     line[index] != ":",
-                    line[index] != ","
+                    line[index] != ",",
+                    line[index] != ";"
                 {
                     index = line.index(after: index)
                 }
@@ -171,7 +172,7 @@ public struct MockConnectionDetailsParser: ConnectionDetailsParsing {
                 let character = line[index]
                 if isEscaped {
                     isEscaped = false
-                } else if character == "\\", quote == "\"" {
+                } else if character == "\\" {
                     isEscaped = true
                 } else if character == quote {
                     index = line.index(after: index)
@@ -183,7 +184,7 @@ public struct MockConnectionDetailsParser: ConnectionDetailsParsing {
         }
 
         while index < line.endIndex {
-            if line[index] == "," {
+            if line[index] == "," || line[index] == ";" {
                 let next = indexAfterPairDelimiter(in: line, from: index)
                 if beginsKeyValuePair(in: line, at: next) { break }
             }
@@ -201,7 +202,8 @@ public struct MockConnectionDetailsParser: ConnectionDetailsParsing {
 
     private static func skipPairDelimiters(in line: String, from index: inout String.Index) {
         while index < line.endIndex,
-            line[index].isWhitespace || line[index] == "," || line[index] == "{" || line[index] == "}"
+            line[index].isWhitespace || line[index] == "," || line[index] == ";"
+                || line[index] == "{" || line[index] == "}"
         {
             index = line.index(after: index)
         }
@@ -244,7 +246,8 @@ public struct MockConnectionDetailsParser: ConnectionDetailsParsing {
                 !line[cursor].isWhitespace,
                 line[cursor] != "=",
                 line[cursor] != ":",
-                line[cursor] != ","
+                line[cursor] != ",",
+                line[cursor] != ";"
             {
                 cursor = line.index(after: cursor)
             }
@@ -264,14 +267,14 @@ public struct MockConnectionDetailsParser: ConnectionDetailsParsing {
     private static func cleanedValue(_ rawValue: String) -> String {
         var value = stripUnquotedComment(from: rawValue)
             .trimmingCharacters(in: .whitespaces)
-        while value.last == "," {
+        while value.last == "," || value.last == ";" {
             value.removeLast()
             value = value.trimmingCharacters(in: .whitespaces)
         }
-        return stripMatchingOuterQuotes(from: value)
+        return unquotedValue(from: value)
     }
 
-    private static func stripMatchingOuterQuotes(from value: String) -> String {
+    private static func unquotedValue(from value: String) -> String {
         guard value.count >= 2,
             let first = value.first,
             first == "\"" || first == "'",
@@ -279,7 +282,26 @@ public struct MockConnectionDetailsParser: ConnectionDetailsParsing {
         else {
             return value
         }
-        return String(value.dropFirst().dropLast())
+        return unescapedQuotedValue(value.dropFirst().dropLast())
+    }
+
+    private static func unescapedQuotedValue(_ value: Substring) -> String {
+        var result = ""
+        var isEscaped = false
+        for character in value {
+            if isEscaped {
+                result.append(character)
+                isEscaped = false
+            } else if character == "\\" {
+                isEscaped = true
+            } else {
+                result.append(character)
+            }
+        }
+        if isEscaped {
+            result.append("\\")
+        }
+        return result
     }
 
     private static func stripUnquotedComment(from value: String) -> String {
@@ -295,7 +317,7 @@ public struct MockConnectionDetailsParser: ConnectionDetailsParsing {
                 continue
             }
 
-            if character == "\\", inDoubleQuote {
+            if character == "\\", inDoubleQuote || inSingleQuote {
                 result.append(character)
                 isEscaped = true
                 continue

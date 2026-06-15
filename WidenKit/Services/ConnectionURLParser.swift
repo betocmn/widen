@@ -83,7 +83,21 @@ public enum ConnectionURLParser {
             text[..<index].lastIndex(where: \.isNewline).map { text.index(after: $0) }
             ?? text.startIndex
         let prefix = text[lineStart..<index].trimmingCharacters(in: .whitespaces)
-        return prefix.hasPrefix("#")
+        if prefix.hasPrefix("#") { return true }
+
+        var cursor = lineStart
+        while cursor < index,
+            let hash = text[cursor..<index].firstIndex(of: "#")
+        {
+            let beforeHash = text[lineStart..<hash]
+            if beforeHash.trimmingCharacters(in: .whitespaces).isEmpty
+                || beforeHash.last?.isWhitespace == true
+            {
+                return true
+            }
+            cursor = text.index(after: hash)
+        }
+        return false
     }
 
     /// Splits `scheme://[user[:password]@]host[:port][/database][?query]` by
@@ -130,12 +144,14 @@ public enum ConnectionURLParser {
 
         let (host, port) = hostAndPort(in: hostPart)
         let queryValues = queryParameters(in: query)
+        let parsedHost = host.isEmpty ? queryValues["host"] : host
+        let parsedPort = port ?? queryValues["port"].flatMap { Int(decoded($0)) }
         let parsedUser = user ?? queryValues["user"] ?? queryValues["username"]
         let parsedPassword = password ?? queryValues["password"]
 
         return .sanitized(
-            host: decoded(host),
-            port: port,
+            host: parsedHost.map(decoded),
+            port: parsedPort,
             database: database.map(decoded),
             username: parsedUser.map(decoded),
             password: parsedPassword.map(decoded),
@@ -161,6 +177,10 @@ public enum ConnectionURLParser {
     }
 
     private static func hostAndPort(in hostPart: String) -> (host: String, port: Int?) {
+        let hostPart = String(
+            hostPart.split(separator: ",", maxSplits: 1, omittingEmptySubsequences: false)
+                .first ?? ""
+        )
         if hostPart.hasPrefix("["),
             let closeBracket = hostPart.firstIndex(of: "]")
         {

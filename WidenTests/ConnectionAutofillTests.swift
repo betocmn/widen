@@ -267,6 +267,12 @@ struct ConnectionURLParserTests {
         #expect(details?.database == "new-db")
     }
 
+    @Test func ignoresURLInsideInlineComment() {
+        let details = ConnectionURLParser.details(
+            in: "DB_HOST=db.internal # old postgres://old:secret@old-host/old-db")
+        #expect(details == nil)
+    }
+
     @Test func parsesExplicitEmptyPassword() {
         let details = ConnectionURLParser.details(in: "postgres://u:@host/db")
         #expect(details?.host == "host")
@@ -314,6 +320,24 @@ struct ConnectionURLParserTests {
         #expect(details?.database == "analytics")
         #expect(details?.username == nil)
         #expect(details?.password == nil)
+    }
+
+    @Test func parsesHostAndPortFromQueryParameters() {
+        let details = ConnectionURLParser.details(
+            in: "postgresql:///analytics?host=db.internal&port=5433&user=etl&password=secret")
+        #expect(details?.host == "db.internal")
+        #expect(details?.port == 5433)
+        #expect(details?.database == "analytics")
+        #expect(details?.username == "etl")
+        #expect(details?.password == "secret")
+    }
+
+    @Test func usesFirstEndpointFromMultiHostURI() {
+        let details = ConnectionURLParser.details(
+            in: "postgresql://host1:5432,host2:5433/analytics")
+        #expect(details?.host == "host1")
+        #expect(details?.port == 5432)
+        #expect(details?.database == "analytics")
     }
 
     @Test func returnsNilWithoutURL() {
@@ -437,6 +461,16 @@ struct MockConnectionDetailsParserTests {
         #expect(details.password == "'secret'")
     }
 
+    @Test func honorsEscapedSingleQuoteInQuotedPassword() async throws {
+        let details = try await MockConnectionDetailsParser().parse(
+            #"""
+            DB_HOST=db.internal
+            DB_PASSWORD='pa\'ss'
+            """#)
+        #expect(details.host == "db.internal")
+        #expect(details.password == "pa'ss")
+    }
+
     @Test func ignoresCommentedOutKeyValuePairs() async throws {
         let details = try await MockConnectionDetailsParser().parse(
             """
@@ -485,6 +519,20 @@ struct MockConnectionDetailsParserTests {
         #expect(details.port == nil)
     }
 
+    @Test func inlineCommentURLsDoNotOverrideActiveKeyValues() async throws {
+        let details = try await MockConnectionDetailsParser().parse(
+            """
+            DB_HOST=db.internal # old postgres://old:secret@old-host/old-db
+            DB_NAME=warehouse
+            DB_USER=etl
+            DB_PASSWORD=secret
+            """)
+        #expect(details.host == "db.internal")
+        #expect(details.database == "warehouse")
+        #expect(details.username == "etl")
+        #expect(details.password == "secret")
+    }
+
     @Test func prefersDatabaseNameOverDatabaseHost() async throws {
         let details = try await MockConnectionDetailsParser().parse(
             """
@@ -525,6 +573,16 @@ struct MockConnectionDetailsParserTests {
     @Test func parsesSpaceSeparatedInlinePairs() async throws {
         let details = try await MockConnectionDetailsParser().parse(
             "host=db.internal port=5433 dbname=warehouse user=etl password=secret")
+        #expect(details.host == "db.internal")
+        #expect(details.port == 5433)
+        #expect(details.database == "warehouse")
+        #expect(details.username == "etl")
+        #expect(details.password == "secret")
+    }
+
+    @Test func parsesSemicolonDelimitedConnectionString() async throws {
+        let details = try await MockConnectionDetailsParser().parse(
+            "Host=db.internal;Port=5433;Database=warehouse;Username=etl;Password=secret")
         #expect(details.host == "db.internal")
         #expect(details.port == 5433)
         #expect(details.database == "warehouse")
