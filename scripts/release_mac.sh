@@ -127,8 +127,10 @@ SIGN_UPDATE="$SPARKLE_BIN/sign_update"
 IDENTITY_HASH="$(identity_hash)"
 [ -n "$IDENTITY_HASH" ] || die "Developer ID Application certificate for team $TEAM_ID is not installed"
 
-"$GENERATE_KEYS" --account "$SPARKLE_ACCOUNT" -p >/dev/null ||
+KEYCHAIN_SPARKLE_PUBLIC_ED_KEY="$("$GENERATE_KEYS" --account "$SPARKLE_ACCOUNT" -p)" ||
   die "Sparkle EdDSA key for account '$SPARKLE_ACCOUNT' is not in the login Keychain"
+[ "$KEYCHAIN_SPARKLE_PUBLIC_ED_KEY" = "$SPARKLE_PUBLIC_ED_KEY" ] ||
+  die "SPARKLE_PUBLIC_ED_KEY does not match Sparkle keychain account '$SPARKLE_ACCOUNT'"
 
 VERSION="$(plist_value CFBundleShortVersionString Widen/Info.plist)"
 BUILD_NUMBER="$(plist_value CFBundleVersion Widen/Info.plist)"
@@ -205,7 +207,13 @@ xcrun stapler staple "$DMG_PATH"
 xcrun stapler validate "$DMG_PATH"
 spctl -a -vvv -t open --context context:primary-signature "$DMG_PATH"
 
-if [ -n "$WEBSITE_REPO" ] && [ -d "$WEBSITE_REPO/public/releases" ] && [ -f "$WEBSITE_REPO/public/appcast.xml" ]; then
+if [ -n "$WEBSITE_REPO" ]; then
+  [ -d "$WEBSITE_REPO" ] || die "WEBSITE_REPO does not exist: $WEBSITE_REPO"
+  [ -d "$WEBSITE_REPO/public/releases" ] ||
+    die "WEBSITE_REPO is missing public/releases: $WEBSITE_REPO"
+  [ -f "$WEBSITE_REPO/public/appcast.xml" ] ||
+    die "WEBSITE_REPO is missing public/appcast.xml: $WEBSITE_REPO"
+
   WEBSITE_ZIP="$WEBSITE_REPO/public/releases/$APP_NAME-$VERSION.zip"
   cp "$SPARKLE_ZIP" "$WEBSITE_ZIP"
 

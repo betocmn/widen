@@ -31,7 +31,7 @@ DMGs, and Sparkle updates.
 
    ```sh
    set -a
-   . .env.release.local
+   . ./.env.release.local
    set +a
    ```
 
