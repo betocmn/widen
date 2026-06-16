@@ -57,7 +57,8 @@ DMGs, and Sparkle updates.
 4. Confirm the Sparkle key exists:
 
    ```sh
-   build/release/SourcePackages/artifacts/sparkle/Sparkle/bin/generate_keys \
+   make setup
+   build/SourcePackages/artifacts/sparkle/Sparkle/bin/generate_keys \
      --account "$SPARKLE_ACCOUNT" -p
    ```
 
