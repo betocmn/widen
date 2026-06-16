@@ -1,5 +1,18 @@
 import Foundation
 
+/// The kind of statement a validated SQL string represents. Reads run
+/// read-only and may auto-retry; writes can only run after an explicit Run and
+/// never auto-execute. DDL/admin statements never classify here — they are
+/// rejected outright.
+public enum SQLStatementKind: String, Codable, Sendable, Equatable {
+    case read
+    case insert
+    case update
+    case delete
+
+    public var isWrite: Bool { self != .read }
+}
+
 public struct SQLValidationResult: Equatable, Sendable {
     public var isValid: Bool
     public var normalizedSQL: String?
@@ -8,28 +21,45 @@ public struct SQLValidationResult: Equatable, Sendable {
     /// True when the stripped SQL contains a top-level LIMIT token; the
     /// executor wraps the query in a `LIMIT n` subquery when absent.
     public var hasLimit: Bool
+    /// What the statement does. Drives the read-only vs. write execution path.
+    public var kind: SQLStatementKind
+    /// True when the user must confirm before this write runs: every DELETE and
+    /// any UPDATE without a top-level WHERE clause.
+    public var requiresConfirmation: Bool
 
     public init(
         isValid: Bool,
         normalizedSQL: String?,
         errors: [String],
         warnings: [String],
-        hasLimit: Bool
+        hasLimit: Bool,
+        kind: SQLStatementKind = .read,
+        requiresConfirmation: Bool = false
     ) {
         self.isValid = isValid
         self.normalizedSQL = normalizedSQL
         self.errors = errors
         self.warnings = warnings
         self.hasLimit = hasLimit
+        self.kind = kind
+        self.requiresConfirmation = requiresConfirmation
     }
 }
 
 /// Deterministic gatekeeper for every statement that reaches the database.
-/// The language model is never trusted; only single read-only SELECT/WITH
-/// statements pass. Conservative false positives are acceptable.
+/// The language model is never trusted; only single SELECT/WITH reads and
+/// single INSERT/UPDATE/DELETE writes pass. Every other statement (DDL, admin,
+/// transaction control) is rejected. Conservative false positives are
+/// acceptable. The returned `kind` decides the execution path: reads run
+/// read-only and may auto-retry; writes only ever run from an explicit Run.
 public enum SQLSafetyValidator {
+    /// Data-modifying verbs that are allowed as the leading keyword of a
+    /// statement, but never anywhere inside a SELECT/WITH read (which would be
+    /// a data-modifying CTE or a `FOR UPDATE` lock clause).
+    public static let writeKeywords: Set<String> = ["INSERT", "UPDATE", "DELETE"]
+
     public static let forbiddenKeywords: Set<String> = [
-        "INSERT", "UPDATE", "DELETE", "MERGE", "ALTER", "DROP", "CREATE",
+        "MERGE", "ALTER", "DROP", "CREATE",
         "TRUNCATE", "GRANT", "REVOKE", "CALL", "DO", "COPY", "EXECUTE",
         "PREPARE", "VACUUM", "ANALYZE", "REINDEX", "REFRESH", "SET", "RESET",
         "BEGIN", "COMMIT", "ROLLBACK",
@@ -79,9 +109,27 @@ public enum SQLSafetyValidator {
         }
 
         let tokens = tokenize(stripped.text)
+        var kind: SQLStatementKind = .read
         if let first = tokens.first {
-            if first != "SELECT" && first != "WITH" {
-                errors.append("Only SELECT or WITH … SELECT queries are allowed.")
+            switch first {
+            case "SELECT", "WITH":
+                kind = .read
+                // A data-modifying statement must be a plain INSERT/UPDATE/DELETE.
+                // A read that still carries one is a data-modifying CTE
+                // (`WITH … DELETE …`) or a `FOR UPDATE` lock clause — unsupported.
+                if let writeToken = tokens.first(where: { writeKeywords.contains($0) }) {
+                    errors.append(
+                        "Data-modifying statements are not allowed inside a SELECT or WITH query: \(writeToken)."
+                    )
+                }
+            case "INSERT":
+                kind = .insert
+            case "UPDATE":
+                kind = .update
+            case "DELETE":
+                kind = .delete
+            default:
+                errors.append("Only SELECT, WITH, INSERT, UPDATE, or DELETE statements are allowed.")
             }
         } else {
             errors.append("No SQL statement found.")
@@ -109,15 +157,30 @@ public enum SQLSafetyValidator {
 
         let hasLimit = hasTopLevelLimit(stripped.text)
         if errors.isEmpty {
-            if !hasLimit {
-                warnings.append("No LIMIT clause — the default row limit will be applied.")
+            if kind == .read {
+                if !hasLimit {
+                    warnings.append("No LIMIT clause — the default row limit will be applied.")
+                }
+                if hasSelectStar(stripped.text) {
+                    warnings.append(
+                        "SELECT * returns every column; consider selecting specific columns.")
+                }
+                if !tokens.contains("WHERE"), tokens.contains("FROM") {
+                    warnings.append("Query has no WHERE clause and may scan whole tables.")
+                }
+            } else {
+                warnings.append("This query modifies data.")
             }
-            if hasSelectStar(stripped.text) {
-                warnings.append("SELECT * returns every column; consider selecting specific columns.")
-            }
-            if !tokens.contains("WHERE"), tokens.contains("FROM") {
-                warnings.append("Query has no WHERE clause and may scan whole tables.")
-            }
+        }
+
+        let requiresConfirmation: Bool
+        switch kind {
+        case .delete:
+            requiresConfirmation = true
+        case .update:
+            requiresConfirmation = !hasTopLevelWhere(stripped.text)
+        case .read, .insert:
+            requiresConfirmation = false
         }
 
         return SQLValidationResult(
@@ -125,7 +188,9 @@ public enum SQLSafetyValidator {
             normalizedSQL: errors.isEmpty ? trimmed : nil,
             errors: errors,
             warnings: warnings,
-            hasLimit: hasLimit
+            hasLimit: hasLimit,
+            kind: kind,
+            requiresConfirmation: requiresConfirmation
         )
     }
 
@@ -369,6 +434,37 @@ public enum SQLSafetyValidator {
                 }
                 if depth == 0, token.uppercased() == "LIMIT" {
                     return topLevelLimitIsBounded(chars, after: i)
+                }
+                continue
+            }
+            if char == "(" {
+                depth += 1
+            } else if char == ")", depth > 0 {
+                depth -= 1
+            }
+            i += 1
+        }
+        return false
+    }
+
+    /// True when a `WHERE` token appears at parenthesis depth zero. Mirrors
+    /// `hasTopLevelLimit`: a WHERE buried inside a subquery does not count, so
+    /// an UPDATE whose only WHERE is in a sub-SELECT still requires confirmation.
+    static func hasTopLevelWhere(_ strippedText: String) -> Bool {
+        let chars = Array(strippedText)
+        var depth = 0
+        var i = 0
+
+        while i < chars.count {
+            let char = chars[i]
+            if isWordStart(char) {
+                var token = ""
+                while i < chars.count, isWordPart(chars[i], tokenStarted: !token.isEmpty) {
+                    token.append(chars[i])
+                    i += 1
+                }
+                if depth == 0, token.uppercased() == "WHERE" {
+                    return true
                 }
                 continue
             }

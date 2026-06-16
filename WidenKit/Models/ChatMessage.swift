@@ -18,12 +18,37 @@ public struct ChatMessage: Identifiable, Codable, Equatable, Sendable {
         public var executionTimeMs: Int
         public var truncated: Bool
         public var sql: String
+        /// What ran. For writes `rowCount` is the affected-row count and the
+        /// record reads "Inserted/Updated/Deleted N rows".
+        public var kind: SQLStatementKind
 
-        public init(rowCount: Int, executionTimeMs: Int, truncated: Bool, sql: String) {
+        public init(
+            rowCount: Int,
+            executionTimeMs: Int,
+            truncated: Bool,
+            sql: String,
+            kind: SQLStatementKind = .read
+        ) {
             self.rowCount = rowCount
             self.executionTimeMs = executionTimeMs
             self.truncated = truncated
             self.sql = sql
+            self.kind = kind
+        }
+
+        private enum CodingKeys: String, CodingKey {
+            case rowCount, executionTimeMs, truncated, sql, kind
+        }
+
+        public init(from decoder: any Decoder) throws {
+            let container = try decoder.container(keyedBy: CodingKeys.self)
+            rowCount = try container.decode(Int.self, forKey: .rowCount)
+            executionTimeMs = try container.decode(Int.self, forKey: .executionTimeMs)
+            truncated = try container.decode(Bool.self, forKey: .truncated)
+            sql = try container.decode(String.self, forKey: .sql)
+            // Transcripts saved before writes existed have no `kind` — they are
+            // all reads. Decoding a non-optional key directly would throw.
+            kind = try container.decodeIfPresent(SQLStatementKind.self, forKey: .kind) ?? .read
         }
     }
 
@@ -34,26 +59,43 @@ public struct ChatMessage: Identifiable, Codable, Equatable, Sendable {
     public var generation: SQLGenerationResult?
     /// Present on `.result` messages recording a finished run.
     public var runSummary: RunSummary?
+    /// Present on `.error` messages from a failed write that was AI-generated:
+    /// the failing SQL the "Try Again" button asks the model to repair. Writes
+    /// never auto-retry, so the retry is a one-shot, execution-free regenerate.
+    public var failedWriteSQL: String?
     public var timestamp: Date
 
     public init(
         role: Role,
         text: String,
         generation: SQLGenerationResult? = nil,
-        runSummary: RunSummary? = nil
+        runSummary: RunSummary? = nil,
+        failedWriteSQL: String? = nil
     ) {
         self.id = UUID()
         self.role = role
         self.text = text
         self.generation = generation
         self.runSummary = runSummary
+        self.failedWriteSQL = failedWriteSQL
         self.timestamp = Date()
     }
 
     /// A `.result` message for a finished run, with human-readable text so
     /// persisted transcripts read sensibly on their own.
     public static func runRecord(_ summary: RunSummary) -> ChatMessage {
-        var text = "Returned \(summary.rowCount) row\(summary.rowCount == 1 ? "" : "s")"
+        let rows = "\(summary.rowCount) row\(summary.rowCount == 1 ? "" : "s")"
+        var text: String
+        switch summary.kind {
+        case .read:
+            text = "Returned \(rows)"
+        case .insert:
+            text = "Inserted \(rows)"
+        case .update:
+            text = "Updated \(rows)"
+        case .delete:
+            text = "Deleted \(rows)"
+        }
         text += " in \(summary.executionTimeMs) ms"
         if summary.truncated {
             text += " (truncated at row limit)"

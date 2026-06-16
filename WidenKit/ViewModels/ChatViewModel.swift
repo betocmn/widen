@@ -44,6 +44,13 @@ public final class ChatViewModel {
         messages.append(ChatMessage(role: .error, text: message))
     }
 
+    /// Records a failed write run. `failedSQL` lets the transcript offer a
+    /// "Try Again" button that asks the model to repair the query without
+    /// executing it — writes never auto-retry.
+    func appendWriteRunError(_ message: String, failedSQL: String) {
+        messages.append(ChatMessage(role: .error, text: message, failedWriteSQL: failedSQL))
+    }
+
     func beginGeneration(status: String? = nil) {
         isGenerating = true
         generationStatus = status
