@@ -6,6 +6,11 @@ import Foundation
 /// `SPUStandardUpdaterController`) and injects it via `AppState.updaterControl`.
 @MainActor
 public protocol UpdaterControlling: AnyObject {
+    /// True when the app bundle has enough updater configuration to start
+    /// Sparkle. Public source builds leave this false until release values are
+    /// injected.
+    var isConfigured: Bool { get }
+
     /// Whether an update check can be started right now (false while a check
     /// or install is already in flight). Drives the menu/button enabled state.
     var canCheckForUpdates: Bool { get }

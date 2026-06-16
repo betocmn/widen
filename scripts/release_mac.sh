@@ -130,19 +130,9 @@ KEYCHAIN_SPARKLE_PUBLIC_ED_KEY="$("$GENERATE_KEYS" --account "$SPARKLE_ACCOUNT" 
 [ "$KEYCHAIN_SPARKLE_PUBLIC_ED_KEY" = "$SPARKLE_PUBLIC_ED_KEY" ] ||
   die "SPARKLE_PUBLIC_ED_KEY does not match Sparkle keychain account '$SPARKLE_ACCOUNT'"
 
-VERSION="$(plist_value CFBundleShortVersionString Widen/Info.plist)"
-BUILD_NUMBER="$(plist_value CFBundleVersion Widen/Info.plist)"
-RELEASE_DIR="$ARTIFACT_ROOT/$VERSION"
-TMP_DIR="$RELEASE_DIR/tmp"
 APP_PATH="$DERIVED_DATA_PATH/Build/Products/Release/$APP_NAME.app"
-NOTARY_APP_ZIP="$TMP_DIR/$APP_NAME-notary.zip"
-SPARKLE_ZIP="$RELEASE_DIR/$APP_NAME-$VERSION.zip"
-DMG_PATH="$RELEASE_DIR/$APP_NAME.dmg"
 
-rm -rf "$RELEASE_DIR"
-mkdir -p "$TMP_DIR"
-
-printf 'Building %s %s (%s) with Xcode at %s\n' "$APP_NAME" "$VERSION" "$BUILD_NUMBER" "$DEVELOPER_DIR"
+printf 'Building %s with Xcode at %s\n' "$APP_NAME" "$DEVELOPER_DIR"
 xcodegen generate
 xcodebuild \
   -project "$APP_NAME.xcodeproj" \
@@ -181,7 +171,23 @@ plist_value CFBundleShortVersionString "$APP_PATH/Contents/Info.plist" >/dev/nul
   die "built app is missing CFBundleShortVersionString"
 plist_value CFBundleVersion "$APP_PATH/Contents/Info.plist" >/dev/null ||
   die "built app is missing CFBundleVersion"
+VERSION="$(plist_value CFBundleShortVersionString "$APP_PATH/Contents/Info.plist")"
+BUILD_NUMBER="$(plist_value CFBundleVersion "$APP_PATH/Contents/Info.plist")"
+[ "$VERSION" != "\$(MARKETING_VERSION)" ] ||
+  die "built app has unresolved MARKETING_VERSION"
+[ "$BUILD_NUMBER" != "\$(CURRENT_PROJECT_VERSION)" ] ||
+  die "built app has unresolved CURRENT_PROJECT_VERSION"
 
+RELEASE_DIR="$ARTIFACT_ROOT/$VERSION"
+TMP_DIR="$RELEASE_DIR/tmp"
+NOTARY_APP_ZIP="$TMP_DIR/$APP_NAME-notary.zip"
+SPARKLE_ZIP="$RELEASE_DIR/$APP_NAME-$VERSION.zip"
+DMG_PATH="$RELEASE_DIR/$APP_NAME.dmg"
+
+rm -rf "$RELEASE_DIR"
+mkdir -p "$TMP_DIR"
+
+printf 'Packaging %s %s (%s)\n' "$APP_NAME" "$VERSION" "$BUILD_NUMBER"
 resign_sparkle_helpers
 codesign --verify --deep --strict --verbose=4 "$APP_PATH"
 

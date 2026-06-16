@@ -16,11 +16,16 @@ final class UpdaterModel: UpdaterControlling {
     /// the Settings button as it flips.
     private(set) var canCheckForUpdates = false
 
+    let isConfigured: Bool
+
     private let controller: SPUStandardUpdaterController?
     @ObservationIgnored private var canCheckObserver: AnyCancellable?
 
     init() {
-        guard Self.hasUsableSparkleConfiguration else {
+        let isConfigured = Self.hasUsableSparkleConfiguration
+        self.isConfigured = isConfigured
+
+        guard isConfigured else {
             controller = nil
             return
         }
