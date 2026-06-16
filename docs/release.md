@@ -27,13 +27,17 @@ DMGs, and Sparkle updates.
 
    `.env.release.local` is ignored by git. Do not commit it.
 
-   For manual checks in the current shell, load it with:
+   Before running manual checks in the current shell, load it with:
 
    ```sh
    set -a
    . ./.env.release.local
    set +a
    ```
+
+   Run this in every new terminal before the checks below. If
+   `NOTARY_PROFILE` is not loaded, `notarytool` exits with
+   `Profile name must be at least 3 characters`.
 
 2. Confirm Conductor copies the env file into new workspaces.
 
@@ -44,8 +48,9 @@ DMGs, and Sparkle updates.
 3. Confirm Apple signing and notarization are available:
 
    ```sh
+   : "${NOTARY_PROFILE:?Set NOTARY_PROFILE in .env.release.local and load it first}"
    security find-identity -v -p codesigning | rg "Developer ID Application"
-   DEVELOPER_DIR=/Applications/Xcode-26.app/Contents/Developer \
+   DEVELOPER_DIR="${DEVELOPER_DIR:-/Applications/Xcode-26.app/Contents/Developer}" \
      xcrun notarytool history --keychain-profile "$NOTARY_PROFILE"
    ```
 
