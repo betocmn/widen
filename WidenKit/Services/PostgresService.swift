@@ -351,18 +351,15 @@ private final class WriteResultAccumulator: @unchecked Sendable {
     }
 
     func record(_ row: PostgresRow) {
-        let rowColumns = row.map(\.columnName)
-        let displayRow = row.map { PostgresCellFormatter.string(for: $0) }
-
         lock.lock()
         defer { lock.unlock() }
 
         returnedRowCount += 1
         if columns.isEmpty {
-            columns = rowColumns
+            columns = row.map(\.columnName)
         }
-        if rows.count <= rowLimit {
-            rows.append(displayRow)
+        if rows.count < rowLimit {
+            rows.append(row.map { PostgresCellFormatter.string(for: $0) })
         }
     }
 

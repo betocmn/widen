@@ -18,16 +18,17 @@ public final class ChatViewModel {
     /// runnable SQL for it.
     public static func isDirectSQL(_ input: String) -> Bool {
         let trimmed = input.trimmingCharacters(in: .whitespacesAndNewlines)
+        let identifier = #"(?:[A-Za-z_][A-Za-z0-9_$]*|"(?:""|[^"])+")"#
+        let tableTarget = #"(?:\#(identifier)\.)?\#(identifier)"#
         let patterns = [
-            #"^(?i)(select|with)\b"#,
-            #"^(?i)insert\s+into\s+\S+\s*(\([^)]*\)\s*)?(default\s+values|values\s*\(|select\b|with\b)"#,
-            #"^(?i)delete\s+from\s+(only\s+)?\S+\s*(;)?$"#,
-            #"^(?i)delete\s+from\s+(only\s+)?\S+\s+(where|using|returning)\b"#,
-            #"^(?i)delete\s+from\s+(only\s+)?\S+\s+(as\s+)?\S+\s+(where|using|returning)\b"#,
-            #"^(?i)update\s+(only\s+)?\S+(\s+(as\s+)?\S+)?\s+set\s+[^=]+="#,
+            #"^(select|with)\b"#,
+            #"^insert\s+into\s+\#(tableTarget)\s*(\([^)]*\)\s*)?(default\s+values|values\s*\(|select\b|with\b)"#,
+            #"^delete\s+from\s+(only\s+)?\#(tableTarget)(\s+(as\s+)?\#(identifier))?\s*(;)?$"#,
+            #"^delete\s+from\s+(only\s+)?\#(tableTarget)(\s+(as\s+)?\#(identifier))?\s+(where|using|returning)\b"#,
+            #"^update\s+(only\s+)?\#(tableTarget)(\s+(as\s+)?\#(identifier))?\s+set\s+[^=]+="#,
         ]
         return patterns.contains { pattern in
-            trimmed.range(of: pattern, options: .regularExpression) != nil
+            trimmed.range(of: pattern, options: [.regularExpression, .caseInsensitive]) != nil
         }
     }
 
