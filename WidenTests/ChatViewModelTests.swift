@@ -219,6 +219,8 @@ struct ChatViewModelTests {
         (#"update "Sales Data"."Q1 Orders" set status = 'paid' where id = 1"#, true),
         ("DELETE FROM users WHERE id = 1", true),
         ("DELETE FROM users", true),
+        ("DELETE FROM users -- cleanup", true),
+        ("DELETE FROM users; /* cleanup */", true),
         (#"DELETE FROM "Sales Data"."Q1 Orders" WHERE id = 1"#, true),
         ("Insert a new user named Alice", false),
         ("Insert into the users table a new Alice", false),
