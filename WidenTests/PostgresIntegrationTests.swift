@@ -321,6 +321,26 @@ struct QueryExecutionIntegrationTests {
         }
     }
 
+    @Test func writeWithLargeReturningIsCappedForDisplay() async throws {
+        let config = makeConfig(rowLimit: 1)
+        let table = "widen_write_trunc_test"
+        try await withService(config: config) { service in
+            _ = try await service.query("DROP TABLE IF EXISTS \(table)") { _ in 0 }
+            _ = try await service.query("CREATE TABLE \(table) (id int)") { _ in 0 }
+
+            // Three rows affected, but display rows are capped at rowLimit and
+            // flagged truncated — `rowCount` still reports the true count.
+            let insert = try await QueryExecutionService().runWrite(
+                sql: "INSERT INTO \(table) (id) VALUES (1), (2), (3) RETURNING id",
+                config: config, postgres: service, confirmedDangerous: false)
+            #expect(insert.rowCount == 3)
+            #expect(insert.rows.count == 1)
+            #expect(insert.truncated)
+
+            _ = try await service.query("DROP TABLE IF EXISTS \(table)") { _ in 0 }
+        }
+    }
+
     @Test func statementTimeoutCancelsLongQueries() async throws {
         let config = makeConfig(timeoutSeconds: 1)
         try await withService(config: config) { service in

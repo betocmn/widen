@@ -140,8 +140,14 @@ public actor PostgresService {
     /// transaction with a statement timeout, pinned to a single pooled
     /// connection. Captures the affected-row count from the command tag and any
     /// RETURNING rows. Rolls back on error so the pooled connection stays clean.
+    ///
+    /// `rowCount` is the affected-row count. RETURNING rows are materialized for
+    /// display only up to `rowLimit` (with `truncated` set when more were
+    /// returned), so a `… RETURNING *` over a large table cannot flood the
+    /// transcript and UI — mirroring the read path's row cap.
     public func executeWrite(
         sql: String,
+        rowLimit: Int,
         timeoutSeconds: Int,
         kind: SQLStatementKind
     ) async throws -> QueryResult {
@@ -171,15 +177,19 @@ public actor PostgresService {
                     let columns = writeResult.rows.first.map { row in
                         row.map(\.columnName)
                     } ?? []
-                    let rows: [[String?]] = writeResult.rows.map { row in
+                    var rows: [[String?]] = writeResult.rows.map { row in
                         row.map { PostgresCellFormatter.string(for: $0) }
+                    }
+                    let truncated = rows.count > rowLimit
+                    if truncated {
+                        rows = Array(rows.prefix(rowLimit))
                     }
                     let elapsed = start.duration(to: .now)
                     return QueryResult(
                         columns: columns,
                         rows: rows,
                         rowCount: affected,
-                        truncated: false,
+                        truncated: truncated,
                         executionTimeMs: Int(elapsed / .milliseconds(1)),
                         kind: kind
                     )

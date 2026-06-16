@@ -21,7 +21,9 @@ protocol QueryExecuting: Sendable {
 
 extension QueryExecuting {
     /// Default so read-only test doubles keep compiling. Real execution routes
-    /// writes through `QueryExecutionService.runWrite`.
+    /// writes through `QueryExecutionService.runWrite`. This forwards to `run`,
+    /// which throws on writes, so a conformer that forgets to override it fails
+    /// closed (writes are rejected, never mis-executed read-only).
     func runWrite(
         sql: String,
         config: DatabaseConnectionConfig,
@@ -83,6 +85,7 @@ public struct QueryExecutionService: QueryExecuting, Sendable {
         }
         return try await postgres.executeWrite(
             sql: normalizedSQL,
+            rowLimit: config.defaultRowLimit,
             timeoutSeconds: config.statementTimeoutSeconds,
             kind: validation.kind
         )
