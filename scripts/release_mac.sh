@@ -44,6 +44,18 @@ plist_value() {
   /usr/libexec/PlistBuddy -c "Print :$1" "$2"
 }
 
+require_resolved_value() {
+  local name="$1"
+  local value="$2"
+
+  [ -n "$value" ] || die "built app has empty $name"
+  case "$value" in
+    *'$('*)
+      die "built app has unresolved $name"
+      ;;
+  esac
+}
+
 find_sparkle_bin() {
   for candidate in \
     "$DERIVED_DATA_PATH/SourcePackages/artifacts/sparkle/Sparkle/bin" \
@@ -163,8 +175,7 @@ plist_value SUFeedURL "$APP_PATH/Contents/Info.plist" >/dev/null ||
 plist_value SUPublicEDKey "$APP_PATH/Contents/Info.plist" >/dev/null ||
   die "built app is missing SUPublicEDKey"
 BUILT_SPARKLE_PUBLIC_ED_KEY="$(plist_value SUPublicEDKey "$APP_PATH/Contents/Info.plist")"
-[ "$BUILT_SPARKLE_PUBLIC_ED_KEY" != "\$(SPARKLE_PUBLIC_ED_KEY)" ] ||
-  die "built app has unresolved SPARKLE_PUBLIC_ED_KEY"
+require_resolved_value SUPublicEDKey "$BUILT_SPARKLE_PUBLIC_ED_KEY"
 [ "$BUILT_SPARKLE_PUBLIC_ED_KEY" = "$SPARKLE_PUBLIC_ED_KEY" ] ||
   die "built app SUPublicEDKey does not match SPARKLE_PUBLIC_ED_KEY"
 plist_value CFBundleShortVersionString "$APP_PATH/Contents/Info.plist" >/dev/null ||
@@ -173,10 +184,8 @@ plist_value CFBundleVersion "$APP_PATH/Contents/Info.plist" >/dev/null ||
   die "built app is missing CFBundleVersion"
 VERSION="$(plist_value CFBundleShortVersionString "$APP_PATH/Contents/Info.plist")"
 BUILD_NUMBER="$(plist_value CFBundleVersion "$APP_PATH/Contents/Info.plist")"
-[ "$VERSION" != "\$(MARKETING_VERSION)" ] ||
-  die "built app has unresolved MARKETING_VERSION"
-[ "$BUILD_NUMBER" != "\$(CURRENT_PROJECT_VERSION)" ] ||
-  die "built app has unresolved CURRENT_PROJECT_VERSION"
+require_resolved_value CFBundleShortVersionString "$VERSION"
+require_resolved_value CFBundleVersion "$BUILD_NUMBER"
 
 RELEASE_DIR="$ARTIFACT_ROOT/$VERSION"
 TMP_DIR="$RELEASE_DIR/tmp"
