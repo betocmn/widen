@@ -226,12 +226,15 @@ struct ChatModeView: View {
         }
     }
 
-    /// The newest failed-write error owns the "Try Again" button; older ones
-    /// drop it so the affordance always points at the current query.
+    /// Only a failed-write error that is the newest message owns the "Try Again"
+    /// button. Once a retry appends a new generation (or the session is reopened
+    /// onto later history), the affordance retires — it always points at the
+    /// query the user is currently looking at, and the lookup stays O(1).
     private var lastWriteErrorID: UUID? {
-        controller.chatVM.messages.last(where: {
-            $0.role == .error && $0.failedWriteSQL != nil
-        })?.id
+        guard let last = controller.chatVM.messages.last,
+            last.role == .error, last.failedWriteSQL != nil
+        else { return nil }
+        return last.id
     }
 
     private func retryWriteAction(for message: ChatMessage) -> (() -> Void)? {

@@ -89,7 +89,6 @@ public final class SessionController: Identifiable {
         guard !queryVM.isRunning, !chatVM.isGenerating else { return }
         let sql = queryVM.sqlText
         let generation = queryVM.generation
-        let isWrite = SQLSafetyValidator.validate(sql).kind.isWrite
         queryVM.startRun(
             connection: appState.connection(for: connectionID),
             postgres: appState.postgres(for: connectionID),
@@ -97,6 +96,9 @@ public final class SessionController: Identifiable {
             confirmed: confirmed
         ) { [weak self, weak appState] result, errorMessage in
             guard let self else { return }
+            // `startRun` validated `sql` as part of the run; reuse that result
+            // instead of re-tokenizing, and route the error by statement kind.
+            let isWrite = self.queryVM.validation?.kind.isWrite == true
             if let result {
                 self.appendRunResult(result, sql: sql)
             } else if let errorMessage {

@@ -63,44 +63,42 @@ struct SQLCardView: View {
             .disabled(runDisabled)
             .help("Approve and execute this query")
             .confirmationDialog(
-                confirmTitle,
+                writeConfirmation.title,
                 isPresented: $showWriteConfirm,
                 titleVisibility: .visible
             ) {
-                Button(confirmActionLabel, role: .destructive) {
+                Button(writeConfirmation.action, role: .destructive) {
                     controller.runQuery(appState: appState, confirmed: true)
                 }
                 Button("Cancel", role: .cancel) {}
             } message: {
-                Text(confirmMessage)
+                Text(writeConfirmation.message)
             }
         }
     }
 
-    private var confirmTitle: String {
-        switch controller.queryVM.validation?.kind {
-        case .delete: return "Run this DELETE query?"
-        case .update: return "Run this UPDATE without a WHERE clause?"
-        default: return "Run this query?"
-        }
-    }
-
-    private var confirmActionLabel: String {
-        switch controller.queryVM.validation?.kind {
-        case .delete: return "Delete Rows"
-        case .update: return "Update Every Row"
-        default: return "Run Query"
-        }
-    }
-
-    private var confirmMessage: String {
+    /// Title, button label, and body for the destructive-write confirmation,
+    /// derived from the statement kind in one place.
+    private var writeConfirmation: (title: String, action: String, message: String) {
         switch controller.queryVM.validation?.kind {
         case .delete:
-            return "This permanently deletes matching rows and cannot be undone."
+            return (
+                "Run this DELETE query?",
+                "Delete Rows",
+                "This permanently deletes matching rows and cannot be undone."
+            )
         case .update:
-            return "This UPDATE has no WHERE clause and changes every row in the table. This cannot be undone."
+            return (
+                "Run this UPDATE without a WHERE clause?",
+                "Update Every Row",
+                "This UPDATE has no WHERE clause and changes every row in the table. This cannot be undone."
+            )
         default:
-            return "This query modifies data and cannot be undone."
+            return (
+                "Run this query?",
+                "Run Query",
+                "This query modifies data and cannot be undone."
+            )
         }
     }
 

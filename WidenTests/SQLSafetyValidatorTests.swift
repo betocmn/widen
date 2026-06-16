@@ -115,6 +115,23 @@ struct SQLSafetyValidatorTests {
         #expect(result.errors.contains { $0.contains("Data-modifying") })
     }
 
+    @Test func rejectsCTELedInsertAndUpdate() {
+        let insert = validate("WITH x AS (SELECT 1) INSERT INTO users (id) VALUES (1)")
+        #expect(!insert.isValid)
+        #expect(insert.errors.contains { $0.contains("Data-modifying") })
+
+        let update = validate("WITH x AS (SELECT 1) UPDATE users SET id = 2 WHERE id = 1")
+        #expect(!update.isValid)
+        #expect(update.errors.contains { $0.contains("Data-modifying") })
+    }
+
+    @Test func rejectsForbiddenFunctionInsideWrite() {
+        // Dangerous functions are blocked on the write path too, not just reads.
+        let result = validate("INSERT INTO logs (n) SELECT pg_sleep(10)")
+        #expect(!result.isValid)
+        #expect(result.errors.contains { $0.contains("pg_sleep") })
+    }
+
     @Test func rejectsEmptyAndWhitespaceOnlySQL() {
         #expect(!validate("").isValid)
         #expect(!validate("   \n\t ").isValid)
