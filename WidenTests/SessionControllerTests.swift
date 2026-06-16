@@ -54,7 +54,7 @@ struct SessionControllerTests {
             postgres: PostgresService,
             confirmedDangerous: Bool
         ) async throws -> QueryResult {
-            try await Task.sleep(for: .seconds(30))
+            try await Task.sleep(for: .milliseconds(100))
             return QueryResult(
                 columns: [],
                 rows: [],
@@ -748,7 +748,7 @@ struct SessionControllerTests {
         #expect(controller.chatVM.messages.last?.failedWriteSQL == writeGeneration.sql)
     }
 
-    @Test func canceledGeneratedWriteDoesNotOfferTryAgain() async {
+    @Test func generatedWriteIgnoresStopWaitingUntilServerFinishes() async {
         let connectionID = UUID()
         let (state, dir) = makeState(connectionID: connectionID, connected: true)
         defer { try? FileManager.default.removeItem(at: dir) }
@@ -764,14 +764,16 @@ struct SessionControllerTests {
         controller.queryVM.setGeneration(writeGeneration)
 
         controller.runQuery(appState: state)
-        await waitUntil { controller.queryVM.isRunning }
+        await waitUntil { controller.queryVM.isRunning && !controller.queryVM.canStopWaiting }
         controller.queryVM.cancelRun()
+        #expect(controller.queryVM.isRunning)
+        #expect(controller.chatVM.messages.last?.role == .assistant)
+
         await waitUntil {
             !controller.queryVM.isRunning
-                && controller.chatVM.messages.last?.role == .error
+                && controller.chatVM.messages.last?.role == .result
         }
 
-        #expect(controller.chatVM.messages.last?.text.contains("Stopped waiting") == true)
         #expect(controller.chatVM.messages.last?.failedWriteSQL == nil)
     }
 
@@ -810,8 +812,7 @@ struct SessionControllerTests {
         state.schemas[connectionID] = makeSchema()
         let badRead = makeGeneration(sql: "SELECT id FROM public.bad_table")
         let writeAttempt = makeGeneration(sql: "DELETE FROM public.users WHERE id = 1")
-        let generator = RecordingRepairGenerator(
-            results: Array(repeating: writeAttempt, count: 5))
+        let generator = RecordingRepairGenerator(results: [writeAttempt])
         state.sqlGeneratorOverride = generator
         let recorder = SQLRecorder()
         let controller = makeController(
@@ -832,10 +833,15 @@ struct SessionControllerTests {
         }
 
         // Only the initial failing read reached the executor. The generated
-        // DELETE was refused by the auto-retry guard and never executed.
+        // DELETE was refused by the auto-retry guard, never executed, and
+        // never became the active runnable SQL.
         let statements = await recorder.all()
         #expect(statements == [badRead.sql])
         #expect(!statements.contains { $0.contains("DELETE") })
+        #expect(generator.contexts.count == 1)
+        #expect(controller.queryVM.sqlText == badRead.sql)
+        #expect(controller.queryVM.generation?.sql == badRead.sql)
+        #expect(controller.chatVM.messages.last?.text.contains("data-modifying query") == true)
     }
 
     @Test func runSummaryDecodesLegacyJSONWithoutKindAsRead() throws {

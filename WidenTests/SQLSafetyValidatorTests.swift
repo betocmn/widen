@@ -81,6 +81,13 @@ struct SQLSafetyValidatorTests {
         #expect(!result.requiresConfirmation)
     }
 
+    @Test func updateFromRequiresConfirmationEvenWithWhere() {
+        let result = validate("UPDATE users SET email = staging.email FROM staging WHERE staging.ready")
+        #expect(result.isValid)
+        #expect(result.kind == .update)
+        #expect(result.requiresConfirmation)
+    }
+
     @Test func updateWithoutWhereRequiresConfirmation() {
         let result = validate("UPDATE users SET email = 'x'")
         #expect(result.isValid)

@@ -207,7 +207,7 @@ public final class SessionController: Identifiable {
 
     /// Wipes the transcript, the SQL preview, and the per-run result cache.
     public func clearConversation() {
-        queryVM.clear()
+        guard queryVM.clear() else { return }
         chatVM.clearConversation()
         results.removeAll()
     }
@@ -428,6 +428,15 @@ public final class SessionController: Identifiable {
                 isConnected: appState.connectionState(connectionID) == .connected
             )
             if execution.wasDiscarded {
+                appState.sessionDidChange(sessionID)
+                return
+            }
+            if execution.wasUnsafeWrite {
+                restoreStartingGeneration()
+                chatVM.appendRunError(
+                    execution.errorMessage
+                        ?? "The model tried to repair this read with a data-modifying query."
+                )
                 appState.sessionDidChange(sessionID)
                 return
             }

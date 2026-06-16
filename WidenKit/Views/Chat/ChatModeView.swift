@@ -162,11 +162,13 @@ struct ChatModeView: View {
                     if controller.queryVM.isRunning {
                         HStack(spacing: 8) {
                             LoadingView(label: "Running query…")
-                            Button("Stop waiting") {
-                                controller.queryVM.cancelRun()
+                            if controller.queryVM.canStopWaiting {
+                                Button("Stop waiting") {
+                                    controller.queryVM.cancelRun()
+                                }
+                                .controlSize(.small)
+                                .hoverBrightness()
                             }
-                            .controlSize(.small)
-                            .hoverBrightness()
                         }
                         .id(Self.runningID)
                     }

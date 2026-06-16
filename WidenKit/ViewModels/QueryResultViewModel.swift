@@ -5,6 +5,7 @@ struct QueryExecutionAttempt {
     var result: QueryResult?
     var errorMessage: String?
     var wasDiscarded = false
+    var wasUnsafeWrite = false
 }
 
 /// State for the SQL editor and results panels.
@@ -19,6 +20,7 @@ public final class QueryResultViewModel {
     public private(set) var validation: SQLValidationResult?
     public private(set) var result: QueryResult?
     public private(set) var isRunning = false
+    public private(set) var canStopWaiting = false
     public private(set) var runError: String?
     /// Metadata of the last model generation that filled the editor.
     public private(set) var generation: SQLGenerationResult?
@@ -64,6 +66,7 @@ public final class QueryResultViewModel {
         let runID = nextRunID
         activeRunID = runID
         activeRunKind = .visible
+        canStopWaiting = true
         result = nil
         runError = nil
         isRunning = true
@@ -79,16 +82,20 @@ public final class QueryResultViewModel {
         cancelActiveRun(reportError: true, fireCompletion: true)
     }
 
-    private func discardActiveRun() {
+    @discardableResult
+    private func discardActiveRun() -> Bool {
         cancelActiveRun(reportError: false, fireCompletion: false)
     }
 
-    private func cancelActiveRun(reportError: Bool, fireCompletion shouldFire: Bool) {
+    @discardableResult
+    private func cancelActiveRun(reportError: Bool, fireCompletion shouldFire: Bool) -> Bool {
+        guard activeRunID == nil || canStopWaiting else { return false }
         let runKind = activeRunKind
         runTask?.cancel()
         runTask = nil
         activeRunID = nil
         activeRunKind = nil
+        canStopWaiting = false
         if isRunning {
             isRunning = false
             if reportError {
@@ -111,15 +118,18 @@ public final class QueryResultViewModel {
             onFinish = nil
             onAttemptFinish = nil
         }
+        return true
     }
 
-    public func clear() {
-        discardActiveRun()
+    @discardableResult
+    public func clear() -> Bool {
+        guard discardActiveRun() else { return false }
         sqlText = ""
         validation = nil
         result = nil
         runError = nil
         generation = nil
+        return true
     }
 
     /// Called by the chat flow when the model fills the editor. The generated
@@ -177,7 +187,8 @@ public final class QueryResultViewModel {
             return QueryExecutionAttempt(
                 result: nil,
                 errorMessage:
-                    "The model produced a data-modifying query, which is never run automatically. Press Run to execute it."
+                    "The model produced a data-modifying query while repairing a read, so I stopped before showing it.",
+                wasUnsafeWrite: true
             )
         }
         guard isConnected, let config = connection else {
@@ -214,6 +225,7 @@ public final class QueryResultViewModel {
         let runID = nextRunID
         activeRunID = runID
         activeRunKind = .generatedSQLAttempt
+        canStopWaiting = true
         onAttemptFinish = onFinish
         result = nil
         runError = nil
@@ -251,6 +263,9 @@ public final class QueryResultViewModel {
         do {
             // Writes run only through `runWrite`; the auto-retry loop never
             // reaches this branch because it uses a separate hidden run path.
+            if validation.kind.isWrite, isActiveRun(runID) {
+                canStopWaiting = false
+            }
             let newResult =
                 validation.kind.isWrite
                 ? try await executor.runWrite(
@@ -314,6 +329,7 @@ public final class QueryResultViewModel {
         runTask = nil
         activeRunID = nil
         activeRunKind = nil
+        canStopWaiting = false
         fireCompletion()
     }
 
@@ -325,6 +341,7 @@ public final class QueryResultViewModel {
         runTask = nil
         activeRunID = nil
         activeRunKind = nil
+        canStopWaiting = false
         fireAttemptCompletion(attempt)
     }
 

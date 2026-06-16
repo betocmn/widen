@@ -185,6 +185,7 @@ public enum SQLSafetyValidator {
             requiresConfirmation = true
         case .update:
             requiresConfirmation = !hasTopLevelWhere(stripped.text)
+                || hasTopLevelFrom(stripped.text)
         case .insert:
             requiresConfirmation = containsUpsertDoUpdate(tokens)
         case .read:
@@ -459,9 +460,18 @@ public enum SQLSafetyValidator {
     /// `hasTopLevelLimit`: a WHERE buried inside a subquery does not count, so
     /// an UPDATE whose only WHERE is in a sub-SELECT still requires confirmation.
     static func hasTopLevelWhere(_ strippedText: String) -> Bool {
+        hasTopLevelKeyword("WHERE", in: strippedText)
+    }
+
+    static func hasTopLevelFrom(_ strippedText: String) -> Bool {
+        hasTopLevelKeyword("FROM", in: strippedText)
+    }
+
+    private static func hasTopLevelKeyword(_ keyword: String, in strippedText: String) -> Bool {
         let chars = Array(strippedText)
         var depth = 0
         var i = 0
+        let target = keyword.uppercased()
 
         while i < chars.count {
             let char = chars[i]
@@ -471,7 +481,7 @@ public enum SQLSafetyValidator {
                     token.append(chars[i])
                     i += 1
                 }
-                if depth == 0, token.uppercased() == "WHERE" {
+                if depth == 0, token.uppercased() == target {
                     return true
                 }
                 continue
