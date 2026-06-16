@@ -20,7 +20,7 @@ public final class ChatViewModel {
         let trimmed = input.trimmingCharacters(in: .whitespacesAndNewlines)
         let identifier = #"(?:[A-Za-z_][A-Za-z0-9_$]*|"(?:""|[^"])+")"#
         let tableTarget = #"(?:\#(identifier)\.)?\#(identifier)"#
-        let trailingSQLTrivia = #"\s*(;)?\s*(?:(?:--[^\n\r]*)|(?:/\*(?:.|\n|\r)*?\*/))?\s*$"#
+        let trailingSQLTrivia = #"\s*(?:(?:--[^\n\r]*)|(?:/\*(?:.|\n|\r)*?\*/))?\s*;?\s*$"#
         let patterns = [
             #"^(select|with)\b"#,
             #"^insert\s+into\s+\#(tableTarget)\s*(\([^)]*\)\s*)?(default\s+values|values\s*\(|select\b|with\b)"#,

@@ -20,7 +20,8 @@ public enum SQLPromptBuilder {
         - Prefer a WHERE clause to scope UPDATE and DELETE statements; an UPDATE or DELETE without a WHERE affects every row in the table.
         - You may use RETURNING to show the affected rows.
         - Do not put INSERT, UPDATE, or DELETE inside a WITH/CTE; write a plain INSERT, UPDATE, or DELETE statement.
-        - Never generate MERGE, ALTER, DROP, CREATE, TRUNCATE, GRANT, REVOKE, CALL, DO, COPY, EXECUTE, PREPARE, VACUUM, ANALYZE, REINDEX, REFRESH, SET, RESET, BEGIN, COMMIT, or ROLLBACK.
+        - Never generate MERGE, ALTER, DROP, CREATE, TRUNCATE, GRANT, REVOKE, CALL, COPY, EXECUTE, PREPARE, VACUUM, ANALYZE, REINDEX, REFRESH, RESET, BEGIN, COMMIT, or ROLLBACK.
+        - Do not generate standalone SET or DO statements. SET may appear only as an UPDATE clause; DO may appear only as part of ON CONFLICT DO UPDATE or ON CONFLICT DO NOTHING.
         - Do not include semicolons.
         - Do not generate multiple statements.
         - Do not use tables or columns that are not present in the provided schema.

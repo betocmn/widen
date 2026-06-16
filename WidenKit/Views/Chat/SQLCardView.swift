@@ -80,7 +80,17 @@ struct SQLCardView: View {
     /// Title, button label, and body for the destructive-write confirmation,
     /// derived from the statement kind in one place.
     private var writeConfirmation: (title: String, action: String, message: String) {
-        switch controller.queryVM.validation?.kind {
+        Self.writeConfirmation(
+            validation: controller.queryVM.validation,
+            sql: controller.queryVM.sqlText
+        )
+    }
+
+    static func writeConfirmation(
+        validation: SQLValidationResult?,
+        sql: String
+    ) -> (title: String, action: String, message: String) {
+        switch validation?.kind {
         case .delete:
             return (
                 "Run this DELETE query?",
@@ -88,10 +98,25 @@ struct SQLCardView: View {
                 "This permanently deletes matching rows and cannot be undone."
             )
         case .update:
+            let stripped = SQLSafetyValidator.strip(sql).text
+            if !SQLSafetyValidator.hasTopLevelWhere(stripped) {
+                return (
+                    "Run this UPDATE without a WHERE clause?",
+                    "Update Every Row",
+                    "This UPDATE has no WHERE clause and changes every row in the table. This cannot be undone."
+                )
+            }
+            if SQLSafetyValidator.hasTopLevelFrom(stripped) {
+                return (
+                    "Run this UPDATE FROM query?",
+                    "Update Rows",
+                    "This UPDATE uses a FROM clause; if the join or filter is not scoped to the target table it can update more rows than intended. This cannot be undone."
+                )
+            }
             return (
-                "Run this UPDATE without a WHERE clause?",
-                "Update Every Row",
-                "This UPDATE has no WHERE clause and changes every row in the table. This cannot be undone."
+                "Run this UPDATE query?",
+                "Update Rows",
+                "This query modifies data and cannot be undone."
             )
         default:
             return (

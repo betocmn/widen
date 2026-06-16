@@ -90,7 +90,7 @@ public struct ChatMessage: Identifiable, Codable, Equatable, Sendable {
         case .read:
             text = "Returned \(rows)"
         case .insert:
-            text = "Inserted \(rows)"
+            text = summary.isUpsertDoUpdate ? "Affected \(rows)" : "Inserted \(rows)"
         case .update:
             text = "Updated \(rows)"
         case .delete:
@@ -101,5 +101,13 @@ public struct ChatMessage: Identifiable, Codable, Equatable, Sendable {
             text += " (truncated at row limit)"
         }
         return ChatMessage(role: .result, text: text, runSummary: summary)
+    }
+}
+
+extension ChatMessage.RunSummary {
+    fileprivate var isUpsertDoUpdate: Bool {
+        let stripped = SQLSafetyValidator.strip(sql).text
+        let tokens = SQLSafetyValidator.tokenize(stripped)
+        return SQLSafetyValidator.containsUpsertDoUpdate(tokens)
     }
 }
