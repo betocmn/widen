@@ -17,7 +17,7 @@ struct GeneralSettingsView: View {
                 .pickerStyle(.segmented)
             }
 
-            if let updater = appState.updaterControl {
+            if let updater = appState.updaterControl, updater.isConfigured {
                 Section("Updates") {
                     Toggle(
                         "Automatically check for updates",

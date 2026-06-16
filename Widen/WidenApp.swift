@@ -27,11 +27,17 @@ struct WidenApp: App {
                 // `.preferredColorScheme`, which leaves the window's materials
                 // and chrome out of sync with the content on a theme switch.
                 .onChange(of: appearanceRaw) { _, _ in appearance.apply() }
-                .onAppear { appState.updaterControl = updaterModel }
+                .onAppear {
+                    if updaterModel.isConfigured {
+                        appState.updaterControl = updaterModel
+                    }
+                }
         }
         .commands {
             CommandGroup(after: .appInfo) {
-                CheckForUpdatesView(updater: updaterModel)
+                if updaterModel.isConfigured {
+                    CheckForUpdatesView(updater: updaterModel)
+                }
             }
             CommandGroup(replacing: .newItem) {
                 Button("New Session") {

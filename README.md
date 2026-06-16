@@ -64,6 +64,21 @@ The committed `Widen.xcodeproj` is generated - edit `project.yml` and run
 project in Xcode directly, make sure it is **Xcode 26**, not an older default
 Xcode (older SDKs have no FoundationModels and a lower deployment target).
 
+## Release packaging
+
+Release packaging is prepared for Developer ID distribution. Debug stays ad-hoc
+signed for local development. The release script reads local signing, notarizing,
+bundle ID, and Sparkle values from environment variables or
+`.env.release.local`:
+
+```sh
+cp .env.release.example .env.release.local
+make release-mac
+```
+
+See [docs/release.md](docs/release.md) for the full signed DMG, Sparkle, and
+static website release runbook.
+
 For codebase onboarding and implementation details, see
 [docs/implementation-guide.md](docs/implementation-guide.md).
 

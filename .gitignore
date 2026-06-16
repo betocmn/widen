@@ -8,6 +8,15 @@ xcuserdata/
 *.xcuserstate
 *.xcscmblueprint
 
+# Local release credentials
+.env*
+!.env.example
+!.env.release.example
+.envrc
+*.p8
+sparkle_private_key.pem
+*-sparkle-private-key.pem
+
 # SwiftPM
 .swiftpm/
 
