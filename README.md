@@ -152,8 +152,8 @@ light/dark mode; pick "System" in Settings › General to follow macOS again.
 ## How a query runs
 
 1. You type into the composer: a plain-English question, or raw SQL
-   (statements starting with `SELECT`, `WITH`, `INSERT`, `UPDATE`, or `DELETE`
-   skip the model entirely).
+   (`SELECT`/`WITH` reads and SQL-shaped `INSERT INTO`, `UPDATE ... SET`, or
+   `DELETE FROM` writes skip the model entirely).
 2. For questions, Widen prompts the local model with the open schema's
    tables, columns, types, and foreign keys (system schemas excluded) plus
    the safety rules, and gets structured output back: SQL, explanation,

@@ -17,9 +17,18 @@ public final class ChatViewModel {
     /// comment is treated as natural language — the model path still produces
     /// runnable SQL for it.
     public static func isDirectSQL(_ input: String) -> Bool {
-        input
-            .trimmingCharacters(in: .whitespacesAndNewlines)
-            .range(of: #"^(?i)(select|with|insert|update|delete)\b"#, options: .regularExpression) != nil
+        let trimmed = input.trimmingCharacters(in: .whitespacesAndNewlines)
+        let patterns = [
+            #"^(?i)(select|with)\b"#,
+            #"^(?i)insert\s+into\s+\S+\s*(\([^)]*\)\s*)?(default\s+values|values\s*\(|select\b|with\b)"#,
+            #"^(?i)delete\s+from\s+(only\s+)?\S+\s*(;)?$"#,
+            #"^(?i)delete\s+from\s+(only\s+)?\S+\s+(where|using|returning)\b"#,
+            #"^(?i)delete\s+from\s+(only\s+)?\S+\s+(as\s+)?\S+\s+(where|using|returning)\b"#,
+            #"^(?i)update\s+(only\s+)?\S+(\s+(as\s+)?\S+)?\s+set\s+[^=]+="#,
+        ]
+        return patterns.contains { pattern in
+            trimmed.range(of: pattern, options: .regularExpression) != nil
+        }
     }
 
     /// Direct-SQL path: records the user's SQL in the transcript and loads it

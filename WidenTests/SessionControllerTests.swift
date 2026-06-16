@@ -628,6 +628,25 @@ struct SessionControllerTests {
         #expect(controller.queryVM.generation == nil)
     }
 
+    @Test func submitWithNaturalLanguageWriteUsesGenerator() async {
+        let connectionID = UUID()
+        let (state, dir) = makeState(connectionID: connectionID, connected: true)
+        defer { try? FileManager.default.removeItem(at: dir) }
+        state.schemas[connectionID] = makeSchema()
+        let generated = makeGeneration(sql: "UPDATE public.users SET id = 2 WHERE id = 1")
+        let generator = RecordingRepairGenerator(results: [generated])
+        state.sqlGeneratorOverride = generator
+        let controller = makeController(connectionID: connectionID)
+        controller.chatVM.input = "Update Alice's email to alice@example.com"
+
+        await controller.submit(appState: state)
+
+        #expect(generator.contexts.count == 1)
+        #expect(controller.chatVM.messages.map(\.role) == [.user, .assistant])
+        #expect(controller.queryVM.sqlText == generated.sql)
+        #expect(controller.queryVM.generation == generated)
+    }
+
     @Test func clearConversationCancelsActiveRunWithoutAppendingCompletion() async {
         let connectionID = UUID()
         let (state, dir) = makeState(connectionID: connectionID, connected: true)
