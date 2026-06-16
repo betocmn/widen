@@ -3,6 +3,20 @@
 This is the app release procedure for signed Developer ID builds, notarized
 DMGs, and Sparkle updates.
 
+## GitHub Manual Checkpoints
+
+Most release steps run locally. GitHub is only needed at these points:
+
+- App release PR: after committing the version bump, push the branch and open a
+  PR against `main` in `https://github.com/betocmn/widen`. Merge the PR before
+  publishing release artifacts.
+- GitHub Release: after the final app and DMG artifacts are locally verified,
+  create or update the release in `https://github.com/betocmn/widen/releases`.
+  Upload the DMG asset with the exact filename `Widen.dmg`.
+- Website repo PR or push: if `WEBSITE_REPO` is set, `make release-mac` stages
+  Sparkle files in that separate checkout. Commit and publish those changes
+  using that repo's normal GitHub flow.
+
 ## One-Time Local Setup
 
 1. Copy the release env template and fill it from your password manager:
@@ -80,14 +94,39 @@ DMGs, and Sparkle updates.
    make test
    ```
 
-3. Commit the version bump:
+3. Commit the version bump locally:
 
    ```sh
    git add project.yml Widen.xcodeproj Widen/Info.plist
    git commit -m "build: bump release version"
    ```
 
-4. Build, sign, notarize, package, and stage website files:
+4. Push the release branch and open a GitHub PR against `main`.
+
+   Manual GitHub action: open the PR in
+   `https://github.com/betocmn/widen/compare` and merge it after review and CI.
+   Equivalent CLI flow:
+
+   ```sh
+   git push -u origin HEAD
+   gh pr create --base main --fill
+   ```
+
+5. After the PR is merged, run the final release build from the merged `main`
+   commit.
+
+   In the root checkout, or any checkout that can use the `main` branch, run:
+
+   ```sh
+   git fetch origin
+   git switch main
+   git pull --ff-only origin main
+   ```
+
+   If `main` is already checked out in another worktree, use that checkout for
+   the final build instead of switching this workspace.
+
+6. Build, sign, notarize, package, and stage website files:
 
    ```sh
    make release-mac
@@ -104,7 +143,7 @@ DMGs, and Sparkle updates.
    - If `WEBSITE_REPO` is set, copies the ZIP to the website repo, regenerates
      `public/appcast.xml`, verifies the Sparkle signature, and runs the website build.
 
-5. Verify the app artifact:
+7. Verify the app artifact:
 
    ```sh
    codesign --verify --deep --strict --verbose=4 build/release/Build/Products/Release/Widen.app
@@ -112,7 +151,7 @@ DMGs, and Sparkle updates.
    spctl -a -vvv -t exec build/release/Build/Products/Release/Widen.app
    ```
 
-6. Verify the DMG:
+8. Verify the DMG:
 
    ```sh
    codesign --verify --verbose=4 build/release-artifacts/X.Y.Z/Widen.dmg
@@ -120,14 +159,21 @@ DMGs, and Sparkle updates.
    spctl -a -vvv -t open --context context:primary-signature build/release-artifacts/X.Y.Z/Widen.dmg
    ```
 
-7. Create or update the GitHub Release.
+9. Create or update the GitHub Release.
 
-   Upload the DMG asset with the exact filename `Widen.dmg`. The static website
-   CTA expects this conventional latest-release URL:
+   Manual GitHub action: go to
+   `https://github.com/betocmn/widen/releases/new`, create a tag such as
+   `vX.Y.Z` targeting the merged `main` commit, and upload
+   `build/release-artifacts/X.Y.Z/Widen.dmg` with the exact asset filename
+   `Widen.dmg`. The static website CTA expects this conventional latest-release
+   URL:
 
    ```text
-   https://github.com/<owner>/<repo>/releases/latest/download/Widen.dmg
+   https://github.com/betocmn/widen/releases/latest/download/Widen.dmg
    ```
+
+   If the release already exists, replace the `Widen.dmg` asset before
+   publishing or marking it as latest.
 
 ## Static Website Repo
 
@@ -146,6 +192,10 @@ git add public/appcast.xml public/releases/Widen-X.Y.Z.zip
 git commit -m "build: publish sparkle release"
 git push
 ```
+
+Manual GitHub action: if the website repo requires PRs, open and merge the
+website PR after pushing. If direct pushes deploy the site, confirm the
+deployment completed before announcing Sparkle updates.
 
 Update the website download metadata in `src/config/site.ts`:
 
