@@ -136,6 +136,64 @@ public actor PostgresService {
         }
     }
 
+    /// Executes a validated write (INSERT/UPDATE/DELETE) inside a read-write
+    /// transaction with a statement timeout, pinned to a single pooled
+    /// connection. Captures the affected-row count from the command tag and any
+    /// RETURNING rows. Rolls back on error so the pooled connection stays clean.
+    public func executeWrite(
+        sql: String,
+        timeoutSeconds: Int,
+        kind: SQLStatementKind
+    ) async throws -> QueryResult {
+        guard let client else { throw AppError.notConnected }
+        let logger = logger
+        let start = ContinuousClock.now
+        do {
+            return try await client.withConnection { connection in
+                try await connection.query("BEGIN", logger: logger)
+                do {
+                    // SET cannot take bind parameters; timeoutSeconds is
+                    // app-validated (1…120).
+                    try await connection.query(
+                        PostgresQuery(unsafeSQL: "SET LOCAL statement_timeout = \(timeoutSeconds * 1000)"),
+                        logger: logger
+                    )
+
+                    // The async `query` overload returns a row stream with no
+                    // command tag. Annotating the result as PostgresQueryResult
+                    // and calling `.get()` selects the EventLoopFuture overload,
+                    // which carries the affected-row count plus RETURNING rows.
+                    let writeResult: PostgresQueryResult =
+                        try await connection.query(PostgresQuery(unsafeSQL: sql), logger: logger).get()
+                    try await connection.query("COMMIT", logger: logger)
+
+                    let affected = writeResult.metadata.rows ?? 0
+                    let columns = writeResult.rows.first.map { row in
+                        row.map(\.columnName)
+                    } ?? []
+                    let rows: [[String?]] = writeResult.rows.map { row in
+                        row.map { PostgresCellFormatter.string(for: $0) }
+                    }
+                    let elapsed = start.duration(to: .now)
+                    return QueryResult(
+                        columns: columns,
+                        rows: rows,
+                        rowCount: affected,
+                        truncated: false,
+                        executionTimeMs: Int(elapsed / .milliseconds(1)),
+                        kind: kind
+                    )
+                } catch {
+                    // Leave the pooled connection in a clean state.
+                    try? await connection.query("ROLLBACK", logger: logger)
+                    throw error
+                }
+            }
+        } catch {
+            throw PostgresErrorMapper.map(error)
+        }
+    }
+
     // MARK: - Configuration
 
     static func makeLogger(label: String) -> Logger {

@@ -45,10 +45,14 @@ public final class QueryResultViewModel {
 
     /// Starts the query in a cancellable task. Cancellation only stops the app
     /// from waiting — the server-side guard is the statement timeout.
+    /// `confirmed` is true only when the user approved a destructive write
+    /// (DELETE, or UPDATE without WHERE) in the confirmation dialog. It is
+    /// passed straight to the write executor and ignored for reads.
     public func startRun(
         connection: DatabaseConnectionConfig?,
         postgres: PostgresService,
         isConnected: Bool,
+        confirmed: Bool = false,
         onFinish: RunCompletion? = nil
     ) {
         // The guard must precede storing the callback, so a rejected start
@@ -67,7 +71,7 @@ public final class QueryResultViewModel {
             await run(
                 sql: runSQL,
                 connection: connection, postgres: postgres,
-                isConnected: isConnected, runID: runID)
+                isConnected: isConnected, runID: runID, confirmed: confirmed)
         }
     }
 
@@ -167,6 +171,15 @@ public final class QueryResultViewModel {
                 errorMessage: AppError.validationFailed(validation.errors).localizedDescription
             )
         }
+        // Hard invariant: the auto-retry path never executes a write. If the
+        // model produced one, stop here so it never reaches the database.
+        guard !validation.kind.isWrite else {
+            return QueryExecutionAttempt(
+                result: nil,
+                errorMessage:
+                    "The model produced a data-modifying query, which is never run automatically. Press Run to execute it."
+            )
+        }
         guard isConnected, let config = connection else {
             return QueryExecutionAttempt(
                 result: nil,
@@ -215,7 +228,8 @@ public final class QueryResultViewModel {
         connection: DatabaseConnectionConfig?,
         postgres: PostgresService,
         isConnected: Bool,
-        runID: Int
+        runID: Int,
+        confirmed: Bool
     ) async {
         validation = SQLSafetyValidator.validate(sql)
         guard let validation, validation.isValid else {
@@ -235,11 +249,21 @@ public final class QueryResultViewModel {
         }
 
         do {
-            let newResult = try await executor.run(
-                sql: sql,
-                config: config,
-                postgres: postgres
-            )
+            // Writes run only through `runWrite`; the auto-retry loop never
+            // reaches this branch because it uses a separate hidden run path.
+            let newResult =
+                validation.kind.isWrite
+                ? try await executor.runWrite(
+                    sql: sql,
+                    config: config,
+                    postgres: postgres,
+                    confirmedDangerous: confirmed
+                )
+                : try await executor.run(
+                    sql: sql,
+                    config: config,
+                    postgres: postgres
+                )
             if isActiveRun(runID) {
                 result = newResult
             }
