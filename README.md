@@ -66,7 +66,10 @@ Xcode (older SDKs have no FoundationModels and a lower deployment target).
 For codebase onboarding and implementation details, see
 [docs/implementation-guide.md](docs/implementation-guide.md).
 
-## Sample test database
+## Sample database for exploring the app
+
+This is only for trying the app by hand — the integration tests (`make test-db`)
+provision and drop their own throwaway databases and do not need it.
 
 With Postgres.app running (its default server on `localhost:5432`):
 
@@ -114,9 +117,10 @@ macOS username, empty password (Postgres.app uses trust auth locally), SSL
 mode Disabled. Add as many databases as you like with the "+" button;
 deleting one warns you first — its sessions are deleted with it.
 
-> **Safety tip:** connect with a read-only Postgres user when using
-> AI-generated SQL. Widen enforces read-only execution itself, but defense in
-> depth is cheap.
+> **Safety tip:** Widen runs the SQL you approve, including writes — it never
+> auto-runs a write, and DELETE or UPDATE-without-WHERE asks you to confirm
+> first. If you only want reads, connect with a read-only Postgres user; defense
+> in depth is cheap.
 
 Non-secret connection settings are stored in
 `~/Library/Application Support/Widen/connections.json`; passwords are stored

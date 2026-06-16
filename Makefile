@@ -30,10 +30,12 @@ build:
 test:
 	$(XCODEBUILD) test
 
-## Run unit + Postgres integration tests against a local database
-## (requires a running local PostgreSQL and the widen_test sample database)
+## Run unit + Postgres integration tests against a local database.
+## Each test provisions and drops its own throwaway database, so this only
+## needs a reachable PostgreSQL whose role can CREATE DATABASE — no manual
+## seeding. Override host/port/user with WIDEN_TEST_{HOST,PORT,USER}.
 test-db:
-	TEST_RUNNER_WIDEN_TEST_DB=$${WIDEN_TEST_DB:-widen_test} $(XCODEBUILD) test
+	TEST_RUNNER_WIDEN_TEST_DB=$${WIDEN_TEST_DB:-1} $(XCODEBUILD) test
 
 ## Run unit + Foundation Models smoke tests (requires Apple Intelligence enabled)
 test-fm:
