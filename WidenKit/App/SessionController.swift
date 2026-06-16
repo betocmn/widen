@@ -83,20 +83,32 @@ public final class SessionController: Identifiable {
     /// outcome — row count or error, including the "stopped waiting"
     /// cancellation — is appended to the chat transcript so the history
     /// records every run; the latest result renders inline as a card.
-    public func runQuery(appState: AppState) {
+    /// `confirmed` is true only when the user approved a destructive write
+    /// (DELETE, or UPDATE without WHERE) in the Run confirmation dialog.
+    public func runQuery(appState: AppState, confirmed: Bool = false) {
         guard !queryVM.isRunning, !chatVM.isGenerating else { return }
         let sql = queryVM.sqlText
         let generation = queryVM.generation
+        let isWrite = SQLSafetyValidator.validate(sql).kind.isWrite
         queryVM.startRun(
             connection: appState.connection(for: connectionID),
             postgres: appState.postgres(for: connectionID),
-            isConnected: appState.connectionState(connectionID) == .connected
+            isConnected: appState.connectionState(connectionID) == .connected,
+            confirmed: confirmed
         ) { [weak self, weak appState] result, errorMessage in
             guard let self else { return }
             if let result {
                 self.appendRunResult(result, sql: sql)
             } else if let errorMessage {
-                if generation != nil,
+                if isWrite {
+                    // Writes never auto-retry: show the error immediately. When
+                    // the query was AI-generated, offer a one-shot "Try Again".
+                    if generation != nil {
+                        self.chatVM.appendWriteRunError(errorMessage, failedSQL: sql)
+                    } else {
+                        self.chatVM.appendRunError(errorMessage)
+                    }
+                } else if generation != nil,
                     Self.isRetryableGeneratedSQLError(errorMessage)
                 {
                     Task { [weak self, weak appState] in
@@ -117,6 +129,76 @@ public final class SessionController: Identifiable {
             }
             appState?.sessionDidChange(self.sessionID)
         }
+    }
+
+    /// One-shot "Try Again" for a failed write: asks the model to repair the
+    /// SQL and drops it into the editor WITHOUT executing. Writes never
+    /// auto-execute, so the user must press Run again (and confirm if
+    /// destructive). Each tap is a single regenerate — no retry loop.
+    public func retryFailedWrite(appState: AppState, failedSQL: String, error: String) async {
+        guard !queryVM.isRunning, !chatVM.isGenerating else { return }
+        guard let schema = appState.promptSchema(for: connectionID), !schema.tables.isEmpty else {
+            chatVM.appendRunError(
+                "I could not retry because the database schema is no longer available."
+            )
+            appState.sessionDidChange(sessionID)
+            return
+        }
+
+        let questionContext = questionContextForRepair(startingSQL: failedSQL)
+        let context = SQLGenerationContext(
+            recentQuestions: questionContext.recentQuestions,
+            currentSQL: failedSQL,
+            lastRunError: error
+        )
+        let connection = appState.connection(for: connectionID)
+        let config = SQLGenerationConfig(
+            defaultRowLimit: connection?.defaultRowLimit ?? 100,
+            databaseContext: connection?.databaseContext ?? ""
+        )
+
+        chatVM.beginGeneration(
+            status: "Asking \(appState.activeBackendDisplayName) to fix the query…"
+        )
+        appState.sessionDidChange(sessionID)
+        defer {
+            chatVM.finishGeneration()
+            appState.sessionDidChange(sessionID)
+        }
+
+        let generation: SQLGenerationResult
+        do {
+            generation = try await appState.sqlGenerator.generateSQL(
+                question: questionContext.question,
+                schema: schema,
+                context: context,
+                config: config
+            )
+        } catch {
+            chatVM.appendRunError(error.localizedDescription)
+            return
+        }
+
+        if generation.needsClarification,
+            let clarification = generation.clarificationQuestion,
+            !clarification.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+        {
+            chatVM.messages.append(
+                ChatMessage(role: .assistant, text: clarification, generation: generation)
+            )
+            return
+        }
+
+        let generatedSQL = generation.sql.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !generatedSQL.isEmpty else {
+            appendAssistantGeneration(generation)
+            return
+        }
+
+        // Fill the editor only. Execution still requires an explicit Run.
+        let visibleGeneration = generation.withSQL(generatedSQL)
+        appendAssistantGeneration(visibleGeneration)
+        queryVM.setGeneration(visibleGeneration)
     }
 
     /// Wipes the transcript, the SQL preview, and the per-run result cache.
@@ -423,9 +505,14 @@ public final class SessionController: Identifiable {
                 rowCount: result.rowCount,
                 executionTimeMs: result.executionTimeMs,
                 truncated: result.truncated,
-                sql: sql
+                sql: sql,
+                kind: result.kind
             ))
-        results[record.id] = result
+        // Writes without RETURNING rows have no table — the summary row records
+        // them. Reads (even empty) and writes with RETURNING get a results card.
+        if result.kind == .read || !result.rows.isEmpty {
+            results[record.id] = result
+        }
     }
 
     private func retryStatus(
