@@ -32,8 +32,7 @@ test:
 
 ## Run unit + Postgres integration tests against a local database.
 ## Each test provisions and drops its own throwaway database, so this only
-## needs a reachable PostgreSQL whose role can CREATE DATABASE — no manual
-## seeding. Override host/port/user with WIDEN_TEST_{HOST,PORT,USER}.
+## needs a local PostgreSQL whose role can CREATE DATABASE — no manual seeding.
 test-db:
 	TEST_RUNNER_WIDEN_TEST_DB=$${WIDEN_TEST_DB:-1} $(XCODEBUILD) test
 

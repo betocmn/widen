@@ -13,14 +13,13 @@ import Testing
 /// data, and drops it afterward, so the suite never shares state with a
 /// developer's manual-testing database (and cannot drift when that database is
 /// poked by hand). The only requirement is a reachable server whose role can
-/// CREATE DATABASE; connection details are overridable via WIDEN_TEST_HOST /
-/// WIDEN_TEST_PORT / WIDEN_TEST_USER.
+/// CREATE DATABASE on localhost:5432.
 private let integrationEnabled = ProcessInfo.processInfo.environment["WIDEN_TEST_DB"] != nil
 
 private enum IntegrationServer {
-    static let host = ProcessInfo.processInfo.environment["WIDEN_TEST_HOST"] ?? "localhost"
-    static let port = Int(ProcessInfo.processInfo.environment["WIDEN_TEST_PORT"] ?? "") ?? 5432
-    static let username = ProcessInfo.processInfo.environment["WIDEN_TEST_USER"] ?? NSUserName()
+    static let host = "localhost"
+    static let port = 5432
+    static let username = NSUserName()
     /// Always-present database, used only to issue CREATE/DROP DATABASE.
     static let maintenanceDatabase = "postgres"
 
