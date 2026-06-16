@@ -39,6 +39,33 @@ struct SessionControllerTests {
         }
     }
 
+    private struct SlowWriteExecutor: QueryExecuting {
+        func run(
+            sql: String,
+            config: DatabaseConnectionConfig,
+            postgres: PostgresService
+        ) async throws -> QueryResult {
+            throw AppError.executionFailed("read path used unexpectedly")
+        }
+
+        func runWrite(
+            sql: String,
+            config: DatabaseConnectionConfig,
+            postgres: PostgresService,
+            confirmedDangerous: Bool
+        ) async throws -> QueryResult {
+            try await Task.sleep(for: .seconds(30))
+            return QueryResult(
+                columns: [],
+                rows: [],
+                rowCount: 1,
+                truncated: false,
+                executionTimeMs: 1,
+                kind: .update
+            )
+        }
+    }
+
     private actor SQLRecorder {
         private var statements: [String] = []
 
@@ -719,6 +746,33 @@ struct SessionControllerTests {
         #expect(statements == ["WRITE:UPDATE public.users SET id = 2 WHERE id = 1"])
         #expect(generator.contexts.isEmpty)
         #expect(controller.chatVM.messages.last?.failedWriteSQL == writeGeneration.sql)
+    }
+
+    @Test func canceledGeneratedWriteDoesNotOfferTryAgain() async {
+        let connectionID = UUID()
+        let (state, dir) = makeState(connectionID: connectionID, connected: true)
+        defer { try? FileManager.default.removeItem(at: dir) }
+        let controller = makeController(
+            connectionID: connectionID,
+            executor: SlowWriteExecutor()
+        )
+        let writeGeneration = makeGeneration(sql: "UPDATE public.users SET id = 2 WHERE id = 1")
+        controller.chatVM.messages = [
+            ChatMessage(role: .user, text: "bump ids"),
+            ChatMessage(role: .assistant, text: writeGeneration.explanation, generation: writeGeneration),
+        ]
+        controller.queryVM.setGeneration(writeGeneration)
+
+        controller.runQuery(appState: state)
+        await waitUntil { controller.queryVM.isRunning }
+        controller.queryVM.cancelRun()
+        await waitUntil {
+            !controller.queryVM.isRunning
+                && controller.chatVM.messages.last?.role == .error
+        }
+
+        #expect(controller.chatVM.messages.last?.text.contains("Stopped waiting") == true)
+        #expect(controller.chatVM.messages.last?.failedWriteSQL == nil)
     }
 
     @Test func retryFailedWriteRegeneratesWithoutExecuting() async {

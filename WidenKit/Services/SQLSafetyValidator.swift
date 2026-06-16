@@ -185,7 +185,9 @@ public enum SQLSafetyValidator {
             requiresConfirmation = true
         case .update:
             requiresConfirmation = !hasTopLevelWhere(stripped.text)
-        case .read, .insert:
+        case .insert:
+            requiresConfirmation = containsUpsertDoUpdate(tokens)
+        case .read:
             requiresConfirmation = false
         }
 
@@ -480,6 +482,21 @@ public enum SQLSafetyValidator {
                 depth -= 1
             }
             i += 1
+        }
+        return false
+    }
+
+    static func containsUpsertDoUpdate(_ tokens: [String]) -> Bool {
+        guard let conflictIndex = tokens.firstIndex(of: "CONFLICT") else { return false }
+        var index = tokens.index(after: conflictIndex)
+        while index < tokens.endIndex {
+            if tokens[index] == "DO" {
+                let next = tokens.index(after: index)
+                if next < tokens.endIndex, tokens[next] == "UPDATE" {
+                    return true
+                }
+            }
+            index = tokens.index(after: index)
         }
         return false
     }

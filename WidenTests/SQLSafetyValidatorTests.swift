@@ -57,6 +57,23 @@ struct SQLSafetyValidatorTests {
         #expect(!result.requiresConfirmation)
     }
 
+    @Test func upsertDoUpdateRequiresConfirmation() {
+        let result = validate(
+            "INSERT INTO users (id, name) SELECT id, 'x' FROM staging ON CONFLICT (id) DO UPDATE SET name = excluded.name"
+        )
+        #expect(result.isValid)
+        #expect(result.kind == .insert)
+        #expect(result.requiresConfirmation)
+    }
+
+    @Test func upsertDoNothingDoesNotRequireConfirmation() {
+        let result = validate(
+            "INSERT INTO users (id, name) VALUES (1, 'x') ON CONFLICT (id) DO NOTHING")
+        #expect(result.isValid)
+        #expect(result.kind == .insert)
+        #expect(!result.requiresConfirmation)
+    }
+
     @Test func allowsUpdateWithWhereWithoutConfirmation() {
         let result = validate("UPDATE users SET email = 'x' WHERE id = 1")
         #expect(result.isValid)

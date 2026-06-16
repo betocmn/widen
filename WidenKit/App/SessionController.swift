@@ -105,7 +105,9 @@ public final class SessionController: Identifiable {
                 if isWrite {
                     // Writes never auto-retry: show the error immediately. When
                     // the query was AI-generated, offer a one-shot "Try Again".
-                    if generation != nil {
+                    if generation != nil,
+                        Self.isRetryableGeneratedSQLError(errorMessage)
+                    {
                         self.chatVM.appendWriteRunError(errorMessage, failedSQL: sql)
                     } else {
                         self.chatVM.appendRunError(errorMessage)
