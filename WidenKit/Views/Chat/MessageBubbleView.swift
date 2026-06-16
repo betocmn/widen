@@ -7,6 +7,9 @@ import SwiftUI
 /// the transcript too.)
 struct MessageBubbleView: View {
     let message: ChatMessage
+    /// Present on a failed-write error bubble: asks the model to repair the
+    /// query and refill the editor (without running it).
+    var onRetryWrite: (() -> Void)? = nil
 
     var body: some View {
         if message.role == .result {
@@ -63,6 +66,15 @@ struct MessageBubbleView: View {
                 Label("Needs clarification", systemImage: "questionmark.bubble")
                     .font(.caption2)
                     .foregroundStyle(.secondary)
+            }
+            if message.role == .error, let onRetryWrite {
+                Button("Try Again", systemImage: "arrow.clockwise") {
+                    onRetryWrite()
+                }
+                .buttonStyle(.bordered)
+                .controlSize(.small)
+                .hoverBrightness()
+                .padding(.top, 2)
             }
         }
         .padding(.horizontal, 10)

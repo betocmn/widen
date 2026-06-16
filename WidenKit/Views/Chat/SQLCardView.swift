@@ -14,6 +14,7 @@ struct SQLCardView: View {
     @Environment(AppState.self) private var appState
     let controller: SessionController
     var isAwaitingRun = true
+    @State private var showWriteConfirm = false
 
     var body: some View {
         VStack(alignment: .leading, spacing: 8) {
@@ -50,13 +51,56 @@ struct SQLCardView: View {
             Spacer()
             AnimatedCopyButton(text: controller.queryVM.sqlText, help: "Copy SQL")
             Button("Run") {
-                controller.runQuery(appState: appState)
+                if controller.queryVM.validation?.requiresConfirmation == true {
+                    showWriteConfirm = true
+                } else {
+                    controller.runQuery(appState: appState)
+                }
             }
             .buttonStyle(.glassProminent)
             .hoverBrightness()
             .keyboardShortcut(.return, modifiers: .command)
             .disabled(runDisabled)
             .help("Approve and execute this query")
+            .confirmationDialog(
+                confirmTitle,
+                isPresented: $showWriteConfirm,
+                titleVisibility: .visible
+            ) {
+                Button(confirmActionLabel, role: .destructive) {
+                    controller.runQuery(appState: appState, confirmed: true)
+                }
+                Button("Cancel", role: .cancel) {}
+            } message: {
+                Text(confirmMessage)
+            }
+        }
+    }
+
+    private var confirmTitle: String {
+        switch controller.queryVM.validation?.kind {
+        case .delete: return "Run this DELETE query?"
+        case .update: return "Run this UPDATE without a WHERE clause?"
+        default: return "Run this query?"
+        }
+    }
+
+    private var confirmActionLabel: String {
+        switch controller.queryVM.validation?.kind {
+        case .delete: return "Delete Rows"
+        case .update: return "Update Every Row"
+        default: return "Run Query"
+        }
+    }
+
+    private var confirmMessage: String {
+        switch controller.queryVM.validation?.kind {
+        case .delete:
+            return "This permanently deletes matching rows and cannot be undone."
+        case .update:
+            return "This UPDATE has no WHERE clause and changes every row in the table. This cannot be undone."
+        default:
+            return "This query modifies data and cannot be undone."
         }
     }
 

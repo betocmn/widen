@@ -222,7 +222,27 @@ struct ChatModeView: View {
                 StaticSQLCardView(sql: sql)
             }
         } else {
-            MessageBubbleView(message: message)
+            MessageBubbleView(message: message, onRetryWrite: retryWriteAction(for: message))
+        }
+    }
+
+    /// The newest failed-write error owns the "Try Again" button; older ones
+    /// drop it so the affordance always points at the current query.
+    private var lastWriteErrorID: UUID? {
+        controller.chatVM.messages.last(where: {
+            $0.role == .error && $0.failedWriteSQL != nil
+        })?.id
+    }
+
+    private func retryWriteAction(for message: ChatMessage) -> (() -> Void)? {
+        guard message.id == lastWriteErrorID, let failedSQL = message.failedWriteSQL else {
+            return nil
+        }
+        return {
+            Task {
+                await controller.retryFailedWrite(
+                    appState: appState, failedSQL: failedSQL, error: message.text)
+            }
         }
     }
 
