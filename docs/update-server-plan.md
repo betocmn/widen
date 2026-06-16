@@ -125,24 +125,9 @@ local development.
 
 ## 5. The release pipeline (per release)
 
-This is the bridge between the two repos. It can run as a local script or a GitHub Action
-(§7). Steps for version `X.Y.Z` (with build number `N`):
-
-1. **Bump version** in the Widen repo's `project.yml`
-   (`CFBundleShortVersionString: "X.Y.Z"`, `CFBundleVersion: "N"`), `make project`, commit, tag.
-2. **Build Release** with Developer ID signing (Xcode signs the app *and* Sparkle's embedded
-   XPC services / `Autoupdate` correctly when the identity is set in the build). The app repo
-   script runs the full local pipeline:
-   ```sh
-   make release-mac
-   ```
-   It builds with Xcode 26, notarizes and staples `Widen.app`, creates `Widen-X.Y.Z.zip`,
-   creates/signs/notarizes/staples `Widen.dmg`, copies the ZIP into
-   `$WEBSITE_REPO/public/releases/`, regenerates
-   `$WEBSITE_REPO/public/appcast.xml`, verifies the Sparkle signature, and runs
-   the website build.
-3. **Publish**: commit and deploy the website repo changes, then upload `Widen.dmg` to the
-   matching GitHub Release as exactly `Widen.dmg`.
+The release pipeline is documented in [release.md](release.md). That runbook
+covers version bumps, local signing environment, Developer ID notarization,
+Sparkle ZIP/appcast generation, DMG upload, and the static website repo update.
 
 ---
 

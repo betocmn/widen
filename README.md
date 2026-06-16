@@ -66,27 +66,17 @@ Xcode (older SDKs have no FoundationModels and a lower deployment target).
 ## Release packaging
 
 Release packaging is prepared for Developer ID distribution. Debug stays ad-hoc
-signed for local development. Before the first release, install a
-`Developer ID Application` certificate for your Apple Developer team and store
-notarization credentials in a local `notarytool` keychain profile. The release
-script reads local release values from environment variables or
-`.env.release.local`; start from the placeholder template:
+signed for local development. The release script reads local signing, notarizing,
+bundle ID, and Sparkle values from environment variables or
+`.env.release.local`:
 
 ```sh
 cp .env.release.example .env.release.local
-```
-
-```sh
 make release-mac
 ```
 
-This builds with `/Applications/Xcode-26.app`, notarizes and staples the app,
-creates `build/release-artifacts/<version>/Widen.dmg` for manual downloads, and
-creates `Widen-<version>.zip` for Sparkle. If `WEBSITE_REPO` points at the
-website checkout, the script also copies the ZIP into
-`public/releases/`, regenerates `public/appcast.xml`, verifies the Sparkle
-signature, and runs the website build. Upload the DMG to the GitHub Release as
-exactly `Widen.dmg` so the website CTA keeps working.
+See [docs/release.md](docs/release.md) for the full signed DMG, Sparkle, and
+static website release runbook.
 
 For codebase onboarding and implementation details, see
 [docs/implementation-guide.md](docs/implementation-guide.md).
