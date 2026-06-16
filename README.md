@@ -3,9 +3,9 @@
 Free, local and open-source Postgres GUI for your Mac, with natural language
 to SQL support — fully offline by default, with optional cloud pro models.
 
-Widen introspects your schema, drafts a read-only SQL query with **Apple's
-on-device Foundation Model**, shows you the SQL to review and edit, and runs
-it safely - all locally.
+Widen introspects your schema, drafts SQL with **Apple's on-device Foundation
+Model**, shows you the statement to review and edit, and runs it safely - all
+locally.
 
 - **Local by default.** No backend, no accounts, no analytics. Out of the box
   the only network connection is the PostgreSQL connection you configure.
@@ -14,10 +14,11 @@ it safely - all locally.
   a daily limit) or any model via your own **OpenRouter** API key. Configure
   in Settings › LLM; everything keeps working fully local if you never turn
   it on.
-- **Read-only by design.** Every statement (yours or the model's) goes through
-  a deterministic safety validator: single `SELECT`/`WITH` statements only,
-  executed inside a `READ ONLY` transaction with a statement timeout and a row
-  limit.
+- **Guarded execution.** Every statement (yours or the model's) goes through a
+  deterministic safety validator: single read statements or explicit
+  `INSERT`/`UPDATE`/`DELETE` writes only, with statement timeouts and row caps.
+  Widen never auto-runs writes, and asks for confirmation before `DELETE` or an
+  `UPDATE` without a `WHERE`.
 - **Private.** By default prompts go to Apple's local Foundation Model through
   macOS and your schema and queries never leave your machine. With a cloud pro
   model enabled, your questions and the relevant schema go to the provider you
@@ -151,19 +152,21 @@ light/dark mode; pick "System" in Settings › General to follow macOS again.
 ## How a query runs
 
 1. You type into the composer: a plain-English question, or raw SQL
-   (anything starting with `SELECT`/`WITH` skips the model entirely).
+   (statements starting with `SELECT`, `WITH`, `INSERT`, `UPDATE`, or `DELETE`
+   skip the model entirely).
 2. For questions, Widen prompts the local model with the open schema's
    tables, columns, types, and foreign keys (system schemas excluded) plus
    the safety rules, and gets structured output back: SQL, explanation,
    assumptions, referenced tables, confidence, and risk level.
-3. The SQL appears in the chat as a read-only dashed card, validated
-   deterministically: only a single `SELECT`/`WITH` statement, no
-   semicolons, no mutation/DDL/transaction keywords, no
-   `pg_sleep`/`dblink`/`lo_*`. Validation issues sit behind the card's
-   status icon. Keep chatting (or paste corrected SQL) until it's right.
-4. Run executes it in a `BEGIN READ ONLY` transaction with
-   `SET LOCAL statement_timeout` (default 10s). Queries without a `LIMIT` are
-   wrapped in a subquery with your default row limit (default 100).
+3. The SQL appears in the chat as a dashed card, validated deterministically:
+   only one read or `INSERT`/`UPDATE`/`DELETE` statement, no semicolons, no
+   DDL/transaction keywords, no `pg_sleep`/`dblink`/`lo_*`. Validation issues
+   sit behind the card's status icon. Keep chatting (or paste corrected SQL)
+   until it's right.
+4. Run executes reads in a `BEGIN READ ONLY` transaction and writes in a normal
+   transaction with `SET LOCAL statement_timeout` (default 10s). Read queries
+   without a `LIMIT` are wrapped in a subquery with your default row limit
+   (default 100).
 5. The results flow into the same chat thread: a bordered table card appears
    where the run happened (first 10 rows, "View more" for the rest), with
    Copy as CSV and Export CSV. Every run is recorded in the transcript, and

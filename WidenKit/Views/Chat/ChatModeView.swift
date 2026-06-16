@@ -130,7 +130,7 @@ struct ChatModeView: View {
                 Text("Ask your database anything")
                     .font(.title3)
                     .foregroundStyle(.secondary)
-                Text("Type a question in plain English, or paste a SELECT to run it as-is.")
+                Text("Type a question in plain English, or paste SQL to run it as-is.")
                     .font(.callout)
                     .foregroundStyle(.tertiary)
                     .multilineTextAlignment(.center)
@@ -199,7 +199,7 @@ struct ChatModeView: View {
     /// One chronological transcript entry: run records render their full
     /// results card while the result is in memory; the SQL-introducing
     /// messages carry their card right below the bubble — the newest one
-    /// runnable, earlier ones as permanent read-only records.
+    /// runnable, earlier ones as permanent static records.
     @ViewBuilder
     private func messageGroup(_ message: ChatMessage) -> some View {
         if message.role == .result, let result = controller.results[message.id] {
@@ -285,7 +285,7 @@ private enum SchemaStatus: Equatable {
         case .loading:
             return "Tables and columns are loading. Natural-language questions will be available once the schema is ready."
         case .missing:
-            return "Natural-language questions need table and column context. Direct SELECT queries can still be pasted and run."
+            return "Natural-language questions need table and column context. Direct SQL can still be pasted and run."
         case .connectionError(let message):
             return message
         }

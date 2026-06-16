@@ -612,6 +612,22 @@ struct SessionControllerTests {
         #expect(controller.queryVM.generation == nil)
     }
 
+    @Test func submitWithDirectWriteSQLSkipsGenerator() async {
+        let connectionID = UUID()
+        let (state, dir) = makeState(connectionID: connectionID, connected: true)
+        defer { try? FileManager.default.removeItem(at: dir) }
+        let controller = makeController(connectionID: connectionID)
+        controller.chatVM.input = "UPDATE public.users SET name = 'A' WHERE id = 1"
+
+        await controller.submit(appState: state)
+
+        #expect(controller.chatVM.messages.count == 1)
+        #expect(controller.chatVM.messages[0].role == .user)
+        #expect(controller.queryVM.sqlText == "UPDATE public.users SET name = 'A' WHERE id = 1")
+        #expect(controller.queryVM.validation?.kind == .update)
+        #expect(controller.queryVM.generation == nil)
+    }
+
     @Test func clearConversationCancelsActiveRunWithoutAppendingCompletion() async {
         let connectionID = UUID()
         let (state, dir) = makeState(connectionID: connectionID, connected: true)

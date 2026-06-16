@@ -2,9 +2,9 @@ import AppKit
 import SwiftUI
 
 /// The newest SQL, the only runnable one, rendered inline in the chat
-/// transcript. Read-only by design — the user refines it by chatting or by
-/// pasting new SQL into the composer. Validation issues and generation
-/// details appear on hover; referenced tables sit in a single caption row.
+/// transcript. The user refines it by chatting or by pasting new SQL into the
+/// composer. Validation issues and generation details appear on hover;
+/// referenced tables sit in a single caption row.
 ///
 /// Color system: the user owns blue, settled AI output is plain gray, and a
 /// muted green marks the single item awaiting attention. This card carries

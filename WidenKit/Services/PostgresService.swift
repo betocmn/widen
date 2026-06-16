@@ -165,31 +165,22 @@ public actor PostgresService {
                         logger: logger
                     )
 
-                    // The async `query` overload returns a row stream with no
-                    // command tag. Annotating the result as PostgresQueryResult
-                    // and calling `.get()` selects the EventLoopFuture overload,
-                    // which carries the affected-row count plus RETURNING rows.
-                    let writeResult: PostgresQueryResult =
-                        try await connection.query(PostgresQuery(unsafeSQL: sql), logger: logger).get()
+                    let accumulator = WriteResultAccumulator(rowLimit: rowLimit)
+                    let metadata = try await connection.query(
+                        PostgresQuery(unsafeSQL: sql),
+                        logger: logger
+                    ) { row in
+                        accumulator.record(row)
+                    }.get()
                     try await connection.query("COMMIT", logger: logger)
 
-                    let affected = writeResult.metadata.rows ?? 0
-                    let columns = writeResult.rows.first.map { row in
-                        row.map(\.columnName)
-                    } ?? []
-                    var rows: [[String?]] = writeResult.rows.map { row in
-                        row.map { PostgresCellFormatter.string(for: $0) }
-                    }
-                    let truncated = rows.count > rowLimit
-                    if truncated {
-                        rows = Array(rows.prefix(rowLimit))
-                    }
+                    let snapshot = accumulator.snapshot(affectedRows: metadata.rows)
                     let elapsed = start.duration(to: .now)
                     return QueryResult(
-                        columns: columns,
-                        rows: rows,
-                        rowCount: affected,
-                        truncated: truncated,
+                        columns: snapshot.columns,
+                        rows: snapshot.rows,
+                        rowCount: snapshot.rowCount,
+                        truncated: snapshot.truncated,
                         executionTimeMs: Int(elapsed / .milliseconds(1)),
                         kind: kind
                     )
@@ -345,6 +336,48 @@ public actor PostgresService {
         } onCancel: {
             state.complete(.failure(CancellationError()), cancelWorker: true)
         }
+    }
+}
+
+private final class WriteResultAccumulator: @unchecked Sendable {
+    private let rowLimit: Int
+    private let lock = NSLock()
+    private var columns: [String] = []
+    private var rows: [[String?]] = []
+    private var returnedRowCount = 0
+
+    init(rowLimit: Int) {
+        self.rowLimit = max(rowLimit, 0)
+    }
+
+    func record(_ row: PostgresRow) {
+        let rowColumns = row.map(\.columnName)
+        let displayRow = row.map { PostgresCellFormatter.string(for: $0) }
+
+        lock.lock()
+        defer { lock.unlock() }
+
+        returnedRowCount += 1
+        if columns.isEmpty {
+            columns = rowColumns
+        }
+        if rows.count <= rowLimit {
+            rows.append(displayRow)
+        }
+    }
+
+    func snapshot(affectedRows: Int?) -> (
+        columns: [String], rows: [[String?]], rowCount: Int, truncated: Bool
+    ) {
+        lock.lock()
+        defer { lock.unlock() }
+
+        return (
+            columns: columns,
+            rows: Array(rows.prefix(rowLimit)),
+            rowCount: affectedRows ?? returnedRowCount,
+            truncated: returnedRowCount > rowLimit
+        )
     }
 }
 
