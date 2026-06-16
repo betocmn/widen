@@ -100,10 +100,14 @@ struct SQLPromptBuilderTests {
 
     @Test func instructionsContainSafetyRulesAndRowLimit() {
         let instructions = SQLPromptBuilder.instructions(defaultRowLimit: 250)
-        #expect(instructions.contains("SELECT or WITH ... SELECT only"))
+        #expect(instructions.contains("SELECT, WITH ... SELECT, INSERT, UPDATE, or DELETE"))
+        #expect(instructions.contains("Only generate a write"))
         #expect(instructions.contains("Use a default LIMIT of 250."))
         #expect(instructions.contains("Database context"))
-        #expect(instructions.contains("Never generate INSERT, UPDATE, DELETE"))
+        #expect(instructions.contains("Never generate MERGE, ALTER, DROP"))
+        #expect(instructions.contains("Do not generate standalone SET or DO statements."))
+        #expect(instructions.contains("SET may appear only as an UPDATE clause"))
+        #expect(instructions.contains("ON CONFLICT DO UPDATE"))
         #expect(instructions.contains("Do not include semicolons."))
         #expect(instructions.contains("needsClarification"))
         #expect(instructions.contains("Use schema-qualified table names"))

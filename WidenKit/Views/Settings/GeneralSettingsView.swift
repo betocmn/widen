@@ -35,7 +35,7 @@ struct GeneralSettingsView: View {
 
             Section {
                 Label(
-                    "For safety, connect with a read-only Postgres user when using AI-generated SQL.",
+                    "If you only want reads, connect with a read-only Postgres user for defense in depth.",
                     systemImage: "lock.shield"
                 )
                 .font(.callout)

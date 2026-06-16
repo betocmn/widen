@@ -5,22 +5,29 @@ import Foundation
 public struct QueryResult: Equatable, Sendable {
     public var columns: [String]
     public var rows: [[String?]]
+    /// Rows returned for reads; rows *affected* for writes (which may exceed
+    /// `rows.count` when the write has no RETURNING clause).
     public var rowCount: Int
     public var truncated: Bool
     public var executionTimeMs: Int
+    /// What produced this result. Writes phrase their run record differently
+    /// and skip the empty results table when they return no rows.
+    public var kind: SQLStatementKind
 
     public init(
         columns: [String],
         rows: [[String?]],
         rowCount: Int,
         truncated: Bool,
-        executionTimeMs: Int
+        executionTimeMs: Int,
+        kind: SQLStatementKind = .read
     ) {
         self.columns = columns
         self.rows = rows
         self.rowCount = rowCount
         self.truncated = truncated
         self.executionTimeMs = executionTimeMs
+        self.kind = kind
     }
 
     /// RFC-4180-style CSV: fields containing commas, quotes, or newlines are

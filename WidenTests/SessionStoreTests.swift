@@ -181,6 +181,22 @@ struct ChatMessageCodableTests {
         #expect(message.text == "Returned 1 row in 7 ms")
     }
 
+    @Test func runRecordUsesAffectedTextForUpsertUpdates() {
+        let message = ChatMessage.runRecord(
+            ChatMessage.RunSummary(
+                rowCount: 2,
+                executionTimeMs: 15,
+                truncated: false,
+                sql: """
+                    INSERT INTO users (id, email) VALUES (1, 'a@example.com')
+                    ON CONFLICT (id) DO UPDATE SET email = EXCLUDED.email
+                    """,
+                kind: .insert
+            ))
+
+        #expect(message.text == "Affected 2 rows in 15 ms")
+    }
+
     @Test func legacyMessageWithoutRunSummaryDecodes() throws {
         // A pre-runSummary message as written by older builds.
         let legacy = """

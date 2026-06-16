@@ -181,7 +181,7 @@ struct QueryResultViewModelTests {
         await waitUntil { viewModel.result != nil && !viewModel.isRunning }
         #expect(viewModel.result != nil)
 
-        viewModel.sqlText = "DELETE FROM users"
+        viewModel.sqlText = "DROP TABLE users"
         viewModel.startRun(
             connection: DatabaseConnectionConfig(), postgres: postgres, isConnected: true)
         await waitUntil { !viewModel.isRunning }

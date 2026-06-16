@@ -136,7 +136,144 @@ public actor PostgresService {
         }
     }
 
+    /// Executes a validated write (INSERT/UPDATE/DELETE) inside a read-write
+    /// transaction with a statement timeout, pinned to a single pooled
+    /// connection. Captures the affected-row count from the command tag and any
+    /// RETURNING rows. Rolls back on error so the pooled connection stays clean.
+    ///
+    /// `rowCount` is the affected-row count. RETURNING rows are materialized for
+    /// display only up to `rowLimit` (with `truncated` set when more were
+    /// returned), so a `… RETURNING *` over a large table cannot flood the
+    /// transcript and UI — mirroring the read path's row cap.
+    public func executeWrite(
+        sql: String,
+        rowLimit: Int,
+        timeoutSeconds: Int,
+        kind: SQLStatementKind
+    ) async throws -> QueryResult {
+        guard let client else { throw AppError.notConnected }
+        let logger = logger
+        let start = ContinuousClock.now
+        do {
+            return try await client.withConnection { connection in
+                try await connection.query("BEGIN", logger: logger)
+                do {
+                    // SET cannot take bind parameters; timeoutSeconds is
+                    // app-validated (1…120).
+                    try await connection.query(
+                        PostgresQuery(unsafeSQL: "SET LOCAL statement_timeout = \(timeoutSeconds * 1000)"),
+                        logger: logger
+                    )
+
+                    let limitsReturningRows = Self.hasTopLevelReturning(sql)
+                    let executionSQL =
+                        limitsReturningRows
+                        ? Self.limitedReturningWriteSQL(sql: sql, rowLimit: rowLimit)
+                        : sql
+                    let accumulator = WriteResultAccumulator(
+                        rowLimit: rowLimit,
+                        capturesLimitedReturning: limitsReturningRows
+                    )
+                    let metadata = try await connection.query(
+                        PostgresQuery(unsafeSQL: executionSQL),
+                        logger: logger
+                    ) { row in
+                        accumulator.record(row)
+                    }.get()
+                    try await connection.query("COMMIT", logger: logger)
+
+                    let snapshot = accumulator.snapshot(
+                        commandRows: limitsReturningRows ? nil : metadata.rows)
+                    let elapsed = start.duration(to: .now)
+                    return QueryResult(
+                        columns: snapshot.columns,
+                        rows: snapshot.rows,
+                        rowCount: snapshot.rowCount,
+                        truncated: snapshot.truncated,
+                        executionTimeMs: Int(elapsed / .milliseconds(1)),
+                        kind: kind
+                    )
+                } catch {
+                    // Leave the pooled connection in a clean state.
+                    try? await connection.query("ROLLBACK", logger: logger)
+                    throw error
+                }
+            }
+        } catch {
+            throw PostgresErrorMapper.map(error)
+        }
+    }
+
     // MARK: - Configuration
+
+    private static let returningRowNumberColumn = "__widen_returning_row_number"
+    private static let returningAffectedRowsColumn = "__widen_affected_rows"
+
+    private static func limitedReturningWriteSQL(sql: String, rowLimit: Int) -> String {
+        let writeSQL = sqlWithoutTrailingTerminator(sql)
+        let streamLimit = max(rowLimit, 0) + 1
+        return """
+            WITH "__widen_write" AS (
+            \(writeSQL)
+            ),
+            "__widen_count" AS (
+              SELECT count(*)::bigint AS "\(returningAffectedRowsColumn)" FROM "__widen_write"
+            ),
+            "__widen_limited" AS (
+              SELECT row_number() OVER () AS "\(returningRowNumberColumn)", "__widen_write".*
+              FROM "__widen_write"
+              LIMIT \(streamLimit)
+            )
+            SELECT "__widen_limited".*, "__widen_count"."\(returningAffectedRowsColumn)"
+            FROM "__widen_count"
+            LEFT JOIN "__widen_limited" ON true
+            """
+    }
+
+    private static func sqlWithoutTrailingTerminator(_ sql: String) -> String {
+        var trimmed = sql.trimmingCharacters(in: .whitespacesAndNewlines)
+        if trimmed.hasSuffix(";") {
+            trimmed = String(trimmed.dropLast()).trimmingCharacters(in: .whitespacesAndNewlines)
+        }
+        return trimmed
+    }
+
+    private static func hasTopLevelReturning(_ sql: String) -> Bool {
+        let stripped = SQLSafetyValidator.strip(sql).text
+        let chars = Array(stripped)
+        var depth = 0
+        var i = 0
+
+        while i < chars.count {
+            let char = chars[i]
+            if isWordStart(char) {
+                var token = ""
+                while i < chars.count, isWordPart(chars[i], tokenStarted: !token.isEmpty) {
+                    token.append(chars[i])
+                    i += 1
+                }
+                if depth == 0, token.uppercased() == "RETURNING" {
+                    return true
+                }
+                continue
+            }
+            if char == "(" {
+                depth += 1
+            } else if char == ")", depth > 0 {
+                depth -= 1
+            }
+            i += 1
+        }
+        return false
+    }
+
+    private static func isWordStart(_ char: Character) -> Bool {
+        char.isLetter || char == "_"
+    }
+
+    private static func isWordPart(_ char: Character, tokenStarted: Bool) -> Bool {
+        char.isLetter || char == "_" || (tokenStarted && (char.isNumber || char == "$"))
+    }
 
     static func makeLogger(label: String) -> Logger {
         var logger = Logger(label: label)
@@ -277,6 +414,83 @@ public actor PostgresService {
         } onCancel: {
             state.complete(.failure(CancellationError()), cancelWorker: true)
         }
+    }
+}
+
+private final class WriteResultAccumulator: @unchecked Sendable {
+    private let rowLimit: Int
+    private let capturesLimitedReturning: Bool
+    private let lock = NSLock()
+    private var columns: [String] = []
+    private var rows: [[String?]] = []
+    private var returnedRowCount = 0
+    private var affectedRows: Int?
+
+    init(rowLimit: Int, capturesLimitedReturning: Bool = false) {
+        self.rowLimit = max(rowLimit, 0)
+        self.capturesLimitedReturning = capturesLimitedReturning
+    }
+
+    func record(_ row: PostgresRow) {
+        lock.lock()
+        defer { lock.unlock() }
+
+        if capturesLimitedReturning {
+            recordLimitedReturning(row)
+            return
+        }
+
+        returnedRowCount += 1
+        if columns.isEmpty {
+            columns = row.map(\.columnName)
+        }
+        if rows.count < rowLimit {
+            rows.append(row.map { PostgresCellFormatter.string(for: $0) })
+        }
+    }
+
+    private func recordLimitedReturning(_ row: PostgresRow) {
+        let randomAccess = row.makeRandomAccess()
+        let columnNames = row.map(\.columnName)
+        guard randomAccess.count >= 2 else { return }
+
+        if columns.isEmpty {
+            columns = Array(columnNames.dropFirst().dropLast())
+        }
+        if affectedRows == nil {
+            let affectedRowsValue = PostgresCellFormatter.string(
+                for: randomAccess[randomAccess.count - 1])
+            affectedRows = affectedRowsValue.flatMap(Int.init)
+        }
+
+        let rowNumber = PostgresCellFormatter.string(for: randomAccess[0])
+        guard rowNumber != nil else { return }
+
+        returnedRowCount += 1
+        if rows.count < rowLimit {
+            rows.append(
+                (1..<(randomAccess.count - 1)).map {
+                    PostgresCellFormatter.string(for: randomAccess[$0])
+                }
+            )
+        }
+    }
+
+    func snapshot(commandRows: Int?) -> (
+        columns: [String], rows: [[String?]], rowCount: Int, truncated: Bool
+    ) {
+        lock.lock()
+        defer { lock.unlock() }
+
+        let effectiveRowCount = affectedRows ?? commandRows ?? returnedRowCount
+        return (
+            columns: columns,
+            rows: Array(rows.prefix(rowLimit)),
+            rowCount: effectiveRowCount,
+            truncated: capturesLimitedReturning
+                ? effectiveRowCount > rowLimit
+                : returnedRowCount > rowLimit
+        )
     }
 }
 

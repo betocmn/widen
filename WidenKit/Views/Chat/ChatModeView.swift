@@ -130,7 +130,7 @@ struct ChatModeView: View {
                 Text("Ask your database anything")
                     .font(.title3)
                     .foregroundStyle(.secondary)
-                Text("Type a question in plain English, or paste a SELECT to run it as-is.")
+                Text("Type a question in plain English, or paste SQL to run it as-is.")
                     .font(.callout)
                     .foregroundStyle(.tertiary)
                     .multilineTextAlignment(.center)
@@ -162,11 +162,13 @@ struct ChatModeView: View {
                     if controller.queryVM.isRunning {
                         HStack(spacing: 8) {
                             LoadingView(label: "Running query…")
-                            Button("Stop waiting") {
-                                controller.queryVM.cancelRun()
+                            if controller.queryVM.canStopWaiting {
+                                Button("Stop waiting") {
+                                    controller.queryVM.cancelRun()
+                                }
+                                .controlSize(.small)
+                                .hoverBrightness()
                             }
-                            .controlSize(.small)
-                            .hoverBrightness()
                         }
                         .id(Self.runningID)
                     }
@@ -199,7 +201,7 @@ struct ChatModeView: View {
     /// One chronological transcript entry: run records render their full
     /// results card while the result is in memory; the SQL-introducing
     /// messages carry their card right below the bubble — the newest one
-    /// runnable, earlier ones as permanent read-only records.
+    /// runnable, earlier ones as permanent static records.
     @ViewBuilder
     private func messageGroup(_ message: ChatMessage) -> some View {
         if message.role == .result, let result = controller.results[message.id] {
@@ -222,7 +224,30 @@ struct ChatModeView: View {
                 StaticSQLCardView(sql: sql)
             }
         } else {
-            MessageBubbleView(message: message)
+            MessageBubbleView(message: message, onRetryWrite: retryWriteAction(for: message))
+        }
+    }
+
+    /// Only a failed-write error that is the newest message owns the "Try Again"
+    /// button. Once a retry appends a new generation (or the session is reopened
+    /// onto later history), the affordance retires — it always points at the
+    /// query the user is currently looking at, and the lookup stays O(1).
+    private var lastWriteErrorID: UUID? {
+        guard let last = controller.chatVM.messages.last,
+            last.role == .error, last.failedWriteSQL != nil
+        else { return nil }
+        return last.id
+    }
+
+    private func retryWriteAction(for message: ChatMessage) -> (() -> Void)? {
+        guard message.id == lastWriteErrorID, let failedSQL = message.failedWriteSQL else {
+            return nil
+        }
+        return {
+            Task {
+                await controller.retryFailedWrite(
+                    appState: appState, failedSQL: failedSQL, error: message.text)
+            }
         }
     }
 
@@ -262,7 +287,7 @@ private enum SchemaStatus: Equatable {
         case .loading:
             return "Tables and columns are loading. Natural-language questions will be available once the schema is ready."
         case .missing:
-            return "Natural-language questions need table and column context. Direct SELECT queries can still be pasted and run."
+            return "Natural-language questions need table and column context. Direct SQL can still be pasted and run."
         case .connectionError(let message):
             return message
         }

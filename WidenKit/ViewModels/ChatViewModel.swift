@@ -11,14 +11,26 @@ public final class ChatViewModel {
 
     public init() {}
 
-    /// True when the trimmed input reads as raw SQL: a leading SELECT or
-    /// WITH word. Word-boundary match, so "SELECTED users last week" is
-    /// natural language. SQL that opens with a comment is treated as natural
-    /// language — the model path still produces runnable SQL for it.
+    /// True when the trimmed input reads as raw SQL: one of the statement
+    /// kinds the validator can run directly. Word-boundary match, so
+    /// "SELECTED users last week" is natural language. SQL that opens with a
+    /// comment is treated as natural language — the model path still produces
+    /// runnable SQL for it.
     public static func isDirectSQL(_ input: String) -> Bool {
-        input
-            .trimmingCharacters(in: .whitespacesAndNewlines)
-            .range(of: #"^(?i)(select|with)\b"#, options: .regularExpression) != nil
+        let trimmed = input.trimmingCharacters(in: .whitespacesAndNewlines)
+        let identifier = #"(?:[A-Za-z_][A-Za-z0-9_$]*|"(?:""|[^"])+")"#
+        let tableTarget = #"(?:\#(identifier)\.)?\#(identifier)"#
+        let trailingSQLTrivia = #"\s*(?:(?:--[^\n\r]*)|(?:/\*(?:.|\n|\r)*?\*/))?\s*;?\s*$"#
+        let patterns = [
+            #"^(select|with)\b"#,
+            #"^insert\s+into\s+\#(tableTarget)\s*(\([^)]*\)\s*)?(default\s+values|values\s*\(|select\b|with\b)"#,
+            #"^delete\s+from\s+(only\s+)?\#(tableTarget)(\s+(as\s+)?\#(identifier))?\#(trailingSQLTrivia)"#,
+            #"^delete\s+from\s+(only\s+)?\#(tableTarget)(\s+(as\s+)?\#(identifier))?\s+(where|using|returning)\b"#,
+            #"^update\s+(only\s+)?\#(tableTarget)(\s+(as\s+)?\#(identifier))?\s+set\s+[^=]+="#,
+        ]
+        return patterns.contains { pattern in
+            trimmed.range(of: pattern, options: [.regularExpression, .caseInsensitive]) != nil
+        }
     }
 
     /// Direct-SQL path: records the user's SQL in the transcript and loads it
@@ -42,6 +54,13 @@ public final class ChatViewModel {
 
     func appendRunError(_ message: String) {
         messages.append(ChatMessage(role: .error, text: message))
+    }
+
+    /// Records a failed write run. `failedSQL` lets the transcript offer a
+    /// "Try Again" button that asks the model to repair the query without
+    /// executing it — writes never auto-retry.
+    func appendWriteRunError(_ message: String, failedSQL: String) {
+        messages.append(ChatMessage(role: .error, text: message, failedWriteSQL: failedSQL))
     }
 
     func beginGeneration(status: String? = nil) {

@@ -5,11 +5,11 @@
 
     /// Structured output schema for the on-device model. Mirrors
     /// `SQLGenerationResult`, with guides keeping the model inside the rails.
-    @Generable(description: "A single safe read-only PostgreSQL query answering the user's question.")
+    @Generable(description: "A single safe PostgreSQL statement answering the user's question.")
     struct GeneratedSQLResponse {
         @Guide(
             description:
-                "Exactly one PostgreSQL SELECT or WITH ... SELECT statement. No semicolons, no data modification, only tables and columns from the provided schema.")
+                "Exactly one PostgreSQL statement: a SELECT/WITH read, or an INSERT/UPDATE/DELETE write only when the user asks to modify data. No semicolons, no DDL, only tables and columns from the provided schema.")
         var sql: String
 
         @Guide(description: "One or two sentences explaining what the query does.")

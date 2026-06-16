@@ -211,6 +211,23 @@ struct ChatViewModelTests {
         ("  SELECT id\nFROM users", true),
         ("WITH x AS (SELECT 1) SELECT * FROM x", true),
         ("with totals as (select 1) select * from totals", true),
+        ("INSERT INTO users (email) VALUES ('a@example.com')", true),
+        ("INSERT INTO users DEFAULT VALUES", true),
+        ("INSERT INTO users VALUES (1, 'a@example.com')", true),
+        (#"INSERT INTO "Sales Data"."Q1 Orders" (id) VALUES (1)"#, true),
+        ("update users set name = 'A' where id = 1", true),
+        (#"update "Sales Data"."Q1 Orders" set status = 'paid' where id = 1"#, true),
+        ("DELETE FROM users WHERE id = 1", true),
+        ("DELETE FROM users", true),
+        ("DELETE FROM users -- cleanup", true),
+        ("DELETE FROM users /* cleanup */;", true),
+        ("DELETE FROM users; /* cleanup */", false),
+        (#"DELETE FROM "Sales Data"."Q1 Orders" WHERE id = 1"#, true),
+        ("Insert a new user named Alice", false),
+        ("Insert into the users table a new Alice", false),
+        ("Update Alice's email to alice@example.com", false),
+        ("Delete duplicate users", false),
+        ("Delete from the users table", false),
         ("SELECTED users last week", false),
         ("show me users", false),
         ("Withdrawals by month", false),
@@ -219,6 +236,31 @@ struct ChatViewModelTests {
     ])
     func directSQLDetection(input: String, expected: Bool) {
         #expect(ChatViewModel.isDirectSQL(input) == expected)
+    }
+
+    @Test func updateFromConfirmationMentionsFromClauseRisk() {
+        let sql = "UPDATE users SET email = staging.email FROM staging WHERE staging.ready"
+        let confirmation = SQLCardView.writeConfirmation(
+            validation: SQLSafetyValidator.validate(sql),
+            sql: sql
+        )
+
+        #expect(confirmation.title == "Run this UPDATE FROM query?")
+        #expect(confirmation.action == "Update Rows")
+        #expect(confirmation.message.contains("FROM clause"))
+        #expect(!confirmation.message.contains("no WHERE"))
+    }
+
+    @Test func updateWithoutWhereConfirmationStillWarnsEveryRow() {
+        let sql = "UPDATE users SET email = 'x'"
+        let confirmation = SQLCardView.writeConfirmation(
+            validation: SQLSafetyValidator.validate(sql),
+            sql: sql
+        )
+
+        #expect(confirmation.title == "Run this UPDATE without a WHERE clause?")
+        #expect(confirmation.action == "Update Every Row")
+        #expect(confirmation.message.contains("no WHERE clause"))
     }
 
     @Test func submitDirectSQLRecordsUserMessageAndFillsPreview() {

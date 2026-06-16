@@ -2,9 +2,9 @@ import AppKit
 import SwiftUI
 
 /// The newest SQL, the only runnable one, rendered inline in the chat
-/// transcript. Read-only by design — the user refines it by chatting or by
-/// pasting new SQL into the composer. Validation issues and generation
-/// details appear on hover; referenced tables sit in a single caption row.
+/// transcript. The user refines it by chatting or by pasting new SQL into the
+/// composer. Validation issues and generation details appear on hover;
+/// referenced tables sit in a single caption row.
 ///
 /// Color system: the user owns blue, settled AI output is plain gray, and a
 /// muted green marks the single item awaiting attention. This card carries
@@ -14,6 +14,7 @@ struct SQLCardView: View {
     @Environment(AppState.self) private var appState
     let controller: SessionController
     var isAwaitingRun = true
+    @State private var showWriteConfirm = false
 
     var body: some View {
         VStack(alignment: .leading, spacing: 8) {
@@ -50,13 +51,79 @@ struct SQLCardView: View {
             Spacer()
             AnimatedCopyButton(text: controller.queryVM.sqlText, help: "Copy SQL")
             Button("Run") {
-                controller.runQuery(appState: appState)
+                if controller.queryVM.validation?.requiresConfirmation == true {
+                    showWriteConfirm = true
+                } else {
+                    controller.runQuery(appState: appState)
+                }
             }
             .buttonStyle(.glassProminent)
             .hoverBrightness()
             .keyboardShortcut(.return, modifiers: .command)
             .disabled(runDisabled)
             .help("Approve and execute this query")
+            .confirmationDialog(
+                writeConfirmation.title,
+                isPresented: $showWriteConfirm,
+                titleVisibility: .visible
+            ) {
+                Button(writeConfirmation.action, role: .destructive) {
+                    controller.runQuery(appState: appState, confirmed: true)
+                }
+                Button("Cancel", role: .cancel) {}
+            } message: {
+                Text(writeConfirmation.message)
+            }
+        }
+    }
+
+    /// Title, button label, and body for the destructive-write confirmation,
+    /// derived from the statement kind in one place.
+    private var writeConfirmation: (title: String, action: String, message: String) {
+        Self.writeConfirmation(
+            validation: controller.queryVM.validation,
+            sql: controller.queryVM.sqlText
+        )
+    }
+
+    static func writeConfirmation(
+        validation: SQLValidationResult?,
+        sql: String
+    ) -> (title: String, action: String, message: String) {
+        switch validation?.kind {
+        case .delete:
+            return (
+                "Run this DELETE query?",
+                "Delete Rows",
+                "This permanently deletes matching rows and cannot be undone."
+            )
+        case .update:
+            let stripped = SQLSafetyValidator.strip(sql).text
+            if !SQLSafetyValidator.hasTopLevelWhere(stripped) {
+                return (
+                    "Run this UPDATE without a WHERE clause?",
+                    "Update Every Row",
+                    "This UPDATE has no WHERE clause and changes every row in the table. This cannot be undone."
+                )
+            }
+            if SQLSafetyValidator.hasTopLevelFrom(stripped) {
+                return (
+                    "Run this UPDATE FROM query?",
+                    "Update Rows",
+                    "This UPDATE uses a FROM clause; if the join or filter is not scoped to the target table it can update more rows than intended. This cannot be undone."
+                )
+            }
+            return (
+                "Run this UPDATE query?",
+                "Update Rows",
+                "This query modifies data and cannot be undone."
+            )
+        default:
+            return (
+                "Run this query?",
+                "Run Query",
+                "This query modifies data and cannot be undone."
+            )
         }
     }
 

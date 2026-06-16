@@ -39,6 +39,33 @@ struct SessionControllerTests {
         }
     }
 
+    private struct SlowWriteExecutor: QueryExecuting {
+        func run(
+            sql: String,
+            config: DatabaseConnectionConfig,
+            postgres: PostgresService
+        ) async throws -> QueryResult {
+            throw AppError.executionFailed("read path used unexpectedly")
+        }
+
+        func runWrite(
+            sql: String,
+            config: DatabaseConnectionConfig,
+            postgres: PostgresService,
+            confirmedDangerous: Bool
+        ) async throws -> QueryResult {
+            try await Task.sleep(for: .milliseconds(100))
+            return QueryResult(
+                columns: [],
+                rows: [],
+                rowCount: 1,
+                truncated: false,
+                executionTimeMs: 1,
+                kind: .update
+            )
+        }
+    }
+
     private actor SQLRecorder {
         private var statements: [String] = []
 
@@ -83,6 +110,32 @@ struct SessionControllerTests {
         ) async throws -> QueryResult {
             await recorder.record(sql)
             throw AppError.executionFailed(#"relation "public.bad_table" does not exist"#)
+        }
+    }
+
+    /// Records whether the read or write path was used, and always fails — so
+    /// tests can assert which executor method ran without a real database.
+    private struct FailingWriteExecutor: QueryExecuting {
+        let recorder: SQLRecorder
+
+        func run(
+            sql: String,
+            config: DatabaseConnectionConfig,
+            postgres: PostgresService
+        ) async throws -> QueryResult {
+            await recorder.record("READ:\(sql)")
+            throw AppError.executionFailed("read path used unexpectedly")
+        }
+
+        func runWrite(
+            sql: String,
+            config: DatabaseConnectionConfig,
+            postgres: PostgresService,
+            confirmedDangerous: Bool
+        ) async throws -> QueryResult {
+            await recorder.record("WRITE:\(sql)")
+            throw AppError.executionFailed(
+                #"null value in column "x" violates not-null constraint"#)
         }
     }
 
@@ -586,6 +639,41 @@ struct SessionControllerTests {
         #expect(controller.queryVM.generation == nil)
     }
 
+    @Test func submitWithDirectWriteSQLSkipsGenerator() async {
+        let connectionID = UUID()
+        let (state, dir) = makeState(connectionID: connectionID, connected: true)
+        defer { try? FileManager.default.removeItem(at: dir) }
+        let controller = makeController(connectionID: connectionID)
+        controller.chatVM.input = "UPDATE public.users SET name = 'A' WHERE id = 1"
+
+        await controller.submit(appState: state)
+
+        #expect(controller.chatVM.messages.count == 1)
+        #expect(controller.chatVM.messages[0].role == .user)
+        #expect(controller.queryVM.sqlText == "UPDATE public.users SET name = 'A' WHERE id = 1")
+        #expect(controller.queryVM.validation?.kind == .update)
+        #expect(controller.queryVM.generation == nil)
+    }
+
+    @Test func submitWithNaturalLanguageWriteUsesGenerator() async {
+        let connectionID = UUID()
+        let (state, dir) = makeState(connectionID: connectionID, connected: true)
+        defer { try? FileManager.default.removeItem(at: dir) }
+        state.schemas[connectionID] = makeSchema()
+        let generated = makeGeneration(sql: "UPDATE public.users SET id = 2 WHERE id = 1")
+        let generator = RecordingRepairGenerator(results: [generated])
+        state.sqlGeneratorOverride = generator
+        let controller = makeController(connectionID: connectionID)
+        controller.chatVM.input = "Update Alice's email to alice@example.com"
+
+        await controller.submit(appState: state)
+
+        #expect(generator.contexts.count == 1)
+        #expect(controller.chatVM.messages.map(\.role) == [.user, .assistant])
+        #expect(controller.queryVM.sqlText == generated.sql)
+        #expect(controller.queryVM.generation == generated)
+    }
+
     @Test func clearConversationCancelsActiveRunWithoutAppendingCompletion() async {
         let connectionID = UUID()
         let (state, dir) = makeState(connectionID: connectionID, connected: true)
@@ -623,6 +711,154 @@ struct SessionControllerTests {
         #expect(controller.chatVM.messages.isEmpty)
 
         controller.queryVM.cancelRun()
+    }
+
+    @Test func writeRunErrorDoesNotAutoRetryAndOffersTryAgain() async {
+        let connectionID = UUID()
+        let (state, dir) = makeState(connectionID: connectionID, connected: true)
+        defer { try? FileManager.default.removeItem(at: dir) }
+        state.schemas[connectionID] = makeSchema()
+        // The generator would only be consulted by an auto-retry, which writes
+        // must never trigger.
+        let generator = RecordingRepairGenerator(
+            results: [makeGeneration(sql: "UPDATE public.users SET id = 3 WHERE id = 1")])
+        state.sqlGeneratorOverride = generator
+        let recorder = SQLRecorder()
+        let controller = makeController(
+            connectionID: connectionID,
+            executor: FailingWriteExecutor(recorder: recorder)
+        )
+        let writeGeneration = makeGeneration(sql: "UPDATE public.users SET id = 2 WHERE id = 1")
+        controller.chatVM.messages = [
+            ChatMessage(role: .user, text: "bump ids"),
+            ChatMessage(role: .assistant, text: writeGeneration.explanation, generation: writeGeneration),
+        ]
+        controller.queryVM.setGeneration(writeGeneration)
+
+        controller.runQuery(appState: state)
+        await waitUntil {
+            !controller.queryVM.isRunning
+                && !controller.chatVM.isGenerating
+                && controller.chatVM.messages.last?.role == .error
+        }
+
+        let statements = await recorder.all()
+        #expect(statements == ["WRITE:UPDATE public.users SET id = 2 WHERE id = 1"])
+        #expect(generator.contexts.isEmpty)
+        #expect(controller.chatVM.messages.last?.failedWriteSQL == writeGeneration.sql)
+    }
+
+    @Test func generatedWriteIgnoresStopWaitingUntilServerFinishes() async {
+        let connectionID = UUID()
+        let (state, dir) = makeState(connectionID: connectionID, connected: true)
+        defer { try? FileManager.default.removeItem(at: dir) }
+        let controller = makeController(
+            connectionID: connectionID,
+            executor: SlowWriteExecutor()
+        )
+        let writeGeneration = makeGeneration(sql: "UPDATE public.users SET id = 2 WHERE id = 1")
+        controller.chatVM.messages = [
+            ChatMessage(role: .user, text: "bump ids"),
+            ChatMessage(role: .assistant, text: writeGeneration.explanation, generation: writeGeneration),
+        ]
+        controller.queryVM.setGeneration(writeGeneration)
+
+        controller.runQuery(appState: state)
+        await waitUntil { controller.queryVM.isRunning && !controller.queryVM.canStopWaiting }
+        controller.queryVM.cancelRun()
+        #expect(controller.queryVM.isRunning)
+        #expect(controller.chatVM.messages.last?.role == .assistant)
+
+        await waitUntil {
+            !controller.queryVM.isRunning
+                && controller.chatVM.messages.last?.role == .result
+        }
+
+        #expect(controller.chatVM.messages.last?.failedWriteSQL == nil)
+    }
+
+    @Test func retryFailedWriteRegeneratesWithoutExecuting() async {
+        let connectionID = UUID()
+        let (state, dir) = makeState(connectionID: connectionID, connected: true)
+        defer { try? FileManager.default.removeItem(at: dir) }
+        state.schemas[connectionID] = makeSchema()
+        let fixed = makeGeneration(
+            sql: "UPDATE public.users SET id = 2 WHERE id = 1", explanation: "Fixed it.")
+        let generator = RecordingRepairGenerator(results: [fixed])
+        state.sqlGeneratorOverride = generator
+        let recorder = SQLRecorder()
+        let controller = makeController(
+            connectionID: connectionID,
+            executor: FailingWriteExecutor(recorder: recorder)
+        )
+        controller.chatVM.messages = [ChatMessage(role: .user, text: "bump ids")]
+
+        await controller.retryFailedWrite(
+            appState: state, failedSQL: "UPDATE public.users SET id = 9", error: "boom")
+
+        let statements = await recorder.all()
+        #expect(statements.isEmpty)
+        #expect(generator.contexts.count == 1)
+        #expect(generator.contexts[0].currentSQL == "UPDATE public.users SET id = 9")
+        #expect(generator.contexts[0].lastRunError == "boom")
+        #expect(controller.queryVM.sqlText == fixed.sql)
+        #expect(controller.chatVM.messages.last?.role == .assistant)
+    }
+
+    @Test func autoRetryRefusesAGeneratedWrite() async {
+        let connectionID = UUID()
+        let (state, dir) = makeState(connectionID: connectionID, connected: true)
+        defer { try? FileManager.default.removeItem(at: dir) }
+        state.schemas[connectionID] = makeSchema()
+        let badRead = makeGeneration(sql: "SELECT id FROM public.bad_table")
+        let writeAttempt = makeGeneration(sql: "DELETE FROM public.users WHERE id = 1")
+        let generator = RecordingRepairGenerator(results: [writeAttempt])
+        state.sqlGeneratorOverride = generator
+        let recorder = SQLRecorder()
+        let controller = makeController(
+            connectionID: connectionID,
+            executor: BadTableExecutor(recorder: recorder)
+        )
+        controller.chatVM.messages = [
+            ChatMessage(role: .user, text: "show users"),
+            ChatMessage(role: .assistant, text: badRead.explanation, generation: badRead),
+        ]
+        controller.queryVM.setGeneration(badRead)
+
+        controller.runQuery(appState: state)
+        await waitUntil {
+            !controller.queryVM.isRunning
+                && !controller.chatVM.isGenerating
+                && controller.chatVM.messages.last?.role == .error
+        }
+
+        // Only the initial failing read reached the executor. The generated
+        // DELETE was refused by the auto-retry guard, never executed, and
+        // never became the active runnable SQL.
+        let statements = await recorder.all()
+        #expect(statements == [badRead.sql])
+        #expect(!statements.contains { $0.contains("DELETE") })
+        #expect(generator.contexts.count == 1)
+        #expect(controller.queryVM.sqlText == badRead.sql)
+        #expect(controller.queryVM.generation?.sql == badRead.sql)
+        #expect(controller.chatVM.messages.last?.text.contains("data-modifying query") == true)
+    }
+
+    @Test func runSummaryDecodesLegacyJSONWithoutKindAsRead() throws {
+        let legacy = #"{"rowCount":3,"executionTimeMs":12,"truncated":false,"sql":"SELECT 1"}"#
+        let summary = try JSONDecoder().decode(
+            ChatMessage.RunSummary.self, from: Data(legacy.utf8))
+        #expect(summary.kind == .read)
+        #expect(summary.rowCount == 3)
+    }
+
+    @Test func runSummaryRoundTripsWriteKind() throws {
+        let summary = ChatMessage.RunSummary(
+            rowCount: 5, executionTimeMs: 9, truncated: false, sql: "DELETE FROM t", kind: .delete)
+        let data = try JSONEncoder().encode(summary)
+        let decoded = try JSONDecoder().decode(ChatMessage.RunSummary.self, from: data)
+        #expect(decoded == summary)
+        #expect(decoded.kind == .delete)
     }
 
     private func waitUntil(_ condition: @MainActor @escaping () -> Bool) async {
