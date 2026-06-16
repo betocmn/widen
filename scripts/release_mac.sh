@@ -92,10 +92,8 @@ resign_sparkle_helpers() {
 need codesign
 need ditto
 need hdiutil
-need npm
 need security
 need spctl
-need xmllint
 need xcodebuild
 need xcodegen
 need xcrun
@@ -174,8 +172,11 @@ plist_value SUFeedURL "$APP_PATH/Contents/Info.plist" >/dev/null ||
   die "built app is missing SUFeedURL"
 plist_value SUPublicEDKey "$APP_PATH/Contents/Info.plist" >/dev/null ||
   die "built app is missing SUPublicEDKey"
-[ "$(plist_value SUPublicEDKey "$APP_PATH/Contents/Info.plist")" != "\$(SPARKLE_PUBLIC_ED_KEY)" ] ||
+BUILT_SPARKLE_PUBLIC_ED_KEY="$(plist_value SUPublicEDKey "$APP_PATH/Contents/Info.plist")"
+[ "$BUILT_SPARKLE_PUBLIC_ED_KEY" != "\$(SPARKLE_PUBLIC_ED_KEY)" ] ||
   die "built app has unresolved SPARKLE_PUBLIC_ED_KEY"
+[ "$BUILT_SPARKLE_PUBLIC_ED_KEY" = "$SPARKLE_PUBLIC_ED_KEY" ] ||
+  die "built app SUPublicEDKey does not match SPARKLE_PUBLIC_ED_KEY"
 plist_value CFBundleShortVersionString "$APP_PATH/Contents/Info.plist" >/dev/null ||
   die "built app is missing CFBundleShortVersionString"
 plist_value CFBundleVersion "$APP_PATH/Contents/Info.plist" >/dev/null ||
@@ -208,6 +209,9 @@ xcrun stapler validate "$DMG_PATH"
 spctl -a -vvv -t open --context context:primary-signature "$DMG_PATH"
 
 if [ -n "$WEBSITE_REPO" ]; then
+  need npm
+  need xmllint
+
   [ -d "$WEBSITE_REPO" ] || die "WEBSITE_REPO does not exist: $WEBSITE_REPO"
   [ -d "$WEBSITE_REPO/public/releases" ] ||
     die "WEBSITE_REPO is missing public/releases: $WEBSITE_REPO"
