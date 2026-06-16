@@ -32,19 +32,87 @@ struct SQLSafetyValidatorTests {
     // MARK: - Rejected (roadmap list)
 
     @Test(arguments: [
-        "DELETE FROM users",
         "DROP TABLE users",
         "SELECT 1; DELETE FROM users",
-        "UPDATE users SET email = 'x'",
         "COPY users TO PROGRAM 'rm -rf /'",
         "CALL dangerous_function()",
         "DO $$ BEGIN PERFORM 1; END $$",
         "SELECT pg_sleep(100)",
+        "ALTER TABLE users ADD COLUMN x int",
+        "TRUNCATE users",
+        "CREATE TABLE t (id int)",
     ])
-    func rejectsMutatingOrDangerousSQL(sql: String) {
+    func rejectsDDLOrDangerousSQL(sql: String) {
         let result = validate(sql)
         #expect(!result.isValid, "expected rejection for: \(sql)")
         #expect(result.normalizedSQL == nil)
+    }
+
+    // MARK: - Writes (INSERT / UPDATE / DELETE)
+
+    @Test func allowsInsertWithoutConfirmation() {
+        let result = validate("INSERT INTO users (id, email) VALUES (1, 'a@b.com')")
+        #expect(result.isValid)
+        #expect(result.kind == .insert)
+        #expect(!result.requiresConfirmation)
+    }
+
+    @Test func allowsUpdateWithWhereWithoutConfirmation() {
+        let result = validate("UPDATE users SET email = 'x' WHERE id = 1")
+        #expect(result.isValid)
+        #expect(result.kind == .update)
+        #expect(!result.requiresConfirmation)
+    }
+
+    @Test func updateWithoutWhereRequiresConfirmation() {
+        let result = validate("UPDATE users SET email = 'x'")
+        #expect(result.isValid)
+        #expect(result.kind == .update)
+        #expect(result.requiresConfirmation)
+    }
+
+    @Test func updateWithWhereOnlyInSubqueryStillRequiresConfirmation() {
+        // The only WHERE is inside a sub-SELECT, so no rows are scoped at the
+        // top level — confirmation is still required.
+        let result = validate(
+            "UPDATE users SET email = (SELECT email FROM staging WHERE id = 1)")
+        #expect(result.isValid)
+        #expect(result.kind == .update)
+        #expect(result.requiresConfirmation)
+    }
+
+    @Test func allowsDeleteWithWhereButRequiresConfirmation() {
+        let result = validate("DELETE FROM users WHERE id = 1")
+        #expect(result.isValid)
+        #expect(result.kind == .delete)
+        #expect(result.requiresConfirmation)
+    }
+
+    @Test func deleteWithoutWhereRequiresConfirmation() {
+        let result = validate("DELETE FROM users")
+        #expect(result.isValid)
+        #expect(result.kind == .delete)
+        #expect(result.requiresConfirmation)
+    }
+
+    @Test func allowsWriteWithReturning() {
+        let result = validate("INSERT INTO users (id) VALUES (1) RETURNING id")
+        #expect(result.isValid)
+        #expect(result.kind == .insert)
+    }
+
+    @Test func selectClassifiesAsReadAndNeverConfirms() {
+        let result = validate("SELECT id FROM users WHERE id = 1 LIMIT 1")
+        #expect(result.isValid)
+        #expect(result.kind == .read)
+        #expect(!result.requiresConfirmation)
+    }
+
+    @Test func rejectsCTELedWrite() {
+        // A data-modifying statement led by WITH is unsupported in v1.
+        let result = validate("WITH x AS (SELECT 1) DELETE FROM users WHERE id = 1")
+        #expect(!result.isValid)
+        #expect(result.errors.contains { $0.contains("Data-modifying") })
     }
 
     @Test func rejectsEmptyAndWhitespaceOnlySQL() {
@@ -56,7 +124,7 @@ struct SQLSafetyValidatorTests {
     @Test func rejectsNonSelectFirstKeyword() {
         let result = validate("EXPLAIN SELECT 1")
         #expect(!result.isValid)
-        #expect(result.errors.contains { $0.contains("Only SELECT or WITH") })
+        #expect(result.errors.contains { $0.contains("Only SELECT, WITH, INSERT, UPDATE, or DELETE") })
     }
 
     @Test func rejectsMultipleStatements() {

@@ -241,16 +241,18 @@ struct QueryExecutionIntegrationTests {
         #expect(result.csv() == "id,email")
     }
 
-    @Test func mutatingSQLIsBlockedBeforeReachingTheServer() async throws {
+    @Test func writeSQLIsRefusedOnTheReadPath() async throws {
         let config = makeConfig()
         try await withService(config: config) { service in
             do {
+                // `run` is the path the auto-retry loop uses; it must refuse
+                // writes before they reach the server.
                 _ = try await QueryExecutionService().run(
                     sql: "DELETE FROM users", config: config, postgres: service)
-                Issue.record("Expected validation to fail")
+                Issue.record("Expected the read path to refuse the write")
             } catch let error as AppError {
-                guard case .validationFailed = error else {
-                    Issue.record("Expected validationFailed, got \(error)")
+                guard case .executionFailed = error else {
+                    Issue.record("Expected executionFailed, got \(error)")
                     return
                 }
             }
@@ -259,6 +261,63 @@ struct QueryExecutionIntegrationTests {
                 try row["n"].decode(Int64.self)
             }
             #expect(counts == [3])
+        }
+    }
+
+    @Test func executesWritesReportsAffectedRowsAndCommits() async throws {
+        let config = makeConfig()
+        let table = "widen_write_test"
+        try await withService(config: config) { service in
+            _ = try await service.query("DROP TABLE IF EXISTS \(table)") { _ in 0 }
+            _ = try await service.query(
+                "CREATE TABLE \(table) (id int primary key, label text)") { _ in 0 }
+
+            // INSERT … RETURNING: rowCount is the affected count; columns/rows
+            // carry the RETURNING projection.
+            let insert = try await QueryExecutionService().runWrite(
+                sql: "INSERT INTO \(table) (id, label) VALUES (1, 'a'), (2, 'b') RETURNING id",
+                config: config, postgres: service, confirmedDangerous: false)
+            #expect(insert.kind == .insert)
+            #expect(insert.rowCount == 2)
+            #expect(insert.columns == ["id"])
+            #expect(insert.rows.count == 2)
+
+            // UPDATE with a WHERE runs without confirmation and reports affected
+            // rows with no RETURNING projection.
+            let update = try await QueryExecutionService().runWrite(
+                sql: "UPDATE \(table) SET label = 'x' WHERE id = 1",
+                config: config, postgres: service, confirmedDangerous: false)
+            #expect(update.kind == .update)
+            #expect(update.rowCount == 1)
+            #expect(update.rows.isEmpty)
+
+            // A DELETE requires confirmation: unconfirmed is refused.
+            do {
+                _ = try await QueryExecutionService().runWrite(
+                    sql: "DELETE FROM \(table) WHERE id = 2",
+                    config: config, postgres: service, confirmedDangerous: false)
+                Issue.record("Expected the unconfirmed DELETE to be refused")
+            } catch let error as AppError {
+                guard case .executionFailed = error else {
+                    Issue.record("Expected executionFailed, got \(error)")
+                    return
+                }
+            }
+
+            // Confirmed DELETE runs and commits.
+            let delete = try await QueryExecutionService().runWrite(
+                sql: "DELETE FROM \(table) WHERE id = 2",
+                config: config, postgres: service, confirmedDangerous: true)
+            #expect(delete.kind == .delete)
+            #expect(delete.rowCount == 1)
+
+            // The writes committed: id 2 is gone, id 1 remains.
+            let counts = try await service.query("SELECT count(*) AS n FROM \(table)") { row in
+                try row["n"].decode(Int64.self)
+            }
+            #expect(counts == [1])
+
+            _ = try await service.query("DROP TABLE IF EXISTS \(table)") { _ in 0 }
         }
     }
 

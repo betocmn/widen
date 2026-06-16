@@ -137,7 +137,13 @@ public enum SQLSafetyValidator {
 
         var reported: Set<String> = []
         for token in tokens {
-            if forbiddenKeywords.contains(token), reported.insert(token).inserted {
+            // Forbidden command keywords are only dangerous as a leading
+            // statement, which the first-token check already rejects. Inside a
+            // write they are legitimate clause keywords (UPDATE … SET …,
+            // INSERT … ON CONFLICT DO UPDATE), so only scan reads for them.
+            if kind == .read, forbiddenKeywords.contains(token),
+                reported.insert(token).inserted
+            {
                 errors.append("Forbidden keyword: \(token).")
             }
             if forbiddenFunctions.contains(token), reported.insert(token).inserted {
