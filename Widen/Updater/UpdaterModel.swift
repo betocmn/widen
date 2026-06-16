@@ -16,18 +16,24 @@ final class UpdaterModel: UpdaterControlling {
     /// the Settings button as it flips.
     private(set) var canCheckForUpdates = false
 
-    private let controller: SPUStandardUpdaterController
+    private let controller: SPUStandardUpdaterController?
     @ObservationIgnored private var canCheckObserver: AnyCancellable?
 
     init() {
+        guard Self.hasUsableSparkleConfiguration else {
+            controller = nil
+            return
+        }
+
         // startingUpdater: true launches the scheduled checker; the standard
         // user driver supplies Sparkle's built-in UI — the "new version
         // available" panel, download progress, and the relaunch prompt.
-        controller = SPUStandardUpdaterController(
+        let controller = SPUStandardUpdaterController(
             startingUpdater: true,
             updaterDelegate: nil,
             userDriverDelegate: nil
         )
+        self.controller = controller
         canCheckObserver = controller.updater
             .publisher(for: \.canCheckForUpdates)
             .receive(on: RunLoop.main)
@@ -40,12 +46,23 @@ final class UpdaterModel: UpdaterControlling {
     }
 
     var automaticallyChecksForUpdates: Bool {
-        get { controller.updater.automaticallyChecksForUpdates }
-        set { controller.updater.automaticallyChecksForUpdates = newValue }
+        get { controller?.updater.automaticallyChecksForUpdates ?? false }
+        set { controller?.updater.automaticallyChecksForUpdates = newValue }
     }
 
     func checkForUpdates() {
-        controller.updater.checkForUpdates()
+        controller?.updater.checkForUpdates()
+    }
+
+    private static var hasUsableSparkleConfiguration: Bool {
+        let info = Bundle.main.infoDictionary
+        return hasResolvedInfoValue(info?["SUFeedURL"])
+            && hasResolvedInfoValue(info?["SUPublicEDKey"])
+    }
+
+    private static func hasResolvedInfoValue(_ value: Any?) -> Bool {
+        guard let string = value as? String else { return false }
+        return !string.isEmpty && !string.contains("$(")
     }
 }
 

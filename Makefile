@@ -12,7 +12,7 @@ XCODEBUILD := xcodebuild -project Widen.xcodeproj -scheme Widen -configuration D
 
 APP := build/Build/Products/Debug/Widen.app
 
-.PHONY: project build test test-db test-fm setup run run-conductor xcode clean
+.PHONY: project build test test-db test-fm setup run run-conductor release-mac xcode clean
 
 ## Regenerate Widen.xcodeproj from project.yml
 project:
@@ -46,6 +46,10 @@ run: build
 ## Build and launch the app, blocking until it quits (for Conductor run tab)
 run-conductor: build
 	open -W -n $(APP)
+
+## Build, notarize, package, and stage a Developer ID macOS release
+release-mac: project
+	./scripts/release_mac.sh
 
 ## Open the project in Xcode 26
 xcode:
