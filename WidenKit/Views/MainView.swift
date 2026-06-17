@@ -87,7 +87,7 @@ public struct MainView: View {
         // can exceed the screen; macOS 26 then keeps the content laid out
         // wider than the clamped window and the panes clip their leading
         // and trailing edges.
-        .frame(minWidth: 900, idealWidth: 1100, minHeight: 560, idealHeight: 700)
+        .frame(minWidth: 920, idealWidth: 1100, minHeight: 560, idealHeight: 700)
         .task {
             await appState.onLaunch()
         }
