@@ -3,19 +3,23 @@
 This is the app release procedure for signed Developer ID builds, notarized
 DMGs, and Sparkle updates.
 
-## GitHub Manual Checkpoints
+## Automated Release Overview
 
-Most release steps run locally. GitHub is only needed at these points:
+Normal releases use one command with the target version as an argument:
 
-- App release PR: after committing the version bump, push the branch and open a
-  PR against `main` in `https://github.com/betocmn/widen`. Merge the PR before
-  publishing release artifacts.
-- GitHub Release: after the final app and DMG artifacts are locally verified,
-  create or update the release in `https://github.com/betocmn/widen/releases`.
-  Upload the DMG asset with the exact filename `Widen.dmg`.
-- Website repo PR or push: if `WEBSITE_REPO` is set, `make release-mac` stages
-  Sparkle files in that separate checkout. Commit and publish those changes
-  using that repo's normal GitHub flow.
+```sh
+scripts/publish_release.sh 0.1.0
+```
+
+The script:
+
+- Updates release version files and commits the bump when needed.
+- Runs tests, builds, signs, notarizes, staples, and packages the app.
+- Fast-forwards local `main`, pushes `main`, creates tag `vX.Y.Z`, and pushes
+  the tag.
+- Creates a draft GitHub Release in `https://github.com/betocmn/widen` with the
+  DMG uploaded as the exact asset name `Widen.dmg`.
+- Leaves website/appcast publishing manual and prints the follow-up commands.
 
 ## One-Time Local Setup
 
@@ -78,111 +82,82 @@ Most release steps run locally. GitHub is only needed at these points:
 
 ## Per-Release Steps
 
-1. Choose the app version and build number.
-
-   For version `X.Y.Z` and build `N`, update `project.yml` in both places:
-
-   - `CFBundleShortVersionString: "X.Y.Z"`
-   - `CFBundleVersion: "N"`
-   - `MARKETING_VERSION: "X.Y.Z"`
-   - `CURRENT_PROJECT_VERSION: "N"`
-
-2. Regenerate the Xcode project and run tests:
-
-   ```sh
-   make project
-   make test
-   ```
-
-3. Commit the version bump locally:
-
-   ```sh
-   git add project.yml Widen.xcodeproj Widen/Info.plist
-   git commit -m "build: bump release version"
-   ```
-
-4. Push the release branch and open a GitHub PR against `main`.
-
-   Manual GitHub action: open the PR in
-   `https://github.com/betocmn/widen/compare` and merge it after review and CI.
-   Equivalent CLI flow:
-
-   ```sh
-   git push -u origin HEAD
-   gh pr create --base main --fill
-   ```
-
-5. After the PR is merged, run the final release build from the merged `main`
-   commit.
-
-   In the root checkout, or any checkout that can use the `main` branch, run:
+1. Start a fresh release worktree from `origin/main`:
 
    ```sh
    git fetch origin
-   git switch main
-   git pull --ff-only origin main
+   git worktree add ../release-X.Y.Z -b release/X.Y.Z origin/main
+   cd ../release-X.Y.Z
    ```
 
-   If `main` is already checked out in another worktree, use that checkout for
-   the final build instead of switching this workspace.
-
-6. Build, sign, notarize, package, and stage website files:
+2. Run the release command with the target version:
 
    ```sh
-   make release-mac
+   scripts/publish_release.sh X.Y.Z
    ```
 
-   The script:
-
-   - Builds Release with Xcode 26.
-   - Injects `TEAM_ID`, `BUNDLE_ID_PREFIX`, and `SPARKLE_PUBLIC_ED_KEY` from local env.
-   - Re-signs Sparkle helper bundles for Developer ID distribution.
-   - Notarizes and staples `Widen.app`.
-   - Creates `build/release-artifacts/X.Y.Z/Widen-X.Y.Z.zip` for Sparkle.
-   - Creates, signs, notarizes, and staples `build/release-artifacts/X.Y.Z/Widen.dmg`.
-   - If `WEBSITE_REPO` is set, copies the ZIP to the website repo, regenerates
-     `public/appcast.xml`, verifies the Sparkle signature, and runs the website build.
-
-7. Verify the app artifact:
+   Equivalent Makefile form:
 
    ```sh
-   codesign --verify --deep --strict --verbose=4 build/release/Build/Products/Release/Widen.app
-   xcrun stapler validate build/release/Build/Products/Release/Widen.app
-   spctl -a -vvv -t exec build/release/Build/Products/Release/Widen.app
+   make release VERSION=X.Y.Z
    ```
 
-8. Verify the DMG:
+   Optional flags:
 
    ```sh
-   codesign --verify --verbose=4 build/release-artifacts/X.Y.Z/Widen.dmg
-   xcrun stapler validate build/release-artifacts/X.Y.Z/Widen.dmg
-   spctl -a -vvv -t open --context context:primary-signature build/release-artifacts/X.Y.Z/Widen.dmg
+   scripts/publish_release.sh X.Y.Z --build N
+   scripts/publish_release.sh X.Y.Z --dry-run
+   scripts/publish_release.sh X.Y.Z --no-open
    ```
 
-9. Create or update the GitHub Release.
+   Build number behavior:
 
-   Manual GitHub action: go to
-   `https://github.com/betocmn/widen/releases/new`, create a tag such as
-   `vX.Y.Z` targeting the merged `main` commit, and upload
-   `build/release-artifacts/X.Y.Z/Widen.dmg` with the exact asset filename
-   `Widen.dmg`. The static website CTA expects this conventional latest-release
-   URL:
+   - If `X.Y.Z` already matches the project version and no tag/release exists,
+     the current build number is reused.
+   - Otherwise the current build number is incremented by one.
+   - `--build N` overrides the automatic build number.
 
-   ```text
-   https://github.com/betocmn/widen/releases/latest/download/Widen.dmg
-   ```
+3. Wait for the command to finish.
 
-   If the release already exists, replace the `Widen.dmg` asset before
-   publishing or marking it as latest.
+   The script validates the release environment, updates `project.yml`, runs
+   `make project`, commits changed version files, runs `make test`, runs
+   `make release-mac`, fast-forwards `main`, pushes `main`, creates and pushes
+   tag `vX.Y.Z`, creates a draft GitHub Release, and uploads
+   `build/release-artifacts/X.Y.Z/Widen.dmg` as `Widen.dmg`.
 
-## Static Website Repo
+4. Publish the remaining manual surfaces.
+
+   If `WEBSITE_REPO` is set, the script stages Sparkle files in that separate
+   checkout and prints exact commands to review, commit, push, and verify the
+   website deployment. Publish the GitHub draft release only after the website
+   appcast and ZIP are live.
+
+## Artifact-Only Build
+
+Use this only when you want local artifacts without publishing `main`, a tag,
+or a GitHub Release:
+
+```sh
+make release-mac
+```
+
+`make release-mac` builds Release with Xcode 26, injects local release env,
+re-signs Sparkle helpers, notarizes and staples `Widen.app`, creates the
+Sparkle ZIP, creates/signs/notarizes/staples the DMG, and stages website
+Sparkle files when `WEBSITE_REPO` is set.
+
+The automated `scripts/publish_release.sh` wrapper runs these same artifact
+checks before it publishes any GitHub state.
+
+## Static Website Follow-Up
 
 The static website handles two separate release surfaces:
 
 - Manual download CTA: configured in `src/config/site.ts`.
 - Sparkle update hosting: `public/appcast.xml` and `public/releases/Widen-X.Y.Z.zip`.
 
-After `make release-mac`, inspect and commit the website changes:
+After `scripts/publish_release.sh` or `make release-mac` stages website files,
+inspect and commit the website changes:
 
 ```sh
 cd "$WEBSITE_REPO"

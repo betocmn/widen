@@ -270,4 +270,6 @@ rm -rf "$TMP_DIR"
 printf '\nRelease artifacts are ready:\n'
 printf '  Sparkle ZIP: %s\n' "$SPARKLE_ZIP"
 printf '  Manual DMG:  %s\n' "$DMG_PATH"
-printf 'Upload the DMG to the GitHub Release as exactly Widen.dmg.\n'
+if [ "${RELEASE_MAC_SKIP_GITHUB_HINT:-0}" != "1" ]; then
+  printf 'Upload the DMG to the GitHub Release as exactly Widen.dmg.\n'
+fi
