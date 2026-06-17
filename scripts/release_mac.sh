@@ -172,6 +172,11 @@ SIGN_UPDATE="$SPARKLE_BIN/sign_update"
 
 plist_value SUFeedURL "$APP_PATH/Contents/Info.plist" >/dev/null ||
   die "built app is missing SUFeedURL"
+EXPECTED_SUFEED_URL="https://github.com/$REPO/releases/latest/download/appcast.xml"
+BUILT_SUFEED_URL="$(plist_value SUFeedURL "$APP_PATH/Contents/Info.plist")"
+require_resolved_value SUFeedURL "$BUILT_SUFEED_URL"
+[ "$BUILT_SUFEED_URL" = "$EXPECTED_SUFEED_URL" ] ||
+  die "built app SUFeedURL '$BUILT_SUFEED_URL' did not match '$EXPECTED_SUFEED_URL'"
 plist_value SUPublicEDKey "$APP_PATH/Contents/Info.plist" >/dev/null ||
   die "built app is missing SUPublicEDKey"
 BUILT_SPARKLE_PUBLIC_ED_KEY="$(plist_value SUPublicEDKey "$APP_PATH/Contents/Info.plist")"

@@ -306,16 +306,6 @@ run git fetch --prune origin
 git merge-base --is-ancestor origin/main "$RELEASE_COMMIT" ||
   die "origin/main moved during release; rebase or merge it before publishing"
 
-if [ "$MAIN_WORKTREE" = "$ROOT_DIR" ]; then
-  run git merge --ff-only origin/main
-else
-  run git -C "$MAIN_WORKTREE" fetch --prune origin
-  run git -C "$MAIN_WORKTREE" merge --ff-only origin/main
-  run git -C "$MAIN_WORKTREE" merge --ff-only "$RELEASE_COMMIT"
-fi
-
-run git -C "$MAIN_WORKTREE" push origin main
-
 LOCAL_TAG_COMMIT="$(local_tag_commit)"
 REMOTE_TAG_COMMIT="$(remote_tag_commit)"
 
@@ -337,6 +327,16 @@ if [ -z "$LOCAL_TAG_COMMIT" ]; then
 else
   log "Tag $TAG_NAME already points at release commit; reusing it."
 fi
+
+if [ "$MAIN_WORKTREE" = "$ROOT_DIR" ]; then
+  run git merge --ff-only origin/main
+else
+  run git -C "$MAIN_WORKTREE" fetch --prune origin
+  run git -C "$MAIN_WORKTREE" merge --ff-only origin/main
+  run git -C "$MAIN_WORKTREE" merge --ff-only "$RELEASE_COMMIT"
+fi
+
+run git -C "$MAIN_WORKTREE" push origin main
 
 if [ -z "$REMOTE_TAG_COMMIT" ]; then
   run git -C "$MAIN_WORKTREE" push origin "$TAG_NAME"
