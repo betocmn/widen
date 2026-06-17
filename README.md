@@ -1,47 +1,107 @@
 # Widen
 
-Free, local and open-source Postgres GUI for your Mac, with natural language
-to SQL support — fully offline by default, with optional cloud pro models.
+**Ask Postgres with the LLM already on your Mac.**
 
-Widen introspects your schema, drafts SQL with **Apple's on-device Foundation
-Model**, shows you the statement to review and edit, and runs it safely - all
-locally.
+Widen is a free, open-source, native macOS Postgres GUI for macOS 26+.
+It introspects your schema, drafts SQL with Apple's on-device Foundation Model
+through the macOS Foundation Models framework, shows every query for review,
+and only runs what you approve.
 
-- **Local by default.** No backend, no accounts, no analytics. Out of the box
-  the only network connection is the PostgreSQL connection you configure.
-- **Optional cloud pro models.** Flip the toolbar cloud toggle to generate
-  with a bigger model: **Apple Private Cloud Compute** (macOS 27+, free with
-  a daily limit) or any model via your own **OpenRouter** API key. Configure
-  in Settings › LLM; everything keeps working fully local if you never turn
-  it on.
-- **Guarded execution.** Every statement (yours or the model's) goes through a
-  deterministic safety validator: single read statements or explicit
-  `INSERT`/`UPDATE`/`DELETE` writes only, with statement timeouts and row caps.
-  Widen never auto-runs writes, and asks for confirmation before `DELETE` or an
-  `UPDATE` without a `WHERE`.
-- **Private.** By default prompts go to Apple's local Foundation Model through
-  macOS and your schema and queries never leave your machine. With a cloud pro
-  model enabled, your questions and the relevant schema go to the provider you
-  chose — query results still never leave your Mac. Passwords and API keys
-  live in the macOS Keychain, never on disk in plaintext.
-- **Multiple databases, persistent sessions.** Configure any number of
-  PostgreSQL connections in Settings; each one is a group in the sidebar.
-  Select a database to browse its schema, or press "+" on it to start a
-  query session — a persistent chat + SQL + results workspace that survives
-  restarts and is auto-named by the local model after your first question.
-- **Modern macOS 26 look.** Liquid Glass styling, a schema inspector panel,
-  a local/cloud LLM toggle in the toolbar, and a light/dark toggle in the
-  sidebar footer.
+No backend. No account. No analytics. Local by default.
 
-## Requirements
+[Download for Mac](https://github.com/betocmn/widen/releases/latest/download/Widen.dmg)
+· [Build from source](#build-and-run)
+· [Release notes](https://github.com/betocmn/widen/releases/latest)
 
-- **macOS 26 or later** on **Apple Silicon** (Foundation Models requirement).
-- **Apple Intelligence enabled** (System Settings > Apple Intelligence & Siri)
-  for AI generation. Without it, the app still works for manual SQL, or flip
-  on "Use mock AI" in Settings for development.
-- **Xcode 26** to build (the macOS 26 SDK ships FoundationModels).
-- A local **PostgreSQL** server ([Postgres.app](https://postgresapp.com) works
-  great).
+`macOS 26+` · `Apple Silicon` · `Apple Intelligence for local AI` ·
+`No backend` · `No account` · `MIT` · `Postgres-only MVP`
+
+## What makes this new?
+
+Starting with macOS 26, supported Apple Silicon Macs can run Apple's Foundation
+Model on-device. Widen uses that local model for a practical developer
+workflow: turning schema-aware questions into SQL you can inspect before
+running.
+
+It is not an autonomous database agent. Widen drafts SQL, validates it, and
+waits for you to decide whether to run it.
+
+## Install
+
+Download the latest signed and notarized DMG:
+
+```text
+https://github.com/betocmn/widen/releases/latest/download/Widen.dmg
+```
+
+Open `Widen.dmg`, drag Widen into Applications, and launch it. Sparkle updates
+are served from GitHub Releases.
+
+## Compatibility
+
+| Requirement | Notes |
+| --- | --- |
+| macOS 26 or later | Required for the Foundation Models framework. |
+| Apple Silicon | Required for Apple's on-device Foundation Model. |
+| Apple Intelligence enabled | Required for local AI generation. Manual SQL still works without it. |
+| PostgreSQL | Widen is Postgres-only today. [Postgres.app](https://postgresapp.com) works well for local testing. |
+| Xcode 26 | Only needed when building from source. |
+
+## What leaves your Mac?
+
+Out of the box, the only network connection is the PostgreSQL connection you
+configure.
+
+| Mode | Schema/question | Query results | Notes |
+| --- | ---: | ---: | --- |
+| Local mode | Stays on your Mac | Stays on your Mac | Default. Prompts go to Apple's local Foundation Model through macOS. |
+| Cloud mode | Sent to the provider you choose | Stays on your Mac | Optional. Use Apple Private Cloud Compute on macOS 27+, or OpenRouter with your own API key. |
+
+Passwords and API keys live in the macOS Keychain, never on disk in plaintext.
+
+## Review before run
+
+Every statement, whether typed manually or drafted by the model, goes through
+the same deterministic safety validator:
+
+- One statement only.
+- `SELECT`/`WITH` reads, or explicit `INSERT`/`UPDATE`/`DELETE` writes.
+- No DDL, transaction keywords, semicolon chains, `pg_sleep`, `dblink`, or
+  large-object calls.
+- Statement timeouts and row caps apply at execution time.
+- Writes are never auto-run, and Widen asks for confirmation before `DELETE`
+  or an `UPDATE` without a `WHERE`.
+
+If you only want reads, connect with a read-only Postgres user. The app-level
+guardrails are useful, but database permissions are the real boundary.
+
+## Built for people who live in Postgres
+
+Widen is a lightweight, native, local-first Postgres workbench for browsing
+schemas, keeping query sessions, and turning questions into SQL:
+
+- Configure any number of PostgreSQL connections in Settings.
+- Browse the selected database's schemas, tables, columns, types, and foreign
+  keys in the inspector.
+- Keep persistent chat + SQL + results sessions that survive restarts.
+- Switch between the local model and optional cloud models from the toolbar.
+- Use the modern macOS 26 Liquid Glass interface with light/dark appearance.
+
+## Known limitations
+
+- PostgreSQL only.
+- Early MVP, not full DataGrip/TablePlus/Postico feature parity.
+- The local Foundation Model has a small context window; very large schemas are
+  truncated whole-table-at-a-time before prompting. If you need a stronger
+  model, Widen already supports cloud generation with your own OpenRouter API
+  key, and includes support for Apple's Private Cloud Compute models in the
+  upcoming September OS releases.
+- Results are rendered as text values; typed grid behavior is still limited.
+- Export is CSV-only today.
+- No SQL syntax highlighting yet.
+- Query results are not persisted across restarts. Transcripts, SQL text, and
+  generation metadata are persisted; rerun a session's query to repopulate the
+  grid.
 
 ## Build and run
 
@@ -66,9 +126,9 @@ Xcode (older SDKs have no FoundationModels and a lower deployment target).
 
 ## Release packaging
 
-Release packaging is prepared for Developer ID distribution. Debug stays ad-hoc
-signed for local development. The release script reads local signing, notarizing,
-bundle ID, and Sparkle values from environment variables or
+Release packaging is automated for Developer ID distribution. Debug stays ad-hoc
+signed for local development. The release script reads local signing,
+notarizing, bundle ID, and Sparkle values from environment variables or
 `.env.release.local`:
 
 ```sh
@@ -215,20 +275,11 @@ refreshes the active database's schema; **Cmd+,** opens Settings.
   large schemas are truncated whole-table-at-a-time in the prompt; Widen
   retries once with a tighter budget if the window is exceeded. Cloud models
   get a much larger schema budget.
-- **Apple Private Cloud Compute** (announced WWDC 2026) needs macOS 27, a
+- **Apple Private Cloud Compute** needs macOS 27, a
   build made with Xcode 27, and Apple's `com.apple.developer.private-cloud-compute`
   entitlement on a properly signed build — see
   [docs/implementation-guide.md](docs/implementation-guide.md). On macOS 26,
   use OpenRouter for cloud generation instead.
-
-## MVP limitations
-
-- PostgreSQL only.
-- Results are stringified text (no typed grid, no export-to-file).
-- No SQL syntax highlighting.
-- Query results are not persisted across restarts (transcripts, SQL text,
-  and generation metadata are; rerun a session's query to repopulate the
-  grid).
 
 ## License
 
