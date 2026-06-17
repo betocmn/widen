@@ -18,8 +18,7 @@ The script:
 - Fast-forwards local `main`, pushes `main`, creates tag `vX.Y.Z`, and pushes
   the tag.
 - Creates a draft GitHub Release in `https://github.com/betocmn/widen` with the
-  DMG uploaded as the exact asset name `Widen.dmg`.
-- Leaves website/appcast publishing manual and prints the follow-up commands.
+  DMG, Sparkle ZIP, and appcast uploaded as release assets.
 
 ## One-Time Local Setup
 
@@ -39,9 +38,11 @@ The script:
 
    Optional values:
 
-   - `WEBSITE_REPO`: local checkout of the static website repo.
-   - `DOWNLOAD_URL_PREFIX`: URL prefix for Sparkle ZIP enclosures.
    - `DEVELOPER_DIR`: Xcode path. The default is `/Applications/Xcode-26.app/Contents/Developer`.
+   - `DOWNLOAD_URL_PREFIX`: advanced override for Sparkle ZIP enclosure URLs.
+     Leave blank for normal GitHub Releases hosting.
+   - `STAGE_WEBSITE` and `WEBSITE_REPO`: legacy website staging. Normal
+     releases do not use these.
 
    `.env.release.local` is ignored by git. Do not commit it.
 
@@ -122,15 +123,26 @@ The script:
    The script validates the release environment, updates `project.yml`, runs
    `make project`, commits changed version files, runs `make test`, runs
    `make release-mac`, fast-forwards `main`, pushes `main`, creates and pushes
-   tag `vX.Y.Z`, creates a draft GitHub Release, and uploads
-   `build/release-artifacts/X.Y.Z/Widen.dmg` as `Widen.dmg`.
+   tag `vX.Y.Z`, creates a draft GitHub Release, and uploads:
 
-4. Publish the remaining manual surfaces.
+   - `build/release-artifacts/X.Y.Z/Widen.dmg`
+   - `build/release-artifacts/X.Y.Z/Widen-X.Y.Z.zip`
+   - `build/release-artifacts/X.Y.Z/appcast.xml`
 
-   If `WEBSITE_REPO` is set, the script stages Sparkle files in that separate
-   checkout and prints exact commands to review, commit, push, and verify the
-   website deployment. Publish the GitHub draft release only after the website
-   appcast and ZIP are live.
+4. Inspect and publish the GitHub draft release.
+
+   Before publishing, confirm the draft contains exactly these asset names:
+
+   - `Widen.dmg`
+   - `Widen-X.Y.Z.zip`
+   - `appcast.xml`
+
+   After publishing, verify:
+
+   ```text
+   https://github.com/betocmn/widen/releases/latest/download/appcast.xml
+   https://github.com/betocmn/widen/releases/latest/download/Widen.dmg
+   ```
 
 ## Artifact-Only Build
 
@@ -143,50 +155,26 @@ make release-mac
 
 `make release-mac` builds Release with Xcode 26, injects local release env,
 re-signs Sparkle helpers, notarizes and staples `Widen.app`, creates the
-Sparkle ZIP, creates/signs/notarizes/staples the DMG, and stages website
-Sparkle files when `WEBSITE_REPO` is set.
+Sparkle ZIP, generates `appcast.xml`, and creates/signs/notarizes/staples the
+DMG. The appcast enclosure URL points at the versioned GitHub Release ZIP:
+
+```text
+https://github.com/betocmn/widen/releases/download/vX.Y.Z/Widen-X.Y.Z.zip
+```
 
 The automated `scripts/publish_release.sh` wrapper runs these same artifact
 checks before it publishes any GitHub state.
 
 ## Static Website Follow-Up
 
-The static website handles two separate release surfaces:
-
-- Manual download CTA: configured in `src/config/site.ts`.
-- Sparkle update hosting: `public/appcast.xml` and `public/releases/Widen-X.Y.Z.zip`.
-
-After `scripts/publish_release.sh` or `make release-mac` stages website files,
-inspect and commit the website changes:
-
-```sh
-cd "$WEBSITE_REPO"
-npm run build
-git status --short
-git add public/appcast.xml public/releases/Widen-X.Y.Z.zip
-git commit -m "build: publish sparkle release"
-git push
-```
-
-Manual GitHub action: if the website repo requires PRs, open and merge the
-website PR after pushing. If direct pushes deploy the site, confirm the
-deployment completed before announcing Sparkle updates.
-
-Update the website download metadata in `src/config/site.ts`:
-
-1. Set `download.version` to the released version.
-2. Leave `download.dmgUrl` unchanged if the GitHub Release asset is named
-   exactly `Widen.dmg`; the existing latest-release URL will update
-   automatically.
-3. Change `download.dmgUrl` only if you move downloads away from GitHub
-   Releases or stop using the `Widen.dmg` asset name.
-4. Run `npm run build`, commit, and push the website repo.
-
-The appcast enclosure URL should look like this:
+The static website should point its download CTA at GitHub's latest DMG asset:
 
 ```text
-https://widen.dev/releases/Widen-X.Y.Z.zip
+https://github.com/betocmn/widen/releases/latest/download/Widen.dmg
 ```
+
+After that one-time website update, routine app releases do not require static
+website changes unless the site displays hardcoded release version text.
 
 ## Sparkle End-To-End Test
 
@@ -203,5 +191,5 @@ https://widen.dev/releases/Widen-X.Y.Z.zip
 - Keychain prompt: choose **Always Allow** for the Developer ID private key.
 - Slow notarization: query status with `xcrun notarytool info <submission-id>
   --keychain-profile "$NOTARY_PROFILE"`.
-- Website build missing dependencies: the release script runs `npm ci` when the
-  website checkout lacks `node_modules/.bin/astro`.
+- Unexpected website staging: normal releases ignore `WEBSITE_REPO`. Set
+  `STAGE_WEBSITE=1` only if you need the legacy appcast handoff.

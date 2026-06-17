@@ -151,8 +151,6 @@ TEAM_ID="${TEAM_ID:-}"
 NOTARY_PROFILE="${NOTARY_PROFILE:-}"
 SPARKLE_PUBLIC_ED_KEY="${SPARKLE_PUBLIC_ED_KEY:-}"
 BUNDLE_ID_PREFIX="${BUNDLE_ID_PREFIX:-}"
-WEBSITE_REPO="${WEBSITE_REPO:-}"
-DOWNLOAD_URL_PREFIX="${DOWNLOAD_URL_PREFIX:-https://widen.dev/releases/}"
 
 export DEVELOPER_DIR
 
@@ -175,6 +173,7 @@ CURRENT_BRANCH="$(git branch --show-current)"
 [ -n "$CURRENT_BRANCH" ] || die "release must run from a branch, not detached HEAD"
 
 TAG_NAME="v$TARGET_VERSION"
+GITHUB_DOWNLOAD_PREFIX="https://github.com/$REPO/releases/download/$TAG_NAME/"
 CURRENT_VERSION="$(project_value MARKETING_VERSION)"
 CURRENT_BUILD="$(project_value CURRENT_PROJECT_VERSION)"
 [ -n "$CURRENT_VERSION" ] || die "could not read MARKETING_VERSION from project.yml"
@@ -230,22 +229,15 @@ fi
 
 log "Using main worktree: $MAIN_WORKTREE"
 
-if [ -n "$WEBSITE_REPO" ]; then
-  [ -d "$WEBSITE_REPO" ] || die "WEBSITE_REPO does not exist: $WEBSITE_REPO"
-  if git -C "$WEBSITE_REPO" rev-parse --is-inside-work-tree >/dev/null 2>&1; then
-    git_clean "$WEBSITE_REPO" ||
-      die "WEBSITE_REPO has uncommitted changes: $WEBSITE_REPO"
-  fi
-fi
-
 if [ "$DRY_RUN" -eq 1 ]; then
   log "Dry run only. Planned release actions:"
   log "  update project.yml to $TARGET_VERSION ($TARGET_BUILD)"
   log "  run make project and make test"
   log "  run make release-mac"
+  log "  generate appcast.xml with ZIP URL $GITHUB_DOWNLOAD_PREFIX$APP_NAME-$TARGET_VERSION.zip"
   log "  fast-forward main to this release commit and push origin main"
   log "  create and push tag $TAG_NAME"
-  log "  create a draft GitHub Release with Widen.dmg"
+  log "  create a draft GitHub Release with Widen.dmg, $APP_NAME-$TARGET_VERSION.zip, and appcast.xml"
   exit 0
 fi
 
@@ -281,10 +273,18 @@ fi
 run make test
 
 log "Building signed and notarized release artifacts"
-run env RELEASE_MAC_SKIP_GITHUB_HINT=1 make release-mac
+run env \
+  RELEASE_MAC_SKIP_GITHUB_HINT=1 \
+  REPO="$REPO" \
+  DOWNLOAD_URL_PREFIX="$GITHUB_DOWNLOAD_PREFIX" \
+  make release-mac
 
 DMG_PATH="build/release-artifacts/$TARGET_VERSION/$APP_NAME.dmg"
+SPARKLE_ZIP_PATH="build/release-artifacts/$TARGET_VERSION/$APP_NAME-$TARGET_VERSION.zip"
+APPCAST_PATH="build/release-artifacts/$TARGET_VERSION/appcast.xml"
 [ -f "$DMG_PATH" ] || die "expected DMG was not produced at $DMG_PATH"
+[ -f "$SPARKLE_ZIP_PATH" ] || die "expected Sparkle ZIP was not produced at $SPARKLE_ZIP_PATH"
+[ -f "$APPCAST_PATH" ] || die "expected appcast was not produced at $APPCAST_PATH"
 
 RELEASE_COMMIT="$(git rev-parse HEAD)"
 run git fetch --prune origin
@@ -303,7 +303,7 @@ run git -C "$MAIN_WORKTREE" push origin main
 run git -C "$MAIN_WORKTREE" tag -a "$TAG_NAME" "$RELEASE_COMMIT" -m "$APP_NAME $TARGET_VERSION"
 run git -C "$MAIN_WORKTREE" push origin "$TAG_NAME"
 
-run gh release create "$TAG_NAME" "$DMG_PATH#$APP_NAME.dmg" \
+run gh release create "$TAG_NAME" "$DMG_PATH" "$SPARKLE_ZIP_PATH" "$APPCAST_PATH" \
   --repo "$REPO" \
   --draft \
   --verify-tag \
@@ -317,28 +317,15 @@ cat <<EOF
 Draft GitHub Release is ready:
   $RELEASE_URL
 
-Before publishing the draft:
-EOF
+Before publishing the draft, inspect the assets:
+  - $APP_NAME.dmg
+  - $APP_NAME-$TARGET_VERSION.zip
+  - appcast.xml
 
-if [ -n "$WEBSITE_REPO" ]; then
-  cat <<EOF
-  1. Publish the Sparkle website files:
-     cd "$WEBSITE_REPO"
-     git status --short
-     git add public/appcast.xml public/releases/$APP_NAME-$TARGET_VERSION.zip
-     git commit -m "build: publish sparkle release"
-     git push
-  2. Confirm the website deployment serves:
-     $DOWNLOAD_URL_PREFIX$APP_NAME-$TARGET_VERSION.zip
-     https://widen.dev/appcast.xml
-  3. Publish the GitHub draft release.
+After publishing, verify:
+  https://github.com/$REPO/releases/latest/download/appcast.xml
+  https://github.com/$REPO/releases/latest/download/$APP_NAME.dmg
 EOF
-else
-  cat <<EOF
-  1. WEBSITE_REPO was not set, so Sparkle appcast files were not staged.
-  2. Publish the GitHub draft release when you are ready to make the DMG public.
-EOF
-fi
 
 if [ "$OPEN_RELEASE" -eq 1 ]; then
   run gh release view "$TAG_NAME" --repo "$REPO" --web

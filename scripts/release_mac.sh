@@ -13,6 +13,7 @@ if [ -f "$RELEASE_ENV_FILE" ]; then
 fi
 
 APP_NAME="${APP_NAME:-Widen}"
+REPO="${REPO:-betocmn/widen}"
 TEAM_ID="${TEAM_ID:-}"
 DEVELOPER_DIR="${DEVELOPER_DIR:-/Applications/Xcode-26.app/Contents/Developer}"
 NOTARY_PROFILE="${NOTARY_PROFILE:-}"
@@ -20,7 +21,8 @@ SPARKLE_ACCOUNT="${SPARKLE_ACCOUNT:-ed25519}"
 SPARKLE_PUBLIC_ED_KEY="${SPARKLE_PUBLIC_ED_KEY:-}"
 BUNDLE_ID_PREFIX="${BUNDLE_ID_PREFIX:-}"
 WEBSITE_REPO="${WEBSITE_REPO:-}"
-DOWNLOAD_URL_PREFIX="${DOWNLOAD_URL_PREFIX:-https://widen.dev/releases/}"
+STAGE_WEBSITE="${STAGE_WEBSITE:-0}"
+DOWNLOAD_URL_PREFIX="${DOWNLOAD_URL_PREFIX:-}"
 DERIVED_DATA_PATH="${DERIVED_DATA_PATH:-build/release}"
 ARTIFACT_ROOT="${ARTIFACT_ROOT:-build/release-artifacts}"
 
@@ -106,6 +108,7 @@ need ditto
 need hdiutil
 need security
 need spctl
+need xmllint
 need xcodebuild
 need xcodegen
 need xcrun
@@ -192,6 +195,16 @@ TMP_DIR="$RELEASE_DIR/tmp"
 NOTARY_APP_ZIP="$TMP_DIR/$APP_NAME-notary.zip"
 SPARKLE_ZIP="$RELEASE_DIR/$APP_NAME-$VERSION.zip"
 DMG_PATH="$RELEASE_DIR/$APP_NAME.dmg"
+APPCAST_PATH="$RELEASE_DIR/appcast.xml"
+APPCAST_INPUT_DIR="$TMP_DIR/appcast-input"
+
+if [ -z "$DOWNLOAD_URL_PREFIX" ]; then
+  DOWNLOAD_URL_PREFIX="https://github.com/$REPO/releases/download/v$VERSION/"
+fi
+case "$DOWNLOAD_URL_PREFIX" in
+  */) ;;
+  *) DOWNLOAD_URL_PREFIX="$DOWNLOAD_URL_PREFIX/" ;;
+esac
 
 rm -rf "$RELEASE_DIR"
 mkdir -p "$TMP_DIR"
@@ -210,6 +223,30 @@ spctl -a -vvv -t exec "$APP_PATH"
 printf 'Creating Sparkle archive %s\n' "$SPARKLE_ZIP"
 ditto -c -k --sequesterRsrc --keepParent "$APP_PATH" "$SPARKLE_ZIP"
 
+printf 'Generating Sparkle appcast %s\n' "$APPCAST_PATH"
+mkdir -p "$APPCAST_INPUT_DIR"
+cp "$SPARKLE_ZIP" "$APPCAST_INPUT_DIR/"
+"$GENERATE_APPCAST" \
+  --account "$SPARKLE_ACCOUNT" \
+  --download-url-prefix "$DOWNLOAD_URL_PREFIX" \
+  -o "$APPCAST_PATH" \
+  "$APPCAST_INPUT_DIR"
+
+EXPECTED_SPARKLE_URL="$DOWNLOAD_URL_PREFIX$APP_NAME-$VERSION.zip"
+APPCAST_SPARKLE_URL="$(
+  xmllint --xpath "string(//*[local-name()='enclosure'][contains(@url, '$APP_NAME-$VERSION.zip')]/@url)" \
+    "$APPCAST_PATH" 2>/dev/null || true
+)"
+[ "$APPCAST_SPARKLE_URL" = "$EXPECTED_SPARKLE_URL" ] ||
+  die "generated appcast URL '$APPCAST_SPARKLE_URL' did not match '$EXPECTED_SPARKLE_URL'"
+
+SIGNATURE="$(
+  xmllint --xpath "string(//*[local-name()='enclosure'][contains(@url, '$APP_NAME-$VERSION.zip')]/@*[local-name()='edSignature'])" \
+    "$APPCAST_PATH" 2>/dev/null || true
+)"
+[ -n "$SIGNATURE" ] || die "generated appcast is missing a Sparkle EdDSA signature for $APP_NAME-$VERSION.zip"
+"$SIGN_UPDATE" --account "$SPARKLE_ACCOUNT" --verify "$SPARKLE_ZIP" "$SIGNATURE"
+
 printf 'Creating signed DMG %s\n' "$DMG_PATH"
 DMG_ROOT="$TMP_DIR/dmg-root"
 mkdir -p "$DMG_ROOT"
@@ -223,9 +260,8 @@ xcrun stapler staple "$DMG_PATH"
 xcrun stapler validate "$DMG_PATH"
 spctl -a -vvv -t open --context context:primary-signature "$DMG_PATH"
 
-if [ -n "$WEBSITE_REPO" ]; then
+if [ "$STAGE_WEBSITE" = "1" ] && [ -n "$WEBSITE_REPO" ]; then
   need npm
-  need xmllint
 
   [ -d "$WEBSITE_REPO" ] || die "WEBSITE_REPO does not exist: $WEBSITE_REPO"
   [ -d "$WEBSITE_REPO/public/releases" ] ||
@@ -262,7 +298,7 @@ if [ -n "$WEBSITE_REPO" ]; then
     npm run build
   )
 else
-  printf 'Skipping website handoff; set WEBSITE_REPO to a checkout containing public/appcast.xml and public/releases/.\n'
+  printf 'Skipping legacy website handoff; set STAGE_WEBSITE=1 and WEBSITE_REPO to stage appcast files there.\n'
 fi
 
 rm -rf "$TMP_DIR"
@@ -270,6 +306,7 @@ rm -rf "$TMP_DIR"
 printf '\nRelease artifacts are ready:\n'
 printf '  Sparkle ZIP: %s\n' "$SPARKLE_ZIP"
 printf '  Manual DMG:  %s\n' "$DMG_PATH"
+printf '  Appcast:     %s\n' "$APPCAST_PATH"
 if [ "${RELEASE_MAC_SKIP_GITHUB_HINT:-0}" != "1" ]; then
-  printf 'Upload the DMG to the GitHub Release as exactly Widen.dmg.\n'
+  printf 'Upload the DMG, Sparkle ZIP, and appcast.xml to the GitHub Release.\n'
 fi
