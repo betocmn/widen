@@ -13,23 +13,32 @@ struct AIBackendToggle: View {
     @Environment(AppState.self) private var appState
 
     var body: some View {
-        HStack(spacing: 2) {
-            CapsuleSegmentButton(
-                icon: "shield.lefthalf.filled",
-                title: "Local",
-                isSelected: appState.aiBackendMode == .local,
-                help: localHelp
-            ) {
-                select(.local)
-            }
-            CapsuleSegmentButton(
-                icon: isCloudBroken ? "exclamationmark.icloud.fill" : "cloud.fill",
-                title: "Cloud",
-                isSelected: appState.aiBackendMode == .cloud,
-                isWarning: isCloudBroken,
-                help: cloudHelp
-            ) {
-                select(.cloud)
+        HStack(spacing: 6) {
+            // Muted prefix so the toggle reads as "which LLM generates the
+            // SQL", not "is the database local or cloud". Hidden from
+            // VoiceOver — the container already carries the "LLM backend" label.
+            Text("LLM:")
+                .font(.callout)
+                .foregroundStyle(.secondary)
+                .accessibilityHidden(true)
+            HStack(spacing: 2) {
+                CapsuleSegmentButton(
+                    icon: "shield.lefthalf.filled",
+                    title: "Local",
+                    isSelected: appState.aiBackendMode == .local,
+                    help: localHelp
+                ) {
+                    select(.local)
+                }
+                CapsuleSegmentButton(
+                    icon: isCloudBroken ? "exclamationmark.icloud.fill" : "cloud.fill",
+                    title: "Cloud",
+                    isSelected: appState.aiBackendMode == .cloud,
+                    isWarning: isCloudBroken,
+                    help: cloudHelp
+                ) {
+                    select(.cloud)
+                }
             }
         }
         .padding(.horizontal, 4)
