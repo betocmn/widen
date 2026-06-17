@@ -41,7 +41,12 @@ struct AIBackendToggle: View {
                 }
             }
         }
-        .padding(.horizontal, 4)
+        // Asymmetric: the bare "LLM:" text needs breathing room from the glass
+        // pill's leading edge (matching the breadcrumb's 10pt), while the
+        // trailing side ends in a capsule button that already carries its own
+        // internal padding.
+        .padding(.leading, 10)
+        .padding(.trailing, 4)
         .accessibilityElement(children: .contain)
         .accessibilityLabel("LLM backend")
     }
