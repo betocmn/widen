@@ -92,23 +92,16 @@ schemas, keeping query sessions, and turning questions into SQL:
 - PostgreSQL only.
 - Early MVP, not full DataGrip/TablePlus/Postico feature parity.
 - The local Foundation Model has a small context window; very large schemas are
-  truncated whole-table-at-a-time before prompting.
+  truncated whole-table-at-a-time before prompting. If you need a stronger
+  model, Widen already supports cloud generation with your own OpenRouter API
+  key, and includes support for Apple's Private Cloud Compute models in the
+  upcoming September OS releases.
 - Results are rendered as text values; typed grid behavior is still limited.
 - Export is CSV-only today.
 - No SQL syntax highlighting yet.
 - Query results are not persisted across restarts. Transcripts, SQL text, and
   generation metadata are persisted; rerun a session's query to repopulate the
   grid.
-
-## Roadmap
-
-- [x] Signed and notarized DMG releases.
-- [ ] Homebrew cask.
-- [ ] SQL syntax highlighting.
-- [ ] Typed results grid and richer type rendering.
-- [ ] Export improvements.
-- [ ] Schema filtering for large databases.
-- [ ] Broader database support.
 
 ## Build and run
 
