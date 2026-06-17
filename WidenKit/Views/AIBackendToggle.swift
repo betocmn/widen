@@ -13,26 +13,40 @@ struct AIBackendToggle: View {
     @Environment(AppState.self) private var appState
 
     var body: some View {
-        HStack(spacing: 2) {
-            CapsuleSegmentButton(
-                icon: "shield.lefthalf.filled",
-                title: "Local",
-                isSelected: appState.aiBackendMode == .local,
-                help: localHelp
-            ) {
-                select(.local)
-            }
-            CapsuleSegmentButton(
-                icon: isCloudBroken ? "exclamationmark.icloud.fill" : "cloud.fill",
-                title: "Cloud",
-                isSelected: appState.aiBackendMode == .cloud,
-                isWarning: isCloudBroken,
-                help: cloudHelp
-            ) {
-                select(.cloud)
+        HStack(spacing: 6) {
+            // Muted prefix so the toggle reads as "which LLM generates the
+            // SQL", not "is the database local or cloud". Hidden from
+            // VoiceOver — the container already carries the "LLM backend" label.
+            Text("LLM:")
+                .font(.callout)
+                .foregroundStyle(.secondary)
+                .accessibilityHidden(true)
+            HStack(spacing: 2) {
+                CapsuleSegmentButton(
+                    icon: "shield.lefthalf.filled",
+                    title: "Local",
+                    isSelected: appState.aiBackendMode == .local,
+                    help: localHelp
+                ) {
+                    select(.local)
+                }
+                CapsuleSegmentButton(
+                    icon: isCloudBroken ? "exclamationmark.icloud.fill" : "cloud.fill",
+                    title: "Cloud",
+                    isSelected: appState.aiBackendMode == .cloud,
+                    isWarning: isCloudBroken,
+                    help: cloudHelp
+                ) {
+                    select(.cloud)
+                }
             }
         }
-        .padding(.horizontal, 4)
+        // Asymmetric: the bare "LLM:" text needs breathing room from the glass
+        // pill's leading edge (matching the breadcrumb's 10pt), while the
+        // trailing side ends in a capsule button that already carries its own
+        // internal padding.
+        .padding(.leading, 10)
+        .padding(.trailing, 4)
         .accessibilityElement(children: .contain)
         .accessibilityLabel("LLM backend")
     }
