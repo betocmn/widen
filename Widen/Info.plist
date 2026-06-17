@@ -23,9 +23,9 @@
 	<key>LSApplicationCategoryType</key>
 	<string>public.app-category.developer-tools</string>
 	<key>LSMinimumSystemVersion</key>
-	<string>26.0</string>
+	<string>15.5</string>
 	<key>NSHumanReadableCopyright</key>
-	<string>Widen — local-only MVP</string>
+	<string>Widen — Postgres GUI</string>
 	<key>NSLocalNetworkUsageDescription</key>
 	<string>Widen connects to PostgreSQL databases you configure on your local network.</string>
 	<key>NSPrincipalClass</key>

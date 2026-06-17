@@ -15,9 +15,7 @@ struct LLMSettingsView: View {
         Form {
             Section("Local LLM") {
                 LabeledContent("Model", value: Self.localModelName)
-                Text(
-                    "Free and included with your Mac. Generation runs entirely on this device — your questions and schema never leave it, and it works offline."
-                )
+                Text(localModelDescription)
                 .font(.callout)
                 .foregroundStyle(.secondary)
                 if let message = appState.localModelAvailabilityMessage {
@@ -70,7 +68,23 @@ struct LLMSettingsView: View {
     /// versioned by the OS that ships it.
     private static var localModelName: String {
         let version = ProcessInfo.processInfo.operatingSystemVersion
+        guard version.majorVersion >= LocalLLMEligibilityChecker.requiredLocalMacOSMajor else {
+            return "Apple Foundation Model · Requires macOS 26+"
+        }
         return "Apple Foundation Model · macOS \(version.majorVersion).\(version.minorVersion)"
+    }
+
+    private var localModelDescription: String {
+        switch appState.localLLMEligibility {
+        case .ready:
+            return "Free and included with your Mac. Generation runs entirely on this device — your questions and schema never leave it, and it works offline."
+        case .macOSTooOld:
+            return "Local generation requires macOS 26 or later. On this Mac, use a cloud model by adding an API key below."
+        case .appleIntelligenceDisabled:
+            return "Local generation runs entirely on this device after Apple Intelligence is enabled in System Settings › Apple Intelligence & Siri."
+        default:
+            return "Local generation runs entirely on this device when Apple's local model is available."
+        }
     }
 
     @ViewBuilder

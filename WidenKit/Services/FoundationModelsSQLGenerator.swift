@@ -5,6 +5,7 @@
 
     /// Structured output schema for the on-device model. Mirrors
     /// `SQLGenerationResult`, with guides keeping the model inside the rails.
+    @available(macOS 26.0, *)
     @Generable(description: "A single safe PostgreSQL statement answering the user's question.")
     struct GeneratedSQLResponse {
         @Guide(
@@ -45,6 +46,7 @@
 
     /// Generates SQL with Apple's on-device Foundation Model. Local-only: no
     /// network, no external LLM APIs.
+    @available(macOS 26.0, *)
     public final class FoundationModelsSQLGenerator: SQLGenerator, Sendable {
         public init() {}
 

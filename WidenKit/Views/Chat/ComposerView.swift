@@ -49,7 +49,7 @@ struct ComposerView: View {
         }
         .padding(.horizontal, 14)
         .padding(.vertical, 12)
-        .glassEffect(.regular, in: .rect(cornerRadius: 18))
+        .widenGlassEffect(cornerRadius: 18)
         .padding([.horizontal, .bottom], 12)
         .onAppear {
             requestInitialFocus()

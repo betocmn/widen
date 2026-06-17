@@ -40,9 +40,7 @@ struct MessageBubbleView: View {
     private var bubble: some View {
         if message.role == .user {
             content
-                .glassEffect(
-                    .regular.tint(Color.accentColor.opacity(0.35)),
-                    in: .rect(cornerRadius: 14))
+                .widenGlassEffect(cornerRadius: 14, tint: Color.accentColor.opacity(0.35))
         } else {
             content
                 .background(.regularMaterial, in: RoundedRectangle(cornerRadius: 14))

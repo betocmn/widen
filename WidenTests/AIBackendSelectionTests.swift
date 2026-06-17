@@ -8,12 +8,15 @@ import Testing
 struct AIBackendSelectionTests {
     private static let defaultsKeys = [
         "WidenAIBackendMode", "WidenCloudAIProvider", "WidenOpenRouterModelID",
+        "WidenUseMockAI",
     ]
 
     private func clearDefaults() {
         for key in Self.defaultsKeys {
             UserDefaults.standard.removeObject(forKey: key)
         }
+        UserDefaults.standard.removeObject(
+            forKey: AppState.didShowInstallLLMCompatibilityAlertKey)
     }
 
     private func makeState() -> (AppState, URL) {
@@ -80,11 +83,11 @@ struct AIBackendSelectionTests {
             return
         }
         #expect(message.contains("limit"))
-        #expect(state.activeBackendDisplayName == "the local model")
-        #expect(state.modelAvailabilityMessage?.contains("on-device model") == true)
+        #expect(state.activeBackendDisplayName == "Apple Private Cloud Compute")
+        #expect(state.modelAvailabilityMessage?.contains("limit") == true)
     }
 
-    @Test func cloudOpenRouterWithoutKeyFallsBackToLocal() {
+    @Test func cloudOpenRouterWithoutKeyReportsConfigurationProblem() {
         clearDefaults()
         let (state, dir) = makeState()
         defer { cleanUp(dir) }
@@ -98,12 +101,13 @@ struct AIBackendSelectionTests {
             return
         }
         #expect(!(state.sqlGenerator is OpenRouterSQLGenerator))
-        #expect(state.activeBackendDisplayName == "the local model")
+        #expect(state.sqlGenerator is UnavailableSQLGenerator)
+        #expect(state.activeBackendDisplayName.contains("via OpenRouter"))
         #expect(state.modelAvailabilityMessage?.contains("API key") == true)
-        #expect(state.modelAvailabilityMessage?.contains("on-device") == true)
+        #expect(state.modelAvailabilityMessage?.contains("on-device") == false)
     }
 
-    @Test func cloudFallbackReportsWhenLocalModelIsAlsoUnavailable() {
+    @Test func cloudStatusDoesNotMentionLocalFallback() {
         clearDefaults()
         let (state, dir) = makeState()
         defer { cleanUp(dir) }
@@ -115,8 +119,7 @@ struct AIBackendSelectionTests {
 
         let message = state.modelAvailabilityMessage ?? ""
         #expect(message.contains("API key"))
-        #expect(message.contains("on-device fallback is also unavailable"))
-        #expect(message.contains("Local model is unavailable."))
+        #expect(!message.contains("on-device fallback"))
         #expect(!message.contains("Using the on-device model until then."))
     }
 
@@ -139,8 +142,9 @@ struct AIBackendSelectionTests {
         }
         #expect(message.contains("OpenRouter"))
         #expect(!(state.sqlGenerator is OpenRouterSQLGenerator))
-        #expect(state.activeBackendDisplayName == "the local model")
-        #expect(state.modelAvailabilityMessage?.contains("on-device") == true)
+        #expect(state.sqlGenerator is UnavailableSQLGenerator)
+        #expect(state.activeBackendDisplayName == "Apple Private Cloud Compute")
+        #expect(state.modelAvailabilityMessage?.contains("OpenRouter") == true)
     }
 
     @Test func localModeIgnoresCloudConfiguration() {
@@ -151,6 +155,7 @@ struct AIBackendSelectionTests {
         state.aiBackendMode = .local
         state.cloudProvider = .openRouter
         state.openRouterAPIKeyOverride = .some("sk-test")
+        state.localLLMEligibilityOverride = .ready
 
         #expect(!(state.sqlGenerator is OpenRouterSQLGenerator))
         #expect(state.activeBackendDisplayName == "the local model")
@@ -161,10 +166,95 @@ struct AIBackendSelectionTests {
         let (state, dir) = makeState()
         defer { cleanUp(dir) }
 
-        state.localModelAvailabilityMessageOverride = .some("Local model is unavailable.")
+        state.localLLMEligibilityOverride = .appleIntelligenceDisabled
 
         #expect(state.connectionDetailsParser != nil)
         #expect(state.connectionAutofillUnavailableMessage == nil)
+    }
+
+    @Test func firstLaunchOnOldMacOSSelectsCloudAndShowsAlert() async {
+        clearDefaults()
+        let (state, dir) = makeState()
+        defer { cleanUp(dir) }
+
+        state.aiBackendMode = .local
+        state.localLLMEligibilityOverride = .macOSTooOld(current: "15.6", required: "26")
+
+        await state.onLaunch()
+
+        #expect(state.aiBackendMode == .cloud)
+        #expect(state.settingsTab == .llm)
+        #expect(state.llmCompatibilityAlert?.kind == .macOSTooOld)
+        let message = state.llmCompatibilityAlert?.message ?? ""
+        #expect(message.contains("cloud model"))
+        #expect(message.contains("API key"))
+        #expect(message.contains("macOS 26"))
+    }
+
+    @Test func selectingLocalOnOldMacOSFailsAndShowsAlert() {
+        clearDefaults()
+        let (state, dir) = makeState()
+        defer { cleanUp(dir) }
+
+        state.aiBackendMode = .cloud
+        state.localLLMEligibilityOverride = .macOSTooOld(current: "15.6", required: "26")
+
+        let selected = state.requestAIBackendMode(.local)
+
+        #expect(!selected)
+        #expect(state.aiBackendMode == .cloud)
+        #expect(state.settingsTab == .llm)
+        #expect(state.llmCompatibilityAlert?.kind == .macOSTooOld)
+    }
+
+    @Test func firstLaunchWithAppleIntelligenceDisabledShowsSettingsPath() async {
+        clearDefaults()
+        let (state, dir) = makeState()
+        defer { cleanUp(dir) }
+
+        state.aiBackendMode = .local
+        state.localLLMEligibilityOverride = .appleIntelligenceDisabled
+
+        await state.onLaunch()
+
+        #expect(state.aiBackendMode == .local)
+        #expect(state.llmCompatibilityAlert?.kind == .appleIntelligenceDisabled)
+        #expect(
+            state.llmCompatibilityAlert?.message.contains(
+                "System Settings › Apple Intelligence & Siri") == true)
+    }
+
+    @Test func selectingLocalWithAppleIntelligenceDisabledFailsAndShowsAlert() {
+        clearDefaults()
+        let (state, dir) = makeState()
+        defer { cleanUp(dir) }
+
+        state.aiBackendMode = .cloud
+        state.localLLMEligibilityOverride = .appleIntelligenceDisabled
+
+        let selected = state.requestAIBackendMode(.local)
+
+        #expect(!selected)
+        #expect(state.aiBackendMode == .cloud)
+        #expect(state.llmCompatibilityAlert?.kind == .appleIntelligenceDisabled)
+        #expect(
+            state.llmCompatibilityAlert?.message.contains(
+                "System Settings › Apple Intelligence & Siri") == true)
+    }
+
+    @Test func selectingLocalWhenReadySucceedsWithoutAlert() {
+        clearDefaults()
+        let (state, dir) = makeState()
+        defer { cleanUp(dir) }
+
+        state.aiBackendMode = .cloud
+        state.localLLMEligibilityOverride = .ready
+
+        let selected = state.requestAIBackendMode(.local)
+
+        #expect(selected)
+        #expect(state.aiBackendMode == .local)
+        #expect(state.llmCompatibilityAlert == nil)
     }
 
     /// OpenRouter works on every Mac today, so it is the default; Apple

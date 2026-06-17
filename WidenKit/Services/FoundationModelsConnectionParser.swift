@@ -4,6 +4,7 @@
     import FoundationModels
 
     /// Structured output schema for paste-autofill extraction.
+    @available(macOS 26.0, *)
     @Generable(description: "PostgreSQL connection details found in the pasted text.")
     struct GeneratedConnectionDetails {
         @Guide(description: "Hostname or IP address of the PostgreSQL server.")
@@ -32,6 +33,7 @@
     /// feature is disabled rather than ever falling back to a remote model.
     /// For the same reason nothing here is written to `GenerationLog` — the
     /// prompt would put passwords in a plain-text file.
+    @available(macOS 26.0, *)
     public final class FoundationModelsConnectionParser: ConnectionDetailsParsing, Sendable {
         public init() {}
 

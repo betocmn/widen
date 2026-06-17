@@ -21,6 +21,19 @@ public enum SidebarItem: Hashable, Sendable {
     case session(UUID)
 }
 
+public struct LLMCompatibilityAlert: Identifiable, Equatable, Sendable {
+    public enum Kind: Equatable, Sendable {
+        case macOSTooOld
+        case appleIntelligenceDisabled
+        case localUnavailable
+    }
+
+    public let id = UUID()
+    public let kind: Kind
+    public let title: String
+    public let message: String
+}
+
 /// Root application state. Owns the services, the configured connections,
 /// and the persistent query sessions shared across views.
 @MainActor
@@ -97,6 +110,7 @@ public final class AppState {
     public var databaseSettingsRequest = 0
     public var pendingDatabaseSettingsRequest: DatabaseSettingsRequest?
     public var errorBanner: String?
+    public var llmCompatibilityAlert: LLMCompatibilityAlert?
 
     /// Developer toggle: use the deterministic mock generator instead of the
     /// on-device model.
@@ -111,7 +125,7 @@ public final class AppState {
     public var aiBackendMode: AIBackendMode =
         AIBackendMode(
             rawValue: UserDefaults.standard.string(forKey: AppState.aiBackendModeKey) ?? "")
-        ?? .local
+        ?? AppState.defaultAIBackendMode()
     {
         didSet { UserDefaults.standard.set(aiBackendMode.rawValue, forKey: Self.aiBackendModeKey) }
     }
@@ -147,6 +161,7 @@ public final class AppState {
     var pccAvailabilityMessageOverride: String??
     var pccQuotaLimitReachedMessageOverride: String??
     var localModelAvailabilityMessageOverride: String??
+    var localLLMEligibilityOverride: LocalLLMEligibility?
     var sqlGeneratorOverride: (any SQLGenerator)?
     var queryExecutorOverride: (any QueryExecuting)?
 
@@ -210,12 +225,18 @@ public final class AppState {
         }
     }
 
-    /// The active SQL generation backend: mock wins, then the cloud backend
-    /// when selected and ready, then the on-device model.
+    /// The active SQL generation backend: mock wins, then the selected
+    /// backend if it is available. Production never silently swaps to another
+    /// backend when the selected one is unavailable.
     public var sqlGenerator: any SQLGenerator {
         if let sqlGeneratorOverride { return sqlGeneratorOverride }
         if useMockAI { return MockSQLGenerator() }
-        if aiBackendMode == .cloud, case .ready = cloudBackendStatus {
+        if aiBackendMode == .cloud {
+            guard case .ready = cloudBackendStatus else {
+                return UnavailableSQLGenerator(
+                    message: cloudBackendStatus.message
+                        ?? "The selected cloud model is unavailable. Check Settings › LLM.")
+            }
             switch cloudProvider {
             case .openRouter:
                 if let key = openRouterAPIKey, !key.isEmpty {
@@ -226,19 +247,33 @@ public final class AppState {
                     return generator
                 }
             }
+            return UnavailableSQLGenerator(
+                message: "The selected cloud model is unavailable. Check Settings › LLM.")
         }
+
+        let localStatus = localLLMEligibility
+        guard localStatus.isReady else {
+            return UnavailableSQLGenerator(message: localStatus.message)
+        }
+
         #if canImport(FoundationModels)
-            return FoundationModelsSQLGenerator()
+            if #available(macOS 26.0, *) {
+                return FoundationModelsSQLGenerator()
+            }
         #else
-            return MockSQLGenerator()
+            return UnavailableSQLGenerator(
+                message: LocalLLMEligibility.sdkUnavailable(
+                    "The FoundationModels framework is not available to this build."
+                ).message)
         #endif
+        return UnavailableSQLGenerator(message: localStatus.message)
     }
 
     /// Label for the backend now serving generations, phrased to follow
     /// "Generating SQL with …" in the spinner and Settings.
     public var activeBackendDisplayName: String {
         if useMockAI { return "the mock generator" }
-        if aiBackendMode == .cloud, case .ready = cloudBackendStatus {
+        if aiBackendMode == .cloud {
             switch cloudProvider {
             case .applePCC:
                 return "Apple Private Cloud Compute"
@@ -254,10 +289,11 @@ public final class AppState {
         if let titleGeneratorOverride { return titleGeneratorOverride }
         if useMockAI { return MockTitleGenerator() }
         #if canImport(FoundationModels)
-            return FoundationModelsTitleGenerator()
-        #else
-            return MockTitleGenerator()
+            if localLLMEligibility.isReady, #available(macOS 26.0, *) {
+                return FoundationModelsTitleGenerator()
+            }
         #endif
+        return MockTitleGenerator()
     }
     var titleGeneratorOverride: (any SessionTitleGenerating)?
 
@@ -267,10 +303,11 @@ public final class AppState {
     public var connectionDetailsParser: (any ConnectionDetailsParsing)? {
         if useMockAI { return MockConnectionDetailsParser() }
         #if canImport(FoundationModels)
-            return FoundationModelsConnectionParser()
-        #else
-            return MockConnectionDetailsParser()
+            if localLLMEligibility.isReady, #available(macOS 26.0, *) {
+                return FoundationModelsConnectionParser()
+            }
         #endif
+        return MockConnectionDetailsParser()
     }
 
     /// nil when paste autofill is available; otherwise the user-readable
@@ -280,17 +317,13 @@ public final class AppState {
     }
 
     /// nil when AI generation is ready; otherwise a user-readable reason.
-    /// In cloud mode an unusable provider surfaces here while generation
-    /// silently falls back to the on-device model.
+    /// In cloud mode an unusable provider surfaces here instead of silently
+    /// falling back to another backend.
     public var modelAvailabilityMessage: String? {
         if useMockAI { return nil }
         if aiBackendMode == .cloud {
             if let message = cloudBackendStatus.message {
-                if let localMessage = localModelAvailabilityMessage {
-                    return
-                        "\(message) The on-device fallback is also unavailable: \(localMessage)"
-                }
-                return "\(message) Using the on-device model until then."
+                return message
             }
             if cloudProvider == .applePCC {
                 return PCCSupport.quotaWarning
@@ -305,12 +338,12 @@ public final class AppState {
     /// section regardless of the active backend.
     public var localModelAvailabilityMessage: String? {
         if let localModelAvailabilityMessageOverride { return localModelAvailabilityMessageOverride }
-        #if canImport(FoundationModels)
-            return FoundationModelsSQLGenerator.availabilityMessage
-        #else
-            return
-                "This build does not include FoundationModels (SDK too old). Mock mode is the only AI option."
-        #endif
+        let status = localLLMEligibility
+        return status.isReady ? nil : status.message
+    }
+
+    public var localLLMEligibility: LocalLLMEligibility {
+        localLLMEligibilityOverride ?? LocalLLMEligibilityChecker.status()
     }
 
     public let connectionStore: ConnectionStore
@@ -371,6 +404,75 @@ public final class AppState {
 
         UserDefaults.standard.removeObject(forKey: Self.selectedSessionKey)
         sidebarSelection = nil
+        checkLocalLLMEligibilityForInstallIfNeeded()
+    }
+
+    public func checkLocalLLMEligibilityForInstallIfNeeded() {
+        let status = localLLMEligibility
+        if case .macOSTooOld = status {
+            aiBackendMode = .cloud
+            settingsTab = .llm
+        }
+        guard !status.isReady else { return }
+        guard !UserDefaults.standard.bool(forKey: Self.didShowInstallLLMCompatibilityAlertKey)
+        else { return }
+
+        UserDefaults.standard.set(true, forKey: Self.didShowInstallLLMCompatibilityAlertKey)
+        llmCompatibilityAlert = compatibilityAlert(for: status)
+    }
+
+    @discardableResult
+    public func requestAIBackendMode(_ mode: AIBackendMode) -> Bool {
+        switch mode {
+        case .local:
+            let status = localLLMEligibility
+            guard status.isReady else {
+                if case .macOSTooOld = status {
+                    aiBackendMode = .cloud
+                    settingsTab = .llm
+                }
+                llmCompatibilityAlert = compatibilityAlert(for: status)
+                return false
+            }
+            aiBackendMode = .local
+            return true
+        case .cloud:
+            if case .ready = cloudBackendStatus {
+                aiBackendMode = .cloud
+                return true
+            }
+            openSettings(tab: .llm)
+            return false
+        }
+    }
+
+    private func compatibilityAlert(for status: LocalLLMEligibility) -> LLMCompatibilityAlert {
+        switch status {
+        case .macOSTooOld:
+            return LLMCompatibilityAlert(
+                kind: .macOSTooOld,
+                title: "Local model requires macOS 26",
+                message: status.message
+            )
+        case .appleIntelligenceDisabled:
+            return LLMCompatibilityAlert(
+                kind: .appleIntelligenceDisabled,
+                title: "Enable Apple Intelligence for Local mode",
+                message: status.message
+            )
+        case .ready:
+            return LLMCompatibilityAlert(
+                kind: .localUnavailable,
+                title: "Local model ready",
+                message: status.message
+            )
+        default:
+            return LLMCompatibilityAlert(
+                kind: .localUnavailable,
+                title: "Local model unavailable",
+                message: status.message
+            )
+        }
     }
 
     /// Asks the UI to show Settings on the given tab. MainView watches
@@ -449,6 +551,21 @@ public final class AppState {
         guard let schema = schemas[connectionID] else { return nil }
         guard let name = currentSchemaName(for: connectionID) else { return schema }
         return schema.filtered(toSchema: name)
+    }
+
+    static var didShowInstallLLMCompatibilityAlertKey: String {
+        let version =
+            Bundle.main.object(forInfoDictionaryKey: "CFBundleShortVersionString") as? String
+            ?? "dev"
+        let build = Bundle.main.object(forInfoDictionaryKey: "CFBundleVersion") as? String ?? "0"
+        return "WidenDidShowInstallLLMCompatibilityAlert.\(version).\(build).v1"
+    }
+
+    private static func defaultAIBackendMode() -> AIBackendMode {
+        if case .macOSTooOld = LocalLLMEligibilityChecker.status() {
+            return .cloud
+        }
+        return .local
     }
 
     private static func loadSelectedSchemaNames() -> [UUID: String] {

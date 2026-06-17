@@ -2,10 +2,9 @@
 
 **Ask Postgres with the LLM already on your Mac.**
 
-Widen is a free, open-source, native macOS Postgres GUI for macOS 26+.
-It introspects your schema, drafts SQL with Apple's on-device Foundation Model
-through the macOS Foundation Models framework, shows every query for review,
-and only runs what you approve.
+Widen is a free, open-source, native macOS Postgres GUI for Apple Silicon Macs
+running macOS 15.5 or later. It introspects your schema, drafts SQL with a local
+or cloud model, shows every query for review, and only runs what you approve.
 
 No backend. No account. No analytics. Local by default.
 
@@ -13,15 +12,15 @@ No backend. No account. No analytics. Local by default.
 · [Build from source](#build-and-run)
 · [Release notes](https://github.com/betocmn/widen/releases/latest)
 
-`macOS 26+` · `Apple Silicon` · `Apple Intelligence for local AI` ·
-`No backend` · `No account` · `MIT` · `Postgres-only MVP`
+`macOS 15.5+ app` · `macOS 26+ local AI` · `Apple Silicon` ·
+`Apple Intelligence for local AI` · `No backend` · `No account` · `MIT` ·
+`Postgres-only MVP`
 
 ## What makes this new?
 
 Starting with macOS 26, supported Apple Silicon Macs can run Apple's Foundation
-Model on-device. Widen uses that local model for a practical developer
-workflow: turning schema-aware questions into SQL you can inspect before
-running.
+Model on-device. Widen uses that local model where available, and can use a
+cloud model with your own API key on macOS 15.5 or later.
 
 It is not an autonomous database agent. Widen drafts SQL, validates it, and
 waits for you to decide whether to run it.
@@ -41,9 +40,10 @@ are served from GitHub Releases.
 
 | Requirement | Notes |
 | --- | --- |
-| macOS 26 or later | Required for the Foundation Models framework. |
-| Apple Silicon | Required for Apple's on-device Foundation Model. |
-| Apple Intelligence enabled | Required for local AI generation. Manual SQL still works without it. |
+| macOS 15.5 or later | Required to run the app on Apple Silicon. Manual SQL and cloud models work here. |
+| macOS 26 or later | Required for the local Apple Foundation Model. |
+| Apple Silicon | Required for supported Widen builds and Apple's on-device Foundation Model. |
+| Apple Intelligence enabled | Required for local AI generation. Manual SQL and cloud models still work without it. |
 | PostgreSQL | Widen is Postgres-only today. [Postgres.app](https://postgresapp.com) works well for local testing. |
 | Xcode 26 | Only needed when building from source. |
 
@@ -54,8 +54,8 @@ configure.
 
 | Mode | Schema/question | Query results | Notes |
 | --- | ---: | ---: | --- |
-| Local mode | Stays on your Mac | Stays on your Mac | Default. Prompts go to Apple's local Foundation Model through macOS. |
-| Cloud mode | Sent to the provider you choose | Stays on your Mac | Optional. Use Apple Private Cloud Compute on macOS 27+, or OpenRouter with your own API key. |
+| Local mode | Stays on your Mac | Stays on your Mac | Default when available. Requires macOS 26+, Apple Intelligence, and an eligible Apple Silicon Mac. |
+| Cloud mode | Sent to the provider you choose | Stays on your Mac | Use Apple Private Cloud Compute on macOS 27+, or OpenRouter with your own API key. |
 
 Passwords and API keys live in the macOS Keychain, never on disk in plaintext.
 
@@ -85,7 +85,7 @@ schemas, keeping query sessions, and turning questions into SQL:
   keys in the inspector.
 - Keep persistent chat + SQL + results sessions that survive restarts.
 - Switch between the local model and optional cloud models from the toolbar.
-- Use the modern macOS 26 Liquid Glass interface with light/dark appearance.
+- Use a modern macOS interface with light/dark appearance and Liquid Glass on macOS 26.
 
 ## Known limitations
 
@@ -122,7 +122,8 @@ make xcode     # open the project in Xcode 26
 The committed `Widen.xcodeproj` is generated - edit `project.yml` and run
 `make project` instead of editing project settings by hand. If you open the
 project in Xcode directly, make sure it is **Xcode 26**, not an older default
-Xcode (older SDKs have no FoundationModels and a lower deployment target).
+Xcode. The app deploys to macOS 15.5, but local Foundation Models code needs the
+macOS 26 SDK.
 
 ## Release packaging
 

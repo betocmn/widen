@@ -27,7 +27,7 @@ public struct ErrorBannerView: View {
             .buttonStyle(.plain)
         }
         .padding(10)
-        .glassEffect(.regular.tint(.red.opacity(0.35)), in: .rect(cornerRadius: 10))
+        .widenGlassEffect(cornerRadius: 10, tint: .red.opacity(0.35))
         .padding([.horizontal, .top], 10)
     }
 }
