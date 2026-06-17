@@ -33,6 +33,7 @@ struct WidenApp: App {
                     }
                 }
         }
+        .windowResizability(.contentMinSize)
         .commands {
             CommandGroup(after: .appInfo) {
                 if updaterModel.isConfigured {

@@ -17,7 +17,6 @@ public struct MainView: View {
 
         NavigationSplitView(columnVisibility: $columnVisibility) {
             SidebarView()
-                .navigationSplitViewColumnWidth(min: 230, ideal: 280, max: 400)
                 // Replace the system sidebar toggle with our own at the
                 // sidebar's trailing corner (the side facing the content),
                 // mirroring the inspector toggle — and without the glass
@@ -35,6 +34,7 @@ public struct MainView: View {
                         .sharedBackgroundVisibility(.hidden)
                     }
                 }
+                .navigationSplitViewColumnWidth(min: 340, ideal: 340, max: 480)
         } detail: {
             VStack(spacing: 0) {
                 if let message = appState.errorBanner {
@@ -87,7 +87,7 @@ public struct MainView: View {
         // can exceed the screen; macOS 26 then keeps the content laid out
         // wider than the clamped window and the panes clip their leading
         // and trailing edges.
-        .frame(minWidth: 900, idealWidth: 1100, minHeight: 560, idealHeight: 700)
+        .frame(minWidth: 1040, idealWidth: 1200, minHeight: 560, idealHeight: 700)
         .task {
             await appState.onLaunch()
         }
