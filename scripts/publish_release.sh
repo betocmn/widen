@@ -91,6 +91,25 @@ find_main_worktree() {
     '
 }
 
+local_tag_commit() {
+  git rev-parse -q --verify "$TAG_NAME^{}" 2>/dev/null || true
+}
+
+remote_tag_commit() {
+  git ls-remote origin "refs/tags/$TAG_NAME*" |
+    awk -v ref="refs/tags/$TAG_NAME" '
+      $2 == ref "^{}" { peeled = $1 }
+      $2 == ref { direct = $1 }
+      END {
+        if (peeled != "") {
+          print peeled
+        } else if (direct != "") {
+          print direct
+        }
+      }
+    '
+}
+
 cleanup() {
   if [ -n "$TEMP_MAIN_WORKTREE" ] && [ -d "$TEMP_MAIN_WORKTREE" ]; then
     git worktree remove "$TEMP_MAIN_WORKTREE" --force >/dev/null 2>&1 || true
@@ -173,7 +192,7 @@ CURRENT_BRANCH="$(git branch --show-current)"
 [ -n "$CURRENT_BRANCH" ] || die "release must run from a branch, not detached HEAD"
 
 TAG_NAME="v$TARGET_VERSION"
-GITHUB_DOWNLOAD_PREFIX="https://github.com/$REPO/releases/download/$TAG_NAME/"
+GITHUB_RELEASE_DOWNLOAD_URL="https://github.com/$REPO/releases/download/$TAG_NAME/"
 CURRENT_VERSION="$(project_value MARKETING_VERSION)"
 CURRENT_BUILD="$(project_value CURRENT_PROJECT_VERSION)"
 [ -n "$CURRENT_VERSION" ] || die "could not read MARKETING_VERSION from project.yml"
@@ -195,20 +214,17 @@ run git fetch --prune origin
 git merge-base --is-ancestor origin/main HEAD ||
   die "current branch must contain origin/main before releasing"
 
-if git rev-parse -q --verify "refs/tags/$TAG_NAME" >/dev/null; then
-  die "local tag already exists: $TAG_NAME"
-fi
-
-if [ -n "$(git ls-remote --tags origin "refs/tags/$TAG_NAME")" ]; then
-  die "remote tag already exists: $TAG_NAME"
-fi
-
-if gh release view "$TAG_NAME" --repo "$REPO" >/dev/null 2>&1; then
-  die "GitHub Release already exists: $TAG_NAME"
-fi
-
 gh auth status --hostname github.com >/dev/null
 gh repo view "$REPO" >/dev/null
+
+EXISTING_RELEASE_IS_DRAFT="$(
+  gh release view "$TAG_NAME" --repo "$REPO" --json isDraft --jq .isDraft 2>/dev/null || true
+)"
+if [ "$EXISTING_RELEASE_IS_DRAFT" = "false" ]; then
+  die "GitHub Release already exists and is published: $TAG_NAME"
+elif [ "$EXISTING_RELEASE_IS_DRAFT" = "true" ]; then
+  log "Found existing draft GitHub Release $TAG_NAME; release assets will be replaced after build."
+fi
 
 MAIN_WORKTREE="$(find_main_worktree)"
 if [ -n "$MAIN_WORKTREE" ]; then
@@ -234,10 +250,10 @@ if [ "$DRY_RUN" -eq 1 ]; then
   log "  update project.yml to $TARGET_VERSION ($TARGET_BUILD)"
   log "  run make project and make test"
   log "  run make release-mac"
-  log "  generate appcast.xml with ZIP URL $GITHUB_DOWNLOAD_PREFIX$APP_NAME-$TARGET_VERSION.zip"
+  log "  generate appcast.xml with ZIP URL $GITHUB_RELEASE_DOWNLOAD_URL$APP_NAME-$TARGET_VERSION.zip"
   log "  fast-forward main to this release commit and push origin main"
-  log "  create and push tag $TAG_NAME"
-  log "  create a draft GitHub Release with Widen.dmg, $APP_NAME-$TARGET_VERSION.zip, and appcast.xml"
+  log "  create or reuse tag $TAG_NAME when it points at the release commit"
+  log "  create or update a draft GitHub Release with Widen.dmg, $APP_NAME-$TARGET_VERSION.zip, and appcast.xml"
   exit 0
 fi
 
@@ -276,7 +292,6 @@ log "Building signed and notarized release artifacts"
 run env \
   RELEASE_MAC_SKIP_GITHUB_HINT=1 \
   REPO="$REPO" \
-  DOWNLOAD_URL_PREFIX="$GITHUB_DOWNLOAD_PREFIX" \
   make release-mac
 
 DMG_PATH="build/release-artifacts/$TARGET_VERSION/$APP_NAME.dmg"
@@ -300,15 +315,52 @@ else
 fi
 
 run git -C "$MAIN_WORKTREE" push origin main
-run git -C "$MAIN_WORKTREE" tag -a "$TAG_NAME" "$RELEASE_COMMIT" -m "$APP_NAME $TARGET_VERSION"
-run git -C "$MAIN_WORKTREE" push origin "$TAG_NAME"
 
-run gh release create "$TAG_NAME" "$DMG_PATH" "$SPARKLE_ZIP_PATH" "$APPCAST_PATH" \
-  --repo "$REPO" \
-  --draft \
-  --verify-tag \
-  --title "$APP_NAME $TARGET_VERSION" \
-  --generate-notes
+LOCAL_TAG_COMMIT="$(local_tag_commit)"
+REMOTE_TAG_COMMIT="$(remote_tag_commit)"
+
+if [ -n "$LOCAL_TAG_COMMIT" ] && [ "$LOCAL_TAG_COMMIT" != "$RELEASE_COMMIT" ]; then
+  die "local tag $TAG_NAME points at $LOCAL_TAG_COMMIT, not release commit $RELEASE_COMMIT"
+fi
+
+if [ -n "$REMOTE_TAG_COMMIT" ] && [ "$REMOTE_TAG_COMMIT" != "$RELEASE_COMMIT" ]; then
+  die "remote tag $TAG_NAME points at $REMOTE_TAG_COMMIT, not release commit $RELEASE_COMMIT"
+fi
+
+if [ -z "$LOCAL_TAG_COMMIT" ] && [ -n "$REMOTE_TAG_COMMIT" ]; then
+  run git fetch origin "refs/tags/$TAG_NAME:refs/tags/$TAG_NAME"
+  LOCAL_TAG_COMMIT="$(local_tag_commit)"
+fi
+
+if [ -z "$LOCAL_TAG_COMMIT" ]; then
+  run git -C "$MAIN_WORKTREE" tag -a "$TAG_NAME" "$RELEASE_COMMIT" -m "$APP_NAME $TARGET_VERSION"
+else
+  log "Tag $TAG_NAME already points at release commit; reusing it."
+fi
+
+if [ -z "$REMOTE_TAG_COMMIT" ]; then
+  run git -C "$MAIN_WORKTREE" push origin "$TAG_NAME"
+else
+  log "Remote tag $TAG_NAME already points at release commit; reusing it."
+fi
+
+EXISTING_RELEASE_IS_DRAFT="$(
+  gh release view "$TAG_NAME" --repo "$REPO" --json isDraft --jq .isDraft 2>/dev/null || true
+)"
+if [ "$EXISTING_RELEASE_IS_DRAFT" = "true" ]; then
+  run gh release upload "$TAG_NAME" "$DMG_PATH" "$SPARKLE_ZIP_PATH" "$APPCAST_PATH" \
+    --repo "$REPO" \
+    --clobber
+elif [ -z "$EXISTING_RELEASE_IS_DRAFT" ]; then
+  run gh release create "$TAG_NAME" "$DMG_PATH" "$SPARKLE_ZIP_PATH" "$APPCAST_PATH" \
+    --repo "$REPO" \
+    --draft \
+    --verify-tag \
+    --title "$APP_NAME $TARGET_VERSION" \
+    --generate-notes
+else
+  die "GitHub Release already exists and is published: $TAG_NAME"
+fi
 
 RELEASE_URL="$(gh release view "$TAG_NAME" --repo "$REPO" --json url -q .url)"
 

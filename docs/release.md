@@ -15,10 +15,10 @@ The script:
 
 - Updates release version files and commits the bump when needed.
 - Runs tests, builds, signs, notarizes, staples, and packages the app.
-- Fast-forwards local `main`, pushes `main`, creates tag `vX.Y.Z`, and pushes
-  the tag.
-- Creates a draft GitHub Release in `https://github.com/betocmn/widen` with the
-  DMG, Sparkle ZIP, and appcast uploaded as release assets.
+- Fast-forwards local `main`, pushes `main`, creates or reuses tag `vX.Y.Z`,
+  and pushes the tag when needed.
+- Creates or updates a draft GitHub Release in `https://github.com/betocmn/widen`
+  with the DMG, Sparkle ZIP, and appcast uploaded as release assets.
 
 ## One-Time Local Setup
 
@@ -39,10 +39,6 @@ The script:
    Optional values:
 
    - `DEVELOPER_DIR`: Xcode path. The default is `/Applications/Xcode-26.app/Contents/Developer`.
-   - `DOWNLOAD_URL_PREFIX`: advanced override for Sparkle ZIP enclosure URLs.
-     Leave blank for normal GitHub Releases hosting.
-   - `STAGE_WEBSITE` and `WEBSITE_REPO`: legacy website staging. Normal
-     releases do not use these.
 
    `.env.release.local` is ignored by git. Do not commit it.
 
@@ -113,8 +109,8 @@ The script:
 
    Build number behavior:
 
-   - If `X.Y.Z` already matches the project version and no tag/release exists,
-     the current build number is reused.
+   - If `X.Y.Z` already matches the project version, the current build number is
+     reused.
    - Otherwise the current build number is incremented by one.
    - `--build N` overrides the automatic build number.
 
@@ -122,8 +118,8 @@ The script:
 
    The script validates the release environment, updates `project.yml`, runs
    `make project`, commits changed version files, runs `make test`, runs
-   `make release-mac`, fast-forwards `main`, pushes `main`, creates and pushes
-   tag `vX.Y.Z`, creates a draft GitHub Release, and uploads:
+   `make release-mac`, fast-forwards `main`, pushes `main`, creates or reuses
+   tag `vX.Y.Z`, creates or updates a draft GitHub Release, and uploads:
 
    - `build/release-artifacts/X.Y.Z/Widen.dmg`
    - `build/release-artifacts/X.Y.Z/Widen-X.Y.Z.zip`
@@ -191,5 +187,7 @@ website changes unless the site displays hardcoded release version text.
 - Keychain prompt: choose **Always Allow** for the Developer ID private key.
 - Slow notarization: query status with `xcrun notarytool info <submission-id>
   --keychain-profile "$NOTARY_PROFILE"`.
-- Unexpected website staging: normal releases ignore `WEBSITE_REPO`. Set
-  `STAGE_WEBSITE=1` only if you need the legacy appcast handoff.
+- Retry after a partial publish: rerun the same command. If tag `vX.Y.Z`
+  already points at the same release commit, the script reuses it. If a draft
+  GitHub Release already exists, the script replaces its assets. Published
+  releases and tags pointing at a different commit still stop the release.

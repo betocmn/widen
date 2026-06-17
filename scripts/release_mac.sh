@@ -20,9 +20,6 @@ NOTARY_PROFILE="${NOTARY_PROFILE:-}"
 SPARKLE_ACCOUNT="${SPARKLE_ACCOUNT:-ed25519}"
 SPARKLE_PUBLIC_ED_KEY="${SPARKLE_PUBLIC_ED_KEY:-}"
 BUNDLE_ID_PREFIX="${BUNDLE_ID_PREFIX:-}"
-WEBSITE_REPO="${WEBSITE_REPO:-}"
-STAGE_WEBSITE="${STAGE_WEBSITE:-0}"
-DOWNLOAD_URL_PREFIX="${DOWNLOAD_URL_PREFIX:-}"
 DERIVED_DATA_PATH="${DERIVED_DATA_PATH:-build/release}"
 ARTIFACT_ROOT="${ARTIFACT_ROOT:-build/release-artifacts}"
 
@@ -198,13 +195,7 @@ DMG_PATH="$RELEASE_DIR/$APP_NAME.dmg"
 APPCAST_PATH="$RELEASE_DIR/appcast.xml"
 APPCAST_INPUT_DIR="$TMP_DIR/appcast-input"
 
-if [ -z "$DOWNLOAD_URL_PREFIX" ]; then
-  DOWNLOAD_URL_PREFIX="https://github.com/$REPO/releases/download/v$VERSION/"
-fi
-case "$DOWNLOAD_URL_PREFIX" in
-  */) ;;
-  *) DOWNLOAD_URL_PREFIX="$DOWNLOAD_URL_PREFIX/" ;;
-esac
+SPARKLE_DOWNLOAD_BASE_URL="https://github.com/$REPO/releases/download/v$VERSION/"
 
 rm -rf "$RELEASE_DIR"
 mkdir -p "$TMP_DIR"
@@ -228,11 +219,11 @@ mkdir -p "$APPCAST_INPUT_DIR"
 cp "$SPARKLE_ZIP" "$APPCAST_INPUT_DIR/"
 "$GENERATE_APPCAST" \
   --account "$SPARKLE_ACCOUNT" \
-  --download-url-prefix "$DOWNLOAD_URL_PREFIX" \
+  --download-url-prefix "$SPARKLE_DOWNLOAD_BASE_URL" \
   -o "$APPCAST_PATH" \
   "$APPCAST_INPUT_DIR"
 
-EXPECTED_SPARKLE_URL="$DOWNLOAD_URL_PREFIX$APP_NAME-$VERSION.zip"
+EXPECTED_SPARKLE_URL="$SPARKLE_DOWNLOAD_BASE_URL$APP_NAME-$VERSION.zip"
 APPCAST_SPARKLE_URL="$(
   xmllint --xpath "string(//*[local-name()='enclosure'][contains(@url, '$APP_NAME-$VERSION.zip')]/@url)" \
     "$APPCAST_PATH" 2>/dev/null || true
@@ -259,47 +250,6 @@ xcrun notarytool submit "$DMG_PATH" --keychain-profile "$NOTARY_PROFILE" --wait
 xcrun stapler staple "$DMG_PATH"
 xcrun stapler validate "$DMG_PATH"
 spctl -a -vvv -t open --context context:primary-signature "$DMG_PATH"
-
-if [ "$STAGE_WEBSITE" = "1" ] && [ -n "$WEBSITE_REPO" ]; then
-  need npm
-
-  [ -d "$WEBSITE_REPO" ] || die "WEBSITE_REPO does not exist: $WEBSITE_REPO"
-  [ -d "$WEBSITE_REPO/public/releases" ] ||
-    die "WEBSITE_REPO is missing public/releases: $WEBSITE_REPO"
-  [ -f "$WEBSITE_REPO/public/appcast.xml" ] ||
-    die "WEBSITE_REPO is missing public/appcast.xml: $WEBSITE_REPO"
-
-  WEBSITE_ZIP="$WEBSITE_REPO/public/releases/$APP_NAME-$VERSION.zip"
-  cp "$SPARKLE_ZIP" "$WEBSITE_ZIP"
-
-  printf 'Generating Sparkle appcast in %s\n' "$WEBSITE_REPO/public/appcast.xml"
-  "$GENERATE_APPCAST" \
-    --account "$SPARKLE_ACCOUNT" \
-    --download-url-prefix "$DOWNLOAD_URL_PREFIX" \
-    -o "$WEBSITE_REPO/public/appcast.xml" \
-    "$WEBSITE_REPO/public/releases"
-
-  SIGNATURE="$(
-    xmllint --xpath "string(//*[local-name()='enclosure'][contains(@url, '$APP_NAME-$VERSION.zip')]/@*[local-name()='edSignature'])" \
-      "$WEBSITE_REPO/public/appcast.xml" 2>/dev/null || true
-  )"
-  [ -n "$SIGNATURE" ] || die "generated appcast is missing a Sparkle EdDSA signature for $APP_NAME-$VERSION.zip"
-  "$SIGN_UPDATE" --account "$SPARKLE_ACCOUNT" --verify "$WEBSITE_ZIP" "$SIGNATURE"
-
-  (
-    cd "$WEBSITE_REPO"
-    if [ ! -x node_modules/.bin/astro ]; then
-      if [ -f package-lock.json ]; then
-        npm ci
-      else
-        npm install
-      fi
-    fi
-    npm run build
-  )
-else
-  printf 'Skipping legacy website handoff; set STAGE_WEBSITE=1 and WEBSITE_REPO to stage appcast files there.\n'
-fi
 
 rm -rf "$TMP_DIR"
 
