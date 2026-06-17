@@ -68,10 +68,6 @@ struct FoundationModelsSmokeTests {
     @Test(.timeLimit(.minutes(3)))
     func modelIsAvailableAndGeneratesValidSQL() async throws {
         #if canImport(FoundationModels)
-            guard #available(macOS 26.0, *) else {
-                Issue.record("FoundationModels requires macOS 26 or later")
-                return
-            }
             let model = SystemLanguageModel.default
             print("Foundation Models availability: \(model.availability)")
             guard model.isAvailable else {
@@ -101,10 +97,6 @@ struct FoundationModelsSmokeTests {
     @Test(.timeLimit(.minutes(3)))
     func modelGeneratesValidAverageOrdersPerDaySQL() async throws {
         #if canImport(FoundationModels)
-            guard #available(macOS 26.0, *) else {
-                Issue.record("FoundationModels requires macOS 26 or later")
-                return
-            }
             let model = SystemLanguageModel.default
             guard model.isAvailable else {
                 Issue.record("Model unavailable: \(model.availability)")
@@ -134,10 +126,6 @@ struct FoundationModelsSmokeTests {
     @Test(.timeLimit(.minutes(2)))
     func modelGeneratesUsableSessionTitle() async throws {
         #if canImport(FoundationModels)
-            guard #available(macOS 26.0, *) else {
-                Issue.record("FoundationModels requires macOS 26 or later")
-                return
-            }
             let model = SystemLanguageModel.default
             guard model.isAvailable else {
                 Issue.record("Model unavailable: \(model.availability)")
@@ -160,10 +148,6 @@ struct FoundationModelsSmokeTests {
     @Test(.timeLimit(.minutes(2)))
     func modelExtractsConnectionDetailsFromPastedURL() async throws {
         #if canImport(FoundationModels)
-            guard #available(macOS 26.0, *) else {
-                Issue.record("FoundationModels requires macOS 26 or later")
-                return
-            }
             let model = SystemLanguageModel.default
             guard model.isAvailable else {
                 Issue.record("Model unavailable: \(model.availability)")
@@ -192,10 +176,6 @@ struct FoundationModelsSmokeTests {
     @Test(.timeLimit(.minutes(2)))
     func modelExtractsConnectionDetailsFromEnvLines() async throws {
         #if canImport(FoundationModels)
-            guard #available(macOS 26.0, *) else {
-                Issue.record("FoundationModels requires macOS 26 or later")
-                return
-            }
             let model = SystemLanguageModel.default
             guard model.isAvailable else {
                 Issue.record("Model unavailable: \(model.availability)")
@@ -229,10 +209,6 @@ struct FoundationModelsSmokeTests {
     @Test(.timeLimit(.minutes(2)))
     func extractsSupabasePoolerUsernameVerbatim() async throws {
         #if canImport(FoundationModels)
-            guard #available(macOS 26.0, *) else {
-                Issue.record("FoundationModels requires macOS 26 or later")
-                return
-            }
             let model = SystemLanguageModel.default
             guard model.isAvailable else {
                 Issue.record("Model unavailable: \(model.availability)")

@@ -16,7 +16,25 @@ public struct MainView: View {
         @Bindable var appState = appState
 
         NavigationSplitView(columnVisibility: $columnVisibility) {
-            sidebarColumn
+            SidebarView()
+                // Replace the system sidebar toggle with our own at the
+                // sidebar's trailing corner (the side facing the content),
+                // mirroring the inspector toggle — and without the glass
+                // container, so neither panel toggle merges into the
+                // neighbouring toolbar pills.
+                .toolbar(removing: .sidebarToggle)
+                .toolbar {
+                    if columnVisibility != .detailOnly {
+                        // The flexible spacer pushes the toggle to the
+                        // sidebar's trailing corner, against the divider.
+                        ToolbarSpacer(.flexible)
+                        ToolbarItem {
+                            SidebarToggle(columnVisibility: $columnVisibility)
+                        }
+                        .sharedBackgroundVisibility(.hidden)
+                    }
+                }
+                .navigationSplitViewColumnWidth(min: 340, ideal: 340, max: 480)
         } detail: {
             VStack(spacing: 0) {
                 if let message = appState.errorBanner {
@@ -36,16 +54,10 @@ public struct MainView: View {
             // corner. The appearance toggle lives in the sidebar footer.
             .toolbar {
                 if columnVisibility == .detailOnly {
-                    if #available(macOS 26.0, *) {
-                        ToolbarItem(placement: .navigation) {
-                            SidebarToggle(columnVisibility: $columnVisibility)
-                        }
-                        .sharedBackgroundVisibility(.hidden)
-                    } else {
-                        ToolbarItem(placement: .navigation) {
-                            SidebarToggle(columnVisibility: $columnVisibility)
-                        }
+                    ToolbarItem(placement: .navigation) {
+                        SidebarToggle(columnVisibility: $columnVisibility)
                     }
+                    .sharedBackgroundVisibility(.hidden)
                 }
                 ToolbarItem(placement: .navigation) {
                     breadcrumb
@@ -53,16 +65,10 @@ public struct MainView: View {
                 ToolbarItem(placement: .navigation) {
                     AIBackendToggle()
                 }
-                if #available(macOS 26.0, *) {
-                    ToolbarItem(placement: .primaryAction) {
-                        SchemaInspectorToggle()
-                    }
-                    .sharedBackgroundVisibility(.hidden)
-                } else {
-                    ToolbarItem(placement: .primaryAction) {
-                        SchemaInspectorToggle()
-                    }
+                ToolbarItem(placement: .primaryAction) {
+                    SchemaInspectorToggle()
                 }
+                .sharedBackgroundVisibility(.hidden)
             }
         }
         // Attached to the split view (not the detail content) so the detail
@@ -102,41 +108,6 @@ public struct MainView: View {
             NotificationCenter.default.publisher(for: NSApplication.willTerminateNotification)
         ) { _ in
             appState.flushSessions()
-        }
-    }
-
-    @ViewBuilder
-    private var sidebarColumn: some View {
-        if #available(macOS 26.0, *) {
-            SidebarView()
-                // Replace the system sidebar toggle with our own at the
-                // sidebar's trailing corner (the side facing the content),
-                // mirroring the inspector toggle — and without the glass
-                // container, so neither panel toggle merges into the
-                // neighbouring toolbar pills.
-                .toolbar(removing: .sidebarToggle)
-                .toolbar {
-                    if columnVisibility != .detailOnly {
-                        // The flexible spacer pushes the toggle to the
-                        // sidebar's trailing corner, against the divider.
-                        ToolbarSpacer(.flexible)
-                        ToolbarItem {
-                            SidebarToggle(columnVisibility: $columnVisibility)
-                        }
-                        .sharedBackgroundVisibility(.hidden)
-                    }
-                }
-                .navigationSplitViewColumnWidth(min: 340, ideal: 340, max: 480)
-        } else {
-            SidebarView()
-                .toolbar {
-                    if columnVisibility != .detailOnly {
-                        ToolbarItem(placement: .navigation) {
-                            SidebarToggle(columnVisibility: $columnVisibility)
-                        }
-                    }
-                }
-                .navigationSplitViewColumnWidth(min: 340, ideal: 340, max: 480)
         }
     }
 
@@ -235,7 +206,7 @@ private struct WelcomeDetailView: View {
                 Button(action: addDatabase) {
                     Label("Add Database", systemImage: "plus")
                 }
-                .widenGlassProminentButtonStyle()
+                .buttonStyle(.glassProminent)
             }
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity)

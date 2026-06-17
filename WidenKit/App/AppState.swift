@@ -23,7 +23,6 @@ public enum SidebarItem: Hashable, Sendable {
 
 public struct LLMCompatibilityAlert: Identifiable, Equatable, Sendable {
     public enum Kind: Equatable, Sendable {
-        case macOSTooOld
         case appleIntelligenceDisabled
         case localUnavailable
     }
@@ -125,7 +124,7 @@ public final class AppState {
     public var aiBackendMode: AIBackendMode =
         AIBackendMode(
             rawValue: UserDefaults.standard.string(forKey: AppState.aiBackendModeKey) ?? "")
-        ?? AppState.defaultAIBackendMode()
+        ?? .local
     {
         didSet { UserDefaults.standard.set(aiBackendMode.rawValue, forKey: Self.aiBackendModeKey) }
     }
@@ -257,9 +256,7 @@ public final class AppState {
         }
 
         #if canImport(FoundationModels)
-            if #available(macOS 26.0, *) {
-                return FoundationModelsSQLGenerator()
-            }
+            return FoundationModelsSQLGenerator()
         #else
             return UnavailableSQLGenerator(
                 message: LocalLLMEligibility.sdkUnavailable(
@@ -289,7 +286,7 @@ public final class AppState {
         if let titleGeneratorOverride { return titleGeneratorOverride }
         if useMockAI { return MockTitleGenerator() }
         #if canImport(FoundationModels)
-            if localLLMEligibility.isReady, #available(macOS 26.0, *) {
+            if localLLMEligibility.isReady {
                 return FoundationModelsTitleGenerator()
             }
         #endif
@@ -303,7 +300,7 @@ public final class AppState {
     public var connectionDetailsParser: (any ConnectionDetailsParsing)? {
         if useMockAI { return MockConnectionDetailsParser() }
         #if canImport(FoundationModels)
-            if localLLMEligibility.isReady, #available(macOS 26.0, *) {
+            if localLLMEligibility.isReady {
                 return FoundationModelsConnectionParser()
             }
         #endif
@@ -409,10 +406,6 @@ public final class AppState {
 
     public func checkLocalLLMEligibilityForInstallIfNeeded() {
         let status = localLLMEligibility
-        if case .macOSTooOld = status {
-            aiBackendMode = .cloud
-            settingsTab = .llm
-        }
         guard !status.isReady else { return }
         guard !UserDefaults.standard.bool(forKey: Self.didShowInstallLLMCompatibilityAlertKey)
         else { return }
@@ -427,10 +420,6 @@ public final class AppState {
         case .local:
             let status = localLLMEligibility
             guard status.isReady else {
-                if case .macOSTooOld = status {
-                    aiBackendMode = .cloud
-                    settingsTab = .llm
-                }
                 llmCompatibilityAlert = compatibilityAlert(for: status)
                 return false
             }
@@ -448,12 +437,6 @@ public final class AppState {
 
     private func compatibilityAlert(for status: LocalLLMEligibility) -> LLMCompatibilityAlert {
         switch status {
-        case .macOSTooOld:
-            return LLMCompatibilityAlert(
-                kind: .macOSTooOld,
-                title: "Local model requires macOS 26",
-                message: status.message
-            )
         case .appleIntelligenceDisabled:
             return LLMCompatibilityAlert(
                 kind: .appleIntelligenceDisabled,
@@ -559,13 +542,6 @@ public final class AppState {
             ?? "dev"
         let build = Bundle.main.object(forInfoDictionaryKey: "CFBundleVersion") as? String ?? "0"
         return "WidenDidShowInstallLLMCompatibilityAlert.\(version).\(build).v1"
-    }
-
-    private static func defaultAIBackendMode() -> AIBackendMode {
-        if case .macOSTooOld = LocalLLMEligibilityChecker.status() {
-            return .cloud
-        }
-        return .local
     }
 
     private static func loadSelectedSchemaNames() -> [UUID: String] {

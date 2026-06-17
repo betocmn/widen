@@ -4,7 +4,6 @@
     import FoundationModels
 
     /// Structured output schema for session titles.
-    @available(macOS 26.0, *)
     @Generable(description: "A short descriptive title for a database query session.")
     struct GeneratedSessionTitle {
         @Guide(
@@ -15,7 +14,6 @@
 
     /// Names sessions with Apple's on-device Foundation Model. Local-only:
     /// no network, no external LLM APIs.
-    @available(macOS 26.0, *)
     public final class FoundationModelsTitleGenerator: SessionTitleGenerating, Sendable {
         public init() {}
 

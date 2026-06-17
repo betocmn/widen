@@ -172,41 +172,6 @@ struct AIBackendSelectionTests {
         #expect(state.connectionAutofillUnavailableMessage == nil)
     }
 
-    @Test func firstLaunchOnOldMacOSSelectsCloudAndShowsAlert() async {
-        clearDefaults()
-        let (state, dir) = makeState()
-        defer { cleanUp(dir) }
-
-        state.aiBackendMode = .local
-        state.localLLMEligibilityOverride = .macOSTooOld(current: "15.6", required: "26")
-
-        await state.onLaunch()
-
-        #expect(state.aiBackendMode == .cloud)
-        #expect(state.settingsTab == .llm)
-        #expect(state.llmCompatibilityAlert?.kind == .macOSTooOld)
-        let message = state.llmCompatibilityAlert?.message ?? ""
-        #expect(message.contains("cloud model"))
-        #expect(message.contains("API key"))
-        #expect(message.contains("macOS 26"))
-    }
-
-    @Test func selectingLocalOnOldMacOSFailsAndShowsAlert() {
-        clearDefaults()
-        let (state, dir) = makeState()
-        defer { cleanUp(dir) }
-
-        state.aiBackendMode = .cloud
-        state.localLLMEligibilityOverride = .macOSTooOld(current: "15.6", required: "26")
-
-        let selected = state.requestAIBackendMode(.local)
-
-        #expect(!selected)
-        #expect(state.aiBackendMode == .cloud)
-        #expect(state.settingsTab == .llm)
-        #expect(state.llmCompatibilityAlert?.kind == .macOSTooOld)
-    }
-
     @Test func firstLaunchWithAppleIntelligenceDisabledShowsSettingsPath() async {
         clearDefaults()
         let (state, dir) = makeState()

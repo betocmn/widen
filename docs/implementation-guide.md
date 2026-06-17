@@ -39,8 +39,8 @@ Apple's `FoundationModels` framework when building with the macOS 26 SDK.
 ## Build And Runtime Assumptions
 
 The project requires Xcode 26 because Foundation Models is only available in
-the macOS 26 SDK. The app deployment target is macOS 15.5; the local Apple
-Foundation Model path is runtime-gated to macOS 26.0. The Makefile exports:
+the macOS 26 SDK, and the app deployment target is macOS 26.0. The Makefile
+exports:
 
 ```sh
 DEVELOPER_DIR=/Applications/Xcode-26.app/Contents/Developer
@@ -81,11 +81,10 @@ DEVELOPER_DIR=/Applications/Xcode-beta.app/Contents/Developer \
 
 All PCC symbols live behind `#if compiler(>=6.4) && canImport(FoundationModels)`
 (compile gate) plus `#available(macOS 27.0, *)` (runtime gate). The deployment
-target stays macOS 15.5: a 27-SDK build still runs on older supported macOS
-versions and reports PCC as unavailable there. Everything outside
-`PrivateCloudComputeSQLGenerator.swift` reaches PCC only through the
-always-compiled `PCCSupport` facade — keep it that way, or Xcode 26 builds
-break.
+target stays macOS 26.0: a 27-SDK build still runs on macOS 26 and reports PCC
+as unavailable there. Everything outside `PrivateCloudComputeSQLGenerator.swift`
+reaches PCC only through the always-compiled `PCCSupport` facade — keep it that
+way, or Xcode 26 builds break.
 
 ## Runtime Object Graph
 
@@ -501,8 +500,8 @@ Preferences and secrets:
 The UI surface is the Settings › LLM tab (`LLMSettingsView`) plus the
 `AIBackendToggle` toolbar segmented control, which chooses local/cloud and
 opens Settings › LLM when the cloud backend needs setup. Local selection goes
-through `AppState.requestAIBackendMode(_:)`; pre-macOS 26 users and macOS 26
-users without Apple Intelligence get an alert instead of a silent mode switch.
+through `AppState.requestAIBackendMode(_:)`; users without Apple Intelligence
+or a ready local model get an alert instead of a silent mode switch.
 
 ### Private Cloud Compute entitlement and signing
 
@@ -529,8 +528,7 @@ availability checks; everything reports through
 
 It checks `SystemLanguageModel.default.availability` before each generation.
 If unavailable, it throws `AppError.modelUnavailable` with user-readable
-guidance. All direct FoundationModels declarations are `@available(macOS 26.0,
-*)` so the app can deploy to macOS 15.5 for manual SQL and cloud models.
+guidance.
 
 The real generator uses structured output:
 

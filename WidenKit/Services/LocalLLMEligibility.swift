@@ -4,7 +4,6 @@ import Foundation
 /// run without this being ready, but Local mode cannot.
 public enum LocalLLMEligibility: Equatable, Sendable {
     case ready
-    case macOSTooOld(current: String, required: String)
     case deviceNotEligible(String)
     case appleIntelligenceDisabled
     case modelNotReady(String)
@@ -20,8 +19,6 @@ public enum LocalLLMEligibility: Equatable, Sendable {
         switch self {
         case .ready:
             return "The on-device model is ready."
-        case .macOSTooOld(let current, let required):
-            return "Your Mac is running macOS \(current). Widen's local Apple Foundation Model requires macOS \(required) or later. You can still use Widen with a cloud model, but you'll need to set up an API key in Settings › LLM. Upgrade to macOS \(required) or later to use the local model."
         case .deviceNotEligible(let detail):
             return "This Mac does not support Apple Intelligence. You can still use Widen with a cloud model by setting up an API key in Settings › LLM. \(detail)"
         case .appleIntelligenceDisabled:
@@ -37,37 +34,9 @@ public enum LocalLLMEligibility: Equatable, Sendable {
 }
 
 public enum LocalLLMEligibilityChecker {
-    public static let requiredLocalMacOSMajor = 26
-    public static let requiredLocalMacOSDisplay = "26"
-
-    public static func currentMacOSDisplay() -> String {
-        let version = ProcessInfo.processInfo.operatingSystemVersion
-        if version.patchVersion > 0 {
-            return "\(version.majorVersion).\(version.minorVersion).\(version.patchVersion)"
-        }
-        return "\(version.majorVersion).\(version.minorVersion)"
-    }
-
-    public static func currentMacOSMajor() -> Int {
-        ProcessInfo.processInfo.operatingSystemVersion.majorVersion
-    }
-
     public static func status() -> LocalLLMEligibility {
-        guard currentMacOSMajor() >= requiredLocalMacOSMajor else {
-            return .macOSTooOld(
-                current: currentMacOSDisplay(),
-                required: requiredLocalMacOSDisplay
-            )
-        }
-
         #if canImport(FoundationModels)
-            if #available(macOS 26.0, *) {
-                return FoundationModelsAvailability.status()
-            }
-            return .macOSTooOld(
-                current: currentMacOSDisplay(),
-                required: requiredLocalMacOSDisplay
-            )
+            return FoundationModelsAvailability.status()
         #else
             return .sdkUnavailable(
                 "The FoundationModels framework is not available to this build.")
@@ -78,7 +47,6 @@ public enum LocalLLMEligibilityChecker {
 #if canImport(FoundationModels)
     import FoundationModels
 
-    @available(macOS 26.0, *)
     enum FoundationModelsAvailability {
         static func status() -> LocalLLMEligibility {
             switch SystemLanguageModel.default.availability {

@@ -385,7 +385,7 @@ private struct SchemaEmptyStatusView: View {
 
             if status.canRefresh {
                 Button("Refresh Schema", action: refresh)
-                    .widenGlassButtonStyle()
+                    .buttonStyle(.glass)
                     .hoverBrightness()
             }
         }
