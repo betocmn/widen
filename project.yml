@@ -64,9 +64,9 @@ targets:
         NSPrincipalClass: NSApplication
         NSHumanReadableCopyright: "Widen — local-only MVP"
         NSLocalNetworkUsageDescription: "Widen connects to PostgreSQL databases you configure on your local network."
-        # Sparkle auto-update. The feed and the zipped builds are hosted as
-        # static files next to the marketing site (see docs/update-server-plan.md).
-        SUFeedURL: "https://widen.dev/appcast.xml"
+        # Sparkle auto-update. The feed and zipped builds are hosted as GitHub
+        # Release assets (see docs/update-server-plan.md).
+        SUFeedURL: "https://github.com/betocmn/widen/releases/latest/download/appcast.xml"
         SUPublicEDKey: "$(SPARKLE_PUBLIC_ED_KEY)"
         # Auto-check for updates on by default (opt-out in Settings ▸ General).
         # Setting this explicitly also suppresses Sparkle's first-run prompt.

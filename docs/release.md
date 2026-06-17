@@ -3,6 +3,23 @@
 This is the app release procedure for signed Developer ID builds, notarized
 DMGs, and Sparkle updates.
 
+## Automated Release Overview
+
+Normal releases use one command with the target version as an argument:
+
+```sh
+scripts/publish_release.sh 0.1.0
+```
+
+The script:
+
+- Updates release version files and commits the bump when needed.
+- Runs tests, builds, signs, notarizes, staples, and packages the app.
+- Fast-forwards local `main`, pushes `main`, creates or reuses tag `vX.Y.Z`,
+  and pushes the tag when needed.
+- Creates or updates a draft GitHub Release in `https://github.com/betocmn/widen`
+  with the DMG, Sparkle ZIP, and appcast uploaded as release assets.
+
 ## One-Time Local Setup
 
 1. Copy the release env template and fill it from your password manager:
@@ -21,19 +38,21 @@ DMGs, and Sparkle updates.
 
    Optional values:
 
-   - `WEBSITE_REPO`: local checkout of the static website repo.
-   - `DOWNLOAD_URL_PREFIX`: URL prefix for Sparkle ZIP enclosures.
    - `DEVELOPER_DIR`: Xcode path. The default is `/Applications/Xcode-26.app/Contents/Developer`.
 
    `.env.release.local` is ignored by git. Do not commit it.
 
-   For manual checks in the current shell, load it with:
+   Before running manual checks in the current shell, load it with:
 
    ```sh
    set -a
    . ./.env.release.local
    set +a
    ```
+
+   Run this in every new terminal before the checks below. If
+   `NOTARY_PROFILE` is not loaded, `notarytool` exits with
+   `Profile name must be at least 3 characters`.
 
 2. Confirm Conductor copies the env file into new workspaces.
 
@@ -44,118 +63,114 @@ DMGs, and Sparkle updates.
 3. Confirm Apple signing and notarization are available:
 
    ```sh
+   : "${NOTARY_PROFILE:?Set NOTARY_PROFILE in .env.release.local and load it first}"
    security find-identity -v -p codesigning | rg "Developer ID Application"
-   DEVELOPER_DIR=/Applications/Xcode-26.app/Contents/Developer \
+   DEVELOPER_DIR="${DEVELOPER_DIR:-/Applications/Xcode-26.app/Contents/Developer}" \
      xcrun notarytool history --keychain-profile "$NOTARY_PROFILE"
    ```
 
 4. Confirm the Sparkle key exists:
 
    ```sh
-   build/release/SourcePackages/artifacts/sparkle/Sparkle/bin/generate_keys \
+   make setup
+   build/SourcePackages/artifacts/sparkle/Sparkle/bin/generate_keys \
      --account "$SPARKLE_ACCOUNT" -p
    ```
 
 ## Per-Release Steps
 
-1. Choose the app version and build number.
-
-   For version `X.Y.Z` and build `N`, update `project.yml` in both places:
-
-   - `CFBundleShortVersionString: "X.Y.Z"`
-   - `CFBundleVersion: "N"`
-   - `MARKETING_VERSION: "X.Y.Z"`
-   - `CURRENT_PROJECT_VERSION: "N"`
-
-2. Regenerate the Xcode project and run tests:
+1. Start a fresh release worktree from `origin/main`:
 
    ```sh
-   make project
-   make test
+   git fetch origin
+   git worktree add ../release-X.Y.Z -b release/X.Y.Z origin/main
+   cd ../release-X.Y.Z
    ```
 
-3. Commit the version bump:
+2. Run the release command with the target version:
 
    ```sh
-   git add project.yml Widen.xcodeproj Widen/Info.plist
-   git commit -m "build: bump release version"
+   scripts/publish_release.sh X.Y.Z
    ```
 
-4. Build, sign, notarize, package, and stage website files:
+   Equivalent Makefile form:
 
    ```sh
-   make release-mac
+   make release VERSION=X.Y.Z
    ```
 
-   The script:
-
-   - Builds Release with Xcode 26.
-   - Injects `TEAM_ID`, `BUNDLE_ID_PREFIX`, and `SPARKLE_PUBLIC_ED_KEY` from local env.
-   - Re-signs Sparkle helper bundles for Developer ID distribution.
-   - Notarizes and staples `Widen.app`.
-   - Creates `build/release-artifacts/X.Y.Z/Widen-X.Y.Z.zip` for Sparkle.
-   - Creates, signs, notarizes, and staples `build/release-artifacts/X.Y.Z/Widen.dmg`.
-   - If `WEBSITE_REPO` is set, copies the ZIP to the website repo, regenerates
-     `public/appcast.xml`, verifies the Sparkle signature, and runs the website build.
-
-5. Verify the app artifact:
+   Optional flags:
 
    ```sh
-   codesign --verify --deep --strict --verbose=4 build/release/Build/Products/Release/Widen.app
-   xcrun stapler validate build/release/Build/Products/Release/Widen.app
-   spctl -a -vvv -t exec build/release/Build/Products/Release/Widen.app
+   scripts/publish_release.sh X.Y.Z --build N
+   scripts/publish_release.sh X.Y.Z --dry-run
+   scripts/publish_release.sh X.Y.Z --no-open
    ```
 
-6. Verify the DMG:
+   Build number behavior:
 
-   ```sh
-   codesign --verify --verbose=4 build/release-artifacts/X.Y.Z/Widen.dmg
-   xcrun stapler validate build/release-artifacts/X.Y.Z/Widen.dmg
-   spctl -a -vvv -t open --context context:primary-signature build/release-artifacts/X.Y.Z/Widen.dmg
-   ```
+   - If `X.Y.Z` already matches the project version, the current build number is
+     reused.
+   - Otherwise the current build number is incremented by one.
+   - `--build N` overrides the automatic build number.
 
-7. Create or update the GitHub Release.
+3. Wait for the command to finish.
 
-   Upload the DMG asset with the exact filename `Widen.dmg`. The static website
-   CTA expects this conventional latest-release URL:
+   The script validates the release environment, updates `project.yml`, runs
+   `make project`, commits changed version files, runs `make test`, runs
+   `make release-mac`, fast-forwards `main`, pushes `main`, creates or reuses
+   tag `vX.Y.Z`, creates or updates a draft GitHub Release, and uploads:
+
+   - `build/release-artifacts/X.Y.Z/Widen.dmg`
+   - `build/release-artifacts/X.Y.Z/Widen-X.Y.Z.zip`
+   - `build/release-artifacts/X.Y.Z/appcast.xml`
+
+4. Inspect and publish the GitHub draft release.
+
+   Before publishing, confirm the draft contains exactly these asset names:
+
+   - `Widen.dmg`
+   - `Widen-X.Y.Z.zip`
+   - `appcast.xml`
+
+   After publishing, verify:
 
    ```text
-   https://github.com/<owner>/<repo>/releases/latest/download/Widen.dmg
+   https://github.com/betocmn/widen/releases/latest/download/appcast.xml
+   https://github.com/betocmn/widen/releases/latest/download/Widen.dmg
    ```
 
-## Static Website Repo
+## Artifact-Only Build
 
-The static website handles two separate release surfaces:
-
-- Manual download CTA: configured in `src/config/site.ts`.
-- Sparkle update hosting: `public/appcast.xml` and `public/releases/Widen-X.Y.Z.zip`.
-
-After `make release-mac`, inspect and commit the website changes:
+Use this only when you want local artifacts without publishing `main`, a tag,
+or a GitHub Release:
 
 ```sh
-cd "$WEBSITE_REPO"
-npm run build
-git status --short
-git add public/appcast.xml public/releases/Widen-X.Y.Z.zip
-git commit -m "build: publish sparkle release"
-git push
+make release-mac
 ```
 
-Update the website download metadata in `src/config/site.ts`:
-
-1. Set `download.version` to the released version.
-2. Leave `download.dmgUrl` unchanged if the GitHub Release asset is named
-   exactly `Widen.dmg`; the existing latest-release URL will update
-   automatically.
-3. Change `download.dmgUrl` only if you move downloads away from GitHub
-   Releases or stop using the `Widen.dmg` asset name.
-4. Run `npm run build`, commit, and push the website repo.
-
-The appcast enclosure URL should look like this:
+`make release-mac` builds Release with Xcode 26, injects local release env,
+re-signs Sparkle helpers, notarizes and staples `Widen.app`, creates the
+Sparkle ZIP, generates `appcast.xml`, and creates/signs/notarizes/staples the
+DMG. The appcast enclosure URL points at the versioned GitHub Release ZIP:
 
 ```text
-https://widen.dev/releases/Widen-X.Y.Z.zip
+https://github.com/betocmn/widen/releases/download/vX.Y.Z/Widen-X.Y.Z.zip
 ```
+
+The automated `scripts/publish_release.sh` wrapper runs these same artifact
+checks before it publishes any GitHub state.
+
+## Static Website Follow-Up
+
+The static website should point its download CTA at GitHub's latest DMG asset:
+
+```text
+https://github.com/betocmn/widen/releases/latest/download/Widen.dmg
+```
+
+After that one-time website update, routine app releases do not require static
+website changes unless the site displays hardcoded release version text.
 
 ## Sparkle End-To-End Test
 
@@ -172,5 +187,7 @@ https://widen.dev/releases/Widen-X.Y.Z.zip
 - Keychain prompt: choose **Always Allow** for the Developer ID private key.
 - Slow notarization: query status with `xcrun notarytool info <submission-id>
   --keychain-profile "$NOTARY_PROFILE"`.
-- Website build missing dependencies: the release script runs `npm ci` when the
-  website checkout lacks `node_modules/.bin/astro`.
+- Retry after a partial publish: rerun the same command. If tag `vX.Y.Z`
+  already points at the same release commit, the script reuses it. If a draft
+  GitHub Release already exists, the script replaces its assets. Published
+  releases and tags pointing at a different commit still stop the release.

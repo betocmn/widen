@@ -1,13 +1,12 @@
-# Widen auto-update infrastructure — build plan for the website/update-server repo
+# Widen auto-update infrastructure
 
-This is a self-contained brief for standing up the **server/hosting side** of Widen's
-auto-update feature. The **client side is already done** in the Widen app repo (Sparkle 2 is
-integrated — update popup, auto-download, install, relaunch, a "Check for Updates…" menu item,
-and a Settings toggle). What's missing is the thing the client talks to: an **appcast feed**
-and the **downloadable builds**, plus the **release pipeline** that produces and publishes them.
+This is the hosting model for Widen's Sparkle auto-update feature. The app uses
+Sparkle 2 for update UI, download, install, relaunch, "Check for Updates...",
+and the Settings toggle. Release artifacts are hosted directly on GitHub
+Releases in the Widen app repo.
 
-Hand this file to an LLM/agent working in the new **Next.js-on-Vercel** repo (the one that also
-hosts the marketing site). It does not need access to the Widen app source to do its part.
+The static marketing site should only link to the latest DMG. It no longer
+hosts `appcast.xml` or Sparkle ZIP files for routine releases.
 
 ---
 
@@ -25,22 +24,21 @@ So the "API" is just **two kinds of static files served over HTTPS**:
 1. `appcast.xml` — the feed (one per release channel).
 2. `Widen-X.Y.Z.zip` — the zipped, signed, notarized app for each release.
 
-**No backend logic is required.** A dynamic route is optional (see §7) for phased rollouts or
-download analytics, but start static.
+**No backend logic is required.** GitHub Releases serves both files.
 
 ### What the client already expects (from the Widen repo — do not change without coordinating)
 These are set in the Widen app's `project.yml` → `targets.Widen.info.properties`:
 
 | Info.plist key | Current value | Meaning |
 | --- | --- | --- |
-| `SUFeedURL` | `https://widen.dev/appcast.xml` | Where this repo must serve the feed. |
+| `SUFeedURL` | `https://github.com/betocmn/widen/releases/latest/download/appcast.xml` | Where Sparkle fetches the latest feed. |
 | `SUPublicEDKey` | Configured in the Widen app repo | EdDSA **public** key for Sparkle update verification. |
 | `SUEnableAutomaticChecks` | `true` | Auto-check on by default. |
 
 > ⚠️ **Cross-repo coupling — read this twice.**
-> - `SUFeedURL` must equal the public URL where this repo serves `appcast.xml`. If you host the
->   feed somewhere else or under a different path, the Widen repo's `SUFeedURL` must be updated
->   (edit `project.yml`, run `make project`, rebuild).
+> - `SUFeedURL` must equal the public URL where GitHub serves `appcast.xml`.
+>   If you move hosting again, update `project.yml`, run `make project`, and
+>   rebuild before distributing that change.
 > - If `SUPublicEDKey` is added to the Widen repo, it must be the public half of the EdDSA key
 >   generated in §3. Do **not** commit a placeholder value: Sparkle treats invalid public keys as
 >   fatal updater configuration errors at launch.
@@ -53,7 +51,7 @@ Do these once, in order:
 
 - [x] **§3** Generate the Sparkle EdDSA key pair; add the public key to the Widen repo.
 - [ ] **§4** Confirm/obtain Apple signing + notarization credentials.
-- [x] **§6** Stand up hosting in this repo (serve `appcast.xml` + `/releases/*.zip` at `widen.dev`).
+- [x] **§6** Host `appcast.xml` and `Widen-X.Y.Z.zip` as GitHub Release assets.
 - [ ] **§5** Run the release pipeline once to publish v0.1.0 (or the first real version).
 - [ ] **§8** Verify end-to-end with a test feed before announcing.
 
@@ -127,23 +125,36 @@ local development.
 
 The release pipeline is documented in [release.md](release.md). That runbook
 covers version bumps, local signing environment, Developer ID notarization,
-Sparkle ZIP/appcast generation, DMG upload, and the static website repo update.
+Sparkle ZIP/appcast generation, DMG upload, tag push, and draft GitHub Release
+creation.
 
 ---
 
-## 6. Hosting in this (Next.js/Vercel) repo
+## 6. Hosting on GitHub Releases
 
-### Option A — static (recommended to start)
-- Serve the feed at `https://widen.dev/appcast.xml` → put the file at `public/appcast.xml`.
-- Serve builds at `https://widen.dev/releases/Widen-X.Y.Z.zip` → `public/releases/…`.
-- Vercel serves `.xml` as `application/xml` and `.zip` as a binary download automatically.
-- **HTTPS is mandatory** (Sparkle refuses insecure feeds) — Vercel gives you that.
+Each release uploads three assets:
 
-> **Binary size caveat:** files in `public/` are committed to git and bundled into every
-> deploy. A macOS `.app` zip is tens of MB and grows the repo fast. For anything beyond a few
-> releases, host the **zips** on object storage — **Vercel Blob**, **Cloudflare R2/S3**, or
-> **GitHub Release assets** — and point each `<enclosure url>` at that. The small `appcast.xml`
-> can still live in `public/` (or be a dynamic route). Keep the feed and the binaries on HTTPS.
+- `Widen.dmg` for the static website and manual downloads.
+- `Widen-X.Y.Z.zip` for Sparkle.
+- `appcast.xml` for Sparkle's update feed.
+
+The shipped app uses GitHub's stable latest-release asset URL:
+
+```text
+https://github.com/betocmn/widen/releases/latest/download/appcast.xml
+```
+
+Each generated appcast points its enclosure at the versioned ZIP asset:
+
+```text
+https://github.com/betocmn/widen/releases/download/vX.Y.Z/Widen-X.Y.Z.zip
+```
+
+The website download CTA should point at:
+
+```text
+https://github.com/betocmn/widen/releases/latest/download/Widen.dmg
+```
 
 ### Appcast format (full example)
 `sparkle:version` = `CFBundleVersion` (the build number Sparkle compares); `sparkle:shortVersionString`
@@ -156,7 +167,7 @@ Sparkle ZIP/appcast generation, DMG upload, and the static website repo update.
      xmlns:dc="http://purl.org/dc/elements/1.1/">
   <channel>
     <title>Widen</title>
-    <link>https://widen.dev/appcast.xml</link>
+    <link>https://github.com/betocmn/widen/releases/latest/download/appcast.xml</link>
     <description>Most recent updates to Widen.</description>
     <language>en</language>
     <item>
@@ -170,7 +181,7 @@ Sparkle ZIP/appcast generation, DMG upload, and the static website repo update.
         <ul><li>First auto-update-capable release.</li></ul>
       ]]></description>
       <enclosure
-        url="https://widen.dev/releases/Widen-0.2.0.zip"
+        url="https://github.com/betocmn/widen/releases/download/v0.2.0/Widen-0.2.0.zip"
         length="18342755"
         type="application/octet-stream"
         sparkle:edSignature="REAL_BASE64_ED_SIGNATURE_FROM_sign_update==" />
@@ -181,7 +192,7 @@ Sparkle ZIP/appcast generation, DMG upload, and the static website repo update.
 ```
 
 Release-notes alternative to inline `<description>`: host an HTML file and reference it with
-`<sparkle:releaseNotesLink>https://widen.dev/notes/0.2.0.html</sparkle:releaseNotesLink>`.
+`<sparkle:releaseNotesLink>https://github.com/betocmn/widen/releases/tag/v0.2.0</sparkle:releaseNotesLink>`.
 
 `generate_appcast` (§5) produces this XML for you, including the signature and length — prefer
 it over hand-editing.
@@ -191,17 +202,16 @@ it over hand-editing.
 ## 7. Optional: dynamic feed + CI
 
 ### Dynamic appcast route
-Replace the static file with `app/appcast.xml/route.ts` returning the XML with
-`Content-Type: application/xml`. This unlocks: **phased rollouts** (serve the new `<item>` to a
-growing % of requests via `sparkle:phasedRolloutInterval` or your own logic), **channels**
-(beta vs stable feeds), and **download analytics**. Sparkle only requires valid appcast XML at
-the URL — everything else is your choice.
+If Widen later needs phased rollouts, channels, or download analytics, move the
+feed back behind a controlled HTTPS endpoint and update `SUFeedURL` in the app.
+Sparkle only requires valid appcast XML at the configured URL.
 
 ### GitHub Actions release workflow (skeleton — can live in the Widen repo)
-On a `v*` tag: select Xcode 26 → build Release → import Developer ID cert (from a base64 secret)
-→ notarize with the App Store Connect API key (secret) → staple → zip → `sign_update` with the
-EdDSA **private** key (imported from a secret via `generate_keys -f`) → `generate_appcast` →
-publish the zip to storage and push `appcast.xml` to this repo (or commit to `public/`).
+On a `v*` tag: select Xcode 26 → build Release → import Developer ID cert
+(from a base64 secret) → notarize with the App Store Connect API key (secret)
+→ staple → zip → `generate_appcast` with the EdDSA **private** key imported via
+`generate_keys -f` → upload `Widen.dmg`, `Widen-X.Y.Z.zip`, and `appcast.xml`
+to the GitHub Release.
 Required repo secrets: `DEVELOPER_ID_CERT_P12_BASE64`, `DEVELOPER_ID_CERT_PASSWORD`,
 `AC_API_KEY_P8`, `AC_KEY_ID`, `AC_ISSUER_ID`, `SPARKLE_PRIVATE_KEY`, plus a deploy/storage token.
 
