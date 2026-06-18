@@ -1,0 +1,5 @@
+blank_issues_enabled: false
+contact_links:
+  - name: Security reports
+    url: https://github.com/betocmn/widen/security/policy
+    about: Please read the security policy before reporting vulnerabilities.

@@ -1,0 +1,55 @@
+name: Bug report
+description: Report a reproducible Widen bug
+title: "fix: "
+labels: ["bug"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Thanks for taking the time to report a bug. Please remove secrets, private schema names, query results, and connection details before posting.
+  - type: textarea
+    id: summary
+    attributes:
+      label: Summary
+      description: What happened, and what did you expect instead?
+    validations:
+      required: true
+  - type: textarea
+    id: steps
+    attributes:
+      label: Steps to reproduce
+      placeholder: |
+        1. Open Widen
+        2. Connect to ...
+        3. Run ...
+    validations:
+      required: true
+  - type: textarea
+    id: environment
+    attributes:
+      label: Environment
+      description: Include anything relevant.
+      value: |
+        - Widen version or commit:
+        - macOS version:
+        - Mac model:
+        - Xcode version, if building from source:
+        - PostgreSQL version:
+        - AI mode: local / cloud / manual SQL only
+    validations:
+      required: true
+  - type: textarea
+    id: logs
+    attributes:
+      label: Sanitized logs or screenshots
+      description: Paste only redacted output. Do not include credentials, real hostnames, private schemas, or query results.
+      render: text
+  - type: checkboxes
+    id: checks
+    attributes:
+      label: Checklist
+      options:
+        - label: I searched existing issues.
+          required: true
+        - label: I removed credentials, private schema details, and query results from this report.
+          required: true
