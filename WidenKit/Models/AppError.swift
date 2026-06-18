@@ -10,6 +10,7 @@ public enum AppError: Error, LocalizedError, Equatable, Sendable {
     case queryTimeout
     case validationFailed([String])
     case executionFailed(String)
+    case databaseFailed(DatabaseDiagnostic)
     case introspectionFailed(String)
     case modelUnavailable(String)
     case modelGenerationFailed(String)
@@ -33,6 +34,10 @@ public enum AppError: Error, LocalizedError, Equatable, Sendable {
             "The SQL failed validation: \(errors.joined(separator: " "))"
         case .executionFailed(let detail):
             "Query failed: \(detail)"
+        case .databaseFailed(let diagnostic):
+            diagnostic.kind == .timedOut
+                ? "The query timed out (statement timeout exceeded)."
+                : "Query failed: \(diagnostic.displayMessage)"
         case .introspectionFailed(let detail):
             "Could not load the database schema: \(detail)"
         case .modelUnavailable(let detail):
@@ -45,6 +50,15 @@ public enum AppError: Error, LocalizedError, Equatable, Sendable {
             "Keychain error: \(detail)"
         case .invalidInput(let errors):
             errors.joined(separator: " ")
+        }
+    }
+
+    public var databaseDiagnostic: DatabaseDiagnostic? {
+        switch self {
+        case .databaseFailed(let diagnostic):
+            diagnostic
+        default:
+            nil
         }
     }
 }
