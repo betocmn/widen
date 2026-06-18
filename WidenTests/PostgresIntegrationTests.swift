@@ -424,7 +424,13 @@ struct QueryExecutionIntegrationTests {
                 )
                 Issue.record("Expected the statement timeout to fire")
             } catch let error as AppError {
-                #expect(error == .queryTimeout)
+                guard case .databaseFailed(let diagnostic) = error else {
+                    Issue.record("Expected databaseFailed timeout diagnostic, got \(error)")
+                    return
+                }
+                #expect(diagnostic.kind == .timedOut)
+                #expect(diagnostic.sqlState == "57014")
+                #expect(error.localizedDescription == AppError.queryTimeout.localizedDescription)
             }
             // The connection is healthy again after ROLLBACK.
             let values = try await service.query("SELECT 1 AS ok") { row in
