@@ -694,6 +694,29 @@ public final class SessionController: Identifiable {
 
     private static func diagnostic(from error: String) -> DatabaseDiagnostic? {
         let lowercased = error.lowercased()
+        if let tableName = firstCapturedValue(
+            in: error,
+            pattern: #"Schema validation failed: table ([^\s]+) is not in the selected schema"#
+        ) {
+            return DatabaseDiagnostic(
+                kind: .missingRelation,
+                sqlState: "42P01",
+                message: error,
+                tableName: tableName
+            )
+        }
+        if let columnName = firstCapturedValue(
+            in: error,
+            pattern:
+                #"Schema validation failed: column ([A-Za-z_][A-Za-z0-9_$]*) is (?:not available from the referenced tables|not on [^.\s]+(?:\.[^.\s]+)?)"#
+        ) {
+            return DatabaseDiagnostic(
+                kind: .missingColumn,
+                sqlState: "42703",
+                message: error,
+                columnName: columnName
+            )
+        }
         if lowercased.contains("relation"), lowercased.contains("does not exist") {
             return DatabaseDiagnostic(
                 kind: .missingRelation,
@@ -748,7 +771,7 @@ public final class SessionController: Identifiable {
         error: String,
         diagnostic suppliedDiagnostic: DatabaseDiagnostic? = nil
     ) -> [String] {
-        var identifiers = quotedIdentifiers(in: error)
+        var identifiers = quotedIdentifiers(in: error) + schemaValidationIdentifiers(in: error)
         if let diagnostic = suppliedDiagnostic ?? diagnostic(from: error) {
             if let identifier = diagnostic.identifierForRepair {
                 identifiers.append(identifier)
@@ -761,8 +784,45 @@ public final class SessionController: Identifiable {
         return identifiers.filter { seen.insert($0).inserted }
     }
 
+    private static func schemaValidationIdentifiers(in text: String) -> [String] {
+        var identifiers: [String] = []
+        identifiers.append(
+            contentsOf: capturedValues(
+                in: text,
+                pattern:
+                    #"Schema validation failed: column ([A-Za-z_][A-Za-z0-9_$]*) is (?:not available from the referenced tables|not on [^.\s]+(?:\.[^.\s]+)?|ambiguous across referenced tables)"#
+            ))
+        identifiers.append(
+            contentsOf: capturedValues(
+                in: text,
+                pattern: #"Schema validation failed: table ([^\s]+) is not in the selected schema"#
+            ))
+        identifiers.append(
+            contentsOf: capturedValues(
+                in: text,
+                pattern:
+                    #"Schema validation failed: qualifier ([A-Za-z_][A-Za-z0-9_$]*) does not resolve to a selected-schema table"#
+            ))
+        return identifiers
+    }
+
     private static func quotedIdentifiers(in text: String) -> [String] {
         guard let regex = try? NSRegularExpression(pattern: #""([^"]+)""#) else {
+            return []
+        }
+        let range = NSRange(text.startIndex..<text.endIndex, in: text)
+        return regex.matches(in: text, range: range).compactMap { match in
+            guard let matchRange = Range(match.range(at: 1), in: text) else { return nil }
+            return String(text[matchRange])
+        }
+    }
+
+    private static func firstCapturedValue(in text: String, pattern: String) -> String? {
+        capturedValues(in: text, pattern: pattern).first
+    }
+
+    private static func capturedValues(in text: String, pattern: String) -> [String] {
+        guard let regex = try? NSRegularExpression(pattern: pattern) else {
             return []
         }
         let range = NSRange(text.startIndex..<text.endIndex, in: text)

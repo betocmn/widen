@@ -18,7 +18,7 @@ public struct PromptBudget: Equatable, Sendable {
     public static let localFoundationModels = PromptBudget(
         contextWindowTokens: 4_096,
         outputReserveTokens: 512,
-        safetyMarginTokens: 256
+        safetyMarginTokens: 512
     )
 
     public func schemaCharacterAllowance(fixedPromptCharacters: Int) -> Int {

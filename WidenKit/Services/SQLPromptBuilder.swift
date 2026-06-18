@@ -40,6 +40,7 @@ public enum SQLPromptBuilder {
         - If a required entity, metric, business meaning, relationship, or time interpretation is undefined by the Database context or provided schema, set needsClarification to true and ask a concise clarification question.
         - Assumptions may resolve presentation choices such as LIMIT, sort direction, or inclusive date boundaries. Assumptions MUST NOT invent schema objects, joins, winner definitions, revenue definitions, status meanings, ownership rules, or other business semantics.
         - Terms such as wins, revenue, active, churn, conversion, success, owner, retained, and best can have database-specific meanings. If the Database context and schema do not define the requested term, ask what column, condition, or table defines it. Do not infer it from a nearby count or status.
+        - For winning-tool questions, if the schema provides a winner identifier such as winner_id that points to a tool/entity table, count/group by that winner identifier and join to the entity table for labels. Do not select both participant IDs as "wins", and do not compare enum-like winner_decision/status fields to invented literal values unless Database context defines those values.
         - A plausible-looking query that does not answer the user's requested metric is incorrect.
         - If the request cannot be answered from the schema, set needsClarification to true and ask a concise clarification question.
         - Output only the requested structured result.
@@ -288,33 +289,53 @@ public enum SQLPromptBuilder {
 
     private static func missingColumnRepairHint(for text: String) -> String? {
         let lowercased = text.lowercased()
-        guard lowercased.contains("column"), lowercased.contains("does not exist") else {
+        guard lowercased.contains("column"),
+            lowercased.contains("does not exist")
+                || lowercased.contains("not available from the referenced tables")
+                || lowercased.contains("not on ")
+        else {
             return nil
         }
 
         let candidates = missingColumnCandidates(in: text)
+        let missingColumns = missingColumnNames(in: text)
+        let missingColumnText =
+            missingColumns.isEmpty
+            ? "a column"
+            : "column \(missingColumns.map { "\"\($0)\"" }.joined(separator: ", "))"
 
         if candidates.isEmpty {
             return
-                "PostgreSQL says a column is missing. Use only columns present in the schema. If no available column clearly matches the user's intent, set needsClarification to true and ask which entity or relationship they mean."
+                "The previous SQL used \(missingColumnText) that is not available from the referenced tables. Use only columns present in the schema. If no available column clearly matches the user's intent, set needsClarification to true and ask which entity or relationship they mean."
         }
 
         return
-            "PostgreSQL says a column is missing. Candidate columns from the database hint: \(candidates.joined(separator: ", ")). Use a candidate only if it matches the user's intent; otherwise set needsClarification to true and ask which entity or relationship they mean."
+            "The previous SQL used \(missingColumnText) that is not available from the referenced tables. Candidate columns from the database hint: \(candidates.joined(separator: ", ")). Use a candidate only if it matches the user's intent; otherwise set needsClarification to true and ask which entity or relationship they mean."
     }
 
     static func missingColumnClarificationQuestion(for text: String) -> String? {
         let lowercased = text.lowercased()
-        guard lowercased.contains("column"), lowercased.contains("does not exist") else {
+        guard lowercased.contains("column"),
+            lowercased.contains("does not exist")
+                || lowercased.contains("not available from the referenced tables")
+                || lowercased.contains("not on ")
+        else {
             return nil
         }
 
-        let missingColumn = quotedIdentifiers(in: text).first ?? "the missing column"
+        let missingColumns = missingColumnNames(in: text)
+        let missingColumn =
+            missingColumns.first
+            ?? quotedIdentifiers(in: text).first
+            ?? "the missing column"
+        let missingColumnList = missingColumns.isEmpty
+            ? "\"\(missingColumn)\""
+            : missingColumns.map { "\"\($0)\"" }.joined(separator: ", ")
         let candidates = missingColumnCandidates(in: text)
         switch candidates.count {
         case 0:
             return
-                "I'm having trouble identifying which schema column should replace \"\(missingColumn)\". Can you clarify which entity or relationship you mean?"
+                "I'm having trouble identifying which schema column should replace \(missingColumnList). Can you clarify which table, join, or relationship defines that value?"
         case 1:
             return
                 "I'm having trouble confirming whether \"\(candidates[0])\" should replace \"\(missingColumn)\". Can you clarify which entity or relationship you mean?"
@@ -323,6 +344,18 @@ public enum SQLPromptBuilder {
             return
                 "I'm having trouble identifying which column should replace \"\(missingColumn)\". Did you mean \"\(options)\", or \"\(candidates.last!)\", or something else?"
         }
+    }
+
+    private static func missingColumnNames(in text: String) -> [String] {
+        var names = quotedIdentifiers(in: text).filter { !$0.contains(".") }
+        names.append(
+            contentsOf: capturedValues(
+                in: text,
+                pattern:
+                    #"Schema validation failed: column ([A-Za-z_][A-Za-z0-9_$]*) is (?:not available from the referenced tables|not on [^.\s]+(?:\.[^.\s]+)?|ambiguous across referenced tables)"#
+            ))
+        var seen = Set<String>()
+        return names.filter { seen.insert($0).inserted }
     }
 
     private static func missingColumnCandidates(in text: String) -> [String] {
@@ -337,6 +370,17 @@ public enum SQLPromptBuilder {
 
     private static func quotedIdentifiers(in text: String) -> [String] {
         guard let regex = try? NSRegularExpression(pattern: #""([^"]+)""#) else {
+            return []
+        }
+        let range = NSRange(text.startIndex..<text.endIndex, in: text)
+        return regex.matches(in: text, range: range).compactMap { match in
+            guard let matchRange = Range(match.range(at: 1), in: text) else { return nil }
+            return String(text[matchRange])
+        }
+    }
+
+    private static func capturedValues(in text: String, pattern: String) -> [String] {
+        guard let regex = try? NSRegularExpression(pattern: pattern) else {
             return []
         }
         let range = NSRange(text.startIndex..<text.endIndex, in: text)

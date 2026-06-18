@@ -642,6 +642,34 @@ struct SessionControllerTests {
         #expect(controller.chatVM.messages[1].generation?.sql == fixedGeneration.sql)
     }
 
+    @Test func submitRepairForMissingGeneratedColumnForbidsColumnIdentifier() async {
+        let connectionID = UUID()
+        let (state, dir) = makeState(connectionID: connectionID, connected: true)
+        defer { try? FileManager.default.removeItem(at: dir) }
+        state.schemas[connectionID] = makeSchema()
+        let badGeneration = makeGeneration(
+            sql: "SELECT name FROM public.users",
+            explanation: "Uses a missing column."
+        )
+        let fixedGeneration = makeGeneration(
+            sql: "SELECT id FROM public.users LIMIT 100",
+            explanation: "Uses an available column."
+        )
+        let generator = RecordingRepairGenerator(results: [badGeneration, fixedGeneration])
+        state.sqlGeneratorOverride = generator
+        let controller = makeController(connectionID: connectionID)
+        controller.chatVM.input = "show users"
+
+        await controller.submit(appState: state)
+
+        #expect(generator.contexts.count == 2)
+        #expect(generator.contexts[1].mode == .repair)
+        #expect(generator.contexts[1].repairContext?.diagnostic?.kind == .missingColumn)
+        #expect(generator.contexts[1].repairContext?.forbiddenIdentifiers.contains("name") == true)
+        #expect(controller.queryVM.sqlText == fixedGeneration.sql)
+        #expect(controller.chatVM.messages.map(\.role) == [.user, .assistant])
+    }
+
     @Test func generatedRunErrorGivesUpAfterRepairAndReconstruction() async {
         let connectionID = UUID()
         let (state, dir) = makeState(connectionID: connectionID, connected: true)

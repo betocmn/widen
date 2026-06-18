@@ -121,6 +121,8 @@ struct SQLPromptBuilderTests {
         #expect(instructions.contains("DATE_TRUNC('day'"))
         #expect(instructions.contains("first count rows per period"))
         #expect(instructions.contains("Do not group or partition by CURRENT_DATE itself"))
+        #expect(instructions.contains("winner_id"))
+        #expect(instructions.contains("Do not select both participant IDs as \"wins\""))
         // Follow-up handling for the conversation context section.
         #expect(instructions.contains("follow-up"))
         #expect(instructions.contains("<ordered_chat_history>"))
@@ -252,7 +254,7 @@ struct SQLPromptBuilderTests {
             context: context
         )
 
-        #expect(prompt.contains("PostgreSQL says a column is missing"))
+        #expect(prompt.contains("The previous SQL used column \"tool_id\""))
         #expect(prompt.contains("preseason_match_batch.tool_a_id"))
         #expect(prompt.contains("preseason_match_batch.tool_b_id"))
         #expect(prompt.contains("needsClarification"))
@@ -267,6 +269,17 @@ struct SQLPromptBuilderTests {
         #expect(question?.contains("\"tool_id\"") == true)
         #expect(question?.contains("\"preseason_match_batch.tool_a_id\"") == true)
         #expect(question?.contains("\"preseason_match_batch.tool_b_id\"") == true)
+    }
+
+    @Test func missingColumnClarificationQuestionHandlesSchemaValidationErrors() {
+        let question = SQLPromptBuilder.missingColumnClarificationQuestion(
+            for:
+                "The SQL failed validation: Schema validation failed: column tool_a_id is not available from the referenced tables. Schema validation failed: column tool_b_id is not available from the referenced tables."
+        )
+
+        #expect(question?.contains("\"tool_a_id\"") == true)
+        #expect(question?.contains("\"tool_b_id\"") == true)
+        #expect(question?.contains("which table, join, or relationship") == true)
     }
 
     @Test func repairPromptIncludesFailedSQLOnceAndOmitsChatHistory() {
