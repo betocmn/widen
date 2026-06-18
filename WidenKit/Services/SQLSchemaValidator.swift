@@ -361,22 +361,27 @@ public enum GeneratedSQLPostprocessor {
         let questionTokens = Set(SchemaIndex.tokens(in: question))
         guard !questionTokens.intersection(highRiskBusinessTerms).isEmpty else { return nil }
         let contextTokens = Set(SchemaIndex.tokens(in: databaseContext))
-        if !contextTokens.intersection(highRiskBusinessTerms.union(supportingBusinessTokens)).isEmpty {
-            return nil
-        }
-
         let referencedTableIDs = Set(schemaValidation.referencedTables)
         let referencedTables = schema.tables.filter { referencedTableIDs.contains($0.qualifiedName) }
         let schemaTokens = Set(referencedTables.flatMap { table in
             SchemaIndex.tokens(in: table.name)
                 + table.columns.flatMap { SchemaIndex.tokens(in: $0.name) }
         })
-        guard schemaTokens.intersection(supportingBusinessTokens).isEmpty else { return nil }
 
-        if questionTokens.contains("win") {
+        if !questionTokens.intersection(winBusinessTerms).isEmpty {
+            if !contextTokens.intersection(winDefinitionTokens).isEmpty
+                || !schemaTokens.intersection(winDefinitionTokens).isEmpty
+            {
+                return nil
+            }
             return
                 "I found match or tool fields, but the selected schema does not define which tool won. What table, column, or condition represents a win?"
         }
+
+        if !contextTokens.intersection(highRiskBusinessTerms.union(supportingBusinessTokens)).isEmpty {
+            return nil
+        }
+        guard schemaTokens.intersection(supportingBusinessTokens).isEmpty else { return nil }
         return
             "I need the database-specific definition for this metric before I can write SQL safely. What table, column, or condition defines it?"
     }
@@ -384,6 +389,15 @@ public enum GeneratedSQLPostprocessor {
     private static let highRiskBusinessTerms: Set<String> = [
         "win", "wins", "winner", "revenue", "active", "churn", "conversion", "success",
         "owner", "retained", "best",
+    ]
+
+    private static let winBusinessTerms: Set<String> = [
+        "win", "wins", "winner",
+    ]
+
+    private static let winDefinitionTokens: Set<String> = [
+        "winner", "winning", "won", "win", "wins", "victor", "victory", "lost", "loss",
+        "loser",
     ]
 
     private static let supportingBusinessTokens: Set<String> = [

@@ -163,6 +163,29 @@ struct SQLSchemaValidatorTests {
         #expect(enriched.clarificationQuestion?.contains("which tool won") == true)
     }
 
+    @Test func genericResultStatusAndScoreDoNotDefineWins() {
+        let generation = SQLGenerationResult(
+            sql: "SELECT tool_a_id, COUNT(*) FROM public.preseason_match_batch GROUP BY tool_a_id",
+            explanation: "Counts appearances.",
+            assumptions: [],
+            referencedTables: [],
+            confidence: 1,
+            riskLevel: .low,
+            needsClarification: false,
+            clarificationQuestion: nil
+        )
+
+        let enriched = GeneratedSQLPostprocessor.enriched(
+            generation,
+            question: "what tools have the most wins?",
+            schema: makePreseasonSchemaWithGenericOutcomeFields(),
+            databaseContext: ""
+        )
+
+        #expect(enriched.needsClarification)
+        #expect(enriched.clarificationQuestion?.contains("which tool won") == true)
+    }
+
     private func makeUsersOrdersSchema() -> DatabaseSchema {
         DatabaseSchema(
             schemas: [SchemaInfo(name: "public")],
@@ -250,6 +273,62 @@ struct SQLSchemaValidatorTests {
                             dataType: "integer",
                             isNullable: false,
                             ordinalPosition: 3
+                        ),
+                    ]
+                )
+            ],
+            foreignKeys: []
+        )
+    }
+
+    private func makePreseasonSchemaWithGenericOutcomeFields() -> DatabaseSchema {
+        DatabaseSchema(
+            schemas: [SchemaInfo(name: "public")],
+            tables: [
+                TableInfo(
+                    schema: "public",
+                    name: "preseason_match_batch",
+                    type: .baseTable,
+                    columns: [
+                        ColumnInfo(
+                            tableSchema: "public",
+                            tableName: "preseason_match_batch",
+                            name: "tool_a_id",
+                            dataType: "uuid",
+                            isNullable: false,
+                            ordinalPosition: 1
+                        ),
+                        ColumnInfo(
+                            tableSchema: "public",
+                            tableName: "preseason_match_batch",
+                            name: "tool_b_id",
+                            dataType: "uuid",
+                            isNullable: false,
+                            ordinalPosition: 2
+                        ),
+                        ColumnInfo(
+                            tableSchema: "public",
+                            tableName: "preseason_match_batch",
+                            name: "result",
+                            dataType: "text",
+                            isNullable: true,
+                            ordinalPosition: 3
+                        ),
+                        ColumnInfo(
+                            tableSchema: "public",
+                            tableName: "preseason_match_batch",
+                            name: "status",
+                            dataType: "text",
+                            isNullable: true,
+                            ordinalPosition: 4
+                        ),
+                        ColumnInfo(
+                            tableSchema: "public",
+                            tableName: "preseason_match_batch",
+                            name: "score",
+                            dataType: "integer",
+                            isNullable: true,
+                            ordinalPosition: 5
                         ),
                     ]
                 )
