@@ -684,7 +684,7 @@ struct SessionControllerTests {
         #expect(controller.chatVM.messages.last?.text.contains("Retry 5/5") == true)
     }
 
-    @Test func generatedRunErrorKeepsDatabaseHintOutOfRecursiveRepeatedError() async {
+    @Test func generatedRunErrorAsksForClarificationWhenRepairRepeatsMissingColumn() async {
         let connectionID = UUID()
         let (state, dir) = makeState(connectionID: connectionID, connected: true)
         defer { try? FileManager.default.removeItem(at: dir) }
@@ -715,17 +715,22 @@ struct SessionControllerTests {
         await waitUntil {
             !controller.queryVM.isRunning
                 && !controller.chatVM.isGenerating
-                && controller.chatVM.messages.last?.role == .error
+                && controller.chatVM.messages.count == 3
         }
 
         let statements = await recorder.all()
         #expect(statements == [badGeneration.sql])
-        #expect(generator.contexts.count == 5)
-        let repeatedPromptError = generator.contexts[1].lastRunError ?? ""
-        #expect(repeatedPromptError.contains("repeated the exact same SQL"))
-        #expect(repeatedPromptError.contains("preseason_match_batch.tool_a_id"))
-        #expect(repeatedPromptError.contains("preseason_match_batch.tool_b_id"))
-        #expect(!repeatedPromptError.contains("Previous error"))
+        #expect(generator.contexts.count == 1)
+        #expect(generator.contexts[0].lastRunError?.contains(missingColumnError) == true)
+        #expect(controller.chatVM.messages.map(\.role) == [.user, .assistant, .assistant])
+        #expect(controller.chatVM.messages.last?.text.contains("\"tool_id\"") == true)
+        #expect(
+            controller.chatVM.messages.last?.text.contains(
+                "\"preseason_match_batch.tool_a_id\"") == true)
+        #expect(
+            controller.chatVM.messages.last?.text.contains(
+                "\"preseason_match_batch.tool_b_id\"") == true)
+        #expect(!(controller.chatVM.messages.last?.text.contains("Previous error") ?? true))
     }
 
     @Test func generatedRunRepairClarificationStopsRetryLoop() async {

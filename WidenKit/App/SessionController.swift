@@ -419,6 +419,13 @@ public final class SessionController: Identifiable {
                         error: lastError
                     )
                 )
+                if let clarification = SQLPromptBuilder.missingColumnClarificationQuestion(
+                    for: lastDatabaseError)
+                {
+                    chatVM.messages.append(ChatMessage(role: .assistant, text: clarification))
+                    appState.sessionDidChange(sessionID)
+                    return
+                }
                 continue
             }
             attemptedSQL.insert(normalizedGeneratedSQL)

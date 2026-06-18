@@ -238,6 +238,17 @@ struct SQLPromptBuilderTests {
         #expect(prompt.contains("needsClarification"))
     }
 
+    @Test func missingColumnClarificationQuestionNamesCandidateColumns() {
+        let question = SQLPromptBuilder.missingColumnClarificationQuestion(
+            for:
+                #"Query failed: column "tool_id" does not exist Hint: Perhaps you meant to reference the column "preseason_match_batch.tool_a_id" or the column "preseason_match_batch.tool_b_id"."#
+        )
+
+        #expect(question?.contains("\"tool_id\"") == true)
+        #expect(question?.contains("\"preseason_match_batch.tool_a_id\"") == true)
+        #expect(question?.contains("\"preseason_match_batch.tool_b_id\"") == true)
+    }
+
     @Test func contextSectionTruncatesLongItemsAndKeepsLastThreeQuestions() {
         let longSQL = String(repeating: "S", count: 2_000)
         let context = SQLGenerationContext(

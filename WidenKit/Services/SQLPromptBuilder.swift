@@ -120,13 +120,7 @@ public enum SQLPromptBuilder {
             return nil
         }
 
-        let candidates = quotedIdentifiers(in: text)
-            .filter { $0.contains(".") }
-            .reduce(into: [String]()) { result, identifier in
-                if !result.contains(identifier) {
-                    result.append(identifier)
-                }
-            }
+        let candidates = missingColumnCandidates(in: text)
 
         if candidates.isEmpty {
             return
@@ -135,6 +129,38 @@ public enum SQLPromptBuilder {
 
         return
             "PostgreSQL says a column is missing. Candidate columns from the database hint: \(candidates.joined(separator: ", ")). Use a candidate only if it matches the user's intent; otherwise set needsClarification to true and ask which entity or relationship they mean."
+    }
+
+    static func missingColumnClarificationQuestion(for text: String) -> String? {
+        let lowercased = text.lowercased()
+        guard lowercased.contains("column"), lowercased.contains("does not exist") else {
+            return nil
+        }
+
+        let missingColumn = quotedIdentifiers(in: text).first ?? "the missing column"
+        let candidates = missingColumnCandidates(in: text)
+        switch candidates.count {
+        case 0:
+            return
+                "I'm having trouble identifying which schema column should replace \"\(missingColumn)\". Can you clarify which entity or relationship you mean?"
+        case 1:
+            return
+                "I'm having trouble confirming whether \"\(candidates[0])\" should replace \"\(missingColumn)\". Can you clarify which entity or relationship you mean?"
+        default:
+            let options = candidates.dropLast().joined(separator: "\", \"")
+            return
+                "I'm having trouble identifying which column should replace \"\(missingColumn)\". Did you mean \"\(options)\", or \"\(candidates.last!)\", or something else?"
+        }
+    }
+
+    private static func missingColumnCandidates(in text: String) -> [String] {
+        quotedIdentifiers(in: text)
+            .filter { $0.contains(".") }
+            .reduce(into: [String]()) { result, identifier in
+                if !result.contains(identifier) {
+                    result.append(identifier)
+                }
+            }
     }
 
     private static func quotedIdentifiers(in text: String) -> [String] {
