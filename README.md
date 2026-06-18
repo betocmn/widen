@@ -1,16 +1,14 @@
 # Widen
 
-**Ask Postgres with the LLM already on your Mac.**
-
 [![CI](https://github.com/betocmn/widen/actions/workflows/ci.yml/badge.svg)](https://github.com/betocmn/widen/actions/workflows/ci.yml)
 [![CodeQL](https://github.com/betocmn/widen/actions/workflows/codeql.yml/badge.svg)](https://github.com/betocmn/widen/actions/workflows/codeql.yml)
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
 [![PRs Welcome](https://img.shields.io/badge/PRs-welcome-brightgreen.svg)](CONTRIBUTING.md)
 
-Widen is a free, open-source, native macOS Postgres GUI for macOS 26+.
-It introspects your schema, drafts SQL with Apple's on-device Foundation Model
-through the macOS Foundation Models framework or an optional cloud model, shows
-every query for review, and only runs what you approve.
+Widen is an open-source macOS Postgres GUI for macOS 26+. It reads your schema
+and can draft SQL from a question using Apple's on-device Foundation Model, or
+an optional cloud model if you configure one. It shows the SQL before anything
+runs, so you can review or edit it first.
 
 No backend. No account. No analytics. Local by default.
 
