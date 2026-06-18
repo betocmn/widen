@@ -101,6 +101,8 @@ public final class ChatViewModel {
         // is failing") only work if the prompt carries what they refer to.
         let context = SQLGenerationContext(
             recentQuestions: messages.filter { $0.role == .user }.suffix(3).map(\.text),
+            originalQuestion: messages.originalUserQuestion(),
+            conversationMessages: messages.sqlConversationMessages(),
             currentSQL: queryVM.sqlText
                 .trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
                 ? nil : queryVM.sqlText,

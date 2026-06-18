@@ -34,6 +34,7 @@ public enum SQLPromptBuilder {
         - For average counts per day/week/month, first count rows per period in a subquery or CTE, then AVG those counts in the outer SELECT. Never put a window function or another aggregate directly inside AVG, SUM, MIN, MAX, or COUNT.
         - For simple "per day" order/event averages, group by DATE_TRUNC('day', the timestamp column) or timestamp_column::date. State whether the average is across days with records unless the user asks to include zero-activity days.
         - If a Database context section is present, use it as user-provided guidance about relationships, business rules, data meaning, and preferred filters. The schema remains authoritative for available tables and columns.
+        - The prompt is organized with XML-style sections such as <database_schema>, <conversation_context>, and <current_user_request>. Treat <ordered_chat_history> messages as a chronological back-and-forth chat transcript between the user and the assistant.
         - The prompt may include conversation context: earlier questions, the current SQL, and the error of its last run. Treat the user's question as a follow-up to that context — adjust the current SQL when asked, and when an error is shown, produce a corrected version of that query that still answers the earlier questions.
         - If the request is ambiguous, make the safest reasonable assumption and include it in assumptions.
         - If the request cannot be answered from the schema, set needsClarification to true and ask a concise clarification question.
@@ -50,40 +51,77 @@ public enum SQLPromptBuilder {
         databaseContext: String? = nil,
         maxSchemaCharacters: Int = 8_000
     ) -> String {
-        var sections = [schemaSummary(schema, maxCharacters: maxSchemaCharacters)]
+        var sections = [
+            taggedSection(
+                "database_schema",
+                schemaSummary(schema, maxCharacters: maxSchemaCharacters)
+            )
+        ]
         if let databaseContextSection = databaseContextSection(databaseContext) {
-            sections.append(databaseContextSection)
+            sections.append(taggedSection("database_context", databaseContextSection))
         }
         if let contextSection = contextSection(context) {
             sections.append(contextSection)
         }
-        sections.append("User question: \(question)")
+        sections.append(
+            taggedSection(
+                "current_user_request",
+                "User question: \(question)"
+            ))
         return sections.joined(separator: "\n\n")
     }
 
-    /// Renders the conversation context with tight per-item budgets — the
-    /// on-device model's context window is small, so follow-ups get the
-    /// minimum they need: a few earlier questions, the SQL on screen, and
-    /// the last error.
+    /// Renders the conversation context with tight per-item budgets. The
+    /// transcript is ordered so the model can follow the back-and-forth chat
+    /// without treating the current request as an isolated question.
     static func contextSection(_ context: SQLGenerationContext) -> String? {
         guard !context.isEmpty else { return nil }
-        var lines = ["Conversation context:"]
-        for question in context.recentQuestions.suffix(3) {
-            lines.append("- Earlier question: \(truncated(question, to: 200))")
+        var lines = [
+            "<conversation_context>",
+            "This is an ongoing back-and-forth chat between the user and Widen.",
+            "Messages are chronological. Use them to understand what the user has already asked, what responses or SQL were already shown, and what failed.",
+            "The <current_user_request> section after this context is the request to answer now.",
+        ]
+
+        if let originalQuestion = context.originalQuestion
+            ?? context.conversationMessages.first(where: { $0.role == .user })?.text
+            ?? context.recentQuestions.first
+        {
+            lines.append(taggedCDATASection("original_user_question", originalQuestion))
         }
+
+        let orderedMessages = context.conversationMessages.isEmpty
+            ? context.recentQuestions.suffix(3).map {
+                SQLConversationMessage(role: .user, text: $0)
+            }
+            : context.conversationMessages
+        if !orderedMessages.isEmpty {
+            lines.append("<ordered_chat_history>")
+            for (index, message) in orderedMessages.enumerated() {
+                let text = truncated(message.text, to: 700)
+                lines.append(
+                    taggedCDATASection(
+                        #"message index="\#(index + 1)" role="\#(message.role.rawValue)""#,
+                        text
+                    ))
+            }
+            lines.append("</ordered_chat_history>")
+        }
+
         if let sql = context.currentSQL,
             !sql.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
         {
-            lines.append("- Current SQL on screen:\n\(truncated(sql, to: 700))")
+            lines.append(taggedCDATASection("current_sql_on_screen", truncated(sql, to: 700)))
         }
         if let error = context.lastRunError,
             !error.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
         {
-            lines.append("- The last run of that SQL failed with: \(truncated(error, to: 300))")
+            lines.append(taggedCDATASection("last_run_error", truncated(error, to: 300)))
         }
         if let hint = repairHint(for: context) {
-            lines.append("- Repair requirement: \(hint)")
+            lines.append(taggedCDATASection("repair_requirement", hint))
         }
+        lines.append("</conversation_context>")
         return lines.joined(separator: "\n")
     }
 
@@ -172,6 +210,32 @@ public enum SQLPromptBuilder {
             guard let matchRange = Range(match.range(at: 1), in: text) else { return nil }
             return String(text[matchRange])
         }
+    }
+
+    private static func taggedSection(_ tag: String, _ content: String) -> String {
+        """
+        <\(tag)>
+        \(content)
+        </\(tag)>
+        """
+    }
+
+    private static func taggedCDATASection(_ tag: String, _ content: String) -> String {
+        """
+        <\(tag)>
+        <![CDATA[
+        \(cdataEscaped(content))
+        ]]>
+        </\(closingTagName(tag))>
+        """
+    }
+
+    private static func closingTagName(_ tag: String) -> String {
+        tag.split(separator: " ").first.map(String.init) ?? tag
+    }
+
+    private static func cdataEscaped(_ text: String) -> String {
+        text.replacingOccurrences(of: "]]>", with: "]]]]><![CDATA[>")
     }
 
     /// Renders user-authored database guidance from settings. This is capped

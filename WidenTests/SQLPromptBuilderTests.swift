@@ -95,7 +95,11 @@ struct SQLPromptBuilderTests {
             schema: makeSampleSchema()
         )
         #expect(prompt.contains("Database schema:"))
+        #expect(prompt.contains("<database_schema>"))
+        #expect(prompt.contains("</database_schema>"))
+        #expect(prompt.contains("<current_user_request>"))
         #expect(prompt.contains("User question: Show me the 10 most recent users."))
+        #expect(prompt.contains("</current_user_request>"))
     }
 
     @Test func instructionsContainSafetyRulesAndRowLimit() {
@@ -119,6 +123,7 @@ struct SQLPromptBuilderTests {
         #expect(instructions.contains("Do not group or partition by CURRENT_DATE itself"))
         // Follow-up handling for the conversation context section.
         #expect(instructions.contains("follow-up"))
+        #expect(instructions.contains("<ordered_chat_history>"))
     }
 
     @Test func promptWithoutContextHasNoContextSection() {
@@ -126,7 +131,7 @@ struct SQLPromptBuilderTests {
             question: "Show me users.",
             schema: makeSampleSchema()
         )
-        #expect(!prompt.contains("Conversation context:"))
+        #expect(!prompt.contains("<conversation_context>"))
     }
 
     @Test func promptIncludesDatabaseContextBeforeConversationAndQuestion() {
@@ -140,7 +145,7 @@ struct SQLPromptBuilderTests {
 
         #expect(prompt.contains("Database context:\nActive customers have orders in the last 90 days."))
         let databaseContextRange = prompt.range(of: "Database context:")
-        let conversationRange = prompt.range(of: "Conversation context:")
+        let conversationRange = prompt.range(of: "<conversation_context>")
         let questionRange = prompt.range(of: "User question:")
         #expect(databaseContextRange!.lowerBound < conversationRange!.lowerBound)
         #expect(conversationRange!.lowerBound < questionRange!.lowerBound)
@@ -161,6 +166,15 @@ struct SQLPromptBuilderTests {
     @Test func promptIncludesConversationContext() {
         let context = SQLGenerationContext(
             recentQuestions: ["max spend per customer?", "just the last week?"],
+            originalQuestion: "max spend per customer?",
+            conversationMessages: [
+                SQLConversationMessage(role: .user, text: "max spend per customer?"),
+                SQLConversationMessage(
+                    role: .assistant,
+                    text: "Generated a max-spend query.\nGenerated SQL:\nSELECT MAX(total_cents) FROM public.orders"
+                ),
+                SQLConversationMessage(role: .user, text: "just the last week?"),
+            ],
             currentSQL: "SELECT MAX(total_cents) FROM public.orders",
             lastRunError: "syntax error at or near \"30\""
         )
@@ -170,14 +184,20 @@ struct SQLPromptBuilderTests {
             context: context
         )
 
-        #expect(prompt.contains("Conversation context:"))
-        #expect(prompt.contains("- Earlier question: max spend per customer?"))
-        #expect(prompt.contains("- Earlier question: just the last week?"))
-        #expect(prompt.contains("Current SQL on screen:\nSELECT MAX(total_cents)"))
-        #expect(prompt.contains("failed with: syntax error at or near \"30\""))
+        #expect(prompt.contains("<conversation_context>"))
+        #expect(prompt.contains("back-and-forth chat"))
+        #expect(prompt.contains("<original_user_question>"))
+        #expect(prompt.contains("max spend per customer?"))
+        #expect(prompt.contains(#"<message index="1" role="user">"#))
+        #expect(prompt.contains(#"<message index="2" role="assistant">"#))
+        #expect(prompt.contains(#"<message index="3" role="user">"#))
+        #expect(prompt.contains("<current_sql_on_screen>"))
+        #expect(prompt.contains("SELECT MAX(total_cents)"))
+        #expect(prompt.contains("<last_run_error>"))
+        #expect(prompt.contains("syntax error at or near \"30\""))
         // The question always comes last, after the context.
         let questionRange = prompt.range(of: "User question:")
-        let contextRange = prompt.range(of: "Conversation context:")
+        let contextRange = prompt.range(of: "<conversation_context>")
         #expect(contextRange!.lowerBound < questionRange!.lowerBound)
     }
 
@@ -195,7 +215,7 @@ struct SQLPromptBuilderTests {
             context: context
         )
 
-        #expect(prompt.contains("Repair requirement:"))
+        #expect(prompt.contains("<repair_requirement>"))
         #expect(prompt.contains("Do not use OVER inside AVG"))
         #expect(prompt.contains("WITH counts AS"))
     }
@@ -213,7 +233,7 @@ struct SQLPromptBuilderTests {
             context: context
         )
 
-        #expect(prompt.contains("Repair requirement:"))
+        #expect(prompt.contains("<repair_requirement>"))
         #expect(prompt.contains("Do not return the current SQL again"))
         #expect(prompt.contains("needsClarification"))
     }
@@ -249,7 +269,7 @@ struct SQLPromptBuilderTests {
         #expect(question?.contains("\"preseason_match_batch.tool_b_id\"") == true)
     }
 
-    @Test func contextSectionTruncatesLongItemsAndKeepsLastThreeQuestions() {
+    @Test func contextSectionIncludesOriginalQuestionAndKeepsLastThreeQuestionsInHistory() {
         let longSQL = String(repeating: "S", count: 2_000)
         let context = SQLGenerationContext(
             recentQuestions: ["q1", "q2", "q3", "q4", "q5"],
@@ -259,11 +279,15 @@ struct SQLPromptBuilderTests {
 
         let section = SQLPromptBuilder.contextSection(context)!
 
-        #expect(!section.contains("q1"))
+        #expect(section.contains("<original_user_question>"))
+        #expect(section.contains("q1"))
         #expect(!section.contains("q2"))
         #expect(section.contains("q3"))
         #expect(section.contains("q5"))
-        #expect(section.count < 1_400)
+        #expect(section.contains(#"<message index="1" role="user">"#))
+        #expect(section.contains("<current_sql_on_screen>"))
+        #expect(section.contains("<last_run_error>"))
+        #expect(section.count < 2_400)
         #expect(section.contains("…"))
     }
 
