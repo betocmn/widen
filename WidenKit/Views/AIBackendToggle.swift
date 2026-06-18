@@ -56,20 +56,14 @@ struct AIBackendToggle: View {
     }
 
     private func select(_ mode: AIBackendMode) {
-        switch mode {
-        case .local:
-            appState.aiBackendMode = .local
-        case .cloud:
-            if case .ready = appState.cloudBackendStatus {
-                appState.aiBackendMode = .cloud
-            } else {
-                appState.openSettings(tab: .llm)
-            }
-        }
+        _ = appState.requestAIBackendMode(mode)
     }
 
     private var localHelp: String {
-        "Generate SQL with Apple's on-device model — your questions and schema stay on this Mac. This switch only picks the LLM that turns questions into SQL; nothing else moves to the cloud."
+        if let message = appState.localModelAvailabilityMessage {
+            return message
+        }
+        return "Generate SQL with Apple's on-device model — your questions and schema stay on this Mac. This switch only picks the LLM that turns questions into SQL; nothing else moves to the cloud."
     }
 
     private var cloudHelp: String {

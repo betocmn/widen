@@ -15,9 +15,7 @@ struct LLMSettingsView: View {
         Form {
             Section("Local LLM") {
                 LabeledContent("Model", value: Self.localModelName)
-                Text(
-                    "Free and included with your Mac. Generation runs entirely on this device — your questions and schema never leave it, and it works offline."
-                )
+                Text(localModelDescription)
                 .font(.callout)
                 .foregroundStyle(.secondary)
                 if let message = appState.localModelAvailabilityMessage {
@@ -56,7 +54,7 @@ struct LLMSettingsView: View {
 
             Section {
                 Text(
-                    "Switch between Local and Cloud with the toggle in the toolbar. Cloud models are used for SQL generation only; session titles always use the on-device model."
+                    "Switch between Local and Cloud with the toggle in the toolbar. Cloud models are used for SQL generation only; session titles use the on-device model when available, otherwise a local deterministic fallback."
                 )
                 .font(.callout)
                 .foregroundStyle(.secondary)
@@ -71,6 +69,17 @@ struct LLMSettingsView: View {
     private static var localModelName: String {
         let version = ProcessInfo.processInfo.operatingSystemVersion
         return "Apple Foundation Model · macOS \(version.majorVersion).\(version.minorVersion)"
+    }
+
+    private var localModelDescription: String {
+        switch appState.localLLMEligibility {
+        case .ready:
+            return "Free and included with your Mac. Generation runs entirely on this device — your questions and schema never leave it, and it works offline."
+        case .appleIntelligenceDisabled:
+            return "Local generation runs entirely on this device after Apple Intelligence is enabled in System Settings › Apple Intelligence & Siri."
+        default:
+            return "Local generation runs entirely on this device when Apple's local model is available."
+        }
     }
 
     @ViewBuilder

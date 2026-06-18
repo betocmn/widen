@@ -39,7 +39,8 @@ Apple's `FoundationModels` framework when building with the macOS 26 SDK.
 ## Build And Runtime Assumptions
 
 The project requires Xcode 26 because Foundation Models is only available in
-the macOS 26 SDK. The Makefile exports:
+the macOS 26 SDK, and the app deployment target is macOS 26.0. The Makefile
+exports:
 
 ```sh
 DEVELOPER_DIR=/Applications/Xcode-26.app/Contents/Developer
@@ -107,10 +108,11 @@ The central object is `AppState` in `WidenKit/App/AppState.swift`.
 It also exposes `sqlGenerator` and `titleGenerator`, which choose:
 
 - The mock implementations when the developer toggle is enabled.
-- `FoundationModelsSQLGenerator` / `FoundationModelsTitleGenerator` when
-  available at compile time.
-- The mocks as a compile-time fallback when Foundation Models is not
-  available.
+- The selected cloud provider when Cloud mode is ready.
+- `FoundationModelsSQLGenerator` / `FoundationModelsTitleGenerator` when Local
+  mode is eligible and Apple's on-device model is ready.
+- `UnavailableSQLGenerator` for an unavailable selected SQL backend, while
+  session titles fall back to the deterministic local title generator.
 
 `SessionController` in `WidenKit/App/SessionController.swift` is the
 per-session runtime container. It owns a `ChatViewModel` and a
@@ -479,11 +481,13 @@ There are four implementations:
 
 ### Cloud backend selection
 
-`AppState.sqlGenerator` picks the backend: mock wins, then the cloud provider
-when `aiBackendMode == .cloud` and `cloudBackendStatus == .ready`, then the
-local model. An unusable cloud selection falls back to local silently while
-`modelAvailabilityMessage` explains why (shown in the chat banner and
-Settings › LLM). Session titles always use the on-device generator.
+`AppState.sqlGenerator` picks the backend: mock wins, then the selected cloud
+provider when `aiBackendMode == .cloud` and `cloudBackendStatus == .ready`, or
+the local model only when `LocalLLMEligibility` is ready. An unusable selection
+returns `UnavailableSQLGenerator` so production never silently swaps to another
+backend. `modelAvailabilityMessage` explains the selected backend problem in
+the chat banner and Settings › LLM. Session titles use the on-device generator
+when available, otherwise the deterministic fallback.
 
 Preferences and secrets:
 
@@ -496,7 +500,9 @@ Preferences and secrets:
 
 The UI surface is the Settings › LLM tab (`LLMSettingsView`) plus the
 `AIBackendToggle` toolbar segmented control, which chooses local/cloud and
-opens Settings › LLM when the cloud backend needs setup.
+opens Settings › LLM when the cloud backend needs setup. Local selection goes
+through `AppState.requestAIBackendMode(_:)`; users without Apple Intelligence
+or a ready local model get an alert instead of a silent mode switch.
 
 ### Private Cloud Compute entitlement and signing
 

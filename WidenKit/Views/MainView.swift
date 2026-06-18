@@ -94,6 +94,16 @@ public struct MainView: View {
         .onChange(of: appState.openSettingsRequest) {
             openSettings()
         }
+        .alert(item: $appState.llmCompatibilityAlert) { alert in
+            Alert(
+                title: Text(alert.title),
+                message: Text(alert.message),
+                primaryButton: .default(Text("Open LLM Settings")) {
+                    appState.openSettings(tab: .llm)
+                },
+                secondaryButton: .cancel(Text("Dismiss"))
+            )
+        }
         .onReceive(
             NotificationCenter.default.publisher(for: NSApplication.willTerminateNotification)
         ) { _ in

@@ -62,7 +62,7 @@ targets:
         LSMinimumSystemVersion: "26.0"
         LSApplicationCategoryType: public.app-category.developer-tools
         NSPrincipalClass: NSApplication
-        NSHumanReadableCopyright: "Widen — local-only MVP"
+        NSHumanReadableCopyright: "Widen — Postgres GUI"
         NSLocalNetworkUsageDescription: "Widen connects to PostgreSQL databases you configure on your local network."
         # Sparkle auto-update. The feed and zipped builds are hosted as GitHub
         # Release assets (see docs/update-server-plan.md).
