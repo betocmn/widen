@@ -99,6 +99,8 @@ public final class SessionController: Identifiable {
             // `startRun` validated `sql` as part of the run; reuse that result
             // instead of re-tokenizing, and route the error by statement kind.
             let isWrite = self.queryVM.validation?.kind.isWrite == true
+            let queryFailure =
+                self.queryVM.runFailure ?? errorMessage.map { QueryFailure(message: $0) }
             if let result {
                 self.appendRunResult(result, sql: sql)
             } else if let errorMessage {
@@ -106,14 +108,14 @@ public final class SessionController: Identifiable {
                     // Writes never auto-retry: show the error immediately. When
                     // the query was AI-generated, offer a one-shot "Try Again".
                     if generation != nil,
-                        Self.isRetryableGeneratedSQLError(errorMessage)
+                        Self.isRetryableGeneratedSQLFailure(queryFailure)
                     {
                         self.chatVM.appendWriteRunError(errorMessage, failedSQL: sql)
                     } else {
                         self.chatVM.appendRunError(errorMessage)
                     }
                 } else if generation != nil,
-                    Self.isRetryableGeneratedSQLError(errorMessage)
+                    Self.isRetryableGeneratedSQLFailure(queryFailure)
                 {
                     Task { [weak self, weak appState] in
                         guard let self else { return }
@@ -124,7 +126,8 @@ public final class SessionController: Identifiable {
                         await self.repairGeneratedSQL(
                             appState: appState,
                             startingSQL: sql,
-                            firstError: errorMessage
+                            firstError: errorMessage,
+                            firstFailure: queryFailure
                         )
                     }
                 } else {
@@ -323,6 +326,7 @@ public final class SessionController: Identifiable {
         appState: AppState,
         startingSQL: String,
         firstError: String,
+        firstFailure: QueryFailure? = nil,
         startingGeneration: SQLGenerationResult? = nil,
         questionContext suppliedQuestionContext: RepairQuestionContext? = nil,
         mode: GeneratedSQLRepairMode = .execution
@@ -369,11 +373,16 @@ public final class SessionController: Identifiable {
             databaseContext: connection?.databaseContext ?? ""
         )
         let postgres = appState.postgres(for: connectionID)
+        let firstDiagnostic = firstFailure?.diagnostic ?? Self.diagnostic(from: firstError)
         var coordinator = GeneratedSQLRepairCoordinator(
             failedSQL: startingSQL,
             firstError: firstError,
-            diagnostic: Self.diagnostic(from: firstError),
-            forbiddenIdentifiers: Self.forbiddenIdentifiers(sql: startingSQL, error: firstError)
+            diagnostic: firstDiagnostic,
+            forbiddenIdentifiers: Self.forbiddenIdentifiers(
+                sql: startingSQL,
+                error: firstError,
+                diagnostic: firstDiagnostic
+            )
         )
 
         while let repairMode = coordinator.beginNextAttempt() {
@@ -447,7 +456,7 @@ public final class SessionController: Identifiable {
             case .rejected(let reason):
                 if case .repeatedFingerprint = reason,
                     let clarification = SQLPromptBuilder.missingColumnClarificationQuestion(
-                        for: firstError)
+                        for: firstDiagnostic?.displayMessage ?? firstError)
                 {
                     chatVM.messages.append(ChatMessage(role: .assistant, text: clarification))
                     appState.sessionDidChange(sessionID)
@@ -523,7 +532,12 @@ public final class SessionController: Identifiable {
                 )
                 continue
             }
-            guard Self.isRetryableGeneratedSQLError(errorMessage) else {
+            let executionFailure =
+                execution.failure ?? QueryFailure(
+                    message: errorMessage,
+                    diagnostic: Self.diagnostic(from: errorMessage)
+                )
+            guard Self.isRetryableGeneratedSQLFailure(executionFailure) else {
                 restoreStartingGeneration(schema: schema)
                 chatVM.appendRunError(errorMessage)
                 appState.sessionDidChange(sessionID)
@@ -533,8 +547,12 @@ public final class SessionController: Identifiable {
                 mode: repairMode,
                 sql: generatedSQL,
                 error: errorMessage,
-                diagnostic: Self.diagnostic(from: errorMessage),
-                forbiddenIdentifiers: Self.forbiddenIdentifiers(sql: generatedSQL, error: errorMessage)
+                diagnostic: executionFailure.diagnostic ?? Self.diagnostic(from: errorMessage),
+                forbiddenIdentifiers: Self.forbiddenIdentifiers(
+                    sql: generatedSQL,
+                    error: errorMessage,
+                    diagnostic: executionFailure.diagnostic
+                )
             )
             if coordinator.canRequestAnotherModelCall {
                 continue
@@ -706,12 +724,32 @@ public final class SessionController: Identifiable {
         if lowercased.contains("aggregate") || lowercased.contains("group by") {
             return DatabaseDiagnostic(kind: .groupingError, sqlState: "42803", message: error)
         }
+        if lowercased.contains("type") && lowercased.contains("mismatch") {
+            return DatabaseDiagnostic(kind: .datatypeMismatch, sqlState: "42804", message: error)
+        }
+        if lowercased.contains("function"), lowercased.contains("does not exist") {
+            return DatabaseDiagnostic(kind: .undefinedFunction, sqlState: "42883", message: error)
+        }
+        if lowercased.contains("permission denied") || lowercased.contains("insufficient privilege") {
+            return DatabaseDiagnostic(
+                kind: .insufficientPrivilege,
+                sqlState: "42501",
+                message: error
+            )
+        }
+        if lowercased.contains("timed out") || lowercased.contains("statement timeout") {
+            return DatabaseDiagnostic(kind: .timedOut, sqlState: "57014", message: error)
+        }
         return nil
     }
 
-    private static func forbiddenIdentifiers(sql: String, error: String) -> [String] {
+    private static func forbiddenIdentifiers(
+        sql: String,
+        error: String,
+        diagnostic suppliedDiagnostic: DatabaseDiagnostic? = nil
+    ) -> [String] {
         var identifiers = quotedIdentifiers(in: error)
-        if let diagnostic = diagnostic(from: error) {
+        if let diagnostic = suppliedDiagnostic ?? diagnostic(from: error) {
             if let identifier = diagnostic.identifierForRepair {
                 identifiers.append(identifier)
             }
@@ -765,6 +803,22 @@ public final class SessionController: Identifiable {
             return false
         }
         return true
+    }
+
+    private static func isRetryableGeneratedSQLFailure(_ failure: QueryFailure?) -> Bool {
+        guard let failure else { return false }
+        if let diagnostic = failure.diagnostic {
+            switch diagnostic.kind {
+            case .insufficientPrivilege, .timedOut, .cancelled:
+                return false
+            default:
+                break
+            }
+            if diagnostic.sqlState == "42501" || diagnostic.sqlState == "57014" {
+                return false
+            }
+        }
+        return isRetryableGeneratedSQLError(failure.message)
     }
 }
 

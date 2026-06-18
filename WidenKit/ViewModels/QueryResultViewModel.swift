@@ -4,6 +4,7 @@ import Observation
 struct QueryExecutionAttempt {
     var result: QueryResult?
     var errorMessage: String?
+    var failure: QueryFailure?
     var wasDiscarded = false
     var wasUnsafeWrite = false
 }
@@ -23,6 +24,7 @@ public final class QueryResultViewModel {
     public private(set) var isRunning = false
     public private(set) var canStopWaiting = false
     public private(set) var runError: String?
+    public private(set) var runFailure: QueryFailure?
     /// Metadata of the last model generation that filled the editor.
     public private(set) var generation: SQLGenerationResult?
 
@@ -85,6 +87,7 @@ public final class QueryResultViewModel {
         canStopWaiting = true
         result = nil
         runError = nil
+        runFailure = nil
         isRunning = true
         runTask = Task {
             await run(
@@ -116,12 +119,13 @@ public final class QueryResultViewModel {
             isRunning = false
             if reportError {
                 runError = Self.stoppedWaitingMessage
+                runFailure = QueryFailure(message: Self.stoppedWaitingMessage)
             }
         }
         if shouldFire {
             if runKind == .generatedSQLAttempt {
                 fireAttemptCompletion(
-                    QueryExecutionAttempt(result: nil, errorMessage: runError)
+                    QueryExecutionAttempt(result: nil, errorMessage: runError, failure: runFailure)
                 )
             } else {
                 fireCompletion()
@@ -145,6 +149,7 @@ public final class QueryResultViewModel {
         schemaValidation = nil
         result = nil
         runError = nil
+        runFailure = nil
         generation = nil
         return true
     }
@@ -156,6 +161,7 @@ public final class QueryResultViewModel {
         sqlText = generation.sql
         result = nil
         runError = nil
+        runFailure = nil
         validate(schema: schema)
     }
 
@@ -166,6 +172,7 @@ public final class QueryResultViewModel {
         generation = nil
         result = nil
         runError = nil
+        runFailure = nil
         validate()
     }
 
@@ -176,6 +183,7 @@ public final class QueryResultViewModel {
         self.generation = generation
         result = nil
         runError = nil
+        runFailure = nil
         validation = nil
         schemaValidation = nil
         if !sqlText.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
@@ -198,31 +206,41 @@ public final class QueryResultViewModel {
             schema.map { GeneratedSQLValidator.validate(sql: sql, schema: $0) }
             ?? safety
         guard validation.isValid else {
+            let failure = Self.failure(from: AppError.validationFailed(validation.errors))
             return QueryExecutionAttempt(
                 result: nil,
-                errorMessage: AppError.validationFailed(validation.errors).localizedDescription
+                errorMessage: failure.message,
+                failure: failure
             )
         }
         // Hard invariant: the auto-retry path never executes a write. If the
         // model produced one, stop here so it never reaches the database.
         guard !validation.kind.isWrite else {
+            let failure = QueryFailure(
+                message:
+                    "The model produced a data-modifying query while repairing a read, so I stopped before showing it."
+            )
             return QueryExecutionAttempt(
                 result: nil,
-                errorMessage:
-                    "The model produced a data-modifying query while repairing a read, so I stopped before showing it.",
+                errorMessage: failure.message,
+                failure: failure,
                 wasUnsafeWrite: true
             )
         }
         guard isConnected, let config = connection else {
+            let failure = Self.failure(from: AppError.notConnected)
             return QueryExecutionAttempt(
                 result: nil,
-                errorMessage: AppError.notConnected.errorDescription
+                errorMessage: failure.message,
+                failure: failure
             )
         }
         guard !isRunning else {
+            let failure = QueryFailure(message: "A query is already running.")
             return QueryExecutionAttempt(
                 result: nil,
-                errorMessage: "A query is already running."
+                errorMessage: failure.message,
+                failure: failure
             )
         }
 
@@ -251,6 +269,7 @@ public final class QueryResultViewModel {
         onAttemptFinish = onFinish
         result = nil
         runError = nil
+        runFailure = nil
         isRunning = true
         runTask = Task {
             await runGeneratedSQLAttempt(sql: sql, config: config, postgres: postgres, runID: runID)
@@ -267,17 +286,22 @@ public final class QueryResultViewModel {
     ) async {
         validation = SQLSafetyValidator.validate(sql)
         schemaValidation = nil
+        runFailure = nil
         guard let validation, validation.isValid else {
             if isActiveRun(runID) {
                 let errors = validation?.errors ?? ["SQL is invalid."]
-                runError = AppError.validationFailed(errors).localizedDescription
+                let failure = Self.failure(from: AppError.validationFailed(errors))
+                runError = failure.message
+                runFailure = failure
             }
             finishRun(runID)
             return
         }
         guard isConnected, let config = connection else {
             if isActiveRun(runID) {
-                runError = AppError.notConnected.errorDescription
+                let failure = Self.failure(from: AppError.notConnected)
+                runError = failure.message
+                runFailure = failure
             }
             finishRun(runID)
             return
@@ -304,14 +328,19 @@ public final class QueryResultViewModel {
                 )
             if isActiveRun(runID) {
                 result = newResult
+                runFailure = nil
             }
         } catch is CancellationError {
             if isActiveRun(runID) {
-                runError = Self.stoppedWaitingMessage
+                let failure = QueryFailure(message: Self.stoppedWaitingMessage)
+                runError = failure.message
+                runFailure = failure
             }
         } catch {
             if isActiveRun(runID) {
-                runError = error.localizedDescription
+                let failure = Self.failure(from: error)
+                runError = failure.message
+                runFailure = failure
             }
         }
         finishRun(runID)
@@ -332,12 +361,15 @@ public final class QueryResultViewModel {
             )
             attempt = QueryExecutionAttempt(result: newResult, errorMessage: nil)
         } catch is CancellationError {
+            let failure = QueryFailure(message: Self.stoppedWaitingMessage)
             attempt = QueryExecutionAttempt(
                 result: nil,
-                errorMessage: Self.stoppedWaitingMessage
+                errorMessage: failure.message,
+                failure: failure
             )
         } catch {
-            attempt = QueryExecutionAttempt(result: nil, errorMessage: error.localizedDescription)
+            let failure = Self.failure(from: error)
+            attempt = QueryExecutionAttempt(result: nil, errorMessage: failure.message, failure: failure)
         }
         finishGeneratedSQLAttempt(runID, attempt: attempt)
     }
@@ -360,6 +392,7 @@ public final class QueryResultViewModel {
         guard isActiveRun(runID) else { return }
         result = attempt.result
         runError = attempt.errorMessage
+        runFailure = attempt.failure
         isRunning = false
         runTask = nil
         activeRunID = nil
@@ -385,6 +418,16 @@ public final class QueryResultViewModel {
 
     private static let stoppedWaitingMessage =
         "Stopped waiting for the query. The server may still finish it in the background."
+
+    private static func failure(from error: any Error) -> QueryFailure {
+        if let appError = error as? AppError {
+            return QueryFailure(
+                message: appError.errorDescription ?? appError.localizedDescription,
+                diagnostic: appError.databaseDiagnostic
+            )
+        }
+        return QueryFailure(message: error.localizedDescription)
+    }
 
 }
 
