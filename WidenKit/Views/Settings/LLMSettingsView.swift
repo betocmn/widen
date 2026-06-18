@@ -54,7 +54,7 @@ struct LLMSettingsView: View {
 
             Section {
                 Text(
-                    "Switch between Local and Cloud with the toggle in the toolbar. Cloud models are used for SQL generation only; session titles always use the on-device model."
+                    "Switch between Local and Cloud with the toggle in the toolbar. Cloud models are used for SQL generation only; session titles use the on-device model when available, otherwise a local deterministic fallback."
                 )
                 .font(.callout)
                 .foregroundStyle(.secondary)
