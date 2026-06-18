@@ -111,3 +111,65 @@ extension ChatMessage.RunSummary {
         return SQLSafetyValidator.containsUpsertDoUpdate(tokens)
     }
 }
+
+extension SQLConversationMessage.Role {
+    init(_ role: ChatMessage.Role) {
+        switch role {
+        case .user:
+            self = .user
+        case .assistant:
+            self = .assistant
+        case .result:
+            self = .result
+        case .error:
+            self = .error
+        }
+    }
+}
+
+extension ChatMessage {
+    var promptContextText: String {
+        var lines = [text]
+        if let generation {
+            let sql = generation.sql.trimmingCharacters(in: .whitespacesAndNewlines)
+            if !sql.isEmpty {
+                lines.append("Generated SQL:\n\(sql)")
+            }
+            if generation.needsClarification,
+                let clarification = generation.clarificationQuestion,
+                !clarification.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+            {
+                lines.append("Clarification requested:\n\(clarification)")
+            }
+        }
+        if let runSummary {
+            lines.append("SQL run:\n\(runSummary.sql)")
+            lines.append(
+                "Run summary: \(runSummary.kind.rawValue), \(runSummary.rowCount) row(s), \(runSummary.executionTimeMs) ms"
+            )
+        }
+        if let failedWriteSQL {
+            lines.append("Failed write SQL:\n\(failedWriteSQL)")
+        }
+        return lines.joined(separator: "\n")
+    }
+}
+
+extension Array where Element == ChatMessage {
+    func originalUserQuestion(upTo upperBound: Int? = nil) -> String? {
+        let bounded = prefix(upTo: Swift.min(upperBound ?? count, count))
+        return bounded.first(where: { $0.role == .user })?.text
+    }
+
+    func sqlConversationMessages(upTo upperBound: Int? = nil, limit: Int = 8)
+        -> [SQLConversationMessage]
+    {
+        let bounded = prefix(upTo: Swift.min(upperBound ?? count, count))
+        return bounded.suffix(limit).map { message in
+            SQLConversationMessage(
+                role: SQLConversationMessage.Role(message.role),
+                text: message.promptContextText
+            )
+        }
+    }
+}

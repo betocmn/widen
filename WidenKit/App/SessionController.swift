@@ -152,6 +152,8 @@ public final class SessionController: Identifiable {
         let questionContext = questionContextForRepair(startingSQL: failedSQL)
         let context = SQLGenerationContext(
             recentQuestions: questionContext.recentQuestions,
+            originalQuestion: questionContext.originalQuestion,
+            conversationMessages: questionContext.conversationMessages,
             currentSQL: failedSQL,
             lastRunError: error
         )
@@ -224,6 +226,8 @@ public final class SessionController: Identifiable {
 
         let context = SQLGenerationContext(
             recentQuestions: chatVM.messages.filter { $0.role == .user }.suffix(3).map(\.text),
+            originalQuestion: chatVM.messages.originalUserQuestion(),
+            conversationMessages: chatVM.messages.sqlConversationMessages(),
             currentSQL: queryVM.sqlText
                 .trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
                 ? nil : queryVM.sqlText,
@@ -277,9 +281,12 @@ public final class SessionController: Identifiable {
                     startingSQL: generatedSQL,
                     firstError: firstError,
                     startingGeneration: visibleGeneration,
-                    questionContext: (
+                    questionContext: RepairQuestionContext(
                         question: question,
-                        recentQuestions: Array(context.recentQuestions.suffix(3))
+                        recentQuestions: Array(context.recentQuestions.suffix(3)),
+                        originalQuestion: context.originalQuestion ?? question,
+                        conversationMessages: context.conversationMessages
+                            + [SQLConversationMessage(role: .user, text: question)]
                     ),
                     mode: .validationOnly
                 )
@@ -298,7 +305,7 @@ public final class SessionController: Identifiable {
         startingSQL: String,
         firstError: String,
         startingGeneration: SQLGenerationResult? = nil,
-        questionContext suppliedQuestionContext: (question: String, recentQuestions: [String])? = nil,
+        questionContext suppliedQuestionContext: RepairQuestionContext? = nil,
         mode: GeneratedSQLRepairMode = .execution
     ) async {
         let questionContext = suppliedQuestionContext ?? questionContextForRepair(startingSQL: startingSQL)
@@ -345,6 +352,8 @@ public final class SessionController: Identifiable {
         )
         let postgres = appState.postgres(for: connectionID)
         var failingSQL = startingSQL
+        var attemptedSQL = Set([Self.normalizedSQL(startingSQL)])
+        var lastDatabaseError = firstError
         var lastError = firstError
         var attempts = [
             GeneratedSQLRepairAttempt(label: "Initial run", error: firstError)
@@ -356,6 +365,8 @@ public final class SessionController: Identifiable {
             )
             let context = SQLGenerationContext(
                 recentQuestions: questionContext.recentQuestions,
+                originalQuestion: questionContext.originalQuestion,
+                conversationMessages: questionContext.conversationMessages,
                 currentSQL: failingSQL,
                 lastRunError: lastError
             )
@@ -379,7 +390,26 @@ public final class SessionController: Identifiable {
             if !generatedSQL.isEmpty {
                 finalGeneration = generation.withSQL(generatedSQL)
             }
-            guard !generatedSQL.isEmpty, !generation.needsClarification else {
+            if generation.needsClarification {
+                if let clarification = generation.clarificationQuestion,
+                    !clarification.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+                {
+                    chatVM.messages.append(
+                        ChatMessage(role: .assistant, text: clarification, generation: generation)
+                    )
+                    appState.sessionDidChange(sessionID)
+                    return
+                }
+                lastError = "The model asked for clarification but did not return a question."
+                attempts.append(
+                    GeneratedSQLRepairAttempt(
+                        label: "Retry \(attempt)/\(Self.generatedSQLRepairRetryLimit)",
+                        error: lastError
+                    )
+                )
+                continue
+            }
+            guard !generatedSQL.isEmpty else {
                 lastError = "The model did not return corrected SQL."
                 attempts.append(
                     GeneratedSQLRepairAttempt(
@@ -389,16 +419,25 @@ public final class SessionController: Identifiable {
                 )
                 continue
             }
-            if Self.normalizedSQL(generatedSQL) == Self.normalizedSQL(failingSQL) {
-                lastError = Self.repeatedSQLRepairMessage(previousError: lastError)
+            let normalizedGeneratedSQL = Self.normalizedSQL(generatedSQL)
+            if attemptedSQL.contains(normalizedGeneratedSQL) {
+                lastError = Self.repeatedSQLRepairMessage(databaseError: lastDatabaseError)
                 attempts.append(
                     GeneratedSQLRepairAttempt(
                         label: "Retry \(attempt)/\(Self.generatedSQLRepairRetryLimit)",
                         error: lastError
                     )
                 )
+                if let clarification = SQLPromptBuilder.missingColumnClarificationQuestion(
+                    for: lastDatabaseError)
+                {
+                    chatVM.messages.append(ChatMessage(role: .assistant, text: clarification))
+                    appState.sessionDidChange(sessionID)
+                    return
+                }
                 continue
             }
+            attemptedSQL.insert(normalizedGeneratedSQL)
 
             if mode == .validationOnly {
                 let validation = SQLSafetyValidator.validate(generatedSQL)
@@ -417,6 +456,7 @@ public final class SessionController: Identifiable {
                     )
                 )
                 failingSQL = generatedSQL
+                lastDatabaseError = errorMessage
                 lastError = errorMessage
                 continue
             }
@@ -451,6 +491,7 @@ public final class SessionController: Identifiable {
 
             guard let errorMessage = execution.errorMessage else {
                 lastError = "The query did not return a result."
+                lastDatabaseError = lastError
                 attempts.append(
                     GeneratedSQLRepairAttempt(
                         label: "Retry \(attempt)/\(Self.generatedSQLRepairRetryLimit)",
@@ -473,6 +514,7 @@ public final class SessionController: Identifiable {
                 )
             )
             failingSQL = generatedSQL
+            lastDatabaseError = errorMessage
             lastError = errorMessage
         }
 
@@ -572,17 +614,24 @@ public final class SessionController: Identifiable {
 
     private func questionContextForRepair(
         startingSQL: String
-    ) -> (question: String, recentQuestions: [String]) {
+    ) -> RepairQuestionContext {
         let anchorIndex = chatVM.messages.lastIndex { message in
             message.role == .assistant
                 && Self.normalizedSQL(message.generation?.sql ?? "") == Self.normalizedSQL(startingSQL)
         }
         let upperBound = anchorIndex ?? chatVM.messages.endIndex
+        let transcriptUpperBound = anchorIndex.map { $0 + 1 } ?? chatVM.messages.endIndex
         let userQuestions = chatVM.messages[..<upperBound]
             .filter { $0.role == .user }
             .map(\.text)
         let question = userQuestions.last ?? "Fix the generated SQL so it runs successfully."
-        return (question, Array(userQuestions.dropLast().suffix(3)))
+        return RepairQuestionContext(
+            question: question,
+            recentQuestions: Array(userQuestions.dropLast().suffix(3)),
+            originalQuestion: chatVM.messages.originalUserQuestion(upTo: transcriptUpperBound),
+            conversationMessages: chatVM.messages.sqlConversationMessages(
+                upTo: transcriptUpperBound)
+        )
     }
 
     private func generatedAssistantIndex(matchingSQL sql: String) -> Int? {
@@ -609,10 +658,10 @@ public final class SessionController: Identifiable {
         text.count <= limit ? text : String(text.prefix(limit)) + "..."
     }
 
-    private static func repeatedSQLRepairMessage(previousError: String) -> String {
+    private static func repeatedSQLRepairMessage(databaseError: String) -> String {
         """
-        The model repeated the exact same SQL after it failed. Produce a structurally different query.
-        Previous error: \(previousError)
+        The model repeated the exact same SQL after it failed. Do not return that SQL again; produce a different query or ask a clarification question.
+        Database error: \(databaseError)
         """
     }
 
@@ -628,6 +677,13 @@ public final class SessionController: Identifiable {
 private struct GeneratedSQLRepairAttempt {
     var label: String
     var error: String
+}
+
+private struct RepairQuestionContext {
+    var question: String
+    var recentQuestions: [String]
+    var originalQuestion: String?
+    var conversationMessages: [SQLConversationMessage]
 }
 
 private enum GeneratedSQLRepairMode {

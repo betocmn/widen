@@ -113,6 +113,20 @@ struct SessionControllerTests {
         }
     }
 
+    private struct AlwaysFailingWithMessageExecutor: QueryExecuting {
+        let recorder: SQLRecorder
+        let message: String
+
+        func run(
+            sql: String,
+            config: DatabaseConnectionConfig,
+            postgres: PostgresService
+        ) async throws -> QueryResult {
+            await recorder.record(sql)
+            throw AppError.executionFailed(message)
+        }
+    }
+
     /// Records whether the read or write path was used, and always fails — so
     /// tests can assert which executor method ran without a real database.
     private struct FailingWriteExecutor: QueryExecuting {
@@ -267,7 +281,9 @@ struct SessionControllerTests {
 
     private func makeGeneration(
         sql: String,
-        explanation: String = "Generated SQL."
+        explanation: String = "Generated SQL.",
+        needsClarification: Bool = false,
+        clarificationQuestion: String? = nil
     ) -> SQLGenerationResult {
         SQLGenerationResult(
             sql: sql,
@@ -276,8 +292,8 @@ struct SessionControllerTests {
             referencedTables: ["public.users"],
             confidence: 0.8,
             riskLevel: .low,
-            needsClarification: false,
-            clarificationQuestion: nil
+            needsClarification: needsClarification,
+            clarificationQuestion: clarificationQuestion
         )
     }
 
@@ -622,6 +638,139 @@ struct SessionControllerTests {
         #expect(controller.chatVM.messages.last?.text.contains("Last error:") == true)
         #expect(controller.chatVM.messages.last?.text.contains("repeated the exact same SQL") == true)
         #expect(controller.chatVM.messages.last?.text.contains("smarter cloud model") == true)
+    }
+
+    @Test func generatedRunErrorDoesNotReexecuteAnyPriorFailedSQL() async {
+        let connectionID = UUID()
+        let (state, dir) = makeState(connectionID: connectionID, connected: true)
+        defer { try? FileManager.default.removeItem(at: dir) }
+        state.schemas[connectionID] = makeSchema()
+        let firstBadGeneration = makeGeneration(sql: "SELECT id FROM public.bad_table")
+        let secondBadGeneration = makeGeneration(sql: "SELECT id FROM public.other_table")
+        let generator = RecordingRepairGenerator(
+            results: [
+                secondBadGeneration,
+                firstBadGeneration,
+                secondBadGeneration,
+                firstBadGeneration,
+                firstBadGeneration,
+            ]
+        )
+        state.sqlGeneratorOverride = generator
+        let recorder = SQLRecorder()
+        let controller = makeController(
+            connectionID: connectionID,
+            executor: AlwaysFailingExecutor(recorder: recorder)
+        )
+        controller.chatVM.messages = [
+            ChatMessage(role: .user, text: "show users"),
+            ChatMessage(
+                role: .assistant,
+                text: firstBadGeneration.explanation,
+                generation: firstBadGeneration),
+        ]
+        controller.queryVM.setGeneration(firstBadGeneration)
+
+        controller.runQuery(appState: state)
+        await waitUntil {
+            !controller.queryVM.isRunning
+                && !controller.chatVM.isGenerating
+                && controller.chatVM.messages.last?.role == .error
+        }
+
+        let statements = await recorder.all()
+        #expect(statements == [firstBadGeneration.sql, secondBadGeneration.sql])
+        #expect(generator.contexts.count == 5)
+        #expect(controller.chatVM.messages.last?.text.contains("Retry 5/5") == true)
+    }
+
+    @Test func generatedRunErrorAsksForClarificationWhenRepairRepeatsMissingColumn() async {
+        let connectionID = UUID()
+        let (state, dir) = makeState(connectionID: connectionID, connected: true)
+        defer { try? FileManager.default.removeItem(at: dir) }
+        state.schemas[connectionID] = makeSchema()
+        let missingColumnError =
+            #"Query failed: column "tool_id" does not exist Hint: Perhaps you meant to reference the column "preseason_match_batch.tool_a_id" or the column "preseason_match_batch.tool_b_id"."#
+        let badGeneration = makeGeneration(
+            sql: "SELECT DISTINCT tool_id FROM public.preseason_match_batch")
+        let generator = RecordingRepairGenerator(
+            results: Array(repeating: badGeneration, count: 5)
+        )
+        state.sqlGeneratorOverride = generator
+        let recorder = SQLRecorder()
+        let controller = makeController(
+            connectionID: connectionID,
+            executor: AlwaysFailingWithMessageExecutor(
+                recorder: recorder,
+                message: missingColumnError
+            )
+        )
+        controller.chatVM.messages = [
+            ChatMessage(role: .user, text: "top tools"),
+            ChatMessage(role: .assistant, text: badGeneration.explanation, generation: badGeneration),
+        ]
+        controller.queryVM.setGeneration(badGeneration)
+
+        controller.runQuery(appState: state)
+        await waitUntil {
+            !controller.queryVM.isRunning
+                && !controller.chatVM.isGenerating
+                && controller.chatVM.messages.count == 3
+        }
+
+        let statements = await recorder.all()
+        #expect(statements == [badGeneration.sql])
+        #expect(generator.contexts.count == 1)
+        #expect(generator.contexts[0].lastRunError?.contains(missingColumnError) == true)
+        #expect(controller.chatVM.messages.map(\.role) == [.user, .assistant, .assistant])
+        #expect(controller.chatVM.messages.last?.text.contains("\"tool_id\"") == true)
+        #expect(
+            controller.chatVM.messages.last?.text.contains(
+                "\"preseason_match_batch.tool_a_id\"") == true)
+        #expect(
+            controller.chatVM.messages.last?.text.contains(
+                "\"preseason_match_batch.tool_b_id\"") == true)
+        #expect(!(controller.chatVM.messages.last?.text.contains("Previous error") ?? true))
+    }
+
+    @Test func generatedRunRepairClarificationStopsRetryLoop() async {
+        let connectionID = UUID()
+        let (state, dir) = makeState(connectionID: connectionID, connected: true)
+        defer { try? FileManager.default.removeItem(at: dir) }
+        state.schemas[connectionID] = makeSchema()
+        let badGeneration = makeGeneration(sql: "SELECT id FROM public.bad_table")
+        let clarification = makeGeneration(
+            sql: "",
+            explanation: "",
+            needsClarification: true,
+            clarificationQuestion: "Which table should I use for users?"
+        )
+        let generator = RecordingRepairGenerator(results: [clarification])
+        state.sqlGeneratorOverride = generator
+        let recorder = SQLRecorder()
+        let controller = makeController(
+            connectionID: connectionID,
+            executor: BadTableExecutor(recorder: recorder)
+        )
+        controller.chatVM.messages = [
+            ChatMessage(role: .user, text: "show users"),
+            ChatMessage(role: .assistant, text: badGeneration.explanation, generation: badGeneration),
+        ]
+        controller.queryVM.setGeneration(badGeneration)
+
+        controller.runQuery(appState: state)
+        await waitUntil {
+            !controller.queryVM.isRunning
+                && !controller.chatVM.isGenerating
+                && controller.chatVM.messages.count == 3
+        }
+
+        let statements = await recorder.all()
+        #expect(statements == [badGeneration.sql])
+        #expect(generator.contexts.count == 1)
+        #expect(controller.queryVM.sqlText == badGeneration.sql)
+        #expect(controller.chatVM.messages.map(\.role) == [.user, .assistant, .assistant])
+        #expect(controller.chatVM.messages.last?.text == "Which table should I use for users?")
     }
 
     @Test func submitWithDirectSQLSkipsGenerator() async {

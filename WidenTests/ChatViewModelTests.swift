@@ -187,6 +187,10 @@ struct ChatViewModelTests {
 
         let context = generator.recordedContext
         #expect(context?.recentQuestions == ["what's the max spend per customer?"])
+        #expect(context?.originalQuestion == "what's the max spend per customer?")
+        #expect(context?.conversationMessages.map(\.role) == [.user, .assistant, .error])
+        #expect(context?.conversationMessages[1].text.contains("Generated SQL:") == true)
+        #expect(context?.conversationMessages[1].text.contains("SELECT id FROM users LIMIT 10") == true)
         #expect(context?.currentSQL == "SELECT MAX(total_cents) FROM public.orders")
         #expect(context?.lastRunError == "Query failed: syntax error at or near \"30\"")
     }

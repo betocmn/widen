@@ -34,6 +34,7 @@ public enum SQLPromptBuilder {
         - For average counts per day/week/month, first count rows per period in a subquery or CTE, then AVG those counts in the outer SELECT. Never put a window function or another aggregate directly inside AVG, SUM, MIN, MAX, or COUNT.
         - For simple "per day" order/event averages, group by DATE_TRUNC('day', the timestamp column) or timestamp_column::date. State whether the average is across days with records unless the user asks to include zero-activity days.
         - If a Database context section is present, use it as user-provided guidance about relationships, business rules, data meaning, and preferred filters. The schema remains authoritative for available tables and columns.
+        - The prompt is organized with XML-style sections such as <database_schema>, <conversation_context>, and <current_user_request>. Treat <ordered_chat_history> messages as a chronological back-and-forth chat transcript between the user and the assistant.
         - The prompt may include conversation context: earlier questions, the current SQL, and the error of its last run. Treat the user's question as a follow-up to that context — adjust the current SQL when asked, and when an error is shown, produce a corrected version of that query that still answers the earlier questions.
         - If the request is ambiguous, make the safest reasonable assumption and include it in assumptions.
         - If the request cannot be answered from the schema, set needsClarification to true and ask a concise clarification question.
@@ -50,40 +51,77 @@ public enum SQLPromptBuilder {
         databaseContext: String? = nil,
         maxSchemaCharacters: Int = 8_000
     ) -> String {
-        var sections = [schemaSummary(schema, maxCharacters: maxSchemaCharacters)]
+        var sections = [
+            taggedSection(
+                "database_schema",
+                schemaSummary(schema, maxCharacters: maxSchemaCharacters)
+            )
+        ]
         if let databaseContextSection = databaseContextSection(databaseContext) {
-            sections.append(databaseContextSection)
+            sections.append(taggedSection("database_context", databaseContextSection))
         }
         if let contextSection = contextSection(context) {
             sections.append(contextSection)
         }
-        sections.append("User question: \(question)")
+        sections.append(
+            taggedSection(
+                "current_user_request",
+                "User question: \(question)"
+            ))
         return sections.joined(separator: "\n\n")
     }
 
-    /// Renders the conversation context with tight per-item budgets — the
-    /// on-device model's context window is small, so follow-ups get the
-    /// minimum they need: a few earlier questions, the SQL on screen, and
-    /// the last error.
+    /// Renders the conversation context with tight per-item budgets. The
+    /// transcript is ordered so the model can follow the back-and-forth chat
+    /// without treating the current request as an isolated question.
     static func contextSection(_ context: SQLGenerationContext) -> String? {
         guard !context.isEmpty else { return nil }
-        var lines = ["Conversation context:"]
-        for question in context.recentQuestions.suffix(3) {
-            lines.append("- Earlier question: \(truncated(question, to: 200))")
+        var lines = [
+            "<conversation_context>",
+            "This is an ongoing back-and-forth chat between the user and Widen.",
+            "Messages are chronological. Use them to understand what the user has already asked, what responses or SQL were already shown, and what failed.",
+            "The <current_user_request> section after this context is the request to answer now.",
+        ]
+
+        if let originalQuestion = context.originalQuestion
+            ?? context.conversationMessages.first(where: { $0.role == .user })?.text
+            ?? context.recentQuestions.first
+        {
+            lines.append(taggedCDATASection("original_user_question", originalQuestion))
         }
+
+        let orderedMessages = context.conversationMessages.isEmpty
+            ? context.recentQuestions.suffix(3).map {
+                SQLConversationMessage(role: .user, text: $0)
+            }
+            : context.conversationMessages
+        if !orderedMessages.isEmpty {
+            lines.append("<ordered_chat_history>")
+            for (index, message) in orderedMessages.enumerated() {
+                let text = truncated(message.text, to: 700)
+                lines.append(
+                    taggedCDATASection(
+                        #"message index="\#(index + 1)" role="\#(message.role.rawValue)""#,
+                        text
+                    ))
+            }
+            lines.append("</ordered_chat_history>")
+        }
+
         if let sql = context.currentSQL,
             !sql.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
         {
-            lines.append("- Current SQL on screen:\n\(truncated(sql, to: 700))")
+            lines.append(taggedCDATASection("current_sql_on_screen", truncated(sql, to: 700)))
         }
         if let error = context.lastRunError,
             !error.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
         {
-            lines.append("- The last run of that SQL failed with: \(truncated(error, to: 300))")
+            lines.append(taggedCDATASection("last_run_error", truncated(error, to: 300)))
         }
         if let hint = repairHint(for: context) {
-            lines.append("- Repair requirement: \(hint)")
+            lines.append(taggedCDATASection("repair_requirement", hint))
         }
+        lines.append("</conversation_context>")
         return lines.joined(separator: "\n")
     }
 
@@ -91,6 +129,12 @@ public enum SQLPromptBuilder {
         let sql = context.currentSQL ?? ""
         let error = context.lastRunError ?? ""
         let combined = "\(sql)\n\(error)"
+        var requirements: [String] = []
+        if combined.localizedCaseInsensitiveContains("repeated the exact same SQL") {
+            requirements.append(
+                "Do not return the current SQL again. Produce a structurally different query that fixes the database error, or set needsClarification to true if the schema does not make the right fix clear."
+            )
+        }
         if combined.localizedCaseInsensitiveContains(
             "aggregate function calls cannot contain window function calls"
         )
@@ -98,14 +142,100 @@ public enum SQLPromptBuilder {
                 SQLSafetyValidator.strip(sql).text
             )
         {
-            return "PostgreSQL rejected an aggregate wrapped around a window function. Do not use OVER inside AVG, SUM, MIN, MAX, or COUNT. For average counts over time, use a CTE like WITH counts AS (SELECT DATE_TRUNC('day', created_at) AS period, COUNT(*) AS row_count FROM table GROUP BY 1) SELECT AVG(row_count) FROM counts."
+            requirements.append(
+                "PostgreSQL rejected an aggregate wrapped around a window function. Do not use OVER inside AVG, SUM, MIN, MAX, or COUNT. For average counts over time, use a CTE like WITH counts AS (SELECT DATE_TRUNC('day', created_at) AS period, COUNT(*) AS row_count FROM table GROUP BY 1) SELECT AVG(row_count) FROM counts."
+            )
         }
-        if combined.localizedCaseInsensitiveContains("repeated the exact same SQL")
-            && combined.localizedCaseInsensitiveContains("window function")
-        {
-            return "Produce a structurally different query. Do not repeat the failed SQL or use OVER inside AVG, SUM, MIN, MAX, or COUNT."
+        if let missingColumnHint = missingColumnRepairHint(for: combined) {
+            requirements.append(missingColumnHint)
         }
-        return nil
+        return requirements.isEmpty ? nil : requirements.joined(separator: " ")
+    }
+
+    private static func missingColumnRepairHint(for text: String) -> String? {
+        let lowercased = text.lowercased()
+        guard lowercased.contains("column"), lowercased.contains("does not exist") else {
+            return nil
+        }
+
+        let candidates = missingColumnCandidates(in: text)
+
+        if candidates.isEmpty {
+            return
+                "PostgreSQL says a column is missing. Use only columns present in the schema. If no available column clearly matches the user's intent, set needsClarification to true and ask which entity or relationship they mean."
+        }
+
+        return
+            "PostgreSQL says a column is missing. Candidate columns from the database hint: \(candidates.joined(separator: ", ")). Use a candidate only if it matches the user's intent; otherwise set needsClarification to true and ask which entity or relationship they mean."
+    }
+
+    static func missingColumnClarificationQuestion(for text: String) -> String? {
+        let lowercased = text.lowercased()
+        guard lowercased.contains("column"), lowercased.contains("does not exist") else {
+            return nil
+        }
+
+        let missingColumn = quotedIdentifiers(in: text).first ?? "the missing column"
+        let candidates = missingColumnCandidates(in: text)
+        switch candidates.count {
+        case 0:
+            return
+                "I'm having trouble identifying which schema column should replace \"\(missingColumn)\". Can you clarify which entity or relationship you mean?"
+        case 1:
+            return
+                "I'm having trouble confirming whether \"\(candidates[0])\" should replace \"\(missingColumn)\". Can you clarify which entity or relationship you mean?"
+        default:
+            let options = candidates.dropLast().joined(separator: "\", \"")
+            return
+                "I'm having trouble identifying which column should replace \"\(missingColumn)\". Did you mean \"\(options)\", or \"\(candidates.last!)\", or something else?"
+        }
+    }
+
+    private static func missingColumnCandidates(in text: String) -> [String] {
+        quotedIdentifiers(in: text)
+            .filter { $0.contains(".") }
+            .reduce(into: [String]()) { result, identifier in
+                if !result.contains(identifier) {
+                    result.append(identifier)
+                }
+            }
+    }
+
+    private static func quotedIdentifiers(in text: String) -> [String] {
+        guard let regex = try? NSRegularExpression(pattern: #""([^"]+)""#) else {
+            return []
+        }
+        let range = NSRange(text.startIndex..<text.endIndex, in: text)
+        return regex.matches(in: text, range: range).compactMap { match in
+            guard let matchRange = Range(match.range(at: 1), in: text) else { return nil }
+            return String(text[matchRange])
+        }
+    }
+
+    private static func taggedSection(_ tag: String, _ content: String) -> String {
+        """
+        <\(tag)>
+        \(content)
+        </\(tag)>
+        """
+    }
+
+    private static func taggedCDATASection(_ tag: String, _ content: String) -> String {
+        """
+        <\(tag)>
+        <![CDATA[
+        \(cdataEscaped(content))
+        ]]>
+        </\(closingTagName(tag))>
+        """
+    }
+
+    private static func closingTagName(_ tag: String) -> String {
+        tag.split(separator: " ").first.map(String.init) ?? tag
+    }
+
+    private static func cdataEscaped(_ text: String) -> String {
+        text.replacingOccurrences(of: "]]>", with: "]]]]><![CDATA[>")
     }
 
     /// Renders user-authored database guidance from settings. This is capped

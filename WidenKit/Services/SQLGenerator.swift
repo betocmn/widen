@@ -1,13 +1,34 @@
 import Foundation
 
+public struct SQLConversationMessage: Equatable, Sendable {
+    public enum Role: String, Equatable, Sendable {
+        case user
+        case assistant
+        case result
+        case error
+    }
+
+    public var role: Role
+    public var text: String
+
+    public init(role: Role, text: String) {
+        self.role = role
+        self.text = text
+    }
+}
+
 /// Compact conversational context for one generation. The on-device model
 /// has a small context window, so this carries only what a follow-up needs:
-/// a few earlier questions, the SQL currently on screen, and the last error
-/// when the previous run failed. With it, "make it last month instead" or
-/// "the query is failing" can be answered against the right query.
+/// a short ordered chat transcript, the SQL currently on screen, and the last
+/// error when the previous run failed. With it, "make it last month instead"
+/// or "the query is failing" can be answered against the right query.
 public struct SQLGenerationContext: Equatable, Sendable {
     /// Earlier user questions, oldest first, excluding the current one.
     public var recentQuestions: [String]
+    /// The first user question in this session, when known.
+    public var originalQuestion: String?
+    /// Recent chat messages in chronological order, excluding the current question.
+    public var conversationMessages: [SQLConversationMessage]
     /// The SQL currently in the preview — the query a follow-up refers to.
     public var currentSQL: String?
     /// The most recent run error, when the last run of `currentSQL` failed.
@@ -15,16 +36,21 @@ public struct SQLGenerationContext: Equatable, Sendable {
 
     public init(
         recentQuestions: [String] = [],
+        originalQuestion: String? = nil,
+        conversationMessages: [SQLConversationMessage] = [],
         currentSQL: String? = nil,
         lastRunError: String? = nil
     ) {
         self.recentQuestions = recentQuestions
+        self.originalQuestion = originalQuestion
+        self.conversationMessages = conversationMessages
         self.currentSQL = currentSQL
         self.lastRunError = lastRunError
     }
 
     public var isEmpty: Bool {
-        recentQuestions.isEmpty && currentSQL == nil && lastRunError == nil
+        recentQuestions.isEmpty && originalQuestion == nil && conversationMessages.isEmpty
+            && currentSQL == nil && lastRunError == nil
     }
 }
 
