@@ -20,43 +20,97 @@ public struct SQLReferenceAnalysis: Equatable, Sendable {
     public var relations: [SQLRelationReference]
     public var columns: [SQLColumnReference]
     public var cteNames: Set<String>
+    public var cteOutputColumns: [String: Set<String>?]
     public var outputAliases: Set<String>
+    public var scopes: [SQLReferenceScope]
     public var analysisIncomplete: Bool
+}
+
+public struct SQLReferenceScope: Equatable, Sendable {
+    public var relations: [SQLRelationReference]
+    public var columns: [SQLColumnReference]
+    public var outputAliases: Set<String>
+    public var parentIndex: Int?
+
+    public init(
+        relations: [SQLRelationReference],
+        columns: [SQLColumnReference],
+        outputAliases: Set<String>,
+        parentIndex: Int?
+    ) {
+        self.relations = relations
+        self.columns = columns
+        self.outputAliases = outputAliases
+        self.parentIndex = parentIndex
+    }
 }
 
 public enum SQLReferenceAnalyzer {
     public static func analyze(_ sql: String) -> SQLReferenceAnalysis {
         let tokens = SQLToken.tokenize(sql)
         var cteNames = Set<String>()
-        var relations: [SQLRelationReference] = []
-        var outputAliases = Set<String>()
+        var cteOutputColumns: [String: Set<String>?] = [:]
+        var scopes: [SQLReferenceScope] = []
         var incomplete = false
 
-        parseCTEs(tokens, cteNames: &cteNames, incomplete: &incomplete)
-        relations.append(contentsOf: parseRelations(tokens, cteNames: cteNames, incomplete: &incomplete))
-        outputAliases.formUnion(parseOutputAliases(tokens))
-        let columns = parseColumnReferences(
+        let mainStart = parseCTEs(
             tokens,
-            relations: relations,
-            cteNames: cteNames,
-            outputAliases: outputAliases
+            cteNames: &cteNames,
+            cteOutputColumns: &cteOutputColumns,
+            scopes: &scopes,
+            incomplete: &incomplete
         )
+        parseScopes(
+            Array(tokens[mainStart..<tokens.count]),
+            cteNames: cteNames,
+            parentIndex: nil,
+            scopes: &scopes,
+            incomplete: &incomplete
+        )
+        if scopes.isEmpty {
+            let relations = parseRelations(tokens, cteNames: cteNames, incomplete: &incomplete)
+            let outputAliases = parseOutputAliases(tokens)
+            let columns = parseColumnReferences(
+                tokens,
+                relations: relations,
+                cteNames: cteNames,
+                outputAliases: outputAliases
+            )
+            scopes.append(
+                SQLReferenceScope(
+                    relations: relations,
+                    columns: columns,
+                    outputAliases: outputAliases,
+                    parentIndex: nil
+                ))
+        }
+
+        let relations = scopes.flatMap(\.relations)
+        let columns = scopes.flatMap(\.columns)
+        let outputAliases = scopes.reduce(into: Set<String>()) { result, scope in
+            result.formUnion(scope.outputAliases)
+        }
 
         return SQLReferenceAnalysis(
             relations: deduplicated(relations),
             columns: deduplicated(columns),
             cteNames: cteNames,
+            cteOutputColumns: cteOutputColumns,
             outputAliases: outputAliases,
+            scopes: scopes,
             analysisIncomplete: incomplete
         )
     }
 
+    @discardableResult
     private static func parseCTEs(
         _ tokens: [SQLToken],
         cteNames: inout Set<String>,
+        cteOutputColumns: inout [String: Set<String>?],
+        scopes: inout [SQLReferenceScope],
         incomplete: inout Bool
-    ) {
-        guard tokens.first?.normalized == "with" else { return }
+    ) -> Int {
+        guard tokens.first?.normalized == "with" else { return 0 }
         var index = 1
         if tokens[safe: index]?.normalized == "recursive" {
             index += 1
@@ -65,44 +119,209 @@ public enum SQLReferenceAnalyzer {
         while index < tokens.count {
             guard let nameToken = tokens[safe: index], nameToken.isIdentifierLike else {
                 incomplete = true
-                return
+                return index
             }
-            cteNames.insert(nameToken.identifierValue)
+            let cteName = nameToken.identifierValue.lowercased()
+            cteNames.insert(cteName)
             index += 1
 
+            var explicitColumns: Set<String>?
             if tokens[safe: index]?.text == "(" {
+                let columns = identifiersInBalancedGroup(tokens, startingAt: index)
+                explicitColumns = Set(columns.map { $0.lowercased() })
                 index = indexAfterBalancedGroup(tokens, startingAt: index) ?? tokens.count
             }
             guard tokens[safe: index]?.normalized == "as" else {
                 incomplete = true
-                return
+                return index
             }
             index += 1
+            if tokens[safe: index]?.normalized == "materialized"
+                || (tokens[safe: index]?.normalized == "not"
+                    && tokens[safe: index + 1]?.normalized == "materialized")
+            {
+                index += tokens[safe: index]?.normalized == "not" ? 2 : 1
+            }
             guard tokens[safe: index]?.text == "(",
                 let afterSubquery = indexAfterBalancedGroup(tokens, startingAt: index)
             else {
                 incomplete = true
-                return
+                return index
+            }
+            let innerTokens = Array(tokens[(index + 1)..<(afterSubquery - 1)])
+            parseScopes(
+                innerTokens,
+                cteNames: cteNames,
+                parentIndex: nil,
+                scopes: &scopes,
+                incomplete: &incomplete
+            )
+            if let explicitColumns {
+                cteOutputColumns[cteName] = explicitColumns
+            } else {
+                let inferred = inferSelectOutputColumns(innerTokens)
+                cteOutputColumns[cteName] = inferred
+                if inferred == nil {
+                    incomplete = true
+                }
             }
             index = afterSubquery
             if tokens[safe: index]?.text == "," {
                 index += 1
                 continue
             }
-            return
+            return index
+        }
+        return index
+    }
+
+    private static func parseScopes(
+        _ tokens: [SQLToken],
+        cteNames: Set<String>,
+        parentIndex: Int?,
+        scopes: inout [SQLReferenceScope],
+        incomplete: inout Bool
+    ) {
+        var index = 0
+        var foundTopLevelSelect = false
+        while index < tokens.count {
+            let token = tokens[index]
+            if token.text == "(" {
+                guard let afterGroup = indexAfterBalancedGroup(tokens, startingAt: index) else {
+                    incomplete = true
+                    return
+                }
+                let innerTokens = Array(tokens[(index + 1)..<(afterGroup - 1)])
+                if containsTopLevelSelect(innerTokens) {
+                    parseScopes(
+                        innerTokens,
+                        cteNames: cteNames,
+                        parentIndex: parentIndex,
+                        scopes: &scopes,
+                        incomplete: &incomplete
+                    )
+                }
+                index = afterGroup
+                continue
+            }
+            if token.normalized == "select" {
+                foundTopLevelSelect = true
+                let statementEnd = nextTopLevelIndex(
+                    ofAny: ["union", "intersect", "except"],
+                    in: tokens,
+                    after: index + 1
+                ) ?? tokens.count
+                let relations = parseRelations(
+                    Array(tokens[index..<statementEnd]),
+                    cteNames: cteNames,
+                    incomplete: &incomplete,
+                    skipCTEs: false
+                )
+                let outputAliases = parseOutputAliases(Array(tokens[index..<statementEnd]))
+                let columns = parseColumnReferences(
+                    Array(tokens[index..<statementEnd]),
+                    relations: relations,
+                    cteNames: cteNames,
+                    outputAliases: outputAliases,
+                    skipNestedSubqueries: true
+                )
+                let scopeIndex = scopes.count
+                scopes.append(
+                    SQLReferenceScope(
+                        relations: relations,
+                        columns: columns,
+                        outputAliases: outputAliases,
+                        parentIndex: parentIndex
+                    ))
+                parseNestedSubqueryScopes(
+                    Array(tokens[index..<statementEnd]),
+                    cteNames: cteNames,
+                    parentIndex: scopeIndex,
+                    scopes: &scopes,
+                    incomplete: &incomplete
+                )
+                index = statementEnd
+                continue
+            }
+            index += 1
+        }
+
+        if !foundTopLevelSelect {
+            let relations = parseRelations(
+                tokens,
+                cteNames: cteNames,
+                incomplete: &incomplete,
+                skipCTEs: false
+            )
+            guard !relations.isEmpty else { return }
+            let outputAliases = parseOutputAliases(tokens)
+            let columns = parseColumnReferences(
+                tokens,
+                relations: relations,
+                cteNames: cteNames,
+                outputAliases: outputAliases,
+                skipNestedSubqueries: true
+            )
+            scopes.append(
+                SQLReferenceScope(
+                    relations: relations,
+                    columns: columns,
+                    outputAliases: outputAliases,
+                    parentIndex: parentIndex
+                ))
+        }
+    }
+
+    private static func parseNestedSubqueryScopes(
+        _ tokens: [SQLToken],
+        cteNames: Set<String>,
+        parentIndex: Int,
+        scopes: inout [SQLReferenceScope],
+        incomplete: inout Bool
+    ) {
+        var index = 0
+        while index < tokens.count {
+            guard tokens[index].text == "(" else {
+                index += 1
+                continue
+            }
+            guard let afterGroup = indexAfterBalancedGroup(tokens, startingAt: index) else {
+                incomplete = true
+                return
+            }
+            let innerTokens = Array(tokens[(index + 1)..<(afterGroup - 1)])
+            if containsTopLevelSelect(innerTokens) {
+                parseScopes(
+                    innerTokens,
+                    cteNames: cteNames,
+                    parentIndex: parentIndex,
+                    scopes: &scopes,
+                    incomplete: &incomplete
+                )
+            }
+            index = afterGroup
         }
     }
 
     private static func parseRelations(
         _ tokens: [SQLToken],
         cteNames: Set<String>,
-        incomplete: inout Bool
+        incomplete: inout Bool,
+        skipCTEs: Bool = true
     ) -> [SQLRelationReference] {
         var relations: [SQLRelationReference] = []
         var index = 0
         var previousKeyword: String?
         while index < tokens.count {
             let token = tokens[index]
+            if token.text == "(" {
+                guard let afterGroup = indexAfterBalancedGroup(tokens, startingAt: index) else {
+                    incomplete = true
+                    return relations
+                }
+                index = afterGroup
+                continue
+            }
             let normalized = token.normalized
             let isRelationStart =
                 normalized == "from"
@@ -113,24 +332,39 @@ public enum SQLReferenceAnalyzer {
 
             if isRelationStart {
                 index += 1
-                if tokens[safe: index]?.normalized == "only" {
-                    index += 1
-                }
-                if tokens[safe: index]?.text == "(" {
-                    if let afterGroup = indexAfterBalancedGroup(tokens, startingAt: index) {
-                        index = afterGroup
+                while index < tokens.count {
+                    if let current = tokens[safe: index],
+                        relationTerminatorKeywords.contains(current.normalized)
+                    {
+                        break
+                    }
+                    if tokens[safe: index]?.normalized == "only" {
+                        index += 1
+                    }
+                    if tokens[safe: index]?.text == "(" {
+                        if let afterGroup = indexAfterBalancedGroup(tokens, startingAt: index) {
+                            index = afterGroup
+                            if let aliasIndex = skipOptionalAlias(tokens, startingAt: index) {
+                                index = aliasIndex
+                            }
+                        } else {
+                            incomplete = true
+                            return relations
+                        }
+                    } else if let relation = parseRelation(at: &index, tokens: tokens) {
+                        if !skipCTEs || !cteNames.contains(relation.name.lowercased()) {
+                            relations.append(relation)
+                        }
                     } else {
-                        incomplete = true
-                        return relations
+                        break
                     }
-                    continue
-                }
-                if let relation = parseRelation(at: &index, tokens: tokens) {
-                    if !cteNames.contains(relation.name.lowercased()) {
-                        relations.append(relation)
+                    if tokens[safe: index]?.text == "," {
+                        index += 1
+                        continue
                     }
-                    continue
+                    break
                 }
+                continue
             }
 
             if token.kind == .identifier || token.kind == .quotedIdentifier {
@@ -195,11 +429,82 @@ public enum SQLReferenceAnalyzer {
         return aliases
     }
 
+    private static func inferSelectOutputColumns(_ tokens: [SQLToken]) -> Set<String>? {
+        guard let selectIndex = tokens.firstIndex(where: { $0.normalized == "select" }) else {
+            return nil
+        }
+        let fromIndex = firstTopLevelIndex(ofAny: ["from"], in: tokens, after: selectIndex + 1)
+            ?? tokens.count
+        let items = splitTopLevelCommaSeparated(Array(tokens[(selectIndex + 1)..<fromIndex]))
+        var columns = Set<String>()
+        for item in items {
+            let significant = item.filter { $0.text != "," }
+            guard !significant.isEmpty else { continue }
+            if significant.contains(where: { $0.text == "*" }) {
+                return nil
+            }
+            if let asIndex = significant.lastIndex(where: { $0.normalized == "as" }),
+                let alias = significant[safe: asIndex + 1],
+                alias.isIdentifierLike
+            {
+                columns.insert(alias.identifierValue.lowercased())
+                continue
+            }
+            if significant.count >= 2,
+                let alias = significant.last,
+                alias.isIdentifierLike,
+                significant[safe: significant.count - 2]?.text != ".",
+                significant[safe: significant.count - 2]?.text != ")"
+            {
+                columns.insert(alias.identifierValue.lowercased())
+                continue
+            }
+            if significant.count == 1, let column = significant.first, column.isIdentifierLike {
+                columns.insert(column.identifierValue.lowercased())
+                continue
+            }
+            if significant.count == 3,
+                significant[safe: 1]?.text == ".",
+                let column = significant.last,
+                column.isIdentifierLike
+            {
+                columns.insert(column.identifierValue.lowercased())
+                continue
+            }
+            return nil
+        }
+        return columns
+    }
+
+    private static func splitTopLevelCommaSeparated(_ tokens: [SQLToken]) -> [[SQLToken]] {
+        var groups: [[SQLToken]] = []
+        var current: [SQLToken] = []
+        var depth = 0
+        for token in tokens {
+            if token.text == "(" {
+                depth += 1
+            } else if token.text == ")" {
+                depth = max(0, depth - 1)
+            }
+            if depth == 0, token.text == "," {
+                groups.append(current)
+                current = []
+            } else {
+                current.append(token)
+            }
+        }
+        if !current.isEmpty {
+            groups.append(current)
+        }
+        return groups
+    }
+
     private static func parseColumnReferences(
         _ tokens: [SQLToken],
         relations: [SQLRelationReference],
         cteNames: Set<String>,
-        outputAliases: Set<String>
+        outputAliases: Set<String>,
+        skipNestedSubqueries: Bool = false
     ) -> [SQLColumnReference] {
         var columns: [SQLColumnReference] = []
         var relationAliases = Set<String>()
@@ -214,6 +519,16 @@ public enum SQLReferenceAnalyzer {
         var index = 0
         while index < tokens.count {
             let token = tokens[index]
+            if skipNestedSubqueries, token.text == "(" {
+                guard let afterGroup = indexAfterBalancedGroup(tokens, startingAt: index) else {
+                    break
+                }
+                let innerTokens = Array(tokens[(index + 1)..<(afterGroup - 1)])
+                if containsTopLevelSelect(innerTokens) {
+                    index = afterGroup
+                    continue
+                }
+            }
             guard token.isIdentifierLike else {
                 index += 1
                 continue
@@ -225,33 +540,32 @@ public enum SQLReferenceAnalyzer {
                 tokens[safe: index + 3]?.text == ".",
                 let column = tokens[safe: index + 4],
                 column.isIdentifierLike || column.text == "*"
-            {
-                if column.text != "*" {
-                    columns.append(
-                        SQLColumnReference(
-                            qualifier: "\(token.identifierValue).\(table.identifierValue)",
-                            name: column.identifierValue
-                        ))
-                }
-                index += 5
-                continue
-            }
+	            {
+	                columns.append(
+	                    SQLColumnReference(
+	                        qualifier: "\(token.identifierValue).\(table.identifierValue)",
+	                        name: column.text == "*" ? "*" : column.identifierValue
+	                    ))
+	                index += 5
+	                continue
+	            }
 
             if tokens[safe: index + 1]?.text == ".",
                 let column = tokens[safe: index + 2],
                 column.isIdentifierLike || column.text == "*"
             {
-                if isQualifiedRelationTarget(at: index, tokens: tokens) {
+                let qualifiedName = "\(token.identifierValue).\(column.identifierValue)".lowercased()
+                if isQualifiedRelationTarget(at: index, tokens: tokens)
+                    || relationAliases.contains(qualifiedName)
+                {
                     index += 3
                     continue
                 }
-                if column.text != "*" {
-                    columns.append(
-                        SQLColumnReference(
-                            qualifier: token.identifierValue,
-                            name: column.identifierValue
-                        ))
-                }
+                columns.append(
+                    SQLColumnReference(
+                        qualifier: token.identifierValue,
+                        name: column.text == "*" ? "*" : column.identifierValue
+                    ))
                 index += 3
                 continue
             }
@@ -272,6 +586,27 @@ public enum SQLReferenceAnalyzer {
             index += 1
         }
         return columns
+    }
+
+    private static func identifiersInBalancedGroup(_ tokens: [SQLToken], startingAt start: Int) -> [String] {
+        guard let end = indexAfterBalancedGroup(tokens, startingAt: start) else { return [] }
+        return tokens[(start + 1)..<(end - 1)].compactMap { token in
+            token.isIdentifierLike ? token.identifierValue : nil
+        }
+    }
+
+    private static func skipOptionalAlias(_ tokens: [SQLToken], startingAt index: Int) -> Int? {
+        var index = index
+        if tokens[safe: index]?.normalized == "as" {
+            index += 1
+        }
+        guard let alias = tokens[safe: index],
+            alias.isIdentifierLike,
+            !relationTerminatorKeywords.contains(alias.normalized)
+        else {
+            return nil
+        }
+        return index + 1
     }
 
     private static func isQualifiedRelationTarget(at index: Int, tokens: [SQLToken]) -> Bool {
@@ -317,6 +652,14 @@ public enum SQLReferenceAnalyzer {
         in tokens: [SQLToken],
         after start: Int
     ) -> Int? {
+        nextTopLevelIndex(ofAny: words, in: tokens, after: start)
+    }
+
+    private static func nextTopLevelIndex(
+        ofAny words: Set<String>,
+        in tokens: [SQLToken],
+        after start: Int
+    ) -> Int? {
         var depth = 0
         for index in start..<tokens.count {
             if tokens[index].text == "(" {
@@ -328,6 +671,11 @@ public enum SQLReferenceAnalyzer {
             }
         }
         return nil
+    }
+
+    private static func containsTopLevelSelect(_ tokens: [SQLToken]) -> Bool {
+        nextTopLevelIndex(ofAny: ["select"], in: tokens, after: 0) != nil
+            || tokens.first?.normalized == "select"
     }
 
     private static func indexAfterBalancedGroup(_ tokens: [SQLToken], startingAt start: Int) -> Int? {

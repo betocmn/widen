@@ -64,6 +64,59 @@ struct SQLSchemaValidatorTests {
         #expect(result.errors.first?.contains("ambiguous") == true)
     }
 
+    @Test func nestedSubqueryScopesDoNotFalseAmbiguateOuterColumn() {
+        let result = SQLSchemaValidator.validate(
+            sql: """
+                SELECT id
+                FROM public.users
+                WHERE EXISTS (
+                  SELECT 1
+                  FROM public.orders
+                  WHERE orders.user_id = users.id
+                )
+                """,
+            against: makeUsersOrdersSchema()
+        )
+
+        #expect(!result.hasDefiniteErrors)
+        #expect(result.referencedTables == ["public.orders", "public.users"])
+    }
+
+    @Test func cteOutputColumnsAreValidated() {
+        let result = SQLSchemaValidator.validate(
+            sql: """
+                WITH recent_users AS (
+                  SELECT id FROM public.users
+                )
+                SELECT email FROM recent_users
+                """,
+            against: makeUsersOrdersSchema()
+        )
+
+        #expect(result.hasDefiniteErrors)
+        #expect(result.errors.first?.contains("email") == true)
+    }
+
+    @Test func unresolvedAliasStarIsDefiniteError() {
+        let result = SQLSchemaValidator.validate(
+            sql: "SELECT missing_alias.* FROM public.users AS u",
+            against: makeUsersOrdersSchema()
+        )
+
+        #expect(result.hasDefiniteErrors)
+        #expect(result.errors.first?.contains("missing_alias") == true)
+    }
+
+    @Test func commaSeparatedMissingRelationIsDefiniteError() {
+        let result = SQLSchemaValidator.validate(
+            sql: "SELECT u.id FROM public.users AS u, public.missing_table AS m",
+            against: makeUsersOrdersSchema()
+        )
+
+        #expect(result.hasDefiniteErrors)
+        #expect(result.errors.first?.contains("missing_table") == true)
+    }
+
     @Test func generatedResultDerivesReferencedTables() {
         let generation = SQLGenerationResult(
             sql: "SELECT u.id FROM public.users AS u",

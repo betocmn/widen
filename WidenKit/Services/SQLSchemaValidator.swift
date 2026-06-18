@@ -47,74 +47,55 @@ public enum SQLSchemaValidator {
     ) -> SQLSchemaValidationResult {
         let schemaIndex = SchemaLookup(schema: schema)
         var issues: [SQLSchemaValidationIssue] = []
-        var resolvedRelations: [SQLRelationReference: TableInfo] = [:]
-        var aliasToTable: [String: TableInfo] = [:]
+        var scopeSources = Array(repeating: [ResolvedRelationSource](), count: analysis.scopes.count)
         var referencedTables: [String] = []
 
-        for relation in analysis.relations {
-            guard let table = schemaIndex.resolve(relation) else {
-                issues.append(
-                    SQLSchemaValidationIssue(
-                        severity: .error,
-                        message: "Schema validation failed: table \(relation.displayName) is not in the selected schema."
-                    ))
-                continue
-            }
-            resolvedRelations[relation] = table
-            referencedTables.append(table.qualifiedName)
-            aliasToTable[table.name.lowercased()] = table
-            aliasToTable[table.qualifiedName.lowercased()] = table
-            if let alias = relation.alias {
-                aliasToTable[alias.lowercased()] = table
-            }
-        }
-
-        for column in analysis.columns {
-            if let qualifier = column.qualifier {
-                guard let table = aliasToTable[qualifier.lowercased()] else {
-                    if analysis.cteNames.contains(qualifier.lowercased()) {
-                        continue
-                    }
-                    issues.append(
-                        SQLSchemaValidationIssue(
-                            severity: .error,
-                            message: "Schema validation failed: qualifier \(qualifier) does not resolve to a selected-schema table."
+        for (scopeIndex, scope) in analysis.scopes.enumerated() {
+            for relation in scope.relations {
+                if relation.schema == nil, analysis.cteNames.contains(relation.name.lowercased()) {
+                    let cteName = relation.name.lowercased()
+                    scopeSources[scopeIndex].append(
+                        ResolvedRelationSource.cte(
+                            name: cteName,
+                            alias: relation.alias,
+                            columns: analysis.cteOutputColumns[cteName] ?? nil
                         ))
                     continue
                 }
-                if !schemaIndex.table(table, containsColumn: column.name) {
+                guard let table = schemaIndex.resolve(relation) else {
                     issues.append(
                         SQLSchemaValidationIssue(
                             severity: .error,
-                            message: "Schema validation failed: column \(column.name) is not on \(table.qualifiedName)."
+                            message: "Schema validation failed: table \(relation.displayName) is not in the selected schema."
                         ))
+                    continue
                 }
-                continue
+                referencedTables.append(table.qualifiedName)
+                scopeSources[scopeIndex].append(.table(table, alias: relation.alias))
             }
+        }
 
-            if analysis.outputAliases.contains(column.name.lowercased()) {
-                continue
+        for (scopeIndex, scope) in analysis.scopes.enumerated() {
+            for column in scope.columns {
+                validate(
+                    column: column,
+                    scopeIndex: scopeIndex,
+                    analysis: analysis,
+                    scopeSources: scopeSources,
+                    schemaIndex: schemaIndex,
+                    issues: &issues
+                )
             }
-            let matchingTables = resolvedRelations.values.filter {
-                schemaIndex.table($0, containsColumn: column.name)
-            }
-            switch matchingTables.count {
-            case 0:
-                if !resolvedRelations.isEmpty {
-                    issues.append(
-                        SQLSchemaValidationIssue(
-                            severity: .error,
-                            message: "Schema validation failed: column \(column.name) is not available from the referenced tables."
-                        ))
-                }
-            case 1:
-                break
-            default:
-                issues.append(
-                    SQLSchemaValidationIssue(
-                        severity: .error,
-                        message: "Schema validation failed: column \(column.name) is ambiguous across referenced tables."
-                    ))
+        }
+
+        if analysis.scopes.isEmpty {
+            for column in analysis.columns {
+                validateLegacy(
+                    column: column,
+                    analysis: analysis,
+                    schemaIndex: schemaIndex,
+                    issues: &issues
+                )
             }
         }
 
@@ -131,6 +112,208 @@ public enum SQLSchemaValidator {
             issues: issues,
             referencedTables: Array(Set(referencedTables)).sorted()
         )
+    }
+
+    private static func validate(
+        column: SQLColumnReference,
+        scopeIndex: Int,
+        analysis: SQLReferenceAnalysis,
+        scopeSources: [[ResolvedRelationSource]],
+        schemaIndex: SchemaLookup,
+        issues: inout [SQLSchemaValidationIssue]
+    ) {
+        let scope = analysis.scopes[scopeIndex]
+        if let qualifier = column.qualifier {
+            guard let source = resolveSource(
+                qualifier,
+                from: scopeIndex,
+                analysis: analysis,
+                scopeSources: scopeSources
+            ) else {
+                issues.append(
+                    SQLSchemaValidationIssue(
+                        severity: .error,
+                        message: "Schema validation failed: qualifier \(qualifier) does not resolve to a selected-schema table."
+                    ))
+                return
+            }
+            guard column.name != "*" else { return }
+            if !source.definitelyContainsColumn(column.name, schemaIndex: schemaIndex) {
+                if source.hasUnknownColumns {
+                    return
+                }
+                issues.append(
+                    SQLSchemaValidationIssue(
+                        severity: .error,
+                        message: "Schema validation failed: column \(column.name) is not on \(source.displayName)."
+                    ))
+            }
+            return
+        }
+
+        if scope.outputAliases.contains(column.name.lowercased()) {
+            return
+        }
+        let localResolution = resolveUnqualified(
+            column.name,
+            in: scopeIndex,
+            scopeSources: scopeSources,
+            schemaIndex: schemaIndex
+        )
+        switch localResolution {
+        case .resolved:
+            return
+        case .unknown:
+            return
+        case .ambiguous:
+            issues.append(
+                SQLSchemaValidationIssue(
+                    severity: .error,
+                    message: "Schema validation failed: column \(column.name) is ambiguous across referenced tables."
+                ))
+            return
+        case .missing:
+            break
+        }
+
+        var parentIndex = scope.parentIndex
+        while let index = parentIndex {
+            let parentResolution = resolveUnqualified(
+                column.name,
+                in: index,
+                scopeSources: scopeSources,
+                schemaIndex: schemaIndex
+            )
+            switch parentResolution {
+            case .resolved, .unknown:
+                return
+            case .ambiguous:
+                issues.append(
+                    SQLSchemaValidationIssue(
+                        severity: .error,
+                        message: "Schema validation failed: column \(column.name) is ambiguous across referenced tables."
+                    ))
+                return
+            case .missing:
+                parentIndex = analysis.scopes[index].parentIndex
+            }
+        }
+
+        if !scopeSources[scopeIndex].isEmpty {
+            issues.append(
+                SQLSchemaValidationIssue(
+                    severity: .error,
+                    message: "Schema validation failed: column \(column.name) is not available from the referenced tables."
+                ))
+        }
+    }
+
+    private static func validateLegacy(
+        column: SQLColumnReference,
+        analysis: SQLReferenceAnalysis,
+        schemaIndex: SchemaLookup,
+        issues: inout [SQLSchemaValidationIssue]
+    ) {
+        var resolvedRelations: [SQLRelationReference: TableInfo] = [:]
+        var aliasToTable: [String: TableInfo] = [:]
+        for relation in analysis.relations {
+            guard let table = schemaIndex.resolve(relation) else { continue }
+            resolvedRelations[relation] = table
+            aliasToTable[table.name.lowercased()] = table
+            aliasToTable[table.qualifiedName.lowercased()] = table
+            if let alias = relation.alias {
+                aliasToTable[alias.lowercased()] = table
+            }
+        }
+
+        if let qualifier = column.qualifier {
+            guard let table = aliasToTable[qualifier.lowercased()] else {
+                if analysis.cteNames.contains(qualifier.lowercased()) {
+                    return
+                }
+                issues.append(
+                    SQLSchemaValidationIssue(
+                        severity: .error,
+                        message: "Schema validation failed: qualifier \(qualifier) does not resolve to a selected-schema table."
+                    ))
+                return
+            }
+            guard column.name != "*" else { return }
+            if !schemaIndex.table(table, containsColumn: column.name) {
+                issues.append(
+                    SQLSchemaValidationIssue(
+                        severity: .error,
+                        message: "Schema validation failed: column \(column.name) is not on \(table.qualifiedName)."
+                    ))
+            }
+            return
+        }
+
+        if analysis.outputAliases.contains(column.name.lowercased()) {
+            return
+        }
+        let matchingTables = resolvedRelations.values.filter {
+            schemaIndex.table($0, containsColumn: column.name)
+        }
+        switch matchingTables.count {
+        case 0:
+            if !resolvedRelations.isEmpty {
+                issues.append(
+                    SQLSchemaValidationIssue(
+                        severity: .error,
+                        message: "Schema validation failed: column \(column.name) is not available from the referenced tables."
+                    ))
+            }
+        case 1:
+            break
+        default:
+            issues.append(
+                SQLSchemaValidationIssue(
+                    severity: .error,
+                    message: "Schema validation failed: column \(column.name) is ambiguous across referenced tables."
+                ))
+        }
+    }
+
+    private static func resolveSource(
+        _ qualifier: String,
+        from scopeIndex: Int,
+        analysis: SQLReferenceAnalysis,
+        scopeSources: [[ResolvedRelationSource]]
+    ) -> ResolvedRelationSource? {
+        var index: Int? = scopeIndex
+        while let current = index {
+            if let source = scopeSources[current].first(where: { $0.matches(qualifier) }) {
+                return source
+            }
+            index = analysis.scopes[current].parentIndex
+        }
+        return nil
+    }
+
+    private static func resolveUnqualified(
+        _ column: String,
+        in scopeIndex: Int,
+        scopeSources: [[ResolvedRelationSource]],
+        schemaIndex: SchemaLookup
+    ) -> ColumnResolution {
+        var matches = 0
+        var hasUnknown = false
+        for source in scopeSources[scopeIndex] {
+            if source.definitelyContainsColumn(column, schemaIndex: schemaIndex) {
+                matches += 1
+            } else if source.hasUnknownColumns {
+                hasUnknown = true
+            }
+        }
+        switch matches {
+        case 0:
+            return hasUnknown ? .unknown : .missing
+        case 1:
+            return .resolved
+        default:
+            return .ambiguous
+        }
     }
 }
 
@@ -258,5 +441,64 @@ private struct SchemaLookup {
 
     func table(_ table: TableInfo, containsColumn column: String) -> Bool {
         columnsByTableID[table.id]?.contains(column.lowercased()) == true
+    }
+}
+
+private enum ColumnResolution {
+    case resolved
+    case missing
+    case ambiguous
+    case unknown
+}
+
+private struct ResolvedRelationSource {
+    var displayName: String
+    var names: Set<String>
+    var table: TableInfo?
+    var cteColumns: Set<String>?
+    var hasUnknownColumns: Bool
+
+    static func table(_ table: TableInfo, alias: String?) -> ResolvedRelationSource {
+        var names = Set([table.name.lowercased(), table.qualifiedName.lowercased()])
+        if let alias {
+            names.insert(alias.lowercased())
+        }
+        return ResolvedRelationSource(
+            displayName: table.qualifiedName,
+            names: names,
+            table: table,
+            cteColumns: nil,
+            hasUnknownColumns: false
+        )
+    }
+
+    static func cte(
+        name: String,
+        alias: String?,
+        columns: Set<String>?
+    ) -> ResolvedRelationSource {
+        var names = Set([name.lowercased()])
+        if let alias {
+            names.insert(alias.lowercased())
+        }
+        return ResolvedRelationSource(
+            displayName: name,
+            names: names,
+            table: nil,
+            cteColumns: columns,
+            hasUnknownColumns: columns == nil
+        )
+    }
+
+    func matches(_ qualifier: String) -> Bool {
+        names.contains(qualifier.lowercased())
+    }
+
+    func definitelyContainsColumn(_ column: String, schemaIndex: SchemaLookup) -> Bool {
+        if let table {
+            return schemaIndex.table(table, containsColumn: column)
+        }
+        guard let cteColumns else { return false }
+        return cteColumns.contains(column.lowercased())
     }
 }
