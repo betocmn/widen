@@ -557,8 +557,9 @@ public enum SQLPromptBuilder {
             var lines = ["Table \(qualifiedIdentifier(schema: table.schema, name: table.name))"]
             for column in table.columns {
                 let nullability = column.isNullable ? "" : " not null"
+                let constraints = valueConstraintSummary(column).map { " \($0)" } ?? ""
                 lines.append(
-                    "- \(quotedIdentifier(column.name)) \(column.dataType.lowercased())\(nullability)"
+                    "- \(quotedIdentifier(column.name)) \(column.dataType.lowercased())\(nullability)\(constraints)"
                 )
             }
             let section = lines.joined(separator: "\n")
@@ -630,5 +631,35 @@ public enum SQLPromptBuilder {
 
     private static func quotedIdentifier(_ identifier: String) -> String {
         "\"\(identifier.replacingOccurrences(of: "\"", with: "\"\""))\""
+    }
+
+    private static func valueConstraintSummary(_ column: ColumnInfo) -> String? {
+        guard let constraints = column.valueConstraints, !constraints.isEmpty else {
+            return nil
+        }
+        let parts = constraints.compactMap { constraint -> String? in
+            switch constraint.kind {
+            case .enumValues:
+                guard !constraint.values.isEmpty else { return nil }
+                return "values: \(quotedLiterals(constraint.values))"
+            case .check:
+                if !constraint.values.isEmpty {
+                    return "check values: \(quotedLiterals(constraint.values))"
+                }
+                guard let expression = constraint.expression,
+                    !expression.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+                else {
+                    return nil
+                }
+                return "check: \(truncated(expression, to: 180))"
+            }
+        }
+        return parts.isEmpty ? nil : "(\(parts.joined(separator: "; ")))"
+    }
+
+    private static func quotedLiterals(_ values: [String]) -> String {
+        values.prefix(20)
+            .map { "'\($0.replacingOccurrences(of: "'", with: "''"))'" }
+            .joined(separator: ", ")
     }
 }

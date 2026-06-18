@@ -9,7 +9,9 @@ import Testing
 
 /// Real on-device generation smoke test. Requires Apple Intelligence to be
 /// enabled; run with `make test-fm`.
-private let fmTestEnabled = ProcessInfo.processInfo.environment["WIDEN_FM_TEST"] != nil
+private let fmTestEnabled =
+    ProcessInfo.processInfo.environment["WIDEN_FM_TEST"] != nil
+    || ProcessInfo.processInfo.environment["TEST_RUNNER_WIDEN_FM_TEST"] != nil
 
 @Suite("Foundation Models smoke", .enabled(if: fmTestEnabled))
 struct FoundationModelsSmokeTests {

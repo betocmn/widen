@@ -186,6 +186,30 @@ struct SQLSchemaValidatorTests {
         #expect(enriched.clarificationQuestion?.contains("which tool won") == true)
     }
 
+    @Test func enumValueCanDefineBusinessTerm() {
+        let generation = SQLGenerationResult(
+            sql: "SELECT COUNT(*) FROM public.customers WHERE segment = 'retained'",
+            explanation: "Counts retained customers.",
+            assumptions: [],
+            referencedTables: [],
+            confidence: 1,
+            riskLevel: .low,
+            needsClarification: false,
+            clarificationQuestion: nil
+        )
+
+        let enriched = GeneratedSQLPostprocessor.enriched(
+            generation,
+            question: "how many retained customers do we have?",
+            schema: makeCustomerSegmentSchema(),
+            databaseContext: ""
+        )
+
+        #expect(!enriched.needsClarification)
+        #expect(enriched.sql == generation.sql)
+        #expect(enriched.referencedTables == ["public.customers"])
+    }
+
     private func makeUsersOrdersSchema() -> DatabaseSchema {
         DatabaseSchema(
             schemas: [SchemaInfo(name: "public")],
@@ -330,6 +354,36 @@ struct SQLSchemaValidatorTests {
                             isNullable: true,
                             ordinalPosition: 5
                         ),
+                    ]
+                )
+            ],
+            foreignKeys: []
+        )
+    }
+
+    private func makeCustomerSegmentSchema() -> DatabaseSchema {
+        DatabaseSchema(
+            schemas: [SchemaInfo(name: "public")],
+            tables: [
+                TableInfo(
+                    schema: "public",
+                    name: "customers",
+                    type: .baseTable,
+                    columns: [
+                        ColumnInfo(
+                            tableSchema: "public",
+                            tableName: "customers",
+                            name: "segment",
+                            dataType: "user-defined",
+                            isNullable: false,
+                            ordinalPosition: 1,
+                            valueConstraints: [
+                                ColumnValueConstraint(
+                                    kind: .enumValues,
+                                    values: ["new", "retained", "churned"]
+                                )
+                            ]
+                        )
                     ]
                 )
             ],

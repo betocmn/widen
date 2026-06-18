@@ -365,7 +365,7 @@ public enum GeneratedSQLPostprocessor {
         let referencedTables = schema.tables.filter { referencedTableIDs.contains($0.qualifiedName) }
         let schemaTokens = Set(referencedTables.flatMap { table in
             SchemaIndex.tokens(in: table.name)
-                + table.columns.flatMap { SchemaIndex.tokens(in: $0.name) }
+                + table.columns.flatMap(columnSemanticTokens)
         })
 
         if !questionTokens.intersection(winBusinessTerms).isEmpty {
@@ -381,7 +381,8 @@ public enum GeneratedSQLPostprocessor {
         if !contextTokens.intersection(highRiskBusinessTerms.union(supportingBusinessTokens)).isEmpty {
             return nil
         }
-        guard schemaTokens.intersection(supportingBusinessTokens).isEmpty else { return nil }
+        guard schemaTokens.intersection(highRiskBusinessTerms.union(supportingBusinessTokens)).isEmpty
+        else { return nil }
         return
             "I need the database-specific definition for this metric before I can write SQL safely. What table, column, or condition defines it?"
     }
@@ -404,6 +405,17 @@ public enum GeneratedSQLPostprocessor {
         "winner", "winning", "won", "win", "wins", "result", "outcome", "verdict",
         "score", "rank", "revenue", "amount", "active", "status", "success",
     ]
+
+    private static func columnSemanticTokens(_ column: ColumnInfo) -> [String] {
+        var tokens = SchemaIndex.tokens(in: column.name)
+        for constraint in column.valueConstraints ?? [] {
+            tokens += constraint.values.flatMap { SchemaIndex.tokens(in: $0) }
+            if let expression = constraint.expression {
+                tokens += SchemaIndex.tokens(in: expression)
+            }
+        }
+        return tokens
+    }
 }
 
 public enum GeneratedSQLValidator {

@@ -382,6 +382,8 @@ struct SchemaIntrospectionServiceTests {
         let snippets = [
             SchemaIntrospectionService.tablesSQL,
             SchemaIntrospectionService.columnsSQL,
+            SchemaIntrospectionService.enumValuesSQL,
+            SchemaIntrospectionService.columnCheckConstraintsSQL,
             SchemaIntrospectionService.foreignKeysSQL,
         ]
 
@@ -389,5 +391,12 @@ struct SchemaIntrospectionServiceTests {
             #expect(sql.contains(#"NOT LIKE 'pg\_%' ESCAPE '\'"#))
             #expect(sql.contains("<> 'information_schema'"))
         }
+    }
+
+    @Test func valueConstraintSQLReadsEnumsAndSingleColumnChecks() {
+        #expect(SchemaIntrospectionService.enumValuesSQL.contains("pg_catalog.pg_enum"))
+        #expect(SchemaIntrospectionService.enumValuesSQL.contains("enum.enumsortorder"))
+        #expect(SchemaIntrospectionService.columnCheckConstraintsSQL.contains("pg_get_constraintdef"))
+        #expect(SchemaIntrospectionService.columnCheckConstraintsSQL.contains("array_length(con.conkey, 1) = 1"))
     }
 }

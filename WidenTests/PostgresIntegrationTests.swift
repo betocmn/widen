@@ -14,7 +14,9 @@ import Testing
 /// developer's manual-testing database (and cannot drift when that database is
 /// poked by hand). The only requirement is a reachable server whose role can
 /// CREATE DATABASE on localhost:5432.
-private let integrationEnabled = ProcessInfo.processInfo.environment["WIDEN_TEST_DB"] != nil
+private let integrationEnabled =
+    ProcessInfo.processInfo.environment["WIDEN_TEST_DB"] != nil
+    || ProcessInfo.processInfo.environment["TEST_RUNNER_WIDEN_TEST_DB"] != nil
 
 private enum IntegrationServer {
     static let host = "localhost"
@@ -229,6 +231,45 @@ struct PostgresIntegrationTests {
                 !schema.tables.contains {
                     $0.schema.hasPrefix("pg_") || $0.schema == "information_schema"
                 })
+        }
+    }
+
+    @Test func introspectsEnumAndCheckColumnValueConstraints() async throws {
+        try await withDatabase { config, service in
+            try await runStatements(
+                [
+                    "CREATE TYPE winner_decision AS ENUM ('tool_a', 'tool_b', 'tie')",
+                    """
+                    CREATE TABLE match_evaluations (
+                      id SERIAL PRIMARY KEY,
+                      winner_decision winner_decision NOT NULL,
+                      review_status TEXT NOT NULL CHECK (review_status IN ('approved', 'rejected'))
+                    )
+                    """,
+                ],
+                on: config.database
+            )
+
+            let schema = try await SchemaIntrospectionService().loadSchema(using: service)
+            let table = try #require(
+                schema.tables.first { $0.schema == "public" && $0.name == "match_evaluations" })
+
+            let winnerDecision = try #require(
+                table.columns.first { $0.name == "winner_decision" })
+            #expect(winnerDecision.udtSchema == "public")
+            #expect(winnerDecision.udtName == "winner_decision")
+            #expect(
+                winnerDecision.valueConstraints?.contains(
+                    ColumnValueConstraint(
+                        kind: .enumValues,
+                        values: ["tool_a", "tool_b", "tie"]
+                    )) == true)
+
+            let reviewStatus = try #require(table.columns.first { $0.name == "review_status" })
+            let check = try #require(
+                reviewStatus.valueConstraints?.first { $0.kind == .check })
+            #expect(check.values == ["approved", "rejected"])
+            #expect(check.expression?.contains("review_status") == true)
         }
     }
 

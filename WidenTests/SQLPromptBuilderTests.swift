@@ -89,6 +89,63 @@ struct SQLPromptBuilderTests {
         #expect(summary.contains("- \"quoted\"\"name\" integer not null"))
     }
 
+    @Test func schemaSummaryIncludesColumnValueConstraints() {
+        let schema = DatabaseSchema(
+            schemas: [SchemaInfo(name: "public")],
+            tables: [
+                TableInfo(
+                    schema: "public",
+                    name: "evaluations",
+                    type: .baseTable,
+                    columns: [
+                        ColumnInfo(
+                            tableSchema: "public",
+                            tableName: "evaluations",
+                            name: "winner_decision",
+                            dataType: "user-defined",
+                            isNullable: false,
+                            ordinalPosition: 1,
+                            valueConstraints: [
+                                ColumnValueConstraint(
+                                    kind: .enumValues,
+                                    values: ["tool_a", "tool_b", "tie"]
+                                )
+                            ]
+                        ),
+                        ColumnInfo(
+                            tableSchema: "public",
+                            tableName: "evaluations",
+                            name: "review_status",
+                            dataType: "text",
+                            isNullable: false,
+                            ordinalPosition: 2,
+                            valueConstraints: [
+                                ColumnValueConstraint(
+                                    kind: .check,
+                                    values: ["approved", "rejected"],
+                                    expression:
+                                        "CHECK ((review_status = ANY (ARRAY['approved'::text, 'rejected'::text])))",
+                                    constraintName: "evaluations_review_status_check"
+                                )
+                            ]
+                        ),
+                    ]
+                )
+            ]
+        )
+
+        let summary = SQLPromptBuilder.schemaSummary(schema)
+
+        #expect(
+            summary.contains(
+                #"- "winner_decision" user-defined not null (values: 'tool_a', 'tool_b', 'tie')"#
+            ))
+        #expect(
+            summary.contains(
+                #"- "review_status" text not null (check values: 'approved', 'rejected')"#
+            ))
+    }
+
     @Test func promptContainsQuestionAndSchema() {
         let prompt = SQLPromptBuilder.prompt(
             question: "Show me the 10 most recent users.",

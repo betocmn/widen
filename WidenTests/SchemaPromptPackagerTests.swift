@@ -117,6 +117,8 @@ struct SchemaPromptPackagerTests {
         #expect(package.text.contains("NOW() - INTERVAL '14 days'"))
         #expect(package.text.contains(#"Do not select a generic "tool_id""#))
         #expect(package.text.contains(#"Do not use participant columns "tool_a_id" or "tool_b_id" as wins"#))
+        #expect(package.text.contains("Schema-defined decision/status values:"))
+        #expect(package.text.contains(#""public"."preseason_match_evaluation"."winner_decision" (values: 'tool_a', 'tool_b', 'tie')"#))
         #expect(package.text.contains(#"TABLE "public"."preseason_tool""#))
         #expect(package.pinnedTables.contains("public.preseason_tool"))
     }
@@ -308,7 +310,13 @@ struct SchemaPromptPackagerTests {
                         "preseason_match_evaluation",
                         "winner_decision",
                         type: "user-defined",
-                        ordinal: 4
+                        ordinal: 4,
+                        valueConstraints: [
+                            ColumnValueConstraint(
+                                kind: .enumValues,
+                                values: ["tool_a", "tool_b", "tie"]
+                            )
+                        ]
                     ),
                     column(
                         "preseason_match_evaluation",
@@ -433,7 +441,8 @@ struct SchemaPromptPackagerTests {
         _ tableName: String,
         _ name: String,
         type: String = "uuid",
-        ordinal: Int
+        ordinal: Int,
+        valueConstraints: [ColumnValueConstraint]? = nil
     ) -> ColumnInfo {
         ColumnInfo(
             tableSchema: "public",
@@ -441,7 +450,8 @@ struct SchemaPromptPackagerTests {
             name: name,
             dataType: type,
             isNullable: false,
-            ordinalPosition: ordinal
+            ordinalPosition: ordinal,
+            valueConstraints: valueConstraints
         )
     }
 }

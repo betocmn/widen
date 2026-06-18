@@ -286,10 +286,18 @@ public enum SchemaPromptPackager {
                 guidance +=
                     " Do not use participant columns \(quotedIdentifier("tool_a_id")) or \(quotedIdentifier("tool_b_id")) as wins unless the user asks for participants."
             }
-            if sourceTable.columns.contains(where: {
+            let decisionColumns = sourceTable.columns.filter {
                 SchemaIndex.tokens(in: $0.name).contains("decision")
                     || SchemaRelevanceRanker.canonicalIdentifier($0.name).contains("status")
-            }) {
+            }
+            let constrainedDecisionColumns = decisionColumns.compactMap { column -> String? in
+                guard let summary = valueConstraintSummary(column) else { return nil }
+                return "\(qualifiedColumn(schema: sourceTable.schema, table: sourceTable.name, column: column.name)) \(summary)"
+            }
+            if !constrainedDecisionColumns.isEmpty {
+                guidance +=
+                    " Schema-defined decision/status values: \(constrainedDecisionColumns.joined(separator: "; ")). Do not invent other literal values."
+            } else if !decisionColumns.isEmpty {
                 guidance +=
                     " Do not compare decision/status fields to invented literal values unless Database context defines those values."
             }
@@ -445,7 +453,10 @@ public enum SchemaPromptPackager {
         var lines = ["TABLE \(qualifiedName(table))"]
         for column in table.columns {
             let nullability = column.isNullable ? "" : " NOT NULL"
-            lines.append("  \(quotedIdentifier(column.name)) \(column.dataType.lowercased())\(nullability)")
+            let constraints = valueConstraintSummary(column).map { " \($0)" } ?? ""
+            lines.append(
+                "  \(quotedIdentifier(column.name)) \(column.dataType.lowercased())\(nullability)\(constraints)"
+            )
         }
         for foreignKey in schema.foreignKeys where foreignKey.sourceSchema == table.schema && foreignKey.sourceTable == table.name {
             lines.append(
@@ -453,6 +464,30 @@ public enum SchemaPromptPackager {
             )
         }
         return lines.joined(separator: "\n")
+    }
+
+    private static func valueConstraintSummary(_ column: ColumnInfo) -> String? {
+        guard let constraints = column.valueConstraints, !constraints.isEmpty else {
+            return nil
+        }
+        let parts = constraints.compactMap { constraint -> String? in
+            switch constraint.kind {
+            case .enumValues:
+                guard !constraint.values.isEmpty else { return nil }
+                return "values: \(quotedLiterals(constraint.values))"
+            case .check:
+                if !constraint.values.isEmpty {
+                    return "check values: \(quotedLiterals(constraint.values))"
+                }
+                guard let expression = constraint.expression,
+                    !expression.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+                else {
+                    return nil
+                }
+                return "check: \(truncated(expression, to: 180))"
+            }
+        }
+        return parts.isEmpty ? nil : "(\(parts.joined(separator: "; ")))"
     }
 
     private static func relationshipLines(schema: DatabaseSchema, touching tableIDs: Set<String>) -> [String] {
@@ -493,5 +528,15 @@ public enum SchemaPromptPackager {
 
     private static func quotedIdentifier(_ identifier: String) -> String {
         "\"\(identifier.replacingOccurrences(of: "\"", with: "\"\""))\""
+    }
+
+    private static func quotedLiterals(_ values: [String]) -> String {
+        values.prefix(20)
+            .map { "'\($0.replacingOccurrences(of: "'", with: "''"))'" }
+            .joined(separator: ", ")
+    }
+
+    private static func truncated(_ text: String, to limit: Int) -> String {
+        text.count <= limit ? text : String(text.prefix(limit)) + "..."
     }
 }
