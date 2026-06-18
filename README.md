@@ -11,6 +11,9 @@ No backend. No account. No analytics. Local by default.
 
 [Download for Mac](https://github.com/betocmn/widen/releases/latest/download/Widen.dmg)
 · [Build from source](#build-and-run)
+· [Privacy](PRIVACY.md)
+· [Contributing](CONTRIBUTING.md)
+· [Security](SECURITY.md)
 · [Release notes](https://github.com/betocmn/widen/releases/latest)
 
 `macOS 26+` · `Apple Silicon` · `Apple Intelligence for local AI` ·
@@ -144,6 +147,14 @@ static website release runbook.
 For codebase onboarding and implementation details, see
 [docs/implementation-guide.md](docs/implementation-guide.md).
 
+## Open source
+
+Widen is MIT licensed and developed in the open. Start with
+[CONTRIBUTING.md](CONTRIBUTING.md) for local setup, testing expectations, and
+the safety/privacy rules contributors should preserve. See
+[PRIVACY.md](PRIVACY.md) for the data-flow summary and [SECURITY.md](SECURITY.md)
+for vulnerability reporting.
+
 ## Sample database for exploring the app
 
 This is only for trying the app by hand — the integration tests (`make test-db`)
@@ -263,9 +274,10 @@ refreshes the active database's schema; **Cmd+,** opens Settings.
 - **Postgres.app client permissions.** Postgres.app asks per client app
   before allowing a connection. If a connection seems to hang, check
   Postgres.app's Settings > Client Applications and allow Widen.
-- **App Sandbox is disabled** for this development build so the app can reach
-  local PostgreSQL without provisioning. Before any distribution, enable the
-  sandbox with the outgoing-network-client entitlement.
+- **App Sandbox is disabled today.** Developer ID apps can ship outside the
+  sandbox, but database permissions remain the real safety boundary. If you
+  work on sandboxing, enable the outgoing-network-client entitlement and test
+  local Postgres, remote Postgres, Keychain access, and Sparkle updates.
 - **SSL modes:** "Prefer"/"Require" encrypt the connection but skip
   certificate verification - local-development semantics for self-signed
   certs. "Disabled" is the default for local Postgres.

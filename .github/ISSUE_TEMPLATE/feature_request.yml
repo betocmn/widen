@@ -1,0 +1,49 @@
+name: Feature request
+description: Suggest a focused improvement
+title: "feat: "
+labels: ["enhancement"]
+body:
+  - type: textarea
+    id: problem
+    attributes:
+      label: Problem
+      description: What workflow is hard or missing today?
+    validations:
+      required: true
+  - type: textarea
+    id: proposal
+    attributes:
+      label: Proposed solution
+      description: What should Widen do?
+    validations:
+      required: true
+  - type: textarea
+    id: alternatives
+    attributes:
+      label: Alternatives considered
+      description: What workarounds or different designs did you consider?
+  - type: dropdown
+    id: area
+    attributes:
+      label: Area
+      options:
+        - SQL generation
+        - SQL validation and execution
+        - Schema browsing
+        - Results grid and export
+        - Sessions
+        - Connection setup
+        - Build, release, or updates
+        - Documentation
+        - Other
+    validations:
+      required: true
+  - type: checkboxes
+    id: checks
+    attributes:
+      label: Checklist
+      options:
+        - label: I searched existing issues.
+          required: true
+        - label: This request does not require posting private schema, credentials, or query results.
+          required: true
