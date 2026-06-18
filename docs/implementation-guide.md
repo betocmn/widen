@@ -108,10 +108,11 @@ The central object is `AppState` in `WidenKit/App/AppState.swift`.
 It also exposes `sqlGenerator` and `titleGenerator`, which choose:
 
 - The mock implementations when the developer toggle is enabled.
-- `FoundationModelsSQLGenerator` / `FoundationModelsTitleGenerator` when
-  available at compile time.
-- The mocks as a compile-time fallback when Foundation Models is not
-  available.
+- The selected cloud provider when Cloud mode is ready.
+- `FoundationModelsSQLGenerator` / `FoundationModelsTitleGenerator` when Local
+  mode is eligible and Apple's on-device model is ready.
+- `UnavailableSQLGenerator` for an unavailable selected SQL backend, while
+  session titles fall back to the deterministic local title generator.
 
 `SessionController` in `WidenKit/App/SessionController.swift` is the
 per-session runtime container. It owns a `ChatViewModel` and a
