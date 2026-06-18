@@ -84,6 +84,8 @@ public enum SQLSafetyValidator {
         "SET_CONFIG",
     ]
 
+    private static let aggregateFunctions: Set<String> = ["AVG", "SUM", "MIN", "MAX", "COUNT"]
+
     public static func validate(_ sql: String) -> SQLValidationResult {
         var errors: [String] = []
         var warnings: [String] = []
@@ -158,6 +160,11 @@ public enum SQLSafetyValidator {
         if containsWindowFunctionInsideAggregate(stripped.text) {
             errors.append(
                 "Aggregate functions cannot contain window functions. Count rows in a subquery or CTE, then aggregate those results in the outer SELECT."
+            )
+        }
+        if containsAggregateFunctionInsideAggregate(stripped.text) {
+            errors.append(
+                "Aggregate functions cannot contain other aggregate functions. Count rows in a subquery or CTE, then aggregate those results in the outer SELECT."
             )
         }
 
@@ -512,7 +519,6 @@ public enum SQLSafetyValidator {
     }
 
     static func containsWindowFunctionInsideAggregate(_ strippedText: String) -> Bool {
-        let aggregateFunctions: Set<String> = ["AVG", "SUM", "MIN", "MAX", "COUNT"]
         let chars = Array(strippedText)
         var i = 0
 
@@ -544,6 +550,59 @@ public enum SQLSafetyValidator {
             i = max(closeIndex + 1, tokenStart + 1)
         }
 
+        return false
+    }
+
+    static func containsAggregateFunctionInsideAggregate(_ strippedText: String) -> Bool {
+        let chars = Array(strippedText)
+        var i = 0
+
+        while i < chars.count {
+            guard isWordStart(chars[i]) else {
+                i += 1
+                continue
+            }
+
+            let tokenStart = i
+            var token = ""
+            while i < chars.count, isWordPart(chars[i], tokenStarted: !token.isEmpty) {
+                token.append(chars[i])
+                i += 1
+            }
+
+            guard aggregateFunctions.contains(token.uppercased()) else { continue }
+            let openIndex = indexOfOpeningParenthesis(chars, after: i)
+            guard let openIndex else { continue }
+            let closeIndex = matchingClosingParenthesis(chars, openingAt: openIndex)
+            guard let closeIndex else { continue }
+            let argumentText = String(chars[(openIndex + 1)..<closeIndex])
+            if containsFunctionCall(argumentText, named: aggregateFunctions) {
+                return true
+            }
+            i = max(closeIndex + 1, tokenStart + 1)
+        }
+
+        return false
+    }
+
+    private static func containsFunctionCall(_ text: String, named names: Set<String>) -> Bool {
+        let chars = Array(text)
+        var i = 0
+        while i < chars.count {
+            guard isWordStart(chars[i]) else {
+                i += 1
+                continue
+            }
+            var token = ""
+            while i < chars.count, isWordPart(chars[i], tokenStarted: !token.isEmpty) {
+                token.append(chars[i])
+                i += 1
+            }
+            guard names.contains(token.uppercased()) else { continue }
+            if indexOfOpeningParenthesis(chars, after: i) != nil {
+                return true
+            }
+        }
         return false
     }
 

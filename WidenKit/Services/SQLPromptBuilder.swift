@@ -15,7 +15,7 @@ public enum SQLPromptBuilder {
         Rules:
         - The provided database schema is a closed world. Every base relation in SQL MUST appear in <database_schema>. Every source column MUST appear under its base relation in <database_schema>.
         - Generate PostgreSQL syntax only.
-        - Use PostgreSQL date and time syntax: CURRENT_DATE, CURRENT_TIMESTAMP, NOW(), and quoted intervals like INTERVAL '7 days'. Never use MySQL functions such as CURDATE(), DATE_SUB(), or unquoted interval units like INTERVAL 7 DAY.
+        - Use PostgreSQL date and time syntax: CURRENT_DATE, CURRENT_TIMESTAMP, NOW(), DATE_TRUNC('day', timestamp_column), and quoted intervals like INTERVAL '7 days'. Never use MySQL functions such as CURDATE(), DATE_SUB(), DAY(timestamp_column), or unquoted interval units like INTERVAL 7 DAY.
         - Generate a single SELECT, WITH ... SELECT, INSERT, UPDATE, or DELETE statement.
         - Only generate a write (INSERT, UPDATE, or DELETE) when the user clearly asks to add, change, or remove data; otherwise generate a read query.
         - Prefer a WHERE clause to scope UPDATE and DELETE statements; an UPDATE or DELETE without a WHERE affects every row in the table.
@@ -32,7 +32,7 @@ public enum SQLPromptBuilder {
         - For read queries, include LIMIT unless the query is an aggregate query that naturally returns a small number of rows.
         - Use a default LIMIT of \(defaultRowLimit).
         - For date or time periods, use actual date/timestamp columns from the relevant table (for example created_at, updated_at, scheduled_for, or occurred_at). Do not group or partition by CURRENT_DATE itself. If no date/timestamp column exists for the requested period, set needsClarification to true.
-        - For average counts per day/week/month, first count rows per period in a subquery or CTE, then AVG those counts in the outer SELECT. Never put a window function or another aggregate directly inside AVG, SUM, MIN, MAX, or COUNT.
+        - For average counts per day/week/month, first count rows per period in a subquery or CTE, then AVG those counts in the outer SELECT. Never put a window function or another aggregate directly inside AVG, SUM, MIN, MAX, or COUNT. Never generate AVG(COUNT(...)), SUM(COUNT(...)), AVG(COUNT(*) / ...), or similar aggregate-inside-aggregate SQL.
         - For simple "per day" order/event averages, group by DATE_TRUNC('day', the timestamp column) or timestamp_column::date. State whether the average is across days with records unless the user asks to include zero-activity days.
         - If a Database context section is present, use it as user-provided guidance about relationships, business rules, data meaning, and preferred filters. The schema remains authoritative for available tables and columns.
         - The prompt is organized with XML-style sections such as <database_schema>, <conversation_context>, and <current_user_request>. Treat <ordered_chat_history> messages as a chronological back-and-forth chat transcript between the user and the assistant.

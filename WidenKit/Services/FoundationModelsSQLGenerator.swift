@@ -9,7 +9,7 @@
     struct GeneratedSQLResponse {
         @Guide(
             description:
-                "Exactly one PostgreSQL statement: a SELECT/WITH read, or an INSERT/UPDATE/DELETE write only when the user asks to modify data. No semicolons, no DDL, only tables and columns from the provided schema.")
+                "Exactly one PostgreSQL statement: a SELECT/WITH read, or an INSERT/UPDATE/DELETE write only when the user asks to modify data. No semicolons, no DDL, only tables and columns from the provided schema. For average counts per day, use a CTE/subquery and never AVG(COUNT(...)) or DAY(...).")
         var sql: String
 
         @Guide(description: "One or two sentences explaining what the query does.")

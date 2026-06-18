@@ -238,6 +238,30 @@ struct SQLSafetyValidatorTests {
         #expect(result.errors.contains { $0.contains("Aggregate functions cannot contain") })
     }
 
+    @Test func rejectsAggregateWrappedAroundAggregateFunction() {
+        let result = validate(
+            "SELECT AVG(COUNT(*) / DAY(created_at)) FROM public.orders GROUP BY DAY(created_at)"
+        )
+
+        #expect(!result.isValid)
+        #expect(result.errors.contains { $0.contains("other aggregate functions") })
+    }
+
+    @Test func allowsAverageOfCountsFromCTE() {
+        let result = validate(
+            """
+            WITH daily_counts AS (
+              SELECT DATE_TRUNC('day', created_at) AS day, COUNT(*) AS order_count
+              FROM public.orders
+              GROUP BY 1
+            )
+            SELECT AVG(order_count) FROM daily_counts
+            """
+        )
+
+        #expect(result.isValid)
+    }
+
     @Test func allowsAggregateUsedAsWindowFunction() {
         let result = validate(
             "SELECT AVG(total_cents) OVER (PARTITION BY user_id) FROM public.orders LIMIT 100"
