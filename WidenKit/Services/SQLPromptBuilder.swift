@@ -13,6 +13,7 @@ public enum SQLPromptBuilder {
         Your task is to generate exactly one safe PostgreSQL statement for the user's question.
 
         Rules:
+        - The provided database schema is a closed world. Every base relation in SQL MUST appear in <database_schema>. Every source column MUST appear under its base relation in <database_schema>.
         - Generate PostgreSQL syntax only.
         - Use PostgreSQL date and time syntax: CURRENT_DATE, CURRENT_TIMESTAMP, NOW(), and quoted intervals like INTERVAL '7 days'. Never use MySQL functions such as CURDATE(), DATE_SUB(), or unquoted interval units like INTERVAL 7 DAY.
         - Generate a single SELECT, WITH ... SELECT, INSERT, UPDATE, or DELETE statement.
@@ -36,7 +37,10 @@ public enum SQLPromptBuilder {
         - If a Database context section is present, use it as user-provided guidance about relationships, business rules, data meaning, and preferred filters. The schema remains authoritative for available tables and columns.
         - The prompt is organized with XML-style sections such as <database_schema>, <conversation_context>, and <current_user_request>. Treat <ordered_chat_history> messages as a chronological back-and-forth chat transcript between the user and the assistant.
         - The prompt may include conversation context: earlier questions, the current SQL, and the error of its last run. Treat the user's question as a follow-up to that context — adjust the current SQL when asked, and when an error is shown, produce a corrected version of that query that still answers the earlier questions.
-        - If the request is ambiguous, make the safest reasonable assumption and include it in assumptions.
+        - If a required entity, metric, business meaning, relationship, or time interpretation is undefined by the Database context or provided schema, set needsClarification to true and ask a concise clarification question.
+        - Assumptions may resolve presentation choices such as LIMIT, sort direction, or inclusive date boundaries. Assumptions MUST NOT invent schema objects, joins, winner definitions, revenue definitions, status meanings, ownership rules, or other business semantics.
+        - Terms such as wins, revenue, active, churn, conversion, success, owner, retained, and best can have database-specific meanings. If the Database context and schema do not define the requested term, ask what column, condition, or table defines it. Do not infer it from a nearby count or status.
+        - A plausible-looking query that does not answer the user's requested metric is incorrect.
         - If the request cannot be answered from the schema, set needsClarification to true and ask a concise clarification question.
         - Output only the requested structured result.
         """
@@ -51,24 +55,154 @@ public enum SQLPromptBuilder {
         databaseContext: String? = nil,
         maxSchemaCharacters: Int = 8_000
     ) -> String {
+        let databaseContextText = databaseContextSection(databaseContext)
+        let schemaPackage = SchemaPromptPackager.package(
+            schema: schema,
+            question: question,
+            context: context,
+            databaseContext: databaseContext ?? "",
+            maxCharacters: maxSchemaCharacters
+        )
         var sections = [
             taggedSection(
                 "database_schema",
-                schemaSummary(schema, maxCharacters: maxSchemaCharacters)
+                schemaPackage.text
             )
         ]
-        if let databaseContextSection = databaseContextSection(databaseContext) {
+
+        if let databaseContextSection = databaseContextText {
             sections.append(taggedSection("database_context", databaseContextSection))
         }
-        if let contextSection = contextSection(context) {
-            sections.append(contextSection)
+
+        switch context.mode {
+        case .repair:
+            sections.append(repairTaskSection(question: question, context: context))
+        case .reconstructAfterFailedRepair:
+            sections.append(reconstructionTaskSection(question: question, context: context))
+        case .initial, .followUp:
+            if let contextSection = contextSection(context) {
+                sections.append(contextSection)
+            }
+            sections.append(
+                taggedSection(
+                    "current_user_request",
+                    "User question: \(question)"
+                ))
         }
-        sections.append(
-            taggedSection(
-                "current_user_request",
-                "User question: \(question)"
-            ))
         return sections.joined(separator: "\n\n")
+    }
+
+    static func repairTaskSection(question: String, context: SQLGenerationContext) -> String {
+        let repair = context.repairContext
+        let failedSQL = repair?.failedSQL ?? context.currentSQL ?? ""
+        var lines = [
+            "<repair_task>",
+            taggedCDATASection("original_request", context.originalQuestion ?? question),
+        ]
+        if !failedSQL.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+            lines.append(taggedCDATASection("failed_sql", failedSQL))
+        }
+        lines.append(databaseDiagnosticSection(repair?.diagnostic, fallbackError: context.lastRunError))
+        lines.append(repairConstraintsSection(repair))
+        lines.append(
+            taggedCDATASection(
+                "repair_instruction",
+                """
+                The database diagnostic is authoritative.
+
+                Every identifier listed in <forbidden_identifier> MUST be absent from the next SQL. Reformatting, changing aliases, changing LIMIT, or changing whitespace does not constitute a repair.
+
+                A repair is acceptable only when it removes the diagnosed cause and passes the closed-world schema checklist.
+
+                If the schema does not provide an unambiguous, intent-preserving repair, set needsClarification to true immediately.
+                """
+            ))
+        lines.append("</repair_task>")
+        return lines.joined(separator: "\n")
+    }
+
+    static func reconstructionTaskSection(question: String, context: SQLGenerationContext) -> String {
+        let repair = context.repairContext
+        var lines = [
+            "<reconstruction_task>",
+            taggedCDATASection("original_request", context.originalQuestion ?? question),
+        ]
+        if let repair {
+            lines.append("<must_not_use>")
+            for identifier in repair.forbiddenIdentifiers {
+                lines.append(taggedCDATASection("identifier", identifier))
+            }
+            lines.append("</must_not_use>")
+            if !repair.priorFingerprints.isEmpty {
+                lines.append("<prior_attempts>")
+                for fingerprint in repair.priorFingerprints {
+                    lines.append(taggedCDATASection("fingerprint", fingerprint))
+                }
+                lines.append("</prior_attempts>")
+            }
+        }
+        lines.append(
+            taggedCDATASection(
+                "reconstruction_instruction",
+                """
+                Construct the answer from the original request and focused schema.
+                Do not patch or imitate any previous SQL.
+                If the schema does not define the requested business meaning, set needsClarification to true.
+                """
+            ))
+        lines.append("</reconstruction_task>")
+        return lines.joined(separator: "\n")
+    }
+
+    private static func databaseDiagnosticSection(
+        _ diagnostic: DatabaseDiagnostic?,
+        fallbackError: String?
+    ) -> String {
+        var lines = ["<database_diagnostic>"]
+        if let diagnostic {
+            lines.append("<kind>\(diagnostic.kind.rawValue)</kind>")
+            if let sqlState = diagnostic.sqlState {
+                lines.append("<sqlstate>\(sqlState)</sqlstate>")
+            }
+            if let identifier = diagnostic.identifierForRepair {
+                lines.append(taggedCDATASection("missing_identifier", identifier))
+            }
+            lines.append(taggedCDATASection("message", diagnostic.message))
+            if let detail = diagnostic.detail {
+                lines.append(taggedCDATASection("detail", detail))
+            }
+            if let hint = diagnostic.hint {
+                lines.append(taggedCDATASection("hint", hint))
+            }
+            if let position = diagnostic.position {
+                lines.append("<position>\(position)</position>")
+            }
+        } else if let fallbackError,
+            !fallbackError.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+        {
+            lines.append(taggedCDATASection("message", fallbackError))
+        } else {
+            lines.append(taggedCDATASection("message", "The previous generated SQL failed."))
+        }
+        lines.append("</database_diagnostic>")
+        return lines.joined(separator: "\n")
+    }
+
+    private static func repairConstraintsSection(_ repair: SQLRepairContext?) -> String {
+        var lines = ["<repair_constraints>"]
+        for identifier in repair?.forbiddenIdentifiers ?? [] {
+            lines.append(taggedCDATASection("forbidden_identifier", identifier))
+        }
+        if let fingerprints = repair?.priorFingerprints, !fingerprints.isEmpty {
+            lines.append("<prior_fingerprints>")
+            for fingerprint in fingerprints {
+                lines.append(taggedCDATASection("fingerprint", fingerprint))
+            }
+            lines.append("</prior_fingerprints>")
+        }
+        lines.append("<require_new_fingerprint>true</require_new_fingerprint>")
+        lines.append("</repair_constraints>")
+        return lines.joined(separator: "\n")
     }
 
     /// Renders the conversation context with tight per-item budgets. The

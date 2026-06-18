@@ -103,23 +103,41 @@
             // A fresh session per request keeps the context window small and
             // the generation stateless; follow-up awareness comes from the
             // compact context section in the prompt instead.
+            let instructions = SQLPromptBuilder.instructions(defaultRowLimit: config.defaultRowLimit)
             let session = LanguageModelSession(
                 model: model,
-                instructions: SQLPromptBuilder.instructions(defaultRowLimit: config.defaultRowLimit)
+                instructions: instructions
+            )
+            let fixedPromptCharacters =
+                instructions.count
+                + question.count
+                + config.databaseContext.count
+                + context.recentQuestions.joined(separator: "\n").count
+                + (context.originalQuestion?.count ?? 0)
+                + context.conversationMessages.map(\.text.count).reduce(0, +)
+                + (context.currentSQL?.count ?? 0)
+                + (context.lastRunError?.count ?? 0)
+                + (context.repairContext?.failedSQL?.count ?? 0)
+                + (context.repairContext?.diagnostic?.displayMessage.count ?? 0)
+                + 2_000
+            let schemaCharacters = min(
+                maxSchemaCharacters,
+                PromptBudget.localFoundationModels.schemaCharacterAllowance(
+                    fixedPromptCharacters: fixedPromptCharacters)
             )
             let prompt = SQLPromptBuilder.prompt(
                 question: question,
                 schema: schema,
                 context: context,
                 databaseContext: config.databaseContext,
-                maxSchemaCharacters: maxSchemaCharacters
+                maxSchemaCharacters: schemaCharacters
             )
             let started = Date()
             do {
                 let response = try await session.respond(
                     to: prompt,
                     generating: GeneratedSQLResponse.self,
-                    options: GenerationOptions(sampling: .greedy, maximumResponseTokens: 1_024)
+                    options: GenerationOptions(sampling: .greedy, maximumResponseTokens: 512)
                 )
                 let result = Self.result(from: response.content)
                 await GenerationLog.shared.append(

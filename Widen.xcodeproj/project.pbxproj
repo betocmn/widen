@@ -8,6 +8,7 @@
 
 /* Begin PBXBuildFile section */
 		0063C4373115744E24D4A8E3 /* AppearancePreferenceTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = F008F51E2B0886CE80331A26 /* AppearancePreferenceTests.swift */; };
+		007C9F8E77AC349F7372CC9B /* SchemaIndex.swift in Sources */ = {isa = PBXBuildFile; fileRef = 87A557902EE4B1497CFCF264 /* SchemaIndex.swift */; };
 		01C0284CF143FB036E122995 /* AIBackendSelectionTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 82222A95EEF524D441242FD5 /* AIBackendSelectionTests.swift */; };
 		029C6E6F71C4BBEBAAFBD71D /* WidenKit.framework in Frameworks */ = {isa = PBXBuildFile; fileRef = A287B7ABA46C2CE732510671 /* WidenKit.framework */; };
 		043BA66DA315AD8515BD6D00 /* WidenKit.framework in Embed Frameworks */ = {isa = PBXBuildFile; fileRef = A287B7ABA46C2CE732510671 /* WidenKit.framework */; settings = {ATTRIBUTES = (CodeSignOnCopy, RemoveHeadersOnCopy, ); }; };
@@ -67,6 +68,7 @@
 		7B8853EF36A5A764F648AF6C /* MockSQLGenerator.swift in Sources */ = {isa = PBXBuildFile; fileRef = C69FF94E360E9E0F027F2AAA /* MockSQLGenerator.swift */; };
 		7DBEF4C3F5F26F43884DDC1A /* SessionStoreTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = F2CC4ADDFBD0372E41CBC1A4 /* SessionStoreTests.swift */; };
 		8236925524FBC8516122BF7C /* UnavailableSQLGenerator.swift in Sources */ = {isa = PBXBuildFile; fileRef = E30DD57D665A0DD504E34557 /* UnavailableSQLGenerator.swift */; };
+		823F8A1E6F267CF35850EA17 /* SchemaPromptPackagerTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = CD610621EA17B95CC6C89A5A /* SchemaPromptPackagerTests.swift */; };
 		89E8175EE7A65895715004C8 /* ConnectionStore.swift in Sources */ = {isa = PBXBuildFile; fileRef = 6DBE4DAF98A714DFDE7DF54E /* ConnectionStore.swift */; };
 		8C7B53F2B10338BB399CA9FA /* LoadingView.swift in Sources */ = {isa = PBXBuildFile; fileRef = CB98264D45BE6021646B47AA /* LoadingView.swift */; };
 		91721D00C35BBE6A1B3B7BC5 /* AppError.swift in Sources */ = {isa = PBXBuildFile; fileRef = E6F1A663CDB8B6D45A6DA1D5 /* AppError.swift */; };
@@ -89,12 +91,14 @@
 		AFA418FA05A4579D14F1DA77 /* PostgresService.swift in Sources */ = {isa = PBXBuildFile; fileRef = EC8949F7F4C8FC5E472D3909 /* PostgresService.swift */; };
 		AFBCC86B144660AF022DD102 /* OpenRouterSQLGeneratorTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = B99D0685D8BE2B80381201F0 /* OpenRouterSQLGeneratorTests.swift */; };
 		B61F1D2B5F5495A14A7D6F82 /* ChatModeView.swift in Sources */ = {isa = PBXBuildFile; fileRef = E66C3D2EFDC9E9B4BA09A136 /* ChatModeView.swift */; };
+		B78663053A3F79862EBD9034 /* SchemaPromptPackager.swift in Sources */ = {isa = PBXBuildFile; fileRef = 934D246292381050D06E03C9 /* SchemaPromptPackager.swift */; };
 		B84A31F77577FA4DBD88D7D3 /* SchemaIntrospectionService.swift in Sources */ = {isa = PBXBuildFile; fileRef = 5A2C062CE92CC29EB34DC339 /* SchemaIntrospectionService.swift */; };
 		BC6475426B8F5FE808D3865D /* ConnectionAutofillSheet.swift in Sources */ = {isa = PBXBuildFile; fileRef = 1E304574ECE296ACFF37B3B2 /* ConnectionAutofillSheet.swift */; };
 		C2E902D08842ED705757E093 /* ResultsCardView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 8ED849CA57ABBA33C736A628 /* ResultsCardView.swift */; };
 		C502AEC63AC48859043019A9 /* PostgresCellFormatter.swift in Sources */ = {isa = PBXBuildFile; fileRef = AFAE5FF61F0206972133B567 /* PostgresCellFormatter.swift */; };
 		C5C273D359E377E0C44B9E30 /* DatabasesSettingsView.swift in Sources */ = {isa = PBXBuildFile; fileRef = EFE23C70D785D014C2E39969 /* DatabasesSettingsView.swift */; };
 		C70434C961398F8FE40C7865 /* SessionRow.swift in Sources */ = {isa = PBXBuildFile; fileRef = 1C4B123ACB7D6A07BF9C56B1 /* SessionRow.swift */; };
+		C82EEF48D37AE4A73E13D55F /* SchemaRelevanceRanker.swift in Sources */ = {isa = PBXBuildFile; fileRef = 940033E79D8170BF75FF21E8 /* SchemaRelevanceRanker.swift */; };
 		C8CC0F98FA9581466F034692 /* SchemaStoreTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 6765AEA72CE58BC6D644FE4C /* SchemaStoreTests.swift */; };
 		CC901A90F31FB81E58DCBAC9 /* FoundationModelsSmokeTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = C776863B980AE74374EED3DD /* FoundationModelsSmokeTests.swift */; };
 		D3A1485BB1D9396614D1445C /* ComposerView.swift in Sources */ = {isa = PBXBuildFile; fileRef = B5703BAB8838F625973C3D22 /* ComposerView.swift */; };
@@ -206,8 +210,11 @@
 		822DC2702C5356D72B37F3AE /* ConnectionURLParser.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ConnectionURLParser.swift; sourceTree = "<group>"; };
 		85A8BC5B064230B8C18C5643 /* UpdaterControlling.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = UpdaterControlling.swift; sourceTree = "<group>"; };
 		870B967DD1A236C762771BCD /* FoundationModelsConnectionParser.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = FoundationModelsConnectionParser.swift; sourceTree = "<group>"; };
+		87A557902EE4B1497CFCF264 /* SchemaIndex.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SchemaIndex.swift; sourceTree = "<group>"; };
 		8D3B5C38E209E366A7B9413D /* QueryExecutionService.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = QueryExecutionService.swift; sourceTree = "<group>"; };
 		8ED849CA57ABBA33C736A628 /* ResultsCardView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ResultsCardView.swift; sourceTree = "<group>"; };
+		934D246292381050D06E03C9 /* SchemaPromptPackager.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SchemaPromptPackager.swift; sourceTree = "<group>"; };
+		940033E79D8170BF75FF21E8 /* SchemaRelevanceRanker.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SchemaRelevanceRanker.swift; sourceTree = "<group>"; };
 		9548C6FFDED1BB0553160789 /* LLMSettingsView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = LLMSettingsView.swift; sourceTree = "<group>"; };
 		980EE95F99B9CDF2F26BBC47 /* ErrorBannerView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ErrorBannerView.swift; sourceTree = "<group>"; };
 		9D65EBBAD5352C90A92D303B /* AIBackendPreferences.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AIBackendPreferences.swift; sourceTree = "<group>"; };
@@ -231,6 +238,7 @@
 		CAEBEF243DB2BC29B6767858 /* ConnectionEditorForm.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ConnectionEditorForm.swift; sourceTree = "<group>"; };
 		CB10154B7158004651F823CF /* HTTPTransport.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = HTTPTransport.swift; sourceTree = "<group>"; };
 		CB98264D45BE6021646B47AA /* LoadingView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = LoadingView.swift; sourceTree = "<group>"; };
+		CD610621EA17B95CC6C89A5A /* SchemaPromptPackagerTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SchemaPromptPackagerTests.swift; sourceTree = "<group>"; };
 		CD9A4AC6A2353BABF87696E2 /* QueryResultViewModel.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = QueryResultViewModel.swift; sourceTree = "<group>"; };
 		D02148CFD54DB234244D6960 /* PostgresErrorMapper.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PostgresErrorMapper.swift; sourceTree = "<group>"; };
 		D4040E3CB88247BE7A857541 /* ConnectionDetailsParser.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ConnectionDetailsParser.swift; sourceTree = "<group>"; };
@@ -382,6 +390,7 @@
 				C776863B980AE74374EED3DD /* FoundationModelsSmokeTests.swift */,
 				B99D0685D8BE2B80381201F0 /* OpenRouterSQLGeneratorTests.swift */,
 				526F33B4A497093D4F7A3300 /* PostgresIntegrationTests.swift */,
+				CD610621EA17B95CC6C89A5A /* SchemaPromptPackagerTests.swift */,
 				6765AEA72CE58BC6D644FE4C /* SchemaStoreTests.swift */,
 				FAEB9A30055B7E3FE372CD61 /* SessionControllerTests.swift */,
 				F2CC4ADDFBD0372E41CBC1A4 /* SessionStoreTests.swift */,
@@ -415,7 +424,10 @@
 				EC8949F7F4C8FC5E472D3909 /* PostgresService.swift */,
 				6D97D661282C7D49C7D9844A /* PrivateCloudComputeSQLGenerator.swift */,
 				8D3B5C38E209E366A7B9413D /* QueryExecutionService.swift */,
+				87A557902EE4B1497CFCF264 /* SchemaIndex.swift */,
 				5A2C062CE92CC29EB34DC339 /* SchemaIntrospectionService.swift */,
+				934D246292381050D06E03C9 /* SchemaPromptPackager.swift */,
+				940033E79D8170BF75FF21E8 /* SchemaRelevanceRanker.swift */,
 				F63EE53E94C2C5F8EDC5DD47 /* SchemaStore.swift */,
 				DA1AA29704A0DF0B0D92E56E /* SessionStore.swift */,
 				6E93D92D37A8796CFBFBD827 /* SessionTitleGenerator.swift */,
@@ -648,6 +660,7 @@
 				05E75B10D5A5DAECC48EF104 /* PostgresIntegrationTests.swift in Sources */,
 				EF9CE627C80199A8351EF201 /* SQLPromptBuilderTests.swift in Sources */,
 				6A5DB748205AD6A08CB83BAE /* SQLSafetyValidatorTests.swift in Sources */,
+				823F8A1E6F267CF35850EA17 /* SchemaPromptPackagerTests.swift in Sources */,
 				C8CC0F98FA9581466F034692 /* SchemaStoreTests.swift in Sources */,
 				AAE2F5B4C2AA310AC576E408 /* SessionControllerTests.swift in Sources */,
 				7DBEF4C3F5F26F43884DDC1A /* SessionStoreTests.swift in Sources */,
@@ -721,8 +734,11 @@
 				1B7ED3BD37EE6A5727850143 /* SQLPromptBuilder.swift in Sources */,
 				344BEFD5BC2ABA6B9DE4371C /* SQLSafetyValidator.swift in Sources */,
 				1D500705EAC9A667A2702299 /* SchemaBrowserView.swift in Sources */,
+				007C9F8E77AC349F7372CC9B /* SchemaIndex.swift in Sources */,
 				9289CD3666919AC9B9DD88AD /* SchemaInspectorView.swift in Sources */,
 				B84A31F77577FA4DBD88D7D3 /* SchemaIntrospectionService.swift in Sources */,
+				B78663053A3F79862EBD9034 /* SchemaPromptPackager.swift in Sources */,
+				C82EEF48D37AE4A73E13D55F /* SchemaRelevanceRanker.swift in Sources */,
 				49D036B9E3F976916C4023DC /* SchemaStore.swift in Sources */,
 				DF579B887E407DE86D520359 /* SchemaViewModel.swift in Sources */,
 				97F621F20475215531A2FE1D /* SessionController.swift in Sources */,

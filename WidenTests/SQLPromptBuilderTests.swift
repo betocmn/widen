@@ -269,6 +269,69 @@ struct SQLPromptBuilderTests {
         #expect(question?.contains("\"preseason_match_batch.tool_b_id\"") == true)
     }
 
+    @Test func repairPromptIncludesFailedSQLOnceAndOmitsChatHistory() {
+        let failedSQL = "SELECT id FROM public.match_batch"
+        let context = SQLGenerationContext(
+            mode: .repair,
+            originalQuestion: "show match batches",
+            conversationMessages: [
+                SQLConversationMessage(role: .assistant, text: "Generated SQL:\n\(failedSQL)")
+            ],
+            currentSQL: failedSQL,
+            lastRunError: #"Query failed: relation "public.match_batch" does not exist"#,
+            repairContext: SQLRepairContext(
+                failedSQL: failedSQL,
+                diagnostic: DatabaseDiagnostic(
+                    kind: .missingRelation,
+                    sqlState: "42P01",
+                    message: #"relation "public.match_batch" does not exist"#,
+                    tableName: "match_batch"
+                ),
+                forbiddenIdentifiers: ["public.match_batch"],
+                priorFingerprints: ["select id from public.match_batch"]
+            )
+        )
+
+        let prompt = SQLPromptBuilder.prompt(
+            question: "fix it",
+            schema: makeSampleSchema(),
+            context: context
+        )
+
+        #expect(prompt.contains("<repair_task>"))
+        #expect(!prompt.contains("<ordered_chat_history>"))
+        #expect(occurrences(of: failedSQL, in: prompt) == 1)
+        #expect(prompt.contains("<forbidden_identifier>"))
+        #expect(prompt.contains("public.match_batch"))
+        #expect(prompt.contains("<sqlstate>42P01</sqlstate>"))
+    }
+
+    @Test func reconstructionPromptExcludesFailedSQL() {
+        let failedSQL = "SELECT id FROM public.match_batch"
+        let context = SQLGenerationContext(
+            mode: .reconstructAfterFailedRepair,
+            originalQuestion: "show match batches",
+            currentSQL: failedSQL,
+            repairContext: SQLRepairContext(
+                failedSQL: failedSQL,
+                forbiddenIdentifiers: ["public.match_batch"],
+                priorFingerprints: ["select id from public.match_batch"]
+            )
+        )
+
+        let prompt = SQLPromptBuilder.prompt(
+            question: "show match batches",
+            schema: makeSampleSchema(),
+            context: context
+        )
+
+        #expect(prompt.contains("<reconstruction_task>"))
+        #expect(!prompt.contains("<failed_sql>"))
+        #expect(!prompt.contains(failedSQL))
+        #expect(prompt.contains("<must_not_use>"))
+        #expect(prompt.contains("public.match_batch"))
+    }
+
     @Test func contextSectionIncludesOriginalQuestionAndKeepsLastThreeQuestionsInHistory() {
         let longSQL = String(repeating: "S", count: 2_000)
         let context = SQLGenerationContext(
@@ -338,5 +401,16 @@ struct SQLPromptBuilderTests {
         let summary = SQLPromptBuilder.schemaSummary(makeSampleSchema())
         #expect(!summary.contains("pg_catalog"))
         #expect(!summary.contains("information_schema"))
+    }
+
+    private func occurrences(of needle: String, in haystack: String) -> Int {
+        guard !needle.isEmpty else { return 0 }
+        var count = 0
+        var searchRange = haystack.startIndex..<haystack.endIndex
+        while let range = haystack.range(of: needle, range: searchRange) {
+            count += 1
+            searchRange = range.upperBound..<haystack.endIndex
+        }
+        return count
     }
 }
