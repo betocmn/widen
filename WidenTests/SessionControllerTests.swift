@@ -679,7 +679,7 @@ struct SessionControllerTests {
         }
 
         let statements = await recorder.all()
-        #expect(statements == [firstBadGeneration.sql, secondBadGeneration.sql])
+        #expect(statements == [firstBadGeneration.sql])
         #expect(generator.contexts.count == 5)
         #expect(controller.chatVM.messages.last?.text.contains("Retry 5/5") == true)
     }

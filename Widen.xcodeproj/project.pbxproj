@@ -15,6 +15,7 @@
 		04D45723ACD2DBFB2A44561F /* ChatMessage.swift in Sources */ = {isa = PBXBuildFile; fileRef = 0FC114812768A2AB47EECE04 /* ChatMessage.swift */; };
 		0560EC58BEE91D9F98F5AC32 /* AppearancePreference.swift in Sources */ = {isa = PBXBuildFile; fileRef = A5EB4C4ABF5F9444F28736EF /* AppearancePreference.swift */; };
 		05E75B10D5A5DAECC48EF104 /* PostgresIntegrationTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 526F33B4A497093D4F7A3300 /* PostgresIntegrationTests.swift */; };
+		05ED5874919CE0B450F2A9B1 /* SQLSchemaValidatorTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 06721973667845637FA3171A /* SQLSchemaValidatorTests.swift */; };
 		090D0AA08F031227E6C2A327 /* WidenKit.framework in Embed Frameworks */ = {isa = PBXBuildFile; fileRef = A287B7ABA46C2CE732510671 /* WidenKit.framework */; settings = {ATTRIBUTES = (CodeSignOnCopy, RemoveHeadersOnCopy, ); }; };
 		094449A6D12D44D491D1D497 /* Assets.xcassets in Resources */ = {isa = PBXBuildFile; fileRef = E271C5B65AC35B837AD0BD6C /* Assets.xcassets */; };
 		0F8468DE980881943E60D699 /* DatabaseGroupRow.swift in Sources */ = {isa = PBXBuildFile; fileRef = D4B2FAB6EB4D61BFACA27F79 /* DatabaseGroupRow.swift */; };
@@ -71,6 +72,7 @@
 		823F8A1E6F267CF35850EA17 /* SchemaPromptPackagerTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = CD610621EA17B95CC6C89A5A /* SchemaPromptPackagerTests.swift */; };
 		89E8175EE7A65895715004C8 /* ConnectionStore.swift in Sources */ = {isa = PBXBuildFile; fileRef = 6DBE4DAF98A714DFDE7DF54E /* ConnectionStore.swift */; };
 		8C7B53F2B10338BB399CA9FA /* LoadingView.swift in Sources */ = {isa = PBXBuildFile; fileRef = CB98264D45BE6021646B47AA /* LoadingView.swift */; };
+		8D80F985207C829A9970DBCF /* SQLReferenceAnalyzer.swift in Sources */ = {isa = PBXBuildFile; fileRef = 3A76279AE12FC6943909F765 /* SQLReferenceAnalyzer.swift */; };
 		91721D00C35BBE6A1B3B7BC5 /* AppError.swift in Sources */ = {isa = PBXBuildFile; fileRef = E6F1A663CDB8B6D45A6DA1D5 /* AppError.swift */; };
 		92175B834D98973A909CD346 /* GeneralSettingsView.swift in Sources */ = {isa = PBXBuildFile; fileRef = E15C23EAA90F2205B06AA400 /* GeneralSettingsView.swift */; };
 		9289CD3666919AC9B9DD88AD /* SchemaInspectorView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 725DE507622217A36A82A235 /* SchemaInspectorView.swift */; };
@@ -81,6 +83,7 @@
 		982986ED6DA188054F14BCE9 /* MainView.swift in Sources */ = {isa = PBXBuildFile; fileRef = A181CFBD27E3620C8C3C902E /* MainView.swift */; };
 		98CECE67670288333751B170 /* QueryExecutionService.swift in Sources */ = {isa = PBXBuildFile; fileRef = 8D3B5C38E209E366A7B9413D /* QueryExecutionService.swift */; };
 		9FC5F80BD37E41A1A2235094 /* AppearanceToggle.swift in Sources */ = {isa = PBXBuildFile; fileRef = 230B04423A505F20C3D79EF5 /* AppearanceToggle.swift */; };
+		A4619CBD00076D2F2CCA24D8 /* SQLSchemaValidator.swift in Sources */ = {isa = PBXBuildFile; fileRef = C02CB7A7DD58AC6FA1FDE0A2 /* SQLSchemaValidator.swift */; };
 		A4D6C3096A4BCC48EEC9114A /* ConnectionDetailsParser.swift in Sources */ = {isa = PBXBuildFile; fileRef = D4040E3CB88247BE7A857541 /* ConnectionDetailsParser.swift */; };
 		A8CC6487A4E0350CA83142BA /* MessageBubbleView.swift in Sources */ = {isa = PBXBuildFile; fileRef = ACD47E55C23BE31FB80EB249 /* MessageBubbleView.swift */; };
 		AAE2F5B4C2AA310AC576E408 /* SessionControllerTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = FAEB9A30055B7E3FE372CD61 /* SessionControllerTests.swift */; };
@@ -158,6 +161,7 @@
 
 /* Begin PBXFileReference section */
 		003537221E8D09444ADD7EAD /* SessionDetailView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SessionDetailView.swift; sourceTree = "<group>"; };
+		06721973667845637FA3171A /* SQLSchemaValidatorTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SQLSchemaValidatorTests.swift; sourceTree = "<group>"; };
 		0875D9B4DCE517781B097472 /* OpenRouterCatalog.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = OpenRouterCatalog.swift; sourceTree = "<group>"; };
 		09FE1736941871937B17D50F /* SchemaViewModel.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SchemaViewModel.swift; sourceTree = "<group>"; };
 		0AE9BDC9C2C372D0F3341575 /* LocalLLMEligibility.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = LocalLLMEligibility.swift; sourceTree = "<group>"; };
@@ -175,6 +179,7 @@
 		2B82C454D2705BD1520A0263 /* TableInfo.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = TableInfo.swift; sourceTree = "<group>"; };
 		2DAAF8DAFFED5A966828C8C4 /* SQLGenerationResult.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SQLGenerationResult.swift; sourceTree = "<group>"; };
 		352C4B3A2C622CAEC8466E27 /* SQLPromptBuilderTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SQLPromptBuilderTests.swift; sourceTree = "<group>"; };
+		3A76279AE12FC6943909F765 /* SQLReferenceAnalyzer.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SQLReferenceAnalyzer.swift; sourceTree = "<group>"; };
 		3F4D5F2F87350CA819E01F58 /* Widen.entitlements */ = {isa = PBXFileReference; lastKnownFileType = text.plist.entitlements; path = Widen.entitlements; sourceTree = "<group>"; };
 		4089BA52528E9EEAC2396AB2 /* Widen.app */ = {isa = PBXFileReference; explicitFileType = wrapper.application; includeInIndex = 0; path = Widen.app; sourceTree = BUILT_PRODUCTS_DIR; };
 		420B7A0BDD583B0ABE7D2E25 /* Info.plist */ = {isa = PBXFileReference; lastKnownFileType = text.plist; path = Info.plist; sourceTree = "<group>"; };
@@ -230,6 +235,7 @@
 		B5703BAB8838F625973C3D22 /* ComposerView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ComposerView.swift; sourceTree = "<group>"; };
 		B594613B4437F5693FC5294D /* GenerationLog.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = GenerationLog.swift; sourceTree = "<group>"; };
 		B99D0685D8BE2B80381201F0 /* OpenRouterSQLGeneratorTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = OpenRouterSQLGeneratorTests.swift; sourceTree = "<group>"; };
+		C02CB7A7DD58AC6FA1FDE0A2 /* SQLSchemaValidator.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SQLSchemaValidator.swift; sourceTree = "<group>"; };
 		C38FD0CDC37E536A0ACD0BBD /* PCCSupport.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PCCSupport.swift; sourceTree = "<group>"; };
 		C69FF94E360E9E0F027F2AAA /* MockSQLGenerator.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MockSQLGenerator.swift; sourceTree = "<group>"; };
 		C776863B980AE74374EED3DD /* FoundationModelsSmokeTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = FoundationModelsSmokeTests.swift; sourceTree = "<group>"; };
@@ -397,6 +403,7 @@
 				7DB60DBB4528001882E57C20 /* SessionTitleTests.swift */,
 				352C4B3A2C622CAEC8466E27 /* SQLPromptBuilderTests.swift */,
 				D7D4F66164E5E8028A9EA325 /* SQLSafetyValidatorTests.swift */,
+				06721973667845637FA3171A /* SQLSchemaValidatorTests.swift */,
 				25C6B47E5418CF6D55AE34FD /* WidenKitTests.swift */,
 			);
 			path = WidenTests;
@@ -433,7 +440,9 @@
 				6E93D92D37A8796CFBFBD827 /* SessionTitleGenerator.swift */,
 				4668054A3CDE423568E1A4F4 /* SQLGenerator.swift */,
 				6BA8E6CFAEE004F6DB3C4D6B /* SQLPromptBuilder.swift */,
+				3A76279AE12FC6943909F765 /* SQLReferenceAnalyzer.swift */,
 				E89B4B4CFB39F399ABB908C7 /* SQLSafetyValidator.swift */,
+				C02CB7A7DD58AC6FA1FDE0A2 /* SQLSchemaValidator.swift */,
 				E30DD57D665A0DD504E34557 /* UnavailableSQLGenerator.swift */,
 				85A8BC5B064230B8C18C5643 /* UpdaterControlling.swift */,
 			);
@@ -660,6 +669,7 @@
 				05E75B10D5A5DAECC48EF104 /* PostgresIntegrationTests.swift in Sources */,
 				EF9CE627C80199A8351EF201 /* SQLPromptBuilderTests.swift in Sources */,
 				6A5DB748205AD6A08CB83BAE /* SQLSafetyValidatorTests.swift in Sources */,
+				05ED5874919CE0B450F2A9B1 /* SQLSchemaValidatorTests.swift in Sources */,
 				823F8A1E6F267CF35850EA17 /* SchemaPromptPackagerTests.swift in Sources */,
 				C8CC0F98FA9581466F034692 /* SchemaStoreTests.swift in Sources */,
 				AAE2F5B4C2AA310AC576E408 /* SessionControllerTests.swift in Sources */,
@@ -732,7 +742,9 @@
 				AEBB14B823EC2DF0490DC5B8 /* SQLGenerationResult.swift in Sources */,
 				799DCAF1B34F0A3CD18F70FB /* SQLGenerator.swift in Sources */,
 				1B7ED3BD37EE6A5727850143 /* SQLPromptBuilder.swift in Sources */,
+				8D80F985207C829A9970DBCF /* SQLReferenceAnalyzer.swift in Sources */,
 				344BEFD5BC2ABA6B9DE4371C /* SQLSafetyValidator.swift in Sources */,
+				A4619CBD00076D2F2CCA24D8 /* SQLSchemaValidator.swift in Sources */,
 				1D500705EAC9A667A2702299 /* SchemaBrowserView.swift in Sources */,
 				007C9F8E77AC349F7372CC9B /* SchemaIndex.swift in Sources */,
 				9289CD3666919AC9B9DD88AD /* SchemaInspectorView.swift in Sources */,

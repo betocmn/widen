@@ -116,8 +116,14 @@ public final class ChatViewModel {
         defer { finishGeneration() }
 
         do {
-            let result = try await generator.generateSQL(
+            let generated = try await generator.generateSQL(
                 question: question, schema: schema, context: context, config: config)
+            let result = GeneratedSQLPostprocessor.enriched(
+                generated,
+                question: question,
+                schema: schema,
+                databaseContext: config.databaseContext
+            )
 
             if result.needsClarification,
                 let clarification = result.clarificationQuestion,
@@ -132,7 +138,7 @@ public final class ChatViewModel {
 
             // Generated SQL goes to the editable preview, not only the chat.
             if !result.sql.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
-                queryVM.setGeneration(result)
+                queryVM.setGeneration(result, schema: schema)
             }
         } catch {
             messages.append(ChatMessage(role: .error, text: error.localizedDescription))

@@ -151,11 +151,18 @@ public final class SessionController: Identifiable {
 
         let questionContext = questionContextForRepair(startingSQL: failedSQL)
         let context = SQLGenerationContext(
+            mode: .repair,
             recentQuestions: questionContext.recentQuestions,
             originalQuestion: questionContext.originalQuestion,
             conversationMessages: questionContext.conversationMessages,
             currentSQL: failedSQL,
-            lastRunError: error
+            lastRunError: error,
+            repairContext: SQLRepairContext(
+                failedSQL: failedSQL,
+                diagnostic: Self.diagnostic(from: error),
+                forbiddenIdentifiers: Self.forbiddenIdentifiers(sql: failedSQL, error: error),
+                priorFingerprints: [Self.normalizedSQL(failedSQL)]
+            )
         )
         let connection = appState.connection(for: connectionID)
         let config = SQLGenerationConfig(
@@ -174,11 +181,17 @@ public final class SessionController: Identifiable {
 
         let generation: SQLGenerationResult
         do {
-            generation = try await appState.sqlGenerator.generateSQL(
+            let generated = try await appState.sqlGenerator.generateSQL(
                 question: questionContext.question,
                 schema: schema,
                 context: context,
                 config: config
+            )
+            generation = GeneratedSQLPostprocessor.enriched(
+                generated,
+                question: questionContext.question,
+                schema: schema,
+                databaseContext: config.databaseContext
             )
         } catch {
             chatVM.appendRunError(error.localizedDescription)
@@ -204,7 +217,7 @@ public final class SessionController: Identifiable {
         // Fill the editor only. Execution still requires an explicit Run.
         let visibleGeneration = generation.withSQL(generatedSQL)
         appendAssistantGeneration(visibleGeneration)
-        queryVM.setGeneration(visibleGeneration)
+        queryVM.setGeneration(visibleGeneration, schema: schema)
     }
 
     /// Wipes the transcript, the SQL preview, and the per-run result cache.
@@ -250,11 +263,17 @@ public final class SessionController: Identifiable {
         }
 
         do {
-            let result = try await appState.sqlGenerator.generateSQL(
+            let generated = try await appState.sqlGenerator.generateSQL(
                 question: question,
                 schema: schema,
                 context: context,
                 config: config
+            )
+            let result = GeneratedSQLPostprocessor.enriched(
+                generated,
+                question: question,
+                schema: schema,
+                databaseContext: config.databaseContext
             )
             if result.needsClarification,
                 let clarification = result.clarificationQuestion,
@@ -273,7 +292,7 @@ public final class SessionController: Identifiable {
             }
 
             let visibleGeneration = result.withSQL(generatedSQL)
-            let validation = SQLSafetyValidator.validate(generatedSQL)
+            let validation = GeneratedSQLValidator.validate(sql: generatedSQL, schema: schema)
             guard validation.isValid else {
                 let firstError = AppError.validationFailed(validation.errors).localizedDescription
                 await repairGeneratedSQL(
@@ -294,7 +313,7 @@ public final class SessionController: Identifiable {
             }
 
             appendAssistantGeneration(visibleGeneration)
-            queryVM.setGeneration(visibleGeneration)
+            queryVM.setGeneration(visibleGeneration, schema: schema)
         } catch {
             chatVM.appendRunError(error.localizedDescription)
         }
@@ -330,10 +349,10 @@ public final class SessionController: Identifiable {
         }
         var finalGeneration = startingGeneration
 
-        func restoreStartingGeneration() {
+        func restoreStartingGeneration(schema: DatabaseSchema? = nil) {
             guard let startingGeneration else { return }
             replaceOrAppendAssistantGeneration(startingGeneration, replacingSQL: startingSQL)
-            queryVM.setGeneration(startingGeneration)
+            queryVM.setGeneration(startingGeneration, schema: schema)
         }
 
         guard let schema = appState.promptSchema(for: connectionID), !schema.tables.isEmpty else {
@@ -364,23 +383,36 @@ public final class SessionController: Identifiable {
                 retryStatus(appState: appState, attempt: attempt, error: lastError, mode: mode)
             )
             let context = SQLGenerationContext(
+                mode: .repair,
                 recentQuestions: questionContext.recentQuestions,
                 originalQuestion: questionContext.originalQuestion,
                 conversationMessages: questionContext.conversationMessages,
                 currentSQL: failingSQL,
-                lastRunError: lastError
+                lastRunError: lastError,
+                repairContext: SQLRepairContext(
+                    failedSQL: failingSQL,
+                    diagnostic: Self.diagnostic(from: lastError),
+                    forbiddenIdentifiers: Self.forbiddenIdentifiers(sql: failingSQL, error: lastError),
+                    priorFingerprints: Array(attemptedSQL)
+                )
             )
 
             let generation: SQLGenerationResult
             do {
-                generation = try await appState.sqlGenerator.generateSQL(
+                let generated = try await appState.sqlGenerator.generateSQL(
                     question: questionContext.question,
                     schema: schema,
                     context: context,
                     config: config
                 )
+                generation = GeneratedSQLPostprocessor.enriched(
+                    generated,
+                    question: questionContext.question,
+                    schema: schema,
+                    databaseContext: config.databaseContext
+                )
             } catch {
-                restoreStartingGeneration()
+                restoreStartingGeneration(schema: schema)
                 chatVM.appendRunError(error.localizedDescription)
                 appState.sessionDidChange(sessionID)
                 return
@@ -440,11 +472,11 @@ public final class SessionController: Identifiable {
             attemptedSQL.insert(normalizedGeneratedSQL)
 
             if mode == .validationOnly {
-                let validation = SQLSafetyValidator.validate(generatedSQL)
+                let validation = GeneratedSQLValidator.validate(sql: generatedSQL, schema: schema)
                 if validation.isValid {
                     let visibleGeneration = generation.withSQL(generatedSQL)
                     replaceOrAppendAssistantGeneration(visibleGeneration, replacingSQL: startingSQL)
-                    queryVM.setGeneration(visibleGeneration)
+                    queryVM.setGeneration(visibleGeneration, schema: schema)
                     appState.sessionDidChange(sessionID)
                     return
                 }
@@ -465,14 +497,15 @@ public final class SessionController: Identifiable {
                 sql: generatedSQL,
                 connection: connection,
                 postgres: postgres,
-                isConnected: appState.connectionState(connectionID) == .connected
+                isConnected: appState.connectionState(connectionID) == .connected,
+                schema: schema
             )
             if execution.wasDiscarded {
                 appState.sessionDidChange(sessionID)
                 return
             }
             if execution.wasUnsafeWrite {
-                restoreStartingGeneration()
+                restoreStartingGeneration(schema: schema)
                 chatVM.appendRunError(
                     execution.errorMessage
                         ?? "The model tried to repair this read with a data-modifying query."
@@ -483,7 +516,7 @@ public final class SessionController: Identifiable {
             if let result = execution.result {
                 let visibleGeneration = generation.withSQL(generatedSQL)
                 replaceOrAppendAssistantGeneration(visibleGeneration, replacingSQL: startingSQL)
-                queryVM.setGeneration(visibleGeneration)
+                queryVM.setGeneration(visibleGeneration, schema: schema)
                 appendRunResult(result, sql: generatedSQL)
                 appState.sessionDidChange(sessionID)
                 return
@@ -501,7 +534,7 @@ public final class SessionController: Identifiable {
                 continue
             }
             guard Self.isRetryableGeneratedSQLError(errorMessage) else {
-                restoreStartingGeneration()
+                restoreStartingGeneration(schema: schema)
                 chatVM.appendRunError(errorMessage)
                 appState.sessionDidChange(sessionID)
                 return
@@ -520,7 +553,7 @@ public final class SessionController: Identifiable {
 
         if let finalGeneration {
             replaceOrAppendAssistantGeneration(finalGeneration, replacingSQL: startingSQL)
-            queryVM.setGeneration(finalGeneration)
+            queryVM.setGeneration(finalGeneration, schema: schema)
         }
         chatVM.appendRunError(repairFailureMessage(attempts: attempts, mode: mode))
         appState.sessionDidChange(sessionID)
@@ -652,6 +685,66 @@ public final class SessionController: Identifiable {
 
     private static func normalizedSQL(_ sql: String) -> String {
         sql.trimmingCharacters(in: .whitespacesAndNewlines)
+    }
+
+    private static func diagnostic(from error: String) -> DatabaseDiagnostic? {
+        let lowercased = error.lowercased()
+        if lowercased.contains("relation"), lowercased.contains("does not exist") {
+            return DatabaseDiagnostic(
+                kind: .missingRelation,
+                sqlState: "42P01",
+                message: error,
+                tableName: quotedIdentifiers(in: error).first
+            )
+        }
+        if lowercased.contains("column"), lowercased.contains("does not exist") {
+            return DatabaseDiagnostic(
+                kind: .missingColumn,
+                sqlState: "42703",
+                message: error,
+                columnName: quotedIdentifiers(in: error).first
+            )
+        }
+        if lowercased.contains("ambiguous") && lowercased.contains("column") {
+            return DatabaseDiagnostic(
+                kind: .ambiguousColumn,
+                sqlState: "42702",
+                message: error,
+                columnName: quotedIdentifiers(in: error).first
+            )
+        }
+        if lowercased.contains("syntax error") {
+            return DatabaseDiagnostic(kind: .syntaxError, sqlState: "42601", message: error)
+        }
+        if lowercased.contains("aggregate") || lowercased.contains("group by") {
+            return DatabaseDiagnostic(kind: .groupingError, sqlState: "42803", message: error)
+        }
+        return nil
+    }
+
+    private static func forbiddenIdentifiers(sql: String, error: String) -> [String] {
+        var identifiers = quotedIdentifiers(in: error)
+        if let diagnostic = diagnostic(from: error),
+            let identifier = diagnostic.identifierForRepair
+        {
+            identifiers.append(identifier)
+        }
+        if identifiers.isEmpty {
+            identifiers.append(contentsOf: SchemaRelevanceRanker.extractRelationLikeIdentifiers(from: sql))
+        }
+        var seen = Set<String>()
+        return identifiers.filter { seen.insert($0).inserted }
+    }
+
+    private static func quotedIdentifiers(in text: String) -> [String] {
+        guard let regex = try? NSRegularExpression(pattern: #""([^"]+)""#) else {
+            return []
+        }
+        let range = NSRange(text.startIndex..<text.endIndex, in: text)
+        return regex.matches(in: text, range: range).compactMap { match in
+            guard let matchRange = Range(match.range(at: 1), in: text) else { return nil }
+            return String(text[matchRange])
+        }
     }
 
     private static func truncated(_ text: String, to limit: Int) -> String {

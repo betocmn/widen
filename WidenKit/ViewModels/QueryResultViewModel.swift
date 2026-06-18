@@ -18,6 +18,7 @@ public final class QueryResultViewModel {
 
     public var sqlText = ""
     public private(set) var validation: SQLValidationResult?
+    public private(set) var schemaValidation: SQLSchemaValidationResult?
     public private(set) var result: QueryResult?
     public private(set) var isRunning = false
     public private(set) var canStopWaiting = false
@@ -41,8 +42,23 @@ public final class QueryResultViewModel {
         self.executor = executor
     }
 
-    public func validate() {
-        validation = SQLSafetyValidator.validate(sqlText)
+    public func validate(schema: DatabaseSchema? = nil) {
+        let safety = SQLSafetyValidator.validate(sqlText)
+        schemaValidation = nil
+        guard let schema,
+            safety.isValid,
+            !sqlText.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+        else {
+            validation = safety
+            return
+        }
+
+        let schemaValidation = SQLSchemaValidator.validate(sql: sqlText, against: schema)
+        self.schemaValidation = schemaValidation
+        validation = GeneratedSQLValidator.combine(
+            safety: safety,
+            schemaValidation: schemaValidation
+        )
     }
 
     /// Starts the query in a cancellable task. Cancellation only stops the app
@@ -126,6 +142,7 @@ public final class QueryResultViewModel {
         guard discardActiveRun() else { return false }
         sqlText = ""
         validation = nil
+        schemaValidation = nil
         result = nil
         runError = nil
         generation = nil
@@ -134,12 +151,12 @@ public final class QueryResultViewModel {
 
     /// Called by the chat flow when the model fills the editor. The generated
     /// SQL is validated immediately so the user sees its status before Run.
-    public func setGeneration(_ generation: SQLGenerationResult) {
+    public func setGeneration(_ generation: SQLGenerationResult, schema: DatabaseSchema? = nil) {
         self.generation = generation
         sqlText = generation.sql
         result = nil
         runError = nil
-        validate()
+        validate(schema: schema)
     }
 
     /// Fills the editor with SQL the user typed directly — no generation
@@ -160,6 +177,7 @@ public final class QueryResultViewModel {
         result = nil
         runError = nil
         validation = nil
+        schemaValidation = nil
         if !sqlText.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
             validate()
         }
@@ -172,9 +190,13 @@ public final class QueryResultViewModel {
         sql: String,
         connection: DatabaseConnectionConfig?,
         postgres: PostgresService,
-        isConnected: Bool
+        isConnected: Bool,
+        schema: DatabaseSchema? = nil
     ) async -> QueryExecutionAttempt {
-        let validation = SQLSafetyValidator.validate(sql)
+        let safety = SQLSafetyValidator.validate(sql)
+        let validation =
+            schema.map { GeneratedSQLValidator.validate(sql: sql, schema: $0) }
+            ?? safety
         guard validation.isValid else {
             return QueryExecutionAttempt(
                 result: nil,
@@ -244,6 +266,7 @@ public final class QueryResultViewModel {
         confirmed: Bool
     ) async {
         validation = SQLSafetyValidator.validate(sql)
+        schemaValidation = nil
         guard let validation, validation.isValid else {
             if isActiveRun(runID) {
                 let errors = validation?.errors ?? ["SQL is invalid."]
@@ -362,6 +385,7 @@ public final class QueryResultViewModel {
 
     private static let stoppedWaitingMessage =
         "Stopped waiting for the query. The server may still finish it in the background."
+
 }
 
 private enum ActiveRunKind {
