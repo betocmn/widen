@@ -1,0 +1,23 @@
+name: Security reporting channel request
+description: Request a private channel for a vulnerability report
+title: "security: private reporting channel request"
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Use this only when GitHub private vulnerability reporting is unavailable. Do not include exploit details, secrets, private schema names, real hostnames, connection details, logs, screenshots, or query results.
+  - type: textarea
+    id: request
+    attributes:
+      label: Request
+      description: Ask maintainers for a private vulnerability reporting channel.
+      value: Please provide a private reporting channel for a vulnerability report.
+    validations:
+      required: true
+  - type: checkboxes
+    id: checks
+    attributes:
+      label: Checklist
+      options:
+        - label: I did not include exploit details, secrets, private schema details, connection information, logs, screenshots, or query results.
+          required: true
