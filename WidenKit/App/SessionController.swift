@@ -456,7 +456,9 @@ public final class SessionController: Identifiable {
             case .rejected(let reason):
                 if case .repeatedFingerprint = reason,
                     let clarification = SQLPromptBuilder.missingColumnClarificationQuestion(
-                        for: firstDiagnostic?.displayMessage ?? firstError)
+                        for: firstDiagnostic?.displayMessage ?? firstError,
+                        question: questionContext.originalQuestion ?? questionContext.question,
+                        schema: schema)
                 {
                     chatVM.messages.append(ChatMessage(role: .assistant, text: clarification))
                     appState.sessionDidChange(sessionID)

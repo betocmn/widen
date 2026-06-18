@@ -110,8 +110,13 @@ struct SchemaPromptPackagerTests {
         #expect(package.text.contains("For winning-tool questions"))
         #expect(
             package.text.contains(
-                #""public"."preseason_match_evaluation"."winner_id" joins to "public"."preseason_tool"."id""#
+                #""public"."preseason_match_evaluation"."winner_id" is the winning tool id"#
             ))
+        #expect(package.text.contains(#"filter "public"."preseason_match_evaluation"."winner_id" IS NOT NULL"#))
+        #expect(package.text.contains(#""public"."preseason_match_evaluation"."createdAt""#))
+        #expect(package.text.contains("NOW() - INTERVAL '14 days'"))
+        #expect(package.text.contains(#"Do not select a generic "tool_id""#))
+        #expect(package.text.contains(#"Do not use participant columns "tool_a_id" or "tool_b_id" as wins"#))
         #expect(package.text.contains(#"TABLE "public"."preseason_tool""#))
         #expect(package.pinnedTables.contains("public.preseason_tool"))
     }
@@ -132,11 +137,11 @@ struct SchemaPromptPackagerTests {
 
         #expect(
             package.text.contains(
-                #""public"."preseason_match_evaluation"."winner_id" joins to "public"."preseason_tool"."id""#
+                #""public"."preseason_match_evaluation"."winner_id" is the winning tool id"#
             ))
         #expect(
             !package.text.contains(
-                #""public"."preseason_match_evaluation"."winner_scorekeeper_id" joins to "public"."preseason_scorekeeper"."id""#
+                #""public"."preseason_match_evaluation"."winner_scorekeeper_id" is the winning tool id"#
             ))
     }
 

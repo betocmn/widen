@@ -313,7 +313,11 @@ public enum SQLPromptBuilder {
             "The previous SQL used \(missingColumnText) that is not available from the referenced tables. Candidate columns from the database hint: \(candidates.joined(separator: ", ")). Use a candidate only if it matches the user's intent; otherwise set needsClarification to true and ask which entity or relationship they mean."
     }
 
-    static func missingColumnClarificationQuestion(for text: String) -> String? {
+    static func missingColumnClarificationQuestion(
+        for text: String,
+        question: String? = nil,
+        schema: DatabaseSchema? = nil
+    ) -> String? {
         let lowercased = text.lowercased()
         guard lowercased.contains("column"),
             lowercased.contains("does not exist")
@@ -321,6 +325,17 @@ public enum SQLPromptBuilder {
                 || lowercased.contains("not on ")
         else {
             return nil
+        }
+
+        if let question,
+            let schema,
+            let clarification = winningToolClarificationQuestion(
+                for: text,
+                question: question,
+                schema: schema
+            )
+        {
+            return clarification
         }
 
         let missingColumns = missingColumnNames(in: text)
@@ -344,6 +359,98 @@ public enum SQLPromptBuilder {
             return
                 "I'm having trouble identifying which column should replace \"\(missingColumn)\". Did you mean \"\(options)\", or \"\(candidates.last!)\", or something else?"
         }
+    }
+
+    private static func winningToolClarificationQuestion(
+        for text: String,
+        question: String,
+        schema: DatabaseSchema
+    ) -> String? {
+        let questionTokens = Set(SchemaIndex.tokens(in: question))
+        guard !questionTokens.intersection(["win", "wins", "winner", "winning", "won"]).isEmpty,
+            questionTokens.contains("tool")
+        else {
+            return nil
+        }
+        let missingColumns = Set(missingColumnNames(in: text).map {
+            SchemaRelevanceRanker.canonicalIdentifier($0)
+        })
+        let generatedToolColumns = Set(["tool_id", "toolid", "tool_a_id", "tool_b_id"])
+        guard !missingColumns.isDisjoint(with: generatedToolColumns)
+            || text.localizedCaseInsensitiveContains("tool_id")
+        else {
+            return nil
+        }
+
+        for foreignKey in schema.foreignKeys {
+            let sourceColumnTokens = Set(SchemaIndex.tokens(in: foreignKey.sourceColumn))
+            guard !sourceColumnTokens.intersection(["win", "winner", "winning", "won"]).isEmpty,
+                let sourceTable = table(
+                    schemaName: foreignKey.sourceSchema,
+                    tableName: foreignKey.sourceTable,
+                    in: schema
+                ),
+                let targetTable = table(
+                    schemaName: foreignKey.targetSchema,
+                    tableName: foreignKey.targetTable,
+                    in: schema
+                )
+            else {
+                continue
+            }
+            let targetTokens = Set(
+                SchemaIndex.tokens(in: targetTable.name)
+                    + targetTable.columns.flatMap { SchemaIndex.tokens(in: $0.name) }
+            )
+            guard targetTokens.contains("tool") else { continue }
+
+            var details = [
+                "\(qualifiedIdentifier(schema: foreignKey.sourceSchema, name: foreignKey.sourceTable, column: foreignKey.sourceColumn)) joins to \(qualifiedIdentifier(schema: foreignKey.targetSchema, name: foreignKey.targetTable, column: foreignKey.targetColumn))"
+            ]
+            if let temporalColumn = temporalColumn(in: sourceTable, questionTokens: questionTokens) {
+                details.append(
+                    "\(qualifiedIdentifier(schema: sourceTable.schema, name: sourceTable.name, column: temporalColumn.name)) can filter the requested time window"
+                )
+            }
+            return
+                "I can see \(details.joined(separator: ", ")). Should I define \"most wins\" as counting rows where \(qualifiedIdentifier(schema: foreignKey.sourceSchema, name: foreignKey.sourceTable, column: foreignKey.sourceColumn)) is not null, grouped by \(qualifiedIdentifier(schema: foreignKey.targetSchema, name: foreignKey.targetTable, column: foreignKey.targetColumn)) and labeled from \(qualifiedIdentifier(schema: targetTable.schema, name: targetTable.name))?"
+        }
+        return nil
+    }
+
+    private static func table(
+        schemaName: String,
+        tableName: String,
+        in schema: DatabaseSchema
+    ) -> TableInfo? {
+        schema.tables.first { $0.schema == schemaName && $0.name == tableName }
+    }
+
+    private static func temporalColumn(
+        in table: TableInfo,
+        questionTokens: Set<String>
+    ) -> ColumnInfo? {
+        let temporalIntentTokens: Set<String> = [
+            "last", "recent", "today", "yesterday", "week", "weeks", "month", "months",
+            "day", "days", "date", "time", "since", "between",
+        ]
+        guard !questionTokens.intersection(temporalIntentTokens).isEmpty else { return nil }
+        let temporalColumns = table.columns.filter { column in
+            let dataType = column.dataType.lowercased()
+            return dataType.contains("timestamp") || dataType == "date"
+        }
+        let preferredNames = [
+            "createdat", "created_at", "completed_at", "completedat", "started_at",
+            "startedat", "scheduled_for", "scheduledfor", "updatedat", "updated_at",
+        ]
+        for name in preferredNames {
+            if let column = temporalColumns.first(where: {
+                SchemaRelevanceRanker.canonicalIdentifier($0.name) == name
+            }) {
+                return column
+            }
+        }
+        return temporalColumns.first
     }
 
     private static func missingColumnNames(in text: String) -> [String] {

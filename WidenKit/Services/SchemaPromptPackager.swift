@@ -258,9 +258,44 @@ public enum SchemaPromptPackager {
             )
             guard targetTokens.contains("tool") else { return nil }
 
+            let sourceColumn = qualifiedColumn(
+                schema: foreignKey.sourceSchema,
+                table: foreignKey.sourceTable,
+                column: foreignKey.sourceColumn
+            )
+            let targetColumn = qualifiedColumn(
+                schema: foreignKey.targetSchema,
+                table: foreignKey.targetTable,
+                column: foreignKey.targetColumn
+            )
+            var guidance =
+                "For winning-tool questions, \(sourceColumn) is the winning tool id: join \(qualifiedName(targetTable)) on \(targetColumn) = \(sourceColumn), filter \(sourceColumn) IS NOT NULL, count/group by \(sourceColumn), and use label columns from \(qualifiedName(targetTable))."
+            if let temporalColumn = temporalColumn(in: sourceTable, tokens: tokens) {
+                guidance +=
+                    " For requested time windows, filter \(qualifiedColumn(schema: sourceTable.schema, table: sourceTable.name, column: temporalColumn.name)) with PostgreSQL intervals such as NOW() - INTERVAL '14 days'."
+            }
+            if !sourceTable.columns.contains(where: {
+                SchemaRelevanceRanker.canonicalIdentifier($0.name) == "tool_id"
+            }) {
+                guidance += " Do not select a generic \(quotedIdentifier("tool_id")) from \(qualifiedName(sourceTable)); it is not a column on that table."
+            }
+            let participantColumns = sourceTable.columns.filter {
+                ["tool_a_id", "tool_b_id"].contains(SchemaRelevanceRanker.canonicalIdentifier($0.name))
+            }
+            if participantColumns.isEmpty {
+                guidance +=
+                    " Do not use participant columns \(quotedIdentifier("tool_a_id")) or \(quotedIdentifier("tool_b_id")) as wins unless the user asks for participants."
+            }
+            if sourceTable.columns.contains(where: {
+                SchemaIndex.tokens(in: $0.name).contains("decision")
+                    || SchemaRelevanceRanker.canonicalIdentifier($0.name).contains("status")
+            }) {
+                guidance +=
+                    " Do not compare decision/status fields to invented literal values unless Database context defines those values."
+            }
+
             return RelationshipHint(
-                text:
-                    "For winning-tool questions, \(qualifiedColumn(schema: foreignKey.sourceSchema, table: foreignKey.sourceTable, column: foreignKey.sourceColumn)) joins to \(qualifiedColumn(schema: foreignKey.targetSchema, table: foreignKey.targetTable, column: foreignKey.targetColumn)); count/group by \(qualifiedColumn(schema: foreignKey.sourceSchema, table: foreignKey.sourceTable, column: foreignKey.sourceColumn)) and join \(qualifiedName(targetTable)) for labels.",
+                text: guidance,
                 tableIDs: [sourceTable.id, targetTable.id]
             )
         }
@@ -376,6 +411,30 @@ public enum SchemaPromptPackager {
 
     private static func hasWinningToolIntent(_ tokens: Set<String>) -> Bool {
         !tokens.intersection(winTokens).isEmpty && tokens.contains("tool")
+    }
+
+    private static func temporalColumn(in table: TableInfo, tokens: Set<String>) -> ColumnInfo? {
+        let temporalIntentTokens: Set<String> = [
+            "last", "recent", "today", "yesterday", "week", "weeks", "month", "months",
+            "day", "days", "date", "time", "since", "between",
+        ]
+        guard !tokens.intersection(temporalIntentTokens).isEmpty else { return nil }
+        let temporalColumns = table.columns.filter { column in
+            let dataType = column.dataType.lowercased()
+            return dataType.contains("timestamp") || dataType == "date"
+        }
+        let preferredNames = [
+            "createdat", "created_at", "completed_at", "completedat", "started_at",
+            "startedat", "scheduled_for", "scheduledfor", "updatedat", "updated_at",
+        ]
+        for name in preferredNames {
+            if let column = temporalColumns.first(where: {
+                SchemaRelevanceRanker.canonicalIdentifier($0.name) == name
+            }) {
+                return column
+            }
+        }
+        return temporalColumns.first
     }
 
     private static let winTokens: Set<String> = [

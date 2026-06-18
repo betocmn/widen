@@ -282,6 +282,20 @@ struct SQLPromptBuilderTests {
         #expect(question?.contains("which table, join, or relationship") == true)
     }
 
+    @Test func missingColumnClarificationQuestionUsesWinningToolRelationship() {
+        let question = SQLPromptBuilder.missingColumnClarificationQuestion(
+            for:
+                "The SQL failed validation: Schema validation failed: column tool_id is not available from the referenced tables.",
+            question: "what are tools that are getting the most wins in the last two weeks?",
+            schema: makeWinningToolSchema()
+        )
+
+        #expect(question?.contains(#""public"."preseason_match_evaluation"."winner_id" joins to "public"."preseason_tool"."id""#) == true)
+        #expect(question?.contains(#""public"."preseason_match_evaluation"."createdAt" can filter the requested time window"#) == true)
+        #expect(question?.contains(#"Should I define "most wins" as counting rows"#) == true)
+        #expect(question?.contains(#""public"."preseason_match_evaluation"."winner_id" is not null"#) == true)
+    }
+
     @Test func repairPromptIncludesFailedSQLOnceAndOmitsChatHistory() {
         let failedSQL = "SELECT id FROM public.match_batch"
         let context = SQLGenerationContext(
@@ -414,6 +428,65 @@ struct SQLPromptBuilderTests {
         let summary = SQLPromptBuilder.schemaSummary(makeSampleSchema())
         #expect(!summary.contains("pg_catalog"))
         #expect(!summary.contains("information_schema"))
+    }
+
+    private func makeWinningToolSchema() -> DatabaseSchema {
+        DatabaseSchema(
+            schemas: [SchemaInfo(name: "public")],
+            tables: [
+                TableInfo(
+                    schema: "public",
+                    name: "preseason_match_evaluation",
+                    type: .baseTable,
+                    columns: [
+                        column("preseason_match_evaluation", "id", ordinal: 1),
+                        column("preseason_match_evaluation", "winner_id", ordinal: 2),
+                        column(
+                            "preseason_match_evaluation",
+                            "createdAt",
+                            type: "timestamp with time zone",
+                            ordinal: 3
+                        ),
+                    ]
+                ),
+                TableInfo(
+                    schema: "public",
+                    name: "preseason_tool",
+                    type: .baseTable,
+                    columns: [
+                        column("preseason_tool", "id", ordinal: 1),
+                        column("preseason_tool", "name", type: "character varying", ordinal: 2),
+                    ]
+                ),
+            ],
+            foreignKeys: [
+                ForeignKeyInfo(
+                    constraintName: "match_evaluation_winner_fkey",
+                    sourceSchema: "public",
+                    sourceTable: "preseason_match_evaluation",
+                    sourceColumn: "winner_id",
+                    targetSchema: "public",
+                    targetTable: "preseason_tool",
+                    targetColumn: "id"
+                )
+            ]
+        )
+    }
+
+    private func column(
+        _ tableName: String,
+        _ name: String,
+        type: String = "uuid",
+        ordinal: Int
+    ) -> ColumnInfo {
+        ColumnInfo(
+            tableSchema: "public",
+            tableName: tableName,
+            name: name,
+            dataType: type,
+            isNullable: false,
+            ordinalPosition: ordinal
+        )
     }
 
     private func occurrences(of needle: String, in haystack: String) -> Int {
