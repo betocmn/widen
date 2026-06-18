@@ -14,11 +14,11 @@ private enum MainLayout {
     static let inspectorIdealWidth: CGFloat = 300
     static let inspectorMaxWidth: CGFloat = 420
 
-    static let showAllPanelsAtOrAbove: CGFloat = 1_160
+    static let showAllPanelsAtOrAbove: CGFloat = 1_280
     static let showSidebarAtOrAbove: CGFloat = 820
 
     static let windowMinWidth: CGFloat = 700
-    static let windowIdealWidth: CGFloat = 1_200
+    static let windowIdealWidth: CGFloat = 1_280
     static let windowMinHeight: CGFloat = 560
     static let windowIdealHeight: CGFloat = 700
 }
