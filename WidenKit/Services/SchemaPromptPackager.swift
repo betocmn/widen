@@ -47,8 +47,9 @@ public enum SchemaPromptPackager {
         maxCharacters: Int
     ) -> SchemaPromptPackage {
         let repairContext = context.repairContext
+        let rankingQuestion = contextualQuestion(question, context: context)
         let input = SchemaRankingInput(
-            question: question,
+            question: rankingQuestion,
             currentSQL: repairContext?.failedSQL ?? context.currentSQL,
             databaseContext: databaseContext,
             diagnostic: repairContext?.diagnostic,
@@ -70,7 +71,11 @@ public enum SchemaPromptPackager {
         maxCharacters: Int
     ) -> SchemaPromptPackage {
         let rankedIDs = ranked.map(\.table.id)
-        let pinnedIDs = pinnedTableIDs(schema: schema, ranked: ranked, input: input)
+        let relationshipHints = relationshipHints(schema: schema, input: input)
+        var pinnedIDs = pinnedTableIDs(schema: schema, ranked: ranked, input: input)
+        for hint in relationshipHints {
+            pinnedIDs.formUnion(hint.tableIDs)
+        }
         var includedIDs = Set<String>()
         var sections: [String] = ["Database schema:"]
 
@@ -107,6 +112,17 @@ public enum SchemaPromptPackager {
         if !relationshipLines.isEmpty {
             let section = (["Relationships:"] + relationshipLines).joined(separator: "\n")
             if fits(sections: sections, adding: section, maxCharacters: maxCharacters) {
+                sections.append(section)
+            }
+        }
+
+        let relationshipHintLines = relationshipHints.map(\.text)
+        if !relationshipHintLines.isEmpty {
+            let section = (["Relationship hints:"] + relationshipHintLines).joined(separator: "\n")
+            if fits(sections: sections, adding: section, maxCharacters: maxCharacters)
+                || input.diagnostic != nil
+                || !input.forbiddenIdentifiers.isEmpty
+            {
                 sections.append(section)
             }
         }
@@ -149,6 +165,30 @@ public enum SchemaPromptPackager {
         )
     }
 
+    private struct RelationshipHint {
+        var text: String
+        var tableIDs: Set<String>
+    }
+
+    private static func contextualQuestion(
+        _ question: String,
+        context: SQLGenerationContext
+    ) -> String {
+        var parts: [String] = []
+        if let originalQuestion = context.originalQuestion {
+            parts.append(originalQuestion)
+        }
+        parts.append(contentsOf: context.recentQuestions)
+        parts.append(
+            contentsOf: context.conversationMessages
+                .filter { $0.role == .user }
+                .suffix(3)
+                .map(\.text)
+        )
+        parts.append(question)
+        return parts.joined(separator: " ")
+    }
+
     private static func pinnedTableIDs(
         schema: DatabaseSchema,
         ranked: [RankedSchemaTable],
@@ -177,6 +217,170 @@ public enum SchemaPromptPackager {
         }
         return pinned
     }
+
+    private static func relationshipHints(
+        schema: DatabaseSchema,
+        input: SchemaRankingInput
+    ) -> [RelationshipHint] {
+        var hints =
+            winningToolRelationshipHints(schema: schema, input: input)
+            + missingColumnRelationshipHints(schema: schema, input: input)
+        var seen = Set<String>()
+        hints = hints.filter { seen.insert($0.text).inserted }
+        return Array(hints.prefix(6))
+    }
+
+    private static func winningToolRelationshipHints(
+        schema: DatabaseSchema,
+        input: SchemaRankingInput
+    ) -> [RelationshipHint] {
+        let tokens = inputTokens(input)
+        guard hasWinningToolIntent(tokens) else { return [] }
+
+        return schema.foreignKeys.compactMap { foreignKey in
+            let sourceColumnTokens = Set(SchemaIndex.tokens(in: foreignKey.sourceColumn))
+            guard !sourceColumnTokens.intersection(winTokens).isEmpty else { return nil }
+            guard let sourceTable = table(
+                schemaName: foreignKey.sourceSchema,
+                tableName: foreignKey.sourceTable,
+                in: schema
+            ),
+                let targetTable = table(
+                    schemaName: foreignKey.targetSchema,
+                    tableName: foreignKey.targetTable,
+                    in: schema
+                )
+            else { return nil }
+
+            let targetTokens = Set(
+                SchemaIndex.tokens(in: targetTable.name)
+                    + targetTable.columns.flatMap { SchemaIndex.tokens(in: $0.name) }
+            )
+            guard targetTokens.contains("tool") else { return nil }
+
+            return RelationshipHint(
+                text:
+                    "For winning-tool questions, \(qualifiedColumn(schema: foreignKey.sourceSchema, table: foreignKey.sourceTable, column: foreignKey.sourceColumn)) joins to \(qualifiedColumn(schema: foreignKey.targetSchema, table: foreignKey.targetTable, column: foreignKey.targetColumn)); count/group by \(qualifiedColumn(schema: foreignKey.sourceSchema, table: foreignKey.sourceTable, column: foreignKey.sourceColumn)) and join \(qualifiedName(targetTable)) for labels.",
+                tableIDs: [sourceTable.id, targetTable.id]
+            )
+        }
+    }
+
+    private static func missingColumnRelationshipHints(
+        schema: DatabaseSchema,
+        input: SchemaRankingInput
+    ) -> [RelationshipHint] {
+        let referencedTables = referencedTables(in: input.currentSQL ?? "", schema: schema)
+        guard !referencedTables.isEmpty else { return [] }
+
+        let forbiddenColumns = input.forbiddenIdentifiers
+            .filter { !$0.contains(".") }
+            .map { SchemaRelevanceRanker.canonicalIdentifier($0) }
+            .filter { !$0.isEmpty }
+        guard !forbiddenColumns.isEmpty else { return [] }
+
+        var hints: [RelationshipHint] = []
+        for columnName in forbiddenColumns {
+            let candidateTables = schema.tables.filter { table in
+                table.columns.contains {
+                    SchemaRelevanceRanker.canonicalIdentifier($0.name) == columnName
+                }
+            }
+            for candidateTable in candidateTables {
+                for referencedTable in referencedTables where referencedTable.id != candidateTable.id {
+                    guard let join = directJoin(
+                        from: referencedTable,
+                        to: candidateTable,
+                        schema: schema
+                    ) else { continue }
+                    hints.append(
+                        RelationshipHint(
+                            text:
+                                "Column \(quotedIdentifier(columnName)) is on \(qualifiedName(candidateTable)), not \(qualifiedName(referencedTable)); if participant columns are needed, join \(join).",
+                            tableIDs: [referencedTable.id, candidateTable.id]
+                        ))
+                }
+            }
+        }
+        return hints
+    }
+
+    private static func directJoin(
+        from sourceTable: TableInfo,
+        to targetTable: TableInfo,
+        schema: DatabaseSchema
+    ) -> String? {
+        if let foreignKey = schema.foreignKeys.first(where: {
+            $0.sourceSchema == sourceTable.schema
+                && $0.sourceTable == sourceTable.name
+                && $0.targetSchema == targetTable.schema
+                && $0.targetTable == targetTable.name
+        }) {
+            return
+                "\(qualifiedColumn(schema: foreignKey.sourceSchema, table: foreignKey.sourceTable, column: foreignKey.sourceColumn)) -> \(qualifiedColumn(schema: foreignKey.targetSchema, table: foreignKey.targetTable, column: foreignKey.targetColumn))"
+        }
+        if let foreignKey = schema.foreignKeys.first(where: {
+            $0.sourceSchema == targetTable.schema
+                && $0.sourceTable == targetTable.name
+                && $0.targetSchema == sourceTable.schema
+                && $0.targetTable == sourceTable.name
+        }) {
+            return
+                "\(qualifiedColumn(schema: foreignKey.sourceSchema, table: foreignKey.sourceTable, column: foreignKey.sourceColumn)) -> \(qualifiedColumn(schema: foreignKey.targetSchema, table: foreignKey.targetTable, column: foreignKey.targetColumn))"
+        }
+        return nil
+    }
+
+    private static func referencedTables(in sql: String, schema: DatabaseSchema) -> [TableInfo] {
+        var seen = Set<String>()
+        return SchemaRelevanceRanker.extractRelationLikeIdentifiers(from: sql).compactMap {
+            identifier in
+            guard let table = resolveTable(identifier, schema: schema),
+                seen.insert(table.id).inserted
+            else { return nil }
+            return table
+        }
+    }
+
+    private static func resolveTable(_ identifier: String, schema: DatabaseSchema) -> TableInfo? {
+        let canonical = SchemaRelevanceRanker.canonicalIdentifier(identifier)
+        let qualifiedMatches = schema.tables.filter {
+            SchemaRelevanceRanker.canonicalIdentifier($0.qualifiedName) == canonical
+        }
+        if qualifiedMatches.count == 1 { return qualifiedMatches[0] }
+        let unqualifiedMatches = schema.tables.filter {
+            SchemaRelevanceRanker.canonicalIdentifier($0.name) == canonical
+        }
+        return unqualifiedMatches.count == 1 ? unqualifiedMatches[0] : nil
+    }
+
+    private static func table(
+        schemaName: String,
+        tableName: String,
+        in schema: DatabaseSchema
+    ) -> TableInfo? {
+        schema.tables.first { $0.schema == schemaName && $0.name == tableName }
+    }
+
+    private static func inputTokens(_ input: SchemaRankingInput) -> Set<String> {
+        Set(
+            SchemaIndex.tokens(
+                in: [
+                    input.question,
+                    input.databaseContext,
+                    input.currentSQL ?? "",
+                    input.forbiddenIdentifiers.joined(separator: " "),
+                ].joined(separator: " ")
+            ))
+    }
+
+    private static func hasWinningToolIntent(_ tokens: Set<String>) -> Bool {
+        !tokens.intersection(winTokens).isEmpty && tokens.contains("tool")
+    }
+
+    private static let winTokens: Set<String> = [
+        "win", "winner", "winning", "won", "victory", "victor",
+    ]
 
     private static func fullTableSection(_ table: TableInfo, schema: DatabaseSchema) -> String {
         var lines = ["TABLE \(qualifiedName(table))"]
@@ -222,6 +426,10 @@ public enum SchemaPromptPackager {
 
     private static func qualifiedName(schema: String, table: String) -> String {
         "\(quotedIdentifier(schema)).\(quotedIdentifier(table))"
+    }
+
+    private static func qualifiedColumn(schema: String, table: String, column: String) -> String {
+        "\(qualifiedName(schema: schema, table: table)).\(quotedIdentifier(column))"
     }
 
     private static func quotedIdentifier(_ identifier: String) -> String {
