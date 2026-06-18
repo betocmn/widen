@@ -345,6 +345,8 @@ public final class SessionController: Identifiable {
         )
         let postgres = appState.postgres(for: connectionID)
         var failingSQL = startingSQL
+        var attemptedSQL = Set([Self.normalizedSQL(startingSQL)])
+        var lastDatabaseError = firstError
         var lastError = firstError
         var attempts = [
             GeneratedSQLRepairAttempt(label: "Initial run", error: firstError)
@@ -379,7 +381,26 @@ public final class SessionController: Identifiable {
             if !generatedSQL.isEmpty {
                 finalGeneration = generation.withSQL(generatedSQL)
             }
-            guard !generatedSQL.isEmpty, !generation.needsClarification else {
+            if generation.needsClarification {
+                if let clarification = generation.clarificationQuestion,
+                    !clarification.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+                {
+                    chatVM.messages.append(
+                        ChatMessage(role: .assistant, text: clarification, generation: generation)
+                    )
+                    appState.sessionDidChange(sessionID)
+                    return
+                }
+                lastError = "The model asked for clarification but did not return a question."
+                attempts.append(
+                    GeneratedSQLRepairAttempt(
+                        label: "Retry \(attempt)/\(Self.generatedSQLRepairRetryLimit)",
+                        error: lastError
+                    )
+                )
+                continue
+            }
+            guard !generatedSQL.isEmpty else {
                 lastError = "The model did not return corrected SQL."
                 attempts.append(
                     GeneratedSQLRepairAttempt(
@@ -389,8 +410,9 @@ public final class SessionController: Identifiable {
                 )
                 continue
             }
-            if Self.normalizedSQL(generatedSQL) == Self.normalizedSQL(failingSQL) {
-                lastError = Self.repeatedSQLRepairMessage(previousError: lastError)
+            let normalizedGeneratedSQL = Self.normalizedSQL(generatedSQL)
+            if attemptedSQL.contains(normalizedGeneratedSQL) {
+                lastError = Self.repeatedSQLRepairMessage(databaseError: lastDatabaseError)
                 attempts.append(
                     GeneratedSQLRepairAttempt(
                         label: "Retry \(attempt)/\(Self.generatedSQLRepairRetryLimit)",
@@ -399,6 +421,7 @@ public final class SessionController: Identifiable {
                 )
                 continue
             }
+            attemptedSQL.insert(normalizedGeneratedSQL)
 
             if mode == .validationOnly {
                 let validation = SQLSafetyValidator.validate(generatedSQL)
@@ -417,6 +440,7 @@ public final class SessionController: Identifiable {
                     )
                 )
                 failingSQL = generatedSQL
+                lastDatabaseError = errorMessage
                 lastError = errorMessage
                 continue
             }
@@ -451,6 +475,7 @@ public final class SessionController: Identifiable {
 
             guard let errorMessage = execution.errorMessage else {
                 lastError = "The query did not return a result."
+                lastDatabaseError = lastError
                 attempts.append(
                     GeneratedSQLRepairAttempt(
                         label: "Retry \(attempt)/\(Self.generatedSQLRepairRetryLimit)",
@@ -473,6 +498,7 @@ public final class SessionController: Identifiable {
                 )
             )
             failingSQL = generatedSQL
+            lastDatabaseError = errorMessage
             lastError = errorMessage
         }
 
@@ -609,10 +635,10 @@ public final class SessionController: Identifiable {
         text.count <= limit ? text : String(text.prefix(limit)) + "..."
     }
 
-    private static func repeatedSQLRepairMessage(previousError: String) -> String {
+    private static func repeatedSQLRepairMessage(databaseError: String) -> String {
         """
-        The model repeated the exact same SQL after it failed. Produce a structurally different query.
-        Previous error: \(previousError)
+        The model repeated the exact same SQL after it failed. Do not return that SQL again; produce a different query or ask a clarification question.
+        Database error: \(databaseError)
         """
     }
 

@@ -200,6 +200,44 @@ struct SQLPromptBuilderTests {
         #expect(prompt.contains("WITH counts AS"))
     }
 
+    @Test func promptIncludesRepeatedSQLRepairHint() {
+        let context = SQLGenerationContext(
+            currentSQL: "SELECT id FROM public.missing_table",
+            lastRunError:
+                "The model repeated the exact same SQL after it failed. Database error: relation does not exist"
+        )
+
+        let prompt = SQLPromptBuilder.prompt(
+            question: "show users",
+            schema: makeSampleSchema(),
+            context: context
+        )
+
+        #expect(prompt.contains("Repair requirement:"))
+        #expect(prompt.contains("Do not return the current SQL again"))
+        #expect(prompt.contains("needsClarification"))
+    }
+
+    @Test func promptIncludesMissingColumnRepairHintWithCandidates() {
+        let context = SQLGenerationContext(
+            currentSQL:
+                "SELECT DISTINCT tool_id FROM public.preseason_match_batch ORDER BY completed_evaluations DESC",
+            lastRunError:
+                #"Query failed: column "tool_id" does not exist Hint: Perhaps you meant to reference the column "preseason_match_batch.tool_a_id" or the column "preseason_match_batch.tool_b_id"."#
+        )
+
+        let prompt = SQLPromptBuilder.prompt(
+            question: "what tools have the most wins?",
+            schema: makeSampleSchema(),
+            context: context
+        )
+
+        #expect(prompt.contains("PostgreSQL says a column is missing"))
+        #expect(prompt.contains("preseason_match_batch.tool_a_id"))
+        #expect(prompt.contains("preseason_match_batch.tool_b_id"))
+        #expect(prompt.contains("needsClarification"))
+    }
+
     @Test func contextSectionTruncatesLongItemsAndKeepsLastThreeQuestions() {
         let longSQL = String(repeating: "S", count: 2_000)
         let context = SQLGenerationContext(

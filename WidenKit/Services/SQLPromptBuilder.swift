@@ -91,6 +91,12 @@ public enum SQLPromptBuilder {
         let sql = context.currentSQL ?? ""
         let error = context.lastRunError ?? ""
         let combined = "\(sql)\n\(error)"
+        var requirements: [String] = []
+        if combined.localizedCaseInsensitiveContains("repeated the exact same SQL") {
+            requirements.append(
+                "Do not return the current SQL again. Produce a structurally different query that fixes the database error, or set needsClarification to true if the schema does not make the right fix clear."
+            )
+        }
         if combined.localizedCaseInsensitiveContains(
             "aggregate function calls cannot contain window function calls"
         )
@@ -98,14 +104,48 @@ public enum SQLPromptBuilder {
                 SQLSafetyValidator.strip(sql).text
             )
         {
-            return "PostgreSQL rejected an aggregate wrapped around a window function. Do not use OVER inside AVG, SUM, MIN, MAX, or COUNT. For average counts over time, use a CTE like WITH counts AS (SELECT DATE_TRUNC('day', created_at) AS period, COUNT(*) AS row_count FROM table GROUP BY 1) SELECT AVG(row_count) FROM counts."
+            requirements.append(
+                "PostgreSQL rejected an aggregate wrapped around a window function. Do not use OVER inside AVG, SUM, MIN, MAX, or COUNT. For average counts over time, use a CTE like WITH counts AS (SELECT DATE_TRUNC('day', created_at) AS period, COUNT(*) AS row_count FROM table GROUP BY 1) SELECT AVG(row_count) FROM counts."
+            )
         }
-        if combined.localizedCaseInsensitiveContains("repeated the exact same SQL")
-            && combined.localizedCaseInsensitiveContains("window function")
-        {
-            return "Produce a structurally different query. Do not repeat the failed SQL or use OVER inside AVG, SUM, MIN, MAX, or COUNT."
+        if let missingColumnHint = missingColumnRepairHint(for: combined) {
+            requirements.append(missingColumnHint)
         }
-        return nil
+        return requirements.isEmpty ? nil : requirements.joined(separator: " ")
+    }
+
+    private static func missingColumnRepairHint(for text: String) -> String? {
+        let lowercased = text.lowercased()
+        guard lowercased.contains("column"), lowercased.contains("does not exist") else {
+            return nil
+        }
+
+        let candidates = quotedIdentifiers(in: text)
+            .filter { $0.contains(".") }
+            .reduce(into: [String]()) { result, identifier in
+                if !result.contains(identifier) {
+                    result.append(identifier)
+                }
+            }
+
+        if candidates.isEmpty {
+            return
+                "PostgreSQL says a column is missing. Use only columns present in the schema. If no available column clearly matches the user's intent, set needsClarification to true and ask which entity or relationship they mean."
+        }
+
+        return
+            "PostgreSQL says a column is missing. Candidate columns from the database hint: \(candidates.joined(separator: ", ")). Use a candidate only if it matches the user's intent; otherwise set needsClarification to true and ask which entity or relationship they mean."
+    }
+
+    private static func quotedIdentifiers(in text: String) -> [String] {
+        guard let regex = try? NSRegularExpression(pattern: #""([^"]+)""#) else {
+            return []
+        }
+        let range = NSRange(text.startIndex..<text.endIndex, in: text)
+        return regex.matches(in: text, range: range).compactMap { match in
+            guard let matchRange = Range(match.range(at: 1), in: text) else { return nil }
+            return String(text[matchRange])
+        }
     }
 
     /// Renders user-authored database guidance from settings. This is capped
