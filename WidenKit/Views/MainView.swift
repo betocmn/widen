@@ -2,6 +2,33 @@ import AppKit
 import Combine
 import SwiftUI
 
+private enum MainLayout {
+    static let sidebarMinWidth: CGFloat = 340
+    static let sidebarIdealWidth: CGFloat = 380
+    static let sidebarMaxWidth: CGFloat = 480
+
+    static let detailMinWidth: CGFloat = 420
+    static let detailIdealWidth: CGFloat = 560
+
+    static let inspectorMinWidth: CGFloat = 240
+    static let inspectorIdealWidth: CGFloat = 300
+    static let inspectorMaxWidth: CGFloat = 420
+
+    static let showAllPanelsAtOrAbove: CGFloat = 1_160
+    static let showSidebarAtOrAbove: CGFloat = 820
+
+    static let windowMinWidth: CGFloat = 700
+    static let windowIdealWidth: CGFloat = 1_200
+    static let windowMinHeight: CGFloat = 560
+    static let windowIdealHeight: CGFloat = 700
+}
+
+private enum AdaptivePanelMode: Equatable {
+    case allPanels
+    case noInspector
+    case detailOnly
+}
+
 public struct MainView: View {
     @Environment(AppState.self) private var appState
     @Environment(\.openSettings) private var openSettings
@@ -9,13 +36,37 @@ public struct MainView: View {
     /// header while open, in the detail toolbar while collapsed (a collapsed
     /// column's toolbar items don't survive relaunch).
     @State private var columnVisibility: NavigationSplitViewVisibility = .all
+    @State private var adaptivePanelMode: AdaptivePanelMode = .detailOnly
 
     public init() {}
 
     public var body: some View {
         @Bindable var appState = appState
 
-        NavigationSplitView(columnVisibility: $columnVisibility) {
+        let sidebarIsAvailable = adaptivePanelMode != .detailOnly
+        let inspectorIsAvailable = adaptivePanelMode == .allPanels
+        let effectiveColumnVisibility = Binding<NavigationSplitViewVisibility>(
+            get: {
+                sidebarIsAvailable ? columnVisibility : .detailOnly
+            },
+            set: { newValue in
+                if sidebarIsAvailable {
+                    columnVisibility = newValue
+                }
+            }
+        )
+        let effectiveInspectorPresentation = Binding<Bool>(
+            get: {
+                inspectorIsAvailable && appState.showSchemaInspector
+            },
+            set: { isPresented in
+                if inspectorIsAvailable {
+                    appState.showSchemaInspector = isPresented
+                }
+            }
+        )
+
+        NavigationSplitView(columnVisibility: effectiveColumnVisibility) {
             SidebarView()
                 // Replace the system sidebar toggle with our own at the
                 // sidebar's trailing corner (the side facing the content),
@@ -24,17 +75,21 @@ public struct MainView: View {
                 // neighbouring toolbar pills.
                 .toolbar(removing: .sidebarToggle)
                 .toolbar {
-                    if columnVisibility != .detailOnly {
+                    if sidebarIsAvailable && columnVisibility != .detailOnly {
                         // The flexible spacer pushes the toggle to the
                         // sidebar's trailing corner, against the divider.
                         ToolbarSpacer(.flexible)
                         ToolbarItem {
-                            SidebarToggle(columnVisibility: $columnVisibility)
+                            SidebarToggle(columnVisibility: effectiveColumnVisibility)
                         }
                         .sharedBackgroundVisibility(.hidden)
                     }
                 }
-                .navigationSplitViewColumnWidth(min: 340, ideal: 340, max: 480)
+                .navigationSplitViewColumnWidth(
+                    min: MainLayout.sidebarMinWidth,
+                    ideal: MainLayout.sidebarIdealWidth,
+                    max: MainLayout.sidebarMaxWidth
+                )
         } detail: {
             VStack(spacing: 0) {
                 if let message = appState.errorBanner {
@@ -44,18 +99,21 @@ public struct MainView: View {
                 }
                 detailContent
             }
-            // Cap the detail pane's ideal width: if the split view's total
-            // ideal exceeds the screen, macOS 26 keeps the content laid out
-            // wider than the clamped window and the panes clip their edges.
-            .frame(minWidth: 420, idealWidth: 560)
+            .frame(
+                minWidth: MainLayout.detailMinWidth,
+                idealWidth: MainLayout.detailIdealWidth
+            )
             // Both panel toggles sit container-less in the one toolbar row:
             // the sidebar's at its trailing corner (or here, leading, while
             // collapsed) and the inspector's at the window's trailing
             // corner. The appearance toggle lives in the sidebar footer.
             .toolbar {
-                if columnVisibility == .detailOnly {
+                if !sidebarIsAvailable || columnVisibility == .detailOnly {
                     ToolbarItem(placement: .navigation) {
-                        SidebarToggle(columnVisibility: $columnVisibility)
+                        SidebarToggle(
+                            columnVisibility: effectiveColumnVisibility,
+                            isAvailable: sidebarIsAvailable
+                        )
                     }
                     .sharedBackgroundVisibility(.hidden)
                 }
@@ -66,28 +124,52 @@ public struct MainView: View {
                     AIBackendToggle()
                 }
                 ToolbarItem(placement: .primaryAction) {
-                    SchemaInspectorToggle()
+                    SchemaInspectorToggle(isAvailable: inspectorIsAvailable)
                 }
                 .sharedBackgroundVisibility(.hidden)
             }
         }
         // Attached to the split view (not the detail content) so the detail
         // column's trailing toolbar items stay left of the inspector divider.
-        .inspector(isPresented: $appState.showSchemaInspector) {
+        .inspector(isPresented: effectiveInspectorPresentation) {
             SchemaInspectorView()
-                .inspectorColumnWidth(min: 240, ideal: 300, max: 420)
+                .inspectorColumnWidth(
+                    min: MainLayout.inspectorMinWidth,
+                    ideal: MainLayout.inspectorIdealWidth,
+                    max: MainLayout.inspectorMaxWidth
+                )
         }
         // An empty title (instead of `.toolbar(removing: .title)`) keeps the
         // flexible title region between the leading and trailing toolbar
         // sections — removing it entirely collapses the primary-action
         // buttons next to the breadcrumb.
         .navigationTitle("")
-        // The explicit ideal size caps the window's preferred content width.
-        // Without it the split view's ideal (sidebar + detail + inspector)
-        // can exceed the screen; macOS 26 then keeps the content laid out
-        // wider than the clamped window and the panes clip their leading
-        // and trailing edges.
-        .frame(minWidth: 1040, idealWidth: 1200, minHeight: 560, idealHeight: 700)
+        .frame(
+            minWidth: MainLayout.windowMinWidth,
+            idealWidth: MainLayout.windowIdealWidth,
+            minHeight: MainLayout.windowMinHeight,
+            idealHeight: MainLayout.windowIdealHeight
+        )
+        .onGeometryChange(for: AdaptivePanelMode.self) { proxy in
+            let width = proxy.size.width
+
+            if width < MainLayout.showSidebarAtOrAbove {
+                return .detailOnly
+            }
+
+            if width < MainLayout.showAllPanelsAtOrAbove {
+                return .noInspector
+            }
+
+            return .allPanels
+        } action: { newMode in
+            var transaction = Transaction()
+            transaction.disablesAnimations = true
+
+            withTransaction(transaction) {
+                adaptivePanelMode = newMode
+            }
+        }
         .task {
             await appState.onLaunch()
         }
@@ -218,9 +300,11 @@ private struct WelcomeDetailView: View {
 /// and (lack of) background match the inspector's toggle.
 struct SidebarToggle: View {
     @Binding var columnVisibility: NavigationSplitViewVisibility
+    var isAvailable = true
 
     var body: some View {
         Button {
+            guard isAvailable else { return }
             withAnimation {
                 columnVisibility = columnVisibility == .detailOnly ? .all : .detailOnly
             }
@@ -228,7 +312,8 @@ struct SidebarToggle: View {
             Label("Sidebar", systemImage: "sidebar.left")
                 .labelStyle(.iconOnly)
         }
-        .help("Show or hide the sidebar")
+        .disabled(!isAvailable)
+        .help(isAvailable ? "Show or hide the sidebar" : "Widen the window to show the sidebar")
     }
 }
 
@@ -237,14 +322,21 @@ struct SidebarToggle: View {
 /// system sidebar toggle) and in the detail toolbar while it is hidden.
 struct SchemaInspectorToggle: View {
     @Environment(AppState.self) private var appState
+    var isAvailable = true
 
     var body: some View {
         Button {
+            guard isAvailable else { return }
             appState.showSchemaInspector.toggle()
         } label: {
             Label("Schema", systemImage: "sidebar.right")
                 .labelStyle(.iconOnly)
         }
-        .help("Show or hide the schema inspector")
+        .disabled(!isAvailable)
+        .help(
+            isAvailable
+                ? "Show or hide the schema inspector"
+                : "Widen the window to show the schema inspector"
+        )
     }
 }
