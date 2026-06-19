@@ -67,6 +67,19 @@ struct SQLSchemaValidatorTests {
         #expect(!quoted.hasDefiniteErrors)
     }
 
+    @Test func generatedValidatorCanRepairUnquotedMixedCaseColumns() {
+        let repaired = GeneratedSQLValidator.repairQuotedIdentifiers(
+            sql:
+                #"SELECT createdAt FROM public.events WHERE createdAt IS NOT NULL -- createdAt comment"#,
+            schema: makeMixedCaseSchema()
+        )
+
+        #expect(
+            repaired
+                == #"SELECT "createdAt" FROM public.events WHERE "createdAt" IS NOT NULL -- createdAt comment"#
+        )
+    }
+
     @Test func ambiguousUnqualifiedColumnIsDefiniteError() {
         let result = SQLSchemaValidator.validate(
             sql: """

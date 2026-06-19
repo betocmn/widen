@@ -699,6 +699,29 @@ struct SessionControllerTests {
         #expect(controller.chatVM.messages.map(\.role) == [.user, .assistant])
     }
 
+    @Test func submitAutoQuotesGeneratedMixedCaseColumnsBeforeRepairLoop() async {
+        let connectionID = UUID()
+        let (state, dir) = makeState(connectionID: connectionID, connected: true)
+        defer { try? FileManager.default.removeItem(at: dir) }
+        state.schemas[connectionID] = makeMixedCaseSchema()
+        let generation = makeGeneration(
+            sql: "SELECT createdAt FROM public.events LIMIT 100",
+            explanation: "Shows event creation times."
+        )
+        let generator = RecordingRepairGenerator(results: [generation])
+        state.sqlGeneratorOverride = generator
+        let controller = makeController(connectionID: connectionID)
+        controller.chatVM.input = "show event creation times"
+
+        await controller.submit(appState: state)
+
+        #expect(generator.contexts.count == 1)
+        #expect(controller.queryVM.sqlText == #"SELECT "createdAt" FROM public.events LIMIT 100"#)
+        #expect(controller.queryVM.generation?.sql == #"SELECT "createdAt" FROM public.events LIMIT 100"#)
+        #expect(controller.queryVM.validation?.isValid == true)
+        #expect(controller.chatVM.messages.map(\.role) == [.user, .assistant])
+    }
+
     @Test func repairCoordinatorRejectsOnlyUnquotedMixedCaseIdentifier() {
         var coordinator = GeneratedSQLRepairCoordinator(
             failedSQL: "SELECT createdAt FROM public.events",

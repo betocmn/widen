@@ -301,6 +301,15 @@ public final class SessionController: Identifiable {
             let visibleGeneration = result.withSQL(generatedSQL)
             let validation = GeneratedSQLValidator.validate(sql: generatedSQL, schema: schema)
             guard validation.isValid else {
+                if let repairedSQL = GeneratedSQLValidator.repairQuotedIdentifiers(
+                    sql: generatedSQL,
+                    schema: schema
+                ) {
+                    let repairedGeneration = result.withSQL(repairedSQL)
+                    appendAssistantGeneration(repairedGeneration)
+                    queryVM.setGeneration(repairedGeneration, schema: schema)
+                    return
+                }
                 let firstError = AppError.validationFailed(validation.errors).localizedDescription
                 await repairGeneratedSQL(
                     appState: appState,

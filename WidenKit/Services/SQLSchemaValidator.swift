@@ -540,6 +540,26 @@ public enum GeneratedSQLValidator {
         )
     }
 
+    public static func repairQuotedIdentifiers(sql: String, schema: DatabaseSchema) -> String? {
+        let schemaValidation = SQLSchemaValidator.validate(sql: sql, against: schema)
+        let replacements = schemaValidation.issues.reduce(into: [String: String]()) {
+            result,
+            issue in
+            guard issue.kind == .requiresQuotedIdentifier,
+                let identifier = issue.identifier,
+                let suggestedIdentifier = issue.suggestedIdentifier
+            else { return }
+            result[identifier.lowercased()] = suggestedIdentifier
+        }
+        guard !replacements.isEmpty else { return nil }
+
+        let repaired = rewriteUnquotedIdentifiers(in: sql, replacements: replacements)
+        guard repaired != sql,
+            validate(sql: repaired, schema: schema).isValid
+        else { return nil }
+        return repaired
+    }
+
     public static func combine(
         safety: SQLValidationResult,
         schemaValidation: SQLSchemaValidationResult
@@ -555,6 +575,136 @@ public enum GeneratedSQLValidator {
             kind: safety.kind,
             requiresConfirmation: safety.requiresConfirmation
         )
+    }
+
+    private static func rewriteUnquotedIdentifiers(
+        in sql: String,
+        replacements: [String: String]
+    ) -> String {
+        let characters = Array(sql)
+        var output = ""
+        var index = 0
+
+        func char(at offset: Int) -> Character? {
+            offset < characters.count ? characters[offset] : nil
+        }
+
+        func appendRange(_ range: Range<Int>) {
+            output += String(characters[range])
+        }
+
+        while index < characters.count {
+            let character = characters[index]
+            if character == "-", char(at: index + 1) == "-" {
+                let start = index
+                index += 2
+                while index < characters.count, characters[index] != "\n" {
+                    index += 1
+                }
+                appendRange(start..<index)
+                continue
+            }
+            if character == "/", char(at: index + 1) == "*" {
+                let start = index
+                index += 2
+                while index + 1 < characters.count,
+                    !(characters[index] == "*" && characters[index + 1] == "/")
+                {
+                    index += 1
+                }
+                index = min(characters.count, index + 2)
+                appendRange(start..<index)
+                continue
+            }
+            if character == "$" {
+                let start = index
+                index += 1
+                while index < characters.count,
+                    characters[index].isLetter
+                        || characters[index].isNumber
+                        || characters[index] == "_"
+                {
+                    index += 1
+                }
+                if index < characters.count, characters[index] == "$" {
+                    let delimiter = String(characters[start...index])
+                    index += 1
+                    while index < characters.count {
+                        if String(characters[index..<min(characters.count, index + delimiter.count)])
+                            == delimiter
+                        {
+                            index += delimiter.count
+                            break
+                        }
+                        index += 1
+                    }
+                    appendRange(start..<min(index, characters.count))
+                    continue
+                }
+                appendRange(start..<index)
+                continue
+            }
+            if character == "'" {
+                let start = index
+                index += 1
+                while index < characters.count {
+                    if characters[index] == "'" {
+                        if char(at: index + 1) == "'" {
+                            index += 2
+                        } else {
+                            index += 1
+                            break
+                        }
+                    } else {
+                        index += 1
+                    }
+                }
+                appendRange(start..<min(index, characters.count))
+                continue
+            }
+            if character == "\"" {
+                let start = index
+                index += 1
+                while index < characters.count {
+                    if characters[index] == "\"" {
+                        if char(at: index + 1) == "\"" {
+                            index += 2
+                        } else {
+                            index += 1
+                            break
+                        }
+                    } else {
+                        index += 1
+                    }
+                }
+                appendRange(start..<min(index, characters.count))
+                continue
+            }
+            if character.isLetter || character == "_" {
+                let start = index
+                index += 1
+                while index < characters.count,
+                    characters[index].isLetter
+                        || characters[index].isNumber
+                        || characters[index] == "_"
+                        || characters[index] == "$"
+                {
+                    index += 1
+                }
+                let identifier = String(characters[start..<index])
+                if let replacement = replacements[identifier.lowercased()] {
+                    output += quotedIdentifier(replacement)
+                } else {
+                    output += identifier
+                }
+                continue
+            }
+
+            output.append(character)
+            index += 1
+        }
+
+        return output
     }
 }
 
