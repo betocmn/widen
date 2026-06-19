@@ -276,6 +276,7 @@ public enum SQLSchemaValidator {
         let localResolution = resolveUnqualified(
             column,
             in: scopeIndex,
+            analysis: analysis,
             scopeSources: scopeSources,
             schemaIndex: schemaIndex
         )
@@ -307,6 +308,7 @@ public enum SQLSchemaValidator {
             let parentResolution = resolveUnqualified(
                 column,
                 in: index,
+                analysis: analysis,
                 scopeSources: scopeSources,
                 schemaIndex: schemaIndex
             )
@@ -554,6 +556,7 @@ public enum SQLSchemaValidator {
     private static func resolveUnqualified(
         _ column: SQLColumnReference,
         in scopeIndex: Int,
+        analysis: SQLReferenceAnalysis,
         scopeSources: [[ResolvedRelationSource]],
         schemaIndex: SchemaLookup
     ) -> ColumnResolution {
@@ -581,7 +584,24 @@ public enum SQLSchemaValidator {
         case 1:
             return .resolved
         default:
+            if isMergedUsingColumn(column, in: analysis.scopes[scopeIndex]) {
+                return .resolved
+            }
             return .ambiguous
+        }
+    }
+
+    private static func isMergedUsingColumn(
+        _ column: SQLColumnReference,
+        in scope: SQLReferenceScope
+    ) -> Bool {
+        scope.columns.contains { usingColumn in
+            guard usingColumn.context == .joinUsing else { return false }
+            if usingColumn.isQuoted || column.isQuoted {
+                return usingColumn.isQuoted == column.isQuoted
+                    && usingColumn.name == column.name
+            }
+            return usingColumn.name.lowercased() == column.name.lowercased()
         }
     }
 
@@ -1038,7 +1058,7 @@ public enum GeneratedSQLPostprocessor {
     private static func tokenSet(_ tokens: Set<String>, containsRelatedTo queryToken: String) -> Bool {
         guard !queryToken.isEmpty else { return false }
         if tokens.contains(queryToken) { return true }
-        guard queryToken.count >= 3 else { return false }
+        guard queryToken.count >= 4 else { return false }
         return tokens.contains { token in
             token.hasPrefix(queryToken) || (queryToken.hasPrefix(token) && token.count >= 3)
         }
@@ -1360,8 +1380,8 @@ private struct ResolvedRelationSource {
             unquotedNames = aliasIsQuoted ? [] : [alias.lowercased()]
             quotedNames = aliasIsQuoted ? [alias] : []
         } else {
-            unquotedNames = Set([table.name.lowercased(), table.qualifiedName.lowercased()])
-            quotedNames = []
+            unquotedNames = unquotedTableNames(for: table)
+            quotedNames = Set([table.name, table.qualifiedName])
         }
         return ResolvedRelationSource(
             displayName: table.qualifiedName,
@@ -1406,6 +1426,33 @@ private struct ResolvedRelationSource {
             return quotedNames.contains(qualifier)
         }
         return unquotedNames.contains(qualifier.lowercased())
+    }
+
+    private static func unquotedTableNames(for table: TableInfo) -> Set<String> {
+        var names = Set<String>()
+        if isUnquotedPostgresIdentifier(table.name) {
+            names.insert(table.name.lowercased())
+        }
+        if isUnquotedPostgresIdentifier(table.schema)
+            && isUnquotedPostgresIdentifier(table.name)
+        {
+            names.insert(table.qualifiedName.lowercased())
+        }
+        return names
+    }
+
+    private static func isUnquotedPostgresIdentifier(_ value: String) -> Bool {
+        guard let first = value.first,
+            first == "_" || (first >= "a" && first <= "z")
+        else {
+            return false
+        }
+        return value.allSatisfy { character in
+            character == "_"
+                || character == "$"
+                || (character >= "a" && character <= "z")
+                || (character >= "0" && character <= "9")
+        }
     }
 
     func definitelyContainsColumn(_ column: SQLColumnReference, schemaIndex: SchemaLookup) -> Bool {

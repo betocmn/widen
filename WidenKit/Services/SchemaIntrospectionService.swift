@@ -153,12 +153,34 @@ public struct SchemaIntrospectionService: Sendable {
             constraints.append(
                 ColumnValueConstraint(
                     kind: .check,
-                    values: stringLiterals(in: check.expression),
+                    values: checkValueLiterals(in: check.expression),
                     expression: check.expression,
                     constraintName: check.constraintName
                 ))
         }
         return constraints.isEmpty ? nil : constraints
+    }
+
+    static func checkValueLiterals(in expression: String) -> [String] {
+        guard isPositiveValueCheckExpression(expression) else { return [] }
+        return stringLiterals(in: expression)
+    }
+
+    private static func isPositiveValueCheckExpression(_ expression: String) -> Bool {
+        let lowered = expression.lowercased()
+        if lowered.contains("<>")
+            || lowered.contains("!=")
+            || lowered.contains(" not ")
+            || lowered.contains("!~")
+        {
+            return false
+        }
+        return lowered.range(of: #"\bin\s*\("#, options: .regularExpression) != nil
+            || lowered.range(
+                of: #"=\s*any\s*\(\s*array\s*\["#,
+                options: .regularExpression
+            ) != nil
+            || lowered.range(of: #"=\s*'"#, options: .regularExpression) != nil
     }
 
     private static func stringLiterals(in expression: String) -> [String] {

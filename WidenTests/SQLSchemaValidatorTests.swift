@@ -116,6 +116,19 @@ struct SQLSchemaValidatorTests {
         #expect(!result.hasDefiniteErrors)
     }
 
+    @Test func atTimeZoneSyntaxIsNotTreatedAsColumns() {
+        let result = SQLSchemaValidator.validate(
+            sql: """
+                SELECT created_at AT TIME ZONE 'UTC' AS utc_created_at
+                FROM public.orders
+                ORDER BY utc_created_at
+                """,
+            against: makeUsersOrdersSchema()
+        )
+
+        #expect(!result.hasDefiniteErrors)
+    }
+
     @Test func usingAndExtractSyntaxIdentifiersAreNotTreatedAsColumns() {
         let result = SQLSchemaValidator.validate(
             sql: """
@@ -124,6 +137,19 @@ struct SQLSchemaValidatorTests {
                 JOIN public.orders USING (id)
                 GROUP BY EXTRACT(YEAR FROM orders.created_at)
                 ORDER BY order_year
+                """,
+            against: makeUsersOrdersSchema()
+        )
+
+        #expect(!result.hasDefiniteErrors)
+    }
+
+    @Test func joinUsingColumnsResolveAsMergedOutputColumns() {
+        let result = SQLSchemaValidator.validate(
+            sql: """
+                SELECT id
+                FROM public.users
+                JOIN public.orders USING (id)
                 """,
             against: makeUsersOrdersSchema()
         )
@@ -185,6 +211,20 @@ struct SQLSchemaValidatorTests {
 
         #expect(!result.hasDefiniteErrors)
         #expect(result.referencedTables.isEmpty)
+    }
+
+    @Test func lateralTableValuedFunctionSourcesResolveAsDerivedSources() {
+        let result = SQLSchemaValidator.validate(
+            sql: """
+                SELECT tag.value
+                FROM public.users AS u
+                CROSS JOIN LATERAL jsonb_array_elements_text(u.email) AS tag(value)
+                """,
+            against: makeUsersOrdersSchema()
+        )
+
+        #expect(!result.hasDefiniteErrors)
+        #expect(result.referencedTables == ["public.users"])
     }
 
     @Test func insertDefaultValuesAndConflictSyntaxDoNotBecomeColumns() {
@@ -353,10 +393,25 @@ struct SQLSchemaValidatorTests {
             sql: #"SELECT id FROM "public"."EventLog""#,
             against: makeMixedCaseTableSchema()
         )
+        let unquotedQualifier = SQLSchemaValidator.validate(
+            sql: #"SELECT EventLog.id FROM public."EventLog""#,
+            against: makeMixedCaseTableSchema()
+        )
+        let quotedQualifier = SQLSchemaValidator.validate(
+            sql: #"SELECT "EventLog".id FROM public."EventLog""#,
+            against: makeMixedCaseTableSchema()
+        )
+        let quotedQualifiedQualifier = SQLSchemaValidator.validate(
+            sql: #"SELECT public."EventLog".id FROM public."EventLog""#,
+            against: makeMixedCaseTableSchema()
+        )
 
         #expect(unquoted.hasDefiniteErrors)
         #expect(quotedWrongCase.hasDefiniteErrors)
+        #expect(unquotedQualifier.hasDefiniteErrors)
         #expect(!quotedExact.hasDefiniteErrors)
+        #expect(!quotedQualifier.hasDefiniteErrors)
+        #expect(!quotedQualifiedQualifier.hasDefiniteErrors)
         #expect(quotedExact.referencedTables == ["public.EventLog"])
     }
 
@@ -690,6 +745,30 @@ struct SQLSchemaValidatorTests {
         #expect(enriched.sql.isEmpty)
         #expect(enriched.clarificationQuestion?.contains("\"wins\"") == true)
         #expect(enriched.referencedTables == ["public.preseason_match_batch"])
+    }
+
+    @Test func shortBusinessTermsDoNotPrefixMatchUnrelatedSchemaTokens() {
+        let generation = SQLGenerationResult(
+            sql: "SELECT tool_a_id, COUNT(*) FROM public.preseason_match_batch GROUP BY tool_a_id",
+            explanation: "Counts appearances.",
+            assumptions: [],
+            referencedTables: [],
+            confidence: 1,
+            riskLevel: .low,
+            needsClarification: false,
+            clarificationQuestion: nil
+        )
+
+        let enriched = GeneratedSQLPostprocessor.enriched(
+            generation,
+            question: "what tools have the most wins?",
+            schema: makePreseasonSchemaWithWindowTerms(),
+            databaseContext: ""
+        )
+
+        #expect(enriched.needsClarification)
+        #expect(enriched.sql.isEmpty)
+        #expect(enriched.clarificationQuestion?.contains("\"wins\"") == true)
     }
 
     @Test func enumValueCanDefineBusinessTerm() {
@@ -1048,6 +1127,46 @@ struct SQLSchemaValidatorTests {
                             dataType: "integer",
                             isNullable: true,
                             ordinalPosition: 5
+                        ),
+                    ]
+                )
+            ],
+            foreignKeys: []
+        )
+    }
+
+    private func makePreseasonSchemaWithWindowTerms() -> DatabaseSchema {
+        DatabaseSchema(
+            schemas: [SchemaInfo(name: "public")],
+            tables: [
+                TableInfo(
+                    schema: "public",
+                    name: "preseason_match_batch",
+                    type: .baseTable,
+                    columns: [
+                        ColumnInfo(
+                            tableSchema: "public",
+                            tableName: "preseason_match_batch",
+                            name: "tool_a_id",
+                            dataType: "uuid",
+                            isNullable: false,
+                            ordinalPosition: 1
+                        ),
+                        ColumnInfo(
+                            tableSchema: "public",
+                            tableName: "preseason_match_batch",
+                            name: "window_start",
+                            dataType: "timestamp with time zone",
+                            isNullable: false,
+                            ordinalPosition: 2
+                        ),
+                        ColumnInfo(
+                            tableSchema: "public",
+                            tableName: "preseason_match_batch",
+                            name: "winter_status",
+                            dataType: "text",
+                            isNullable: true,
+                            ordinalPosition: 3
                         ),
                     ]
                 )

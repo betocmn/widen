@@ -436,7 +436,9 @@ public enum SQLReferenceAnalyzer {
                     {
                         break
                     }
-                    if tokens[safe: index]?.normalized == "only" {
+                    while let modifier = tokens[safe: index]?.normalized,
+                        modifier == "only" || modifier == "lateral"
+                    {
                         index += 1
                     }
                     if tokens[safe: index]?.text == "(" {
@@ -779,6 +781,8 @@ public enum SQLReferenceAnalyzer {
                     SQLColumnReference(
                         qualifier: "\(token.identifierValue).\(table.identifierValue)",
                         name: column.text == "*" ? "*" : column.identifierValue,
+                        qualifierIsQuoted: token.kind == .quotedIdentifier
+                            || table.kind == .quotedIdentifier,
                         isQuoted: column.kind == .quotedIdentifier,
                         startOffset: column.startOffset,
                         endOffset: column.endOffset
@@ -1546,7 +1550,7 @@ struct SQLToken: Equatable, Sendable {
         "between", "case", "when", "then", "else", "end", "asc", "desc", "insert", "into",
         "update", "delete", "set", "values", "returning", "distinct", "over", "partition",
         "filter", "left", "right", "inner", "outer", "full", "cross", "lateral", "only",
-        "using",
+        "using", "at", "time", "zone",
         "true", "false", "interval", "current_date", "current_timestamp", "now", "like",
         "ilike", "similar", "escape", "nulls", "first", "last", "default", "conflict",
         "do", "nothing", "constraint", "rows", "row", "range", "groups", "unbounded",

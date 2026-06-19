@@ -399,4 +399,20 @@ struct SchemaIntrospectionServiceTests {
         #expect(SchemaIntrospectionService.columnCheckConstraintsSQL.contains("pg_get_constraintdef"))
         #expect(SchemaIntrospectionService.columnCheckConstraintsSQL.contains("array_length(con.conkey, 1) = 1"))
     }
+
+    @Test func checkValueLiteralsOnlyReportsPositiveValueSets() {
+        let allowed = SchemaIntrospectionService.checkValueLiterals(
+            in: "CHECK ((review_status = ANY (ARRAY['approved'::text, 'rejected'::text])))"
+        )
+        let disallowed = SchemaIntrospectionService.checkValueLiterals(
+            in: "CHECK (status <> 'deleted')"
+        )
+        let pattern = SchemaIntrospectionService.checkValueLiterals(
+            in: "CHECK (code ~ '^[A-Z]+$')"
+        )
+
+        #expect(allowed == ["approved", "rejected"])
+        #expect(disallowed.isEmpty)
+        #expect(pattern.isEmpty)
+    }
 }
