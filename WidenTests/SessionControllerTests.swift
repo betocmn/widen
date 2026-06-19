@@ -854,6 +854,43 @@ struct SessionControllerTests {
         #expect(quoted.outcome == .accepted)
     }
 
+    @Test func repairCoordinatorAllowsQualifiedRepairForAmbiguousBareColumn() {
+        var coordinator = GeneratedSQLRepairCoordinator(
+            failedSQL: """
+                SELECT id
+                FROM public.users AS u
+                JOIN public.users AS other_users ON u.id = other_users.id
+                """,
+            firstError: "Schema validation failed: column id is ambiguous across referenced tables.",
+            diagnostic: DatabaseDiagnostic(
+                kind: .ambiguousColumn,
+                message: "column id is ambiguous",
+                columnName: "id"
+            ),
+            forbiddenIdentifiers: ["id"]
+        )
+
+        let unqualified = coordinator.evaluateCandidate(
+            makeGeneration(sql: "SELECT id FROM public.users AS u LIMIT 100"),
+            mode: .repair,
+            schema: makeSchema(),
+            allowWrites: false
+        )
+        let qualified = coordinator.evaluateCandidate(
+            makeGeneration(sql: "SELECT u.id FROM public.users AS u LIMIT 100"),
+            mode: .repair,
+            schema: makeSchema(),
+            allowWrites: false
+        )
+
+        if case .rejected(let reason) = unqualified.outcome {
+            #expect(reason == .forbiddenIdentifier("id"))
+        } else {
+            Issue.record("Expected unqualified id to remain forbidden")
+        }
+        #expect(qualified.outcome == .accepted)
+    }
+
     @Test func generatedRunErrorGivesUpAfterRepairAndReconstruction() async {
         let connectionID = UUID()
         let (state, dir) = makeState(connectionID: connectionID, connected: true)

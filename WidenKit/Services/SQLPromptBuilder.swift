@@ -130,7 +130,7 @@ public enum SQLPromptBuilder {
         case .reconstructAfterFailedRepair:
             sections.append(reconstructionTaskSection(question: question, context: context))
         case .initial, .followUp:
-            if let contextSection = contextSection(context) {
+            if let contextSection = contextSection(context, currentQuestion: question) {
                 sections.append(contextSection)
             }
             sections.append(
@@ -274,7 +274,10 @@ public enum SQLPromptBuilder {
     /// Renders the conversation context with tight per-item budgets. The
     /// transcript is ordered so the model can follow the back-and-forth chat
     /// without treating the current request as an isolated question.
-    static func contextSection(_ context: SQLGenerationContext) -> String? {
+    static func contextSection(
+        _ context: SQLGenerationContext,
+        currentQuestion: String? = nil
+    ) -> String? {
         guard !context.isEmpty else { return nil }
         var lines = [
             "<conversation_context>",
@@ -308,7 +311,15 @@ public enum SQLPromptBuilder {
             lines.append("</ordered_chat_history>")
         }
 
-        if let confirmedClarification = confirmedClarificationSection(in: orderedMessages) {
+        var clarificationMessages = orderedMessages
+        if let currentQuestion = currentQuestion?
+            .trimmingCharacters(in: .whitespacesAndNewlines),
+            !currentQuestion.isEmpty,
+            orderedMessages.last?.text != currentQuestion
+        {
+            clarificationMessages.append(SQLConversationMessage(role: .user, text: currentQuestion))
+        }
+        if let confirmedClarification = confirmedClarificationSection(in: clarificationMessages) {
             lines.append(confirmedClarification)
         }
 

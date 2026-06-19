@@ -339,9 +339,10 @@ public struct GeneratedSQLRepairCoordinator: Sendable {
             referenced.insert(Self.canonicalIdentifier(relation.displayName))
         }
         for column in analysis.columns {
-            referenced.insert(Self.canonicalIdentifier(column.name))
             if let qualifier = column.qualifier {
                 referenced.insert(Self.canonicalIdentifier("\(qualifier).\(column.name)"))
+            } else {
+                referenced.insert(Self.canonicalIdentifier(column.name))
             }
         }
 

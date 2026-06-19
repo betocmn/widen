@@ -50,6 +50,64 @@ struct SQLSchemaValidatorTests {
         #expect(result.referencedTables == ["public.users"])
     }
 
+    @Test func derivedTableAliasesResolveQualifiedColumns() {
+        let result = SQLSchemaValidator.validate(
+            sql: """
+                SELECT u.id, d.n
+                FROM public.users AS u
+                JOIN (
+                  SELECT user_id, COUNT(*) AS n
+                  FROM public.orders
+                  GROUP BY user_id
+                ) AS d ON d.user_id = u.id
+                ORDER BY d.n DESC
+                LIMIT 10
+                """,
+            against: makeUsersOrdersSchema()
+        )
+
+        #expect(!result.hasDefiniteErrors)
+        #expect(result.referencedTables == ["public.orders", "public.users"])
+    }
+
+    @Test func implicitSelectAliasesResolveInOrderBy() {
+        let result = SQLSchemaValidator.validate(
+            sql: "SELECT COUNT(*) n FROM public.orders ORDER BY n",
+            against: makeUsersOrdersSchema()
+        )
+
+        #expect(!result.hasDefiniteErrors)
+    }
+
+    @Test func castTypeNamesAreNotTreatedAsColumns() {
+        let result = SQLSchemaValidator.validate(
+            sql: """
+                SELECT created_at::date AS day, CAST(created_at AS date) AS cast_day, COUNT(*) n
+                FROM public.orders
+                GROUP BY created_at::date, CAST(created_at AS date)
+                ORDER BY day
+                """,
+            against: makeUsersOrdersSchema()
+        )
+
+        #expect(!result.hasDefiniteErrors)
+    }
+
+    @Test func postgresOperatorWordsAreNotTreatedAsColumns() {
+        let result = SQLSchemaValidator.validate(
+            sql: """
+                SELECT email
+                FROM public.users
+                WHERE email ILIKE '%@example.com'
+                ORDER BY email DESC NULLS LAST
+                LIMIT 10
+                """,
+            against: makeUsersOrdersSchema()
+        )
+
+        #expect(!result.hasDefiniteErrors)
+    }
+
     @Test func unquotedMixedCaseColumnDoesNotMatchQuotedPostgresColumn() {
         let unquoted = SQLSchemaValidator.validate(
             sql: #"SELECT createdAt FROM public.events"#,
@@ -65,6 +123,26 @@ struct SQLSchemaValidatorTests {
         #expect(unquoted.issues.first?.kind == .requiresQuotedIdentifier)
         #expect(unquoted.issues.first?.suggestedIdentifier == "createdAt")
         #expect(!quoted.hasDefiniteErrors)
+    }
+
+    @Test func quotedMixedCaseRelationNamesRequireExactCase() {
+        let unquoted = SQLSchemaValidator.validate(
+            sql: "SELECT id FROM public.EventLog",
+            against: makeMixedCaseTableSchema()
+        )
+        let quotedWrongCase = SQLSchemaValidator.validate(
+            sql: #"SELECT id FROM "public"."eventlog""#,
+            against: makeMixedCaseTableSchema()
+        )
+        let quotedExact = SQLSchemaValidator.validate(
+            sql: #"SELECT id FROM "public"."EventLog""#,
+            against: makeMixedCaseTableSchema()
+        )
+
+        #expect(unquoted.hasDefiniteErrors)
+        #expect(quotedWrongCase.hasDefiniteErrors)
+        #expect(!quotedExact.hasDefiniteErrors)
+        #expect(quotedExact.referencedTables == ["public.EventLog"])
     }
 
     @Test func generatedValidatorCanRepairUnquotedMixedCaseColumns() {
@@ -320,6 +398,14 @@ struct SQLSchemaValidatorTests {
                             isNullable: false,
                             ordinalPosition: 2
                         ),
+                        ColumnInfo(
+                            tableSchema: "public",
+                            tableName: "orders",
+                            name: "created_at",
+                            dataType: "timestamp with time zone",
+                            isNullable: false,
+                            ordinalPosition: 3
+                        ),
                     ]
                 ),
             ],
@@ -341,6 +427,30 @@ struct SQLSchemaValidatorTests {
                             tableName: "events",
                             name: "createdAt",
                             dataType: "timestamp with time zone",
+                            isNullable: false,
+                            ordinalPosition: 1
+                        )
+                    ]
+                )
+            ],
+            foreignKeys: []
+        )
+    }
+
+    private func makeMixedCaseTableSchema() -> DatabaseSchema {
+        DatabaseSchema(
+            schemas: [SchemaInfo(name: "public")],
+            tables: [
+                TableInfo(
+                    schema: "public",
+                    name: "EventLog",
+                    type: .baseTable,
+                    columns: [
+                        ColumnInfo(
+                            tableSchema: "public",
+                            tableName: "EventLog",
+                            name: "id",
+                            dataType: "integer",
                             isNullable: false,
                             ordinalPosition: 1
                         )

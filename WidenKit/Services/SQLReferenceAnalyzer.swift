@@ -4,6 +4,25 @@ public struct SQLRelationReference: Equatable, Hashable, Sendable {
     public var schema: String?
     public var name: String
     public var alias: String?
+    public var schemaIsQuoted: Bool
+    public var nameIsQuoted: Bool
+    public var derivedColumns: Set<String>?
+
+    public init(
+        schema: String? = nil,
+        name: String,
+        alias: String? = nil,
+        schemaIsQuoted: Bool = false,
+        nameIsQuoted: Bool = false,
+        derivedColumns: Set<String>? = nil
+    ) {
+        self.schema = schema
+        self.name = name
+        self.alias = alias
+        self.schemaIsQuoted = schemaIsQuoted
+        self.nameIsQuoted = nameIsQuoted
+        self.derivedColumns = derivedColumns
+    }
 
     public var displayName: String {
         if let schema { return "\(schema).\(name)" }
@@ -350,9 +369,19 @@ public enum SQLReferenceAnalyzer {
                     }
                     if tokens[safe: index]?.text == "(" {
                         if let afterGroup = indexAfterBalancedGroup(tokens, startingAt: index) {
+                            let innerTokens = Array(tokens[(index + 1)..<(afterGroup - 1)])
                             index = afterGroup
-                            if let aliasIndex = skipOptionalAlias(tokens, startingAt: index) {
-                                index = aliasIndex
+                            let aliasParse = parseOptionalAlias(tokens, startingAt: index)
+                            if let aliasParse {
+                                index = aliasParse.nextIndex
+                            }
+                            if containsTopLevelSelect(innerTokens) {
+                                relations.append(
+                                    SQLRelationReference(
+                                        name: aliasParse?.alias ?? "__derived_table",
+                                        alias: aliasParse?.alias,
+                                        derivedColumns: inferSelectOutputColumns(innerTokens)
+                                    ))
                             }
                         } else {
                             incomplete = true
@@ -386,13 +415,17 @@ public enum SQLReferenceAnalyzer {
         guard let first = tokens[safe: index], first.isIdentifierLike else { return nil }
         var schema: String?
         var name = first.identifierValue
+        var schemaIsQuoted = false
+        var nameIsQuoted = first.kind == .quotedIdentifier
         index += 1
         if tokens[safe: index]?.text == ".",
             let second = tokens[safe: index + 1],
             second.isIdentifierLike
         {
             schema = name
+            schemaIsQuoted = first.kind == .quotedIdentifier
             name = second.identifierValue
+            nameIsQuoted = second.kind == .quotedIdentifier
             index += 2
         }
 
@@ -411,7 +444,13 @@ public enum SQLReferenceAnalyzer {
             index += 1
         }
 
-        return SQLRelationReference(schema: schema, name: name, alias: alias)
+        return SQLRelationReference(
+            schema: schema,
+            name: name,
+            alias: alias,
+            schemaIsQuoted: schemaIsQuoted,
+            nameIsQuoted: nameIsQuoted
+        )
     }
 
     private static func parseOutputAliases(_ tokens: [SQLToken]) -> Set<String> {
@@ -420,18 +459,15 @@ public enum SQLReferenceAnalyzer {
         }
         let fromIndex = firstTopLevelIndex(ofAny: ["from"], in: tokens, after: selectIndex + 1)
             ?? tokens.count
+        let items = splitTopLevelCommaSeparated(Array(tokens[(selectIndex + 1)..<fromIndex]))
         var aliases = Set<String>()
-        var index = selectIndex + 1
-        while index < fromIndex {
-            if tokens[index].normalized == "as",
-                let alias = tokens[safe: index + 1],
-                alias.isIdentifierLike
+        for item in items {
+            let significant = item.filter { $0.text != "," }
+            if let alias = explicitOutputAlias(in: significant)
+                ?? implicitOutputAlias(in: significant)
             {
                 aliases.insert(alias.identifierValue.lowercased())
-                index += 2
-                continue
             }
-            index += 1
         }
         return aliases
     }
@@ -447,24 +483,16 @@ public enum SQLReferenceAnalyzer {
         for item in items {
             let significant = item.filter { $0.text != "," }
             guard !significant.isEmpty else { continue }
+            if let alias = explicitOutputAlias(in: significant) {
+                columns.insert(alias.identifierValue.lowercased())
+                continue
+            }
+            if let alias = implicitOutputAlias(in: significant) {
+                columns.insert(alias.identifierValue.lowercased())
+                continue
+            }
             if significant.contains(where: { $0.text == "*" }) {
                 return nil
-            }
-            if let asIndex = significant.lastIndex(where: { $0.normalized == "as" }),
-                let alias = significant[safe: asIndex + 1],
-                alias.isIdentifierLike
-            {
-                columns.insert(alias.identifierValue.lowercased())
-                continue
-            }
-            if significant.count >= 2,
-                let alias = significant.last,
-                alias.isIdentifierLike,
-                significant[safe: significant.count - 2]?.text != ".",
-                significant[safe: significant.count - 2]?.text != ")"
-            {
-                columns.insert(alias.identifierValue.lowercased())
-                continue
             }
             if significant.count == 1, let column = significant.first, column.isIdentifierLike {
                 columns.insert(column.identifierValue.lowercased())
@@ -481,6 +509,45 @@ public enum SQLReferenceAnalyzer {
             return nil
         }
         return columns
+    }
+
+    private static func explicitOutputAlias(in tokens: [SQLToken]) -> SQLToken? {
+        var depth = 0
+        var alias: SQLToken?
+        for index in tokens.indices {
+            let token = tokens[index]
+            if token.text == "(" {
+                depth += 1
+                continue
+            }
+            if token.text == ")" {
+                depth = max(0, depth - 1)
+                continue
+            }
+            if depth == 0,
+                token.normalized == "as",
+                let candidate = tokens[safe: index + 1],
+                candidate.isIdentifierLike
+            {
+                alias = candidate
+            }
+        }
+        return alias
+    }
+
+    private static func implicitOutputAlias(in tokens: [SQLToken]) -> SQLToken? {
+        guard tokens.count >= 2,
+            let alias = tokens.last,
+            alias.isIdentifierLike,
+            !SQLToken.keywords.contains(alias.normalized),
+            let previous = tokens[safe: tokens.count - 2],
+            previous.normalized != "as",
+            previous.text != ".",
+            previous.text != ":"
+        else {
+            return nil
+        }
+        return alias
     }
 
     private static func splitTopLevelCommaSeparated(_ tokens: [SQLToken]) -> [[SQLToken]] {
@@ -584,6 +651,7 @@ public enum SQLReferenceAnalyzer {
                 || cteNames.contains(normalized)
                 || outputAliases.contains(normalized)
                 || relationAliases.contains(normalized)
+                || isCastTypeName(at: index, tokens: tokens)
                 || tokens[safe: index + 1]?.text == "("
                 || tokens[safe: index - 1]?.text == "."
                 || tokens[safe: index + 1]?.text == "."
@@ -609,7 +677,10 @@ public enum SQLReferenceAnalyzer {
         }
     }
 
-    private static func skipOptionalAlias(_ tokens: [SQLToken], startingAt index: Int) -> Int? {
+    private static func parseOptionalAlias(
+        _ tokens: [SQLToken],
+        startingAt index: Int
+    ) -> (alias: String, nextIndex: Int)? {
         var index = index
         if tokens[safe: index]?.normalized == "as" {
             index += 1
@@ -620,7 +691,43 @@ public enum SQLReferenceAnalyzer {
         else {
             return nil
         }
-        return index + 1
+        return (alias.identifierValue, index + 1)
+    }
+
+    private static func isCastTypeName(at index: Int, tokens: [SQLToken]) -> Bool {
+        if tokens[safe: index - 1]?.text == ":",
+            tokens[safe: index - 2]?.text == ":"
+        {
+            return true
+        }
+        return isInsideCastTypeClause(at: index, tokens: tokens)
+    }
+
+    private static func isInsideCastTypeClause(at index: Int, tokens: [SQLToken]) -> Bool {
+        var openParens: [Int] = []
+        for cursor in 0..<index {
+            if tokens[cursor].text == "(" {
+                openParens.append(cursor)
+            } else if tokens[cursor].text == ")" {
+                _ = openParens.popLast()
+            }
+        }
+        guard let castOpen = openParens.last,
+            tokens[safe: castOpen - 1]?.normalized == "cast"
+        else {
+            return false
+        }
+        var depth = 0
+        for cursor in (castOpen + 1)..<index {
+            if tokens[cursor].text == "(" {
+                depth += 1
+            } else if tokens[cursor].text == ")" {
+                depth = max(0, depth - 1)
+            } else if depth == 0, tokens[cursor].normalized == "as" {
+                return true
+            }
+        }
+        return false
     }
 
     private static func isQualifiedRelationTarget(at index: Int, tokens: [SQLToken]) -> Bool {
@@ -849,7 +956,8 @@ struct SQLToken: Equatable, Sendable {
         "between", "case", "when", "then", "else", "end", "asc", "desc", "insert", "into",
         "update", "delete", "set", "values", "returning", "distinct", "over", "partition",
         "filter", "left", "right", "inner", "outer", "full", "cross", "lateral", "only",
-        "true", "false", "interval", "current_date", "current_timestamp", "now",
+        "true", "false", "interval", "current_date", "current_timestamp", "now", "like",
+        "ilike", "similar", "escape", "nulls", "first", "last",
     ]
 }
 

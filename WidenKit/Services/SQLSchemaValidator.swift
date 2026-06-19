@@ -84,6 +84,15 @@ public enum SQLSchemaValidator {
 
         for (scopeIndex, scope) in analysis.scopes.enumerated() {
             for relation in scope.relations {
+                if let derivedColumns = relation.derivedColumns {
+                    scopeSources[scopeIndex].append(
+                        ResolvedRelationSource.cte(
+                            name: relation.alias ?? relation.name,
+                            alias: relation.alias,
+                            columns: derivedColumns
+                        ))
+                    continue
+                }
                 if relation.schema == nil, analysis.cteNames.contains(relation.name.lowercased()) {
                     let cteName = relation.name.lowercased()
                     scopeSources[scopeIndex].append(
@@ -1012,15 +1021,15 @@ public enum GeneratedSQLValidator {
 }
 
 private struct SchemaLookup {
-    private var tablesByQualifiedName: [String: TableInfo] = [:]
-    private var tablesByName: [String: [TableInfo]] = [:]
+    private var tablesByExactQualifiedName: [String: TableInfo] = [:]
+    private var tablesByExactName: [String: [TableInfo]] = [:]
     private var columnsByTableID: [String: Set<String>] = [:]
     private var foldedColumnsByTableID: [String: [String: String]] = [:]
 
     init(schema: DatabaseSchema) {
         for table in schema.tables {
-            tablesByQualifiedName[table.qualifiedName.lowercased()] = table
-            tablesByName[table.name.lowercased(), default: []].append(table)
+            tablesByExactQualifiedName[table.qualifiedName] = table
+            tablesByExactName[table.name, default: []].append(table)
             columnsByTableID[table.id] = Set(table.columns.map(\.name))
             var foldedColumns: [String: String] = [:]
             for column in table.columns {
@@ -1032,9 +1041,12 @@ private struct SchemaLookup {
 
     func resolve(_ relation: SQLRelationReference) -> TableInfo? {
         if let schema = relation.schema {
-            return tablesByQualifiedName["\(schema).\(relation.name)".lowercased()]
+            let schemaName = relation.schemaIsQuoted ? schema : schema.lowercased()
+            let tableName = relation.nameIsQuoted ? relation.name : relation.name.lowercased()
+            return tablesByExactQualifiedName["\(schemaName).\(tableName)"]
         }
-        let matches = tablesByName[relation.name.lowercased()] ?? []
+        let tableName = relation.nameIsQuoted ? relation.name : relation.name.lowercased()
+        let matches = tablesByExactName[tableName] ?? []
         return matches.count == 1 ? matches[0] : nil
     }
 

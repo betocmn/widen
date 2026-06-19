@@ -327,6 +327,31 @@ struct SQLPromptBuilderTests {
         #expect(prompt.contains("winner_id"))
     }
 
+    @Test func promptMarksCurrentAffirmativeClarificationAsConfirmed() {
+        let clarification =
+            "Should I define retained users as users with a retained segment value?"
+        let context = SQLGenerationContext(
+            recentQuestions: ["how many retained users do we have?"],
+            originalQuestion: "how many retained users do we have?",
+            conversationMessages: [
+                SQLConversationMessage(role: .user, text: "how many retained users do we have?"),
+                SQLConversationMessage(role: .assistant, text: clarification),
+            ]
+        )
+
+        let prompt = SQLPromptBuilder.prompt(
+            question: "yes",
+            schema: makeSampleSchema(),
+            context: context
+        )
+
+        #expect(prompt.contains("<confirmed_clarification>"))
+        #expect(prompt.contains("the active task is still the original user question"))
+        #expect(prompt.contains("Do not ask the same clarification question again."))
+        #expect(prompt.contains(#"<user_answer>"#))
+        #expect(prompt.contains("yes"))
+    }
+
     @Test func promptDoesNotConfirmGenericAssistantQuestion() {
         let context = SQLGenerationContext(
             recentQuestions: ["show users"],
