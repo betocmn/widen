@@ -80,6 +80,35 @@ struct SQLSchemaValidatorTests {
         )
     }
 
+    @Test func timestampComparedDirectlyToIntervalIsDefiniteError() {
+        let result = SQLSchemaValidator.validate(
+            sql: #"SELECT "createdAt" FROM public.events WHERE "createdAt" >= INTERVAL '7 days'"#,
+            against: makeMixedCaseSchema()
+        )
+
+        #expect(result.hasDefiniteErrors)
+        #expect(result.issues.contains { $0.kind == .invalidTemporalComparison })
+        #expect(result.errors.first?.contains("NOW() - INTERVAL '7 days'") == true)
+    }
+
+    @Test func timestampComparedToTimestampExpressionIsValid() {
+        let result = SQLSchemaValidator.validate(
+            sql: #"SELECT "createdAt" FROM public.events WHERE "createdAt" >= NOW() - INTERVAL '7 days'"#,
+            against: makeMixedCaseSchema()
+        )
+
+        #expect(!result.hasDefiniteErrors)
+    }
+
+    @Test func intervalColumnCanBeComparedToInterval() {
+        let result = SQLSchemaValidator.validate(
+            sql: "SELECT duration FROM public.jobs WHERE duration >= INTERVAL '7 days'",
+            against: makeIntervalSchema()
+        )
+
+        #expect(!result.hasDefiniteErrors)
+    }
+
     @Test func ambiguousUnqualifiedColumnIsDefiniteError() {
         let result = SQLSchemaValidator.validate(
             sql: """
@@ -169,7 +198,7 @@ struct SQLSchemaValidatorTests {
         #expect(enriched.referencedTables == ["public.users"])
     }
 
-    @Test func postprocessorDoesNotHardcodeWinsClarification() {
+    @Test func postprocessorAsksWhenMetricTermIsMissingFromReferencedSchema() {
         let generation = SQLGenerationResult(
             sql: "SELECT tool_a_id, COUNT(*) FROM public.preseason_match_batch GROUP BY tool_a_id",
             explanation: "Counts tool A appearances.",
@@ -188,12 +217,13 @@ struct SQLSchemaValidatorTests {
             databaseContext: ""
         )
 
-        #expect(!enriched.needsClarification)
-        #expect(enriched.sql == generation.sql)
+        #expect(enriched.needsClarification)
+        #expect(enriched.sql.isEmpty)
+        #expect(enriched.clarificationQuestion?.contains("\"wins\"") == true)
         #expect(enriched.referencedTables == ["public.preseason_match_batch"])
     }
 
-    @Test func genericOutcomeFieldsDoNotTriggerHardcodedWinsClarification() {
+    @Test func genericOutcomeFieldsDoNotSilentlyDefineMissingMetricTerm() {
         let generation = SQLGenerationResult(
             sql: "SELECT tool_a_id, COUNT(*) FROM public.preseason_match_batch GROUP BY tool_a_id",
             explanation: "Counts appearances.",
@@ -212,8 +242,9 @@ struct SQLSchemaValidatorTests {
             databaseContext: ""
         )
 
-        #expect(!enriched.needsClarification)
-        #expect(enriched.sql == generation.sql)
+        #expect(enriched.needsClarification)
+        #expect(enriched.sql.isEmpty)
+        #expect(enriched.clarificationQuestion?.contains("\"wins\"") == true)
         #expect(enriched.referencedTables == ["public.preseason_match_batch"])
     }
 
@@ -310,6 +341,30 @@ struct SQLSchemaValidatorTests {
                             tableName: "events",
                             name: "createdAt",
                             dataType: "timestamp with time zone",
+                            isNullable: false,
+                            ordinalPosition: 1
+                        )
+                    ]
+                )
+            ],
+            foreignKeys: []
+        )
+    }
+
+    private func makeIntervalSchema() -> DatabaseSchema {
+        DatabaseSchema(
+            schemas: [SchemaInfo(name: "public")],
+            tables: [
+                TableInfo(
+                    schema: "public",
+                    name: "jobs",
+                    type: .baseTable,
+                    columns: [
+                        ColumnInfo(
+                            tableSchema: "public",
+                            tableName: "jobs",
+                            name: "duration",
+                            dataType: "interval",
                             isNullable: false,
                             ordinalPosition: 1
                         )

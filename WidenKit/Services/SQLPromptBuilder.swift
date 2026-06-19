@@ -45,7 +45,7 @@ public enum SQLPromptBuilder {
         - If the user answers affirmatively to a previous assistant clarification question, treat that answer as approval to use the proposed definition or constraint. Generate SQL for the original request with that approved interpretation; do not ask the same clarification question again.
         - If a required entity, metric, business meaning, relationship, or time interpretation is undefined by the Database context or provided schema, set needsClarification to true and ask a concise clarification question.
         - Assumptions may resolve presentation choices such as LIMIT, sort direction, or inclusive date boundaries. Assumptions MUST NOT invent schema objects, joins, metric definitions, status meanings, ownership rules, or other business semantics.
-        - Business terms can have database-specific meanings. If the Database context and schema do not define the requested term, ask what column, condition, or table defines it. Do not infer it from a nearby count or status.
+        - Business terms can have database-specific meanings. If the Database context and schema do not define the requested term, ask what column, condition, or table defines it. Do not infer it from a nearby count, status, frequency, recency, participation, or other proxy metric.
         - A plausible-looking query that does not answer the user's requested metric is incorrect.
         - If the request cannot be answered from the schema, set needsClarification to true and ask a concise clarification question.
         - Output only the requested structured result.
@@ -74,6 +74,7 @@ public enum SQLPromptBuilder {
         - In repair mode, the diagnostic and repair constraints are authoritative.
         - If a needed table, column, relationship, metric, status value, or business term is undefined, set needsClarification true and ask one concise question.
         - Do not invent metric, status, ownership, or business-term definitions.
+        - Do not answer with a proxy metric. If the schema/context does not define the requested metric, ask for the column, condition, or table that defines it.
         - A plausible query that answers a different metric is wrong.
         - Output only the requested structured result.
         """

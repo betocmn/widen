@@ -12,6 +12,7 @@ public struct SQLSchemaValidationIssue: Equatable, Sendable {
         case missingColumn
         case ambiguousColumn
         case requiresQuotedIdentifier
+        case invalidTemporalComparison
         case analysisIncomplete
         case other
     }
@@ -60,12 +61,21 @@ public enum SQLSchemaValidator {
         sql: String,
         against schema: DatabaseSchema
     ) -> SQLSchemaValidationResult {
-        validate(SQLReferenceAnalyzer.analyze(sql), against: schema)
+        let analysis = SQLReferenceAnalyzer.analyze(sql)
+        return validate(analysis, against: schema, sql: sql)
     }
 
     public static func validate(
         _ analysis: SQLReferenceAnalysis,
         against schema: DatabaseSchema
+    ) -> SQLSchemaValidationResult {
+        validate(analysis, against: schema, sql: nil)
+    }
+
+    private static func validate(
+        _ analysis: SQLReferenceAnalysis,
+        against schema: DatabaseSchema,
+        sql: String?
     ) -> SQLSchemaValidationResult {
         let schemaIndex = SchemaLookup(schema: schema)
         var issues: [SQLSchemaValidationIssue] = []
@@ -121,6 +131,16 @@ public enum SQLSchemaValidator {
                     issues: &issues
                 )
             }
+        }
+
+        if let sql {
+            issues.append(
+                contentsOf: temporalIntervalComparisonIssues(
+                    sql: sql,
+                    analysis: analysis,
+                    scopeSources: scopeSources,
+                    schemaIndex: schemaIndex
+                ))
         }
 
         if analysis.analysisIncomplete {
@@ -429,6 +449,240 @@ public enum SQLSchemaValidator {
             return .ambiguous
         }
     }
+
+    private static func temporalIntervalComparisonIssues(
+        sql: String,
+        analysis: SQLReferenceAnalysis,
+        scopeSources: [[ResolvedRelationSource]],
+        schemaIndex: SchemaLookup
+    ) -> [SQLSchemaValidationIssue] {
+        let tokens = SQLToken.tokenize(sql)
+        guard !tokens.isEmpty else { return [] }
+
+        var issues: [SQLSchemaValidationIssue] = []
+        var reported = Set<String>()
+        var index = 0
+        while index < tokens.count {
+            guard let comparison = comparisonOperator(at: index, tokens: tokens) else {
+                index += 1
+                continue
+            }
+
+            if isIntervalLiteral(startingAt: comparison.nextIndex, tokens: tokens),
+                let identifier = identifierExpression(endingAt: index - 1, tokens: tokens)
+            {
+                appendTemporalIntervalIssue(
+                    for: identifier,
+                    analysis: analysis,
+                    scopeSources: scopeSources,
+                    schemaIndex: schemaIndex,
+                    reported: &reported,
+                    issues: &issues
+                )
+            }
+
+            if isIntervalLiteral(endingAt: index - 1, tokens: tokens),
+                let identifier = identifierExpression(startingAt: comparison.nextIndex, tokens: tokens)
+            {
+                appendTemporalIntervalIssue(
+                    for: identifier,
+                    analysis: analysis,
+                    scopeSources: scopeSources,
+                    schemaIndex: schemaIndex,
+                    reported: &reported,
+                    issues: &issues
+                )
+            }
+
+            index = comparison.nextIndex
+        }
+
+        return issues
+    }
+
+    private static func appendTemporalIntervalIssue(
+        for identifier: IdentifierExpression,
+        analysis: SQLReferenceAnalysis,
+        scopeSources: [[ResolvedRelationSource]],
+        schemaIndex: SchemaLookup,
+        reported: inout Set<String>,
+        issues: inout [SQLSchemaValidationIssue]
+    ) {
+        let columns = resolvedColumns(
+            for: identifier,
+            analysis: analysis,
+            scopeSources: scopeSources,
+            schemaIndex: schemaIndex
+        )
+        guard let temporalColumn = columns.first(where: isDateOrTimeColumn) else { return }
+        let key = "\(temporalColumn.id):\(identifier.displayName.lowercased())"
+        guard reported.insert(key).inserted else { return }
+
+        issues.append(
+            SQLSchemaValidationIssue(
+                severity: .error,
+                message:
+                    "Schema validation failed: column \(identifier.displayName) is \(temporalColumn.dataType.lowercased()) and cannot be compared directly to an INTERVAL. Compare it to a date or timestamp expression such as NOW() - INTERVAL '7 days'.",
+                kind: .invalidTemporalComparison,
+                identifier: identifier.name
+            ))
+    }
+
+    private static func resolvedColumns(
+        for identifier: IdentifierExpression,
+        analysis: SQLReferenceAnalysis,
+        scopeSources: [[ResolvedRelationSource]],
+        schemaIndex: SchemaLookup
+    ) -> [ColumnInfo] {
+        if let qualifier = identifier.qualifier {
+            var columns: [ColumnInfo] = []
+            for scopeIndex in analysis.scopes.indices {
+                guard let source = resolveSource(
+                    qualifier,
+                    from: scopeIndex,
+                    analysis: analysis,
+                    scopeSources: scopeSources
+                ),
+                    let table = source.table,
+                    let column = schemaIndex.column(
+                        on: table,
+                        named: identifier.name,
+                        isQuoted: identifier.isQuoted
+                    )
+                else { continue }
+                columns.append(column)
+            }
+            return deduplicatedColumns(columns)
+        }
+
+        let columns = scopeSources
+            .flatMap { $0 }
+            .compactMap { source -> ColumnInfo? in
+                guard let table = source.table else { return nil }
+                return schemaIndex.column(
+                    on: table,
+                    named: identifier.name,
+                    isQuoted: identifier.isQuoted
+                )
+            }
+        return deduplicatedColumns(columns)
+    }
+
+    private static func comparisonOperator(
+        at index: Int,
+        tokens: [SQLToken]
+    ) -> (text: String, nextIndex: Int)? {
+        guard let token = tokens[safe: index] else { return nil }
+        switch token.text {
+        case "=":
+            return ("=", index + 1)
+        case "<":
+            if tokens[safe: index + 1]?.text == "=" {
+                return ("<=", index + 2)
+            }
+            if tokens[safe: index + 1]?.text == ">" {
+                return ("<>", index + 2)
+            }
+            return ("<", index + 1)
+        case ">":
+            if tokens[safe: index + 1]?.text == "=" {
+                return (">=", index + 2)
+            }
+            return (">", index + 1)
+        case "!":
+            if tokens[safe: index + 1]?.text == "=" {
+                return ("!=", index + 2)
+            }
+            return nil
+        default:
+            return nil
+        }
+    }
+
+    private static func isIntervalLiteral(startingAt index: Int, tokens: [SQLToken]) -> Bool {
+        tokens[safe: index]?.normalized == "interval"
+            && tokens[safe: index + 1]?.kind == .string
+    }
+
+    private static func isIntervalLiteral(endingAt index: Int, tokens: [SQLToken]) -> Bool {
+        index - 1 >= 0
+            && tokens[safe: index - 1]?.normalized == "interval"
+            && tokens[safe: index]?.kind == .string
+    }
+
+    private static func identifierExpression(
+        endingAt index: Int,
+        tokens: [SQLToken]
+    ) -> IdentifierExpression? {
+        guard index >= 0, tokens[safe: index]?.isIdentifierLike == true else { return nil }
+        var parts: [(value: String, isQuoted: Bool)] = []
+        var current = index
+        while current >= 0, let token = tokens[safe: current], token.isIdentifierLike {
+            parts.insert((token.identifierValue, token.kind == .quotedIdentifier), at: 0)
+            guard current >= 2,
+                tokens[safe: current - 1]?.text == ".",
+                tokens[safe: current - 2]?.isIdentifierLike == true
+            else { break }
+            current -= 2
+        }
+        return IdentifierExpression(parts: parts)
+    }
+
+    private static func identifierExpression(
+        startingAt index: Int,
+        tokens: [SQLToken]
+    ) -> IdentifierExpression? {
+        guard tokens[safe: index]?.isIdentifierLike == true else { return nil }
+        var parts: [(value: String, isQuoted: Bool)] = []
+        var current = index
+        while let token = tokens[safe: current], token.isIdentifierLike {
+            parts.append((token.identifierValue, token.kind == .quotedIdentifier))
+            guard tokens[safe: current + 1]?.text == ".",
+                tokens[safe: current + 2]?.isIdentifierLike == true
+            else { break }
+            current += 2
+        }
+        return IdentifierExpression(parts: parts)
+    }
+
+    private static func isDateOrTimeColumn(_ column: ColumnInfo) -> Bool {
+        let type = column.dataType.lowercased()
+        guard !type.contains("interval") else { return false }
+        return type == "date"
+            || type.hasPrefix("timestamp")
+            || type.hasPrefix("time ")
+            || type == "time"
+            || type.contains("timestamp")
+    }
+
+    private static func deduplicatedColumns(_ columns: [ColumnInfo]) -> [ColumnInfo] {
+        var seen = Set<String>()
+        return columns.filter { seen.insert($0.id).inserted }
+    }
+}
+
+private struct IdentifierExpression: Equatable {
+    var qualifier: String?
+    var name: String
+    var isQuoted: Bool
+
+    var displayName: String {
+        if let qualifier {
+            return "\(qualifier).\(name)"
+        }
+        return name
+    }
+
+    init?(parts: [(value: String, isQuoted: Bool)]) {
+        guard let last = parts.last else { return nil }
+        self.name = last.value
+        self.isQuoted = last.isQuoted
+        if parts.count > 1 {
+            self.qualifier = parts.dropLast().map(\.value).joined(separator: ".")
+        } else {
+            self.qualifier = nil
+        }
+    }
 }
 
 public enum GeneratedSQLPostprocessor {
@@ -445,8 +699,140 @@ public enum GeneratedSQLPostprocessor {
         let schemaValidation = SQLSchemaValidator.validate(sql: sql, against: schema)
         var copy = generation
         copy.referencedTables = schemaValidation.referencedTables
+        if !schemaValidation.hasDefiniteErrors,
+            let clarification = undefinedRequestTermClarification(
+                question: question,
+                referencedTables: schemaValidation.referencedTables,
+                schema: schema,
+                databaseContext: databaseContext
+            )
+        {
+            copy.sql = ""
+            copy.explanation = clarification
+            copy.needsClarification = true
+            copy.clarificationQuestion = clarification
+            copy.confidence = min(copy.confidence, 0.2)
+            copy.riskLevel = .medium
+        }
         return copy
     }
+
+    private static func undefinedRequestTermClarification(
+        question: String,
+        referencedTables: [String],
+        schema: DatabaseSchema,
+        databaseContext: String
+    ) -> String? {
+        guard hasMetricIntent(question) else { return nil }
+        let availableTokens = referencedSchemaTokens(
+            referencedTables: referencedTables,
+            schema: schema
+        ).union(Set(SchemaIndex.tokens(in: databaseContext)))
+
+        let terms = meaningfulRequestWords(question)
+        let unresolved = terms.filter { word in
+            let variants = SchemaIndex.tokens(in: word)
+            guard !variants.isEmpty else { return false }
+            return !variants.contains { variant in
+                tokenSet(availableTokens, containsRelatedTo: variant)
+            }
+        }
+
+        guard let first = unresolved.first else { return nil }
+        return "What column, condition, or table defines \"\(first)\" for this question?"
+    }
+
+    private static func referencedSchemaTokens(
+        referencedTables: [String],
+        schema: DatabaseSchema
+    ) -> Set<String> {
+        let referenced = Set(referencedTables.map { $0.lowercased() })
+        guard !referenced.isEmpty else { return [] }
+
+        var tokens = Set<String>()
+        for table in schema.tables where referenced.contains(table.qualifiedName.lowercased()) {
+            tokens.formUnion(SchemaIndex.tokens(in: table.schema))
+            tokens.formUnion(SchemaIndex.tokens(in: table.name))
+            for column in table.columns {
+                tokens.formUnion(SchemaIndex.tokens(in: column.name))
+                if let udtName = column.udtName {
+                    tokens.formUnion(SchemaIndex.tokens(in: udtName))
+                }
+                for constraint in column.valueConstraints ?? [] {
+                    for value in constraint.values {
+                        tokens.formUnion(SchemaIndex.tokens(in: value))
+                    }
+                    if let expression = constraint.expression {
+                        tokens.formUnion(SchemaIndex.tokens(in: expression))
+                    }
+                    if let constraintName = constraint.constraintName {
+                        tokens.formUnion(SchemaIndex.tokens(in: constraintName))
+                    }
+                }
+            }
+        }
+        return tokens
+    }
+
+    private static func meaningfulRequestWords(_ question: String) -> [String] {
+        let words = rawWords(in: question)
+        var seen = Set<String>()
+        return words.filter { word in
+            let variants = SchemaIndex.tokens(in: word)
+            guard variants.contains(where: { !$0.allSatisfy(\.isNumber) }) else { return false }
+            guard !variants.contains(where: requestStopWords.contains) else { return false }
+            guard !variants.contains(where: metricOperatorStopWords.contains) else { return false }
+            return seen.insert(word).inserted
+        }
+    }
+
+    private static func rawWords(in text: String) -> [String] {
+        text.lowercased()
+            .split { !$0.isLetter && !$0.isNumber }
+            .map(String.init)
+            .filter { !$0.isEmpty }
+    }
+
+    private static func hasMetricIntent(_ question: String) -> Bool {
+        let tokens = Set(SchemaIndex.tokens(in: question))
+        return !tokens.intersection(metricIntentWords).isEmpty
+    }
+
+    private static func tokenSet(_ tokens: Set<String>, containsRelatedTo queryToken: String) -> Bool {
+        guard !queryToken.isEmpty else { return false }
+        if tokens.contains(queryToken) { return true }
+        guard queryToken.count >= 3 else { return false }
+        return tokens.contains { token in
+            token.hasPrefix(queryToken) || (queryToken.hasPrefix(token) && token.count >= 3)
+        }
+    }
+
+    private static let metricIntentWords: Set<String> = [
+        "average", "avg", "best", "bottom", "count", "highest", "least", "lowest", "many",
+        "max", "maximum", "min", "minimum", "most", "much", "number", "percent", "percentage",
+        "rank", "rate", "ratio", "sum", "top", "total", "worst",
+    ]
+
+    private static let metricOperatorStopWords: Set<String> = [
+        "average", "avg", "bottom", "count", "highest", "least", "lowest", "many", "max",
+        "maximum", "min", "minimum", "most", "much", "number", "percent", "percentage",
+        "rank", "rate", "ratio", "sum", "top", "total",
+    ]
+
+    private static let requestStopWords: Set<String> = [
+        "a", "about", "above", "after", "again", "all", "also", "am", "an", "and", "any",
+        "are", "as", "at", "back", "be", "been", "before", "being", "between", "bottom",
+        "but", "by", "can", "could", "current", "day", "days", "did", "do", "does", "each",
+        "for", "from", "get", "getting", "give", "got", "group", "had", "has", "have", "he",
+        "her", "here", "him", "his", "hour", "hours", "how", "i", "in", "into", "is", "it",
+        "last", "latest", "least", "limit", "list", "me", "minute", "minutes", "month",
+        "months", "most", "my", "newest", "next", "not", "of", "oldest", "on", "or", "our",
+        "over", "per", "please", "recent", "return", "select", "she", "show", "since",
+        "sort", "that", "the", "their", "them", "then", "there", "these", "they", "this",
+        "those", "to", "today", "top", "under", "up", "us", "was", "we", "week", "weeks",
+        "were", "what", "when", "where", "which", "who", "whom", "whose", "why", "with",
+        "would", "year", "years", "you", "your",
+    ]
 }
 
 public enum GeneratedSQLValidator {
@@ -669,6 +1055,18 @@ private struct SchemaLookup {
         else { return nil }
         return actualName
     }
+
+    func column(on table: TableInfo, named name: String, isQuoted: Bool) -> ColumnInfo? {
+        if isQuoted {
+            return table.columns.first { $0.name == name }
+        }
+        let folded = name.lowercased()
+        if let column = table.columns.first(where: { $0.name == folded }) {
+            return column
+        }
+        guard let actualName = actualColumnName(on: table, foldedName: name) else { return nil }
+        return table.columns.first { $0.name == actualName }
+    }
 }
 
 private enum ColumnResolution {
@@ -741,4 +1139,10 @@ private struct ResolvedRelationSource {
 
 private func quotedIdentifier(_ identifier: String) -> String {
     "\"\(identifier.replacingOccurrences(of: "\"", with: "\"\""))\""
+}
+
+private extension Collection {
+    subscript(safe index: Index) -> Element? {
+        indices.contains(index) ? self[index] : nil
+    }
 }

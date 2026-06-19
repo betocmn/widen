@@ -179,7 +179,8 @@ struct SQLPromptBuilderTests {
         #expect(instructions.contains("first count rows per period"))
         #expect(instructions.contains("Do not group or partition by CURRENT_DATE itself"))
         #expect(instructions.contains("Business terms can have database-specific meanings"))
-        #expect(instructions.contains("Do not infer it from a nearby count or status"))
+        #expect(instructions.contains("other proxy metric"))
+        #expect(SQLPromptBuilder.compactInstructions(defaultRowLimit: 250).contains("Do not answer with a proxy metric"))
         #expect(instructions.contains("answers affirmatively to a previous assistant clarification"))
         // Follow-up handling for the conversation context section.
         #expect(instructions.contains("follow-up"))
