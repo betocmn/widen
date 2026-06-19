@@ -786,26 +786,25 @@ public enum SQLSchemaValidator {
         scopeSources: [[ResolvedRelationSource]],
         schemaIndex: SchemaLookup
     ) -> Bool {
-        guard let right = identifierExpressionRange(endingAt: index, tokens: tokens),
+        guard let right = temporalExpressionRange(
+            endingAt: index,
+            tokens: tokens,
+            analysis: analysis,
+            scopeSources: scopeSources,
+            schemaIndex: schemaIndex
+        ),
             tokens[safe: right.range.lowerBound - 1]?.text == "-",
-            let left = identifierExpressionRange(
+            let left = temporalExpressionRange(
                 endingAt: right.range.lowerBound - 2,
-                tokens: tokens
+                tokens: tokens,
+                analysis: analysis,
+                scopeSources: scopeSources,
+                schemaIndex: schemaIndex
             )
         else {
             return false
         }
-        return expressionResolvesToTemporalColumn(
-            left.identifier,
-            analysis: analysis,
-            scopeSources: scopeSources,
-            schemaIndex: schemaIndex
-        ) && expressionResolvesToTemporalColumn(
-            right.identifier,
-            analysis: analysis,
-            scopeSources: scopeSources,
-            schemaIndex: schemaIndex
-        )
+        return left.isTemporal && right.isTemporal
     }
 
     private static func isTemporalDifferenceExpression(
@@ -815,26 +814,114 @@ public enum SQLSchemaValidator {
         scopeSources: [[ResolvedRelationSource]],
         schemaIndex: SchemaLookup
     ) -> Bool {
-        guard let left = identifierExpressionRange(startingAt: index, tokens: tokens),
+        guard let left = temporalExpressionRange(
+            startingAt: index,
+            tokens: tokens,
+            analysis: analysis,
+            scopeSources: scopeSources,
+            schemaIndex: schemaIndex
+        ),
             tokens[safe: left.range.upperBound]?.text == "-",
-            let right = identifierExpressionRange(
+            let right = temporalExpressionRange(
                 startingAt: left.range.upperBound + 1,
-                tokens: tokens
+                tokens: tokens,
+                analysis: analysis,
+                scopeSources: scopeSources,
+                schemaIndex: schemaIndex
             )
         else {
             return false
         }
+        return left.isTemporal && right.isTemporal
+    }
+
+    private static func temporalExpressionRange(
+        endingAt index: Int,
+        tokens: [SQLToken],
+        analysis: SQLReferenceAnalysis,
+        scopeSources: [[ResolvedRelationSource]],
+        schemaIndex: SchemaLookup
+    ) -> (range: Range<Int>, isTemporal: Bool)? {
+        if tokens[safe: index]?.text == ")",
+            let openIndex = matchingOpeningParenthesis(endingAt: index, tokens: tokens),
+            let function = tokens[safe: openIndex - 1],
+            function.isIdentifierLike
+        {
+            return ((openIndex - 1)..<(index + 1), isTemporalSQLValue(function.normalized))
+        }
+
+        guard let identifier = identifierExpressionRange(endingAt: index, tokens: tokens) else {
+            return nil
+        }
+        return (
+            identifier.range,
+            expressionResolvesToTemporalValue(
+                identifier.identifier,
+                analysis: analysis,
+                scopeSources: scopeSources,
+                schemaIndex: schemaIndex
+            )
+        )
+    }
+
+    private static func temporalExpressionRange(
+        startingAt index: Int,
+        tokens: [SQLToken],
+        analysis: SQLReferenceAnalysis,
+        scopeSources: [[ResolvedRelationSource]],
+        schemaIndex: SchemaLookup
+    ) -> (range: Range<Int>, isTemporal: Bool)? {
+        if let token = tokens[safe: index],
+            token.isIdentifierLike,
+            isTemporalSQLValue(token.normalized),
+            tokens[safe: index + 1]?.text == "(",
+            let afterGroup = indexAfterBalancedGroup(tokens, startingAt: index + 1)
+        {
+            return (index..<afterGroup, true)
+        }
+
+        guard let identifier = identifierExpressionRange(startingAt: index, tokens: tokens) else {
+            return nil
+        }
+        return (
+            identifier.range,
+            expressionResolvesToTemporalValue(
+                identifier.identifier,
+                analysis: analysis,
+                scopeSources: scopeSources,
+                schemaIndex: schemaIndex
+            )
+        )
+    }
+
+    private static func expressionResolvesToTemporalValue(
+        _ identifier: IdentifierExpression,
+        analysis: SQLReferenceAnalysis,
+        scopeSources: [[ResolvedRelationSource]],
+        schemaIndex: SchemaLookup
+    ) -> Bool {
+        if identifier.qualifier == nil, isTemporalSQLValue(identifier.name.lowercased()) {
+            return true
+        }
         return expressionResolvesToTemporalColumn(
-            left.identifier,
-            analysis: analysis,
-            scopeSources: scopeSources,
-            schemaIndex: schemaIndex
-        ) && expressionResolvesToTemporalColumn(
-            right.identifier,
+            identifier,
             analysis: analysis,
             scopeSources: scopeSources,
             schemaIndex: schemaIndex
         )
+    }
+
+    private static func isTemporalSQLValue(_ normalized: String) -> Bool {
+        [
+            "clock_timestamp",
+            "current_date",
+            "current_timestamp",
+            "localtime",
+            "localtimestamp",
+            "now",
+            "statement_timestamp",
+            "transaction_timestamp",
+        ].contains(normalized)
     }
 
     private static func expressionResolvesToTemporalColumn(
@@ -900,6 +987,47 @@ public enum SQLSchemaValidator {
         }
         guard let identifier = IdentifierExpression(parts: parts) else { return nil }
         return (identifier, index..<(current + 1))
+    }
+
+    private static func matchingOpeningParenthesis(
+        endingAt closeIndex: Int,
+        tokens: [SQLToken]
+    ) -> Int? {
+        guard tokens[safe: closeIndex]?.text == ")" else { return nil }
+        var depth = 0
+        var index = closeIndex
+        while index >= 0 {
+            if tokens[index].text == ")" {
+                depth += 1
+            } else if tokens[index].text == "(" {
+                depth -= 1
+                if depth == 0 {
+                    return index
+                }
+            }
+            if index == 0 { break }
+            index -= 1
+        }
+        return nil
+    }
+
+    private static func indexAfterBalancedGroup(
+        _ tokens: [SQLToken],
+        startingAt openIndex: Int
+    ) -> Int? {
+        guard tokens[safe: openIndex]?.text == "(" else { return nil }
+        var depth = 0
+        for index in openIndex..<tokens.count {
+            if tokens[index].text == "(" {
+                depth += 1
+            } else if tokens[index].text == ")" {
+                depth -= 1
+                if depth == 0 {
+                    return index + 1
+                }
+            }
+        }
+        return nil
     }
 
     private static func isDateOrTimeColumn(_ column: ColumnInfo) -> Bool {

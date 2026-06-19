@@ -251,22 +251,53 @@ public enum SchemaPromptPackager {
         var sections: [String] = ["Database schema:"]
 
         func appendSection(_ title: String, tables: [TableInfo], force: Bool = false) {
-            var tableSections: [String] = []
+            var tableSections: [(table: TableInfo, text: String)] = []
             for table in tables where !includedIDs.contains(table.id) {
-                tableSections.append(
+                tableSections.append((
+                    table,
                     tableSection(
                         table,
                         schema: schema,
                         input: input,
                         compression: compression
-                    ))
+                    )
+                ))
             }
             guard !tableSections.isEmpty else { return }
-            let section = ([title] + tableSections).joined(separator: "\n")
-            if force || fits(sections: sections, adding: section, maxCharacters: maxCharacters) {
+            let section = ([title] + tableSections.map(\.text)).joined(separator: "\n")
+            if fits(sections: sections, adding: section, maxCharacters: maxCharacters) {
                 sections.append(section)
-                for table in tables {
+                for table in tableSections.map(\.table) {
                     includedIDs.insert(table.id)
+                }
+                return
+            }
+            guard force else { return }
+
+            var forcedLines = [title]
+            var forcedIncludedIDs: [String] = []
+            for table in tableSections.map(\.table) {
+                let compactLines = compactForcedTableLines(table, schema: schema, input: input)
+                var includedTable = false
+                for line in compactLines {
+                    let candidate = (forcedLines + [line]).joined(separator: "\n")
+                    if fits(sections: sections, adding: candidate, maxCharacters: maxCharacters) {
+                        forcedLines.append(line)
+                        if line.hasPrefix("TABLE ") {
+                            includedTable = true
+                        }
+                    } else if line.hasPrefix("TABLE ") {
+                        break
+                    }
+                }
+                if includedTable {
+                    forcedIncludedIDs.append(table.id)
+                }
+            }
+            if !forcedIncludedIDs.isEmpty {
+                sections.append(forcedLines.joined(separator: "\n"))
+                for id in forcedIncludedIDs {
+                    includedIDs.insert(id)
                 }
             }
         }
@@ -603,6 +634,45 @@ public enum SchemaPromptPackager {
             )
         }
         return lines.joined(separator: "\n")
+    }
+
+    private static func compactForcedTableLines(
+        _ table: TableInfo,
+        schema: DatabaseSchema,
+        input: SchemaRankingInput
+    ) -> [String] {
+        var lines = ["TABLE \(qualifiedName(table))"]
+        let columns = focusedColumns(
+            table,
+            schema: schema,
+            input: input,
+            compression: .minimal
+        )
+        let selectedColumns = columns.isEmpty ? Array(table.columns.prefix(4)) : columns
+        let columnNames = Set(selectedColumns.map(\.name))
+        for column in selectedColumns {
+            let nullability = column.isNullable ? "" : " NOT NULL"
+            lines.append("  \(quotedIdentifier(column.name)) \(column.dataType.lowercased())\(nullability)")
+        }
+        if table.columns.count > selectedColumns.count {
+            lines.append(
+                "  ... \(table.columns.count - selectedColumns.count) low-relevance column\(table.columns.count - selectedColumns.count == 1 ? "" : "s") omitted"
+            )
+        }
+        var seenForeignKeys = Set<String>()
+        for foreignKey in schema.foreignKeys
+        where foreignKey.sourceSchema == table.schema
+            && foreignKey.sourceTable == table.name
+            && columnNames.contains(foreignKey.sourceColumn)
+        {
+            let key =
+                "\(foreignKey.sourceColumn)->\(foreignKey.targetSchema).\(foreignKey.targetTable).\(foreignKey.targetColumn)"
+            guard seenForeignKeys.insert(key).inserted else { continue }
+            lines.append(
+                "  FK \(quotedIdentifier(foreignKey.sourceColumn)) -> \(qualifiedName(schema: foreignKey.targetSchema, table: foreignKey.targetTable)).\(quotedIdentifier(foreignKey.targetColumn))"
+            )
+        }
+        return lines
     }
 
     private static func focusedColumns(

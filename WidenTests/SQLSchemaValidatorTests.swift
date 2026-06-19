@@ -50,6 +50,16 @@ struct SQLSchemaValidatorTests {
         #expect(result.referencedTables == ["public.users"])
     }
 
+    @Test func unqualifiedAliasedRelationNamesAreNotScannedAsColumns() {
+        let result = SQLSchemaValidator.validate(
+            sql: "SELECT u.email FROM users u",
+            against: makeUsersOrdersSchema()
+        )
+
+        #expect(!result.hasDefiniteErrors)
+        #expect(result.referencedTables == ["public.users"])
+    }
+
     @Test func derivedTableAliasesResolveQualifiedColumns() {
         let result = SQLSchemaValidator.validate(
             sql: """
@@ -122,6 +132,21 @@ struct SQLSchemaValidatorTests {
                 SELECT created_at AT TIME ZONE 'UTC' AS utc_created_at
                 FROM public.orders
                 ORDER BY utc_created_at
+                """,
+            against: makeUsersOrdersSchema()
+        )
+
+        #expect(!result.hasDefiniteErrors)
+    }
+
+    @Test func postgresLiteralAndArraySyntaxIsNotTreatedAsColumns() {
+        let result = SQLSchemaValidator.validate(
+            sql: """
+                SELECT id
+                FROM public.orders
+                WHERE created_at >= TIMESTAMP '2024-01-01 00:00:00'
+                  AND created_at::date >= DATE '2024-01-01'
+                  AND user_id = ANY(ARRAY[1, 2, 3])
                 """,
             against: makeUsersOrdersSchema()
         )
@@ -273,6 +298,18 @@ struct SQLSchemaValidatorTests {
         #expect(!valid.hasDefiniteErrors)
         #expect(invalid.hasDefiniteErrors)
         #expect(invalid.errors.contains { $0.contains("missing") && $0.contains("public.users") })
+    }
+
+    @Test func insertSelectExpressionsDoNotAmbiguateAgainstInsertTarget() {
+        let result = SQLSchemaValidator.validate(
+            sql: """
+                INSERT INTO public.users (email)
+                SELECT email FROM public.staging_users AS staging
+                """,
+            against: makeUsersStagingSchema()
+        )
+
+        #expect(!result.hasDefiniteErrors)
     }
 
     @Test func excludedColumnsResolveAgainstUpsertTarget() {
@@ -540,6 +577,15 @@ struct SQLSchemaValidatorTests {
     @Test func timestampDifferenceCanBeComparedToInterval() {
         let result = SQLSchemaValidator.validate(
             sql: "SELECT id FROM public.jobs WHERE finished_at - started_at > INTERVAL '1 hour'",
+            against: makeIntervalSchema()
+        )
+
+        #expect(!result.hasDefiniteErrors)
+    }
+
+    @Test func temporalFunctionDifferenceCanBeComparedToInterval() {
+        let result = SQLSchemaValidator.validate(
+            sql: "SELECT id FROM public.jobs WHERE NOW() - started_at > INTERVAL '7 days'",
             against: makeIntervalSchema()
         )
 

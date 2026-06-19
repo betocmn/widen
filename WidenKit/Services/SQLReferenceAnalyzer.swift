@@ -301,8 +301,31 @@ public enum SQLReferenceAnalyzer {
                     in: tokens,
                     after: index + 1
                 ) ?? tokens.count
-                let statementStart = statementStartForSelect(at: index, tokens: tokens)
-                let statementTokens = Array(tokens[statementStart..<statementEnd])
+                if let insertPrefix = insertPrefixForSelect(at: index, tokens: tokens) {
+                    let targetRelations = parseRelations(
+                        insertPrefix,
+                        cteNames: cteNames,
+                        incomplete: &incomplete,
+                        skipCTEs: false
+                    )
+                    let targetColumns = parseColumnReferences(
+                        insertPrefix,
+                        relations: targetRelations,
+                        cteNames: cteNames,
+                        outputAliases: [],
+                        skipNestedSubqueries: true
+                    )
+                    if !targetRelations.isEmpty || !targetColumns.isEmpty {
+                        scopes.append(
+                            SQLReferenceScope(
+                                relations: targetRelations,
+                                columns: targetColumns,
+                                outputAliases: [],
+                                parentIndex: parentIndex
+                            ))
+                    }
+                }
+                let statementTokens = Array(tokens[index..<statementEnd])
                 let relations = parseRelations(
                     statementTokens,
                     cteNames: cteNames,
@@ -821,7 +844,10 @@ public enum SQLReferenceAnalyzer {
                 || (outputAliases.contains(normalized)
                     && isPermittedOutputAliasReference(at: index, tokens: tokens))
                 || relationAliases.contains(normalized)
+                || isRelationDeclarationName(at: index, tokens: tokens)
                 || isCastTypeName(at: index, tokens: tokens)
+                || isTypedLiteralPrefix(at: index, tokens: tokens)
+                || isArrayConstructor(at: index, tokens: tokens)
                 || isInsideExtractField(at: index, tokens: tokens)
                 || isOnConflictConstraintName(at: index, tokens: tokens)
                 || tokens[safe: index + 1]?.text == "("
@@ -1124,6 +1150,35 @@ public enum SQLReferenceAnalyzer {
         return false
     }
 
+    private static func isTypedLiteralPrefix(at index: Int, tokens: [SQLToken]) -> Bool {
+        let normalized = tokens[safe: index]?.normalized
+        guard normalized == "date" || normalized == "timestamp" else { return false }
+        if tokens[safe: index + 1]?.kind == .string {
+            return true
+        }
+        if normalized == "timestamp",
+            tokens[safe: index + 1]?.normalized == "with",
+            tokens[safe: index + 2]?.normalized == "time",
+            tokens[safe: index + 3]?.normalized == "zone",
+            tokens[safe: index + 4]?.kind == .string
+        {
+            return true
+        }
+        if normalized == "timestamp",
+            tokens[safe: index + 1]?.normalized == "without",
+            tokens[safe: index + 2]?.normalized == "time",
+            tokens[safe: index + 3]?.normalized == "zone",
+            tokens[safe: index + 4]?.kind == .string
+        {
+            return true
+        }
+        return false
+    }
+
+    private static func isArrayConstructor(at index: Int, tokens: [SQLToken]) -> Bool {
+        tokens[safe: index]?.normalized == "array" && tokens[safe: index + 1]?.text == "["
+    }
+
     private static func isQualifiedRelationTarget(at index: Int, tokens: [SQLToken]) -> Bool {
         guard tokens[safe: index + 1]?.text == ".",
             tokens[safe: index + 2]?.isIdentifierLike == true
@@ -1167,13 +1222,33 @@ public enum SQLReferenceAnalyzer {
         return false
     }
 
-    private static func statementStartForSelect(at index: Int, tokens: [SQLToken]) -> Int {
+    private static func insertPrefixForSelect(at index: Int, tokens: [SQLToken]) -> [SQLToken]? {
         guard let insertIndex = previousTopLevelIndex(ofAny: ["insert"], in: tokens, before: index),
             nextTopLevelIndex(ofAny: ["select"], in: tokens, after: insertIndex + 1) == index
         else {
-            return index
+            return nil
         }
-        return insertIndex
+        return Array(tokens[insertIndex..<index])
+    }
+
+    private static func isRelationDeclarationName(at index: Int, tokens: [SQLToken]) -> Bool {
+        guard tokens[safe: index]?.isIdentifierLike == true else { return false }
+        var cursor = index - 1
+        while cursor >= 0,
+            ["only", "lateral"].contains(tokens[cursor].normalized)
+        {
+            cursor -= 1
+        }
+        guard cursor >= 0 else { return false }
+        let previous = tokens[cursor]
+        if relationStartKeywords.contains(previous.normalized) {
+            return true
+        }
+        if previous.text == "," {
+            guard let clause = topLevelClause(containing: index, tokens: tokens) else { return false }
+            return clause == "from" || clause == "using"
+        }
+        return false
     }
 
     private static func canPrecedeImplicitOutputAlias(_ token: SQLToken) -> Bool {
@@ -1550,7 +1625,7 @@ struct SQLToken: Equatable, Sendable {
         "between", "case", "when", "then", "else", "end", "asc", "desc", "insert", "into",
         "update", "delete", "set", "values", "returning", "distinct", "over", "partition",
         "filter", "left", "right", "inner", "outer", "full", "cross", "lateral", "only",
-        "using", "at", "time", "zone",
+        "using", "at", "time", "zone", "with", "without", "any", "all",
         "true", "false", "interval", "current_date", "current_timestamp", "now", "like",
         "ilike", "similar", "escape", "nulls", "first", "last", "default", "conflict",
         "do", "nothing", "constraint", "rows", "row", "range", "groups", "unbounded",

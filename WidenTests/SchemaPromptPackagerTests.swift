@@ -86,6 +86,62 @@ struct SchemaPromptPackagerTests {
         #expect(package.pinnedTables.contains("public.preseason_match_batch"))
     }
 
+    @Test func forcedPinnedTableSectionStaysWithinTinyBudget() {
+        var columns = [
+            column("large_status_events", "id", ordinal: 1),
+            column(
+                "large_status_events",
+                "status",
+                type: "text",
+                ordinal: 2,
+                valueConstraints: [
+                    ColumnValueConstraint(
+                        kind: .check,
+                        values: (0..<20).map { "very_long_allowed_status_value_\($0)" },
+                        expression:
+                            "CHECK (status = ANY (ARRAY['very_long_allowed_status_value_0', 'very_long_allowed_status_value_1']))"
+                    )
+                ]
+            ),
+            column("large_status_events", "created_at", type: "timestamp with time zone", ordinal: 3),
+        ]
+        for index in 0..<20 {
+            columns.append(
+                column("large_status_events", "descriptive_payload_column_\(index)", type: "text", ordinal: 10 + index)
+            )
+        }
+        let schema = DatabaseSchema(
+            schemas: [SchemaInfo(name: "public")],
+            tables: [
+                TableInfo(
+                    schema: "public",
+                    name: "large_status_events",
+                    type: .baseTable,
+                    columns: columns
+                )
+            ],
+            foreignKeys: []
+        )
+        let context = SQLGenerationContext(
+            mode: .followUp,
+            currentSQL: "SELECT * FROM public.large_status_events",
+            repairContext: nil
+        )
+
+        let package = SchemaPromptPackager.package(
+            schema: schema,
+            question: "show the latest status events",
+            context: context,
+            databaseContext: "",
+            maxCharacters: 500
+        )
+
+        #expect(package.text.count <= 500)
+        #expect(!package.diagnostics.overflowedBudget)
+        #expect(package.text.contains(#"TABLE "public"."large_status_events""#))
+        #expect(package.pinnedTables.contains("public.large_status_events"))
+    }
+
     @Test func quotedCurrentSQLRelationPinsCanonicalTableName() {
         let schema = makeQuotedSalesSchema(extraTables: 20)
         let context = SQLGenerationContext(
