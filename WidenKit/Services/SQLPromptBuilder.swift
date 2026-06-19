@@ -44,9 +44,8 @@ public enum SQLPromptBuilder {
         - The prompt may include conversation context: earlier questions, the current SQL, and the error of its last run. Treat the user's question as a follow-up to that context — adjust the current SQL when asked, and when an error is shown, produce a corrected version of that query that still answers the earlier questions.
         - If the user answers affirmatively to a previous assistant clarification question, treat that answer as approval to use the proposed definition or constraint. Generate SQL for the original request with that approved interpretation; do not ask the same clarification question again.
         - If a required entity, metric, business meaning, relationship, or time interpretation is undefined by the Database context or provided schema, set needsClarification to true and ask a concise clarification question.
-        - Assumptions may resolve presentation choices such as LIMIT, sort direction, or inclusive date boundaries. Assumptions MUST NOT invent schema objects, joins, winner definitions, revenue definitions, status meanings, ownership rules, or other business semantics.
-        - Terms such as wins, revenue, active, churn, conversion, success, owner, retained, and best can have database-specific meanings. If the Database context and schema do not define the requested term, ask what column, condition, or table defines it. Do not infer it from a nearby count or status.
-        - For win/winner questions, if the schema provides a winner-style identifier or foreign key, count/group by that winner identifier and join to the referenced entity table for labels. Do not substitute unrelated participant identifiers as wins, and do not compare enum-like winner/status fields to invented literal values unless Database context defines those values.
+        - Assumptions may resolve presentation choices such as LIMIT, sort direction, or inclusive date boundaries. Assumptions MUST NOT invent schema objects, joins, metric definitions, status meanings, ownership rules, or other business semantics.
+        - Business terms can have database-specific meanings. If the Database context and schema do not define the requested term, ask what column, condition, or table defines it. Do not infer it from a nearby count or status.
         - A plausible-looking query that does not answer the user's requested metric is incorrect.
         - If the request cannot be answered from the schema, set needsClarification to true and ask a concise clarification question.
         - Output only the requested structured result.
@@ -74,7 +73,7 @@ public enum SQLPromptBuilder {
         - Use <database_context> as business guidance when present. Schema remains authoritative.
         - In repair mode, the diagnostic and repair constraints are authoritative.
         - If a needed table, column, relationship, metric, status value, or business term is undefined, set needsClarification true and ask one concise question.
-        - Do not invent winner, revenue, active, success, owner, retained, or best definitions. For win/winner questions, count a winner-style identifier that joins to an entity table when the schema provides it; do not substitute unrelated participant IDs.
+        - Do not invent metric, status, ownership, or business-term definitions.
         - A plausible query that answers a different metric is wrong.
         - Output only the requested structured result.
         """
@@ -459,17 +458,6 @@ public enum SQLPromptBuilder {
             return nil
         }
 
-        if let question,
-            let schema,
-            let clarification = winnerRelationshipClarificationQuestion(
-                for: text,
-                question: question,
-                schema: schema
-            )
-        {
-            return clarification
-        }
-
         let missingColumns = missingColumnNames(in: text)
         let missingColumn =
             missingColumns.first
@@ -491,85 +479,6 @@ public enum SQLPromptBuilder {
             return
                 "I'm having trouble identifying which column should replace \"\(missingColumn)\". Did you mean \"\(options)\", or \"\(candidates.last!)\", or something else?"
         }
-    }
-
-    private static func winnerRelationshipClarificationQuestion(
-        for text: String,
-        question: String,
-        schema: DatabaseSchema
-    ) -> String? {
-        let questionTokens = Set(SchemaIndex.tokens(in: question))
-        guard !questionTokens.intersection(["win", "wins", "winner", "winning", "won"]).isEmpty
-        else { return nil }
-        let missingColumns = Set(missingColumnNames(in: text).map {
-            SchemaRelevanceRanker.canonicalIdentifier($0)
-        })
-        guard !missingColumns.isEmpty || text.localizedCaseInsensitiveContains("column")
-        else { return nil }
-
-        for foreignKey in schema.foreignKeys {
-            let sourceColumnTokens = Set(SchemaIndex.tokens(in: foreignKey.sourceColumn))
-            guard !sourceColumnTokens.intersection(["win", "winner", "winning", "won"]).isEmpty,
-                let sourceTable = table(
-                    schemaName: foreignKey.sourceSchema,
-                    tableName: foreignKey.sourceTable,
-                    in: schema
-                ),
-                let targetTable = table(
-                    schemaName: foreignKey.targetSchema,
-                    tableName: foreignKey.targetTable,
-                    in: schema
-                )
-            else {
-                continue
-            }
-            var details = [
-                "\(qualifiedIdentifier(schema: foreignKey.sourceSchema, name: foreignKey.sourceTable, column: foreignKey.sourceColumn)) joins to \(qualifiedIdentifier(schema: foreignKey.targetSchema, name: foreignKey.targetTable, column: foreignKey.targetColumn))"
-            ]
-            if let temporalColumn = temporalColumn(in: sourceTable, questionTokens: questionTokens) {
-                details.append(
-                    "\(qualifiedIdentifier(schema: sourceTable.schema, name: sourceTable.name, column: temporalColumn.name)) can filter the requested time window"
-                )
-            }
-            return
-                "I can see \(details.joined(separator: ", ")). Should I define \"most wins\" as counting rows where \(qualifiedIdentifier(schema: foreignKey.sourceSchema, name: foreignKey.sourceTable, column: foreignKey.sourceColumn)) is not null, grouped by \(qualifiedIdentifier(schema: foreignKey.targetSchema, name: foreignKey.targetTable, column: foreignKey.targetColumn)) and labeled from \(qualifiedIdentifier(schema: targetTable.schema, name: targetTable.name))?"
-        }
-        return nil
-    }
-
-    private static func table(
-        schemaName: String,
-        tableName: String,
-        in schema: DatabaseSchema
-    ) -> TableInfo? {
-        schema.tables.first { $0.schema == schemaName && $0.name == tableName }
-    }
-
-    private static func temporalColumn(
-        in table: TableInfo,
-        questionTokens: Set<String>
-    ) -> ColumnInfo? {
-        let temporalIntentTokens: Set<String> = [
-            "last", "recent", "today", "yesterday", "week", "weeks", "month", "months",
-            "day", "days", "date", "time", "since", "between",
-        ]
-        guard !questionTokens.intersection(temporalIntentTokens).isEmpty else { return nil }
-        let temporalColumns = table.columns.filter { column in
-            let dataType = column.dataType.lowercased()
-            return dataType.contains("timestamp") || dataType == "date"
-        }
-        let preferredNames = [
-            "createdat", "created_at", "completed_at", "completedat", "started_at",
-            "startedat", "scheduled_for", "scheduledfor", "updatedat", "updated_at",
-        ]
-        for name in preferredNames {
-            if let column = temporalColumns.first(where: {
-                SchemaRelevanceRanker.canonicalIdentifier($0.name) == name
-            }) {
-                return column
-            }
-        }
-        return temporalColumns.first
     }
 
     private static func missingColumnNames(in text: String) -> [String] {

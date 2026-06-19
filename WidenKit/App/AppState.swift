@@ -224,7 +224,7 @@ public final class AppState {
         }
     }
 
-    /// The active SQL generation backend: mock wins, then the selected
+    /// The active SQL generation backend: mock takes precedence, then the selected
     /// backend if it is available. Production never silently swaps to another
     /// backend when the selected one is unavailable.
     public var sqlGenerator: any SQLGenerator {

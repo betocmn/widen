@@ -443,92 +443,9 @@ public enum GeneratedSQLPostprocessor {
         guard !sql.isEmpty else { return generation }
 
         let schemaValidation = SQLSchemaValidator.validate(sql: sql, against: schema)
-        if let clarification = businessTermClarification(
-            question: question,
-            schemaValidation: schemaValidation,
-            schema: schema,
-            databaseContext: databaseContext
-        ) {
-            return SQLGenerationResult(
-                sql: "",
-                explanation: "",
-                assumptions: [],
-                referencedTables: schemaValidation.referencedTables,
-                confidence: 0,
-                riskLevel: .high,
-                needsClarification: true,
-                clarificationQuestion: clarification
-            )
-        }
-
         var copy = generation
         copy.referencedTables = schemaValidation.referencedTables
         return copy
-    }
-
-    public static func businessTermClarification(
-        question: String,
-        schemaValidation: SQLSchemaValidationResult,
-        schema: DatabaseSchema,
-        databaseContext: String
-    ) -> String? {
-        let questionTokens = Set(SchemaIndex.tokens(in: question))
-        guard !questionTokens.intersection(highRiskBusinessTerms).isEmpty else { return nil }
-        let contextTokens = Set(SchemaIndex.tokens(in: databaseContext))
-        let referencedTableIDs = Set(schemaValidation.referencedTables)
-        let referencedTables = schema.tables.filter { referencedTableIDs.contains($0.qualifiedName) }
-        let schemaTokens = Set(referencedTables.flatMap { table in
-            SchemaIndex.tokens(in: table.name)
-                + table.columns.flatMap(columnSemanticTokens)
-        })
-
-        if !questionTokens.intersection(winBusinessTerms).isEmpty {
-            if !contextTokens.intersection(winDefinitionTokens).isEmpty
-                || !schemaTokens.intersection(winDefinitionTokens).isEmpty
-            {
-                return nil
-            }
-            return
-                "I found candidate fields, but the selected schema does not define what counts as a win. What table, column, or condition represents a win?"
-        }
-
-        if !contextTokens.intersection(highRiskBusinessTerms.union(supportingBusinessTokens)).isEmpty {
-            return nil
-        }
-        guard schemaTokens.intersection(highRiskBusinessTerms.union(supportingBusinessTokens)).isEmpty
-        else { return nil }
-        return
-            "I need the database-specific definition for this metric before I can write SQL safely. What table, column, or condition defines it?"
-    }
-
-    private static let highRiskBusinessTerms: Set<String> = [
-        "win", "wins", "winner", "revenue", "active", "churn", "conversion", "success",
-        "owner", "retained", "best",
-    ]
-
-    private static let winBusinessTerms: Set<String> = [
-        "win", "wins", "winner",
-    ]
-
-    private static let winDefinitionTokens: Set<String> = [
-        "winner", "winning", "won", "win", "wins", "victor", "victory", "lost", "loss",
-        "loser",
-    ]
-
-    private static let supportingBusinessTokens: Set<String> = [
-        "winner", "winning", "won", "win", "wins", "result", "outcome", "verdict",
-        "score", "rank", "revenue", "amount", "active", "status", "success",
-    ]
-
-    private static func columnSemanticTokens(_ column: ColumnInfo) -> [String] {
-        var tokens = SchemaIndex.tokens(in: column.name)
-        for constraint in column.valueConstraints ?? [] {
-            tokens += constraint.values.flatMap { SchemaIndex.tokens(in: $0) }
-            if let expression = constraint.expression {
-                tokens += SchemaIndex.tokens(in: expression)
-            }
-        }
-        return tokens
     }
 }
 

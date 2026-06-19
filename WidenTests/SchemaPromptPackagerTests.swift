@@ -86,7 +86,7 @@ struct SchemaPromptPackagerTests {
         #expect(package.pinnedTables.contains("public.preseason_match_batch"))
     }
 
-    @Test func winnerRelationshipHintUsesOriginalQuestionAndPinsEntityTable() {
+    @Test func packagingDoesNotEmitDomainSpecificWinnerHints() {
         let schema = makeWinningToolSchema(extraTables: 12)
         let context = SQLGenerationContext(
             originalQuestion: "what are tools that are getting the most wins in the last two weeks?",
@@ -106,22 +106,12 @@ struct SchemaPromptPackagerTests {
             maxCharacters: 3_500
         )
 
-        #expect(package.text.contains("Relationship hints:"))
-        #expect(package.text.contains("Winner relation:"))
-        #expect(
-            package.text.contains(
-                #""public"."preseason_match_evaluation"."winner_id" -> "public"."preseason_tool"."id""#
-            ))
-        #expect(package.text.contains(#"count non-null "public"."preseason_match_evaluation"."winner_id""#))
-        #expect(package.text.contains(#""public"."preseason_match_evaluation"."createdAt""#))
-        #expect(package.text.contains("NOW() - INTERVAL '14 days'"))
-        #expect(package.text.contains("decision/status values:"))
-        #expect(package.text.contains(#""public"."preseason_match_evaluation"."winner_decision" (values: 'tool_a', 'tool_b', 'tie')"#))
-        #expect(package.text.contains(#"TABLE "public"."preseason_tool""#))
-        #expect(package.pinnedTables.contains("public.preseason_tool"))
+        #expect(!package.text.contains("Winner relation:"))
+        #expect(!package.text.contains("count non-null"))
+        #expect(!package.text.contains(#"Should I define "most wins""#))
     }
 
-    @Test func winnerRelationshipHintIncludesWinnerForeignKeysWithoutEntityNameSpecialCases() {
+    @Test func packagingDoesNotInferWinnerForeignKeysFromQuestionTerms() {
         let schema = makeWinningToolSchema(extraTables: 12, includeNonToolWinnerRelation: true)
         let context = SQLGenerationContext(
             originalQuestion: "what are tools that are getting the most wins in the last two weeks?"
@@ -135,14 +125,8 @@ struct SchemaPromptPackagerTests {
             maxCharacters: 3_500
         )
 
-        #expect(
-            package.text.contains(
-                #"Winner relation: "public"."preseason_match_evaluation"."winner_id" -> "public"."preseason_tool"."id""#
-            ))
-        #expect(
-            package.text.contains(
-                #"Winner relation: "public"."preseason_match_evaluation"."winner_scorekeeper_id""#
-            ))
+        #expect(!package.text.contains("Winner relation:"))
+        #expect(!package.text.contains("count non-null"))
     }
 
     @Test func missingColumnRelationshipHintShowsJoinToColumnOwner() {

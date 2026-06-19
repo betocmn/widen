@@ -178,8 +178,8 @@ struct SQLPromptBuilderTests {
         #expect(instructions.contains("DATE_TRUNC('day'"))
         #expect(instructions.contains("first count rows per period"))
         #expect(instructions.contains("Do not group or partition by CURRENT_DATE itself"))
-        #expect(instructions.contains("winner-style identifier"))
-        #expect(instructions.contains("Do not substitute unrelated participant identifiers as wins"))
+        #expect(instructions.contains("Business terms can have database-specific meanings"))
+        #expect(instructions.contains("Do not infer it from a nearby count or status"))
         #expect(instructions.contains("answers affirmatively to a previous assistant clarification"))
         // Follow-up handling for the conversation context section.
         #expect(instructions.contains("follow-up"))
@@ -425,7 +425,7 @@ struct SQLPromptBuilderTests {
         #expect(question?.contains("which table, join, or relationship") == true)
     }
 
-    @Test func missingColumnClarificationQuestionUsesWinningToolRelationship() {
+    @Test func missingColumnClarificationQuestionDoesNotInventMetricRelationship() {
         let question = SQLPromptBuilder.missingColumnClarificationQuestion(
             for:
                 "The SQL failed validation: Schema validation failed: column tool_id is not available from the referenced tables.",
@@ -433,10 +433,10 @@ struct SQLPromptBuilderTests {
             schema: makeWinningToolSchema()
         )
 
-        #expect(question?.contains(#""public"."preseason_match_evaluation"."winner_id" joins to "public"."preseason_tool"."id""#) == true)
-        #expect(question?.contains(#""public"."preseason_match_evaluation"."createdAt" can filter the requested time window"#) == true)
-        #expect(question?.contains(#"Should I define "most wins" as counting rows"#) == true)
-        #expect(question?.contains(#""public"."preseason_match_evaluation"."winner_id" is not null"#) == true)
+        #expect(question?.contains("\"tool_id\"") == true)
+        #expect(question?.contains("which table, join, or relationship") == true)
+        #expect(question?.contains("most wins") != true)
+        #expect(question?.contains("winner_id") != true)
     }
 
     @Test func repairPromptIncludesFailedSQLOnceAndOmitsChatHistory() {

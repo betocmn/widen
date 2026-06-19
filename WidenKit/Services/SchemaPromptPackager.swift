@@ -419,76 +419,10 @@ public enum SchemaPromptPackager {
         schema: DatabaseSchema,
         input: SchemaRankingInput
     ) -> [RelationshipHint] {
-        var hints =
-            winnerRelationshipHints(schema: schema, input: input)
-            + missingColumnRelationshipHints(schema: schema, input: input)
+        var hints = missingColumnRelationshipHints(schema: schema, input: input)
         var seen = Set<String>()
         hints = hints.filter { seen.insert($0.text).inserted }
         return Array(hints.prefix(6))
-    }
-
-    private static func winnerRelationshipHints(
-        schema: DatabaseSchema,
-        input: SchemaRankingInput
-    ) -> [RelationshipHint] {
-        let tokens = inputTokens(input)
-        guard hasWinnerIntent(tokens) else { return [] }
-
-        return schema.foreignKeys.compactMap { foreignKey in
-            let sourceColumnTokens = Set(SchemaIndex.tokens(in: foreignKey.sourceColumn))
-            guard !sourceColumnTokens.intersection(winTokens).isEmpty else { return nil }
-            guard let sourceTable = table(
-                schemaName: foreignKey.sourceSchema,
-                tableName: foreignKey.sourceTable,
-                in: schema
-            ),
-                let targetTable = table(
-                    schemaName: foreignKey.targetSchema,
-                    tableName: foreignKey.targetTable,
-                    in: schema
-                )
-            else { return nil }
-
-            let sourceColumn = qualifiedColumn(
-                schema: foreignKey.sourceSchema,
-                table: foreignKey.sourceTable,
-                column: foreignKey.sourceColumn
-            )
-            let targetColumn = qualifiedColumn(
-                schema: foreignKey.targetSchema,
-                table: foreignKey.targetTable,
-                column: foreignKey.targetColumn
-            )
-            var parts = [
-                "Winner relation: \(sourceColumn) -> \(targetColumn)",
-                "count non-null \(sourceColumn)",
-                "group by \(sourceColumn)",
-                "label from \(qualifiedName(targetTable))",
-            ]
-            if let temporalColumn = temporalColumn(in: sourceTable, tokens: tokens) {
-                parts.append(
-                    "time filter: \(qualifiedColumn(schema: sourceTable.schema, table: sourceTable.name, column: temporalColumn.name)) >= NOW() - INTERVAL '14 days'"
-                )
-            }
-            let decisionColumns = sourceTable.columns.filter {
-                SchemaIndex.tokens(in: $0.name).contains("decision")
-                    || SchemaRelevanceRanker.canonicalIdentifier($0.name).contains("status")
-            }
-            let constrainedDecisionColumns = decisionColumns.compactMap { column -> String? in
-                guard let summary = valueConstraintSummary(column) else { return nil }
-                return "\(qualifiedColumn(schema: sourceTable.schema, table: sourceTable.name, column: column.name)) \(summary)"
-            }
-            if !constrainedDecisionColumns.isEmpty {
-                parts.append("decision/status values: \(constrainedDecisionColumns.joined(separator: "; "))")
-            } else if !decisionColumns.isEmpty {
-                parts.append("do not invent decision/status literal values")
-            }
-
-            return RelationshipHint(
-                text: parts.joined(separator: "; ") + ".",
-                tableIDs: [sourceTable.id, targetTable.id]
-            )
-        }
     }
 
     private static func missingColumnRelationshipHints(
@@ -599,38 +533,6 @@ public enum SchemaPromptPackager {
             ))
     }
 
-    private static func hasWinnerIntent(_ tokens: Set<String>) -> Bool {
-        !tokens.intersection(winTokens).isEmpty
-    }
-
-    private static func temporalColumn(in table: TableInfo, tokens: Set<String>) -> ColumnInfo? {
-        let temporalIntentTokens: Set<String> = [
-            "last", "recent", "today", "yesterday", "week", "weeks", "month", "months",
-            "day", "days", "date", "time", "since", "between",
-        ]
-        guard !tokens.intersection(temporalIntentTokens).isEmpty else { return nil }
-        let temporalColumns = table.columns.filter { column in
-            let dataType = column.dataType.lowercased()
-            return dataType.contains("timestamp") || dataType == "date"
-        }
-        let preferredNames = [
-            "createdat", "created_at", "completed_at", "completedat", "started_at",
-            "startedat", "scheduled_for", "scheduledfor", "updatedat", "updated_at",
-        ]
-        for name in preferredNames {
-            if let column = temporalColumns.first(where: {
-                SchemaRelevanceRanker.canonicalIdentifier($0.name) == name
-            }) {
-                return column
-            }
-        }
-        return temporalColumns.first
-    }
-
-    private static let winTokens: Set<String> = [
-        "win", "winner", "winning", "won", "victory", "victor",
-    ]
-
     private static func automaticCompression(
         maxCharacters: Int,
         input: SchemaRankingInput
@@ -725,7 +627,6 @@ public enum SchemaPromptPackager {
                 ].joined(separator: " ")
             )
         )
-        let winningIntent = hasWinnerIntent(inputTokens)
         let foreignKeyColumns = Set(schema.foreignKeys.flatMap { foreignKey -> [String] in
             var names: [String] = []
             if foreignKey.sourceSchema == table.schema && foreignKey.sourceTable == table.name {
@@ -756,7 +657,6 @@ public enum SchemaPromptPackager {
                 || isTemporalColumn(column)
                 || column.valueConstraints?.isEmpty == false
                 || !inputTokens.intersection(columnTokens).isEmpty
-                || (winningIntent && !columnTokens.intersection(winTokens).isEmpty)
             {
                 append(column, to: &required)
             }

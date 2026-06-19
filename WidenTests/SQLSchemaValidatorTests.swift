@@ -169,7 +169,7 @@ struct SQLSchemaValidatorTests {
         #expect(enriched.referencedTables == ["public.users"])
     }
 
-    @Test func undefinedWinsMetricAsksForClarification() {
+    @Test func postprocessorDoesNotHardcodeWinsClarification() {
         let generation = SQLGenerationResult(
             sql: "SELECT tool_a_id, COUNT(*) FROM public.preseason_match_batch GROUP BY tool_a_id",
             explanation: "Counts tool A appearances.",
@@ -188,12 +188,12 @@ struct SQLSchemaValidatorTests {
             databaseContext: ""
         )
 
-        #expect(enriched.needsClarification)
-        #expect(enriched.sql.isEmpty)
-        #expect(enriched.clarificationQuestion?.contains("what counts as a win") == true)
+        #expect(!enriched.needsClarification)
+        #expect(enriched.sql == generation.sql)
+        #expect(enriched.referencedTables == ["public.preseason_match_batch"])
     }
 
-    @Test func genericResultStatusAndScoreDoNotDefineWins() {
+    @Test func genericOutcomeFieldsDoNotTriggerHardcodedWinsClarification() {
         let generation = SQLGenerationResult(
             sql: "SELECT tool_a_id, COUNT(*) FROM public.preseason_match_batch GROUP BY tool_a_id",
             explanation: "Counts appearances.",
@@ -212,8 +212,9 @@ struct SQLSchemaValidatorTests {
             databaseContext: ""
         )
 
-        #expect(enriched.needsClarification)
-        #expect(enriched.clarificationQuestion?.contains("what counts as a win") == true)
+        #expect(!enriched.needsClarification)
+        #expect(enriched.sql == generation.sql)
+        #expect(enriched.referencedTables == ["public.preseason_match_batch"])
     }
 
     @Test func enumValueCanDefineBusinessTerm() {
