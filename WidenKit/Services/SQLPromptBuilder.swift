@@ -471,19 +471,22 @@ public enum SQLPromptBuilder {
         switch candidates.count {
         case 0:
             return
-                "I'm having trouble identifying which schema column should replace \(missingColumnList). Can you clarify which table, join, or relationship defines that value?"
+                "I found \(missingColumnList) in the generated SQL, but not on the table the query used. Which table or relationship should I use for that part of the request?"
         case 1:
             return
-                "I'm having trouble confirming whether \"\(candidates[0])\" should replace \"\(missingColumn)\". Can you clarify which entity or relationship you mean?"
+                "I could not find \"\(missingColumn)\" on the table the query used. Should I use \"\(candidates[0])\" for that part of the request?"
         default:
             let options = candidates.dropLast().joined(separator: "\", \"")
             return
-                "I'm having trouble identifying which column should replace \"\(missingColumn)\". Did you mean \"\(options)\", or \"\(candidates.last!)\", or something else?"
+                "I could not find \"\(missingColumn)\" on the table the query used. Should I use \"\(options)\", \"\(candidates.last!)\", or something else for that part of the request?"
         }
     }
 
     private static func missingColumnNames(in text: String) -> [String] {
-        var names = quotedIdentifiers(in: text).filter { !$0.contains(".") }
+        var names = capturedValues(
+            in: text,
+            pattern: #"(?i)column "([^"]+)" does not exist"#
+        )
         names.append(
             contentsOf: capturedValues(
                 in: text,

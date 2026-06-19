@@ -153,6 +153,11 @@ public final class SessionController: Identifiable {
         }
 
         let questionContext = questionContextForRepair(startingSQL: failedSQL)
+        let forbiddenIdentifiers = Self.forbiddenIdentifiers(
+            sql: failedSQL,
+            error: error,
+            schema: schema
+        )
         let context = SQLGenerationContext(
             mode: .repair,
             recentQuestions: questionContext.recentQuestions,
@@ -163,9 +168,9 @@ public final class SessionController: Identifiable {
             repairContext: SQLRepairContext(
                 failedSQL: failedSQL,
                 diagnostic: Self.diagnostic(from: error),
-                forbiddenIdentifiers: Self.forbiddenIdentifiers(sql: failedSQL, error: error),
+                forbiddenIdentifiers: forbiddenIdentifiers,
                 repairConstraints: Self.repairConstraints(
-                    forbiddenIdentifiers: Self.forbiddenIdentifiers(sql: failedSQL, error: error),
+                    forbiddenIdentifiers: forbiddenIdentifiers,
                     error: error
                 ),
                 priorFingerprints: [Self.normalizedSQL(failedSQL)]
@@ -390,7 +395,8 @@ public final class SessionController: Identifiable {
         let forbiddenIdentifiers = Self.forbiddenIdentifiers(
             sql: startingSQL,
             error: firstError,
-            diagnostic: firstDiagnostic
+            diagnostic: firstDiagnostic,
+            schema: schema
         )
         var coordinator = GeneratedSQLRepairCoordinator(
             failedSQL: startingSQL,
@@ -473,6 +479,11 @@ public final class SessionController: Identifiable {
 
             case .rejected(let reason):
                 if case .repeatedFingerprint = reason,
+                    !Self.missingColumnsCanBeResolvedByJoining(
+                        sql: startingSQL,
+                        error: firstDiagnostic?.displayMessage ?? firstError,
+                        schema: schema
+                    ),
                     let clarification = SQLPromptBuilder.missingColumnClarificationQuestion(
                         for: firstDiagnostic?.displayMessage ?? firstError,
                         question: questionContext.originalQuestion ?? questionContext.question,
@@ -563,22 +574,20 @@ public final class SessionController: Identifiable {
                 appState.sessionDidChange(sessionID)
                 return
             }
+            let forbiddenIdentifiers = Self.forbiddenIdentifiers(
+                sql: generatedSQL,
+                error: errorMessage,
+                diagnostic: executionFailure.diagnostic,
+                schema: schema
+            )
             coordinator.recordExecutionFailure(
                 mode: repairMode,
                 sql: generatedSQL,
                 error: errorMessage,
                 diagnostic: executionFailure.diagnostic ?? Self.diagnostic(from: errorMessage),
-                forbiddenIdentifiers: Self.forbiddenIdentifiers(
-                    sql: generatedSQL,
-                    error: errorMessage,
-                    diagnostic: executionFailure.diagnostic
-                ),
+                forbiddenIdentifiers: forbiddenIdentifiers,
                 repairConstraints: Self.repairConstraints(
-                    forbiddenIdentifiers: Self.forbiddenIdentifiers(
-                        sql: generatedSQL,
-                        error: errorMessage,
-                        diagnostic: executionFailure.diagnostic
-                    ),
+                    forbiddenIdentifiers: forbiddenIdentifiers,
                     error: errorMessage
                 )
             )
@@ -809,16 +818,14 @@ public final class SessionController: Identifiable {
     private static func forbiddenIdentifiers(
         sql: String,
         error: String,
-        diagnostic suppliedDiagnostic: DatabaseDiagnostic? = nil
+        diagnostic suppliedDiagnostic: DatabaseDiagnostic? = nil,
+        schema: DatabaseSchema? = nil
     ) -> [String] {
         let unquotedOnly = Set(
             unquotedIdentifierRepairConstraints(in: error)
                 .map { canonicalIdentifier($0.identifier) }
         )
-        var identifiers =
-            quotedIdentifiers(in: error)
-            .filter { !unquotedOnly.contains(canonicalIdentifier($0)) }
-            + schemaValidationIdentifiers(in: error)
+        var identifiers = schemaValidationIdentifiers(in: error)
         if let diagnostic = suppliedDiagnostic ?? diagnostic(from: error) {
             if let identifier = diagnostic.identifierForRepair {
                 if !unquotedOnly.contains(canonicalIdentifier(identifier)) {
@@ -830,7 +837,9 @@ public final class SessionController: Identifiable {
             }
         }
         var seen = Set<String>()
-        return identifiers.filter { seen.insert($0).inserted }
+        return identifiers
+            .filter { shouldForbidIdentifier($0, sql: sql, schema: schema) }
+            .filter { seen.insert($0).inserted }
     }
 
     private static func repairConstraints(
@@ -859,6 +868,11 @@ public final class SessionController: Identifiable {
         identifiers.append(
             contentsOf: capturedValues(
                 in: text,
+                pattern: #"(?i)column "([^"]+)" does not exist"#
+            ))
+        identifiers.append(
+            contentsOf: capturedValues(
+                in: text,
                 pattern:
                     #"Schema validation failed: column ([A-Za-z_][A-Za-z0-9_$]*) is (?:not available from the referenced tables|not on [^.\s]+(?:\.[^.\s]+)?|ambiguous across referenced tables)"#
             ))
@@ -874,6 +888,89 @@ public final class SessionController: Identifiable {
                     #"Schema validation failed: qualifier ([A-Za-z_][A-Za-z0-9_$]*) does not resolve to a selected-schema table"#
             ))
         return identifiers
+    }
+
+    private static func shouldForbidIdentifier(
+        _ identifier: String,
+        sql: String,
+        schema: DatabaseSchema?
+    ) -> Bool {
+        guard let schema else { return true }
+        let canonical = canonicalIdentifier(identifier)
+        if SchemaRelevanceRanker.extractRelationLikeIdentifiers(from: sql)
+            .contains(where: { canonicalIdentifier($0) == canonical })
+        {
+            return true
+        }
+        guard !identifier.contains(".") else { return true }
+        return !missingColumnCanBeResolvedByJoining(identifier, sql: sql, schema: schema)
+    }
+
+    private static func missingColumnsCanBeResolvedByJoining(
+        sql: String,
+        error: String,
+        schema: DatabaseSchema
+    ) -> Bool {
+        let missingColumns = schemaValidationIdentifiers(in: error)
+            .filter { !$0.contains(".") }
+        guard !missingColumns.isEmpty else { return false }
+        return missingColumns.allSatisfy {
+            missingColumnCanBeResolvedByJoining($0, sql: sql, schema: schema)
+        }
+    }
+
+    private static func missingColumnCanBeResolvedByJoining(
+        _ columnName: String,
+        sql: String,
+        schema: DatabaseSchema
+    ) -> Bool {
+        let referencedTables = resolvedTables(
+            from: SchemaRelevanceRanker.extractRelationLikeIdentifiers(from: sql),
+            schema: schema
+        )
+        guard !referencedTables.isEmpty else { return false }
+        let reachableTableIDs = reachableTableIDs(from: Set(referencedTables.map(\.id)), schema: schema)
+        let foldedColumn = columnName.lowercased()
+        return schema.tables.contains { table in
+            reachableTableIDs.contains(table.id)
+                && table.columns.contains { $0.name.lowercased() == foldedColumn }
+        }
+    }
+
+    private static func resolvedTables(
+        from identifiers: [String],
+        schema: DatabaseSchema
+    ) -> [TableInfo] {
+        identifiers.compactMap { identifier in
+            let canonical = canonicalIdentifier(identifier)
+            if let table = schema.tables.first(where: {
+                canonicalIdentifier($0.qualifiedName) == canonical
+            }) {
+                return table
+            }
+            let matches = schema.tables.filter {
+                canonicalIdentifier($0.name) == canonical
+            }
+            return matches.count == 1 ? matches[0] : nil
+        }
+    }
+
+    private static func reachableTableIDs(
+        from tableIDs: Set<String>,
+        schema: DatabaseSchema
+    ) -> Set<String> {
+        var reachable = tableIDs
+        for foreignKey in schema.foreignKeys {
+            let sourceID = "\(foreignKey.sourceSchema).\(foreignKey.sourceTable)"
+            let targetID = "\(foreignKey.targetSchema).\(foreignKey.targetTable)"
+            if tableIDs.contains(sourceID) {
+                reachable.insert(targetID)
+            }
+            if tableIDs.contains(targetID) {
+                reachable.insert(sourceID)
+            }
+        }
+        return reachable
     }
 
     private static func quotedIdentifiers(in text: String) -> [String] {

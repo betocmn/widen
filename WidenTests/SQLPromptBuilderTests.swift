@@ -413,6 +413,7 @@ struct SQLPromptBuilderTests {
         #expect(question?.contains("\"tool_id\"") == true)
         #expect(question?.contains("\"preseason_match_batch.tool_a_id\"") == true)
         #expect(question?.contains("\"preseason_match_batch.tool_b_id\"") == true)
+        #expect(question?.contains("replace") == false)
     }
 
     @Test func missingColumnClarificationQuestionHandlesSchemaValidationErrors() {
@@ -423,7 +424,19 @@ struct SQLPromptBuilderTests {
 
         #expect(question?.contains("\"tool_a_id\"") == true)
         #expect(question?.contains("\"tool_b_id\"") == true)
-        #expect(question?.contains("which table, join, or relationship") == true)
+        #expect(question?.contains("Which table or relationship") == true)
+        #expect(question?.contains("replace") == false)
+    }
+
+    @Test func missingColumnClarificationQuestionIgnoresQuoteAndTemporalDiagnostics() {
+        let question = SQLPromptBuilder.missingColumnClarificationQuestion(
+            for:
+                #"The SQL failed validation: Schema validation failed: column tool_a_id is not available from the referenced tables. Schema validation failed: column createdAt must be quoted as "createdAt" on public.events. Schema validation failed: column createdAt is timestamp with time zone and cannot be compared directly to an INTERVAL."#
+        )
+
+        #expect(question?.contains("\"tool_a_id\"") == true)
+        #expect(question?.contains("createdAt") == false)
+        #expect(question?.contains("replace") == false)
     }
 
     @Test func missingColumnClarificationQuestionDoesNotInventMetricRelationship() {
@@ -435,7 +448,8 @@ struct SQLPromptBuilderTests {
         )
 
         #expect(question?.contains("\"tool_id\"") == true)
-        #expect(question?.contains("which table, join, or relationship") == true)
+        #expect(question?.contains("Which table or relationship") == true)
+        #expect(question?.contains("replace") == false)
         #expect(question?.contains("most wins") != true)
         #expect(question?.contains("winner_id") != true)
     }

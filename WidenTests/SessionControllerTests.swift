@@ -308,6 +308,67 @@ struct SessionControllerTests {
         )
     }
 
+    private func makeJoinableToolSchema() -> DatabaseSchema {
+        DatabaseSchema(
+            schemas: [SchemaInfo(name: "public")],
+            tables: [
+                TableInfo(
+                    schema: "public", name: "preseason_match_evaluation", type: .baseTable,
+                    columns: [
+                        ColumnInfo(
+                            tableSchema: "public",
+                            tableName: "preseason_match_evaluation",
+                            name: "id",
+                            dataType: "uuid",
+                            isNullable: false,
+                            ordinalPosition: 1
+                        ),
+                        ColumnInfo(
+                            tableSchema: "public",
+                            tableName: "preseason_match_evaluation",
+                            name: "batch_id",
+                            dataType: "uuid",
+                            isNullable: false,
+                            ordinalPosition: 2
+                        ),
+                    ]
+                ),
+                TableInfo(
+                    schema: "public", name: "preseason_match_batch", type: .baseTable,
+                    columns: [
+                        ColumnInfo(
+                            tableSchema: "public",
+                            tableName: "preseason_match_batch",
+                            name: "id",
+                            dataType: "uuid",
+                            isNullable: false,
+                            ordinalPosition: 1
+                        ),
+                        ColumnInfo(
+                            tableSchema: "public",
+                            tableName: "preseason_match_batch",
+                            name: "tool_a_id",
+                            dataType: "uuid",
+                            isNullable: false,
+                            ordinalPosition: 2
+                        ),
+                    ]
+                ),
+            ],
+            foreignKeys: [
+                ForeignKeyInfo(
+                    constraintName: "match_evaluation_batch_fkey",
+                    sourceSchema: "public",
+                    sourceTable: "preseason_match_evaluation",
+                    sourceColumn: "batch_id",
+                    targetSchema: "public",
+                    targetTable: "preseason_match_batch",
+                    targetColumn: "id"
+                )
+            ]
+        )
+    }
+
     private func makeGeneration(
         sql: String,
         explanation: String = "Generated SQL.",
@@ -695,6 +756,41 @@ struct SessionControllerTests {
         #expect(generator.contexts[1].mode == .repair)
         #expect(generator.contexts[1].repairContext?.diagnostic?.kind == .missingColumn)
         #expect(generator.contexts[1].repairContext?.forbiddenIdentifiers.contains("name") == true)
+        #expect(controller.queryVM.sqlText == fixedGeneration.sql)
+        #expect(controller.chatVM.messages.map(\.role) == [.user, .assistant])
+    }
+
+    @Test func submitRepairForJoinableMissingColumnDoesNotForbidColumnIdentifier() async {
+        let connectionID = UUID()
+        let (state, dir) = makeState(connectionID: connectionID, connected: true)
+        defer { try? FileManager.default.removeItem(at: dir) }
+        state.schemas[connectionID] = makeJoinableToolSchema()
+        let badGeneration = makeGeneration(
+            sql: "SELECT tool_a_id FROM public.preseason_match_evaluation LIMIT 100",
+            explanation: "Uses a column from the joined batch table."
+        )
+        let fixedGeneration = makeGeneration(
+            sql: """
+                SELECT b.tool_a_id
+                FROM public.preseason_match_evaluation AS e
+                JOIN public.preseason_match_batch AS b ON e.batch_id = b.id
+                LIMIT 100
+                """,
+            explanation: "Joins to the batch table before selecting the tool."
+        )
+        let generator = RecordingRepairGenerator(results: [badGeneration, fixedGeneration])
+        state.sqlGeneratorOverride = generator
+        let controller = makeController(connectionID: connectionID)
+        controller.chatVM.input = "show tools from evaluations"
+
+        await controller.submit(appState: state)
+
+        let repairContext = generator.contexts[1].repairContext
+        #expect(generator.contexts.count == 2)
+        #expect(generator.contexts[1].mode == .repair)
+        #expect(repairContext?.forbiddenIdentifiers.contains("tool_a_id") == false)
+        #expect(
+            repairContext?.repairConstraints.contains(.forbiddenIdentifier("tool_a_id")) == false)
         #expect(controller.queryVM.sqlText == fixedGeneration.sql)
         #expect(controller.chatVM.messages.map(\.role) == [.user, .assistant])
     }
