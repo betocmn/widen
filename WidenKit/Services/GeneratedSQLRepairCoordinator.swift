@@ -25,6 +25,7 @@ public struct RepairConstraints: Equatable, Sendable {
     public var failedSQL: String
     public var diagnostic: DatabaseDiagnostic?
     public var forbiddenIdentifiers: [String]
+    public var repairConstraints: [RepairConstraint]
     public var priorFingerprints: [SQLFingerprint]
     public var lastError: String
 
@@ -32,14 +33,34 @@ public struct RepairConstraints: Equatable, Sendable {
         failedSQL: String,
         diagnostic: DatabaseDiagnostic? = nil,
         forbiddenIdentifiers: [String] = [],
+        repairConstraints: [RepairConstraint] = [],
         priorFingerprints: [SQLFingerprint] = [],
         lastError: String
     ) {
         self.failedSQL = failedSQL
         self.diagnostic = diagnostic
         self.forbiddenIdentifiers = forbiddenIdentifiers
+        self.repairConstraints = Self.mergedConstraints(
+            forbiddenIdentifiers: forbiddenIdentifiers,
+            repairConstraints: repairConstraints
+        )
         self.priorFingerprints = priorFingerprints
         self.lastError = lastError
+    }
+
+    private static func mergedConstraints(
+        forbiddenIdentifiers: [String],
+        repairConstraints: [RepairConstraint]
+    ) -> [RepairConstraint] {
+        var result = repairConstraints
+        var seen = Set(result.map { "\($0.kind.rawValue):\($0.identifier.lowercased())" })
+        for identifier in forbiddenIdentifiers {
+            let key = "\(RepairConstraintKind.forbiddenIdentifier.rawValue):\(identifier.lowercased())"
+            if seen.insert(key).inserted {
+                result.append(.forbiddenIdentifier(identifier))
+            }
+        }
+        return result
     }
 }
 
@@ -101,13 +122,15 @@ public struct GeneratedSQLRepairCoordinator: Sendable {
         failedSQL: String,
         firstError: String,
         diagnostic: DatabaseDiagnostic?,
-        forbiddenIdentifiers: [String]
+        forbiddenIdentifiers: [String],
+        repairConstraints: [RepairConstraint] = []
     ) {
         let fingerprint = SQLFingerprint(failedSQL)
         self.constraints = RepairConstraints(
             failedSQL: failedSQL,
             diagnostic: diagnostic,
             forbiddenIdentifiers: forbiddenIdentifiers,
+            repairConstraints: repairConstraints,
             priorFingerprints: [fingerprint],
             lastError: firstError
         )
@@ -129,6 +152,7 @@ public struct GeneratedSQLRepairCoordinator: Sendable {
             failedSQL: mode == .repair ? constraints.failedSQL : nil,
             diagnostic: constraints.diagnostic,
             forbiddenIdentifiers: constraints.forbiddenIdentifiers,
+            repairConstraints: constraints.repairConstraints,
             priorFingerprints: constraints.priorFingerprints.map(\.value)
         )
     }
@@ -233,7 +257,8 @@ public struct GeneratedSQLRepairCoordinator: Sendable {
         sql: String,
         error: String,
         diagnostic: DatabaseDiagnostic?,
-        forbiddenIdentifiers: [String]
+        forbiddenIdentifiers: [String],
+        repairConstraints: [RepairConstraint] = []
     ) {
         attempts.append(SQLRepairAttempt(mode: mode, sql: sql, error: error))
         constraints.failedSQL = sql
@@ -242,6 +267,7 @@ public struct GeneratedSQLRepairCoordinator: Sendable {
             constraints.diagnostic = diagnostic
         }
         appendForbiddenIdentifiers(forbiddenIdentifiers)
+        appendRepairConstraints(repairConstraints)
     }
 
     private mutating func reject(
@@ -270,16 +296,41 @@ public struct GeneratedSQLRepairCoordinator: Sendable {
 
     private mutating func appendForbiddenIdentifiers(_ identifiers: [String]) {
         var existing = Set(constraints.forbiddenIdentifiers.map(Self.canonicalIdentifier))
+        var existingConstraints = Set(
+            constraints.repairConstraints.map { "\($0.kind.rawValue):\(Self.canonicalIdentifier($0.identifier))" }
+        )
         for identifier in identifiers where existing.insert(Self.canonicalIdentifier(identifier)).inserted {
             constraints.forbiddenIdentifiers.append(identifier)
+            let constraint = RepairConstraint.forbiddenIdentifier(identifier)
+            let key = "\(constraint.kind.rawValue):\(Self.canonicalIdentifier(identifier))"
+            if existingConstraints.insert(key).inserted {
+                constraints.repairConstraints.append(constraint)
+            }
+        }
+    }
+
+    private mutating func appendRepairConstraints(_ repairConstraints: [RepairConstraint]) {
+        var existing = Set(
+            constraints.repairConstraints.map { "\($0.kind.rawValue):\(Self.canonicalIdentifier($0.identifier))" }
+        )
+        for constraint in repairConstraints {
+            let key = "\(constraint.kind.rawValue):\(Self.canonicalIdentifier(constraint.identifier))"
+            if existing.insert(key).inserted {
+                constraints.repairConstraints.append(constraint)
+            }
         }
     }
 
     private func forbiddenIdentifier(in sql: String) -> String? {
-        let forbidden = constraints.forbiddenIdentifiers
-            .map { (original: $0, canonical: Self.canonicalIdentifier($0)) }
+        let hardForbidden = constraints.repairConstraints
+            .filter { $0.kind == .forbiddenIdentifier }
+            .map { (original: $0.identifier, canonical: Self.canonicalIdentifier($0.identifier)) }
             .filter { !$0.canonical.isEmpty }
-        guard !forbidden.isEmpty else { return nil }
+        let unquotedForbidden = constraints.repairConstraints
+            .filter { $0.kind == .forbiddenUnquotedIdentifier }
+            .map { (original: $0.identifier, canonical: Self.canonicalIdentifier($0.identifier)) }
+            .filter { !$0.canonical.isEmpty }
+        guard !hardForbidden.isEmpty || !unquotedForbidden.isEmpty else { return nil }
 
         let analysis = SQLReferenceAnalyzer.analyze(sql)
         var referenced = Set<String>()
@@ -294,8 +345,15 @@ public struct GeneratedSQLRepairCoordinator: Sendable {
             }
         }
 
-        for entry in forbidden where referenced.contains(entry.canonical) {
+        for entry in hardForbidden where referenced.contains(entry.canonical) {
             return entry.original
+        }
+        for entry in unquotedForbidden {
+            if analysis.columns.contains(where: {
+                !$0.isQuoted && Self.canonicalIdentifier($0.name) == entry.canonical
+            }) {
+                return entry.original
+            }
         }
         return nil
     }

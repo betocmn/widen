@@ -6,12 +6,34 @@ public struct SQLSchemaValidationIssue: Equatable, Sendable {
         case warning
     }
 
+    public enum Kind: Equatable, Sendable {
+        case missingRelation
+        case unresolvedQualifier
+        case missingColumn
+        case ambiguousColumn
+        case requiresQuotedIdentifier
+        case analysisIncomplete
+        case other
+    }
+
     public var severity: Severity
     public var message: String
+    public var kind: Kind
+    public var identifier: String?
+    public var suggestedIdentifier: String?
 
-    public init(severity: Severity, message: String) {
+    public init(
+        severity: Severity,
+        message: String,
+        kind: Kind = .other,
+        identifier: String? = nil,
+        suggestedIdentifier: String? = nil
+    ) {
         self.severity = severity
         self.message = message
+        self.kind = kind
+        self.identifier = identifier
+        self.suggestedIdentifier = suggestedIdentifier
     }
 }
 
@@ -66,7 +88,9 @@ public enum SQLSchemaValidator {
                     issues.append(
                         SQLSchemaValidationIssue(
                             severity: .error,
-                            message: "Schema validation failed: table \(relation.displayName) is not in the selected schema."
+                            message: "Schema validation failed: table \(relation.displayName) is not in the selected schema.",
+                            kind: .missingRelation,
+                            identifier: relation.displayName
                         ))
                     continue
                 }
@@ -103,7 +127,8 @@ public enum SQLSchemaValidator {
             issues.append(
                 SQLSchemaValidationIssue(
                     severity: .warning,
-                    message: "Schema validation was incomplete for part of this SQL."
+                    message: "Schema validation was incomplete for part of this SQL.",
+                    kind: .analysisIncomplete
                 ))
         }
 
@@ -133,7 +158,9 @@ public enum SQLSchemaValidator {
                 issues.append(
                     SQLSchemaValidationIssue(
                         severity: .error,
-                        message: "Schema validation failed: qualifier \(qualifier) does not resolve to a selected-schema table."
+                        message: "Schema validation failed: qualifier \(qualifier) does not resolve to a selected-schema table.",
+                        kind: .unresolvedQualifier,
+                        identifier: qualifier
                     ))
                 return
             }
@@ -142,10 +169,21 @@ public enum SQLSchemaValidator {
                 if source.hasUnknownColumns {
                     return
                 }
+                if let actualName = source.quotedColumnName(for: column, schemaIndex: schemaIndex) {
+                    issues.append(
+                        quotedIdentifierIssue(
+                            column: column,
+                            actualName: actualName,
+                            source: source.displayName
+                        ))
+                    return
+                }
                 issues.append(
                     SQLSchemaValidationIssue(
                         severity: .error,
-                        message: "Schema validation failed: column \(column.name) is not on \(source.displayName)."
+                        message: "Schema validation failed: column \(column.name) is not on \(source.displayName).",
+                        kind: .missingColumn,
+                        identifier: column.name
                     ))
             }
             return
@@ -169,8 +207,15 @@ public enum SQLSchemaValidator {
             issues.append(
                 SQLSchemaValidationIssue(
                     severity: .error,
-                    message: "Schema validation failed: column \(column.name) is ambiguous across referenced tables."
+                    message: "Schema validation failed: column \(column.name) is ambiguous across referenced tables.",
+                    kind: .ambiguousColumn,
+                    identifier: column.name
                 ))
+            return
+        case .requiresQuoting(let actualName, let sourceName):
+            issues.append(
+                quotedIdentifierIssue(column: column, actualName: actualName, source: sourceName)
+            )
             return
         case .missing:
             break
@@ -191,7 +236,17 @@ public enum SQLSchemaValidator {
                 issues.append(
                     SQLSchemaValidationIssue(
                         severity: .error,
-                        message: "Schema validation failed: column \(column.name) is ambiguous across referenced tables."
+                        message: "Schema validation failed: column \(column.name) is ambiguous across referenced tables.",
+                        kind: .ambiguousColumn,
+                        identifier: column.name
+                    ))
+                return
+            case .requiresQuoting(let actualName, let sourceName):
+                issues.append(
+                    quotedIdentifierIssue(
+                        column: column,
+                        actualName: actualName,
+                        source: sourceName
                     ))
                 return
             case .missing:
@@ -203,9 +258,26 @@ public enum SQLSchemaValidator {
             issues.append(
                 SQLSchemaValidationIssue(
                     severity: .error,
-                    message: "Schema validation failed: column \(column.name) is not available from the referenced tables."
+                    message: "Schema validation failed: column \(column.name) is not available from the referenced tables.",
+                    kind: .missingColumn,
+                    identifier: column.name
                 ))
         }
+    }
+
+    private static func quotedIdentifierIssue(
+        column: SQLColumnReference,
+        actualName: String,
+        source: String
+    ) -> SQLSchemaValidationIssue {
+        SQLSchemaValidationIssue(
+            severity: .error,
+            message:
+                "Schema validation failed: column \(column.name) must be quoted as \(quotedIdentifier(actualName)) on \(source).",
+            kind: .requiresQuotedIdentifier,
+            identifier: column.name,
+            suggestedIdentifier: actualName
+        )
     }
 
     private static func validateLegacy(
@@ -234,16 +306,29 @@ public enum SQLSchemaValidator {
                 issues.append(
                     SQLSchemaValidationIssue(
                         severity: .error,
-                        message: "Schema validation failed: qualifier \(qualifier) does not resolve to a selected-schema table."
+                        message: "Schema validation failed: qualifier \(qualifier) does not resolve to a selected-schema table.",
+                        kind: .unresolvedQualifier,
+                        identifier: qualifier
                     ))
                 return
             }
             guard column.name != "*" else { return }
             if !schemaIndex.table(table, containsColumn: column) {
+                if let actualName = schemaIndex.actualColumnName(on: table, foldedName: column.name) {
+                    issues.append(
+                        quotedIdentifierIssue(
+                            column: column,
+                            actualName: actualName,
+                            source: table.qualifiedName
+                        ))
+                    return
+                }
                 issues.append(
                     SQLSchemaValidationIssue(
                         severity: .error,
-                        message: "Schema validation failed: column \(column.name) is not on \(table.qualifiedName)."
+                        message: "Schema validation failed: column \(column.name) is not on \(table.qualifiedName).",
+                        kind: .missingColumn,
+                        identifier: column.name
                     ))
             }
             return
@@ -258,10 +343,28 @@ public enum SQLSchemaValidator {
         switch matchingTables.count {
         case 0:
             if !resolvedRelations.isEmpty {
+                if let quotedMatch = resolvedRelations.values.compactMap({
+                    table -> (actualName: String, source: String)? in
+                    guard let actualName = schemaIndex.actualColumnName(
+                        on: table,
+                        foldedName: column.name
+                    ) else { return nil }
+                    return (actualName, table.qualifiedName)
+                }).first {
+                    issues.append(
+                        quotedIdentifierIssue(
+                            column: column,
+                            actualName: quotedMatch.actualName,
+                            source: quotedMatch.source
+                        ))
+                    return
+                }
                 issues.append(
                     SQLSchemaValidationIssue(
                         severity: .error,
-                        message: "Schema validation failed: column \(column.name) is not available from the referenced tables."
+                        message: "Schema validation failed: column \(column.name) is not available from the referenced tables.",
+                        kind: .missingColumn,
+                        identifier: column.name
                     ))
             }
         case 1:
@@ -270,7 +373,9 @@ public enum SQLSchemaValidator {
             issues.append(
                 SQLSchemaValidationIssue(
                     severity: .error,
-                    message: "Schema validation failed: column \(column.name) is ambiguous across referenced tables."
+                    message: "Schema validation failed: column \(column.name) is ambiguous across referenced tables.",
+                    kind: .ambiguousColumn,
+                    identifier: column.name
                 ))
         }
     }
@@ -299,15 +404,24 @@ public enum SQLSchemaValidator {
     ) -> ColumnResolution {
         var matches = 0
         var hasUnknown = false
+        var quotedMatches: [(actualName: String, sourceName: String)] = []
         for source in scopeSources[scopeIndex] {
             if source.definitelyContainsColumn(column, schemaIndex: schemaIndex) {
                 matches += 1
             } else if source.hasUnknownColumns {
                 hasUnknown = true
+            } else if let actualName = source.quotedColumnName(for: column, schemaIndex: schemaIndex) {
+                quotedMatches.append((actualName, source.displayName))
             }
         }
         switch matches {
         case 0:
+            if let quotedMatch = quotedMatches.first, quotedMatches.count == 1 {
+                return .requiresQuoting(
+                    actualName: quotedMatch.actualName,
+                    sourceName: quotedMatch.sourceName
+                )
+            }
             return hasUnknown ? .unknown : .missing
         case 1:
             return .resolved
@@ -448,12 +562,18 @@ private struct SchemaLookup {
     private var tablesByQualifiedName: [String: TableInfo] = [:]
     private var tablesByName: [String: [TableInfo]] = [:]
     private var columnsByTableID: [String: Set<String>] = [:]
+    private var foldedColumnsByTableID: [String: [String: String]] = [:]
 
     init(schema: DatabaseSchema) {
         for table in schema.tables {
             tablesByQualifiedName[table.qualifiedName.lowercased()] = table
             tablesByName[table.name.lowercased(), default: []].append(table)
             columnsByTableID[table.id] = Set(table.columns.map(\.name))
+            var foldedColumns: [String: String] = [:]
+            for column in table.columns {
+                foldedColumns[column.name.lowercased()] = column.name
+            }
+            foldedColumnsByTableID[table.id] = foldedColumns
         }
     }
 
@@ -473,6 +593,15 @@ private struct SchemaLookup {
         let resolvedName = isQuoted ? column : column.lowercased()
         return columnsByTableID[table.id]?.contains(resolvedName) == true
     }
+
+    func actualColumnName(on table: TableInfo, foldedName: String) -> String? {
+        guard !foldedName.isEmpty else { return nil }
+        let folded = foldedName.lowercased()
+        guard let actualName = foldedColumnsByTableID[table.id]?[folded],
+            actualName != folded
+        else { return nil }
+        return actualName
+    }
 }
 
 private enum ColumnResolution {
@@ -480,6 +609,7 @@ private enum ColumnResolution {
     case missing
     case ambiguous
     case unknown
+    case requiresQuoting(actualName: String, sourceName: String)
 }
 
 private struct ResolvedRelationSource {
@@ -532,4 +662,16 @@ private struct ResolvedRelationSource {
         guard let cteColumns else { return false }
         return cteColumns.contains(column.name.lowercased())
     }
+
+    func quotedColumnName(
+        for column: SQLColumnReference,
+        schemaIndex: SchemaLookup
+    ) -> String? {
+        guard !column.isQuoted, let table else { return nil }
+        return schemaIndex.actualColumnName(on: table, foldedName: column.name)
+    }
+}
+
+private func quotedIdentifier(_ identifier: String) -> String {
+    "\"\(identifier.replacingOccurrences(of: "\"", with: "\"\""))\""
 }

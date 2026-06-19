@@ -5,6 +5,11 @@ import Foundation
 public enum SQLPromptBuilder {
     public static let maxDatabaseContextCharacters = 2_000
 
+    public struct PromptBundle: Equatable, Sendable {
+        public var prompt: String
+        public var schemaPackage: SchemaPromptPackage
+    }
+
     /// System instructions for the model, with the app's safety rules.
     public static func instructions(defaultRowLimit: Int) -> String {
         """
@@ -57,6 +62,22 @@ public enum SQLPromptBuilder {
         databaseContext: String? = nil,
         maxSchemaCharacters: Int = 8_000
     ) -> String {
+        promptBundle(
+            question: question,
+            schema: schema,
+            context: context,
+            databaseContext: databaseContext,
+            maxSchemaCharacters: maxSchemaCharacters
+        ).prompt
+    }
+
+    public static func promptBundle(
+        question: String,
+        schema: DatabaseSchema,
+        context: SQLGenerationContext = SQLGenerationContext(),
+        databaseContext: String? = nil,
+        maxSchemaCharacters: Int = 8_000
+    ) -> PromptBundle {
         let databaseContextText = databaseContextSection(databaseContext)
         let schemaPackage = SchemaPromptPackager.package(
             schema: schema,
@@ -91,7 +112,10 @@ public enum SQLPromptBuilder {
                     "User question: \(question)"
                 ))
         }
-        return sections.joined(separator: "\n\n")
+        return PromptBundle(
+            prompt: sections.joined(separator: "\n\n"),
+            schemaPackage: schemaPackage
+        )
     }
 
     static func repairTaskSection(question: String, context: SQLGenerationContext) -> String {
@@ -113,6 +137,8 @@ public enum SQLPromptBuilder {
                 The database diagnostic is authoritative.
 
                 Every identifier listed in <forbidden_identifier> MUST be absent from the next SQL. Reformatting, changing aliases, changing LIMIT, or changing whitespace does not constitute a repair.
+
+                Every identifier listed in <forbidden_unquoted_identifier> may be used only when it is double quoted exactly as shown. For example, createdAt must be written as "createdAt".
 
                 A repair is acceptable only when it removes the diagnosed cause and passes the closed-world schema checklist.
 
@@ -192,8 +218,19 @@ public enum SQLPromptBuilder {
 
     private static func repairConstraintsSection(_ repair: SQLRepairContext?) -> String {
         var lines = ["<repair_constraints>"]
-        for identifier in repair?.forbiddenIdentifiers ?? [] {
-            lines.append(taggedCDATASection("forbidden_identifier", identifier))
+        let constraints =
+            repair?.repairConstraints
+            ?? repair?.forbiddenIdentifiers.map { .forbiddenIdentifier($0) }
+            ?? []
+        for constraint in constraints {
+            switch constraint.kind {
+            case .forbiddenIdentifier:
+                lines.append(taggedCDATASection("forbidden_identifier", constraint.identifier))
+            case .forbiddenUnquotedIdentifier:
+                lines.append(
+                    taggedCDATASection("forbidden_unquoted_identifier", constraint.identifier)
+                )
+            }
         }
         if let fingerprints = repair?.priorFingerprints, !fingerprints.isEmpty {
             lines.append("<prior_fingerprints>")
@@ -571,6 +608,10 @@ public enum SQLPromptBuilder {
         \(content)
         </\(tag)>
         """
+    }
+
+    public static func taggedCDATASectionForGenerator(_ tag: String, _ content: String) -> String {
+        taggedCDATASection(tag, content)
     }
 
     private static func taggedCDATASection(_ tag: String, _ content: String) -> String {

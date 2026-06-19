@@ -12,19 +12,22 @@ public struct SchemaRankingInput: Equatable, Sendable {
     public var databaseContext: String
     public var diagnostic: DatabaseDiagnostic?
     public var forbiddenIdentifiers: [String]
+    public var schemaSearchQueries: [String]
 
     public init(
         question: String,
         currentSQL: String? = nil,
         databaseContext: String = "",
         diagnostic: DatabaseDiagnostic? = nil,
-        forbiddenIdentifiers: [String] = []
+        forbiddenIdentifiers: [String] = [],
+        schemaSearchQueries: [String] = []
     ) {
         self.question = question
         self.currentSQL = currentSQL
         self.databaseContext = databaseContext
         self.diagnostic = diagnostic
         self.forbiddenIdentifiers = forbiddenIdentifiers
+        self.schemaSearchQueries = schemaSearchQueries
     }
 }
 
@@ -34,7 +37,9 @@ public enum SchemaRelevanceRanker {
         input: SchemaRankingInput
     ) -> [RankedSchemaTable] {
         let index = SchemaIndex(schema: schema)
-        let questionTokens = Set(SchemaIndex.tokens(in: input.question))
+        let questionTokens = Set(
+            SchemaIndex.tokens(in: ([input.question] + input.schemaSearchQueries).joined(separator: " "))
+        )
         let contextTokens = Set(SchemaIndex.tokens(in: input.databaseContext))
         let failedSQLIdentifiers = Set(extractRelationLikeIdentifiers(from: input.currentSQL ?? ""))
         let failedSQLTokens = Set(SchemaIndex.tokens(in: (input.currentSQL ?? "") + " " + input.forbiddenIdentifiers.joined(separator: " ")))

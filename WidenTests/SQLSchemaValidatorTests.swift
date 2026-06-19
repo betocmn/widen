@@ -62,6 +62,8 @@ struct SQLSchemaValidatorTests {
 
         #expect(unquoted.hasDefiniteErrors)
         #expect(unquoted.errors.first?.contains("createdAt") == true)
+        #expect(unquoted.issues.first?.kind == .requiresQuotedIdentifier)
+        #expect(unquoted.issues.first?.suggestedIdentifier == "createdAt")
         #expect(!quoted.hasDefiniteErrors)
     }
 

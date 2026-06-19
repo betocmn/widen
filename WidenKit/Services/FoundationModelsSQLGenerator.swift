@@ -43,6 +43,17 @@
         var clarificationQuestion: String?
     }
 
+    @Generable(description: "Schema search queries needed before SQL generation.")
+    struct GeneratedSchemaDiscoveryResponse {
+        @Guide(
+            description: "Short schema search phrases, not SQL. Use table, column, metric, and relationship words.",
+            .maximumCount(3))
+        var searchQueries: [String]
+
+        @Guide(description: "One short sentence explaining why these schema searches are needed.")
+        var reason: String
+    }
+
     /// Generates SQL with Apple's on-device Foundation Model. Local-only: no
     /// network, no external LLM APIs.
     public final class FoundationModelsSQLGenerator: SQLGenerator, Sendable {
@@ -75,15 +86,17 @@
             do {
                 return try await respond(
                     question: question, schema: schema, context: context, config: config,
-                    model: model, maxSchemaCharacters: 8_000)
+                    model: model, maxSchemaCharacters: 8_000, inputScale: 1.0,
+                    allowDiscovery: true)
             } catch let error as LanguageModelSession.GenerationError {
                 if case .exceededContextWindowSize = error {
-                    // Retry once with a heavily truncated schema before
-                    // surfacing the error.
+                    // Retry once with a smaller whole-prompt target while
+                    // preserving the same deterministic ranking and pins.
                     do {
                         return try await respond(
                             question: question, schema: schema, context: context, config: config,
-                            model: model, maxSchemaCharacters: 4_000)
+                            model: model, maxSchemaCharacters: 8_000, inputScale: 0.8,
+                            allowDiscovery: true)
                     } catch let retryError as LanguageModelSession.GenerationError {
                         throw Self.map(retryError)
                     }
@@ -98,40 +111,39 @@
             context: SQLGenerationContext,
             config: SQLGenerationConfig,
             model: SystemLanguageModel,
-            maxSchemaCharacters: Int
+            maxSchemaCharacters: Int,
+            inputScale: Double,
+            allowDiscovery: Bool
         ) async throws -> SQLGenerationResult {
             // A fresh session per request keeps the context window small and
             // the generation stateless; follow-up awareness comes from the
             // compact context section in the prompt instead.
             let instructions = SQLPromptBuilder.instructions(defaultRowLimit: config.defaultRowLimit)
+            let generationContext = try await contextWithOptionalDiscovery(
+                question: question,
+                schema: schema,
+                context: context,
+                config: config,
+                model: model,
+                instructions: instructions,
+                maxSchemaCharacters: maxSchemaCharacters,
+                inputScale: inputScale,
+                allowDiscovery: allowDiscovery
+            )
             let session = LanguageModelSession(
                 model: model,
                 instructions: instructions
             )
-            let fixedPromptCharacters =
-                instructions.count
-                + question.count
-                + config.databaseContext.count
-                + context.recentQuestions.joined(separator: "\n").count
-                + (context.originalQuestion?.count ?? 0)
-                + context.conversationMessages.map(\.text.count).reduce(0, +)
-                + (context.currentSQL?.count ?? 0)
-                + (context.lastRunError?.count ?? 0)
-                + (context.repairContext?.failedSQL?.count ?? 0)
-                + (context.repairContext?.diagnostic?.displayMessage.count ?? 0)
-                + 2_000
-            let schemaCharacters = min(
-                maxSchemaCharacters,
-                PromptBudget.localFoundationModels.schemaCharacterAllowance(
-                    fixedPromptCharacters: fixedPromptCharacters)
-            )
-            let prompt = SQLPromptBuilder.prompt(
+            let bundle = try promptBundle(
                 question: question,
                 schema: schema,
-                context: context,
+                context: generationContext,
                 databaseContext: config.databaseContext,
-                maxSchemaCharacters: schemaCharacters
+                instructions: instructions,
+                maxSchemaCharacters: maxSchemaCharacters,
+                inputScale: inputScale
             )
+            let prompt = bundle.prompt
             let started = Date()
             do {
                 let response = try await session.respond(
@@ -154,6 +166,162 @@
             }
         }
 
+        private func contextWithOptionalDiscovery(
+            question: String,
+            schema: DatabaseSchema,
+            context: SQLGenerationContext,
+            config: SQLGenerationConfig,
+            model: SystemLanguageModel,
+            instructions: String,
+            maxSchemaCharacters: Int,
+            inputScale: Double,
+            allowDiscovery: Bool
+        ) async throws -> SQLGenerationContext {
+            guard allowDiscovery,
+                context.mode == .initial || context.mode == .followUp
+            else { return context }
+
+            let initialBundle = try promptBundle(
+                question: question,
+                schema: schema,
+                context: context,
+                databaseContext: config.databaseContext,
+                instructions: instructions,
+                maxSchemaCharacters: maxSchemaCharacters,
+                inputScale: inputScale,
+                throwIfOversized: false
+            )
+            let budget = PromptBudget.localFoundationModels
+            let shouldDiscover =
+                schema.tables.count > 25
+                || !budget.fits(
+                    inputCharacters: instructions.count + initialBundle.prompt.count,
+                    scale: inputScale
+                )
+            guard shouldDiscover else { return context }
+
+            let discoveryCharacters = min(
+                5_000,
+                budget.schemaCharacterAllowance(
+                    fixedPromptCharacters: instructions.count + question.count + config.databaseContext.count + 1_000,
+                    scale: inputScale
+                )
+            )
+            let catalog = SchemaDiscoveryService.compactCatalog(
+                schema: schema,
+                question: question,
+                databaseContext: config.databaseContext,
+                maxCharacters: discoveryCharacters
+            )
+            let discoveryPrompt = [
+                "<schema_discovery_task>",
+                SQLPromptBuilder.taggedCDATASectionForGenerator("user_request", question),
+                SQLPromptBuilder.taggedCDATASectionForGenerator("schema_catalog", catalog),
+                SQLPromptBuilder.taggedCDATASectionForGenerator(
+                    "instruction",
+                    "Return up to 3 short schema search queries that Widen should use to retrieve detailed table definitions. Do not write SQL."
+                ),
+                "</schema_discovery_task>",
+            ].joined(separator: "\n")
+
+            guard budget.fits(
+                inputCharacters: instructions.count + discoveryPrompt.count,
+                scale: inputScale
+            ) else {
+                return context
+            }
+
+            do {
+                let session = LanguageModelSession(
+                    model: model,
+                    instructions: instructions
+                )
+                let response = try await session.respond(
+                    to: discoveryPrompt,
+                    generating: GeneratedSchemaDiscoveryResponse.self,
+                    options: GenerationOptions(sampling: .greedy, maximumResponseTokens: 160)
+                )
+                let discovery = SchemaDiscoveryRequestResult(
+                    searchQueries: response.content.searchQueries,
+                    reason: response.content.reason
+                )
+                let queries = discovery.sanitizedSearchQueries
+                guard !queries.isEmpty else { return context }
+                let searchResults = SchemaDiscoveryService.search(schema: schema, queries: queries)
+                guard !searchResults.isEmpty else { return context }
+                var copy = context
+                copy.schemaSearchQueries = queries + searchResults.map(\.qualifiedName)
+                return copy
+            } catch {
+                return context
+            }
+        }
+
+        private func promptBundle(
+            question: String,
+            schema: DatabaseSchema,
+            context: SQLGenerationContext,
+            databaseContext: String,
+            instructions: String,
+            maxSchemaCharacters: Int,
+            inputScale: Double,
+            throwIfOversized: Bool = true
+        ) throws -> SQLPromptBuilder.PromptBundle {
+            let budget = PromptBudget.localFoundationModels
+            let fixedPromptCharacters =
+                instructions.count
+                + question.count
+                + databaseContext.count
+                + context.recentQuestions.joined(separator: "\n").count
+                + (context.originalQuestion?.count ?? 0)
+                + context.conversationMessages.map(\.text.count).reduce(0, +)
+                + (context.currentSQL?.count ?? 0)
+                + (context.lastRunError?.count ?? 0)
+                + (context.repairContext?.failedSQL?.count ?? 0)
+                + (context.repairContext?.diagnostic?.displayMessage.count ?? 0)
+                + context.schemaSearchQueries.joined(separator: "\n").count
+                + 1_600
+            var schemaCharacters = min(
+                maxSchemaCharacters,
+                budget.schemaCharacterAllowance(
+                    fixedPromptCharacters: fixedPromptCharacters,
+                    scale: inputScale
+                )
+            )
+            var latest = SQLPromptBuilder.promptBundle(
+                question: question,
+                schema: schema,
+                context: context,
+                databaseContext: databaseContext,
+                maxSchemaCharacters: schemaCharacters
+            )
+            for _ in 0..<4 {
+                let inputCharacters = instructions.count + latest.prompt.count
+                if budget.fits(inputCharacters: inputCharacters, scale: inputScale) {
+                    return latest
+                }
+                let allowed = budget.inputCharacterAllowance(scale: inputScale)
+                let excess = max(0, inputCharacters - allowed)
+                let nextSchemaCharacters = max(500, schemaCharacters - excess - 500)
+                guard nextSchemaCharacters < schemaCharacters else { break }
+                schemaCharacters = nextSchemaCharacters
+                latest = SQLPromptBuilder.promptBundle(
+                    question: question,
+                    schema: schema,
+                    context: context,
+                    databaseContext: databaseContext,
+                    maxSchemaCharacters: schemaCharacters
+                )
+            }
+
+            if throwIfOversized {
+                throw AppError.modelGenerationFailed(
+                    Self.contextWindowMessage(package: latest.schemaPackage)
+                )
+            }
+            return latest
+        }
+
         /// Shared with `PrivateCloudComputeSQLGenerator`, which produces the
         /// same structured response from the server-side model.
         static func result(from generated: GeneratedSQLResponse) -> SQLGenerationResult {
@@ -167,6 +335,13 @@
                 needsClarification: generated.needsClarification,
                 clarificationQuestion: generated.clarificationQuestion
             )
+        }
+
+        private static func contextWindowMessage(package: SchemaPromptPackage) -> String {
+            let tables = package.includedTables.prefix(6).joined(separator: ", ")
+            let tableText = tables.isEmpty ? "the selected schema" : tables
+            return
+                "The local model needs narrower schema context before it can safely generate SQL. Relevant tables selected: \(tableText). Try adding more database context, choosing a narrower schema, or using the cloud model for this request."
         }
 
         /// Shared with `PrivateCloudComputeSQLGenerator`.

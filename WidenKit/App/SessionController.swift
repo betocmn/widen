@@ -164,6 +164,10 @@ public final class SessionController: Identifiable {
                 failedSQL: failedSQL,
                 diagnostic: Self.diagnostic(from: error),
                 forbiddenIdentifiers: Self.forbiddenIdentifiers(sql: failedSQL, error: error),
+                repairConstraints: Self.repairConstraints(
+                    forbiddenIdentifiers: Self.forbiddenIdentifiers(sql: failedSQL, error: error),
+                    error: error
+                ),
                 priorFingerprints: [Self.normalizedSQL(failedSQL)]
             )
         )
@@ -374,14 +378,19 @@ public final class SessionController: Identifiable {
         )
         let postgres = appState.postgres(for: connectionID)
         let firstDiagnostic = firstFailure?.diagnostic ?? Self.diagnostic(from: firstError)
+        let forbiddenIdentifiers = Self.forbiddenIdentifiers(
+            sql: startingSQL,
+            error: firstError,
+            diagnostic: firstDiagnostic
+        )
         var coordinator = GeneratedSQLRepairCoordinator(
             failedSQL: startingSQL,
             firstError: firstError,
             diagnostic: firstDiagnostic,
-            forbiddenIdentifiers: Self.forbiddenIdentifiers(
-                sql: startingSQL,
+            forbiddenIdentifiers: forbiddenIdentifiers,
+            repairConstraints: Self.repairConstraints(
+                forbiddenIdentifiers: forbiddenIdentifiers,
                 error: firstError,
-                diagnostic: firstDiagnostic
             )
         )
 
@@ -554,6 +563,14 @@ public final class SessionController: Identifiable {
                     sql: generatedSQL,
                     error: errorMessage,
                     diagnostic: executionFailure.diagnostic
+                ),
+                repairConstraints: Self.repairConstraints(
+                    forbiddenIdentifiers: Self.forbiddenIdentifiers(
+                        sql: generatedSQL,
+                        error: errorMessage,
+                        diagnostic: executionFailure.diagnostic
+                    ),
+                    error: errorMessage
                 )
             )
             if coordinator.canRequestAnotherModelCall {
@@ -719,6 +736,18 @@ public final class SessionController: Identifiable {
                 columnName: columnName
             )
         }
+        if let columnName = firstCapturedValue(
+            in: error,
+            pattern:
+                #"Schema validation failed: column ([A-Za-z_][A-Za-z0-9_$]*) must be quoted as "[^"]+""#
+        ) {
+            return DatabaseDiagnostic(
+                kind: .missingColumn,
+                sqlState: "42703",
+                message: error,
+                columnName: columnName
+            )
+        }
         if lowercased.contains("relation"), lowercased.contains("does not exist") {
             return DatabaseDiagnostic(
                 kind: .missingRelation,
@@ -773,10 +802,19 @@ public final class SessionController: Identifiable {
         error: String,
         diagnostic suppliedDiagnostic: DatabaseDiagnostic? = nil
     ) -> [String] {
-        var identifiers = quotedIdentifiers(in: error) + schemaValidationIdentifiers(in: error)
+        let unquotedOnly = Set(
+            unquotedIdentifierRepairConstraints(in: error)
+                .map { canonicalIdentifier($0.identifier) }
+        )
+        var identifiers =
+            quotedIdentifiers(in: error)
+            .filter { !unquotedOnly.contains(canonicalIdentifier($0)) }
+            + schemaValidationIdentifiers(in: error)
         if let diagnostic = suppliedDiagnostic ?? diagnostic(from: error) {
             if let identifier = diagnostic.identifierForRepair {
-                identifiers.append(identifier)
+                if !unquotedOnly.contains(canonicalIdentifier(identifier)) {
+                    identifiers.append(identifier)
+                }
             }
             if identifiers.isEmpty, diagnostic.kind == .missingRelation {
                 identifiers.append(contentsOf: SchemaRelevanceRanker.extractRelationLikeIdentifiers(from: sql))
@@ -784,6 +822,27 @@ public final class SessionController: Identifiable {
         }
         var seen = Set<String>()
         return identifiers.filter { seen.insert($0).inserted }
+    }
+
+    private static func repairConstraints(
+        forbiddenIdentifiers: [String],
+        error: String
+    ) -> [RepairConstraint] {
+        var constraints = forbiddenIdentifiers.map(RepairConstraint.forbiddenIdentifier)
+        constraints.append(contentsOf: unquotedIdentifierRepairConstraints(in: error))
+        var seen = Set<String>()
+        return constraints.filter {
+            seen.insert("\($0.kind.rawValue):\(canonicalIdentifier($0.identifier))").inserted
+        }
+    }
+
+    private static func unquotedIdentifierRepairConstraints(in text: String) -> [RepairConstraint] {
+        capturedValues(
+            in: text,
+            pattern:
+                #"Schema validation failed: column [A-Za-z_][A-Za-z0-9_$]* must be quoted as "([^"]+)""#
+        )
+        .map(RepairConstraint.forbiddenUnquotedIdentifier)
     }
 
     private static func schemaValidationIdentifiers(in text: String) -> [String] {
@@ -817,6 +876,13 @@ public final class SessionController: Identifiable {
             guard let matchRange = Range(match.range(at: 1), in: text) else { return nil }
             return String(text[matchRange])
         }
+    }
+
+    private static func canonicalIdentifier(_ identifier: String) -> String {
+        identifier
+            .replacingOccurrences(of: "\"", with: "")
+            .replacingOccurrences(of: " ", with: "")
+            .lowercased()
     }
 
     private static func firstCapturedValue(in text: String, pattern: String) -> String? {

@@ -279,6 +279,35 @@ struct SessionControllerTests {
         )
     }
 
+    private func makeMixedCaseSchema() -> DatabaseSchema {
+        DatabaseSchema(
+            schemas: [SchemaInfo(name: "public")],
+            tables: [
+                TableInfo(
+                    schema: "public", name: "events", type: .baseTable,
+                    columns: [
+                        ColumnInfo(
+                            tableSchema: "public",
+                            tableName: "events",
+                            name: "id",
+                            dataType: "integer",
+                            isNullable: false,
+                            ordinalPosition: 1
+                        ),
+                        ColumnInfo(
+                            tableSchema: "public",
+                            tableName: "events",
+                            name: "createdAt",
+                            dataType: "timestamp with time zone",
+                            isNullable: false,
+                            ordinalPosition: 2
+                        ),
+                    ]
+                )
+            ]
+        )
+    }
+
     private func makeGeneration(
         sql: String,
         explanation: String = "Generated SQL.",
@@ -668,6 +697,42 @@ struct SessionControllerTests {
         #expect(generator.contexts[1].repairContext?.forbiddenIdentifiers.contains("name") == true)
         #expect(controller.queryVM.sqlText == fixedGeneration.sql)
         #expect(controller.chatVM.messages.map(\.role) == [.user, .assistant])
+    }
+
+    @Test func repairCoordinatorRejectsOnlyUnquotedMixedCaseIdentifier() {
+        var coordinator = GeneratedSQLRepairCoordinator(
+            failedSQL: "SELECT createdAt FROM public.events",
+            firstError:
+                #"Schema validation failed: column createdAt must be quoted as "createdAt" on public.events."#,
+            diagnostic: DatabaseDiagnostic(
+                kind: .missingColumn,
+                sqlState: "42703",
+                message: "createdAt must be quoted",
+                columnName: "createdAt"
+            ),
+            forbiddenIdentifiers: [],
+            repairConstraints: [.forbiddenUnquotedIdentifier("createdAt")]
+        )
+
+        let unquoted = coordinator.evaluateCandidate(
+            makeGeneration(sql: "SELECT createdAt FROM public.events LIMIT 100"),
+            mode: .repair,
+            schema: makeMixedCaseSchema(),
+            allowWrites: false
+        )
+        let quoted = coordinator.evaluateCandidate(
+            makeGeneration(sql: #"SELECT "createdAt" FROM public.events LIMIT 100"#),
+            mode: .repair,
+            schema: makeMixedCaseSchema(),
+            allowWrites: false
+        )
+
+        if case .rejected(let reason) = unquoted.outcome {
+            #expect(reason == .forbiddenIdentifier("createdAt"))
+        } else {
+            Issue.record("Expected unquoted createdAt to be rejected")
+        }
+        #expect(quoted.outcome == .accepted)
     }
 
     @Test func generatedRunErrorGivesUpAfterRepairAndReconstruction() async {

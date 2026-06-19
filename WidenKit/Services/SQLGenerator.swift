@@ -24,22 +24,66 @@ public enum SQLGenerationMode: String, Codable, Equatable, Sendable {
     case reconstructAfterFailedRepair
 }
 
+public enum RepairConstraintKind: String, Codable, Equatable, Sendable {
+    case forbiddenIdentifier
+    case forbiddenUnquotedIdentifier
+}
+
+public struct RepairConstraint: Codable, Equatable, Hashable, Sendable {
+    public var kind: RepairConstraintKind
+    public var identifier: String
+
+    public init(kind: RepairConstraintKind, identifier: String) {
+        self.kind = kind
+        self.identifier = identifier
+    }
+
+    public static func forbiddenIdentifier(_ identifier: String) -> RepairConstraint {
+        RepairConstraint(kind: .forbiddenIdentifier, identifier: identifier)
+    }
+
+    public static func forbiddenUnquotedIdentifier(_ identifier: String) -> RepairConstraint {
+        RepairConstraint(kind: .forbiddenUnquotedIdentifier, identifier: identifier)
+    }
+}
+
 public struct SQLRepairContext: Equatable, Sendable {
     public var failedSQL: String?
     public var diagnostic: DatabaseDiagnostic?
     public var forbiddenIdentifiers: [String]
+    public var repairConstraints: [RepairConstraint]
     public var priorFingerprints: [String]
 
     public init(
         failedSQL: String? = nil,
         diagnostic: DatabaseDiagnostic? = nil,
         forbiddenIdentifiers: [String] = [],
+        repairConstraints: [RepairConstraint] = [],
         priorFingerprints: [String] = []
     ) {
         self.failedSQL = failedSQL
         self.diagnostic = diagnostic
         self.forbiddenIdentifiers = forbiddenIdentifiers
+        self.repairConstraints = Self.mergedConstraints(
+            forbiddenIdentifiers: forbiddenIdentifiers,
+            repairConstraints: repairConstraints
+        )
         self.priorFingerprints = priorFingerprints
+    }
+
+    private static func mergedConstraints(
+        forbiddenIdentifiers: [String],
+        repairConstraints: [RepairConstraint]
+    ) -> [RepairConstraint] {
+        var result = repairConstraints
+        var seen = Set(result.map { "\($0.kind.rawValue):\($0.identifier.lowercased())" })
+        for identifier in forbiddenIdentifiers {
+            let key = "\(RepairConstraintKind.forbiddenIdentifier.rawValue):\(identifier.lowercased())"
+            if seen.insert(key).inserted {
+                result.append(.forbiddenIdentifier(identifier))
+            }
+        }
+        return result
     }
 }
 
@@ -62,6 +106,9 @@ public struct SQLGenerationContext: Equatable, Sendable {
     public var lastRunError: String?
     /// Structured repair metadata used only by repair/reconstruction prompts.
     public var repairContext: SQLRepairContext?
+    /// Optional app-controlled schema discovery hints. These are search terms,
+    /// not schema objects, and are used only to bias deterministic packaging.
+    public var schemaSearchQueries: [String]
 
     public init(
         mode: SQLGenerationMode = .initial,
@@ -70,7 +117,8 @@ public struct SQLGenerationContext: Equatable, Sendable {
         conversationMessages: [SQLConversationMessage] = [],
         currentSQL: String? = nil,
         lastRunError: String? = nil,
-        repairContext: SQLRepairContext? = nil
+        repairContext: SQLRepairContext? = nil,
+        schemaSearchQueries: [String] = []
     ) {
         self.mode = mode
         self.recentQuestions = recentQuestions
@@ -79,12 +127,33 @@ public struct SQLGenerationContext: Equatable, Sendable {
         self.currentSQL = currentSQL
         self.lastRunError = lastRunError
         self.repairContext = repairContext
+        self.schemaSearchQueries = schemaSearchQueries
     }
 
     public var isEmpty: Bool {
         recentQuestions.isEmpty && originalQuestion == nil && conversationMessages.isEmpty
             && currentSQL == nil && lastRunError == nil && repairContext == nil
-            && mode == .initial
+            && schemaSearchQueries.isEmpty && mode == .initial
+    }
+}
+
+public struct SchemaDiscoveryRequestResult: Codable, Equatable, Sendable {
+    public var searchQueries: [String]
+    public var reason: String
+
+    public init(searchQueries: [String], reason: String) {
+        self.searchQueries = Array(searchQueries.prefix(3))
+        self.reason = reason
+    }
+
+    public var sanitizedSearchQueries: [String] {
+        var seen = Set<String>()
+        return searchQueries
+            .map { $0.trimmingCharacters(in: .whitespacesAndNewlines) }
+            .filter { !$0.isEmpty }
+            .filter { seen.insert($0.lowercased()).inserted }
+            .prefix(3)
+            .map { $0 }
     }
 }
 

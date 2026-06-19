@@ -107,17 +107,17 @@ struct SchemaPromptPackagerTests {
         )
 
         #expect(package.text.contains("Relationship hints:"))
-        #expect(package.text.contains("For winning-tool questions"))
+        #expect(package.text.contains("Winning-tool relation:"))
         #expect(
             package.text.contains(
-                #""public"."preseason_match_evaluation"."winner_id" is the winning tool id"#
+                #""public"."preseason_match_evaluation"."winner_id" -> "public"."preseason_tool"."id""#
             ))
-        #expect(package.text.contains(#"filter "public"."preseason_match_evaluation"."winner_id" IS NOT NULL"#))
+        #expect(package.text.contains(#"count non-null "public"."preseason_match_evaluation"."winner_id""#))
         #expect(package.text.contains(#""public"."preseason_match_evaluation"."createdAt""#))
         #expect(package.text.contains("NOW() - INTERVAL '14 days'"))
-        #expect(package.text.contains(#"Do not select a generic "tool_id""#))
-        #expect(package.text.contains(#"Do not use participant columns "tool_a_id" or "tool_b_id" as wins"#))
-        #expect(package.text.contains("Schema-defined decision/status values:"))
+        #expect(package.text.contains(#"no generic "tool_id""#))
+        #expect(package.text.contains(#"do not use "tool_a_id"/"tool_b_id" as wins"#))
+        #expect(package.text.contains("decision/status values:"))
         #expect(package.text.contains(#""public"."preseason_match_evaluation"."winner_decision" (values: 'tool_a', 'tool_b', 'tie')"#))
         #expect(package.text.contains(#"TABLE "public"."preseason_tool""#))
         #expect(package.pinnedTables.contains("public.preseason_tool"))
@@ -139,11 +139,11 @@ struct SchemaPromptPackagerTests {
 
         #expect(
             package.text.contains(
-                #""public"."preseason_match_evaluation"."winner_id" is the winning tool id"#
+                #"Winning-tool relation: "public"."preseason_match_evaluation"."winner_id" -> "public"."preseason_tool"."id""#
             ))
         #expect(
             !package.text.contains(
-                #""public"."preseason_match_evaluation"."winner_scorekeeper_id" is the winning tool id"#
+                #"Winning-tool relation: "public"."preseason_match_evaluation"."winner_scorekeeper_id""#
             ))
     }
 
@@ -175,12 +175,97 @@ struct SchemaPromptPackagerTests {
 
         #expect(
             package.text.contains(
-                #"Column "tool_a_id" is on "public"."preseason_match_batch", not "public"."preseason_match_evaluation""#
+                #"Column "tool_a_id" lives on "public"."preseason_match_batch", not "public"."preseason_match_evaluation""#
             ))
         #expect(
             package.text.contains(
                 #"join "public"."preseason_match_evaluation"."batch_id" -> "public"."preseason_match_batch"."id""#
             ))
+    }
+
+    @Test func widePinnedRepairTableIsCompressedButKeepsRequiredColumns() {
+        let schema = makeWideWinningToolSchema(extraTables: 30)
+        let diagnostic = DatabaseDiagnostic(
+            kind: .missingColumn,
+            sqlState: "42703",
+            message:
+                "Schema validation failed: column tool_id is not available from the referenced tables. Schema validation failed: column createdAt must be quoted as \"createdAt\" on public.preseason_match_evaluation.",
+            columnName: "tool_id"
+        )
+        let context = SQLGenerationContext(
+            mode: .repair,
+            originalQuestion: "what are tools that are getting the most wins in the last two weeks?",
+            repairContext: SQLRepairContext(
+                failedSQL:
+                    "SELECT DISTINCT winner_id, tool_id FROM public.preseason_match_evaluation WHERE createdAt >= NOW() - INTERVAL '14 days' GROUP BY winner_id, tool_id",
+                diagnostic: diagnostic,
+                forbiddenIdentifiers: ["tool_id"],
+                repairConstraints: [.forbiddenUnquotedIdentifier("createdAt")]
+            )
+        )
+
+        let package = SchemaPromptPackager.package(
+            schema: schema,
+            question: "what are tools that are getting the most wins in the last two weeks?",
+            context: context,
+            databaseContext: "",
+            maxCharacters: 3_400
+        )
+
+        #expect(package.text.count <= 3_400)
+        #expect(package.text.contains(#"TABLE "public"."preseason_match_evaluation""#))
+        #expect(package.text.contains(#""winner_id" uuid NOT NULL"#))
+        #expect(package.text.contains(#""createdAt" timestamp with time zone NOT NULL"#))
+        #expect(package.text.contains(#"FK "winner_id" -> "public"."preseason_tool"."id""#))
+        #expect(package.text.contains(#"TABLE "public"."preseason_tool""#))
+        #expect(package.text.contains(#""name" character varying NOT NULL"#))
+        #expect(!package.text.contains("raw_response"))
+        #expect(!package.text.contains("appendix_json"))
+        #expect(!package.text.contains("system_prompt_snapshot"))
+    }
+
+    @Test func relationshipHintsAreCappedAndNeverForceOverflow() {
+        let schema = makeWideWinningToolSchema(extraTables: 50)
+        let diagnostic = DatabaseDiagnostic(
+            kind: .missingColumn,
+            sqlState: "42703",
+            message: "Schema validation failed: column tool_id is not available from the referenced tables.",
+            columnName: "tool_id"
+        )
+        let context = SQLGenerationContext(
+            mode: .repair,
+            originalQuestion: "what are tools that are getting the most wins in the last two weeks?",
+            repairContext: SQLRepairContext(
+                failedSQL: "SELECT tool_id FROM public.preseason_match_evaluation",
+                diagnostic: diagnostic,
+                forbiddenIdentifiers: ["tool_id"]
+            )
+        )
+
+        let package = SchemaPromptPackager.package(
+            schema: schema,
+            question: "what are tools that are getting the most wins in the last two weeks?",
+            context: context,
+            databaseContext: "",
+            maxCharacters: 1_700
+        )
+
+        #expect(package.text.count <= 1_700)
+        #expect(package.text.contains(#"TABLE "public"."preseason_match_evaluation""#))
+        #expect(package.text.contains(#""winner_id" uuid NOT NULL"#))
+        #expect(package.diagnostics.compressionLevel != .full)
+    }
+
+    @Test func schemaDiscoverySearchFindsWinningToolTables() {
+        let schema = makeWinningToolSchema(extraTables: 30)
+        let tables = SchemaDiscoveryService.search(
+            schema: schema,
+            queries: ["winning tools last two weeks match evaluation winner_id createdAt"],
+            limit: 5
+        ).map(\.qualifiedName)
+
+        #expect(tables.contains("public.preseason_match_evaluation"))
+        #expect(tables.contains("public.preseason_tool"))
     }
 
     private func makePreseasonSchema(extraTables: Int) -> DatabaseSchema {
@@ -435,6 +520,30 @@ struct SchemaPromptPackagerTests {
             tables: tables,
             foreignKeys: foreignKeys
         )
+    }
+
+    private func makeWideWinningToolSchema(extraTables: Int) -> DatabaseSchema {
+        var schema = makeWinningToolSchema(extraTables: extraTables)
+        guard let index = schema.tables.firstIndex(where: {
+            $0.qualifiedName == "public.preseason_match_evaluation"
+        }) else { return schema }
+        let extraColumns = [
+            ("raw_response", "text"),
+            ("appendix_json", "jsonb"),
+            ("appendix_raw", "text"),
+            ("system_prompt_snapshot", "text"),
+            ("rendered_user_prompt", "text"),
+        ] + (0..<30).map { ("debug_payload_\($0)", "jsonb") }
+        for (offset, extraColumn) in extraColumns.enumerated() {
+            schema.tables[index].columns.append(
+                column(
+                    "preseason_match_evaluation",
+                    extraColumn.0,
+                    type: extraColumn.1,
+                    ordinal: 100 + offset
+                ))
+        }
+        return schema
     }
 
     private func column(
