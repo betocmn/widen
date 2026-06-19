@@ -86,6 +86,26 @@ struct SchemaPromptPackagerTests {
         #expect(package.pinnedTables.contains("public.preseason_match_batch"))
     }
 
+    @Test func quotedCurrentSQLRelationPinsCanonicalTableName() {
+        let schema = makeQuotedSalesSchema(extraTables: 20)
+        let context = SQLGenerationContext(
+            mode: .followUp,
+            currentSQL: #"SELECT id FROM "Sales Data"."Q1 Orders""#,
+            repairContext: nil
+        )
+
+        let package = SchemaPromptPackager.package(
+            schema: schema,
+            question: "show the same orders by status",
+            context: context,
+            databaseContext: "",
+            maxCharacters: 350
+        )
+
+        #expect(package.text.contains(#"TABLE "Sales Data"."Q1 Orders""#))
+        #expect(package.pinnedTables.contains("Sales Data.Q1 Orders"))
+    }
+
     @Test func packagingDoesNotEmitDomainSpecificWinnerHints() {
         let schema = makeWinningToolSchema(extraTables: 12)
         let context = SQLGenerationContext(
@@ -357,6 +377,57 @@ struct SchemaPromptPackagerTests {
                     targetColumn: "id"
                 )
             ]
+        )
+    }
+
+    private func makeQuotedSalesSchema(extraTables: Int) -> DatabaseSchema {
+        var tables = [
+            TableInfo(
+                schema: "Sales Data",
+                name: "Q1 Orders",
+                type: .baseTable,
+                columns: [
+                    ColumnInfo(
+                        tableSchema: "Sales Data",
+                        tableName: "Q1 Orders",
+                        name: "id",
+                        dataType: "integer",
+                        isNullable: false,
+                        ordinalPosition: 1
+                    ),
+                    ColumnInfo(
+                        tableSchema: "Sales Data",
+                        tableName: "Q1 Orders",
+                        name: "status",
+                        dataType: "text",
+                        isNullable: true,
+                        ordinalPosition: 2
+                    ),
+                ]
+            )
+        ]
+        for index in 0..<extraTables {
+            tables.append(
+                TableInfo(
+                    schema: "public",
+                    name: "unrelated_sales_table_\(index)",
+                    type: .baseTable,
+                    columns: [
+                        ColumnInfo(
+                            tableSchema: "public",
+                            tableName: "unrelated_sales_table_\(index)",
+                            name: "id",
+                            dataType: "integer",
+                            isNullable: false,
+                            ordinalPosition: 1
+                        )
+                    ]
+                ))
+        }
+        return DatabaseSchema(
+            schemas: [SchemaInfo(name: "Sales Data"), SchemaInfo(name: "public")],
+            tables: tables,
+            foreignKeys: []
         )
     }
 

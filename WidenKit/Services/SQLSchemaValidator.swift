@@ -81,6 +81,9 @@ public enum SQLSchemaValidator {
         var issues: [SQLSchemaValidationIssue] = []
         var scopeSources = Array(repeating: [ResolvedRelationSource](), count: analysis.scopes.count)
         var referencedTables: [String] = []
+        let upsertTargetSources = analysis.upsertTargetRelations.compactMap { relation in
+            schemaIndex.resolve(relation).map { ResolvedRelationSource.table($0, alias: nil) }
+        }
 
         for (scopeIndex, scope) in analysis.scopes.enumerated() {
             for relation in scope.relations {
@@ -125,6 +128,7 @@ public enum SQLSchemaValidator {
                     scopeIndex: scopeIndex,
                     analysis: analysis,
                     scopeSources: scopeSources,
+                    upsertTargetSources: upsertTargetSources,
                     schemaIndex: schemaIndex,
                     issues: &issues
                 )
@@ -173,17 +177,22 @@ public enum SQLSchemaValidator {
         scopeIndex: Int,
         analysis: SQLReferenceAnalysis,
         scopeSources: [[ResolvedRelationSource]],
+        upsertTargetSources: [ResolvedRelationSource],
         schemaIndex: SchemaLookup,
         issues: inout [SQLSchemaValidationIssue]
     ) {
         let scope = analysis.scopes[scopeIndex]
         if let qualifier = column.qualifier {
-            guard let source = resolveSource(
+            let source = resolveSource(
                 qualifier,
                 from: scopeIndex,
                 analysis: analysis,
                 scopeSources: scopeSources
-            ) else {
+            ) ?? resolveExcludedSource(
+                qualifier,
+                upsertTargetSources: upsertTargetSources
+            )
+            guard let source else {
                 issues.append(
                     SQLSchemaValidationIssue(
                         severity: .error,
@@ -218,9 +227,6 @@ public enum SQLSchemaValidator {
             return
         }
 
-        if scope.outputAliases.contains(column.name.lowercased()) {
-            return
-        }
         let localResolution = resolveUnqualified(
             column,
             in: scopeIndex,
@@ -283,15 +289,13 @@ public enum SQLSchemaValidator {
             }
         }
 
-        if !scopeSources[scopeIndex].isEmpty {
-            issues.append(
-                SQLSchemaValidationIssue(
-                    severity: .error,
-                    message: "Schema validation failed: column \(column.name) is not available from the referenced tables.",
-                    kind: .missingColumn,
-                    identifier: column.name
-                ))
-        }
+        issues.append(
+            SQLSchemaValidationIssue(
+                severity: .error,
+                message: "Schema validation failed: column \(column.name) is not available from the referenced tables.",
+                kind: .missingColumn,
+                identifier: column.name
+            ))
     }
 
     private static func quotedIdentifierIssue(
@@ -363,9 +367,6 @@ public enum SQLSchemaValidator {
             return
         }
 
-        if analysis.outputAliases.contains(column.name.lowercased()) {
-            return
-        }
         let matchingTables = resolvedRelations.values.filter {
             schemaIndex.table($0, containsColumn: column)
         }
@@ -423,6 +424,14 @@ public enum SQLSchemaValidator {
             index = analysis.scopes[current].parentIndex
         }
         return nil
+    }
+
+    private static func resolveExcludedSource(
+        _ qualifier: String,
+        upsertTargetSources: [ResolvedRelationSource]
+    ) -> ResolvedRelationSource? {
+        guard qualifier.lowercased() == "excluded" else { return nil }
+        return upsertTargetSources.count == 1 ? upsertTargetSources[0] : nil
     }
 
     private static func resolveUnqualified(
@@ -837,7 +846,7 @@ public enum GeneratedSQLPostprocessor {
         "last", "latest", "least", "limit", "list", "me", "minute", "minutes", "month",
         "months", "most", "my", "newest", "next", "not", "of", "oldest", "on", "or", "our",
         "over", "per", "please", "recent", "return", "select", "she", "show", "since",
-        "sort", "that", "the", "their", "them", "then", "there", "these", "they", "this",
+        "sort", "placed", "that", "the", "their", "them", "then", "there", "these", "they", "this",
         "those", "to", "today", "top", "under", "up", "us", "was", "we", "week", "weeks",
         "were", "what", "when", "where", "which", "who", "whom", "whose", "why", "with",
         "would", "year", "years", "you", "your",

@@ -396,8 +396,8 @@ public enum SchemaPromptPackager {
             SchemaRelevanceRanker.extractRelationLikeIdentifiers(from: input.currentSQL ?? "")
         )
         for table in schema.tables {
-            if referenced.contains(table.qualifiedName.lowercased())
-                || referenced.contains(table.name.lowercased())
+            if referenced.contains(SchemaRelevanceRanker.canonicalIdentifier(table.qualifiedName))
+                || referenced.contains(SchemaRelevanceRanker.canonicalIdentifier(table.name))
             {
                 pinned.insert(table.id)
             }

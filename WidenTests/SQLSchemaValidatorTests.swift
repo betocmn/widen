@@ -79,6 +79,16 @@ struct SQLSchemaValidatorTests {
         #expect(!result.hasDefiniteErrors)
     }
 
+    @Test func outputAliasesDoNotResolveInWhere() {
+        let result = SQLSchemaValidator.validate(
+            sql: "SELECT id AS total FROM public.users WHERE total > 100",
+            against: makeUsersOrdersSchema()
+        )
+
+        #expect(result.hasDefiniteErrors)
+        #expect(result.errors.contains { $0.contains("total") })
+    }
+
     @Test func castTypeNamesAreNotTreatedAsColumns() {
         let result = SQLSchemaValidator.validate(
             sql: """
@@ -106,6 +116,80 @@ struct SQLSchemaValidatorTests {
         )
 
         #expect(!result.hasDefiniteErrors)
+    }
+
+    @Test func insertDefaultValuesAndConflictSyntaxDoNotBecomeColumns() {
+        let defaultValues = SQLSchemaValidator.validate(
+            sql: "INSERT INTO public.users DEFAULT VALUES",
+            against: makeUsersOrdersSchema()
+        )
+        let doNothing = SQLSchemaValidator.validate(
+            sql: "INSERT INTO public.users (id) VALUES (1) ON CONFLICT (id) DO NOTHING",
+            against: makeUsersOrdersSchema()
+        )
+
+        #expect(!defaultValues.hasDefiniteErrors)
+        #expect(!doNothing.hasDefiniteErrors)
+    }
+
+    @Test func excludedColumnsResolveAgainstUpsertTarget() {
+        let valid = SQLSchemaValidator.validate(
+            sql: """
+                INSERT INTO public.users (id, email)
+                VALUES (1, 'a@example.com')
+                ON CONFLICT (id) DO UPDATE SET email = excluded.email
+                """,
+            against: makeUsersOrdersSchema()
+        )
+        let invalid = SQLSchemaValidator.validate(
+            sql: """
+                INSERT INTO public.users (id, email)
+                VALUES (1, 'a@example.com')
+                ON CONFLICT (id) DO UPDATE SET email = excluded.missing_email
+                """,
+            against: makeUsersOrdersSchema()
+        )
+
+        #expect(!valid.hasDefiniteErrors)
+        #expect(invalid.hasDefiniteErrors)
+        #expect(invalid.errors.contains { $0.contains("missing_email") })
+    }
+
+    @Test func updateSetTargetsDoNotAmbiguateAgainstFromTables() {
+        let result = SQLSchemaValidator.validate(
+            sql: """
+                UPDATE public.users
+                SET email = staging.email
+                FROM public.staging_users AS staging
+                WHERE users.id = staging.user_id
+                """,
+            against: makeUsersStagingSchema()
+        )
+
+        #expect(!result.hasDefiniteErrors)
+    }
+
+    @Test func deleteUsingTablesAreRelationSources() {
+        let result = SQLSchemaValidator.validate(
+            sql: """
+                DELETE FROM public.users
+                USING public.staging_users AS staging
+                WHERE users.id = staging.user_id
+                """,
+            against: makeUsersStagingSchema()
+        )
+
+        #expect(!result.hasDefiniteErrors)
+    }
+
+    @Test func sourceLessIdentifiersAreRejected() {
+        let result = SQLSchemaValidator.validate(
+            sql: "SELECT id",
+            against: makeUsersOrdersSchema()
+        )
+
+        #expect(result.hasDefiniteErrors)
+        #expect(result.errors.contains { $0.contains("id") })
     }
 
     @Test func unquotedMixedCaseColumnDoesNotMatchQuotedPostgresColumn() {
@@ -276,6 +360,34 @@ struct SQLSchemaValidatorTests {
         #expect(enriched.referencedTables == ["public.users"])
     }
 
+    @Test func genericMetricVerbsDoNotForceClarification() {
+        let generation = SQLGenerationResult(
+            sql: """
+                SELECT COUNT(*)
+                FROM public.orders
+                WHERE created_at >= NOW() - INTERVAL '7 days'
+                """,
+            explanation: "Counts recent orders.",
+            assumptions: [],
+            referencedTables: [],
+            confidence: 1,
+            riskLevel: .low,
+            needsClarification: false,
+            clarificationQuestion: nil
+        )
+
+        let enriched = GeneratedSQLPostprocessor.enriched(
+            generation,
+            question: "How many orders were placed last week?",
+            schema: makeUsersOrdersSchema(),
+            databaseContext: ""
+        )
+
+        #expect(!enriched.needsClarification)
+        #expect(enriched.sql == generation.sql)
+        #expect(enriched.referencedTables == ["public.orders"])
+    }
+
     @Test func postprocessorAsksWhenMetricTermIsMissingFromReferencedSchema() {
         let generation = SQLGenerationResult(
             sql: "SELECT tool_a_id, COUNT(*) FROM public.preseason_match_batch GROUP BY tool_a_id",
@@ -411,6 +523,35 @@ struct SQLSchemaValidatorTests {
             ],
             foreignKeys: []
         )
+    }
+
+    private func makeUsersStagingSchema() -> DatabaseSchema {
+        var schema = makeUsersOrdersSchema()
+        schema.tables.append(
+            TableInfo(
+                schema: "public",
+                name: "staging_users",
+                type: .baseTable,
+                columns: [
+                    ColumnInfo(
+                        tableSchema: "public",
+                        tableName: "staging_users",
+                        name: "user_id",
+                        dataType: "integer",
+                        isNullable: false,
+                        ordinalPosition: 1
+                    ),
+                    ColumnInfo(
+                        tableSchema: "public",
+                        tableName: "staging_users",
+                        name: "email",
+                        dataType: "text",
+                        isNullable: false,
+                        ordinalPosition: 2
+                    ),
+                ]
+            ))
+        return schema
     }
 
     private func makeMixedCaseSchema() -> DatabaseSchema {

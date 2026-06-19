@@ -48,6 +48,7 @@ public struct SQLReferenceAnalysis: Equatable, Sendable {
     public var cteNames: Set<String>
     public var cteOutputColumns: [String: Set<String>?]
     public var outputAliases: Set<String>
+    public var upsertTargetRelations: [SQLRelationReference]
     public var scopes: [SQLReferenceScope]
     public var analysisIncomplete: Bool
 }
@@ -123,6 +124,7 @@ public enum SQLReferenceAnalyzer {
             cteNames: cteNames,
             cteOutputColumns: cteOutputColumns,
             outputAliases: outputAliases,
+            upsertTargetRelations: parseUpsertTargetRelations(tokens),
             scopes: scopes,
             analysisIncomplete: incomplete
         )
@@ -355,6 +357,7 @@ public enum SQLReferenceAnalyzer {
                 || normalized == "update"
                 || (normalized == "into" && previousKeyword == "insert")
                 || (normalized == "from" && previousKeyword == "delete")
+                || (normalized == "using" && tokens[safe: index + 1]?.text != "(")
 
             if isRelationStart {
                 index += 1
@@ -649,9 +652,11 @@ public enum SQLReferenceAnalyzer {
             let normalized = token.normalized
             if SQLToken.keywords.contains(normalized)
                 || cteNames.contains(normalized)
-                || outputAliases.contains(normalized)
+                || (outputAliases.contains(normalized)
+                    && isPermittedOutputAliasReference(at: index, tokens: tokens))
                 || relationAliases.contains(normalized)
                 || isCastTypeName(at: index, tokens: tokens)
+                || isSetAssignmentTarget(at: index, tokens: tokens)
                 || tokens[safe: index + 1]?.text == "("
                 || tokens[safe: index - 1]?.text == "."
                 || tokens[safe: index + 1]?.text == "."
@@ -668,6 +673,123 @@ public enum SQLReferenceAnalyzer {
             index += 1
         }
         return columns
+    }
+
+    private static func parseUpsertTargetRelations(_ tokens: [SQLToken]) -> [SQLRelationReference] {
+        guard hasTopLevelOnConflictDoUpdate(tokens) else { return [] }
+        var index = 0
+        while index < tokens.count {
+            if tokens[index].normalized == "insert",
+                let intoIndex = nextTopLevelIndex(ofAny: ["into"], in: tokens, after: index + 1)
+            {
+                var relationIndex = intoIndex + 1
+                if let relation = parseRelation(at: &relationIndex, tokens: tokens) {
+                    return [relation]
+                }
+                return []
+            }
+            index += 1
+        }
+        return []
+    }
+
+    private static func hasTopLevelOnConflictDoUpdate(_ tokens: [SQLToken]) -> Bool {
+        var index = 0
+        while index < tokens.count {
+            guard let onIndex = nextTopLevelIndex(ofAny: ["on"], in: tokens, after: index) else {
+                return false
+            }
+            if tokens[safe: onIndex + 1]?.normalized == "conflict",
+                let doIndex = nextTopLevelIndex(ofAny: ["do"], in: tokens, after: onIndex + 2),
+                tokens[safe: doIndex + 1]?.normalized == "update"
+            {
+                return true
+            }
+            index = onIndex + 1
+        }
+        return false
+    }
+
+    private static func isPermittedOutputAliasReference(
+        at index: Int,
+        tokens: [SQLToken]
+    ) -> Bool {
+        isOutputAliasDefinition(at: index, tokens: tokens)
+            || topLevelClause(containing: index, tokens: tokens) == "order"
+            || topLevelClause(containing: index, tokens: tokens) == "group"
+    }
+
+    private static func isOutputAliasDefinition(at index: Int, tokens: [SQLToken]) -> Bool {
+        guard isWithinTopLevelSelectList(index, tokens: tokens) else { return false }
+        if tokens[safe: index - 1]?.normalized == "as" {
+            return true
+        }
+        guard let groupRange = topLevelSelectItemRange(containing: index, tokens: tokens),
+            let lastIndex = lastSignificantIndex(in: groupRange, tokens: tokens),
+            lastIndex == index,
+            let previous = previousSignificantToken(before: index, in: tokens),
+            previous.normalized != "as",
+            previous.text != ".",
+            previous.text != ":"
+        else {
+            return false
+        }
+        return true
+    }
+
+    private static func isWithinTopLevelSelectList(_ index: Int, tokens: [SQLToken]) -> Bool {
+        guard let selectIndex = previousTopLevelIndex(ofAny: ["select"], in: tokens, before: index),
+            let fromIndex = nextTopLevelIndex(ofAny: ["from"], in: tokens, after: selectIndex + 1)
+        else {
+            return false
+        }
+        return index > selectIndex && index < fromIndex
+    }
+
+    private static func topLevelSelectItemRange(
+        containing index: Int,
+        tokens: [SQLToken]
+    ) -> Range<Int>? {
+        guard let selectIndex = previousTopLevelIndex(ofAny: ["select"], in: tokens, before: index),
+            let fromIndex = nextTopLevelIndex(ofAny: ["from"], in: tokens, after: selectIndex + 1),
+            index > selectIndex,
+            index < fromIndex
+        else {
+            return nil
+        }
+        var start = selectIndex + 1
+        var cursor = selectIndex + 1
+        var depth = 0
+        while cursor < fromIndex {
+            if tokens[cursor].text == "(" {
+                depth += 1
+            } else if tokens[cursor].text == ")" {
+                depth = max(0, depth - 1)
+            } else if depth == 0, tokens[cursor].text == "," {
+                if index >= start && index < cursor {
+                    return start..<cursor
+                }
+                start = cursor + 1
+            }
+            cursor += 1
+        }
+        return index >= start && index < fromIndex ? start..<fromIndex : nil
+    }
+
+    private static func lastSignificantIndex(
+        in range: Range<Int>,
+        tokens: [SQLToken]
+    ) -> Int? {
+        range.reversed().first { tokens[$0].text != "," }
+    }
+
+    private static func isSetAssignmentTarget(at index: Int, tokens: [SQLToken]) -> Bool {
+        guard tokens[safe: index + 1]?.text == "=",
+            topLevelClause(containing: index, tokens: tokens) == "set"
+        else {
+            return false
+        }
+        return true
     }
 
     private static func identifiersInBalancedGroup(_ tokens: [SQLToken], startingAt start: Int) -> [String] {
@@ -794,6 +916,36 @@ public enum SQLReferenceAnalyzer {
         return nil
     }
 
+    private static func previousTopLevelIndex(
+        ofAny words: Set<String>,
+        in tokens: [SQLToken],
+        before end: Int
+    ) -> Int? {
+        var depth = 0
+        var index = 0
+        var result: Int?
+        while index < min(end, tokens.count) {
+            if tokens[index].text == "(" {
+                depth += 1
+            } else if tokens[index].text == ")" {
+                depth = max(0, depth - 1)
+            } else if depth == 0, words.contains(tokens[index].normalized) {
+                result = index
+            }
+            index += 1
+        }
+        return result
+    }
+
+    private static func topLevelClause(containing index: Int, tokens: [SQLToken]) -> String? {
+        let clauseKeywords: Set<String> = [
+            "select", "from", "where", "group", "having", "order", "limit", "offset", "set",
+            "values", "returning", "on", "using",
+        ]
+        return previousTopLevelIndex(ofAny: clauseKeywords, in: tokens, before: index + 1)
+            .map { tokens[$0].normalized }
+    }
+
     private static func containsTopLevelSelect(_ tokens: [SQLToken]) -> Bool {
         nextTopLevelIndex(ofAny: ["select"], in: tokens, after: 0) != nil
             || tokens.first?.normalized == "select"
@@ -823,10 +975,11 @@ public enum SQLReferenceAnalyzer {
     private static let relationTerminatorKeywords: Set<String> = [
         "on", "using", "where", "join", "left", "right", "inner", "outer", "full", "cross",
         "group", "order", "limit", "offset", "union", "returning", "set", "values",
+        "default", "conflict", "do", "nothing",
     ]
 
     private static let relationStartKeywords: Set<String> = [
-        "from", "join", "update", "into",
+        "from", "join", "update", "into", "using",
     ]
 }
 
@@ -956,8 +1109,10 @@ struct SQLToken: Equatable, Sendable {
         "between", "case", "when", "then", "else", "end", "asc", "desc", "insert", "into",
         "update", "delete", "set", "values", "returning", "distinct", "over", "partition",
         "filter", "left", "right", "inner", "outer", "full", "cross", "lateral", "only",
+        "using",
         "true", "false", "interval", "current_date", "current_timestamp", "now", "like",
-        "ilike", "similar", "escape", "nulls", "first", "last",
+        "ilike", "similar", "escape", "nulls", "first", "last", "default", "conflict",
+        "do", "nothing",
     ]
 }
 

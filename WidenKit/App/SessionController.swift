@@ -1026,7 +1026,6 @@ public final class SessionController: Identifiable {
             "insufficient privilege",
             "42501",
             "timed out",
-            "timeout",
             "statement timeout",
             "stopped waiting",
             "canceling statement",
