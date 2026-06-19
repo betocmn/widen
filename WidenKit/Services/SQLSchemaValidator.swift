@@ -82,17 +82,20 @@ public enum SQLSchemaValidator {
         var scopeSources = Array(repeating: [ResolvedRelationSource](), count: analysis.scopes.count)
         var referencedTables: [String] = []
         let upsertTargetSources = analysis.upsertTargetRelations.compactMap { relation in
-            schemaIndex.resolve(relation).map { ResolvedRelationSource.table($0, alias: nil) }
+            schemaIndex.resolve(relation).map {
+                ResolvedRelationSource.table($0, alias: nil, role: relation.role)
+            }
         }
 
         for (scopeIndex, scope) in analysis.scopes.enumerated() {
             for relation in scope.relations {
-                if let derivedColumns = relation.derivedColumns {
+                if relation.isDerived {
                     scopeSources[scopeIndex].append(
                         ResolvedRelationSource.cte(
                             name: relation.alias ?? relation.name,
                             alias: relation.alias,
-                            columns: derivedColumns
+                            columns: relation.derivedColumns,
+                            role: relation.role
                         ))
                     continue
                 }
@@ -102,7 +105,8 @@ public enum SQLSchemaValidator {
                         ResolvedRelationSource.cte(
                             name: cteName,
                             alias: relation.alias,
-                            columns: analysis.cteOutputColumns[cteName] ?? nil
+                            columns: analysis.cteOutputColumns[cteName] ?? nil,
+                            role: relation.role
                         ))
                     continue
                 }
@@ -117,7 +121,9 @@ public enum SQLSchemaValidator {
                     continue
                 }
                 referencedTables.append(table.qualifiedName)
-                scopeSources[scopeIndex].append(.table(table, alias: relation.alias))
+                scopeSources[scopeIndex].append(
+                    .table(table, alias: relation.alias, role: relation.role)
+                )
             }
         }
 
@@ -182,6 +188,16 @@ public enum SQLSchemaValidator {
         issues: inout [SQLSchemaValidationIssue]
     ) {
         let scope = analysis.scopes[scopeIndex]
+        if column.context == .updateSetTarget {
+            validateUpdateSetTarget(
+                column: column,
+                scopeIndex: scopeIndex,
+                scopeSources: scopeSources,
+                schemaIndex: schemaIndex,
+                issues: &issues
+            )
+            return
+        }
         if let qualifier = column.qualifier {
             let source = resolveSource(
                 qualifier,
@@ -298,6 +314,41 @@ public enum SQLSchemaValidator {
             ))
     }
 
+    private static func validateUpdateSetTarget(
+        column: SQLColumnReference,
+        scopeIndex: Int,
+        scopeSources: [[ResolvedRelationSource]],
+        schemaIndex: SchemaLookup,
+        issues: inout [SQLSchemaValidationIssue]
+    ) {
+        guard let source = scopeSources[safe: scopeIndex]?.first(where: {
+            $0.role == .updateTarget
+        }) else {
+            return
+        }
+        guard !source.definitelyContainsColumn(column, schemaIndex: schemaIndex) else { return }
+        if source.hasUnknownColumns {
+            return
+        }
+        if let actualName = source.quotedColumnName(for: column, schemaIndex: schemaIndex) {
+            issues.append(
+                quotedIdentifierIssue(
+                    column: column,
+                    actualName: actualName,
+                    source: source.displayName
+                )
+            )
+            return
+        }
+        issues.append(
+            SQLSchemaValidationIssue(
+                severity: .error,
+                message: "Schema validation failed: column \(column.name) is not on \(source.displayName).",
+                kind: .missingColumn,
+                identifier: column.name
+            ))
+    }
+
     private static func quotedIdentifierIssue(
         column: SQLColumnReference,
         actualName: String,
@@ -324,10 +375,11 @@ public enum SQLSchemaValidator {
         for relation in analysis.relations {
             guard let table = schemaIndex.resolve(relation) else { continue }
             resolvedRelations[relation] = table
-            aliasToTable[table.name.lowercased()] = table
-            aliasToTable[table.qualifiedName.lowercased()] = table
             if let alias = relation.alias {
                 aliasToTable[alias.lowercased()] = table
+            } else {
+                aliasToTable[table.name.lowercased()] = table
+                aliasToTable[table.qualifiedName.lowercased()] = table
             }
         }
 
@@ -874,7 +926,18 @@ public enum GeneratedSQLValidator {
         }
         guard !replacements.isEmpty else { return nil }
 
-        let repaired = rewriteUnquotedIdentifiers(in: sql, replacements: replacements)
+        let replacementRanges = schemaValidation.analysis.columns.compactMap {
+            column -> IdentifierReplacement? in
+            guard !column.isQuoted,
+                let start = column.startOffset,
+                let end = column.endOffset,
+                let replacement = replacements[column.name.lowercased()]
+            else { return nil }
+            return IdentifierReplacement(start: start, end: end, replacement: replacement)
+        }
+        guard !replacementRanges.isEmpty else { return nil }
+
+        let repaired = rewriteUnquotedIdentifiers(in: sql, replacementRanges: replacementRanges)
         guard repaired != sql,
             validate(sql: repaired, schema: schema).isValid
         else { return nil }
@@ -900,11 +963,14 @@ public enum GeneratedSQLValidator {
 
     private static func rewriteUnquotedIdentifiers(
         in sql: String,
-        replacements: [String: String]
+        replacementRanges: [IdentifierReplacement]
     ) -> String {
         let characters = Array(sql)
         var output = ""
         var index = 0
+        let replacementsByStart = Dictionary(
+            uniqueKeysWithValues: replacementRanges.map { ($0.start, $0) }
+        )
 
         func char(at offset: Int) -> Character? {
             offset < characters.count ? characters[offset] : nil
@@ -1013,8 +1079,10 @@ public enum GeneratedSQLValidator {
                     index += 1
                 }
                 let identifier = String(characters[start..<index])
-                if let replacement = replacements[identifier.lowercased()] {
-                    output += quotedIdentifier(replacement)
+                if let replacement = replacementsByStart[start],
+                    replacement.end == index
+                {
+                    output += quotedIdentifier(replacement.replacement)
                 } else {
                     output += identifier
                 }
@@ -1027,6 +1095,12 @@ public enum GeneratedSQLValidator {
 
         return output
     }
+}
+
+private struct IdentifierReplacement {
+    var start: Int
+    var end: Int
+    var replacement: String
 }
 
 private struct SchemaLookup {
@@ -1102,38 +1176,50 @@ private struct ResolvedRelationSource {
     var displayName: String
     var names: Set<String>
     var table: TableInfo?
-    var cteColumns: Set<String>?
+    var cteColumns: Set<SQLDerivedColumn>?
     var hasUnknownColumns: Bool
+    var role: SQLRelationReference.Role
 
-    static func table(_ table: TableInfo, alias: String?) -> ResolvedRelationSource {
-        var names = Set([table.name.lowercased(), table.qualifiedName.lowercased()])
+    static func table(
+        _ table: TableInfo,
+        alias: String?,
+        role: SQLRelationReference.Role = .source
+    ) -> ResolvedRelationSource {
+        let names: Set<String>
         if let alias {
-            names.insert(alias.lowercased())
+            names = [alias.lowercased()]
+        } else {
+            names = Set([table.name.lowercased(), table.qualifiedName.lowercased()])
         }
         return ResolvedRelationSource(
             displayName: table.qualifiedName,
             names: names,
             table: table,
             cteColumns: nil,
-            hasUnknownColumns: false
+            hasUnknownColumns: false,
+            role: role
         )
     }
 
     static func cte(
         name: String,
         alias: String?,
-        columns: Set<String>?
+        columns: Set<SQLDerivedColumn>?,
+        role: SQLRelationReference.Role = .source
     ) -> ResolvedRelationSource {
-        var names = Set([name.lowercased()])
+        let names: Set<String>
         if let alias {
-            names.insert(alias.lowercased())
+            names = [alias.lowercased()]
+        } else {
+            names = [name.lowercased()]
         }
         return ResolvedRelationSource(
             displayName: name,
             names: names,
             table: nil,
             cteColumns: columns,
-            hasUnknownColumns: columns == nil
+            hasUnknownColumns: columns == nil,
+            role: role
         )
     }
 
@@ -1146,7 +1232,7 @@ private struct ResolvedRelationSource {
             return schemaIndex.table(table, containsColumn: column)
         }
         guard let cteColumns else { return false }
-        return cteColumns.contains(column.name.lowercased())
+        return cteColumns.contains { $0.matches(column) }
     }
 
     func quotedColumnName(

@@ -103,6 +103,21 @@ struct SQLSchemaValidatorTests {
         #expect(!result.hasDefiniteErrors)
     }
 
+    @Test func usingAndExtractSyntaxIdentifiersAreNotTreatedAsColumns() {
+        let result = SQLSchemaValidator.validate(
+            sql: """
+                SELECT EXTRACT(YEAR FROM orders.created_at) AS order_year, COUNT(*)
+                FROM public.users
+                JOIN public.orders USING (id)
+                GROUP BY EXTRACT(YEAR FROM orders.created_at)
+                ORDER BY order_year
+                """,
+            against: makeUsersOrdersSchema()
+        )
+
+        #expect(!result.hasDefiniteErrors)
+    }
+
     @Test func postgresOperatorWordsAreNotTreatedAsColumns() {
         let result = SQLSchemaValidator.validate(
             sql: """
@@ -116,6 +131,33 @@ struct SQLSchemaValidatorTests {
         )
 
         #expect(!result.hasDefiniteErrors)
+    }
+
+    @Test func dollarQuotedLiteralsAreNotTreatedAsColumns() {
+        let result = SQLSchemaValidator.validate(
+            sql: "INSERT INTO public.notes (body) VALUES ($$hello$$)",
+            against: makeNotesSchema()
+        )
+
+        #expect(!result.hasDefiniteErrors)
+    }
+
+    @Test func tableValuedFunctionSourcesResolveAsDerivedSources() {
+        let result = SQLSchemaValidator.validate(
+            sql: """
+                SELECT d.day
+                FROM generate_series(
+                  NOW() - INTERVAL '7 days',
+                  NOW(),
+                  INTERVAL '1 day'
+                ) AS d(day)
+                ORDER BY d.day
+                """,
+            against: makeUsersOrdersSchema()
+        )
+
+        #expect(!result.hasDefiniteErrors)
+        #expect(result.referencedTables.isEmpty)
     }
 
     @Test func insertDefaultValuesAndConflictSyntaxDoNotBecomeColumns() {
@@ -167,6 +209,20 @@ struct SQLSchemaValidatorTests {
         )
 
         #expect(!result.hasDefiniteErrors)
+    }
+
+    @Test func updateSetTargetsAreValidatedAgainstUpdateTable() {
+        let result = SQLSchemaValidator.validate(
+            sql: """
+                UPDATE public.users
+                SET missing = 1
+                WHERE id = 1
+                """,
+            against: makeUsersStagingSchema()
+        )
+
+        #expect(result.hasDefiniteErrors)
+        #expect(result.errors.contains { $0.contains("missing") && $0.contains("public.users") })
     }
 
     @Test func deleteUsingTablesAreRelationSources() {
@@ -229,6 +285,62 @@ struct SQLSchemaValidatorTests {
         #expect(quotedExact.referencedTables == ["public.EventLog"])
     }
 
+    @Test func tableAliasesHideOriginalTableQualifier() {
+        let result = SQLSchemaValidator.validate(
+            sql: "SELECT users.id FROM public.users AS u",
+            against: makeUsersOrdersSchema()
+        )
+
+        #expect(result.hasDefiniteErrors)
+        #expect(result.errors.contains { $0.contains("qualifier users") })
+    }
+
+    @Test func quotedCteOutputAliasRequiresExactQuotedReference() {
+        let unquoted = SQLSchemaValidator.validate(
+            sql: """
+                WITH c AS (
+                  SELECT id AS "UserID" FROM public.users
+                )
+                SELECT userid FROM c
+                """,
+            against: makeUsersOrdersSchema()
+        )
+        let quoted = SQLSchemaValidator.validate(
+            sql: """
+                WITH c AS (
+                  SELECT id AS "UserID" FROM public.users
+                )
+                SELECT "UserID" FROM c
+                """,
+            against: makeUsersOrdersSchema()
+        )
+
+        #expect(unquoted.hasDefiniteErrors)
+        #expect(unquoted.errors.contains { $0.contains("userid") })
+        #expect(!quoted.hasDefiniteErrors)
+    }
+
+    @Test func derivedTableColumnAliasListsDefineDerivedColumns() {
+        let valid = SQLSchemaValidator.validate(
+            sql: """
+                SELECT d.user_id
+                FROM (SELECT id FROM public.users) AS d(user_id)
+                """,
+            against: makeUsersOrdersSchema()
+        )
+        let invalid = SQLSchemaValidator.validate(
+            sql: """
+                SELECT d.id
+                FROM (SELECT id FROM public.users) AS d(user_id)
+                """,
+            against: makeUsersOrdersSchema()
+        )
+
+        #expect(!valid.hasDefiniteErrors)
+        #expect(invalid.hasDefiniteErrors)
+        #expect(invalid.errors.contains { $0.contains("id") })
+    }
+
     @Test func generatedValidatorCanRepairUnquotedMixedCaseColumns() {
         let repaired = GeneratedSQLValidator.repairQuotedIdentifiers(
             sql:
@@ -240,6 +352,15 @@ struct SQLSchemaValidatorTests {
             repaired
                 == #"SELECT "createdAt" FROM public.events WHERE "createdAt" IS NOT NULL -- createdAt comment"#
         )
+    }
+
+    @Test func generatedValidatorRepairsOnlyColumnReferenceIdentifiers() {
+        let repaired = GeneratedSQLValidator.repairQuotedIdentifiers(
+            sql: #"SELECT date, created_at::date AS created_day FROM public.events"#,
+            schema: makeMixedCaseDateSchema()
+        )
+
+        #expect(repaired == #"SELECT "Date", created_at::date AS created_day FROM public.events"#)
     }
 
     @Test func timestampComparedDirectlyToIntervalIsDefiniteError() {
@@ -578,6 +699,38 @@ struct SQLSchemaValidatorTests {
         )
     }
 
+    private func makeMixedCaseDateSchema() -> DatabaseSchema {
+        DatabaseSchema(
+            schemas: [SchemaInfo(name: "public")],
+            tables: [
+                TableInfo(
+                    schema: "public",
+                    name: "events",
+                    type: .baseTable,
+                    columns: [
+                        ColumnInfo(
+                            tableSchema: "public",
+                            tableName: "events",
+                            name: "Date",
+                            dataType: "date",
+                            isNullable: false,
+                            ordinalPosition: 1
+                        ),
+                        ColumnInfo(
+                            tableSchema: "public",
+                            tableName: "events",
+                            name: "created_at",
+                            dataType: "timestamp with time zone",
+                            isNullable: false,
+                            ordinalPosition: 2
+                        ),
+                    ]
+                )
+            ],
+            foreignKeys: []
+        )
+    }
+
     private func makeMixedCaseTableSchema() -> DatabaseSchema {
         DatabaseSchema(
             schemas: [SchemaInfo(name: "public")],
@@ -592,6 +745,30 @@ struct SQLSchemaValidatorTests {
                             tableName: "EventLog",
                             name: "id",
                             dataType: "integer",
+                            isNullable: false,
+                            ordinalPosition: 1
+                        )
+                    ]
+                )
+            ],
+            foreignKeys: []
+        )
+    }
+
+    private func makeNotesSchema() -> DatabaseSchema {
+        DatabaseSchema(
+            schemas: [SchemaInfo(name: "public")],
+            tables: [
+                TableInfo(
+                    schema: "public",
+                    name: "notes",
+                    type: .baseTable,
+                    columns: [
+                        ColumnInfo(
+                            tableSchema: "public",
+                            tableName: "notes",
+                            name: "body",
+                            dataType: "text",
                             isNullable: false,
                             ordinalPosition: 1
                         )

@@ -1,12 +1,21 @@
 import Foundation
 
 public struct SQLRelationReference: Equatable, Hashable, Sendable {
+    public enum Role: Equatable, Hashable, Sendable {
+        case source
+        case updateTarget
+        case insertTarget
+        case deleteTarget
+    }
+
     public var schema: String?
     public var name: String
     public var alias: String?
     public var schemaIsQuoted: Bool
     public var nameIsQuoted: Bool
-    public var derivedColumns: Set<String>?
+    public var role: Role
+    public var isDerived: Bool
+    public var derivedColumns: Set<SQLDerivedColumn>?
 
     public init(
         schema: String? = nil,
@@ -14,13 +23,17 @@ public struct SQLRelationReference: Equatable, Hashable, Sendable {
         alias: String? = nil,
         schemaIsQuoted: Bool = false,
         nameIsQuoted: Bool = false,
-        derivedColumns: Set<String>? = nil
+        role: Role = .source,
+        isDerived: Bool = false,
+        derivedColumns: Set<SQLDerivedColumn>? = nil
     ) {
         self.schema = schema
         self.name = name
         self.alias = alias
         self.schemaIsQuoted = schemaIsQuoted
         self.nameIsQuoted = nameIsQuoted
+        self.role = role
+        self.isDerived = isDerived
         self.derivedColumns = derivedColumns
     }
 
@@ -30,15 +43,57 @@ public struct SQLRelationReference: Equatable, Hashable, Sendable {
     }
 }
 
-public struct SQLColumnReference: Equatable, Hashable, Sendable {
-    public var qualifier: String?
+public struct SQLDerivedColumn: Equatable, Hashable, Sendable {
     public var name: String
     public var isQuoted: Bool
 
-    public init(qualifier: String?, name: String, isQuoted: Bool = false) {
+    public init(name: String, isQuoted: Bool) {
+        self.name = isQuoted ? name : name.lowercased()
+        self.isQuoted = isQuoted
+    }
+
+    init(token: SQLToken) {
+        self.init(name: token.identifierValue, isQuoted: token.kind == .quotedIdentifier)
+    }
+
+    public func matches(_ column: SQLColumnReference) -> Bool {
+        if isQuoted {
+            return column.isQuoted && column.name == name
+        }
+        if column.isQuoted {
+            return column.name == name
+        }
+        return column.name.lowercased() == name
+    }
+}
+
+public struct SQLColumnReference: Equatable, Hashable, Sendable {
+    public enum Context: Equatable, Hashable, Sendable {
+        case expression
+        case updateSetTarget
+    }
+
+    public var qualifier: String?
+    public var name: String
+    public var isQuoted: Bool
+    public var context: Context
+    public var startOffset: Int?
+    public var endOffset: Int?
+
+    public init(
+        qualifier: String?,
+        name: String,
+        isQuoted: Bool = false,
+        context: Context = .expression,
+        startOffset: Int? = nil,
+        endOffset: Int? = nil
+    ) {
         self.qualifier = qualifier
         self.name = name
         self.isQuoted = isQuoted
+        self.context = context
+        self.startOffset = startOffset
+        self.endOffset = endOffset
     }
 }
 
@@ -46,7 +101,7 @@ public struct SQLReferenceAnalysis: Equatable, Sendable {
     public var relations: [SQLRelationReference]
     public var columns: [SQLColumnReference]
     public var cteNames: Set<String>
-    public var cteOutputColumns: [String: Set<String>?]
+    public var cteOutputColumns: [String: Set<SQLDerivedColumn>?]
     public var outputAliases: Set<String>
     public var upsertTargetRelations: [SQLRelationReference]
     public var scopes: [SQLReferenceScope]
@@ -76,7 +131,7 @@ public enum SQLReferenceAnalyzer {
     public static func analyze(_ sql: String) -> SQLReferenceAnalysis {
         let tokens = SQLToken.tokenize(sql)
         var cteNames = Set<String>()
-        var cteOutputColumns: [String: Set<String>?] = [:]
+        var cteOutputColumns: [String: Set<SQLDerivedColumn>?] = [:]
         var scopes: [SQLReferenceScope] = []
         var incomplete = false
 
@@ -134,7 +189,7 @@ public enum SQLReferenceAnalyzer {
     private static func parseCTEs(
         _ tokens: [SQLToken],
         cteNames: inout Set<String>,
-        cteOutputColumns: inout [String: Set<String>?],
+        cteOutputColumns: inout [String: Set<SQLDerivedColumn>?],
         scopes: inout [SQLReferenceScope],
         incomplete: inout Bool
     ) -> Int {
@@ -153,10 +208,9 @@ public enum SQLReferenceAnalyzer {
             cteNames.insert(cteName)
             index += 1
 
-            var explicitColumns: Set<String>?
+            var explicitColumns: Set<SQLDerivedColumn>?
             if tokens[safe: index]?.text == "(" {
-                let columns = identifiersInBalancedGroup(tokens, startingAt: index)
-                explicitColumns = Set(columns.map { $0.lowercased() })
+                explicitColumns = Set(derivedColumnsInBalancedGroup(tokens, startingAt: index))
                 index = indexAfterBalancedGroup(tokens, startingAt: index) ?? tokens.count
             }
             guard tokens[safe: index]?.normalized == "as" else {
@@ -360,6 +414,11 @@ public enum SQLReferenceAnalyzer {
                 || (normalized == "using" && tokens[safe: index + 1]?.text != "(")
 
             if isRelationStart {
+                let role: SQLRelationReference.Role =
+                    normalized == "update" ? .updateTarget
+                    : (normalized == "into" && previousKeyword == "insert") ? .insertTarget
+                    : (normalized == "from" && previousKeyword == "delete") ? .deleteTarget
+                    : .source
                 index += 1
                 while index < tokens.count {
                     if let current = tokens[safe: index],
@@ -374,25 +433,36 @@ public enum SQLReferenceAnalyzer {
                         if let afterGroup = indexAfterBalancedGroup(tokens, startingAt: index) {
                             let innerTokens = Array(tokens[(index + 1)..<(afterGroup - 1)])
                             index = afterGroup
-                            let aliasParse = parseOptionalAlias(tokens, startingAt: index)
+                            let aliasParse = parseOptionalAliasAndColumns(tokens, startingAt: index)
                             if let aliasParse {
                                 index = aliasParse.nextIndex
                             }
                             if containsTopLevelSelect(innerTokens) {
+                                let inferredColumns = inferSelectOutputColumns(innerTokens)
                                 relations.append(
                                     SQLRelationReference(
                                         name: aliasParse?.alias ?? "__derived_table",
                                         alias: aliasParse?.alias,
-                                        derivedColumns: inferSelectOutputColumns(innerTokens)
+                                        isDerived: true,
+                                        derivedColumns: aliasParse?.columns ?? inferredColumns
                                     ))
                             }
                         } else {
                             incomplete = true
                             return relations
                         }
+                    } else if role == .source,
+                        let functionRelation = parseTableFunctionRelation(
+                            at: &index,
+                            tokens: tokens
+                        )
+                    {
+                        relations.append(functionRelation)
                     } else if let relation = parseRelation(at: &index, tokens: tokens) {
-                        if !skipCTEs || !cteNames.contains(relation.name.lowercased()) {
-                            relations.append(relation)
+                        var roleRelation = relation
+                        roleRelation.role = role
+                        if !skipCTEs || !cteNames.contains(roleRelation.name.lowercased()) {
+                            relations.append(roleRelation)
                         }
                     } else {
                         break
@@ -456,6 +526,36 @@ public enum SQLReferenceAnalyzer {
         )
     }
 
+    private static func parseTableFunctionRelation(
+        at index: inout Int,
+        tokens: [SQLToken]
+    ) -> SQLRelationReference? {
+        guard let first = tokens[safe: index], first.isIdentifierLike else { return nil }
+        var functionName = first.identifierValue
+        var cursor = index + 1
+        if tokens[safe: cursor]?.text == ".",
+            let second = tokens[safe: cursor + 1],
+            second.isIdentifierLike
+        {
+            functionName = second.identifierValue
+            cursor += 2
+        }
+        guard tokens[safe: cursor]?.text == "(",
+            let afterArguments = indexAfterBalancedGroup(tokens, startingAt: cursor)
+        else {
+            return nil
+        }
+
+        let aliasParse = parseOptionalAliasAndColumns(tokens, startingAt: afterArguments)
+        index = aliasParse?.nextIndex ?? afterArguments
+        return SQLRelationReference(
+            name: aliasParse?.alias ?? functionName,
+            alias: aliasParse?.alias,
+            isDerived: true,
+            derivedColumns: aliasParse?.columns
+        )
+    }
+
     private static func parseOutputAliases(_ tokens: [SQLToken]) -> Set<String> {
         guard let selectIndex = tokens.firstIndex(where: { $0.normalized == "select" }) else {
             return []
@@ -475,30 +575,30 @@ public enum SQLReferenceAnalyzer {
         return aliases
     }
 
-    private static func inferSelectOutputColumns(_ tokens: [SQLToken]) -> Set<String>? {
+    private static func inferSelectOutputColumns(_ tokens: [SQLToken]) -> Set<SQLDerivedColumn>? {
         guard let selectIndex = tokens.firstIndex(where: { $0.normalized == "select" }) else {
             return nil
         }
         let fromIndex = firstTopLevelIndex(ofAny: ["from"], in: tokens, after: selectIndex + 1)
             ?? tokens.count
         let items = splitTopLevelCommaSeparated(Array(tokens[(selectIndex + 1)..<fromIndex]))
-        var columns = Set<String>()
+        var columns = Set<SQLDerivedColumn>()
         for item in items {
             let significant = item.filter { $0.text != "," }
             guard !significant.isEmpty else { continue }
             if let alias = explicitOutputAlias(in: significant) {
-                columns.insert(alias.identifierValue.lowercased())
+                columns.insert(SQLDerivedColumn(token: alias))
                 continue
             }
             if let alias = implicitOutputAlias(in: significant) {
-                columns.insert(alias.identifierValue.lowercased())
+                columns.insert(SQLDerivedColumn(token: alias))
                 continue
             }
             if significant.contains(where: { $0.text == "*" }) {
                 return nil
             }
             if significant.count == 1, let column = significant.first, column.isIdentifierLike {
-                columns.insert(column.identifierValue.lowercased())
+                columns.insert(SQLDerivedColumn(token: column))
                 continue
             }
             if significant.count == 3,
@@ -506,7 +606,7 @@ public enum SQLReferenceAnalyzer {
                 let column = significant.last,
                 column.isIdentifierLike
             {
-                columns.insert(column.identifierValue.lowercased())
+                columns.insert(SQLDerivedColumn(token: column))
                 continue
             }
             return nil
@@ -586,10 +686,11 @@ public enum SQLReferenceAnalyzer {
         var columns: [SQLColumnReference] = []
         var relationAliases = Set<String>()
         for relation in relations {
-            relationAliases.insert(relation.name.lowercased())
-            relationAliases.insert(relation.displayName.lowercased())
             if let alias = relation.alias {
                 relationAliases.insert(alias.lowercased())
+            } else {
+                relationAliases.insert(relation.name.lowercased())
+                relationAliases.insert(relation.displayName.lowercased())
             }
         }
 
@@ -611,6 +712,20 @@ public enum SQLReferenceAnalyzer {
                 continue
             }
 
+            if isSetAssignmentTarget(at: index, tokens: tokens) {
+                columns.append(
+                    SQLColumnReference(
+                        qualifier: nil,
+                        name: token.identifierValue,
+                        isQuoted: token.kind == .quotedIdentifier,
+                        context: .updateSetTarget,
+                        startOffset: token.startOffset,
+                        endOffset: token.endOffset
+                    ))
+                index += 1
+                continue
+            }
+
             if tokens[safe: index + 1]?.text == ".",
                 let table = tokens[safe: index + 2],
                 table.isIdentifierLike,
@@ -622,7 +737,9 @@ public enum SQLReferenceAnalyzer {
                     SQLColumnReference(
                         qualifier: "\(token.identifierValue).\(table.identifierValue)",
                         name: column.text == "*" ? "*" : column.identifierValue,
-                        isQuoted: column.kind == .quotedIdentifier
+                        isQuoted: column.kind == .quotedIdentifier,
+                        startOffset: column.startOffset,
+                        endOffset: column.endOffset
                     ))
                 index += 5
                 continue
@@ -643,7 +760,9 @@ public enum SQLReferenceAnalyzer {
                     SQLColumnReference(
                         qualifier: token.identifierValue,
                         name: column.text == "*" ? "*" : column.identifierValue,
-                        isQuoted: column.kind == .quotedIdentifier
+                        isQuoted: column.kind == .quotedIdentifier,
+                        startOffset: column.startOffset,
+                        endOffset: column.endOffset
                     ))
                 index += 3
                 continue
@@ -656,7 +775,8 @@ public enum SQLReferenceAnalyzer {
                     && isPermittedOutputAliasReference(at: index, tokens: tokens))
                 || relationAliases.contains(normalized)
                 || isCastTypeName(at: index, tokens: tokens)
-                || isSetAssignmentTarget(at: index, tokens: tokens)
+                || isInsideUsingColumnList(at: index, tokens: tokens)
+                || isInsideExtractField(at: index, tokens: tokens)
                 || tokens[safe: index + 1]?.text == "("
                 || tokens[safe: index - 1]?.text == "."
                 || tokens[safe: index + 1]?.text == "."
@@ -668,7 +788,9 @@ public enum SQLReferenceAnalyzer {
                 SQLColumnReference(
                     qualifier: nil,
                     name: token.identifierValue,
-                    isQuoted: token.kind == .quotedIdentifier
+                    isQuoted: token.kind == .quotedIdentifier,
+                    startOffset: token.startOffset,
+                    endOffset: token.endOffset
                 ))
             index += 1
         }
@@ -792,17 +914,69 @@ public enum SQLReferenceAnalyzer {
         return true
     }
 
-    private static func identifiersInBalancedGroup(_ tokens: [SQLToken], startingAt start: Int) -> [String] {
+    private static func isInsideUsingColumnList(at index: Int, tokens: [SQLToken]) -> Bool {
+        guard let group = enclosingGroup(containing: index, tokens: tokens),
+            tokens[safe: group.openIndex - 1]?.normalized == "using"
+        else {
+            return false
+        }
+        return index > group.openIndex && index < group.closeIndex
+    }
+
+    private static func isInsideExtractField(at index: Int, tokens: [SQLToken]) -> Bool {
+        guard let group = enclosingGroup(containing: index, tokens: tokens),
+            tokens[safe: group.openIndex - 1]?.normalized == "extract"
+        else {
+            return false
+        }
+        var depth = 0
+        for cursor in (group.openIndex + 1)..<index {
+            if tokens[cursor].text == "(" {
+                depth += 1
+            } else if tokens[cursor].text == ")" {
+                depth = max(0, depth - 1)
+            } else if depth == 0, tokens[cursor].normalized == "from" {
+                return false
+            }
+        }
+        return true
+    }
+
+    private static func enclosingGroup(
+        containing index: Int,
+        tokens: [SQLToken]
+    ) -> (openIndex: Int, closeIndex: Int)? {
+        guard index > 0 else { return nil }
+        var stack: [Int] = []
+        for cursor in 0...min(index, tokens.count - 1) {
+            if tokens[cursor].text == "(" {
+                stack.append(cursor)
+            } else if tokens[cursor].text == ")" {
+                _ = stack.popLast()
+            }
+        }
+        guard let openIndex = stack.last,
+            let afterGroup = indexAfterBalancedGroup(tokens, startingAt: openIndex)
+        else {
+            return nil
+        }
+        return (openIndex, afterGroup - 1)
+    }
+
+    private static func derivedColumnsInBalancedGroup(
+        _ tokens: [SQLToken],
+        startingAt start: Int
+    ) -> [SQLDerivedColumn] {
         guard let end = indexAfterBalancedGroup(tokens, startingAt: start) else { return [] }
         return tokens[(start + 1)..<(end - 1)].compactMap { token in
-            token.isIdentifierLike ? token.identifierValue : nil
+            token.isIdentifierLike ? SQLDerivedColumn(token: token) : nil
         }
     }
 
-    private static func parseOptionalAlias(
+    private static func parseOptionalAliasAndColumns(
         _ tokens: [SQLToken],
         startingAt index: Int
-    ) -> (alias: String, nextIndex: Int)? {
+    ) -> (alias: String, columns: Set<SQLDerivedColumn>?, nextIndex: Int)? {
         var index = index
         if tokens[safe: index]?.normalized == "as" {
             index += 1
@@ -813,7 +987,13 @@ public enum SQLReferenceAnalyzer {
         else {
             return nil
         }
-        return (alias.identifierValue, index + 1)
+        index += 1
+        var columns: Set<SQLDerivedColumn>?
+        if tokens[safe: index]?.text == "(" {
+            columns = Set(derivedColumnsInBalancedGroup(tokens, startingAt: index))
+            index = indexAfterBalancedGroup(tokens, startingAt: index) ?? index
+        }
+        return (alias.identifierValue, columns, index)
     }
 
     private static func isCastTypeName(at index: Int, tokens: [SQLToken]) -> Bool {
@@ -994,6 +1174,15 @@ struct SQLToken: Equatable, Sendable {
 
     var text: String
     var kind: Kind
+    var startOffset: Int
+    var endOffset: Int
+
+    init(text: String, kind: Kind, startOffset: Int = -1, endOffset: Int = -1) {
+        self.text = text
+        self.kind = kind
+        self.startOffset = startOffset
+        self.endOffset = endOffset
+    }
 
     var normalized: String {
         identifierValue.lowercased()
@@ -1053,7 +1242,50 @@ struct SQLToken: Equatable, Sendable {
                         index += 1
                     }
                 }
-                tokens.append(SQLToken(text: String(chars[start..<min(index, chars.count)]), kind: .string))
+                tokens.append(
+                    SQLToken(
+                        text: String(chars[start..<min(index, chars.count)]),
+                        kind: .string,
+                        startOffset: start,
+                        endOffset: min(index, chars.count)
+                    ))
+                continue
+            }
+            if character == "$" {
+                let start = index
+                index += 1
+                while index < chars.count,
+                    chars[index].isLetter || chars[index].isNumber || chars[index] == "_"
+                {
+                    index += 1
+                }
+                if index < chars.count, chars[index] == "$" {
+                    let delimiter = String(chars[start...index])
+                    index += 1
+                    while index < chars.count {
+                        let possibleEnd = min(chars.count, index + delimiter.count)
+                        if String(chars[index..<possibleEnd]) == delimiter {
+                            index = possibleEnd
+                            break
+                        }
+                        index += 1
+                    }
+                    tokens.append(
+                        SQLToken(
+                            text: String(chars[start..<min(index, chars.count)]),
+                            kind: .string,
+                            startOffset: start,
+                            endOffset: min(index, chars.count)
+                        ))
+                    continue
+                }
+                tokens.append(
+                    SQLToken(
+                        text: String(chars[start..<index]),
+                        kind: .symbol,
+                        startOffset: start,
+                        endOffset: index
+                    ))
                 continue
             }
             if character == "\"" {
@@ -1072,7 +1304,12 @@ struct SQLToken: Equatable, Sendable {
                     }
                 }
                 tokens.append(
-                    SQLToken(text: String(chars[start..<min(index, chars.count)]), kind: .quotedIdentifier)
+                    SQLToken(
+                        text: String(chars[start..<min(index, chars.count)]),
+                        kind: .quotedIdentifier,
+                        startOffset: start,
+                        endOffset: min(index, chars.count)
+                    )
                 )
                 continue
             }
@@ -1084,7 +1321,13 @@ struct SQLToken: Equatable, Sendable {
                 {
                     index += 1
                 }
-                tokens.append(SQLToken(text: String(chars[start..<index]), kind: .identifier))
+                tokens.append(
+                    SQLToken(
+                        text: String(chars[start..<index]),
+                        kind: .identifier,
+                        startOffset: start,
+                        endOffset: index
+                    ))
                 continue
             }
             if character.isNumber {
@@ -1093,10 +1336,22 @@ struct SQLToken: Equatable, Sendable {
                 while index < chars.count, chars[index].isNumber || chars[index] == "." {
                     index += 1
                 }
-                tokens.append(SQLToken(text: String(chars[start..<index]), kind: .number))
+                tokens.append(
+                    SQLToken(
+                        text: String(chars[start..<index]),
+                        kind: .number,
+                        startOffset: start,
+                        endOffset: index
+                    ))
                 continue
             }
-            tokens.append(SQLToken(text: String(character), kind: .symbol))
+            tokens.append(
+                SQLToken(
+                    text: String(character),
+                    kind: .symbol,
+                    startOffset: index,
+                    endOffset: index + 1
+                ))
             index += 1
         }
 
