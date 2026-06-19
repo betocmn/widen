@@ -13,6 +13,7 @@ public struct SQLRelationReference: Equatable, Hashable, Sendable {
     public var alias: String?
     public var schemaIsQuoted: Bool
     public var nameIsQuoted: Bool
+    public var aliasIsQuoted: Bool
     public var role: Role
     public var isDerived: Bool
     public var derivedColumns: Set<SQLDerivedColumn>?
@@ -23,6 +24,7 @@ public struct SQLRelationReference: Equatable, Hashable, Sendable {
         alias: String? = nil,
         schemaIsQuoted: Bool = false,
         nameIsQuoted: Bool = false,
+        aliasIsQuoted: Bool = false,
         role: Role = .source,
         isDerived: Bool = false,
         derivedColumns: Set<SQLDerivedColumn>? = nil
@@ -32,6 +34,7 @@ public struct SQLRelationReference: Equatable, Hashable, Sendable {
         self.alias = alias
         self.schemaIsQuoted = schemaIsQuoted
         self.nameIsQuoted = nameIsQuoted
+        self.aliasIsQuoted = aliasIsQuoted
         self.role = role
         self.isDerived = isDerived
         self.derivedColumns = derivedColumns
@@ -70,11 +73,14 @@ public struct SQLDerivedColumn: Equatable, Hashable, Sendable {
 public struct SQLColumnReference: Equatable, Hashable, Sendable {
     public enum Context: Equatable, Hashable, Sendable {
         case expression
+        case insertTarget
+        case joinUsing
         case updateSetTarget
     }
 
     public var qualifier: String?
     public var name: String
+    public var qualifierIsQuoted: Bool
     public var isQuoted: Bool
     public var context: Context
     public var startOffset: Int?
@@ -83,6 +89,7 @@ public struct SQLColumnReference: Equatable, Hashable, Sendable {
     public init(
         qualifier: String?,
         name: String,
+        qualifierIsQuoted: Bool = false,
         isQuoted: Bool = false,
         context: Context = .expression,
         startOffset: Int? = nil,
@@ -90,6 +97,7 @@ public struct SQLColumnReference: Equatable, Hashable, Sendable {
     ) {
         self.qualifier = qualifier
         self.name = name
+        self.qualifierIsQuoted = qualifierIsQuoted
         self.isQuoted = isQuoted
         self.context = context
         self.startOffset = startOffset
@@ -293,15 +301,17 @@ public enum SQLReferenceAnalyzer {
                     in: tokens,
                     after: index + 1
                 ) ?? tokens.count
+                let statementStart = statementStartForSelect(at: index, tokens: tokens)
+                let statementTokens = Array(tokens[statementStart..<statementEnd])
                 let relations = parseRelations(
-                    Array(tokens[index..<statementEnd]),
+                    statementTokens,
                     cteNames: cteNames,
                     incomplete: &incomplete,
                     skipCTEs: false
                 )
-                let outputAliases = parseOutputAliases(Array(tokens[index..<statementEnd]))
+                let outputAliases = parseOutputAliases(statementTokens)
                 let columns = parseColumnReferences(
-                    Array(tokens[index..<statementEnd]),
+                    statementTokens,
                     relations: relations,
                     cteNames: cteNames,
                     outputAliases: outputAliases,
@@ -443,6 +453,7 @@ public enum SQLReferenceAnalyzer {
                                     SQLRelationReference(
                                         name: aliasParse?.alias ?? "__derived_table",
                                         alias: aliasParse?.alias,
+                                        aliasIsQuoted: aliasParse?.aliasIsQuoted ?? false,
                                         isDerived: true,
                                         derivedColumns: aliasParse?.columns ?? inferredColumns
                                     ))
@@ -503,10 +514,12 @@ public enum SQLReferenceAnalyzer {
         }
 
         var alias: String?
+        var aliasIsQuoted = false
         if tokens[safe: index]?.normalized == "as" {
             index += 1
             if let aliasToken = tokens[safe: index], aliasToken.isIdentifierLike {
                 alias = aliasToken.identifierValue
+                aliasIsQuoted = aliasToken.kind == .quotedIdentifier
                 index += 1
             }
         } else if let aliasToken = tokens[safe: index],
@@ -514,6 +527,7 @@ public enum SQLReferenceAnalyzer {
             !relationTerminatorKeywords.contains(aliasToken.normalized)
         {
             alias = aliasToken.identifierValue
+            aliasIsQuoted = aliasToken.kind == .quotedIdentifier
             index += 1
         }
 
@@ -522,7 +536,8 @@ public enum SQLReferenceAnalyzer {
             name: name,
             alias: alias,
             schemaIsQuoted: schemaIsQuoted,
-            nameIsQuoted: nameIsQuoted
+            nameIsQuoted: nameIsQuoted,
+            aliasIsQuoted: aliasIsQuoted
         )
     }
 
@@ -551,6 +566,7 @@ public enum SQLReferenceAnalyzer {
         return SQLRelationReference(
             name: aliasParse?.alias ?? functionName,
             alias: aliasParse?.alias,
+            aliasIsQuoted: aliasParse?.aliasIsQuoted ?? false,
             isDerived: true,
             derivedColumns: aliasParse?.columns
         )
@@ -644,9 +660,7 @@ public enum SQLReferenceAnalyzer {
             alias.isIdentifierLike,
             !SQLToken.keywords.contains(alias.normalized),
             let previous = tokens[safe: tokens.count - 2],
-            previous.normalized != "as",
-            previous.text != ".",
-            previous.text != ":"
+            canPrecedeImplicitOutputAlias(previous)
         else {
             return nil
         }
@@ -726,6 +740,34 @@ public enum SQLReferenceAnalyzer {
                 continue
             }
 
+            if isInsertTargetColumn(at: index, tokens: tokens) {
+                columns.append(
+                    SQLColumnReference(
+                        qualifier: nil,
+                        name: token.identifierValue,
+                        isQuoted: token.kind == .quotedIdentifier,
+                        context: .insertTarget,
+                        startOffset: token.startOffset,
+                        endOffset: token.endOffset
+                    ))
+                index += 1
+                continue
+            }
+
+            if isJoinUsingColumn(at: index, tokens: tokens) {
+                columns.append(
+                    SQLColumnReference(
+                        qualifier: nil,
+                        name: token.identifierValue,
+                        isQuoted: token.kind == .quotedIdentifier,
+                        context: .joinUsing,
+                        startOffset: token.startOffset,
+                        endOffset: token.endOffset
+                    ))
+                index += 1
+                continue
+            }
+
             if tokens[safe: index + 1]?.text == ".",
                 let table = tokens[safe: index + 2],
                 table.isIdentifierLike,
@@ -760,6 +802,7 @@ public enum SQLReferenceAnalyzer {
                     SQLColumnReference(
                         qualifier: token.identifierValue,
                         name: column.text == "*" ? "*" : column.identifierValue,
+                        qualifierIsQuoted: token.kind == .quotedIdentifier,
                         isQuoted: column.kind == .quotedIdentifier,
                         startOffset: column.startOffset,
                         endOffset: column.endOffset
@@ -775,8 +818,8 @@ public enum SQLReferenceAnalyzer {
                     && isPermittedOutputAliasReference(at: index, tokens: tokens))
                 || relationAliases.contains(normalized)
                 || isCastTypeName(at: index, tokens: tokens)
-                || isInsideUsingColumnList(at: index, tokens: tokens)
                 || isInsideExtractField(at: index, tokens: tokens)
+                || isOnConflictConstraintName(at: index, tokens: tokens)
                 || tokens[safe: index + 1]?.text == "("
                 || tokens[safe: index - 1]?.text == "."
                 || tokens[safe: index + 1]?.text == "."
@@ -849,10 +892,8 @@ public enum SQLReferenceAnalyzer {
         guard let groupRange = topLevelSelectItemRange(containing: index, tokens: tokens),
             let lastIndex = lastSignificantIndex(in: groupRange, tokens: tokens),
             lastIndex == index,
-            let previous = previousSignificantToken(before: index, in: tokens),
-            previous.normalized != "as",
-            previous.text != ".",
-            previous.text != ":"
+            let previous = tokens[safe: index - 1],
+            canPrecedeImplicitOutputAlias(previous)
         else {
             return false
         }
@@ -914,7 +955,25 @@ public enum SQLReferenceAnalyzer {
         return true
     }
 
-    private static func isInsideUsingColumnList(at index: Int, tokens: [SQLToken]) -> Bool {
+    private static func isInsertTargetColumn(at index: Int, tokens: [SQLToken]) -> Bool {
+        guard let group = enclosingGroup(containing: index, tokens: tokens),
+            let insertIndex = previousTopLevelIndex(ofAny: ["insert"], in: tokens, before: group.openIndex),
+            let intoIndex = nextTopLevelIndex(ofAny: ["into"], in: tokens, after: insertIndex + 1),
+            intoIndex < group.openIndex
+        else {
+            return false
+        }
+        if let clauseBeforeTargetList = nextTopLevelIndex(
+            ofAny: ["select", "values", "default", "on", "returning"],
+            in: tokens,
+            after: intoIndex + 1
+        ), clauseBeforeTargetList < group.openIndex {
+            return false
+        }
+        return index > group.openIndex && index < group.closeIndex
+    }
+
+    private static func isJoinUsingColumn(at index: Int, tokens: [SQLToken]) -> Bool {
         guard let group = enclosingGroup(containing: index, tokens: tokens),
             tokens[safe: group.openIndex - 1]?.normalized == "using"
         else {
@@ -976,7 +1035,7 @@ public enum SQLReferenceAnalyzer {
     private static func parseOptionalAliasAndColumns(
         _ tokens: [SQLToken],
         startingAt index: Int
-    ) -> (alias: String, columns: Set<SQLDerivedColumn>?, nextIndex: Int)? {
+    ) -> (alias: String, aliasIsQuoted: Bool, columns: Set<SQLDerivedColumn>?, nextIndex: Int)? {
         var index = index
         if tokens[safe: index]?.normalized == "as" {
             index += 1
@@ -987,22 +1046,51 @@ public enum SQLReferenceAnalyzer {
         else {
             return nil
         }
+        let aliasIsQuoted = alias.kind == .quotedIdentifier
         index += 1
         var columns: Set<SQLDerivedColumn>?
         if tokens[safe: index]?.text == "(" {
             columns = Set(derivedColumnsInBalancedGroup(tokens, startingAt: index))
             index = indexAfterBalancedGroup(tokens, startingAt: index) ?? index
         }
-        return (alias.identifierValue, columns, index)
+        return (alias.identifierValue, aliasIsQuoted, columns, index)
     }
 
     private static func isCastTypeName(at index: Int, tokens: [SQLToken]) -> Bool {
-        if tokens[safe: index - 1]?.text == ":",
-            tokens[safe: index - 2]?.text == ":"
-        {
+        if isDoubleColonCastTypeName(at: index, tokens: tokens) {
             return true
         }
         return isInsideCastTypeClause(at: index, tokens: tokens)
+    }
+
+    private static func isDoubleColonCastTypeName(at index: Int, tokens: [SQLToken]) -> Bool {
+        guard tokens[safe: index]?.isIdentifierLike == true else { return false }
+        var cursor = index - 1
+        while cursor >= 0 {
+            let token = tokens[cursor]
+            if token.text == ":",
+                tokens[safe: cursor - 1]?.text == ":"
+            {
+                return true
+            }
+            if doubleColonCastTypeBoundary(token) {
+                return false
+            }
+            if cursor == 0 { break }
+            cursor -= 1
+        }
+        return false
+    }
+
+    private static func doubleColonCastTypeBoundary(_ token: SQLToken) -> Bool {
+        if [",", "(", ")", "[", "]", "+", "-", "*", "/", "%", "=", "<", ">", "!"].contains(token.text) {
+            return true
+        }
+        return [
+            "as", "select", "from", "where", "group", "having", "order", "limit", "offset",
+            "union", "intersect", "except", "join", "on", "set", "values", "returning",
+            "and", "or",
+        ].contains(token.normalized)
     }
 
     private static func isInsideCastTypeClause(at index: Int, tokens: [SQLToken]) -> Bool {
@@ -1053,6 +1141,48 @@ public enum SQLReferenceAnalyzer {
             }
         }
         return false
+    }
+
+    private static func isOnConflictConstraintName(at index: Int, tokens: [SQLToken]) -> Bool {
+        guard tokens[safe: index - 1]?.normalized == "constraint" else { return false }
+        var cursor = index - 2
+        while cursor >= 0 {
+            if tokens[cursor].normalized == "conflict",
+                tokens[safe: cursor - 1]?.normalized == "on"
+            {
+                return true
+            }
+            if [",", "(", ")"].contains(tokens[cursor].text)
+                || ["select", "from", "where", "returning"].contains(tokens[cursor].normalized)
+            {
+                return false
+            }
+            if cursor == 0 { break }
+            cursor -= 1
+        }
+        return false
+    }
+
+    private static func statementStartForSelect(at index: Int, tokens: [SQLToken]) -> Int {
+        guard let insertIndex = previousTopLevelIndex(ofAny: ["insert"], in: tokens, before: index),
+            nextTopLevelIndex(ofAny: ["select"], in: tokens, after: insertIndex + 1) == index
+        else {
+            return index
+        }
+        return insertIndex
+    }
+
+    private static func canPrecedeImplicitOutputAlias(_ token: SQLToken) -> Bool {
+        if token.normalized == "as" || token.text == "." || token.text == ":" {
+            return false
+        }
+        if ["+", "-", "*", "/", "%", "=", "<", ">", "!", "||"].contains(token.text) {
+            return false
+        }
+        if token.kind == .symbol && token.text != ")" {
+            return false
+        }
+        return true
     }
 
     private static func previousSignificantToken(before index: Int, in tokens: [SQLToken]) -> SQLToken?
@@ -1313,6 +1443,23 @@ struct SQLToken: Equatable, Sendable {
                 )
                 continue
             }
+            if isPrefixedStringLiteralStart(chars, at: index) {
+                let start = index
+                let allowsBackslashEscapes = String(chars[index]).lowercased() == "e"
+                index = consumeSingleQuotedString(
+                    chars,
+                    startingAt: index + 1,
+                    allowsBackslashEscapes: allowsBackslashEscapes
+                )
+                tokens.append(
+                    SQLToken(
+                        text: String(chars[start..<min(index, chars.count)]),
+                        kind: .string,
+                        startOffset: start,
+                        endOffset: min(index, chars.count)
+                    ))
+                continue
+            }
             if character.isLetter || character == "_" {
                 let start = index
                 index += 1
@@ -1358,6 +1505,41 @@ struct SQLToken: Equatable, Sendable {
         return tokens
     }
 
+    private static func isPrefixedStringLiteralStart(_ chars: [Character], at index: Int) -> Bool {
+        guard let character = chars[safe: index],
+            ["e", "b", "x"].contains(String(character).lowercased()),
+            chars[safe: index + 1] == "'"
+        else {
+            return false
+        }
+        return true
+    }
+
+    private static func consumeSingleQuotedString(
+        _ chars: [Character],
+        startingAt quoteIndex: Int,
+        allowsBackslashEscapes: Bool
+    ) -> Int {
+        var index = quoteIndex + 1
+        while index < chars.count {
+            if allowsBackslashEscapes, chars[index] == "\\" {
+                index = min(chars.count, index + 2)
+                continue
+            }
+            if chars[index] == "'" {
+                if chars[safe: index + 1] == "'" {
+                    index += 2
+                } else {
+                    index += 1
+                    break
+                }
+            } else {
+                index += 1
+            }
+        }
+        return min(index, chars.count)
+    }
+
     static let keywords: Set<String> = [
         "select", "from", "where", "join", "on", "as", "with", "recursive", "group", "by",
         "order", "limit", "offset", "having", "and", "or", "not", "null", "is", "in",
@@ -1367,7 +1549,8 @@ struct SQLToken: Equatable, Sendable {
         "using",
         "true", "false", "interval", "current_date", "current_timestamp", "now", "like",
         "ilike", "similar", "escape", "nulls", "first", "last", "default", "conflict",
-        "do", "nothing",
+        "do", "nothing", "constraint", "rows", "row", "range", "groups", "unbounded",
+        "preceding", "current", "following",
     ]
 }
 

@@ -103,6 +103,19 @@ struct SQLSchemaValidatorTests {
         #expect(!result.hasDefiniteErrors)
     }
 
+    @Test func multiwordDoubleColonCastTypeNamesAreNotTreatedAsColumns() {
+        let result = SQLSchemaValidator.validate(
+            sql: """
+                SELECT created_at::timestamp with time zone AS created_at_tz
+                FROM public.orders
+                ORDER BY created_at_tz
+                """,
+            against: makeUsersOrdersSchema()
+        )
+
+        #expect(!result.hasDefiniteErrors)
+    }
+
     @Test func usingAndExtractSyntaxIdentifiersAreNotTreatedAsColumns() {
         let result = SQLSchemaValidator.validate(
             sql: """
@@ -116,6 +129,20 @@ struct SQLSchemaValidatorTests {
         )
 
         #expect(!result.hasDefiniteErrors)
+    }
+
+    @Test func joinUsingColumnsAreValidatedAgainstJoinedRelations() {
+        let result = SQLSchemaValidator.validate(
+            sql: """
+                SELECT *
+                FROM public.users
+                JOIN public.orders USING (missing_id)
+                """,
+            against: makeUsersOrdersSchema()
+        )
+
+        #expect(result.hasDefiniteErrors)
+        #expect(result.errors.contains { $0.contains("missing_id") })
     }
 
     @Test func postgresOperatorWordsAreNotTreatedAsColumns() {
@@ -174,6 +201,40 @@ struct SQLSchemaValidatorTests {
         #expect(!doNothing.hasDefiniteErrors)
     }
 
+    @Test func onConflictConstraintNamesAreNotTreatedAsColumns() {
+        let result = SQLSchemaValidator.validate(
+            sql: """
+                INSERT INTO public.users (id, email)
+                VALUES (1, 'a@example.com')
+                ON CONFLICT ON CONSTRAINT users_pkey DO NOTHING
+                """,
+            against: makeUsersOrdersSchema()
+        )
+
+        #expect(!result.hasDefiniteErrors)
+    }
+
+    @Test func insertSelectTargetColumnsAreValidated() {
+        let valid = SQLSchemaValidator.validate(
+            sql: """
+                INSERT INTO public.users (id)
+                SELECT user_id FROM public.orders
+                """,
+            against: makeUsersOrdersSchema()
+        )
+        let invalid = SQLSchemaValidator.validate(
+            sql: """
+                INSERT INTO public.users (missing)
+                SELECT user_id FROM public.orders
+                """,
+            against: makeUsersOrdersSchema()
+        )
+
+        #expect(!valid.hasDefiniteErrors)
+        #expect(invalid.hasDefiniteErrors)
+        #expect(invalid.errors.contains { $0.contains("missing") && $0.contains("public.users") })
+    }
+
     @Test func excludedColumnsResolveAgainstUpsertTarget() {
         let valid = SQLSchemaValidator.validate(
             sql: """
@@ -195,6 +256,20 @@ struct SQLSchemaValidatorTests {
         #expect(!valid.hasDefiniteErrors)
         #expect(invalid.hasDefiniteErrors)
         #expect(invalid.errors.contains { $0.contains("missing_email") })
+    }
+
+    @Test func onConflictSetTargetsAreValidatedAgainstInsertTarget() {
+        let result = SQLSchemaValidator.validate(
+            sql: """
+                INSERT INTO public.users (id, email)
+                VALUES (1, 'a@example.com')
+                ON CONFLICT (id) DO UPDATE SET missing = excluded.email
+                """,
+            against: makeUsersOrdersSchema()
+        )
+
+        #expect(result.hasDefiniteErrors)
+        #expect(result.errors.contains { $0.contains("missing") && $0.contains("public.users") })
     }
 
     @Test func updateSetTargetsDoNotAmbiguateAgainstFromTables() {
@@ -295,6 +370,21 @@ struct SQLSchemaValidatorTests {
         #expect(result.errors.contains { $0.contains("qualifier users") })
     }
 
+    @Test func quotedTableAliasesRequireExactQuotedQualifierCase() {
+        let unquoted = SQLSchemaValidator.validate(
+            sql: #"SELECT u.id FROM public.users AS "U""#,
+            against: makeUsersOrdersSchema()
+        )
+        let quoted = SQLSchemaValidator.validate(
+            sql: #"SELECT "U".id FROM public.users AS "U""#,
+            against: makeUsersOrdersSchema()
+        )
+
+        #expect(unquoted.hasDefiniteErrors)
+        #expect(unquoted.errors.contains { $0.contains("qualifier u") })
+        #expect(!quoted.hasDefiniteErrors)
+    }
+
     @Test func quotedCteOutputAliasRequiresExactQuotedReference() {
         let unquoted = SQLSchemaValidator.validate(
             sql: """
@@ -363,6 +453,15 @@ struct SQLSchemaValidatorTests {
         #expect(repaired == #"SELECT "Date", created_at::date AS created_day FROM public.events"#)
     }
 
+    @Test func prefixedStringLiteralsAreNotTreatedAsColumns() {
+        let result = SQLSchemaValidator.validate(
+            sql: #"SELECT id FROM public.users WHERE email = E'O\'Reilly' OR email = B'1010' OR email = X'FF'"#,
+            against: makeUsersOrdersSchema()
+        )
+
+        #expect(!result.hasDefiniteErrors)
+    }
+
     @Test func timestampComparedDirectlyToIntervalIsDefiniteError() {
         let result = SQLSchemaValidator.validate(
             sql: #"SELECT "createdAt" FROM public.events WHERE "createdAt" >= INTERVAL '7 days'"#,
@@ -378,6 +477,15 @@ struct SQLSchemaValidatorTests {
         let result = SQLSchemaValidator.validate(
             sql: #"SELECT "createdAt" FROM public.events WHERE "createdAt" >= NOW() - INTERVAL '7 days'"#,
             against: makeMixedCaseSchema()
+        )
+
+        #expect(!result.hasDefiniteErrors)
+    }
+
+    @Test func timestampDifferenceCanBeComparedToInterval() {
+        let result = SQLSchemaValidator.validate(
+            sql: "SELECT id FROM public.jobs WHERE finished_at - started_at > INTERVAL '1 hour'",
+            against: makeIntervalSchema()
         )
 
         #expect(!result.hasDefiniteErrors)
@@ -404,6 +512,31 @@ struct SQLSchemaValidatorTests {
 
         #expect(result.hasDefiniteErrors)
         #expect(result.errors.first?.contains("ambiguous") == true)
+    }
+
+    @Test func trailingExpressionOperandsAreNotImplicitAliases() {
+        let result = SQLSchemaValidator.validate(
+            sql: "SELECT id * missing FROM public.users",
+            against: makeUsersOrdersSchema()
+        )
+
+        #expect(result.hasDefiniteErrors)
+        #expect(result.errors.contains { $0.contains("missing") })
+    }
+
+    @Test func windowFrameTermsAreNotTreatedAsColumns() {
+        let result = SQLSchemaValidator.validate(
+            sql: """
+                SELECT SUM(id) OVER (
+                  ORDER BY created_at
+                  ROWS BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW
+                ) AS running_id
+                FROM public.orders
+                """,
+            against: makeUsersOrdersSchema()
+        )
+
+        #expect(!result.hasDefiniteErrors)
     }
 
     @Test func nestedSubqueryScopesDoNotFalseAmbiguateOuterColumn() {
@@ -791,10 +924,34 @@ struct SQLSchemaValidatorTests {
                         ColumnInfo(
                             tableSchema: "public",
                             tableName: "jobs",
+                            name: "id",
+                            dataType: "integer",
+                            isNullable: false,
+                            ordinalPosition: 1
+                        ),
+                        ColumnInfo(
+                            tableSchema: "public",
+                            tableName: "jobs",
                             name: "duration",
                             dataType: "interval",
                             isNullable: false,
-                            ordinalPosition: 1
+                            ordinalPosition: 2
+                        ),
+                        ColumnInfo(
+                            tableSchema: "public",
+                            tableName: "jobs",
+                            name: "started_at",
+                            dataType: "timestamp with time zone",
+                            isNullable: false,
+                            ordinalPosition: 3
+                        ),
+                        ColumnInfo(
+                            tableSchema: "public",
+                            tableName: "jobs",
+                            name: "finished_at",
+                            dataType: "timestamp with time zone",
+                            isNullable: false,
+                            ordinalPosition: 4
                         )
                     ]
                 )
