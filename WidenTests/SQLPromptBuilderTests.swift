@@ -180,6 +180,7 @@ struct SQLPromptBuilderTests {
         #expect(instructions.contains("Do not group or partition by CURRENT_DATE itself"))
         #expect(instructions.contains("winner_id"))
         #expect(instructions.contains("Do not select both participant IDs as \"wins\""))
+        #expect(instructions.contains("answers affirmatively to a previous assistant clarification"))
         // Follow-up handling for the conversation context section.
         #expect(instructions.contains("follow-up"))
         #expect(instructions.contains("<ordered_chat_history>"))
@@ -258,6 +259,57 @@ struct SQLPromptBuilderTests {
         let questionRange = prompt.range(of: "User question:")
         let contextRange = prompt.range(of: "<conversation_context>")
         #expect(contextRange!.lowerBound < questionRange!.lowerBound)
+    }
+
+    @Test func promptMarksAffirmativeClarificationAsConfirmed() {
+        let clarification =
+            #"I can see "public"."preseason_match_evaluation"."winner_id" joins to "public"."preseason_tool"."id". Should I define "most wins" as counting rows where "public"."preseason_match_evaluation"."winner_id" is not null, grouped by "public"."preseason_tool"."id"?"#
+        let context = SQLGenerationContext(
+            recentQuestions: ["what are tools that are getting the most wins in the last two weeks?"],
+            originalQuestion: "what are tools that are getting the most wins in the last two weeks?",
+            conversationMessages: [
+                SQLConversationMessage(
+                    role: .user,
+                    text: "what are tools that are getting the most wins in the last two weeks?"
+                ),
+                SQLConversationMessage(role: .assistant, text: clarification),
+                SQLConversationMessage(role: .user, text: "yes"),
+            ]
+        )
+
+        let prompt = SQLPromptBuilder.prompt(
+            question: "yes",
+            schema: makeSampleSchema(),
+            context: context
+        )
+
+        #expect(prompt.contains("<confirmed_clarification>"))
+        #expect(prompt.contains("answered an assistant clarification question affirmatively"))
+        #expect(prompt.contains("the active task is still the original user question"))
+        #expect(prompt.contains("Do not ask the same clarification question again."))
+        #expect(prompt.contains(#"<approved_question>"#))
+        #expect(prompt.contains(#"<user_answer>"#))
+        #expect(prompt.contains("winner_id"))
+    }
+
+    @Test func promptDoesNotConfirmGenericAssistantQuestion() {
+        let context = SQLGenerationContext(
+            recentQuestions: ["show users"],
+            originalQuestion: "show users",
+            conversationMessages: [
+                SQLConversationMessage(role: .user, text: "show users"),
+                SQLConversationMessage(role: .assistant, text: "Can I help with anything else?"),
+                SQLConversationMessage(role: .user, text: "yes"),
+            ]
+        )
+
+        let prompt = SQLPromptBuilder.prompt(
+            question: "yes",
+            schema: makeSampleSchema(),
+            context: context
+        )
+
+        #expect(!prompt.contains("<confirmed_clarification>"))
     }
 
     @Test func promptIncludesAggregateWindowRepairHint() {

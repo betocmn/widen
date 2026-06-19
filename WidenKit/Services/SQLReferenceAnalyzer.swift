@@ -14,6 +14,13 @@ public struct SQLRelationReference: Equatable, Hashable, Sendable {
 public struct SQLColumnReference: Equatable, Hashable, Sendable {
     public var qualifier: String?
     public var name: String
+    public var isQuoted: Bool
+
+    public init(qualifier: String?, name: String, isQuoted: Bool = false) {
+        self.qualifier = qualifier
+        self.name = name
+        self.isQuoted = isQuoted
+    }
 }
 
 public struct SQLReferenceAnalysis: Equatable, Sendable {
@@ -540,15 +547,16 @@ public enum SQLReferenceAnalyzer {
                 tokens[safe: index + 3]?.text == ".",
                 let column = tokens[safe: index + 4],
                 column.isIdentifierLike || column.text == "*"
-	            {
-	                columns.append(
-	                    SQLColumnReference(
-	                        qualifier: "\(token.identifierValue).\(table.identifierValue)",
-	                        name: column.text == "*" ? "*" : column.identifierValue
-	                    ))
-	                index += 5
-	                continue
-	            }
+            {
+                columns.append(
+                    SQLColumnReference(
+                        qualifier: "\(token.identifierValue).\(table.identifierValue)",
+                        name: column.text == "*" ? "*" : column.identifierValue,
+                        isQuoted: column.kind == .quotedIdentifier
+                    ))
+                index += 5
+                continue
+            }
 
             if tokens[safe: index + 1]?.text == ".",
                 let column = tokens[safe: index + 2],
@@ -564,7 +572,8 @@ public enum SQLReferenceAnalyzer {
                 columns.append(
                     SQLColumnReference(
                         qualifier: token.identifierValue,
-                        name: column.text == "*" ? "*" : column.identifierValue
+                        name: column.text == "*" ? "*" : column.identifierValue,
+                        isQuoted: column.kind == .quotedIdentifier
                     ))
                 index += 3
                 continue
@@ -582,7 +591,12 @@ public enum SQLReferenceAnalyzer {
                 index += 1
                 continue
             }
-            columns.append(SQLColumnReference(qualifier: nil, name: token.identifierValue))
+            columns.append(
+                SQLColumnReference(
+                    qualifier: nil,
+                    name: token.identifierValue,
+                    isQuoted: token.kind == .quotedIdentifier
+                ))
             index += 1
         }
         return columns

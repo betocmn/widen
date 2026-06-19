@@ -50,6 +50,21 @@ struct SQLSchemaValidatorTests {
         #expect(result.referencedTables == ["public.users"])
     }
 
+    @Test func unquotedMixedCaseColumnDoesNotMatchQuotedPostgresColumn() {
+        let unquoted = SQLSchemaValidator.validate(
+            sql: #"SELECT createdAt FROM public.events"#,
+            against: makeMixedCaseSchema()
+        )
+        let quoted = SQLSchemaValidator.validate(
+            sql: #"SELECT "createdAt" FROM public.events"#,
+            against: makeMixedCaseSchema()
+        )
+
+        #expect(unquoted.hasDefiniteErrors)
+        #expect(unquoted.errors.first?.contains("createdAt") == true)
+        #expect(!quoted.hasDefiniteErrors)
+    }
+
     @Test func ambiguousUnqualifiedColumnIsDefiniteError() {
         let result = SQLSchemaValidator.validate(
             sql: """
@@ -260,6 +275,30 @@ struct SQLSchemaValidatorTests {
                         ),
                     ]
                 ),
+            ],
+            foreignKeys: []
+        )
+    }
+
+    private func makeMixedCaseSchema() -> DatabaseSchema {
+        DatabaseSchema(
+            schemas: [SchemaInfo(name: "public")],
+            tables: [
+                TableInfo(
+                    schema: "public",
+                    name: "events",
+                    type: .baseTable,
+                    columns: [
+                        ColumnInfo(
+                            tableSchema: "public",
+                            tableName: "events",
+                            name: "createdAt",
+                            dataType: "timestamp with time zone",
+                            isNullable: false,
+                            ordinalPosition: 1
+                        )
+                    ]
+                )
             ],
             foreignKeys: []
         )

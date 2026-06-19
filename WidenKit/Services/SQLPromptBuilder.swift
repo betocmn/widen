@@ -37,6 +37,7 @@ public enum SQLPromptBuilder {
         - If a Database context section is present, use it as user-provided guidance about relationships, business rules, data meaning, and preferred filters. The schema remains authoritative for available tables and columns.
         - The prompt is organized with XML-style sections such as <database_schema>, <conversation_context>, and <current_user_request>. Treat <ordered_chat_history> messages as a chronological back-and-forth chat transcript between the user and the assistant.
         - The prompt may include conversation context: earlier questions, the current SQL, and the error of its last run. Treat the user's question as a follow-up to that context — adjust the current SQL when asked, and when an error is shown, produce a corrected version of that query that still answers the earlier questions.
+        - If the user answers affirmatively to a previous assistant clarification question, treat that answer as approval to use the proposed definition or constraint. Generate SQL for the original request with that approved interpretation; do not ask the same clarification question again.
         - If a required entity, metric, business meaning, relationship, or time interpretation is undefined by the Database context or provided schema, set needsClarification to true and ask a concise clarification question.
         - Assumptions may resolve presentation choices such as LIMIT, sort direction, or inclusive date boundaries. Assumptions MUST NOT invent schema objects, joins, winner definitions, revenue definitions, status meanings, ownership rules, or other business semantics.
         - Terms such as wins, revenue, active, churn, conversion, success, owner, retained, and best can have database-specific meanings. If the Database context and schema do not define the requested term, ask what column, condition, or table defines it. Do not infer it from a nearby count or status.
@@ -243,6 +244,10 @@ public enum SQLPromptBuilder {
             lines.append("</ordered_chat_history>")
         }
 
+        if let confirmedClarification = confirmedClarificationSection(in: orderedMessages) {
+            lines.append(confirmedClarification)
+        }
+
         if let sql = context.currentSQL,
             !sql.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
         {
@@ -258,6 +263,69 @@ public enum SQLPromptBuilder {
         }
         lines.append("</conversation_context>")
         return lines.joined(separator: "\n")
+    }
+
+    private static func confirmedClarificationSection(
+        in messages: [SQLConversationMessage]
+    ) -> String? {
+        guard messages.count >= 2 else { return nil }
+        var confirmed: [(question: String, answer: String)] = []
+        for index in messages.indices.dropFirst() {
+            let answer = messages[index]
+            let question = messages[messages.index(before: index)]
+            guard answer.role == .user, question.role == .assistant else { continue }
+            guard isAffirmativeClarificationAnswer(answer.text),
+                isAssistantClarificationQuestion(question.text)
+            else { continue }
+            confirmed.append((question: question.text, answer: answer.text))
+        }
+        guard let latest = confirmed.last else { return nil }
+        return [
+            "<confirmed_clarification>",
+            "The user answered an assistant clarification question affirmatively.",
+            "Use the approved definition or constraint below to answer the original request.",
+            "If the current user request is only an affirmative answer, the active task is still the original user question.",
+            "Do not ask the same clarification question again.",
+            taggedCDATASection("approved_question", truncated(latest.question, to: 900)),
+            taggedCDATASection("user_answer", truncated(latest.answer, to: 120)),
+            "</confirmed_clarification>",
+        ].joined(separator: "\n")
+    }
+
+    private static func isAffirmativeClarificationAnswer(_ text: String) -> Bool {
+        let normalized = text
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+            .lowercased()
+        let stripped = normalized.trimmingCharacters(in: CharacterSet(charactersIn: ".!?, "))
+        let affirmativeAnswers: Set<String> = [
+            "y", "yes", "yeah", "yep", "correct", "right", "that's right", "that is right",
+            "sounds good", "ok", "okay", "sure", "use that", "do that", "exactly",
+        ]
+        return affirmativeAnswers.contains(stripped)
+    }
+
+    private static func isAssistantClarificationQuestion(_ text: String) -> Bool {
+        let normalized = text
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+            .lowercased()
+        guard normalized.hasSuffix("?") else { return false }
+        let clarificationMarkers = [
+            "should i",
+            "do you mean",
+            "did you mean",
+            "which ",
+            "what column",
+            "what table",
+            "what field",
+            "how should",
+            "can you clarify",
+            "please clarify",
+            "define",
+            "definition",
+            "mean by",
+            "interpret",
+        ]
+        return clarificationMarkers.contains { normalized.contains($0) }
     }
 
     static func repairHint(for context: SQLGenerationContext) -> String? {

@@ -138,7 +138,7 @@ public enum SQLSchemaValidator {
                 return
             }
             guard column.name != "*" else { return }
-            if !source.definitelyContainsColumn(column.name, schemaIndex: schemaIndex) {
+            if !source.definitelyContainsColumn(column, schemaIndex: schemaIndex) {
                 if source.hasUnknownColumns {
                     return
                 }
@@ -155,7 +155,7 @@ public enum SQLSchemaValidator {
             return
         }
         let localResolution = resolveUnqualified(
-            column.name,
+            column,
             in: scopeIndex,
             scopeSources: scopeSources,
             schemaIndex: schemaIndex
@@ -179,7 +179,7 @@ public enum SQLSchemaValidator {
         var parentIndex = scope.parentIndex
         while let index = parentIndex {
             let parentResolution = resolveUnqualified(
-                column.name,
+                column,
                 in: index,
                 scopeSources: scopeSources,
                 schemaIndex: schemaIndex
@@ -239,7 +239,7 @@ public enum SQLSchemaValidator {
                 return
             }
             guard column.name != "*" else { return }
-            if !schemaIndex.table(table, containsColumn: column.name) {
+            if !schemaIndex.table(table, containsColumn: column) {
                 issues.append(
                     SQLSchemaValidationIssue(
                         severity: .error,
@@ -253,7 +253,7 @@ public enum SQLSchemaValidator {
             return
         }
         let matchingTables = resolvedRelations.values.filter {
-            schemaIndex.table($0, containsColumn: column.name)
+            schemaIndex.table($0, containsColumn: column)
         }
         switch matchingTables.count {
         case 0:
@@ -292,7 +292,7 @@ public enum SQLSchemaValidator {
     }
 
     private static func resolveUnqualified(
-        _ column: String,
+        _ column: SQLColumnReference,
         in scopeIndex: Int,
         scopeSources: [[ResolvedRelationSource]],
         schemaIndex: SchemaLookup
@@ -453,7 +453,7 @@ private struct SchemaLookup {
         for table in schema.tables {
             tablesByQualifiedName[table.qualifiedName.lowercased()] = table
             tablesByName[table.name.lowercased(), default: []].append(table)
-            columnsByTableID[table.id] = Set(table.columns.map { $0.name.lowercased() })
+            columnsByTableID[table.id] = Set(table.columns.map(\.name))
         }
     }
 
@@ -465,8 +465,13 @@ private struct SchemaLookup {
         return matches.count == 1 ? matches[0] : nil
     }
 
-    func table(_ table: TableInfo, containsColumn column: String) -> Bool {
-        columnsByTableID[table.id]?.contains(column.lowercased()) == true
+    func table(_ table: TableInfo, containsColumn column: SQLColumnReference) -> Bool {
+        self.table(table, containsColumn: column.name, isQuoted: column.isQuoted)
+    }
+
+    func table(_ table: TableInfo, containsColumn column: String, isQuoted: Bool = false) -> Bool {
+        let resolvedName = isQuoted ? column : column.lowercased()
+        return columnsByTableID[table.id]?.contains(resolvedName) == true
     }
 }
 
@@ -520,11 +525,11 @@ private struct ResolvedRelationSource {
         names.contains(qualifier.lowercased())
     }
 
-    func definitelyContainsColumn(_ column: String, schemaIndex: SchemaLookup) -> Bool {
+    func definitelyContainsColumn(_ column: SQLColumnReference, schemaIndex: SchemaLookup) -> Bool {
         if let table {
             return schemaIndex.table(table, containsColumn: column)
         }
         guard let cteColumns else { return false }
-        return cteColumns.contains(column.lowercased())
+        return cteColumns.contains(column.name.lowercased())
     }
 }
