@@ -46,7 +46,7 @@ public enum SQLPromptBuilder {
         - If a required entity, metric, business meaning, relationship, or time interpretation is undefined by the Database context or provided schema, set needsClarification to true and ask a concise clarification question.
         - Assumptions may resolve presentation choices such as LIMIT, sort direction, or inclusive date boundaries. Assumptions MUST NOT invent schema objects, joins, winner definitions, revenue definitions, status meanings, ownership rules, or other business semantics.
         - Terms such as wins, revenue, active, churn, conversion, success, owner, retained, and best can have database-specific meanings. If the Database context and schema do not define the requested term, ask what column, condition, or table defines it. Do not infer it from a nearby count or status.
-        - For winning-tool questions, if the schema provides a winner identifier such as winner_id that points to a tool/entity table, count/group by that winner identifier and join to the entity table for labels. Do not select both participant IDs as "wins", and do not compare enum-like winner_decision/status fields to invented literal values unless Database context defines those values.
+        - For win/winner questions, if the schema provides a winner-style identifier or foreign key, count/group by that winner identifier and join to the referenced entity table for labels. Do not substitute unrelated participant identifiers as wins, and do not compare enum-like winner/status fields to invented literal values unless Database context defines those values.
         - A plausible-looking query that does not answer the user's requested metric is incorrect.
         - If the request cannot be answered from the schema, set needsClarification to true and ask a concise clarification question.
         - Output only the requested structured result.
@@ -74,7 +74,7 @@ public enum SQLPromptBuilder {
         - Use <database_context> as business guidance when present. Schema remains authoritative.
         - In repair mode, the diagnostic and repair constraints are authoritative.
         - If a needed table, column, relationship, metric, status value, or business term is undefined, set needsClarification true and ask one concise question.
-        - Do not invent winner, revenue, active, success, owner, retained, or best definitions. For winning-tool questions, count a winner_id that joins to a tool/entity table when the schema provides it; do not substitute participant IDs.
+        - Do not invent winner, revenue, active, success, owner, retained, or best definitions. For win/winner questions, count a winner-style identifier that joins to an entity table when the schema provides it; do not substitute unrelated participant IDs.
         - A plausible query that answers a different metric is wrong.
         - Output only the requested structured result.
         """
@@ -165,7 +165,7 @@ public enum SQLPromptBuilder {
 
                 Every identifier listed in <forbidden_identifier> MUST be absent from the next SQL. Reformatting, changing aliases, changing LIMIT, or changing whitespace does not constitute a repair.
 
-                Every identifier listed in <forbidden_unquoted_identifier> may be used only when it is double quoted exactly as shown. For example, createdAt must be written as "createdAt".
+                Every identifier listed in <forbidden_unquoted_identifier> may be used only when it is double quoted exactly as shown.
 
                 A repair is acceptable only when it removes the diagnosed cause and passes the closed-world schema checklist.
 
@@ -461,7 +461,7 @@ public enum SQLPromptBuilder {
 
         if let question,
             let schema,
-            let clarification = winningToolClarificationQuestion(
+            let clarification = winnerRelationshipClarificationQuestion(
                 for: text,
                 question: question,
                 schema: schema
@@ -493,26 +493,19 @@ public enum SQLPromptBuilder {
         }
     }
 
-    private static func winningToolClarificationQuestion(
+    private static func winnerRelationshipClarificationQuestion(
         for text: String,
         question: String,
         schema: DatabaseSchema
     ) -> String? {
         let questionTokens = Set(SchemaIndex.tokens(in: question))
-        guard !questionTokens.intersection(["win", "wins", "winner", "winning", "won"]).isEmpty,
-            questionTokens.contains("tool")
-        else {
-            return nil
-        }
+        guard !questionTokens.intersection(["win", "wins", "winner", "winning", "won"]).isEmpty
+        else { return nil }
         let missingColumns = Set(missingColumnNames(in: text).map {
             SchemaRelevanceRanker.canonicalIdentifier($0)
         })
-        let generatedToolColumns = Set(["tool_id", "toolid", "tool_a_id", "tool_b_id"])
-        guard !missingColumns.isDisjoint(with: generatedToolColumns)
-            || text.localizedCaseInsensitiveContains("tool_id")
-        else {
-            return nil
-        }
+        guard !missingColumns.isEmpty || text.localizedCaseInsensitiveContains("column")
+        else { return nil }
 
         for foreignKey in schema.foreignKeys {
             let sourceColumnTokens = Set(SchemaIndex.tokens(in: foreignKey.sourceColumn))
@@ -530,12 +523,6 @@ public enum SQLPromptBuilder {
             else {
                 continue
             }
-            let targetTokens = Set(
-                SchemaIndex.tokens(in: targetTable.name)
-                    + targetTable.columns.flatMap { SchemaIndex.tokens(in: $0.name) }
-            )
-            guard targetTokens.contains("tool") else { continue }
-
             var details = [
                 "\(qualifiedIdentifier(schema: foreignKey.sourceSchema, name: foreignKey.sourceTable, column: foreignKey.sourceColumn)) joins to \(qualifiedIdentifier(schema: foreignKey.targetSchema, name: foreignKey.targetTable, column: foreignKey.targetColumn))"
             ]

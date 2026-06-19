@@ -190,7 +190,7 @@ struct SQLSchemaValidatorTests {
 
         #expect(enriched.needsClarification)
         #expect(enriched.sql.isEmpty)
-        #expect(enriched.clarificationQuestion?.contains("which tool won") == true)
+        #expect(enriched.clarificationQuestion?.contains("what counts as a win") == true)
     }
 
     @Test func genericResultStatusAndScoreDoNotDefineWins() {
@@ -213,7 +213,7 @@ struct SQLSchemaValidatorTests {
         )
 
         #expect(enriched.needsClarification)
-        #expect(enriched.clarificationQuestion?.contains("which tool won") == true)
+        #expect(enriched.clarificationQuestion?.contains("what counts as a win") == true)
     }
 
     @Test func enumValueCanDefineBusinessTerm() {

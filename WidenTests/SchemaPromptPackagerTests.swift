@@ -86,7 +86,7 @@ struct SchemaPromptPackagerTests {
         #expect(package.pinnedTables.contains("public.preseason_match_batch"))
     }
 
-    @Test func winningToolRelationshipHintUsesOriginalQuestionAndPinsToolTable() {
+    @Test func winnerRelationshipHintUsesOriginalQuestionAndPinsEntityTable() {
         let schema = makeWinningToolSchema(extraTables: 12)
         let context = SQLGenerationContext(
             originalQuestion: "what are tools that are getting the most wins in the last two weeks?",
@@ -107,7 +107,7 @@ struct SchemaPromptPackagerTests {
         )
 
         #expect(package.text.contains("Relationship hints:"))
-        #expect(package.text.contains("Winning-tool relation:"))
+        #expect(package.text.contains("Winner relation:"))
         #expect(
             package.text.contains(
                 #""public"."preseason_match_evaluation"."winner_id" -> "public"."preseason_tool"."id""#
@@ -115,15 +115,13 @@ struct SchemaPromptPackagerTests {
         #expect(package.text.contains(#"count non-null "public"."preseason_match_evaluation"."winner_id""#))
         #expect(package.text.contains(#""public"."preseason_match_evaluation"."createdAt""#))
         #expect(package.text.contains("NOW() - INTERVAL '14 days'"))
-        #expect(package.text.contains(#"no generic "tool_id""#))
-        #expect(package.text.contains(#"do not use "tool_a_id"/"tool_b_id" as wins"#))
         #expect(package.text.contains("decision/status values:"))
         #expect(package.text.contains(#""public"."preseason_match_evaluation"."winner_decision" (values: 'tool_a', 'tool_b', 'tie')"#))
         #expect(package.text.contains(#"TABLE "public"."preseason_tool""#))
         #expect(package.pinnedTables.contains("public.preseason_tool"))
     }
 
-    @Test func winningToolRelationshipHintIgnoresNonToolWinnerRelations() {
+    @Test func winnerRelationshipHintIncludesWinnerForeignKeysWithoutEntityNameSpecialCases() {
         let schema = makeWinningToolSchema(extraTables: 12, includeNonToolWinnerRelation: true)
         let context = SQLGenerationContext(
             originalQuestion: "what are tools that are getting the most wins in the last two weeks?"
@@ -139,11 +137,11 @@ struct SchemaPromptPackagerTests {
 
         #expect(
             package.text.contains(
-                #"Winning-tool relation: "public"."preseason_match_evaluation"."winner_id" -> "public"."preseason_tool"."id""#
+                #"Winner relation: "public"."preseason_match_evaluation"."winner_id" -> "public"."preseason_tool"."id""#
             ))
         #expect(
-            !package.text.contains(
-                #"Winning-tool relation: "public"."preseason_match_evaluation"."winner_scorekeeper_id""#
+            package.text.contains(
+                #"Winner relation: "public"."preseason_match_evaluation"."winner_scorekeeper_id""#
             ))
     }
 

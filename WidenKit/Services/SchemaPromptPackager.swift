@@ -420,19 +420,19 @@ public enum SchemaPromptPackager {
         input: SchemaRankingInput
     ) -> [RelationshipHint] {
         var hints =
-            winningToolRelationshipHints(schema: schema, input: input)
+            winnerRelationshipHints(schema: schema, input: input)
             + missingColumnRelationshipHints(schema: schema, input: input)
         var seen = Set<String>()
         hints = hints.filter { seen.insert($0.text).inserted }
         return Array(hints.prefix(6))
     }
 
-    private static func winningToolRelationshipHints(
+    private static func winnerRelationshipHints(
         schema: DatabaseSchema,
         input: SchemaRankingInput
     ) -> [RelationshipHint] {
         let tokens = inputTokens(input)
-        guard hasWinningToolIntent(tokens) else { return [] }
+        guard hasWinnerIntent(tokens) else { return [] }
 
         return schema.foreignKeys.compactMap { foreignKey in
             let sourceColumnTokens = Set(SchemaIndex.tokens(in: foreignKey.sourceColumn))
@@ -449,12 +449,6 @@ public enum SchemaPromptPackager {
                 )
             else { return nil }
 
-            let targetTokens = Set(
-                SchemaIndex.tokens(in: targetTable.name)
-                    + targetTable.columns.flatMap { SchemaIndex.tokens(in: $0.name) }
-            )
-            guard targetTokens.contains("tool") else { return nil }
-
             let sourceColumn = qualifiedColumn(
                 schema: foreignKey.sourceSchema,
                 table: foreignKey.sourceTable,
@@ -466,7 +460,7 @@ public enum SchemaPromptPackager {
                 column: foreignKey.targetColumn
             )
             var parts = [
-                "Winning-tool relation: \(sourceColumn) -> \(targetColumn)",
+                "Winner relation: \(sourceColumn) -> \(targetColumn)",
                 "count non-null \(sourceColumn)",
                 "group by \(sourceColumn)",
                 "label from \(qualifiedName(targetTable))",
@@ -475,17 +469,6 @@ public enum SchemaPromptPackager {
                 parts.append(
                     "time filter: \(qualifiedColumn(schema: sourceTable.schema, table: sourceTable.name, column: temporalColumn.name)) >= NOW() - INTERVAL '14 days'"
                 )
-            }
-            if !sourceTable.columns.contains(where: {
-                SchemaRelevanceRanker.canonicalIdentifier($0.name) == "tool_id"
-            }) {
-                parts.append("no generic \(quotedIdentifier("tool_id")) on \(qualifiedName(sourceTable))")
-            }
-            let participantColumns = sourceTable.columns.filter {
-                ["tool_a_id", "tool_b_id"].contains(SchemaRelevanceRanker.canonicalIdentifier($0.name))
-            }
-            if participantColumns.isEmpty {
-                parts.append("do not use \(quotedIdentifier("tool_a_id"))/\(quotedIdentifier("tool_b_id")) as wins unless requested")
             }
             let decisionColumns = sourceTable.columns.filter {
                 SchemaIndex.tokens(in: $0.name).contains("decision")
@@ -616,8 +599,8 @@ public enum SchemaPromptPackager {
             ))
     }
 
-    private static func hasWinningToolIntent(_ tokens: Set<String>) -> Bool {
-        !tokens.intersection(winTokens).isEmpty && tokens.contains("tool")
+    private static func hasWinnerIntent(_ tokens: Set<String>) -> Bool {
+        !tokens.intersection(winTokens).isEmpty
     }
 
     private static func temporalColumn(in table: TableInfo, tokens: Set<String>) -> ColumnInfo? {
@@ -742,7 +725,7 @@ public enum SchemaPromptPackager {
                 ].joined(separator: " ")
             )
         )
-        let winningIntent = hasWinningToolIntent(inputTokens)
+        let winningIntent = hasWinnerIntent(inputTokens)
         let foreignKeyColumns = Set(schema.foreignKeys.flatMap { foreignKey -> [String] in
             var names: [String] = []
             if foreignKey.sourceSchema == table.schema && foreignKey.sourceTable == table.name {

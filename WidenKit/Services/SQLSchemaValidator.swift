@@ -489,7 +489,7 @@ public enum GeneratedSQLPostprocessor {
                 return nil
             }
             return
-                "I found match or tool fields, but the selected schema does not define which tool won. What table, column, or condition represents a win?"
+                "I found candidate fields, but the selected schema does not define what counts as a win. What table, column, or condition represents a win?"
         }
 
         if !contextTokens.intersection(highRiskBusinessTerms.union(supportingBusinessTokens)).isEmpty {

@@ -178,8 +178,8 @@ struct SQLPromptBuilderTests {
         #expect(instructions.contains("DATE_TRUNC('day'"))
         #expect(instructions.contains("first count rows per period"))
         #expect(instructions.contains("Do not group or partition by CURRENT_DATE itself"))
-        #expect(instructions.contains("winner_id"))
-        #expect(instructions.contains("Do not select both participant IDs as \"wins\""))
+        #expect(instructions.contains("winner-style identifier"))
+        #expect(instructions.contains("Do not substitute unrelated participant identifiers as wins"))
         #expect(instructions.contains("answers affirmatively to a previous assistant clarification"))
         // Follow-up handling for the conversation context section.
         #expect(instructions.contains("follow-up"))
