@@ -100,11 +100,15 @@ public enum SQLSchemaValidator {
                         ))
                     continue
                 }
-                if relation.schema == nil, analysis.cteNames.contains(relation.name.lowercased()) {
-                    let cteName = relation.name.lowercased()
+                if relation.schema == nil,
+                    let cteName = analysis.cteNames.first(where: {
+                        $0.matches(name: relation.name, isQuoted: relation.nameIsQuoted)
+                    })
+                {
                     scopeSources[scopeIndex].append(
                         ResolvedRelationSource.cte(
-                            name: cteName,
+                            name: cteName.name,
+                            nameIsQuoted: cteName.isQuoted,
                             alias: relation.alias,
                             aliasIsQuoted: relation.aliasIsQuoted,
                             columns: analysis.cteOutputColumns[cteName] ?? nil,
@@ -449,7 +453,9 @@ public enum SQLSchemaValidator {
 
         if let qualifier = column.qualifier {
             guard let table = aliasToTable[qualifier.lowercased()] else {
-                if analysis.cteNames.contains(qualifier.lowercased()) {
+                if analysis.cteNames.contains(where: {
+                    $0.matches(name: qualifier, isQuoted: column.qualifierIsQuoted)
+                }) {
                     return
                 }
                 issues.append(
@@ -584,7 +590,7 @@ public enum SQLSchemaValidator {
         case 1:
             return .resolved
         default:
-            if isMergedUsingColumn(column, in: analysis.scopes[scopeIndex]) {
+            if isMergedUsingColumn(column, in: analysis.scopes[scopeIndex], matchCount: matches) {
                 return .resolved
             }
             return .ambiguous
@@ -593,16 +599,18 @@ public enum SQLSchemaValidator {
 
     private static func isMergedUsingColumn(
         _ column: SQLColumnReference,
-        in scope: SQLReferenceScope
+        in scope: SQLReferenceScope,
+        matchCount: Int
     ) -> Bool {
-        scope.columns.contains { usingColumn in
+        let mergedJoinCount = scope.columns.filter { usingColumn in
             guard usingColumn.context == .joinUsing else { return false }
             if usingColumn.isQuoted || column.isQuoted {
                 return usingColumn.isQuoted == column.isQuoted
                     && usingColumn.name == column.name
             }
             return usingColumn.name.lowercased() == column.name.lowercased()
-        }
+        }.count
+        return mergedJoinCount >= max(1, matchCount - 1)
     }
 
     private static func temporalIntervalComparisonIssues(
@@ -645,10 +653,12 @@ public enum SQLSchemaValidator {
                     scopeSources: scopeSources,
                     schemaIndex: schemaIndex
                 ),
-                let identifier = identifierExpression(endingAt: index - 1, tokens: tokens)
+                let identifier = identifierExpressionRange(endingAt: index - 1, tokens: tokens)
             {
                 appendTemporalIntervalIssue(
-                    for: identifier,
+                    for: identifier.identifier,
+                    tokenRange: identifier.range,
+                    tokens: tokens,
                     analysis: analysis,
                     scopeSources: scopeSources,
                     schemaIndex: schemaIndex,
@@ -665,10 +675,15 @@ public enum SQLSchemaValidator {
                     scopeSources: scopeSources,
                     schemaIndex: schemaIndex
                 ),
-                let identifier = identifierExpression(startingAt: comparison.nextIndex, tokens: tokens)
+                let identifier = identifierExpressionRange(
+                    startingAt: comparison.nextIndex,
+                    tokens: tokens
+                )
             {
                 appendTemporalIntervalIssue(
-                    for: identifier,
+                    for: identifier.identifier,
+                    tokenRange: identifier.range,
+                    tokens: tokens,
                     analysis: analysis,
                     scopeSources: scopeSources,
                     schemaIndex: schemaIndex,
@@ -705,12 +720,14 @@ public enum SQLSchemaValidator {
                 scopeSources: scopeSources,
                 schemaIndex: schemaIndex
             ),
-            let identifier = identifierExpression(endingAt: expressionEnd, tokens: tokens)
+            let identifier = identifierExpressionRange(endingAt: expressionEnd, tokens: tokens)
         else {
             return
         }
         appendTemporalIntervalIssue(
-            for: identifier,
+            for: identifier.identifier,
+            tokenRange: identifier.range,
+            tokens: tokens,
             analysis: analysis,
             scopeSources: scopeSources,
             schemaIndex: schemaIndex,
@@ -721,6 +738,8 @@ public enum SQLSchemaValidator {
 
     private static func appendTemporalIntervalIssue(
         for identifier: IdentifierExpression,
+        tokenRange: Range<Int>,
+        tokens: [SQLToken],
         analysis: SQLReferenceAnalysis,
         scopeSources: [[ResolvedRelationSource]],
         schemaIndex: SchemaLookup,
@@ -729,6 +748,11 @@ public enum SQLSchemaValidator {
     ) {
         let columns = resolvedColumns(
             for: identifier,
+            scopeIndex: scopeIndexForIdentifier(
+                tokenRange: tokenRange,
+                tokens: tokens,
+                analysis: analysis
+            ),
             analysis: analysis,
             scopeSources: scopeSources,
             schemaIndex: schemaIndex
@@ -749,10 +773,21 @@ public enum SQLSchemaValidator {
 
     private static func resolvedColumns(
         for identifier: IdentifierExpression,
+        scopeIndex: Int?,
         analysis: SQLReferenceAnalysis,
         scopeSources: [[ResolvedRelationSource]],
         schemaIndex: SchemaLookup
     ) -> [ColumnInfo] {
+        if let scopeIndex {
+            return resolvedColumns(
+                for: identifier,
+                from: scopeIndex,
+                analysis: analysis,
+                scopeSources: scopeSources,
+                schemaIndex: schemaIndex
+            )
+        }
+
         if let qualifier = identifier.qualifier {
             var columns: [ColumnInfo] = []
             for scopeIndex in analysis.scopes.indices {
@@ -785,6 +820,50 @@ public enum SQLSchemaValidator {
                 )
             }
         return deduplicatedColumns(columns)
+    }
+
+    private static func resolvedColumns(
+        for identifier: IdentifierExpression,
+        from scopeIndex: Int,
+        analysis: SQLReferenceAnalysis,
+        scopeSources: [[ResolvedRelationSource]],
+        schemaIndex: SchemaLookup
+    ) -> [ColumnInfo] {
+        if let qualifier = identifier.qualifier {
+            guard let source = resolveSource(
+                qualifier,
+                from: scopeIndex,
+                analysis: analysis,
+                scopeSources: scopeSources
+            ),
+                let table = source.table,
+                let column = schemaIndex.column(
+                    on: table,
+                    named: identifier.name,
+                    isQuoted: identifier.isQuoted
+                )
+            else {
+                return []
+            }
+            return [column]
+        }
+
+        var index: Int? = scopeIndex
+        while let current = index {
+            let columns = scopeSources[current].compactMap { source -> ColumnInfo? in
+                guard let table = source.table else { return nil }
+                return schemaIndex.column(
+                    on: table,
+                    named: identifier.name,
+                    isQuoted: identifier.isQuoted
+                )
+            }
+            if !columns.isEmpty {
+                return deduplicatedColumns(columns)
+            }
+            index = analysis.scopes[current].parentIndex
+        }
+        return []
     }
 
     private static func comparisonOperator(
@@ -934,6 +1013,11 @@ public enum SQLSchemaValidator {
             identifier.range,
             expressionResolvesToTemporalValue(
                 identifier.identifier,
+                scopeIndex: scopeIndexForIdentifier(
+                    tokenRange: identifier.range,
+                    tokens: tokens,
+                    analysis: analysis
+                ),
                 analysis: analysis,
                 scopeSources: scopeSources,
                 schemaIndex: schemaIndex
@@ -964,6 +1048,11 @@ public enum SQLSchemaValidator {
             identifier.range,
             expressionResolvesToTemporalValue(
                 identifier.identifier,
+                scopeIndex: scopeIndexForIdentifier(
+                    tokenRange: identifier.range,
+                    tokens: tokens,
+                    analysis: analysis
+                ),
                 analysis: analysis,
                 scopeSources: scopeSources,
                 schemaIndex: schemaIndex
@@ -973,6 +1062,7 @@ public enum SQLSchemaValidator {
 
     private static func expressionResolvesToTemporalValue(
         _ identifier: IdentifierExpression,
+        scopeIndex: Int?,
         analysis: SQLReferenceAnalysis,
         scopeSources: [[ResolvedRelationSource]],
         schemaIndex: SchemaLookup
@@ -982,6 +1072,7 @@ public enum SQLSchemaValidator {
         }
         return expressionResolvesToTemporalColumn(
             identifier,
+            scopeIndex: scopeIndex,
             analysis: analysis,
             scopeSources: scopeSources,
             schemaIndex: schemaIndex
@@ -1003,23 +1094,41 @@ public enum SQLSchemaValidator {
 
     private static func expressionResolvesToTemporalColumn(
         _ identifier: IdentifierExpression,
+        scopeIndex: Int?,
         analysis: SQLReferenceAnalysis,
         scopeSources: [[ResolvedRelationSource]],
         schemaIndex: SchemaLookup
     ) -> Bool {
         resolvedColumns(
             for: identifier,
+            scopeIndex: scopeIndex,
             analysis: analysis,
             scopeSources: scopeSources,
             schemaIndex: schemaIndex
         ).contains(where: isDateOrTimeColumn)
     }
 
-    private static func identifierExpression(
-        endingAt index: Int,
-        tokens: [SQLToken]
-    ) -> IdentifierExpression? {
-        identifierExpressionRange(endingAt: index, tokens: tokens)?.identifier
+    private static func scopeIndexForIdentifier(
+        tokenRange: Range<Int>,
+        tokens: [SQLToken],
+        analysis: SQLReferenceAnalysis
+    ) -> Int? {
+        guard let nameToken = tokens[safe: tokenRange.upperBound - 1],
+            nameToken.isIdentifierLike
+        else {
+            return nil
+        }
+        for (scopeIndex, scope) in analysis.scopes.enumerated() {
+            if scope.columns.contains(where: {
+                $0.startOffset == nameToken.startOffset
+                    && $0.endOffset == nameToken.endOffset
+                    && $0.name == nameToken.identifierValue
+                    && $0.isQuoted == (nameToken.kind == .quotedIdentifier)
+            }) {
+                return scopeIndex
+            }
+        }
+        return nil
     }
 
     private static func identifierExpressionRange(
@@ -1039,13 +1148,6 @@ public enum SQLSchemaValidator {
         }
         guard let identifier = IdentifierExpression(parts: parts) else { return nil }
         return (identifier, current..<(index + 1))
-    }
-
-    private static func identifierExpression(
-        startingAt index: Int,
-        tokens: [SQLToken]
-    ) -> IdentifierExpression? {
-        identifierExpressionRange(startingAt: index, tokens: tokens)?.identifier
     }
 
     private static func identifierExpressionRange(
@@ -1601,6 +1703,7 @@ private struct ResolvedRelationSource {
 
     static func cte(
         name: String,
+        nameIsQuoted: Bool = false,
         alias: String?,
         aliasIsQuoted: Bool = false,
         columns: Set<SQLDerivedColumn>?,
@@ -1612,8 +1715,8 @@ private struct ResolvedRelationSource {
             unquotedNames = aliasIsQuoted ? [] : [alias.lowercased()]
             quotedNames = aliasIsQuoted ? [alias] : []
         } else {
-            unquotedNames = [name.lowercased()]
-            quotedNames = []
+            unquotedNames = nameIsQuoted ? [] : [name.lowercased()]
+            quotedNames = nameIsQuoted ? [name] : []
         }
         return ResolvedRelationSource(
             displayName: name,

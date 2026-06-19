@@ -99,6 +99,16 @@ struct SQLSchemaValidatorTests {
         #expect(result.errors.contains { $0.contains("total") })
     }
 
+    @Test func quotedOutputAliasRequiresExactQuotedOrderByReference() {
+        let result = SQLSchemaValidator.validate(
+            sql: #"SELECT id AS "UserID" FROM public.users ORDER BY "userid""#,
+            against: makeUsersOrdersSchema()
+        )
+
+        #expect(result.hasDefiniteErrors)
+        #expect(result.errors.contains { $0.contains("userid") })
+    }
+
     @Test func castTypeNamesAreNotTreatedAsColumns() {
         let result = SQLSchemaValidator.validate(
             sql: """
@@ -194,6 +204,21 @@ struct SQLSchemaValidatorTests {
 
         #expect(result.hasDefiniteErrors)
         #expect(result.errors.contains { $0.contains("missing_id") })
+    }
+
+    @Test func joinUsingMergeDoesNotHideAmbiguousExtraSourceColumn() {
+        let result = SQLSchemaValidator.validate(
+            sql: """
+                SELECT id
+                FROM public.users
+                JOIN public.orders USING (id)
+                JOIN public.orders AS o2 ON o2.user_id = users.id
+                """,
+            against: makeUsersOrdersSchema()
+        )
+
+        #expect(result.hasDefiniteErrors)
+        #expect(result.issues.contains { $0.kind == .ambiguousColumn && $0.identifier == "id" })
     }
 
     @Test func postgresOperatorWordsAreNotTreatedAsColumns() {
@@ -502,6 +527,21 @@ struct SQLSchemaValidatorTests {
         #expect(!quoted.hasDefiniteErrors)
     }
 
+    @Test func quotedCteNameRequiresExactQuotedReferenceCase() {
+        let result = SQLSchemaValidator.validate(
+            sql: """
+                WITH "RecentUsers" AS (
+                  SELECT id FROM public.users
+                )
+                SELECT id FROM "recentusers"
+                """,
+            against: makeUsersOrdersSchema()
+        )
+
+        #expect(result.hasDefiniteErrors)
+        #expect(result.issues.contains { $0.kind == .missingRelation })
+    }
+
     @Test func derivedTableColumnAliasListsDefineDerivedColumns() {
         let valid = SQLSchemaValidator.validate(
             sql: """
@@ -616,6 +656,22 @@ struct SQLSchemaValidatorTests {
         let result = SQLSchemaValidator.validate(
             sql: "SELECT duration FROM public.jobs WHERE duration >= INTERVAL '7 days'",
             against: makeIntervalSchema()
+        )
+
+        #expect(!result.hasDefiniteErrors)
+    }
+
+    @Test func intervalColumnComparisonIgnoresNestedTimestampWithSameName() {
+        let result = SQLSchemaValidator.validate(
+            sql: """
+                SELECT duration
+                FROM public.jobs
+                WHERE duration > INTERVAL '1 hour'
+                  AND EXISTS (
+                    SELECT 1 FROM public.events WHERE duration >= NOW()
+                  )
+                """,
+            against: makeIntervalShadowSchema()
         )
 
         #expect(!result.hasDefiniteErrors)
@@ -1103,6 +1159,28 @@ struct SQLSchemaValidatorTests {
             ],
             foreignKeys: []
         )
+    }
+
+    private func makeIntervalShadowSchema() -> DatabaseSchema {
+        var schema = makeIntervalSchema()
+        schema.tables.append(
+            TableInfo(
+                schema: "public",
+                name: "events",
+                type: .baseTable,
+                columns: [
+                    ColumnInfo(
+                        tableSchema: "public",
+                        tableName: "events",
+                        name: "duration",
+                        dataType: "timestamp with time zone",
+                        isNullable: false,
+                        ordinalPosition: 1
+                    )
+                ]
+            )
+        )
+        return schema
     }
 
     private func makePreseasonSchemaWithoutWinner() -> DatabaseSchema {

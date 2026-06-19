@@ -105,12 +105,44 @@ public struct SQLColumnReference: Equatable, Hashable, Sendable {
     }
 }
 
+public struct SQLIdentifierName: Equatable, Hashable, Sendable {
+    public var name: String
+    public var isQuoted: Bool
+
+    public init(name: String, isQuoted: Bool) {
+        self.name = isQuoted ? name : name.lowercased()
+        self.isQuoted = isQuoted
+    }
+
+    init(token: SQLToken) {
+        self.init(name: token.identifierValue, isQuoted: token.kind == .quotedIdentifier)
+    }
+
+    public func matches(name: String, isQuoted: Bool) -> Bool {
+        if self.isQuoted {
+            return isQuoted && name == self.name
+        }
+        if isQuoted {
+            return name == self.name
+        }
+        return name.lowercased() == self.name
+    }
+
+    func matches(_ token: SQLToken) -> Bool {
+        matches(name: token.identifierValue, isQuoted: token.kind == .quotedIdentifier)
+    }
+
+    public func matches(_ column: SQLColumnReference) -> Bool {
+        matches(name: column.name, isQuoted: column.isQuoted)
+    }
+}
+
 public struct SQLReferenceAnalysis: Equatable, Sendable {
     public var relations: [SQLRelationReference]
     public var columns: [SQLColumnReference]
-    public var cteNames: Set<String>
-    public var cteOutputColumns: [String: Set<SQLDerivedColumn>?]
-    public var outputAliases: Set<String>
+    public var cteNames: Set<SQLIdentifierName>
+    public var cteOutputColumns: [SQLIdentifierName: Set<SQLDerivedColumn>?]
+    public var outputAliases: Set<SQLIdentifierName>
     public var upsertTargetRelations: [SQLRelationReference]
     public var scopes: [SQLReferenceScope]
     public var analysisIncomplete: Bool
@@ -119,13 +151,13 @@ public struct SQLReferenceAnalysis: Equatable, Sendable {
 public struct SQLReferenceScope: Equatable, Sendable {
     public var relations: [SQLRelationReference]
     public var columns: [SQLColumnReference]
-    public var outputAliases: Set<String>
+    public var outputAliases: Set<SQLIdentifierName>
     public var parentIndex: Int?
 
     public init(
         relations: [SQLRelationReference],
         columns: [SQLColumnReference],
-        outputAliases: Set<String>,
+        outputAliases: Set<SQLIdentifierName>,
         parentIndex: Int?
     ) {
         self.relations = relations
@@ -138,8 +170,8 @@ public struct SQLReferenceScope: Equatable, Sendable {
 public enum SQLReferenceAnalyzer {
     public static func analyze(_ sql: String) -> SQLReferenceAnalysis {
         let tokens = SQLToken.tokenize(sql)
-        var cteNames = Set<String>()
-        var cteOutputColumns: [String: Set<SQLDerivedColumn>?] = [:]
+        var cteNames = Set<SQLIdentifierName>()
+        var cteOutputColumns: [SQLIdentifierName: Set<SQLDerivedColumn>?] = [:]
         var scopes: [SQLReferenceScope] = []
         var incomplete = false
 
@@ -177,7 +209,7 @@ public enum SQLReferenceAnalyzer {
 
         let relations = scopes.flatMap(\.relations)
         let columns = scopes.flatMap(\.columns)
-        let outputAliases = scopes.reduce(into: Set<String>()) { result, scope in
+        let outputAliases = scopes.reduce(into: Set<SQLIdentifierName>()) { result, scope in
             result.formUnion(scope.outputAliases)
         }
 
@@ -196,8 +228,8 @@ public enum SQLReferenceAnalyzer {
     @discardableResult
     private static func parseCTEs(
         _ tokens: [SQLToken],
-        cteNames: inout Set<String>,
-        cteOutputColumns: inout [String: Set<SQLDerivedColumn>?],
+        cteNames: inout Set<SQLIdentifierName>,
+        cteOutputColumns: inout [SQLIdentifierName: Set<SQLDerivedColumn>?],
         scopes: inout [SQLReferenceScope],
         incomplete: inout Bool
     ) -> Int {
@@ -212,7 +244,7 @@ public enum SQLReferenceAnalyzer {
                 incomplete = true
                 return index
             }
-            let cteName = nameToken.identifierValue.lowercased()
+            let cteName = SQLIdentifierName(token: nameToken)
             cteNames.insert(cteName)
             index += 1
 
@@ -267,7 +299,7 @@ public enum SQLReferenceAnalyzer {
 
     private static func parseScopes(
         _ tokens: [SQLToken],
-        cteNames: Set<String>,
+        cteNames: Set<SQLIdentifierName>,
         parentIndex: Int?,
         scopes: inout [SQLReferenceScope],
         incomplete: inout Bool
@@ -389,7 +421,7 @@ public enum SQLReferenceAnalyzer {
 
     private static func parseNestedSubqueryScopes(
         _ tokens: [SQLToken],
-        cteNames: Set<String>,
+        cteNames: Set<SQLIdentifierName>,
         parentIndex: Int,
         scopes: inout [SQLReferenceScope],
         incomplete: inout Bool
@@ -420,7 +452,7 @@ public enum SQLReferenceAnalyzer {
 
     private static func parseRelations(
         _ tokens: [SQLToken],
-        cteNames: Set<String>,
+        cteNames: Set<SQLIdentifierName>,
         incomplete: inout Bool,
         skipCTEs: Bool = true
     ) -> [SQLRelationReference] {
@@ -497,7 +529,14 @@ public enum SQLReferenceAnalyzer {
                     } else if let relation = parseRelation(at: &index, tokens: tokens) {
                         var roleRelation = relation
                         roleRelation.role = role
-                        if !skipCTEs || !cteNames.contains(roleRelation.name.lowercased()) {
+                        if !skipCTEs
+                            || !cteNames.contains(where: {
+                                $0.matches(
+                                    name: roleRelation.name,
+                                    isQuoted: roleRelation.nameIsQuoted
+                                )
+                            })
+                        {
                             relations.append(roleRelation)
                         }
                     } else {
@@ -597,20 +636,20 @@ public enum SQLReferenceAnalyzer {
         )
     }
 
-    private static func parseOutputAliases(_ tokens: [SQLToken]) -> Set<String> {
+    private static func parseOutputAliases(_ tokens: [SQLToken]) -> Set<SQLIdentifierName> {
         guard let selectIndex = tokens.firstIndex(where: { $0.normalized == "select" }) else {
             return []
         }
         let fromIndex = firstTopLevelIndex(ofAny: ["from"], in: tokens, after: selectIndex + 1)
             ?? tokens.count
         let items = splitTopLevelCommaSeparated(Array(tokens[(selectIndex + 1)..<fromIndex]))
-        var aliases = Set<String>()
+        var aliases = Set<SQLIdentifierName>()
         for item in items {
             let significant = item.filter { $0.text != "," }
             if let alias = explicitOutputAlias(in: significant)
                 ?? implicitOutputAlias(in: significant)
             {
-                aliases.insert(alias.identifierValue.lowercased())
+                aliases.insert(SQLIdentifierName(token: alias))
             }
         }
         return aliases
@@ -718,8 +757,8 @@ public enum SQLReferenceAnalyzer {
     private static func parseColumnReferences(
         _ tokens: [SQLToken],
         relations: [SQLRelationReference],
-        cteNames: Set<String>,
-        outputAliases: Set<String>,
+        cteNames: Set<SQLIdentifierName>,
+        outputAliases: Set<SQLIdentifierName>,
         skipNestedSubqueries: Bool = false
     ) -> [SQLColumnReference] {
         var columns: [SQLColumnReference] = []
@@ -840,8 +879,8 @@ public enum SQLReferenceAnalyzer {
 
             let normalized = token.normalized
             if SQLToken.keywords.contains(normalized)
-                || cteNames.contains(normalized)
-                || (outputAliases.contains(normalized)
+                || cteNames.contains(where: { $0.matches(token) })
+                || (outputAliases.contains(where: { $0.matches(token) })
                     && isPermittedOutputAliasReference(at: index, tokens: tokens))
                 || relationAliases.contains(normalized)
                 || isRelationDeclarationName(at: index, tokens: tokens)
