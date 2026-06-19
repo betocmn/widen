@@ -186,6 +186,40 @@ struct SQLPromptBuilderTests {
         #expect(instructions.contains("<ordered_chat_history>"))
     }
 
+    @Test func compactInstructionsKeepWinningToolPromptUnderLocalBudget() {
+        let question = "what are tools that are getting the most wins in the last two weeks?"
+        let instructions = SQLPromptBuilder.compactInstructions(defaultRowLimit: 100)
+        let verboseInstructions = SQLPromptBuilder.instructions(defaultRowLimit: 100)
+        let budget = PromptBudget.localFoundationModels
+        let context = SQLGenerationContext(
+            schemaSearchQueries: [
+                "winning tools last two weeks winner_id createdAt",
+                "public.preseason_match_evaluation",
+                "public.preseason_tool",
+            ]
+        )
+        let fixedPromptCharacters = instructions.count + question.count + 1_600
+        let schemaCharacters = min(
+            8_000,
+            budget.schemaCharacterAllowance(fixedPromptCharacters: fixedPromptCharacters)
+        )
+
+        let bundle = SQLPromptBuilder.promptBundle(
+            question: question,
+            schema: makeScreenshotWinningToolSchema(extraTables: 60),
+            context: context,
+            maxSchemaCharacters: schemaCharacters
+        )
+
+        #expect(instructions.count < verboseInstructions.count)
+        #expect(budget.fits(inputCharacters: instructions.count + bundle.prompt.count))
+        #expect(bundle.prompt.contains(#"TABLE "public"."preseason_match_evaluation""#))
+        #expect(bundle.prompt.contains(#""winner_id" uuid"#))
+        #expect(bundle.prompt.contains(#""createdAt" timestamp with time zone"#))
+        #expect(bundle.prompt.contains(#"FK "winner_id" -> "public"."preseason_tool"."id""#))
+        #expect(bundle.prompt.contains(#"TABLE "public"."preseason_tool""#))
+    }
+
     @Test func promptWithoutContextHasNoContextSection() {
         let prompt = SQLPromptBuilder.prompt(
             question: "Show me users.",
@@ -582,11 +616,192 @@ struct SQLPromptBuilderTests {
         )
     }
 
+    private func makeScreenshotWinningToolSchema(extraTables: Int) -> DatabaseSchema {
+        var schema = DatabaseSchema(
+            schemas: [SchemaInfo(name: "public")],
+            tables: [
+                TableInfo(
+                    schema: "public",
+                    name: "preseason_benchmark_model_weight_config",
+                    type: .baseTable,
+                    columns: [
+                        column(
+                            "preseason_benchmark_model_weight_config",
+                            "id",
+                            ordinal: 1
+                        ),
+                        column(
+                            "preseason_benchmark_model_weight_config",
+                            "slug",
+                            type: "character varying",
+                            ordinal: 2
+                        ),
+                        column(
+                            "preseason_benchmark_model_weight_config",
+                            "name",
+                            type: "character varying",
+                            ordinal: 3
+                        ),
+                        column(
+                            "preseason_benchmark_model_weight_config",
+                            "createdAt",
+                            type: "timestamp with time zone",
+                            ordinal: 9
+                        ),
+                    ]
+                ),
+                TableInfo(
+                    schema: "public",
+                    name: "preseason_match_batch",
+                    type: .baseTable,
+                    columns: [
+                        column("preseason_match_batch", "id", ordinal: 1),
+                        column("preseason_match_batch", "tool_a_id", ordinal: 2),
+                        column("preseason_match_batch", "tool_b_id", ordinal: 3),
+                        column(
+                            "preseason_match_batch",
+                            "completed_evaluations",
+                            type: "integer",
+                            ordinal: 12
+                        ),
+                        column(
+                            "preseason_match_batch",
+                            "createdAt",
+                            type: "timestamp with time zone",
+                            ordinal: 21
+                        ),
+                    ]
+                ),
+                TableInfo(
+                    schema: "public",
+                    name: "preseason_match_evaluation",
+                    type: .baseTable,
+                    columns: [
+                        column("preseason_match_evaluation", "id", ordinal: 1),
+                        column("preseason_match_evaluation", "batch_id", ordinal: 2),
+                        column("preseason_match_evaluation", "winner_id", ordinal: 8),
+                        column(
+                            "preseason_match_evaluation",
+                            "winner_decision",
+                            type: "user-defined",
+                            ordinal: 7,
+                            valueConstraints: [
+                                ColumnValueConstraint(
+                                    kind: .enumValues,
+                                    values: ["tool_a", "tool_b", "tie"]
+                                )
+                            ]
+                        ),
+                        column(
+                            "preseason_match_evaluation",
+                            "raw_response",
+                            type: "text",
+                            ordinal: 18
+                        ),
+                        column(
+                            "preseason_match_evaluation",
+                            "appendix_json",
+                            type: "jsonb",
+                            ordinal: 19
+                        ),
+                        column(
+                            "preseason_match_evaluation",
+                            "system_prompt_snapshot",
+                            type: "text",
+                            ordinal: 36
+                        ),
+                        column(
+                            "preseason_match_evaluation",
+                            "createdAt",
+                            type: "timestamp with time zone",
+                            ordinal: 37
+                        ),
+                    ]
+                ),
+                TableInfo(
+                    schema: "public",
+                    name: "preseason_tool",
+                    type: .baseTable,
+                    columns: [
+                        column("preseason_tool", "id", ordinal: 1),
+                        column("preseason_tool", "name", type: "character varying", ordinal: 2),
+                        column("preseason_tool", "slug", type: "character varying", ordinal: 3),
+                        column(
+                            "preseason_tool",
+                            "createdAt",
+                            type: "timestamp with time zone",
+                            ordinal: 9
+                        ),
+                    ]
+                ),
+            ],
+            foreignKeys: [
+                ForeignKeyInfo(
+                    constraintName: "match_evaluation_batch_fkey",
+                    sourceSchema: "public",
+                    sourceTable: "preseason_match_evaluation",
+                    sourceColumn: "batch_id",
+                    targetSchema: "public",
+                    targetTable: "preseason_match_batch",
+                    targetColumn: "id"
+                ),
+                ForeignKeyInfo(
+                    constraintName: "match_evaluation_winner_fkey",
+                    sourceSchema: "public",
+                    sourceTable: "preseason_match_evaluation",
+                    sourceColumn: "winner_id",
+                    targetSchema: "public",
+                    targetTable: "preseason_tool",
+                    targetColumn: "id"
+                ),
+                ForeignKeyInfo(
+                    constraintName: "match_batch_tool_a_fkey",
+                    sourceSchema: "public",
+                    sourceTable: "preseason_match_batch",
+                    sourceColumn: "tool_a_id",
+                    targetSchema: "public",
+                    targetTable: "preseason_tool",
+                    targetColumn: "id"
+                ),
+                ForeignKeyInfo(
+                    constraintName: "match_batch_tool_b_fkey",
+                    sourceSchema: "public",
+                    sourceTable: "preseason_match_batch",
+                    sourceColumn: "tool_b_id",
+                    targetSchema: "public",
+                    targetTable: "preseason_tool",
+                    targetColumn: "id"
+                ),
+            ]
+        )
+
+        for index in 0..<extraTables {
+            schema.tables.append(
+                TableInfo(
+                    schema: "public",
+                    name: "preseason_unrelated_table_\(index)",
+                    type: .baseTable,
+                    columns: [
+                        column("preseason_unrelated_table_\(index)", "id", ordinal: 1),
+                        column(
+                            "preseason_unrelated_table_\(index)",
+                            "createdAt",
+                            type: "timestamp with time zone",
+                            ordinal: 2
+                        ),
+                    ]
+                ))
+        }
+
+        return schema
+    }
+
     private func column(
         _ tableName: String,
         _ name: String,
         type: String = "uuid",
-        ordinal: Int
+        ordinal: Int,
+        valueConstraints: [ColumnValueConstraint]? = nil
     ) -> ColumnInfo {
         ColumnInfo(
             tableSchema: "public",
@@ -594,7 +809,8 @@ struct SQLPromptBuilderTests {
             name: name,
             dataType: type,
             isNullable: false,
-            ordinalPosition: ordinal
+            ordinalPosition: ordinal,
+            valueConstraints: valueConstraints
         )
     }
 

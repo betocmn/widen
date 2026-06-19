@@ -118,7 +118,9 @@
             // A fresh session per request keeps the context window small and
             // the generation stateless; follow-up awareness comes from the
             // compact context section in the prompt instead.
-            let instructions = SQLPromptBuilder.instructions(defaultRowLimit: config.defaultRowLimit)
+            let instructions = SQLPromptBuilder.compactInstructions(
+                defaultRowLimit: config.defaultRowLimit
+            )
             let generationContext = try await contextWithOptionalDiscovery(
                 question: question,
                 schema: schema,

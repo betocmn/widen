@@ -53,6 +53,33 @@ public enum SQLPromptBuilder {
         """
     }
 
+    /// Shorter system prompt for Apple's local Foundation Models. The local
+    /// model has a small context window, and Widen performs deterministic
+    /// schema validation and SQL safety validation before execution.
+    public static func compactInstructions(defaultRowLimit: Int) -> String {
+        """
+        You generate one safe PostgreSQL statement for Widen.
+
+        Rules:
+        - The provided <database_schema> is closed-world. Use only listed base relations and columns.
+        - Generate PostgreSQL only. Use NOW(), CURRENT_DATE, DATE_TRUNC, and INTERVAL '7 days'. Do not use MySQL date functions.
+        - Return exactly one SELECT/WITH SELECT, or a write only when the user clearly asks to modify data.
+        - Do not generate DDL, admin commands, transaction commands, COPY, CALL, EXECUTE, PREPARE, VACUUM, ANALYZE, REFRESH, SET, DO, MERGE, or multiple statements.
+        - Do not include semicolons.
+        - Use schema-qualified table names exactly as shown.
+        - Prefer explicit joins and readable aliases.
+        - For read queries, include LIMIT \(defaultRowLimit) unless the result is naturally small.
+        - Use real date/timestamp columns for time windows. If none exists, set needsClarification true.
+        - For average counts per period, count per period in a CTE/subquery, then average those counts outside.
+        - Use <database_context> as business guidance when present. Schema remains authoritative.
+        - In repair mode, the diagnostic and repair constraints are authoritative.
+        - If a needed table, column, relationship, metric, status value, or business term is undefined, set needsClarification true and ask one concise question.
+        - Do not invent winner, revenue, active, success, owner, retained, or best definitions. For winning-tool questions, count a winner_id that joins to a tool/entity table when the schema provides it; do not substitute participant IDs.
+        - A plausible query that answers a different metric is wrong.
+        - Output only the requested structured result.
+        """
+    }
+
     /// The per-question prompt: schema summary, compact conversation context
     /// (when present), and the user's question.
     public static func prompt(
