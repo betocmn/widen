@@ -19,21 +19,21 @@ public final class SessionController: Identifiable {
     /// persisted — after a relaunch the records render as summary rows.
     public private(set) var results: [UUID: QueryResult] = [:]
 
-    public convenience init(session: QuerySession) {
-        self.init(session: session, executor: QueryExecutionService())
+    public convenience init(session: QuerySession, schema: DatabaseSchema? = nil) {
+        self.init(session: session, schema: schema, executor: QueryExecutionService())
     }
 
-    init(session: QuerySession, executor: any QueryExecuting) {
+    init(session: QuerySession, schema: DatabaseSchema? = nil, executor: any QueryExecuting) {
         self.sessionID = session.id
         self.connectionID = session.connectionID
         self.queryVM = QueryResultViewModel(executor: executor)
-        hydrate(from: session)
+        hydrate(from: session, schema: schema)
     }
 
     /// Loads persisted state into the live view models.
-    public func hydrate(from session: QuerySession) {
+    public func hydrate(from session: QuerySession, schema: DatabaseSchema? = nil) {
         chatVM.messages = session.messages
-        queryVM.restore(sqlText: session.sqlText, generation: session.lastGeneration)
+        queryVM.restore(sqlText: session.sqlText, generation: session.lastGeneration, schema: schema)
     }
 
     /// Copies live state back into the session value. Returns true when
@@ -89,11 +89,13 @@ public final class SessionController: Identifiable {
         guard !queryVM.isRunning, !chatVM.isGenerating else { return }
         let sql = queryVM.sqlText
         let generation = queryVM.generation
+        let schema = generation == nil ? nil : appState.promptSchema(for: connectionID)
         queryVM.startRun(
             connection: appState.connection(for: connectionID),
             postgres: appState.postgres(for: connectionID),
             isConnected: appState.connectionState(connectionID) == .connected,
-            confirmed: confirmed
+            confirmed: confirmed,
+            schema: schema
         ) { [weak self, weak appState] result, errorMessage in
             guard let self else { return }
             // `startRun` validated `sql` as part of the run; reuse that result

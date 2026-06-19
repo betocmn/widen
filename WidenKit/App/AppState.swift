@@ -905,10 +905,11 @@ public final class AppState {
     }
 
     private func makeSessionController(_ session: QuerySession) -> SessionController {
+        let schema = promptSchema(for: session.connectionID)
         if let queryExecutorOverride {
-            return SessionController(session: session, executor: queryExecutorOverride)
+            return SessionController(session: session, schema: schema, executor: queryExecutorOverride)
         }
-        return SessionController(session: session)
+        return SessionController(session: session, schema: schema)
     }
 
     /// Selects a database row for schema browsing — no session involved.

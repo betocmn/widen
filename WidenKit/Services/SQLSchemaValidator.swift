@@ -618,6 +618,20 @@ public enum SQLSchemaValidator {
         var reported = Set<String>()
         var index = 0
         while index < tokens.count {
+            if tokens[index].normalized == "between" {
+                appendTemporalBetweenIntervalIssue(
+                    at: index,
+                    tokens: tokens,
+                    analysis: analysis,
+                    scopeSources: scopeSources,
+                    schemaIndex: schemaIndex,
+                    reported: &reported,
+                    issues: &issues
+                )
+                index += 1
+                continue
+            }
+
             guard let comparison = comparisonOperator(at: index, tokens: tokens) else {
                 index += 1
                 continue
@@ -667,6 +681,42 @@ public enum SQLSchemaValidator {
         }
 
         return issues
+    }
+
+    private static func appendTemporalBetweenIntervalIssue(
+        at betweenIndex: Int,
+        tokens: [SQLToken],
+        analysis: SQLReferenceAnalysis,
+        scopeSources: [[ResolvedRelationSource]],
+        schemaIndex: SchemaLookup,
+        reported: inout Set<String>,
+        issues: inout [SQLSchemaValidationIssue]
+    ) {
+        let expressionEnd =
+            tokens[safe: betweenIndex - 1]?.normalized == "not" ? betweenIndex - 2 : betweenIndex - 1
+        guard isIntervalLiteral(startingAt: betweenIndex + 1, tokens: tokens)
+            || betweenUpperBoundStartIndex(at: betweenIndex, tokens: tokens).map({
+                isIntervalLiteral(startingAt: $0, tokens: tokens)
+            }) == true,
+            !isTemporalDifferenceExpression(
+                endingAt: expressionEnd,
+                tokens: tokens,
+                analysis: analysis,
+                scopeSources: scopeSources,
+                schemaIndex: schemaIndex
+            ),
+            let identifier = identifierExpression(endingAt: expressionEnd, tokens: tokens)
+        else {
+            return
+        }
+        appendTemporalIntervalIssue(
+            for: identifier,
+            analysis: analysis,
+            scopeSources: scopeSources,
+            schemaIndex: schemaIndex,
+            reported: &reported,
+            issues: &issues
+        )
     }
 
     private static func appendTemporalIntervalIssue(
@@ -777,6 +827,33 @@ public enum SQLSchemaValidator {
         index - 1 >= 0
             && tokens[safe: index - 1]?.normalized == "interval"
             && tokens[safe: index]?.kind == .string
+    }
+
+    private static func betweenUpperBoundStartIndex(
+        at betweenIndex: Int,
+        tokens: [SQLToken]
+    ) -> Int? {
+        var depth = 0
+        var index = betweenIndex + 1
+        while index < tokens.count {
+            let token = tokens[index]
+            if token.text == "(" {
+                depth += 1
+            } else if token.text == ")" {
+                depth = max(0, depth - 1)
+            } else if depth == 0, token.normalized == "and" {
+                return index + 1
+            } else if depth == 0,
+                [
+                    "where", "group", "having", "order", "limit", "offset", "union",
+                    "returning",
+                ].contains(token.normalized)
+            {
+                return nil
+            }
+            index += 1
+        }
+        return nil
     }
 
     private static func isTemporalDifferenceExpression(

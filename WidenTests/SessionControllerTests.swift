@@ -949,6 +949,15 @@ struct SessionControllerTests {
         #expect(qualified.outcome == .accepted)
     }
 
+    @Test func sqlFingerprintPreservesStringLiteralCase() {
+        let failed = SQLFingerprint("SELECT id FROM public.orders WHERE status = 'Paid'")
+        let repaired = SQLFingerprint("select id from public.orders where status = 'paid'")
+        let recasedSyntax = SQLFingerprint("select ID from PUBLIC.orders where status = 'Paid'")
+
+        #expect(failed != repaired)
+        #expect(failed == recasedSyntax)
+    }
+
     @Test func generatedRunErrorGivesUpAfterRepairAndReconstruction() async {
         let connectionID = UUID()
         let (state, dir) = makeState(connectionID: connectionID, connected: true)

@@ -565,6 +565,26 @@ struct SQLSchemaValidatorTests {
         #expect(result.errors.first?.contains("NOW() - INTERVAL '7 days'") == true)
     }
 
+    @Test func timestampBetweenBareIntervalIsDefiniteError() {
+        let result = SQLSchemaValidator.validate(
+            sql: "SELECT id FROM public.orders WHERE created_at BETWEEN INTERVAL '7 days' AND NOW()",
+            against: makeUsersOrdersSchema()
+        )
+
+        #expect(result.hasDefiniteErrors)
+        #expect(result.issues.contains { $0.kind == .invalidTemporalComparison })
+    }
+
+    @Test func timestampDifferenceCanBeUsedWithIntervalBetween() {
+        let result = SQLSchemaValidator.validate(
+            sql:
+                "SELECT id FROM public.orders WHERE NOW() - created_at BETWEEN INTERVAL '1 day' AND INTERVAL '7 days'",
+            against: makeUsersOrdersSchema()
+        )
+
+        #expect(result.hasDefiniteErrors == false)
+    }
+
     @Test func timestampComparedToTimestampExpressionIsValid() {
         let result = SQLSchemaValidator.validate(
             sql: #"SELECT "createdAt" FROM public.events WHERE "createdAt" >= NOW() - INTERVAL '7 days'"#,

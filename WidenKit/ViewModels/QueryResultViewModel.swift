@@ -35,6 +35,7 @@ public final class QueryResultViewModel {
     private var onFinish: RunCompletion?
     private var onAttemptFinish: ((QueryExecutionAttempt) -> Void)?
     private let executor: any QueryExecuting
+    private var requiresSchemaValidationOnRun = false
 
     public init() {
         self.executor = QueryExecutionService()
@@ -73,12 +74,14 @@ public final class QueryResultViewModel {
         postgres: PostgresService,
         isConnected: Bool,
         confirmed: Bool = false,
+        schema: DatabaseSchema? = nil,
         onFinish: RunCompletion? = nil
     ) {
         // The guard must precede storing the callback, so a rejected start
         // never clobbers the completion of the run already in flight.
         guard !isRunning else { return }
         let runSQL = sqlText
+        let runSchema = requiresSchemaValidationOnRun ? schema : nil
         self.onFinish = onFinish
         nextRunID += 1
         let runID = nextRunID
@@ -93,7 +96,7 @@ public final class QueryResultViewModel {
             await run(
                 sql: runSQL,
                 connection: connection, postgres: postgres,
-                isConnected: isConnected, runID: runID, confirmed: confirmed)
+                isConnected: isConnected, runID: runID, confirmed: confirmed, schema: runSchema)
         }
     }
 
@@ -151,6 +154,7 @@ public final class QueryResultViewModel {
         runError = nil
         runFailure = nil
         generation = nil
+        requiresSchemaValidationOnRun = false
         return true
     }
 
@@ -158,6 +162,7 @@ public final class QueryResultViewModel {
     /// SQL is validated immediately so the user sees its status before Run.
     public func setGeneration(_ generation: SQLGenerationResult, schema: DatabaseSchema? = nil) {
         self.generation = generation
+        requiresSchemaValidationOnRun = false
         sqlText = generation.sql
         result = nil
         runError = nil
@@ -170,6 +175,7 @@ public final class QueryResultViewModel {
     public func setDirectSQL(_ sql: String) {
         sqlText = sql
         generation = nil
+        requiresSchemaValidationOnRun = false
         result = nil
         runError = nil
         runFailure = nil
@@ -178,16 +184,21 @@ public final class QueryResultViewModel {
 
     /// Restores persisted editor state when a session is rehydrated. Unlike
     /// `setGeneration`, this never treats the SQL as a fresh generation.
-    public func restore(sqlText: String, generation: SQLGenerationResult?) {
+    public func restore(
+        sqlText: String,
+        generation: SQLGenerationResult?,
+        schema: DatabaseSchema? = nil
+    ) {
         self.sqlText = sqlText
         self.generation = generation
+        requiresSchemaValidationOnRun = generation != nil
         result = nil
         runError = nil
         runFailure = nil
         validation = nil
         schemaValidation = nil
         if !sqlText.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
-            validate()
+            validate(schema: generation == nil ? nil : schema)
         }
     }
 
@@ -282,10 +293,24 @@ public final class QueryResultViewModel {
         postgres: PostgresService,
         isConnected: Bool,
         runID: Int,
-        confirmed: Bool
+        confirmed: Bool,
+        schema: DatabaseSchema?
     ) async {
-        validation = SQLSafetyValidator.validate(sql)
-        schemaValidation = nil
+        let safety = SQLSafetyValidator.validate(sql)
+        if let schema,
+            safety.isValid,
+            !sql.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+        {
+            let schemaValidation = SQLSchemaValidator.validate(sql: sql, against: schema)
+            self.schemaValidation = schemaValidation
+            validation = GeneratedSQLValidator.combine(
+                safety: safety,
+                schemaValidation: schemaValidation
+            )
+        } else {
+            validation = safety
+            schemaValidation = nil
+        }
         runFailure = nil
         guard let validation, validation.isValid else {
             if isActiveRun(runID) {

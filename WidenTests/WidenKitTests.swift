@@ -240,6 +240,37 @@ struct QueryResultViewModelTests {
         #expect(viewModel.validation?.isValid == true)
     }
 
+    @Test func restoredGeneratedSQLRevalidatesAgainstSchemaBeforeRun() async {
+        let recorder = SQLRecorder()
+        let viewModel = QueryResultViewModel(executor: RecordingExecutor(recorder: recorder))
+        let generation = SQLGenerationResult(
+            sql: "SELECT id FROM public.missing_users",
+            explanation: "Shows users.",
+            assumptions: [],
+            referencedTables: [],
+            confidence: 1.0,
+            riskLevel: .low,
+            needsClarification: false,
+            clarificationQuestion: nil
+        )
+        let schema = makeSchema()
+
+        viewModel.restore(sqlText: generation.sql, generation: generation, schema: schema)
+        viewModel.startRun(
+            connection: DatabaseConnectionConfig(),
+            postgres: PostgresService(),
+            isConnected: true,
+            schema: schema
+        )
+        await waitUntil { !viewModel.isRunning }
+        let statements = await recorder.all()
+
+        #expect(viewModel.validation?.isValid == false)
+        #expect(viewModel.schemaValidation?.hasDefiniteErrors == true)
+        #expect(viewModel.runError?.contains("table public.missing_users") == true)
+        #expect(statements.isEmpty)
+    }
+
     @Test func cancelRunReleasesRunningStateImmediately() async {
         let viewModel = QueryResultViewModel(executor: SlowExecutor())
         viewModel.sqlText = "SELECT 1"
@@ -365,6 +396,30 @@ struct QueryResultViewModelTests {
             try? await Task.sleep(for: .milliseconds(10))
         }
         Issue.record("Timed out waiting for condition")
+    }
+
+    private func makeSchema() -> DatabaseSchema {
+        DatabaseSchema(
+            schemas: [SchemaInfo(name: "public")],
+            tables: [
+                TableInfo(
+                    schema: "public",
+                    name: "users",
+                    type: .baseTable,
+                    columns: [
+                        ColumnInfo(
+                            tableSchema: "public",
+                            tableName: "users",
+                            name: "id",
+                            dataType: "integer",
+                            isNullable: false,
+                            ordinalPosition: 1
+                        )
+                    ]
+                )
+            ],
+            foreignKeys: []
+        )
     }
 }
 

@@ -14,10 +14,94 @@ public struct SQLFingerprint: Codable, Equatable, Hashable, Sendable, CustomStri
         if trimmed.hasSuffix(";") {
             trimmed = String(trimmed.dropLast()).trimmingCharacters(in: .whitespacesAndNewlines)
         }
-        let collapsed = trimmed
-            .split(whereSeparator: \.isWhitespace)
-            .joined(separator: " ")
-        return collapsed.lowercased()
+        let chars = Array(trimmed)
+        var output = ""
+        var index = 0
+        var emittedSpace = false
+
+        func append(_ text: String) {
+            output.append(text)
+            emittedSpace = false
+        }
+
+        while index < chars.count {
+            let char = chars[index]
+            if char.isWhitespace {
+                if !output.isEmpty, !emittedSpace {
+                    output.append(" ")
+                    emittedSpace = true
+                }
+                index += 1
+                continue
+            }
+            if char == "'" {
+                let start = index
+                index += 1
+                while index < chars.count {
+                    if chars[index] == "'" {
+                        if chars[safe: index + 1] == "'" {
+                            index += 2
+                        } else {
+                            index += 1
+                            break
+                        }
+                    } else {
+                        index += 1
+                    }
+                }
+                append(String(chars[start..<min(index, chars.count)]))
+                continue
+            }
+            if char == "\"" {
+                let start = index
+                index += 1
+                while index < chars.count {
+                    if chars[index] == "\"" {
+                        if chars[safe: index + 1] == "\"" {
+                            index += 2
+                        } else {
+                            index += 1
+                            break
+                        }
+                    } else {
+                        index += 1
+                    }
+                }
+                append(String(chars[start..<min(index, chars.count)]))
+                continue
+            }
+            if char == "$",
+                let endIndex = dollarQuotedStringEnd(in: chars, startingAt: index)
+            {
+                append(String(chars[index..<endIndex]))
+                index = endIndex
+                continue
+            }
+
+            append(String(char).lowercased())
+            index += 1
+        }
+
+        return output.trimmingCharacters(in: .whitespaces)
+    }
+
+    private static func dollarQuotedStringEnd(in chars: [Character], startingAt start: Int) -> Int? {
+        var delimiterEnd = start + 1
+        while delimiterEnd < chars.count,
+            chars[delimiterEnd].isLetter || chars[delimiterEnd].isNumber || chars[delimiterEnd] == "_"
+        {
+            delimiterEnd += 1
+        }
+        guard delimiterEnd < chars.count, chars[delimiterEnd] == "$" else { return nil }
+        let delimiter = Array(chars[start...delimiterEnd])
+        var index = delimiterEnd + 1
+        while index + delimiter.count <= chars.count {
+            if Array(chars[index..<(index + delimiter.count)]) == delimiter {
+                return index + delimiter.count
+            }
+            index += 1
+        }
+        return chars.count
     }
 }
 
@@ -364,5 +448,11 @@ public struct GeneratedSQLRepairCoordinator: Sendable {
             .replacingOccurrences(of: "\"", with: "")
             .replacingOccurrences(of: " ", with: "")
             .lowercased()
+    }
+}
+
+private extension Collection {
+    subscript(safe index: Index) -> Element? {
+        indices.contains(index) ? self[index] : nil
     }
 }
