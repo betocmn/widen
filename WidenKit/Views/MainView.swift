@@ -3,16 +3,33 @@ import Combine
 import SwiftUI
 
 private enum MainLayout {
-    static let sidebarMinWidth: CGFloat = 340
-    static let sidebarIdealWidth: CGFloat = 380
-    static let sidebarMaxWidth: CGFloat = 480
+    // macOS 26's `NavigationSplitView` (+ `.inspector`) lays its backing
+    // `NSSplitView` out at the panes' combined width and, when that exceeds the
+    // window, OVERFLOWS instead of shrinking — sliding the whole split left and
+    // clipping the sidebar's leading edge (icons, row inset, selection pill).
+    //
+    // Two rules keep the sidebar safe (both verified against live `NSSplitView`
+    // frames via lldb):
+    //  1. The combined IDEAL width must fit the narrowest all-panels window so
+    //     the default layout never overflows: sidebarIdeal + detailIdeal +
+    //     inspectorIdeal stays under `showAllPanelsAtOrAbove`. The detail is the
+    //     flexible pane — a low ideal only bounds this budget; it still fills
+    //     the whole pane at runtime.
+    //  2. The inspector is FIXED (min == ideal == max). Dragging it wider does
+    //     NOT shrink the detail on macOS 26 — the split just grows past the
+    //     window and clips the sidebar. A non-resizable inspector is the only
+    //     reliable way to guarantee the sidebar never breaks; the schema list
+    //     reads fine at a fixed width.
+    static let sidebarMinWidth: CGFloat = 300
+    static let sidebarIdealWidth: CGFloat = 320
+    static let sidebarMaxWidth: CGFloat = 380
 
-    static let detailMinWidth: CGFloat = 420
-    static let detailIdealWidth: CGFloat = 560
+    static let detailMinWidth: CGFloat = 300
+    static let detailIdealWidth: CGFloat = 300
 
-    static let inspectorMinWidth: CGFloat = 240
-    static let inspectorIdealWidth: CGFloat = 300
-    static let inspectorMaxWidth: CGFloat = 420
+    static let inspectorMinWidth: CGFloat = 320
+    static let inspectorIdealWidth: CGFloat = 320
+    static let inspectorMaxWidth: CGFloat = 320
 
     static let showAllPanelsAtOrAbove: CGFloat = 1_280
     static let showSidebarAtOrAbove: CGFloat = 820

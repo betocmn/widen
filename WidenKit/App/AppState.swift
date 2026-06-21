@@ -799,6 +799,13 @@ public final class AppState {
         selectedSessionID.flatMap { controllers[$0] }
     }
 
+    /// True when the session's cached controller is generating SQL or running
+    /// a query. Drives the sidebar's working indicator, which keeps showing
+    /// across session switches because controllers persist once created.
+    public func isSessionWorking(_ id: UUID) -> Bool {
+        controllers[id]?.isWorking ?? false
+    }
+
     private func mostRecentVisibleSession() -> QuerySession? {
         sessions
             .filter { !$0.isArchived && connection(for: $0.connectionID) != nil }
