@@ -1966,33 +1966,40 @@ public enum GeneratedSQLPostprocessor {
 
         let schemaValidation = SQLSchemaValidator.validate(sql: sql, against: schema)
         copy.referencedTables = schemaValidation.referencedTables
-        if !schemaValidation.hasDefiniteErrors,
-            let clarification = undefinedRequestTermClarification(
+        if !schemaValidation.hasDefiniteErrors {
+            let grounding = groundingEvaluation(
                 question: question,
                 sql: sql,
                 referencedTables: schemaValidation.referencedTables,
                 schema: schema,
                 databaseContext: databaseContext
             )
-        {
-            copy.sql = ""
-            copy.explanation = clarification
-            copy.needsClarification = true
-            copy.clarificationQuestion = clarification
-            copy.confidence = min(copy.confidence, 0.2)
-            copy.riskLevel = .medium
+            copy.groundingConcepts = grounding.concepts
+            if let pending = grounding.pendingClarification {
+                copy.sql = ""
+                copy.explanation = pending.question
+                copy.needsClarification = true
+                copy.clarificationQuestion = pending.question
+                copy.clarificationOptions = pending.options
+                copy.pendingClarificationID = pending.id
+                copy.pendingClarification = pending
+                copy.confidence = min(copy.confidence, 0.2)
+                copy.riskLevel = .medium
+            }
         }
         return copy
     }
 
-    private static func undefinedRequestTermClarification(
+    public static func groundingEvaluation(
         question: String,
         sql: String,
         referencedTables: [String],
         schema: DatabaseSchema,
         databaseContext: String
-    ) -> String? {
-        guard hasMetricIntent(question) else { return nil }
+    ) -> SQLGroundingEvaluation {
+        guard hasMetricIntent(question) else {
+            return SQLGroundingEvaluation(concepts: notRequiredConcepts(question))
+        }
         let availableTokens = referencedSchemaTokens(
             referencedTables: referencedTables,
             schema: schema
@@ -2019,8 +2026,155 @@ public enum GeneratedSQLPostprocessor {
             }
         }
 
-        guard let first = unresolved.first else { return nil }
-        return "What column, condition, or table defines \"\(first)\" for this question?"
+        var concepts = terms.map { term -> SQLGroundingConcept in
+            let variants = SchemaIndex.tokens(in: term)
+            let state: GroundingState
+            let evidence: [String]
+            if variants.contains(where: literalTokens.rejected.contains) || unresolved.contains(term) {
+                state = .unsupported
+                evidence = []
+            } else if variants.contains(where: literalTokens.accepted.contains)
+                || variants.contains(where: {
+                    tokenSet(availableTokens, containsRelatedTo: $0)
+                })
+            {
+                state = .grounded
+                evidence = groundingEvidence(for: variants, schema: schema, databaseContext: databaseContext)
+            } else {
+                state = .notRequired
+                evidence = []
+            }
+            return SQLGroundingConcept(
+                term: term,
+                kind: conceptKind(for: term, question: question),
+                state: state,
+                required: state == .unsupported || state == .ambiguous,
+                evidence: evidence
+            )
+        }
+
+        concepts.append(contentsOf: notRequiredConcepts(question))
+        guard let first = concepts.first(where: {
+            $0.required && ($0.state == .unsupported || $0.state == .ambiguous)
+        }) else {
+            return SQLGroundingEvaluation(concepts: concepts)
+        }
+
+        let options = clarificationOptions(for: first, schema: schema, referencedTables: referencedTables)
+        let clarificationQuestion =
+            "What column, condition, or table defines \"\(first.term)\" for this question?"
+        let pending = PendingClarification(
+            concept: first,
+            originalQuestion: question,
+            question: clarificationQuestion,
+            options: options,
+            evidence: first.evidence
+        )
+        return SQLGroundingEvaluation(concepts: concepts, pendingClarification: pending)
+    }
+
+    private static func notRequiredConcepts(_ question: String) -> [SQLGroundingConcept] {
+        let tokens = Set(SchemaIndex.tokens(in: question))
+        var concepts: [SQLGroundingConcept] = []
+        if !tokens.intersection(metricOperatorStopWords).isEmpty {
+            concepts.append(
+                SQLGroundingConcept(
+                    term: "aggregate operator",
+                    kind: .metric,
+                    state: .notRequired,
+                    required: false,
+                    evidence: []
+                ))
+        }
+        if !tokens.intersection(
+            Set(["day", "days", "week", "weeks", "month", "months", "year", "years"])
+        ).isEmpty {
+            concepts.append(
+                SQLGroundingConcept(
+                    term: "time window",
+                    kind: .time,
+                    state: .notRequired,
+                    required: false,
+                    evidence: []
+                ))
+        }
+        return concepts
+    }
+
+    private static func conceptKind(for term: String, question: String) -> SQLGroundingConcept.Kind {
+        let tokens = Set(SchemaIndex.tokens(in: term))
+        if !tokens.intersection(["status", "active", "inactive", "paid", "refunded"]).isEmpty {
+            return .filter
+        }
+        if hasMetricIntent(question) {
+            return .businessTerm
+        }
+        return .entity
+    }
+
+    private static func groundingEvidence(
+        for variants: [String],
+        schema: DatabaseSchema,
+        databaseContext: String
+    ) -> [String] {
+        var evidence: [String] = []
+        for table in schema.tables {
+            let tableTokens = Set(SchemaIndex.tokens(in: table.name))
+            if variants.contains(where: { tokenSet(tableTokens, containsRelatedTo: $0) }) {
+                evidence.append(table.qualifiedName)
+            }
+            for column in table.columns {
+                let columnTokens = Set(SchemaIndex.tokens(in: column.name))
+                if variants.contains(where: { tokenSet(columnTokens, containsRelatedTo: $0) }) {
+                    evidence.append("\(table.qualifiedName).\(column.name)")
+                }
+                for constraint in column.valueConstraints ?? [] {
+                    for value in constraint.values {
+                        let valueTokens = Set(SchemaIndex.tokens(in: value))
+                        if variants.contains(where: { tokenSet(valueTokens, containsRelatedTo: $0) }) {
+                            evidence.append("\(table.qualifiedName).\(column.name) = '\(value)'")
+                        }
+                    }
+                }
+            }
+        }
+        if variants.contains(where: { token in
+            tokenSet(Set(SchemaIndex.tokens(in: databaseContext)), containsRelatedTo: token)
+        }) {
+            evidence.append("Database context")
+        }
+        var seen = Set<String>()
+        return evidence.filter { seen.insert($0).inserted }.prefix(6).map { $0 }
+    }
+
+    private static func clarificationOptions(
+        for concept: SQLGroundingConcept,
+        schema: DatabaseSchema,
+        referencedTables: [String]
+    ) -> [ClarificationOption] {
+        let referenced = Set(referencedTables.map { $0.lowercased() })
+        let termTokens = Set(SchemaIndex.tokens(in: concept.term))
+        var options: [ClarificationOption] = []
+        for table in schema.tables where referenced.isEmpty || referenced.contains(table.qualifiedName.lowercased()) {
+            for column in table.columns {
+                for constraint in column.valueConstraints ?? [] {
+                    for value in constraint.values {
+                        let valueTokens = Set(SchemaIndex.tokens(in: value))
+                        guard !termTokens.intersection(valueTokens).isEmpty else { continue }
+                        let definition = "\(quotedIdentifier(table.schema)).\(quotedIdentifier(table.name)).\(quotedIdentifier(column.name)) = '\(value.replacingOccurrences(of: "'", with: "''"))'"
+                        options.append(
+                            ClarificationOption(
+                                label: "\(column.name) = \(value)",
+                                replyText: "Use \(definition)",
+                                definition: definition,
+                                evidence: ["\(table.qualifiedName).\(column.name)"]
+                            ))
+                    }
+                }
+            }
+        }
+        var seen = Set<String>()
+        return options.filter { seen.insert($0.definition).inserted }.prefix(3).map { $0 }
     }
 
     private struct ConstrainedColumnValueTokens {

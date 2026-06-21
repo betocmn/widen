@@ -215,4 +215,28 @@ struct ChatMessageCodableTests {
         #expect(decoded.runSummary == nil)
         #expect(decoded.generation == nil)
     }
+
+    @Test func legacyGenerationWithoutGroundingFieldsDecodes() throws {
+        let legacy = """
+            {
+              "sql": "SELECT 1",
+              "explanation": "Constant.",
+              "assumptions": [],
+              "referencedTables": [],
+              "confidence": 1.0,
+              "riskLevel": "low",
+              "needsClarification": false,
+              "clarificationQuestion": null
+            }
+            """
+        let decoded = try JSONDecoder().decode(
+            SQLGenerationResult.self,
+            from: Data(legacy.utf8)
+        )
+
+        #expect(decoded.sql == "SELECT 1")
+        #expect(decoded.groundingConcepts.isEmpty)
+        #expect(decoded.clarificationOptions.isEmpty)
+        #expect(decoded.pendingClarification == nil)
+    }
 }

@@ -113,6 +113,10 @@ public struct SQLGenerationContext: Equatable, Sendable {
     /// including optional local discovery. Used for telemetry and local budget
     /// enforcement only; it is never rendered into prompts.
     public var modelCallCount: Int
+    /// User-confirmed business definitions for this database/schema scope.
+    /// These are app-managed semantic bindings, separate from connection
+    /// credentials and database context notes.
+    public var confirmedSemanticBindings: [String]
 
     public init(
         mode: SQLGenerationMode = .initial,
@@ -123,7 +127,8 @@ public struct SQLGenerationContext: Equatable, Sendable {
         lastRunError: String? = nil,
         repairContext: SQLRepairContext? = nil,
         schemaSearchQueries: [String] = [],
-        modelCallCount: Int = 0
+        modelCallCount: Int = 0,
+        confirmedSemanticBindings: [String] = []
     ) {
         self.mode = mode
         self.recentQuestions = recentQuestions
@@ -134,12 +139,14 @@ public struct SQLGenerationContext: Equatable, Sendable {
         self.repairContext = repairContext
         self.schemaSearchQueries = schemaSearchQueries
         self.modelCallCount = modelCallCount
+        self.confirmedSemanticBindings = confirmedSemanticBindings
     }
 
     public var isEmpty: Bool {
         recentQuestions.isEmpty && originalQuestion == nil && conversationMessages.isEmpty
             && currentSQL == nil && lastRunError == nil && repairContext == nil
-            && schemaSearchQueries.isEmpty && modelCallCount == 0 && mode == .initial
+            && schemaSearchQueries.isEmpty && modelCallCount == 0
+            && confirmedSemanticBindings.isEmpty && mode == .initial
     }
 }
 

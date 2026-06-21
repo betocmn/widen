@@ -130,7 +130,12 @@ public final class ChatViewModel {
                 !clarification.trimmingCharacters(in: .whitespaces).isEmpty
             {
                 messages.append(
-                    ChatMessage(role: .assistant, text: clarification, generation: result))
+                    ChatMessage(
+                        role: .assistant,
+                        text: clarification,
+                        generation: result,
+                        pendingClarification: result.pendingClarification
+                    ))
             } else {
                 messages.append(
                     ChatMessage(role: .assistant, text: result.explanation, generation: result))

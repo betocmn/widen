@@ -246,6 +246,30 @@ struct SQLPromptBuilderTests {
         #expect(conversationRange!.lowerBound < questionRange!.lowerBound)
     }
 
+    @Test func promptIncludesConfirmedSemanticBindingsSeparatelyFromDatabaseContext() {
+        let context = SQLGenerationContext(
+            confirmedSemanticBindings: [
+                #"wins: "public"."evaluations"."winner_id" is not null"#
+            ]
+        )
+
+        let prompt = SQLPromptBuilder.prompt(
+            question: "what tools have the most wins?",
+            schema: makeSampleSchema(),
+            context: context,
+            databaseContext: "General database notes."
+        )
+
+        #expect(prompt.contains("<confirmed_semantic_bindings>"))
+        #expect(prompt.contains(#"wins: "public"."evaluations"."winner_id" is not null"#))
+        #expect(prompt.contains("<database_context>"))
+        let contextRange = prompt.range(of: "<database_context>")
+        let bindingsRange = prompt.range(of: "<confirmed_semantic_bindings>")
+        let questionRange = prompt.range(of: "<current_user_request>")
+        #expect(contextRange!.lowerBound < bindingsRange!.lowerBound)
+        #expect(bindingsRange!.lowerBound < questionRange!.lowerBound)
+    }
+
     @Test func emptyDatabaseContextIsOmittedAndLongContextIsTruncated() {
         #expect(SQLPromptBuilder.databaseContextSection("   \n") == nil)
 

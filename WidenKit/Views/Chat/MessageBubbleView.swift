@@ -10,6 +10,7 @@ struct MessageBubbleView: View {
     /// Present on a failed-write error bubble: asks the model to repair the
     /// query and refill the editor (without running it).
     var onRetryWrite: (() -> Void)? = nil
+    var onClarificationOptionSelected: ((PendingClarification, ClarificationOption) -> Void)? = nil
 
     var body: some View {
         if message.role == .result {
@@ -67,6 +68,13 @@ struct MessageBubbleView: View {
                     .font(.caption2)
                     .foregroundStyle(.secondary)
             }
+            if let pending = message.pendingClarification,
+                !pending.options.isEmpty,
+                message.role == .assistant
+            {
+                clarificationOptions(pending)
+                    .padding(.top, 4)
+            }
             if message.role == .error, let onRetryWrite {
                 Button("Try Again", systemImage: "arrow.clockwise") {
                     onRetryWrite()
@@ -79,5 +87,23 @@ struct MessageBubbleView: View {
         }
         .padding(.horizontal, 10)
         .padding(.vertical, 6)
+    }
+
+    private func clarificationOptions(_ pending: PendingClarification) -> some View {
+        VStack(alignment: .leading, spacing: 6) {
+            ForEach(pending.options) { option in
+                Button {
+                    onClarificationOptionSelected?(pending, option)
+                } label: {
+                    Text(option.label)
+                        .lineLimit(2)
+                        .frame(maxWidth: .infinity, alignment: .leading)
+                }
+                .buttonStyle(.bordered)
+                .controlSize(.small)
+                .hoverBrightness()
+            }
+        }
+        .frame(maxWidth: 320, alignment: .leading)
     }
 }

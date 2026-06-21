@@ -45,6 +45,7 @@ public final class ConnectionSettingsViewModel {
     public private(set) var testState: TestState = .idle
     public private(set) var saveError: String?
     public private(set) var isSaving = false
+    public private(set) var connectionID: UUID?
 
     /// Text pasted into the autofill sheet. Cleared after a successful fill
     /// — it can contain credentials.
@@ -73,6 +74,7 @@ public final class ConnectionSettingsViewModel {
     /// Prefills the form from a saved connection (password from the Keychain).
     public func load(from config: DatabaseConnectionConfig) {
         existing = config
+        connectionID = config.id
         name = config.name
         host = config.host
         portText = String(config.port)
@@ -243,6 +245,7 @@ public final class ConnectionSettingsViewModel {
             return nil
         }
         existing = config
+        connectionID = config.id
         markClean()
         return config
     }
@@ -250,6 +253,7 @@ public final class ConnectionSettingsViewModel {
     /// Resets the form to its defaults for a brand-new connection.
     public func startNew() {
         existing = nil
+        connectionID = nil
         name = ""
         host = "localhost"
         portText = "5432"

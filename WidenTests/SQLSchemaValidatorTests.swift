@@ -1339,6 +1339,9 @@ struct SQLSchemaValidatorTests {
         #expect(!enriched.needsClarification)
         #expect(enriched.sql == generation.sql)
         #expect(enriched.referencedTables == ["public.orders"])
+        #expect(enriched.groundingConcepts.contains {
+            $0.kind == .metric && $0.state == .notRequired
+        })
     }
 
     @Test func literalFilterValuesDoNotForceClarification() {
@@ -1387,6 +1390,7 @@ struct SQLSchemaValidatorTests {
         #expect(enriched.needsClarification)
         #expect(enriched.sql.isEmpty)
         #expect(enriched.clarificationQuestion?.contains("\"active\"") == true)
+        #expect(enriched.pendingClarification?.concept.state == .unsupported)
         #expect(enriched.referencedTables == ["public.users"])
     }
 
@@ -1559,6 +1563,10 @@ struct SQLSchemaValidatorTests {
         #expect(enriched.needsClarification)
         #expect(enriched.sql.isEmpty)
         #expect(enriched.clarificationQuestion?.contains("\"active\"") == true)
+        #expect(enriched.pendingClarification?.concept.state == .unsupported)
+        #expect(enriched.clarificationOptions.contains {
+            $0.definition.contains(#""public"."users"."status" = 'active'"#)
+        })
         #expect(enriched.referencedTables == ["public.users"])
     }
 

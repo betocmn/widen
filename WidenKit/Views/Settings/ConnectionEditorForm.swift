@@ -91,6 +91,8 @@ struct ConnectionEditorForm: View {
                         .frame(maxWidth: .infinity, alignment: .leading)
                     }
 
+                    rememberedDefinitionsSection
+
                     if !viewModel.validationErrors.isEmpty {
                         MessagePanel(systemImage: "exclamationmark.triangle.fill", color: .red) {
                             VStack(alignment: .leading, spacing: 4) {
@@ -126,6 +128,70 @@ struct ConnectionEditorForm: View {
                 }
             }
         }
+    }
+
+    @ViewBuilder
+    private var rememberedDefinitionsSection: some View {
+        if let connectionID = viewModel.connectionID {
+            let bindings = appState.semanticBindings
+                .filter { $0.connectionID == connectionID }
+                .sorted { $0.createdAt > $1.createdAt }
+            SettingsSectionPanel(title: "Remembered Definitions", systemImage: "bookmark") {
+                if bindings.isEmpty {
+                    Text("No remembered definitions")
+                        .font(.callout)
+                        .foregroundStyle(.secondary)
+                        .frame(maxWidth: .infinity, alignment: .leading)
+                } else {
+                    VStack(spacing: 0) {
+                        ForEach(bindings) { binding in
+                            rememberedDefinitionRow(binding)
+                            if binding.id != bindings.last?.id {
+                                Divider()
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    private func rememberedDefinitionRow(_ binding: DatabaseSemanticBinding) -> some View {
+        let schema = appState.schemas[binding.connectionID]
+        let scopedSchema = schema.map { loaded in
+            binding.schemaNames.count == 1
+                ? loaded.filtered(toSchema: binding.schemaNames[0])
+                : loaded
+        }
+        let isStale = scopedSchema.map { !binding.isCurrent(for: $0) } ?? false
+        return HStack(alignment: .firstTextBaseline, spacing: 12) {
+            VStack(alignment: .leading, spacing: 3) {
+                HStack(spacing: 6) {
+                    Text(binding.concept)
+                        .font(.callout.weight(.semibold))
+                    if isStale {
+                        Text("Stale")
+                            .font(.caption2.weight(.semibold))
+                            .foregroundStyle(.orange)
+                    }
+                }
+                Text(binding.definition)
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+                    .textSelection(.enabled)
+            }
+            Spacer()
+            Button {
+                appState.deleteSemanticBinding(binding.id)
+            } label: {
+                Image(systemName: "trash")
+                    .frame(width: 24, height: 24)
+            }
+            .buttonStyle(.plain)
+            .foregroundStyle(.secondary)
+            .help("Delete remembered definition")
+        }
+        .padding(.vertical, 7)
     }
 
     /// Opens the paste-autofill sheet. Parsing stays local: structured URLs

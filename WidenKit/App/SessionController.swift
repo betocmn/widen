@@ -18,6 +18,7 @@ public final class SessionController: Identifiable {
     /// of this live session keeps its full table in the transcript. Never
     /// persisted — after a relaunch the records render as summary rows.
     public private(set) var results: [UUID: QueryResult] = [:]
+    private var selectedClarificationOption: (pendingID: UUID, option: ClarificationOption)?
 
     /// True while the session is mid-generation or mid-run. Surfaced in the
     /// sidebar so work in progress stays visible even when another session is
@@ -191,7 +192,11 @@ public final class SessionController: Identifiable {
                 ),
                 priorFingerprints: [Self.normalizedSQL(failedSQL)]
             ),
-            modelCallCount: 1
+            modelCallCount: 1,
+            confirmedSemanticBindings: appState.semanticBindingPromptLines(
+                for: connectionID,
+                schema: schema
+            )
         )
         let connection = appState.connection(for: connectionID)
         let config = SQLGenerationConfig(
@@ -232,7 +237,12 @@ public final class SessionController: Identifiable {
             !clarification.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
         {
             chatVM.messages.append(
-                ChatMessage(role: .assistant, text: clarification, generation: generation)
+                ChatMessage(
+                    role: .assistant,
+                    text: clarification,
+                    generation: generation,
+                    pendingClarification: generation.pendingClarification
+                )
             )
             return
         }
@@ -256,6 +266,17 @@ public final class SessionController: Identifiable {
         results.removeAll()
     }
 
+    public func selectClarificationOption(
+        appState: AppState,
+        pending: PendingClarification,
+        option: ClarificationOption
+    ) async {
+        guard !queryVM.isRunning, !chatVM.isGenerating else { return }
+        selectedClarificationOption = (pending.id, option)
+        chatVM.input = option.replyText
+        await submit(appState: appState)
+    }
+
     private func submitGeneratedSQL(appState: AppState) async {
         let question = chatVM.input.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !question.isEmpty, !chatVM.isGenerating, !queryVM.isRunning else { return }
@@ -266,15 +287,40 @@ public final class SessionController: Identifiable {
             return
         }
 
+        let pendingClarification = unresolvedPendingClarification()
+        let selectedOption = selectedOptionForPendingClarification(
+            pendingClarification,
+            replyText: question
+        )
+        let generationQuestion = pendingClarification?.originalQuestion ?? question
+        var confirmedBindings = appState.semanticBindingPromptLines(
+            for: connectionID,
+            schema: schema
+        )
+        if let pendingClarification,
+            shouldRememberClarificationReply(question, selectedOption: selectedOption)
+        {
+            let definition = (selectedOption?.definition ?? question)
+                .trimmingCharacters(in: .whitespacesAndNewlines)
+            if !definition.isEmpty {
+                confirmedBindings.append("\(pendingClarification.concept.term): \(definition)")
+            }
+        }
+        var conversationMessages = chatVM.messages.sqlConversationMessages()
+        if pendingClarification != nil {
+            conversationMessages.append(SQLConversationMessage(role: .user, text: question))
+        }
         let context = SQLGenerationContext(
             recentQuestions: chatVM.messages.filter { $0.role == .user }.suffix(3).map(\.text),
-            originalQuestion: chatVM.messages.originalUserQuestion(),
-            conversationMessages: chatVM.messages.sqlConversationMessages(),
+            originalQuestion: pendingClarification?.originalQuestion
+                ?? chatVM.messages.originalUserQuestion(),
+            conversationMessages: conversationMessages,
             currentSQL: queryVM.sqlText
                 .trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
                 ? nil : queryVM.sqlText,
             lastRunError: queryVM.runError
-                ?? (chatVM.messages.last?.role == .error ? chatVM.messages.last?.text : nil)
+                ?? (chatVM.messages.last?.role == .error ? chatVM.messages.last?.text : nil),
+            confirmedSemanticBindings: confirmedBindings
         )
         let connection = appState.connection(for: connectionID)
         let config = SQLGenerationConfig(
@@ -284,23 +330,35 @@ public final class SessionController: Identifiable {
 
         chatVM.input = ""
         chatVM.messages.append(ChatMessage(role: .user, text: question))
+        if let pendingClarification,
+            shouldRememberClarificationReply(question, selectedOption: selectedOption)
+        {
+            appState.confirmSemanticBinding(
+                connectionID: connectionID,
+                pending: pendingClarification,
+                replyText: question,
+                selectedOption: selectedOption,
+                schema: schema
+            )
+        }
         chatVM.beginGeneration()
         appState.sessionDidChange(sessionID)
         defer {
+            selectedClarificationOption = nil
             chatVM.finishGeneration()
             appState.sessionDidChange(sessionID)
         }
 
         do {
             let generated = try await appState.sqlGenerator.generateSQL(
-                question: question,
+                question: generationQuestion,
                 schema: schema,
                 context: context,
                 config: config
             )
             let result = GeneratedSQLPostprocessor.enriched(
                 generated,
-                question: question,
+                question: generationQuestion,
                 schema: schema,
                 databaseContext: config.databaseContext
             )
@@ -309,7 +367,12 @@ public final class SessionController: Identifiable {
                 !clarification.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
             {
                 chatVM.messages.append(
-                    ChatMessage(role: .assistant, text: clarification, generation: result)
+                    ChatMessage(
+                        role: .assistant,
+                        text: clarification,
+                        generation: result,
+                        pendingClarification: result.pendingClarification
+                    )
                 )
                 return
             }
@@ -339,9 +402,9 @@ public final class SessionController: Identifiable {
                     firstError: firstError,
                     startingGeneration: visibleGeneration,
                     questionContext: RepairQuestionContext(
-                        question: question,
+                        question: generationQuestion,
                         recentQuestions: Array(context.recentQuestions.suffix(3)),
-                        originalQuestion: context.originalQuestion ?? question,
+                        originalQuestion: context.originalQuestion ?? generationQuestion,
                         conversationMessages: context.conversationMessages
                             + [SQLConversationMessage(role: .user, text: question)]
                     ),
@@ -355,6 +418,58 @@ public final class SessionController: Identifiable {
         } catch {
             chatVM.appendRunError(error.localizedDescription)
         }
+    }
+
+    private func unresolvedPendingClarification() -> PendingClarification? {
+        guard let last = chatVM.messages.last,
+            last.role == .assistant,
+            let pending = last.pendingClarification
+        else {
+            return nil
+        }
+        return pending
+    }
+
+    private func selectedOptionForPendingClarification(
+        _ pending: PendingClarification?,
+        replyText: String
+    ) -> ClarificationOption? {
+        guard let pending else { return nil }
+        if let selected = selectedClarificationOption,
+            selected.pendingID == pending.id
+        {
+            return selected.option
+        }
+        let trimmed = replyText.trimmingCharacters(in: .whitespacesAndNewlines)
+        if let exact = pending.options.first(where: {
+            $0.replyText.caseInsensitiveCompare(trimmed) == .orderedSame
+        }) {
+            return exact
+        }
+        if Self.isAffirmativeClarificationReply(trimmed),
+            pending.options.count == 1
+        {
+            return pending.options[0]
+        }
+        return nil
+    }
+
+    private func shouldRememberClarificationReply(
+        _ replyText: String,
+        selectedOption: ClarificationOption?
+    ) -> Bool {
+        selectedOption != nil || !Self.isAffirmativeClarificationReply(replyText)
+    }
+
+    private static func isAffirmativeClarificationReply(_ text: String) -> Bool {
+        let stripped = text
+            .trimmingCharacters(in: CharacterSet(charactersIn: ".!?, \n\t"))
+            .lowercased()
+        return [
+            "y", "yes", "yeah", "yep", "correct", "right", "that's right",
+            "that is right", "sounds good", "ok", "okay", "sure", "use that",
+            "do that", "exactly",
+        ].contains(stripped)
     }
 
     private func repairGeneratedSQL(
@@ -453,7 +568,11 @@ public final class SessionController: Identifiable {
                 currentSQL: repairMode == .repair ? repairContext.failedSQL : nil,
                 lastRunError: repairMode == .repair ? coordinator.constraints.lastError : nil,
                 repairContext: repairContext,
-                modelCallCount: attemptNumber
+                modelCallCount: attemptNumber,
+                confirmedSemanticBindings: appState.semanticBindingPromptLines(
+                    for: connectionID,
+                    schema: schema
+                )
             )
 
             let generation: SQLGenerationResult
@@ -497,7 +616,12 @@ public final class SessionController: Identifiable {
                     return
                 }
                 chatVM.messages.append(
-                    ChatMessage(role: .assistant, text: clarification, generation: generation)
+                    ChatMessage(
+                        role: .assistant,
+                        text: clarification,
+                        generation: generation,
+                        pendingClarification: generation.pendingClarification
+                    )
                 )
                 appState.sessionDidChange(sessionID)
                 return
@@ -637,7 +761,12 @@ public final class SessionController: Identifiable {
 
     private func appendAssistantGeneration(_ generation: SQLGenerationResult) {
         chatVM.messages.append(
-            ChatMessage(role: .assistant, text: assistantText(for: generation), generation: generation)
+            ChatMessage(
+                role: .assistant,
+                text: assistantText(for: generation),
+                generation: generation,
+                pendingClarification: generation.pendingClarification
+            )
         )
     }
 

@@ -253,6 +253,7 @@ struct SessionControllerTests {
         private let results: [SQLGenerationResult]
         private(set) var contexts: [SQLGenerationContext] = []
         private(set) var schemaNames: [String?] = []
+        private(set) var questions: [String] = []
 
         init(results: [SQLGenerationResult]) {
             self.results = results
@@ -264,6 +265,7 @@ struct SessionControllerTests {
             context: SQLGenerationContext,
             config: SQLGenerationConfig
         ) async throws -> SQLGenerationResult {
+            questions.append(question)
             contexts.append(context)
             schemaNames.append(schema.singleSchemaName)
             return results[min(contexts.count - 1, results.count - 1)]
@@ -370,6 +372,45 @@ struct SessionControllerTests {
                             isNullable: false,
                             ordinalPosition: 1
                         )
+                    ]
+                )
+            ],
+            foreignKeys: []
+        )
+    }
+
+    private func makeUsersStatusSchema() -> DatabaseSchema {
+        DatabaseSchema(
+            schemas: [SchemaInfo(name: "public")],
+            tables: [
+                TableInfo(
+                    schema: "public",
+                    name: "users",
+                    type: .baseTable,
+                    columns: [
+                        ColumnInfo(
+                            tableSchema: "public",
+                            tableName: "users",
+                            name: "id",
+                            dataType: "uuid",
+                            isNullable: false,
+                            ordinalPosition: 1
+                        ),
+                        ColumnInfo(
+                            tableSchema: "public",
+                            tableName: "users",
+                            name: "status",
+                            dataType: "text",
+                            isNullable: false,
+                            ordinalPosition: 2,
+                            valueConstraints: [
+                                ColumnValueConstraint(
+                                    kind: .check,
+                                    values: ["active", "inactive"],
+                                    expression: "CHECK (status IN ('active', 'inactive'))"
+                                )
+                            ]
+                        ),
                     ]
                 )
             ],
@@ -1460,6 +1501,109 @@ struct SessionControllerTests {
         #expect(controller.queryVM.sqlText == badGeneration.sql)
         #expect(controller.chatVM.messages.map(\.role) == [.user, .assistant, .assistant])
         #expect(controller.chatVM.messages.last?.text == "Which table should I use for users?")
+    }
+
+    @Test func clarificationOptionReplyResolvesPendingClarificationAndStoresBinding() async {
+        let connectionID = UUID()
+        let (state, dir) = makeState(connectionID: connectionID, connected: true)
+        defer { try? FileManager.default.removeItem(at: dir) }
+        let schema = makeUsersStatusSchema()
+        state.schemas[connectionID] = schema
+        let controller = makeController(connectionID: connectionID)
+        let option = ClarificationOption(
+            label: "status = active",
+            replyText: #"Use "public"."users"."status" = 'active'"#,
+            definition: #""public"."users"."status" = 'active'"#,
+            evidence: ["public.users.status"]
+        )
+        let pending = PendingClarification(
+            concept: SQLGroundingConcept(
+                term: "active",
+                kind: .filter,
+                state: .unsupported,
+                required: true
+            ),
+            originalQuestion: "how many active users?",
+            question: "What defines active users?",
+            options: [option]
+        )
+        controller.chatVM.messages = [
+            ChatMessage(role: .user, text: "how many active users?"),
+            ChatMessage(
+                role: .assistant,
+                text: pending.question,
+                pendingClarification: pending
+            ),
+        ]
+        let fixed = makeGeneration(
+            sql: "SELECT COUNT(*) FROM public.users WHERE status = 'active'",
+            explanation: "Counts active users."
+        )
+        let generator = RecordingRepairGenerator(results: [fixed])
+        state.sqlGeneratorOverride = generator
+
+        await controller.selectClarificationOption(
+            appState: state,
+            pending: pending,
+            option: option
+        )
+
+        #expect(controller.chatVM.messages.contains {
+            $0.role == .user && $0.text == option.replyText
+        })
+        #expect(generator.questions == ["how many active users?"])
+        #expect(generator.contexts.first?.confirmedSemanticBindings.contains {
+            $0.contains(#""public"."users"."status" = 'active'"#)
+        } == true)
+        #expect(state.semanticBindings.count == 1)
+        #expect(state.semanticBindings.first?.concept == "active")
+        #expect(state.semanticBindings.first?.definition == option.definition)
+    }
+
+    @Test func freeFormClarificationReplyResolvesSamePendingClarification() async {
+        let connectionID = UUID()
+        let (state, dir) = makeState(connectionID: connectionID, connected: true)
+        defer { try? FileManager.default.removeItem(at: dir) }
+        let schema = makeUsersStatusSchema()
+        state.schemas[connectionID] = schema
+        let controller = makeController(connectionID: connectionID)
+        let pending = PendingClarification(
+            concept: SQLGroundingConcept(
+                term: "active",
+                kind: .filter,
+                state: .unsupported,
+                required: true
+            ),
+            originalQuestion: "how many active users?",
+            question: "What defines active users?"
+        )
+        controller.chatVM.messages = [
+            ChatMessage(role: .user, text: "how many active users?"),
+            ChatMessage(
+                role: .assistant,
+                text: pending.question,
+                pendingClarification: pending
+            ),
+        ]
+        controller.chatVM.input = "Active means users whose status is active."
+        let fixed = makeGeneration(
+            sql: "SELECT COUNT(*) FROM public.users WHERE status = 'active'",
+            explanation: "Counts active users."
+        )
+        let generator = RecordingRepairGenerator(results: [fixed])
+        state.sqlGeneratorOverride = generator
+
+        await controller.submit(appState: state)
+
+        #expect(generator.questions == ["how many active users?"])
+        #expect(
+            generator.contexts.first?.conversationMessages.last?.text
+                == "Active means users whose status is active."
+        )
+        #expect(generator.contexts.first?.confirmedSemanticBindings.contains {
+            $0.contains("Active means users whose status is active.")
+        } == true)
+        #expect(state.semanticBindings.first?.definition == "Active means users whose status is active.")
     }
 
     @Test func submitWithDirectSQLSkipsGenerator() async {

@@ -124,6 +124,10 @@ public enum SQLPromptBuilder {
             sections.append(taggedSection("database_context", databaseContextSection))
         }
 
+        if let bindingSection = confirmedSemanticBindingsSection(context.confirmedSemanticBindings) {
+            sections.append(taggedSection("confirmed_semantic_bindings", bindingSection))
+        }
+
         switch context.mode {
         case .repair:
             sections.append(repairTaskSection(question: question, context: context))
@@ -143,6 +147,17 @@ public enum SQLPromptBuilder {
             prompt: sections.joined(separator: "\n\n"),
             schemaPackage: schemaPackage
         )
+    }
+
+    private static func confirmedSemanticBindingsSection(_ bindings: [String]) -> String? {
+        let trimmed = bindings
+            .map { $0.trimmingCharacters(in: .whitespacesAndNewlines) }
+            .filter { !$0.isEmpty }
+        guard !trimmed.isEmpty else { return nil }
+        return ([
+            "User-confirmed database-specific definitions. Treat these as business semantics, but the schema remains authoritative for available tables and columns.",
+        ] + trimmed.prefix(12).map { "- \(truncated($0, to: 500))" })
+            .joined(separator: "\n")
     }
 
     static func repairTaskSection(question: String, context: SQLGenerationContext) -> String {

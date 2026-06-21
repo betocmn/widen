@@ -104,6 +104,89 @@ struct ConnectionStoreTests {
     }
 }
 
+@Suite("DatabaseSemanticBindingStore")
+struct DatabaseSemanticBindingStoreTests {
+    private func makeSchema(includeName: Bool = true) -> DatabaseSchema {
+        DatabaseSchema(
+            schemas: [SchemaInfo(name: "public")],
+            tables: [
+                TableInfo(
+                    schema: "public",
+                    name: "users",
+                    type: .baseTable,
+                    columns: [
+                        ColumnInfo(
+                            tableSchema: "public",
+                            tableName: "users",
+                            name: "id",
+                            dataType: "uuid",
+                            isNullable: false,
+                            ordinalPosition: 1
+                        ),
+                    ] + (includeName ? [
+                        ColumnInfo(
+                            tableSchema: "public",
+                            tableName: "users",
+                            name: "name",
+                            dataType: "text",
+                            isNullable: true,
+                            ordinalPosition: 2
+                        )
+                    ] : [])
+                )
+            ],
+            foreignKeys: []
+        )
+    }
+
+    @Test func roundTripIsSeparateFromConnectionCredentials() throws {
+        let dir = FileManager.default.temporaryDirectory
+            .appendingPathComponent("widen-bindings-\(UUID().uuidString)", isDirectory: true)
+        defer { try? FileManager.default.removeItem(at: dir) }
+        let connectionID = UUID()
+        let schema = makeSchema()
+        let bindingStore = DatabaseSemanticBindingStore(directory: dir)
+        let connectionStore = ConnectionStore(directory: dir)
+        let binding = DatabaseSemanticBinding(
+            connectionID: connectionID,
+            schemaNames: schema.semanticBindingSchemaNames,
+            schemaFingerprint: schema.semanticFingerprint,
+            concept: "active users",
+            definition: #"status = 'active'"#,
+            evidence: ["public.users.status"],
+            createdAt: Date(timeIntervalSince1970: 1_750_000_000)
+        )
+
+        try connectionStore.save([DatabaseConnectionConfig(id: connectionID, database: "db", username: "u")])
+        try bindingStore.save([binding])
+
+        #expect(try bindingStore.load() == [binding])
+        let connectionJSON = try String(contentsOf: connectionStore.fileURL, encoding: .utf8)
+        #expect(!connectionJSON.contains("active users"))
+        #expect(!connectionJSON.contains("semantic"))
+    }
+
+    @Test func currentBindingsExcludeSchemaDrift() {
+        let dir = FileManager.default.temporaryDirectory
+            .appendingPathComponent("widen-bindings-\(UUID().uuidString)", isDirectory: true)
+        defer { try? FileManager.default.removeItem(at: dir) }
+        let store = DatabaseSemanticBindingStore(directory: dir)
+        let connectionID = UUID()
+        let original = makeSchema()
+        let drifted = makeSchema(includeName: false)
+        let binding = DatabaseSemanticBinding(
+            connectionID: connectionID,
+            schemaNames: original.semanticBindingSchemaNames,
+            schemaFingerprint: original.semanticFingerprint,
+            concept: "active users",
+            definition: #"status = 'active'"#
+        )
+
+        #expect(store.currentBindings([binding], connectionID: connectionID, schema: original) == [binding])
+        #expect(store.currentBindings([binding], connectionID: connectionID, schema: drifted).isEmpty)
+    }
+}
+
 @Suite("ConnectionSettingsViewModel validation")
 @MainActor
 struct ConnectionSettingsViewModelTests {
