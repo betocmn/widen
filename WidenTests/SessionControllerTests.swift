@@ -418,6 +418,38 @@ struct SessionControllerTests {
         )
     }
 
+    private func makeUsersUnconstrainedStatusSchema() -> DatabaseSchema {
+        DatabaseSchema(
+            schemas: [SchemaInfo(name: "public")],
+            tables: [
+                TableInfo(
+                    schema: "public",
+                    name: "users",
+                    type: .baseTable,
+                    columns: [
+                        ColumnInfo(
+                            tableSchema: "public",
+                            tableName: "users",
+                            name: "id",
+                            dataType: "uuid",
+                            isNullable: false,
+                            ordinalPosition: 1
+                        ),
+                        ColumnInfo(
+                            tableSchema: "public",
+                            tableName: "users",
+                            name: "status",
+                            dataType: "text",
+                            isNullable: false,
+                            ordinalPosition: 2
+                        ),
+                    ]
+                )
+            ],
+            foreignKeys: []
+        )
+    }
+
     private func makeSchema(schemas: [String]) -> DatabaseSchema {
         DatabaseSchema(
             schemas: schemas.map(SchemaInfo.init(name:)),
@@ -1247,6 +1279,37 @@ struct SessionControllerTests {
         #expect(!repeated.allowsReconstruction)
     }
 
+    @Test func repairCoordinatorKeepsDerivedAndBaseColumnIssuesDistinct() {
+        let schema = makeSchema()
+        let failedSQL = """
+            WITH c AS (
+              SELECT id FROM public.users
+            )
+            SELECT email FROM c
+            """
+        let initialValidation = GeneratedSQLValidator.validate(sql: failedSQL, schema: schema)
+        var coordinator = GeneratedSQLRepairCoordinator(
+            failedSQL: failedSQL,
+            firstError: AppError.validationFailed(initialValidation.errors).localizedDescription,
+            diagnostic: nil,
+            forbiddenIdentifiers: []
+        )
+
+        let baseColumnFailure = coordinator.evaluateCandidate(
+            makeGeneration(sql: "SELECT email FROM public.users"),
+            mode: .repair,
+            schema: schema,
+            allowWrites: false
+        )
+
+        if case .rejected(let reason) = baseColumnFailure.outcome {
+            #expect(reason == .validationFailure)
+        } else {
+            Issue.record("Expected base column failure to be rejected for validation")
+        }
+        #expect(baseColumnFailure.allowsReconstruction)
+    }
+
     @Test func generatedRunErrorClarifiesAfterRepeatedRepair() async {
         let connectionID = UUID()
         let (state, dir) = makeState(connectionID: connectionID, connected: true)
@@ -1507,7 +1570,7 @@ struct SessionControllerTests {
         let connectionID = UUID()
         let (state, dir) = makeState(connectionID: connectionID, connected: true)
         defer { try? FileManager.default.removeItem(at: dir) }
-        let schema = makeUsersStatusSchema()
+        let schema = makeUsersUnconstrainedStatusSchema()
         state.schemas[connectionID] = schema
         let controller = makeController(connectionID: connectionID)
         let option = ClarificationOption(
@@ -1558,13 +1621,15 @@ struct SessionControllerTests {
         #expect(state.semanticBindings.count == 1)
         #expect(state.semanticBindings.first?.concept == "active")
         #expect(state.semanticBindings.first?.definition == option.definition)
+        #expect(controller.queryVM.sqlText == fixed.sql)
+        #expect(controller.chatVM.messages.last?.generation?.needsClarification == false)
     }
 
     @Test func freeFormClarificationReplyResolvesSamePendingClarification() async {
         let connectionID = UUID()
         let (state, dir) = makeState(connectionID: connectionID, connected: true)
         defer { try? FileManager.default.removeItem(at: dir) }
-        let schema = makeUsersStatusSchema()
+        let schema = makeUsersUnconstrainedStatusSchema()
         state.schemas[connectionID] = schema
         let controller = makeController(connectionID: connectionID)
         let pending = PendingClarification(
@@ -1604,6 +1669,50 @@ struct SessionControllerTests {
             $0.contains("Active means users whose status is active.")
         } == true)
         #expect(state.semanticBindings.first?.definition == "Active means users whose status is active.")
+        #expect(controller.queryVM.sqlText == fixed.sql)
+        #expect(controller.chatVM.messages.last?.generation?.needsClarification == false)
+    }
+
+    @Test func negativeClarificationReplyDoesNotStoreSemanticBinding() async {
+        let connectionID = UUID()
+        let (state, dir) = makeState(connectionID: connectionID, connected: true)
+        defer { try? FileManager.default.removeItem(at: dir) }
+        let schema = makeUsersStatusSchema()
+        state.schemas[connectionID] = schema
+        let controller = makeController(connectionID: connectionID)
+        let pending = PendingClarification(
+            concept: SQLGroundingConcept(
+                term: "active",
+                kind: .filter,
+                state: .unsupported,
+                required: true
+            ),
+            originalQuestion: "how many active users?",
+            question: "What defines active users?"
+        )
+        controller.chatVM.messages = [
+            ChatMessage(role: .user, text: "how many active users?"),
+            ChatMessage(
+                role: .assistant,
+                text: pending.question,
+                pendingClarification: pending
+            ),
+        ]
+        controller.chatVM.input = "no"
+        let clarification = makeGeneration(
+            sql: "",
+            explanation: "Still needs clarification.",
+            needsClarification: true,
+            clarificationQuestion: "What defines active users?"
+        )
+        let generator = RecordingRepairGenerator(results: [clarification])
+        state.sqlGeneratorOverride = generator
+
+        await controller.submit(appState: state)
+
+        #expect(state.semanticBindings.isEmpty)
+        #expect(generator.contexts.first?.confirmedSemanticBindings.isEmpty == true)
+        #expect(generator.contexts.first?.conversationMessages.last?.text == "no")
     }
 
     @Test func submitWithDirectSQLSkipsGenerator() async {

@@ -1394,6 +1394,31 @@ struct SQLSchemaValidatorTests {
         #expect(enriched.referencedTables == ["public.users"])
     }
 
+    @Test func nonMetricFilterTermsStillRequireGrounding() {
+        let generation = SQLGenerationResult(
+            sql: "SELECT id FROM public.users WHERE status = 'active'",
+            explanation: "Lists active users.",
+            assumptions: [],
+            referencedTables: [],
+            confidence: 1,
+            riskLevel: .low,
+            needsClarification: false,
+            clarificationQuestion: nil
+        )
+
+        let enriched = GeneratedSQLPostprocessor.enriched(
+            generation,
+            question: "show active users",
+            schema: makeUsersUnconstrainedStatusSchema(),
+            databaseContext: ""
+        )
+
+        #expect(enriched.needsClarification)
+        #expect(enriched.sql.isEmpty)
+        #expect(enriched.clarificationQuestion?.contains("\"active\"") == true)
+        #expect(enriched.referencedTables == ["public.users"])
+    }
+
     @Test func databaseContextCanDefineUnconstrainedStatusLiteral() {
         let generation = SQLGenerationResult(
             sql: "SELECT COUNT(*) FROM public.users WHERE status = 'active'",
@@ -1416,6 +1441,33 @@ struct SQLSchemaValidatorTests {
         #expect(!enriched.needsClarification)
         #expect(enriched.sql == generation.sql)
         #expect(enriched.referencedTables == ["public.users"])
+    }
+
+    @Test func confirmedSemanticBindingDefinesUnconstrainedStatusLiteral() {
+        let generation = SQLGenerationResult(
+            sql: "SELECT COUNT(*) FROM public.users WHERE status = 'active'",
+            explanation: "Counts active users.",
+            assumptions: [],
+            referencedTables: [],
+            confidence: 1,
+            riskLevel: .low,
+            needsClarification: false,
+            clarificationQuestion: nil
+        )
+
+        let enriched = GeneratedSQLPostprocessor.enriched(
+            generation,
+            question: "how many active users do we have?",
+            schema: makeUsersUnconstrainedStatusSchema(),
+            databaseContext: "",
+            confirmedSemanticBindings: ["active: users whose status is active"]
+        )
+
+        #expect(!enriched.needsClarification)
+        #expect(enriched.sql == generation.sql)
+        #expect(enriched.groundingConcepts.contains {
+            $0.term == "active" && $0.evidence.contains("Confirmed semantic binding")
+        })
     }
 
     @Test func postprocessorAsksWhenMetricTermIsMissingFromReferencedSchema() {

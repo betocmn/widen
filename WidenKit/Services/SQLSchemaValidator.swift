@@ -1956,7 +1956,9 @@ public enum GeneratedSQLPostprocessor {
         _ generation: SQLGenerationResult,
         question: String,
         schema: DatabaseSchema,
-        databaseContext: String
+        databaseContext: String,
+        confirmedSemanticBindings: [String] = [],
+        allowGroundingClarification: Bool = true
     ) -> SQLGenerationResult {
         var copy = generation
         copy.generationSchemaName = schema.singleSchemaName
@@ -1964,18 +1966,23 @@ public enum GeneratedSQLPostprocessor {
         let sql = generation.sql.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !sql.isEmpty else { return copy }
 
+        let safety = SQLSafetyValidator.validate(sql)
         let schemaValidation = SQLSchemaValidator.validate(sql: sql, against: schema)
         copy.referencedTables = schemaValidation.referencedTables
+        guard !safety.kind.isWrite else { return copy }
         if !schemaValidation.hasDefiniteErrors {
             let grounding = groundingEvaluation(
                 question: question,
                 sql: sql,
                 referencedTables: schemaValidation.referencedTables,
                 schema: schema,
-                databaseContext: databaseContext
+                databaseContext: databaseContext,
+                confirmedSemanticBindings: confirmedSemanticBindings
             )
             copy.groundingConcepts = grounding.concepts
-            if let pending = grounding.pendingClarification {
+            if allowGroundingClarification,
+                let pending = grounding.pendingClarification
+            {
                 copy.sql = ""
                 copy.explanation = pending.question
                 copy.needsClarification = true
@@ -1995,17 +2002,20 @@ public enum GeneratedSQLPostprocessor {
         sql: String,
         referencedTables: [String],
         schema: DatabaseSchema,
-        databaseContext: String
+        databaseContext: String,
+        confirmedSemanticBindings: [String] = []
     ) -> SQLGroundingEvaluation {
-        guard hasMetricIntent(question) else {
-            return SQLGroundingEvaluation(concepts: notRequiredConcepts(question))
-        }
         let availableTokens = referencedSchemaTokens(
             referencedTables: referencedTables,
             schema: schema
-        ).union(Set(SchemaIndex.tokens(in: databaseContext)))
+        )
+        .union(Set(SchemaIndex.tokens(in: databaseContext)))
+        .union(Set(SchemaIndex.tokens(in: confirmedSemanticBindings.joined(separator: "\n"))))
 
         let terms = meaningfulRequestWords(question)
+        guard !terms.isEmpty else {
+            return SQLGroundingEvaluation(concepts: notRequiredConcepts(question))
+        }
         let literalTokens = literalValueTokenEvaluation(
             in: sql,
             referencedTables: referencedTables,
@@ -2039,7 +2049,12 @@ public enum GeneratedSQLPostprocessor {
                 })
             {
                 state = .grounded
-                evidence = groundingEvidence(for: variants, schema: schema, databaseContext: databaseContext)
+                evidence = groundingEvidence(
+                    for: variants,
+                    schema: schema,
+                    databaseContext: databaseContext,
+                    confirmedSemanticBindings: confirmedSemanticBindings
+                )
             } else {
                 state = .notRequired
                 evidence = []
@@ -2115,7 +2130,8 @@ public enum GeneratedSQLPostprocessor {
     private static func groundingEvidence(
         for variants: [String],
         schema: DatabaseSchema,
-        databaseContext: String
+        databaseContext: String,
+        confirmedSemanticBindings: [String]
     ) -> [String] {
         var evidence: [String] = []
         for table in schema.tables {
@@ -2142,6 +2158,14 @@ public enum GeneratedSQLPostprocessor {
             tokenSet(Set(SchemaIndex.tokens(in: databaseContext)), containsRelatedTo: token)
         }) {
             evidence.append("Database context")
+        }
+        for binding in confirmedSemanticBindings {
+            if variants.contains(where: { token in
+                tokenSet(Set(SchemaIndex.tokens(in: binding)), containsRelatedTo: token)
+            }) {
+                evidence.append("Confirmed semantic binding")
+                break
+            }
         }
         var seen = Set<String>()
         return evidence.filter { seen.insert($0).inserted }.prefix(6).map { $0 }

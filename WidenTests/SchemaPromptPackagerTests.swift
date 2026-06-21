@@ -258,6 +258,90 @@ struct SchemaPromptPackagerTests {
             ))
     }
 
+    @Test func missingColumnRelationshipHintCanUseTwoHopForeignKeyPath() {
+        let schema = DatabaseSchema(
+            schemas: [SchemaInfo(name: "public")],
+            tables: [
+                TableInfo(
+                    schema: "public",
+                    name: "orders",
+                    type: .baseTable,
+                    columns: [
+                        column("orders", "id", ordinal: 1),
+                        column("orders", "user_id", ordinal: 2),
+                    ]
+                ),
+                TableInfo(
+                    schema: "public",
+                    name: "users",
+                    type: .baseTable,
+                    columns: [
+                        column("users", "id", ordinal: 1),
+                        column("users", "account_id", ordinal: 2),
+                    ]
+                ),
+                TableInfo(
+                    schema: "public",
+                    name: "accounts",
+                    type: .baseTable,
+                    columns: [
+                        column("accounts", "id", ordinal: 1),
+                        column("accounts", "plan_name", type: "text", ordinal: 2),
+                    ]
+                ),
+            ],
+            foreignKeys: [
+                ForeignKeyInfo(
+                    constraintName: "orders_user_fkey",
+                    sourceSchema: "public",
+                    sourceTable: "orders",
+                    sourceColumn: "user_id",
+                    targetSchema: "public",
+                    targetTable: "users",
+                    targetColumn: "id"
+                ),
+                ForeignKeyInfo(
+                    constraintName: "users_account_fkey",
+                    sourceSchema: "public",
+                    sourceTable: "users",
+                    sourceColumn: "account_id",
+                    targetSchema: "public",
+                    targetTable: "accounts",
+                    targetColumn: "id"
+                ),
+            ]
+        )
+        let context = SQLGenerationContext(
+            mode: .repair,
+            originalQuestion: "show order account plan names",
+            repairContext: SQLRepairContext(
+                failedSQL: "SELECT plan_name FROM public.orders",
+                diagnostic: DatabaseDiagnostic(
+                    kind: .missingColumn,
+                    sqlState: "42703",
+                    message: "Schema validation failed: column plan_name is not available from the referenced tables.",
+                    columnName: "plan_name"
+                ),
+                forbiddenIdentifiers: ["plan_name"]
+            )
+        )
+
+        let package = SchemaPromptPackager.package(
+            schema: schema,
+            question: "show order account plan names",
+            context: context,
+            databaseContext: "",
+            maxCharacters: 4_000
+        )
+
+        #expect(
+            package.text.contains(
+                #"join "public"."orders"."user_id" -> "public"."users"."id" then "public"."users"."account_id" -> "public"."accounts"."id""#
+            ))
+        #expect(package.pinnedTables.contains("public.users"))
+        #expect(package.pinnedTables.contains("public.accounts"))
+    }
+
     @Test func widePinnedRepairTableIsCompressedButKeepsRequiredColumns() {
         let schema = makeWideWinningToolSchema(extraTables: 30)
         let diagnostic = DatabaseDiagnostic(

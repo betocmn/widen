@@ -675,7 +675,7 @@ private struct SQLRepairIssueSignature: Hashable, Sendable {
         for issue in schemaValidation.issues where issue.severity == .error {
             let identifier = issue.identifier.map(canonicalIdentifier) ?? ""
             let suggested = issue.suggestedIdentifier.map(canonicalIdentifier) ?? ""
-            let kind = normalizedKind(issue.kind)
+            let kind = String(describing: issue.kind)
             let value =
                 kind == "requiresQuotedIdentifier"
                 ? "\(kind):\(identifier):\(suggested)"
@@ -688,15 +688,6 @@ private struct SQLRepairIssueSignature: Hashable, Sendable {
             signatures.insert(SQLRepairIssueSignature(value: "safety:\(canonicalIdentifier(error))"))
         }
         return signatures
-    }
-
-    private static func normalizedKind(_ kind: SQLSchemaValidationIssue.Kind) -> String {
-        switch kind {
-        case .missingColumn, .missingBaseColumn, .missingDerivedColumn, .columnNotProjectedByCTE:
-            "missingColumn"
-        default:
-            String(describing: kind)
-        }
     }
 
     static func signatures(
@@ -722,10 +713,33 @@ private struct SQLRepairIssueSignature: Hashable, Sendable {
         }
         for match in capturedValues(
             in: error,
-            pattern:
-                #"Schema validation failed: column ([A-Za-z_][A-Za-z0-9_$]*) is (?:not available from the referenced(?: base)? tables|not on [^.\s]+(?:\.[^.\s]+)?|not an output column of [^.;]+|ambiguous across referenced tables)"#
+            pattern: #"Schema validation failed: column ([A-Za-z_][A-Za-z0-9_$]*) is not on [^.;]+"#
+        ) {
+            signatures.insert(SQLRepairIssueSignature(value: "missingBaseColumn:\(canonicalIdentifier(match))"))
+        }
+        for match in capturedValues(
+            in: error,
+            pattern: #"Schema validation failed: column ([A-Za-z_][A-Za-z0-9_$]*) is not available from the referenced base tables"#
+        ) {
+            signatures.insert(SQLRepairIssueSignature(value: "missingBaseColumn:\(canonicalIdentifier(match))"))
+        }
+        for match in capturedValues(
+            in: error,
+            pattern: #"Schema validation failed: column ([A-Za-z_][A-Za-z0-9_$]*) is not an output column of [^.;]+"#
+        ) {
+            signatures.insert(SQLRepairIssueSignature(value: "columnNotProjectedByCTE:\(canonicalIdentifier(match))"))
+        }
+        for match in capturedValues(
+            in: error,
+            pattern: #"Schema validation failed: column ([A-Za-z_][A-Za-z0-9_$]*) is not available from the referenced tables"#
         ) {
             signatures.insert(SQLRepairIssueSignature(value: "missingColumn:\(canonicalIdentifier(match))"))
+        }
+        for match in capturedValues(
+            in: error,
+            pattern: #"Schema validation failed: column ([A-Za-z_][A-Za-z0-9_$]*) is ambiguous across referenced tables"#
+        ) {
+            signatures.insert(SQLRepairIssueSignature(value: "ambiguousColumn:\(canonicalIdentifier(match))"))
         }
         for match in capturedValues(
             in: error,

@@ -554,47 +554,98 @@ public enum SchemaPromptPackager {
             }
             for candidateTable in candidateTables {
                 for referencedTable in referencedTables where referencedTable.id != candidateTable.id {
-                    guard let join = directJoin(
+                    let paths = joinPaths(
                         from: referencedTable,
                         to: candidateTable,
-                        schema: schema
-                    ) else { continue }
-                    hints.append(
-                        RelationshipHint(
-                            text:
-                                "Column \(quotedIdentifier(columnName)) lives on \(qualifiedName(candidateTable)), not \(qualifiedName(referencedTable)); join \(join) if that column is needed.",
-                            tableIDs: [referencedTable.id, candidateTable.id]
-                        ))
+                        schema: schema,
+                        maxHops: 2,
+                        maxPaths: 2
+                    )
+                    for path in paths {
+                        hints.append(
+                            RelationshipHint(
+                                text:
+                                    "Column \(quotedIdentifier(columnName)) lives on \(qualifiedName(candidateTable)), not \(qualifiedName(referencedTable)); join \(path.text) if that column is needed.",
+                                tableIDs: path.tableIDs
+                            ))
+                    }
                 }
             }
         }
         return hints
     }
 
-    private static func directJoin(
+    private struct JoinPath {
+        var text: String
+        var tableIDs: Set<String>
+    }
+
+    private struct JoinEdge {
+        var to: TableInfo
+        var text: String
+    }
+
+    private static func joinPaths(
         from sourceTable: TableInfo,
         to targetTable: TableInfo,
-        schema: DatabaseSchema
-    ) -> String? {
-        if let foreignKey = schema.foreignKeys.first(where: {
-            $0.sourceSchema == sourceTable.schema
-                && $0.sourceTable == sourceTable.name
-                && $0.targetSchema == targetTable.schema
-                && $0.targetTable == targetTable.name
-        }) {
-            return
-                "\(qualifiedColumn(schema: foreignKey.sourceSchema, table: foreignKey.sourceTable, column: foreignKey.sourceColumn)) -> \(qualifiedColumn(schema: foreignKey.targetSchema, table: foreignKey.targetTable, column: foreignKey.targetColumn))"
+        schema: DatabaseSchema,
+        maxHops: Int,
+        maxPaths: Int
+    ) -> [JoinPath] {
+        guard maxHops > 0, maxPaths > 0 else { return [] }
+        var queue: [(table: TableInfo, lines: [String], tableIDs: Set<String>)] = [
+            (sourceTable, [], [sourceTable.id])
+        ]
+        var paths: [JoinPath] = []
+
+        while !queue.isEmpty, paths.count < maxPaths {
+            let current = queue.removeFirst()
+            guard current.lines.count < maxHops else { continue }
+            for edge in joinEdges(from: current.table, schema: schema) {
+                guard !current.tableIDs.contains(edge.to.id) else { continue }
+                let nextLines = current.lines + [edge.text]
+                let nextTableIDs = current.tableIDs.union([edge.to.id])
+                if edge.to.id == targetTable.id {
+                    paths.append(
+                        JoinPath(
+                            text: nextLines.joined(separator: " then "),
+                            tableIDs: nextTableIDs
+                        ))
+                    if paths.count >= maxPaths { break }
+                } else {
+                    queue.append((edge.to, nextLines, nextTableIDs))
+                }
+            }
         }
-        if let foreignKey = schema.foreignKeys.first(where: {
-            $0.sourceSchema == targetTable.schema
-                && $0.sourceTable == targetTable.name
-                && $0.targetSchema == sourceTable.schema
-                && $0.targetTable == sourceTable.name
-        }) {
-            return
+        return paths
+    }
+
+    private static func joinEdges(from table: TableInfo, schema: DatabaseSchema) -> [JoinEdge] {
+        schema.foreignKeys.compactMap { foreignKey in
+            let sourceID = "\(foreignKey.sourceSchema).\(foreignKey.sourceTable)"
+            let targetID = "\(foreignKey.targetSchema).\(foreignKey.targetTable)"
+            let line =
                 "\(qualifiedColumn(schema: foreignKey.sourceSchema, table: foreignKey.sourceTable, column: foreignKey.sourceColumn)) -> \(qualifiedColumn(schema: foreignKey.targetSchema, table: foreignKey.targetTable, column: foreignKey.targetColumn))"
+            if sourceID == table.id,
+                let target = self.table(
+                    schemaName: foreignKey.targetSchema,
+                    tableName: foreignKey.targetTable,
+                    in: schema
+                )
+            {
+                return JoinEdge(to: target, text: line)
+            }
+            if targetID == table.id,
+                let source = self.table(
+                    schemaName: foreignKey.sourceSchema,
+                    tableName: foreignKey.sourceTable,
+                    in: schema
+                )
+            {
+                return JoinEdge(to: source, text: line)
+            }
+            return nil
         }
-        return nil
     }
 
     private static func referencedTables(in sql: String, schema: DatabaseSchema) -> [TableInfo] {

@@ -84,6 +84,7 @@
                 question: question,
                 schema: schema,
                 context: context,
+                databaseContext: config.databaseContext,
                 maxSchemaCharacters: Self.schemaCharacterBudget
             )
             let prompt = bundle.prompt

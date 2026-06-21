@@ -225,7 +225,9 @@ public final class SessionController: Identifiable {
                 generated,
                 question: questionContext.question,
                 schema: schema,
-                databaseContext: config.databaseContext
+                databaseContext: config.databaseContext,
+                confirmedSemanticBindings: context.confirmedSemanticBindings,
+                allowGroundingClarification: false
             )
         } catch {
             chatVM.appendRunError(error.localizedDescription)
@@ -360,7 +362,8 @@ public final class SessionController: Identifiable {
                 generated,
                 question: generationQuestion,
                 schema: schema,
-                databaseContext: config.databaseContext
+                databaseContext: config.databaseContext,
+                confirmedSemanticBindings: context.confirmedSemanticBindings
             )
             if result.needsClarification,
                 let clarification = result.clarificationQuestion,
@@ -458,7 +461,7 @@ public final class SessionController: Identifiable {
         _ replyText: String,
         selectedOption: ClarificationOption?
     ) -> Bool {
-        selectedOption != nil || !Self.isAffirmativeClarificationReply(replyText)
+        selectedOption != nil || Self.isExplicitSemanticDefinitionReply(replyText)
     }
 
     private static func isAffirmativeClarificationReply(_ text: String) -> Bool {
@@ -470,6 +473,24 @@ public final class SessionController: Identifiable {
             "that is right", "sounds good", "ok", "okay", "sure", "use that",
             "do that", "exactly",
         ].contains(stripped)
+    }
+
+    private static func isExplicitSemanticDefinitionReply(_ text: String) -> Bool {
+        let normalized = text
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+            .lowercased()
+        guard normalized.count >= 6 else { return false }
+        let stripped = normalized.trimmingCharacters(in: CharacterSet(charactersIn: ".!?, "))
+        let negativeAnswers: Set<String> = [
+            "n", "no", "nope", "nah", "not sure", "i don't know", "i dont know",
+            "unknown", "something else",
+        ]
+        guard !negativeAnswers.contains(stripped) else { return false }
+        let definitionMarkers = [
+            " means ", " mean ", " is ", " are ", " equals ", " equal ",
+            " defined as ", " refers to ", " should be ", " use ", "=",
+        ]
+        return normalized.hasPrefix("use ") || definitionMarkers.contains { normalized.contains($0) }
     }
 
     private func repairGeneratedSQL(
@@ -587,7 +608,9 @@ public final class SessionController: Identifiable {
                     generated,
                     question: questionContext.question,
                     schema: schema,
-                    databaseContext: config.databaseContext
+                    databaseContext: config.databaseContext,
+                    confirmedSemanticBindings: context.confirmedSemanticBindings,
+                    allowGroundingClarification: false
                 )
             } catch {
                 restoreStartingGeneration(schema: schema)
@@ -1141,18 +1164,26 @@ public final class SessionController: Identifiable {
 
     private static func reachableTableIDs(
         from tableIDs: Set<String>,
-        schema: DatabaseSchema
+        schema: DatabaseSchema,
+        maxHops: Int = 2
     ) -> Set<String> {
         var reachable = tableIDs
-        for foreignKey in schema.foreignKeys {
-            let sourceID = "\(foreignKey.sourceSchema).\(foreignKey.sourceTable)"
-            let targetID = "\(foreignKey.targetSchema).\(foreignKey.targetTable)"
-            if tableIDs.contains(sourceID) {
-                reachable.insert(targetID)
+        var frontier = tableIDs
+        guard maxHops > 0 else { return reachable }
+        for _ in 0..<maxHops {
+            var next = Set<String>()
+            for foreignKey in schema.foreignKeys {
+                let sourceID = "\(foreignKey.sourceSchema).\(foreignKey.sourceTable)"
+                let targetID = "\(foreignKey.targetSchema).\(foreignKey.targetTable)"
+                if frontier.contains(sourceID), reachable.insert(targetID).inserted {
+                    next.insert(targetID)
+                }
+                if frontier.contains(targetID), reachable.insert(sourceID).inserted {
+                    next.insert(sourceID)
+                }
             }
-            if tableIDs.contains(targetID) {
-                reachable.insert(sourceID)
-            }
+            guard !next.isEmpty else { break }
+            frontier = next
         }
         return reachable
     }
