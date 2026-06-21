@@ -576,6 +576,10 @@ public enum SQLSafetyValidator {
             let closeIndex = matchingClosingParenthesis(chars, openingAt: openIndex)
             guard let closeIndex else { continue }
             let argumentText = String(chars[(openIndex + 1)..<closeIndex])
+            if aggregateCallIsWindowFunction(chars, closingAt: closeIndex) {
+                i = max(closeIndex + 1, tokenStart + 1)
+                continue
+            }
             if containsFunctionCall(argumentText, named: aggregateFunctions) {
                 return true
             }
@@ -583,6 +587,46 @@ public enum SQLSafetyValidator {
         }
 
         return false
+    }
+
+    private static func aggregateCallIsWindowFunction(
+        _ chars: [Character],
+        closingAt closeIndex: Int
+    ) -> Bool {
+        var cursor = closeIndex + 1
+        guard let next = nextWord(chars, startingAt: cursor) else { return false }
+        if next.word.uppercased() == "OVER" {
+            return true
+        }
+        guard next.word.uppercased() == "FILTER" else { return false }
+        cursor = next.end
+        while cursor < chars.count, chars[cursor].isWhitespace {
+            cursor += 1
+        }
+        if cursor < chars.count,
+            chars[cursor] == "(",
+            let afterFilter = matchingClosingParenthesis(chars, openingAt: cursor).map({ $0 + 1 })
+        {
+            cursor = afterFilter
+        }
+        return nextWord(chars, startingAt: cursor)?.word.uppercased() == "OVER"
+    }
+
+    private static func nextWord(
+        _ chars: [Character],
+        startingAt offset: Int
+    ) -> (word: String, end: Int)? {
+        var cursor = offset
+        while cursor < chars.count, chars[cursor].isWhitespace {
+            cursor += 1
+        }
+        guard cursor < chars.count, isWordStart(chars[cursor]) else { return nil }
+        var word = ""
+        while cursor < chars.count, isWordPart(chars[cursor], tokenStarted: !word.isEmpty) {
+            word.append(chars[cursor])
+            cursor += 1
+        }
+        return (word, cursor)
     }
 
     private static func containsFunctionCall(_ text: String, named names: Set<String>) -> Bool {

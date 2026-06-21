@@ -247,6 +247,14 @@ struct SQLSafetyValidatorTests {
         #expect(result.errors.contains { $0.contains("other aggregate functions") })
     }
 
+    @Test func allowsAggregateWindowOverGroupedAggregate() {
+        let result = validate(
+            "SELECT COUNT(*) / SUM(COUNT(*)) OVER () FROM public.orders GROUP BY user_id"
+        )
+
+        #expect(result.isValid)
+    }
+
     @Test func allowsAggregateInsideScalarSubqueryArgument() {
         let result = validate(
             "SELECT SUM((SELECT COUNT(*) FROM public.orders)) FROM public.users"

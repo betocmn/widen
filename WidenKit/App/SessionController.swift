@@ -146,7 +146,13 @@ public final class SessionController: Identifiable {
     /// destructive). Each tap is a single regenerate — no retry loop.
     public func retryFailedWrite(appState: AppState, failedSQL: String, error: String) async {
         guard !queryVM.isRunning, !chatVM.isGenerating else { return }
-        guard let schema = appState.promptSchema(for: connectionID), !schema.tables.isEmpty else {
+        let startingGeneration =
+            generatedAssistant(matchingSQL: failedSQL)
+            ?? queryVM.generation?.withSQL(failedSQL)
+        let repairSchema =
+            appState.schemaForGeneration(startingGeneration, connectionID: connectionID)
+            ?? appState.promptSchema(for: connectionID)
+        guard let schema = repairSchema, !schema.tables.isEmpty else {
             chatVM.appendRunError(
                 "I could not retry because the database schema is no longer available."
             )

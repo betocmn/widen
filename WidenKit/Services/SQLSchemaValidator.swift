@@ -883,6 +883,7 @@ public enum SQLSchemaValidator {
             for scopeIndex in analysis.scopes.indices {
                 guard let source = resolveSource(
                     qualifier,
+                    isQuoted: identifier.qualifierIsQuoted,
                     from: scopeIndex,
                     analysis: analysis,
                     scopeSources: scopeSources
@@ -922,6 +923,7 @@ public enum SQLSchemaValidator {
         if let qualifier = identifier.qualifier {
             guard let source = resolveSource(
                 qualifier,
+                isQuoted: identifier.qualifierIsQuoted,
                 from: scopeIndex,
                 analysis: analysis,
                 scopeSources: scopeSources
@@ -1559,6 +1561,7 @@ public enum SQLSchemaValidator {
             return .date
         case
             "clock_timestamp",
+            "current_time",
             "current_timestamp",
             "localtime",
             "localtimestamp",
@@ -1733,6 +1736,17 @@ public enum SQLSchemaValidator {
         guard let relations, !relations.isEmpty else { return nil }
         var columns = Set<SQLDerivedColumn>()
         for relation in relations {
+            if let relationColumns = relation.derivedColumns {
+                columns.formUnion(relationColumns)
+                continue
+            }
+            if let nestedColumns = derivedColumns(
+                from: relation.derivedOutputRelations,
+                schemaIndex: schemaIndex
+            ) {
+                columns.formUnion(nestedColumns)
+                continue
+            }
             guard let table = schemaIndex.resolve(relation) else { return nil }
             for column in table.columns {
                 columns.insert(
@@ -1762,6 +1776,7 @@ public enum SQLSchemaValidator {
 
 private struct IdentifierExpression: Equatable {
     var qualifier: String?
+    var qualifierIsQuoted: Bool
     var name: String
     var isQuoted: Bool
 
@@ -1778,8 +1793,10 @@ private struct IdentifierExpression: Equatable {
         self.isQuoted = last.isQuoted
         if parts.count > 1 {
             self.qualifier = parts.dropLast().map(\.value).joined(separator: ".")
+            self.qualifierIsQuoted = parts.dropLast().contains { $0.isQuoted }
         } else {
             self.qualifier = nil
+            self.qualifierIsQuoted = false
         }
     }
 }

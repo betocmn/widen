@@ -342,6 +342,31 @@ struct SQLSchemaValidatorTests {
         #expect(result.referencedTables == ["public.users"])
     }
 
+    @Test func tableFunctionWithOrdinalityAliasColumnsAreValidated() {
+        let result = SQLSchemaValidator.validate(
+            sql: """
+                SELECT tag.value, tag.ord
+                FROM public.users AS u
+                CROSS JOIN LATERAL jsonb_array_elements_text(u.email)
+                  WITH ORDINALITY AS tag(value, ord)
+                """,
+            against: makeUsersOrdersSchema()
+        )
+
+        #expect(!result.hasDefiniteErrors)
+        #expect(result.referencedTables == ["public.users"])
+    }
+
+    @Test func tableSampleAliasIsParsedAfterClause() {
+        let result = SQLSchemaValidator.validate(
+            sql: "SELECT u.id FROM public.users TABLESAMPLE SYSTEM (1) AS u",
+            against: makeUsersOrdersSchema()
+        )
+
+        #expect(!result.hasDefiniteErrors)
+        #expect(result.referencedTables == ["public.users"])
+    }
+
     @Test func insertDefaultValuesAndConflictSyntaxDoNotBecomeColumns() {
         let defaultValues = SQLSchemaValidator.validate(
             sql: "INSERT INTO public.users DEFAULT VALUES",
@@ -699,6 +724,24 @@ struct SQLSchemaValidatorTests {
         #expect(result.errors.contains { $0.contains("missing") })
     }
 
+    @Test func cteSelectStarFromCteExpandsKnownColumns() {
+        let result = SQLSchemaValidator.validate(
+            sql: """
+                WITH a AS (
+                  SELECT id FROM public.users
+                ),
+                b AS (
+                  SELECT * FROM a
+                )
+                SELECT email FROM b
+                """,
+            against: makeUsersOrdersSchema()
+        )
+
+        #expect(result.hasDefiniteErrors)
+        #expect(result.errors.contains { $0.contains("email") })
+    }
+
     @Test func generatedValidatorCanRepairUnquotedMixedCaseColumns() {
         let repaired = GeneratedSQLValidator.repairQuotedIdentifiers(
             sql:
@@ -739,6 +782,16 @@ struct SQLSchemaValidatorTests {
         #expect(result.hasDefiniteErrors)
         #expect(result.issues.contains { $0.kind == .invalidTemporalComparison })
         #expect(result.errors.first?.contains("NOW() - INTERVAL '7 days'") == true)
+    }
+
+    @Test func quotedAliasTemporalIntervalComparisonIsDefiniteError() {
+        let result = SQLSchemaValidator.validate(
+            sql: #"SELECT "U"."createdAt" FROM public.events AS "U" WHERE "U"."createdAt" >= INTERVAL '7 days'"#,
+            against: makeMixedCaseSchema()
+        )
+
+        #expect(result.hasDefiniteErrors)
+        #expect(result.issues.contains { $0.kind == .invalidTemporalComparison })
     }
 
     @Test func timestampComparedDirectlyToParenthesizedIntervalIsDefiniteError() {
@@ -801,6 +854,15 @@ struct SQLSchemaValidatorTests {
         #expect(!result.hasDefiniteErrors)
     }
 
+    @Test func currentTimeIsBuiltinTemporalValue() {
+        let result = SQLSchemaValidator.validate(
+            sql: "SELECT id FROM public.orders WHERE created_at < CURRENT_TIME",
+            against: makeUsersOrdersSchema()
+        )
+
+        #expect(!result.hasDefiniteErrors)
+    }
+
     @Test func timestampDifferenceCanBeComparedToInterval() {
         let result = SQLSchemaValidator.validate(
             sql: "SELECT id FROM public.jobs WHERE finished_at - started_at > INTERVAL '1 hour'",
@@ -841,6 +903,21 @@ struct SQLSchemaValidatorTests {
     @Test func percentileWithinGroupDoesNotTreatWithinAsColumn() {
         let result = SQLSchemaValidator.validate(
             sql: "SELECT percentile_cont(0.5) WITHIN GROUP (ORDER BY id) FROM public.orders",
+            against: makeUsersOrdersSchema()
+        )
+
+        #expect(!result.hasDefiniteErrors)
+    }
+
+    @Test func postgresExpressionGrammarWordsAreNotColumns() {
+        let result = SQLSchemaValidator.validate(
+            sql: """
+                SELECT email
+                FROM public.users
+                WHERE email SIMILAR TO '%@%'
+                  AND TRIM(BOTH FROM email) <> ''
+                  AND SUBSTRING(email FROM 1 FOR 2) = 'al'
+                """,
             against: makeUsersOrdersSchema()
         )
 

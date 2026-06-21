@@ -1474,6 +1474,39 @@ struct SessionControllerTests {
         #expect(controller.chatVM.messages.last?.role == .assistant)
     }
 
+    @Test func retryFailedWriteUsesGenerationSchema() async {
+        let connectionID = UUID()
+        let (state, dir) = makeState(connectionID: connectionID, connected: true)
+        defer { try? FileManager.default.removeItem(at: dir) }
+        state.schemas[connectionID] = makeSchema(schemas: ["analytics", "public"])
+        var failed = makeGeneration(
+            sql: "UPDATE analytics.users SET id = 9 WHERE id = 1",
+            explanation: "Uses analytics."
+        )
+        failed.generationSchemaName = "analytics"
+        let fixed = makeGeneration(
+            sql: "UPDATE analytics.users SET id = 2 WHERE id = 1",
+            explanation: "Fixed analytics."
+        )
+        let generator = RecordingRepairGenerator(results: [fixed])
+        state.sqlGeneratorOverride = generator
+        let controller = makeController(connectionID: connectionID)
+        controller.chatVM.messages = [
+            ChatMessage(role: .user, text: "bump analytics ids"),
+            ChatMessage(role: .assistant, text: failed.explanation, generation: failed),
+        ]
+        controller.queryVM.setGeneration(
+            failed,
+            schema: state.schemaForGeneration(failed, connectionID: connectionID)
+        )
+
+        await controller.retryFailedWrite(appState: state, failedSQL: failed.sql, error: "boom")
+
+        #expect(generator.schemaNames == ["analytics"])
+        #expect(controller.queryVM.sqlText == fixed.sql)
+        #expect(controller.queryVM.generation?.generationSchemaName == "analytics")
+    }
+
     @Test func autoRetryRefusesAGeneratedWrite() async {
         let connectionID = UUID()
         let (state, dir) = makeState(connectionID: connectionID, connected: true)

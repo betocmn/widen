@@ -729,6 +729,8 @@ public enum SQLReferenceAnalyzer {
             index += 2
         }
 
+        index = skipTableSampleClause(tokens, startingAt: index)
+
         var alias: String?
         var aliasIsQuoted = false
         if tokens[safe: index]?.normalized == "as" {
@@ -779,14 +781,23 @@ public enum SQLReferenceAnalyzer {
             return nil
         }
 
-        let aliasParse = parseOptionalAliasAndColumns(tokens, startingAt: afterArguments)
-        index = aliasParse?.nextIndex ?? afterArguments
+        let ordinality = skipWithOrdinalityClause(tokens, startingAt: afterArguments)
+        let aliasParse = parseOptionalAliasAndColumns(tokens, startingAt: ordinality.index)
+        var derivedColumns = aliasParse?.columns
+        if ordinality.found,
+            var columns = derivedColumns,
+            columns.count == 1
+        {
+            columns.insert(SQLDerivedColumn(name: "ordinality", isQuoted: false))
+            derivedColumns = columns
+        }
+        index = aliasParse?.nextIndex ?? ordinality.index
         return SQLRelationReference(
             name: aliasParse?.alias ?? functionName,
             alias: aliasParse?.alias,
             aliasIsQuoted: aliasParse?.aliasIsQuoted ?? false,
             isDerived: true,
-            derivedColumns: aliasParse?.columns,
+            derivedColumns: derivedColumns,
             startOffset: startOffset
         )
     }
@@ -1076,6 +1087,8 @@ public enum SQLReferenceAnalyzer {
                 || isTypedLiteralPrefix(at: index, tokens: tokens)
                 || isArrayConstructor(at: index, tokens: tokens)
                 || isInsideExtractField(at: index, tokens: tokens)
+                || isPostgreSQLExpressionGrammarWord(at: index, tokens: tokens)
+                || isPostgreSQLRelationGrammarWord(at: index, tokens: tokens)
                 || isOnConflictConstraintName(at: index, tokens: tokens)
                 || isRelationAliasColumn(at: index, tokens: tokens)
                 || tokens[safe: index + 1]?.text == "("
@@ -1284,6 +1297,80 @@ public enum SQLReferenceAnalyzer {
             return false
         }
         return true
+    }
+
+    private static func isPostgreSQLExpressionGrammarWord(at index: Int, tokens: [SQLToken]) -> Bool {
+        guard let token = tokens[safe: index] else { return false }
+        switch token.normalized {
+        case "to":
+            return previousNonCommaIndex(before: index, in: tokens).flatMap { previousIndex in
+                tokens[safe: previousIndex]?.normalized == "similar"
+            } ?? false
+        case "both", "leading", "trailing":
+            return isTrimDirectionWord(at: index, tokens: tokens)
+        case "for":
+            return isSubstringForWord(at: index, tokens: tokens)
+        default:
+            return false
+        }
+    }
+
+    private static func isTrimDirectionWord(at index: Int, tokens: [SQLToken]) -> Bool {
+        guard let group = enclosingGroup(containing: index, tokens: tokens),
+            tokens[safe: group.openIndex - 1]?.normalized == "trim"
+        else {
+            return false
+        }
+        var depth = 0
+        for cursor in (group.openIndex + 1)..<index {
+            if tokens[cursor].text == "(" {
+                depth += 1
+            } else if tokens[cursor].text == ")" {
+                depth = max(0, depth - 1)
+            } else if depth == 0, tokens[cursor].normalized == "from" {
+                return false
+            }
+        }
+        return true
+    }
+
+    private static func isSubstringForWord(at index: Int, tokens: [SQLToken]) -> Bool {
+        guard let group = enclosingGroup(containing: index, tokens: tokens),
+            tokens[safe: group.openIndex - 1]?.normalized == "substring"
+        else {
+            return false
+        }
+        var depth = 0
+        var sawTopLevelFrom = false
+        for cursor in (group.openIndex + 1)..<index {
+            if tokens[cursor].text == "(" {
+                depth += 1
+            } else if tokens[cursor].text == ")" {
+                depth = max(0, depth - 1)
+            } else if depth == 0, tokens[cursor].normalized == "from" {
+                sawTopLevelFrom = true
+            }
+        }
+        return sawTopLevelFrom
+    }
+
+    private static func isPostgreSQLRelationGrammarWord(at index: Int, tokens: [SQLToken]) -> Bool {
+        guard let token = tokens[safe: index],
+            topLevelClause(containing: index, tokens: tokens) == "from"
+        else {
+            return false
+        }
+        if token.normalized == "tablesample" {
+            return true
+        }
+        if token.normalized == "ordinality",
+            previousNonCommaIndex(before: index, in: tokens).flatMap({
+                tokens[safe: $0]?.normalized == "with"
+            }) ?? false
+        {
+            return true
+        }
+        return false
     }
 
     private static func isInsideExtractField(at index: Int, tokens: [SQLToken]) -> Bool {
@@ -1660,6 +1747,40 @@ public enum SQLReferenceAnalyzer {
         return nil
     }
 
+    private static func skipTableSampleClause(_ tokens: [SQLToken], startingAt index: Int) -> Int {
+        guard tokens[safe: index]?.normalized == "tablesample" else { return index }
+        var cursor = index + 1
+        if tokens[safe: cursor]?.isIdentifierLike == true {
+            cursor += 1
+        }
+        if tokens[safe: cursor]?.text == "(",
+            let afterArguments = indexAfterBalancedGroup(tokens, startingAt: cursor)
+        {
+            cursor = afterArguments
+        }
+        if tokens[safe: cursor]?.normalized == "repeatable" {
+            cursor += 1
+            if tokens[safe: cursor]?.text == "(",
+                let afterRepeatable = indexAfterBalancedGroup(tokens, startingAt: cursor)
+            {
+                cursor = afterRepeatable
+            }
+        }
+        return cursor
+    }
+
+    private static func skipWithOrdinalityClause(
+        _ tokens: [SQLToken],
+        startingAt index: Int
+    ) -> (index: Int, found: Bool) {
+        guard tokens[safe: index]?.normalized == "with",
+            tokens[safe: index + 1]?.normalized == "ordinality"
+        else {
+            return (index, false)
+        }
+        return (index + 2, true)
+    }
+
     private static func deduplicated<T: Hashable>(_ values: [T]) -> [T] {
         var seen = Set<T>()
         return values.filter { seen.insert($0).inserted }
@@ -1930,7 +2051,7 @@ struct SQLToken: Equatable, Sendable {
         "update", "delete", "set", "values", "returning", "distinct", "over", "partition",
         "filter", "left", "right", "inner", "outer", "full", "cross", "natural", "lateral", "only",
         "using", "at", "time", "zone", "with", "without", "within", "any", "all",
-        "true", "false", "interval", "current_date", "current_timestamp", "now", "like",
+        "true", "false", "interval", "current_date", "current_time", "current_timestamp", "now", "like",
         "ilike", "similar", "escape", "nulls", "first", "last", "default", "conflict",
         "do", "nothing", "constraint", "rows", "row", "range", "groups", "unbounded",
         "preceding", "current", "following",
