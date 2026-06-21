@@ -1347,6 +1347,30 @@ struct SQLSchemaValidatorTests {
         #expect(enriched.referencedTables == ["public.users"])
     }
 
+    @Test func databaseContextCanDefineUnconstrainedStatusLiteral() {
+        let generation = SQLGenerationResult(
+            sql: "SELECT COUNT(*) FROM public.users WHERE status = 'active'",
+            explanation: "Counts active users.",
+            assumptions: [],
+            referencedTables: [],
+            confidence: 1,
+            riskLevel: .low,
+            needsClarification: false,
+            clarificationQuestion: nil
+        )
+
+        let enriched = GeneratedSQLPostprocessor.enriched(
+            generation,
+            question: "how many active users do we have?",
+            schema: makeUsersUnconstrainedStatusSchema(),
+            databaseContext: "Active users are users whose status is active."
+        )
+
+        #expect(!enriched.needsClarification)
+        #expect(enriched.sql == generation.sql)
+        #expect(enriched.referencedTables == ["public.users"])
+    }
+
     @Test func postprocessorAsksWhenMetricTermIsMissingFromReferencedSchema() {
         let generation = SQLGenerationResult(
             sql: "SELECT tool_a_id, COUNT(*) FROM public.preseason_match_batch GROUP BY tool_a_id",
@@ -1470,6 +1494,31 @@ struct SQLSchemaValidatorTests {
         #expect(enriched.referencedTables == ["public.users"])
     }
 
+    @Test func constrainedLiteralMustMatchExactValue() {
+        let generation = SQLGenerationResult(
+            sql: "SELECT COUNT(*) FROM public.users WHERE status = 'Active'",
+            explanation: "Counts active users.",
+            assumptions: [],
+            referencedTables: [],
+            confidence: 1,
+            riskLevel: .low,
+            needsClarification: false,
+            clarificationQuestion: nil
+        )
+
+        let enriched = GeneratedSQLPostprocessor.enriched(
+            generation,
+            question: "how many active users do we have?",
+            schema: makeUsersStatusSchema(),
+            databaseContext: ""
+        )
+
+        #expect(enriched.needsClarification)
+        #expect(enriched.sql.isEmpty)
+        #expect(enriched.clarificationQuestion?.contains("\"active\"") == true)
+        #expect(enriched.referencedTables == ["public.users"])
+    }
+
     @Test func inventedConstrainedLiteralInMembershipDoesNotDefineBusinessTerm() {
         let inGeneration = SQLGenerationResult(
             sql: "SELECT COUNT(*) FROM public.users WHERE status IN ('churned')",
@@ -1511,6 +1560,39 @@ struct SQLSchemaValidatorTests {
         #expect(anyEnriched.needsClarification)
         #expect(anyEnriched.sql.isEmpty)
         #expect(anyEnriched.clarificationQuestion?.contains("\"churned\"") == true)
+    }
+
+    @Test func unqualifiedConstrainedLiteralUsesResolvedScope() {
+        let generation = SQLGenerationResult(
+            sql: """
+                SELECT COUNT(*)
+                FROM public.users
+                WHERE status = 'active'
+                  AND EXISTS (
+                    SELECT 1
+                    FROM public.orders
+                    WHERE orders.user_id = users.id
+                  )
+                """,
+            explanation: "Counts active users with orders.",
+            assumptions: [],
+            referencedTables: [],
+            confidence: 1,
+            riskLevel: .low,
+            needsClarification: false,
+            clarificationQuestion: nil
+        )
+
+        let enriched = GeneratedSQLPostprocessor.enriched(
+            generation,
+            question: "how many active users have orders?",
+            schema: makeUsersOrdersStatusSchema(),
+            databaseContext: ""
+        )
+
+        #expect(!enriched.needsClarification)
+        #expect(enriched.sql == generation.sql)
+        #expect(enriched.referencedTables == ["public.orders", "public.users"])
     }
 
     @Test func constrainedLiteralMustMatchQualifiedColumnTable() {

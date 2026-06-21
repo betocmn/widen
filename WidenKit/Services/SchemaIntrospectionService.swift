@@ -173,6 +173,8 @@ public struct SchemaIntrospectionService: Sendable {
             || operatorText.contains("!=")
             || operatorText.contains(">=")
             || operatorText.contains("<=")
+            || operatorText.contains(">")
+            || operatorText.contains("<")
             || operatorText.range(of: #"\bnot\b"#, options: .regularExpression) != nil
             || operatorText.contains("!~")
         {

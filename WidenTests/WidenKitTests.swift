@@ -516,6 +516,9 @@ struct SchemaIntrospectionServiceTests {
         let upperBound = SchemaIntrospectionService.checkValueLiterals(
             in: "CHECK (code <= 'Z')"
         )
+        let mixedRange = SchemaIntrospectionService.checkValueLiterals(
+            in: "CHECK (status = 'active' OR status > 'm')"
+        )
 
         #expect(allowed == ["approved", "rejected"])
         #expect(disallowed.isEmpty)
@@ -525,5 +528,6 @@ struct SchemaIntrospectionServiceTests {
         #expect(pattern.isEmpty)
         #expect(lowerBound.isEmpty)
         #expect(upperBound.isEmpty)
+        #expect(mixedRange.isEmpty)
     }
 }
