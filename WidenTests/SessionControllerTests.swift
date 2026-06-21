@@ -201,6 +201,7 @@ struct SessionControllerTests {
     private final class RecordingRepairGenerator: SQLGenerator, @unchecked Sendable {
         private let results: [SQLGenerationResult]
         private(set) var contexts: [SQLGenerationContext] = []
+        private(set) var schemaNames: [String?] = []
 
         init(results: [SQLGenerationResult]) {
             self.results = results
@@ -213,6 +214,7 @@ struct SessionControllerTests {
             config: SQLGenerationConfig
         ) async throws -> SQLGenerationResult {
             contexts.append(context)
+            schemaNames.append(schema.singleSchemaName)
             return results[min(contexts.count - 1, results.count - 1)]
         }
     }
@@ -229,6 +231,29 @@ struct SessionControllerTests {
             contexts.append(context)
             throw AppError.modelGenerationFailed(
                 "OpenRouter is rate-limiting requests. Try again in a moment.")
+        }
+    }
+
+    private final class FirstResultThenFailingGenerator: SQLGenerator, @unchecked Sendable {
+        private let firstResult: SQLGenerationResult
+        private(set) var contexts: [SQLGenerationContext] = []
+
+        init(firstResult: SQLGenerationResult) {
+            self.firstResult = firstResult
+        }
+
+        func generateSQL(
+            question: String,
+            schema: DatabaseSchema,
+            context: SQLGenerationContext,
+            config: SQLGenerationConfig
+        ) async throws -> SQLGenerationResult {
+            contexts.append(context)
+            guard contexts.count == 1 else {
+                throw AppError.modelGenerationFailed(
+                    "OpenRouter is rate-limiting requests. Try again in a moment.")
+            }
+            return firstResult
         }
     }
 
@@ -297,6 +322,28 @@ struct SessionControllerTests {
                     ]
                 )
             ],
+            foreignKeys: []
+        )
+    }
+
+    private func makeSchema(schemas: [String]) -> DatabaseSchema {
+        DatabaseSchema(
+            schemas: schemas.map(SchemaInfo.init(name:)),
+            tables: schemas.map { schema in
+                TableInfo(
+                    schema: schema, name: "users", type: .baseTable,
+                    columns: [
+                        ColumnInfo(
+                            tableSchema: schema,
+                            tableName: "users",
+                            name: "id",
+                            dataType: "integer",
+                            isNullable: false,
+                            ordinalPosition: 1
+                        )
+                    ]
+                )
+            },
             foreignKeys: []
         )
     }
@@ -758,6 +805,50 @@ struct SessionControllerTests {
         #expect(controller.chatVM.messages.map(\.role) == [.user, .assistant, .result])
     }
 
+    @Test func generatedRunRepairUsesGenerationSchema() async {
+        let connectionID = UUID()
+        let (state, dir) = makeState(connectionID: connectionID, connected: true)
+        defer { try? FileManager.default.removeItem(at: dir) }
+        state.schemas[connectionID] = makeSchema(schemas: ["analytics", "public"])
+        var badGeneration = makeGeneration(
+            sql: "SELECT id FROM analytics.bad_table",
+            explanation: "Uses a missing table."
+        )
+        badGeneration.generationSchemaName = "analytics"
+        let fixedGeneration = makeGeneration(
+            sql: "SELECT id FROM analytics.users LIMIT 100",
+            explanation: "Uses the generated schema."
+        )
+        let generator = RecordingRepairGenerator(results: [fixedGeneration])
+        state.sqlGeneratorOverride = generator
+        let recorder = SQLRecorder()
+        let controller = makeController(
+            connectionID: connectionID,
+            executor: BadTableExecutor(recorder: recorder)
+        )
+        controller.chatVM.messages = [
+            ChatMessage(role: .user, text: "show analytics users"),
+            ChatMessage(role: .assistant, text: badGeneration.explanation, generation: badGeneration),
+        ]
+        controller.queryVM.setGeneration(
+            badGeneration,
+            schema: state.schemaForGeneration(badGeneration, connectionID: connectionID)
+        )
+
+        controller.runQuery(appState: state)
+        await waitUntil {
+            !controller.queryVM.isRunning
+                && !controller.chatVM.isGenerating
+                && controller.chatVM.messages.last?.role == .result
+        }
+
+        let statements = await recorder.all()
+        #expect(statements == [badGeneration.sql, fixedGeneration.sql])
+        #expect(generator.schemaNames == ["analytics"])
+        #expect(controller.queryVM.sqlText == fixedGeneration.sql)
+        #expect(controller.queryVM.generation?.generationSchemaName == "analytics")
+    }
+
     @Test func submitRetriesInvalidGeneratedSQLBeforeShowingPreview() async {
         let connectionID = UUID()
         let (state, dir) = makeState(connectionID: connectionID, connected: true)
@@ -788,6 +879,29 @@ struct SessionControllerTests {
         #expect(controller.chatVM.messages.map(\.role) == [.user, .assistant])
         #expect(controller.chatVM.messages[1].text == fixedGeneration.explanation)
         #expect(controller.chatVM.messages[1].generation?.sql == fixedGeneration.sql)
+    }
+
+    @Test func submitKeepsInvalidGeneratedSQLHiddenWhenRepairGeneratorFails() async {
+        let connectionID = UUID()
+        let (state, dir) = makeState(connectionID: connectionID, connected: true)
+        defer { try? FileManager.default.removeItem(at: dir) }
+        state.schemas[connectionID] = makeSchema()
+        let badGeneration = makeGeneration(
+            sql: "SELECT id FROM public.bad_table",
+            explanation: "Uses a missing table."
+        )
+        let generator = FirstResultThenFailingGenerator(firstResult: badGeneration)
+        state.sqlGeneratorOverride = generator
+        let controller = makeController(connectionID: connectionID)
+        controller.chatVM.input = "show users"
+
+        await controller.submit(appState: state)
+
+        #expect(generator.contexts.count == 2)
+        #expect(controller.queryVM.sqlText.isEmpty)
+        #expect(controller.queryVM.generation == nil)
+        #expect(controller.chatVM.messages.map(\.role) == [.user, .error])
+        #expect(controller.chatVM.messages.last?.text.contains("rate-limiting") == true)
     }
 
     @Test func submitRepairForMissingGeneratedColumnForbidsColumnIdentifier() async {

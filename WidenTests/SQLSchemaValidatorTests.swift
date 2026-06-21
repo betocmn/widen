@@ -256,6 +256,21 @@ struct SQLSchemaValidatorTests {
         #expect(result.issues.contains { $0.kind == .ambiguousColumn && $0.identifier == "id" })
     }
 
+    @Test func joinUsingValidatesAgainstRightRelationAfterOnJoin() {
+        let result = SQLSchemaValidator.validate(
+            sql: """
+                SELECT *
+                FROM public.users
+                JOIN public.orders ON orders.user_id = users.id
+                JOIN public.notes USING (id)
+                """,
+            against: makeUsersOrdersNotesSchema()
+        )
+
+        #expect(result.hasDefiniteErrors)
+        #expect(result.errors.contains { $0.contains("JOIN USING column id") })
+    }
+
     @Test func chainedJoinUsingValidatesEachJoinedRelation() {
         let result = SQLSchemaValidator.validate(
             sql: """
@@ -450,6 +465,23 @@ struct SQLSchemaValidatorTests {
 
         #expect(result.hasDefiniteErrors)
         #expect(result.errors.contains { $0.contains("missing") && $0.contains("public.users") })
+    }
+
+    @Test func updateCorrelatedSubqueryCanReferenceTargetAlias() {
+        let result = SQLSchemaValidator.validate(
+            sql: """
+                UPDATE public.users AS u
+                SET email = 'updated@example.com'
+                WHERE EXISTS (
+                    SELECT 1
+                    FROM public.orders AS o
+                    WHERE o.user_id = u.id
+                )
+                """,
+            against: makeUsersOrdersSchema()
+        )
+
+        #expect(!result.hasDefiniteErrors)
     }
 
     @Test func deleteUsingTablesAreRelationSources() {
@@ -941,6 +973,30 @@ struct SQLSchemaValidatorTests {
         #expect(!enriched.needsClarification)
         #expect(enriched.sql == generation.sql)
         #expect(enriched.referencedTables == ["public.orders"])
+    }
+
+    @Test func literalFilterValuesDoNotForceClarification() {
+        let generation = SQLGenerationResult(
+            sql: "SELECT COUNT(*) FROM public.customers WHERE state = 'California'",
+            explanation: "Counts customers in California.",
+            assumptions: [],
+            referencedTables: [],
+            confidence: 1,
+            riskLevel: .low,
+            needsClarification: false,
+            clarificationQuestion: nil
+        )
+
+        let enriched = GeneratedSQLPostprocessor.enriched(
+            generation,
+            question: "How many customers are in California?",
+            schema: makeCustomerStateSchema(),
+            databaseContext: ""
+        )
+
+        #expect(!enriched.needsClarification)
+        #expect(enriched.sql == generation.sql)
+        #expect(enriched.referencedTables == ["public.customers"])
     }
 
     @Test func postprocessorAsksWhenMetricTermIsMissingFromReferencedSchema() {
@@ -1487,6 +1543,30 @@ struct SQLSchemaValidatorTests {
                                     values: ["new", "retained", "churned"]
                                 )
                             ]
+                        )
+                    ]
+                )
+            ],
+            foreignKeys: []
+        )
+    }
+
+    private func makeCustomerStateSchema() -> DatabaseSchema {
+        DatabaseSchema(
+            schemas: [SchemaInfo(name: "public")],
+            tables: [
+                TableInfo(
+                    schema: "public",
+                    name: "customers",
+                    type: .baseTable,
+                    columns: [
+                        ColumnInfo(
+                            tableSchema: "public",
+                            tableName: "customers",
+                            name: "state",
+                            dataType: "text",
+                            isNullable: false,
+                            ordinalPosition: 1
                         )
                     ]
                 )

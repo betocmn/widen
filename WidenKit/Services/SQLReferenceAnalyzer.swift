@@ -17,6 +17,7 @@ public struct SQLRelationReference: Equatable, Hashable, Sendable {
     public var role: Role
     public var isDerived: Bool
     public var derivedColumns: Set<SQLDerivedColumn>?
+    public var startOffset: Int?
 
     public init(
         schema: String? = nil,
@@ -27,7 +28,8 @@ public struct SQLRelationReference: Equatable, Hashable, Sendable {
         aliasIsQuoted: Bool = false,
         role: Role = .source,
         isDerived: Bool = false,
-        derivedColumns: Set<SQLDerivedColumn>? = nil
+        derivedColumns: Set<SQLDerivedColumn>? = nil,
+        startOffset: Int? = nil
     ) {
         self.schema = schema
         self.name = name
@@ -38,6 +40,7 @@ public struct SQLRelationReference: Equatable, Hashable, Sendable {
         self.role = role
         self.isDerived = isDerived
         self.derivedColumns = derivedColumns
+        self.startOffset = startOffset
     }
 
     public var displayName: String {
@@ -355,6 +358,7 @@ public enum SQLReferenceAnalyzer {
 
         var index = 0
         var foundTopLevelSelect = false
+        let shouldDeferNestedSubqueryScopes = startsWithWriteStatement(tokens)
         while index < tokens.count {
             let token = tokens[index]
             if token.text == "(" {
@@ -363,7 +367,7 @@ public enum SQLReferenceAnalyzer {
                     return
                 }
                 let innerTokens = Array(tokens[(index + 1)..<(afterGroup - 1)])
-                if containsTopLevelSelect(innerTokens) {
+                if containsTopLevelSelect(innerTokens), !shouldDeferNestedSubqueryScopes {
                     parseScopes(
                         innerTokens,
                         cteNames: cteNames,
@@ -463,6 +467,7 @@ public enum SQLReferenceAnalyzer {
                 outputAliases: outputAliases,
                 skipNestedSubqueries: true
             )
+            let scopeIndex = scopes.count
             scopes.append(
                 SQLReferenceScope(
                     relations: relations,
@@ -470,7 +475,22 @@ public enum SQLReferenceAnalyzer {
                     outputAliases: outputAliases,
                     parentIndex: parentIndex
                 ))
+            parseNestedSubqueryScopes(
+                tokens,
+                cteNames: cteNames,
+                cteOutputColumns: &cteOutputColumns,
+                parentIndex: scopeIndex,
+                scopes: &scopes,
+                incomplete: &incomplete
+            )
         }
+    }
+
+    private static func startsWithWriteStatement(_ tokens: [SQLToken]) -> Bool {
+        guard let first = tokens.first(where: { $0.isIdentifierLike })?.normalized else {
+            return false
+        }
+        return first == "insert" || first == "update" || first == "delete"
     }
 
     private static func parseNestedSubqueryScopes(
@@ -582,6 +602,7 @@ public enum SQLReferenceAnalyzer {
                         index += 1
                     }
                     if tokens[safe: index]?.text == "(" {
+                        let relationStartOffset = tokens[safe: index]?.startOffset
                         if let afterGroup = indexAfterBalancedGroup(tokens, startingAt: index) {
                             let innerTokens = Array(tokens[(index + 1)..<(afterGroup - 1)])
                             index = afterGroup
@@ -599,7 +620,8 @@ public enum SQLReferenceAnalyzer {
                                         alias: aliasParse?.alias,
                                         aliasIsQuoted: aliasParse?.aliasIsQuoted ?? false,
                                         isDerived: true,
-                                        derivedColumns: aliasParse?.columns ?? inferredColumns
+                                        derivedColumns: aliasParse?.columns ?? inferredColumns,
+                                        startOffset: relationStartOffset
                                     ))
                             }
                         } else {
@@ -654,6 +676,7 @@ public enum SQLReferenceAnalyzer {
 
     private static func parseRelation(at index: inout Int, tokens: [SQLToken]) -> SQLRelationReference? {
         guard let first = tokens[safe: index], first.isIdentifierLike else { return nil }
+        let startOffset = first.startOffset
         var schema: String?
         var name = first.identifierValue
         var schemaIsQuoted = false
@@ -694,7 +717,8 @@ public enum SQLReferenceAnalyzer {
             alias: alias,
             schemaIsQuoted: schemaIsQuoted,
             nameIsQuoted: nameIsQuoted,
-            aliasIsQuoted: aliasIsQuoted
+            aliasIsQuoted: aliasIsQuoted,
+            startOffset: startOffset
         )
     }
 
@@ -703,6 +727,7 @@ public enum SQLReferenceAnalyzer {
         tokens: [SQLToken]
     ) -> SQLRelationReference? {
         guard let first = tokens[safe: index], first.isIdentifierLike else { return nil }
+        let startOffset = first.startOffset
         var functionName = first.identifierValue
         var cursor = index + 1
         if tokens[safe: cursor]?.text == ".",
@@ -725,7 +750,8 @@ public enum SQLReferenceAnalyzer {
             alias: aliasParse?.alias,
             aliasIsQuoted: aliasParse?.aliasIsQuoted ?? false,
             isDerived: true,
-            derivedColumns: aliasParse?.columns
+            derivedColumns: aliasParse?.columns,
+            startOffset: startOffset
         )
     }
 

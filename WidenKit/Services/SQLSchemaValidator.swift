@@ -83,7 +83,12 @@ public enum SQLSchemaValidator {
         var referencedTables: [String] = []
         let upsertTargetSources = analysis.upsertTargetRelations.compactMap { relation in
             schemaIndex.resolve(relation).map {
-                ResolvedRelationSource.table($0, alias: nil, role: relation.role)
+                ResolvedRelationSource.table(
+                    $0,
+                    alias: nil,
+                    role: relation.role,
+                    startOffset: relation.startOffset
+                )
             }
         }
 
@@ -97,7 +102,8 @@ public enum SQLSchemaValidator {
                             alias: relation.alias,
                             aliasIsQuoted: relation.aliasIsQuoted,
                             columns: relation.derivedColumns,
-                            role: relation.role
+                            role: relation.role,
+                            startOffset: relation.startOffset
                         ))
                     continue
                 }
@@ -113,7 +119,8 @@ public enum SQLSchemaValidator {
                             alias: relation.alias,
                             aliasIsQuoted: relation.aliasIsQuoted,
                             columns: analysis.cteOutputColumns[cteName] ?? nil,
-                            role: relation.role
+                            role: relation.role,
+                            startOffset: relation.startOffset
                         ))
                     continue
                 }
@@ -133,7 +140,8 @@ public enum SQLSchemaValidator {
                         table,
                         alias: relation.alias,
                         aliasIsQuoted: relation.aliasIsQuoted,
-                        role: relation.role
+                        role: relation.role,
+                        startOffset: relation.startOffset
                     )
                 )
             }
@@ -408,25 +416,18 @@ public enum SQLSchemaValidator {
             return
         }
 
-        var seenGroups = Set<Int>()
-        let groupOffsets = scope.columns.compactMap { usingColumn -> Int? in
-            guard usingColumn.context == .joinUsing,
-                let offset = usingColumn.joinUsingGroupStartOffset,
-                seenGroups.insert(offset).inserted
-            else {
-                return nil
-            }
-            return offset
-        }
-        guard let groupIndex = groupOffsets.firstIndex(of: groupOffset),
-            sourceRelations.indices.contains(groupIndex + 1)
+        guard let rightSourceIndex = sourceRelations.lastIndex(where: { source in
+            guard let startOffset = source.startOffset else { return false }
+            return startOffset < groupOffset
+        }),
+            rightSourceIndex > sourceRelations.startIndex
         else {
             appendMissingJoinUsingIssue(column: column, issues: &issues)
             return
         }
 
-        let leftSources = sourceRelations.prefix(groupIndex + 1)
-        let rightSource = sourceRelations[groupIndex + 1]
+        let leftSources = sourceRelations.prefix(upTo: rightSourceIndex)
+        let rightSource = sourceRelations[rightSourceIndex]
         let leftContains = leftSources.contains {
             $0.definitelyContainsColumn(column, schemaIndex: schemaIndex) || $0.hasUnknownColumns
         }
@@ -1355,6 +1356,7 @@ public enum GeneratedSQLPostprocessor {
         if !schemaValidation.hasDefiniteErrors,
             let clarification = undefinedRequestTermClarification(
                 question: question,
+                sql: sql,
                 referencedTables: schemaValidation.referencedTables,
                 schema: schema,
                 databaseContext: databaseContext
@@ -1372,6 +1374,7 @@ public enum GeneratedSQLPostprocessor {
 
     private static func undefinedRequestTermClarification(
         question: String,
+        sql: String,
         referencedTables: [String],
         schema: DatabaseSchema,
         databaseContext: String
@@ -1383,9 +1386,13 @@ public enum GeneratedSQLPostprocessor {
         ).union(Set(SchemaIndex.tokens(in: databaseContext)))
 
         let terms = meaningfulRequestWords(question)
+        let literalTokens = literalValueTokens(in: sql)
         let unresolved = terms.filter { word in
             let variants = SchemaIndex.tokens(in: word)
             guard !variants.isEmpty else { return false }
+            if variants.contains(where: literalTokens.contains) {
+                return false
+            }
             return !variants.contains { variant in
                 tokenSet(availableTokens, containsRelatedTo: variant)
             }
@@ -1393,6 +1400,28 @@ public enum GeneratedSQLPostprocessor {
 
         guard let first = unresolved.first else { return nil }
         return "What column, condition, or table defines \"\(first)\" for this question?"
+    }
+
+    private static func literalValueTokens(in sql: String) -> Set<String> {
+        SQLToken.tokenize(sql).reduce(into: Set<String>()) { tokens, token in
+            guard token.kind == .string else { return }
+            tokens.formUnion(SchemaIndex.tokens(in: stringLiteralBody(token.text)))
+        }
+    }
+
+    private static func stringLiteralBody(_ text: String) -> String {
+        if text.hasPrefix("'"), text.hasSuffix("'"), text.count >= 2 {
+            return String(text.dropFirst().dropLast()).replacingOccurrences(of: "''", with: "'")
+        }
+        if text.hasPrefix("$"),
+            let delimiterEnd = text.dropFirst().firstIndex(of: "$")
+        {
+            let delimiter = String(text[...delimiterEnd])
+            if text.hasSuffix(delimiter), text.count >= delimiter.count * 2 {
+                return String(text.dropFirst(delimiter.count).dropLast(delimiter.count))
+            }
+        }
+        return text
     }
 
     private static func referencedSchemaTokens(
@@ -1763,12 +1792,14 @@ private struct ResolvedRelationSource {
     var cteColumns: Set<SQLDerivedColumn>?
     var hasUnknownColumns: Bool
     var role: SQLRelationReference.Role
+    var startOffset: Int?
 
     static func table(
         _ table: TableInfo,
         alias: String?,
         aliasIsQuoted: Bool = false,
-        role: SQLRelationReference.Role = .source
+        role: SQLRelationReference.Role = .source,
+        startOffset: Int? = nil
     ) -> ResolvedRelationSource {
         let unquotedNames: Set<String>
         let quotedNames: Set<String>
@@ -1789,7 +1820,8 @@ private struct ResolvedRelationSource {
             table: table,
             cteColumns: nil,
             hasUnknownColumns: false,
-            role: role
+            role: role,
+            startOffset: startOffset
         )
     }
 
@@ -1799,7 +1831,8 @@ private struct ResolvedRelationSource {
         alias: String?,
         aliasIsQuoted: Bool = false,
         columns: Set<SQLDerivedColumn>?,
-        role: SQLRelationReference.Role = .source
+        role: SQLRelationReference.Role = .source,
+        startOffset: Int? = nil
     ) -> ResolvedRelationSource {
         let unquotedNames: Set<String>
         let quotedNames: Set<String>
@@ -1823,7 +1856,8 @@ private struct ResolvedRelationSource {
             table: nil,
             cteColumns: columns,
             hasUnknownColumns: columns == nil,
-            role: role
+            role: role,
+            startOffset: startOffset
         )
     }
 

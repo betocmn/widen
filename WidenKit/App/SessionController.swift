@@ -373,12 +373,16 @@ public final class SessionController: Identifiable {
         }
 
         func restoreStartingGeneration(schema: DatabaseSchema? = nil) {
+            guard mode != .validationOnly else { return }
             guard let startingGeneration else { return }
             replaceOrAppendAssistantGeneration(startingGeneration, replacingSQL: startingSQL)
             queryVM.setGeneration(startingGeneration, schema: schema)
         }
 
-        guard let schema = appState.promptSchema(for: connectionID), !schema.tables.isEmpty else {
+        let repairSchema =
+            appState.schemaForGeneration(startingGeneration, connectionID: connectionID)
+            ?? appState.promptSchema(for: connectionID)
+        guard let schema = repairSchema, !schema.tables.isEmpty else {
             restoreStartingGeneration()
             chatVM.appendRunError(
                 "I could not retry because the database schema is no longer available."
@@ -677,6 +681,10 @@ public final class SessionController: Identifiable {
             mode == .validationOnly
             ? "it still failed validation"
             : "the database still rejected it"
+        let recoveryGuidance =
+            mode == .validationOnly
+            ? "The rejected SQL was not shown in the editor. Add more context in chat so the model can adjust it, or switch to a smarter cloud model and try again."
+            : "The SQL shown above was restored to the last valid or original generation. Add more context in chat so the model can adjust it, or switch to a smarter cloud model and try again."
         return """
             I tried a focused repair and, when needed, one reconstruction, but \(failureReason).
 
@@ -685,7 +693,7 @@ public final class SessionController: Identifiable {
             Errors seen:
             \(history)
 
-            The SQL shown above was restored to the last valid or original generation. Add more context in chat so the model can adjust it, or switch to a smarter cloud model and try again.
+            \(recoveryGuidance)
             """
     }
 
