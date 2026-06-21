@@ -1062,6 +1062,28 @@ struct SQLSchemaValidatorTests {
         #expect(!result.hasDefiniteErrors)
     }
 
+    @Test func fetchNextWithTiesClauseIsNotAColumnReference() {
+        let result = SQLSchemaValidator.validate(
+            sql: "SELECT id FROM public.orders ORDER BY created_at FETCH NEXT 10 ROWS WITH TIES",
+            against: makeUsersOrdersSchema()
+        )
+
+        #expect(!result.hasDefiniteErrors)
+    }
+
+    @Test func groupingSetsClauseIsNotAColumnReference() {
+        let result = SQLSchemaValidator.validate(
+            sql: """
+                SELECT user_id, COUNT(*)
+                FROM public.orders
+                GROUP BY GROUPING SETS ((user_id), ())
+                """,
+            against: makeUsersOrdersSchema()
+        )
+
+        #expect(!result.hasDefiniteErrors)
+    }
+
     @Test func intervalColumnComparisonIgnoresNestedTimestampWithSameName() {
         let result = SQLSchemaValidator.validate(
             sql: """

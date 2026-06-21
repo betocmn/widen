@@ -404,6 +404,8 @@ public final class SessionController: Identifiable {
         )
         let postgres = appState.postgres(for: connectionID)
         let firstDiagnostic = firstFailure?.diagnostic ?? Self.diagnostic(from: firstError)
+        let allowRepairWrites =
+            mode == .validationOnly && SQLSafetyValidator.validate(startingSQL).kind.isWrite
         let forbiddenIdentifiers = Self.forbiddenIdentifiers(
             sql: startingSQL,
             error: firstError,
@@ -468,7 +470,7 @@ public final class SessionController: Identifiable {
                 generation,
                 mode: repairMode,
                 schema: schema,
-                allowWrites: mode == .validationOnly
+                allowWrites: allowRepairWrites
             )
 
             switch evaluation.outcome {
@@ -787,7 +789,8 @@ public final class SessionController: Identifiable {
                 kind: .missingRelation,
                 sqlState: "42P01",
                 message: error,
-                tableName: quotedIdentifiers(in: error).first
+                tableName: missingRelationIdentifier(in: error)
+                    ?? quotedIdentifiers(in: error).first
             )
         }
         if lowercased.contains("column"), lowercased.contains("does not exist") {
@@ -842,20 +845,36 @@ public final class SessionController: Identifiable {
                 .map { canonicalIdentifier($0.identifier) }
         )
         var identifiers = schemaValidationIdentifiers(in: error)
-        if let diagnostic = suppliedDiagnostic ?? diagnostic(from: error) {
-            if let identifier = diagnostic.identifierForRepair {
+        let parsedDiagnostic = diagnostic(from: error)
+        if let diagnostic = suppliedDiagnostic ?? parsedDiagnostic {
+            if let identifier = repairIdentifier(
+                for: diagnostic,
+                parsedFromError: parsedDiagnostic,
+                fallbackError: error
+            ) {
                 if !unquotedOnly.contains(canonicalIdentifier(identifier)) {
                     identifiers.append(identifier)
                 }
-            }
-            if identifiers.isEmpty, diagnostic.kind == .missingRelation {
-                identifiers.append(contentsOf: SchemaRelevanceRanker.extractRelationLikeIdentifiers(from: sql))
             }
         }
         var seen = Set<String>()
         return identifiers
             .filter { shouldForbidIdentifier($0, sql: sql, schema: schema) }
             .filter { seen.insert($0).inserted }
+    }
+
+    private static func repairIdentifier(
+        for diagnostic: DatabaseDiagnostic,
+        parsedFromError: DatabaseDiagnostic?,
+        fallbackError: String
+    ) -> String? {
+        if let identifier = diagnostic.identifierForRepair {
+            return identifier
+        }
+        guard diagnostic.kind == .missingRelation else { return nil }
+        return parsedFromError?.identifierForRepair
+            ?? missingRelationIdentifier(in: diagnostic.displayMessage)
+            ?? missingRelationIdentifier(in: fallbackError)
     }
 
     private static func repairConstraints(
@@ -998,6 +1017,13 @@ public final class SessionController: Identifiable {
             guard let matchRange = Range(match.range(at: 1), in: text) else { return nil }
             return String(text[matchRange])
         }
+    }
+
+    private static func missingRelationIdentifier(in text: String) -> String? {
+        firstCapturedValue(
+            in: text,
+            pattern: #"(?i)\brelation\s+"([^"]+)"\s+does\s+not\s+exist"#
+        )
     }
 
     private static func canonicalIdentifier(_ identifier: String) -> String {

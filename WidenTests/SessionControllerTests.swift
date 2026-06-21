@@ -171,6 +171,35 @@ struct SessionControllerTests {
         }
     }
 
+    private struct MissingRelationExecutor: QueryExecuting {
+        let recorder: SQLRecorder
+        let relation: String
+
+        func run(
+            sql: String,
+            config: DatabaseConnectionConfig,
+            postgres: PostgresService
+        ) async throws -> QueryResult {
+            await recorder.record(sql)
+            if sql.contains(relation) {
+                throw AppError.databaseFailed(
+                    DatabaseDiagnostic(
+                        kind: .missingRelation,
+                        sqlState: "42P01",
+                        message: "relation \"\(relation)\" does not exist"
+                    )
+                )
+            }
+            return QueryResult(
+                columns: ["id"],
+                rows: [["1"]],
+                rowCount: 1,
+                truncated: false,
+                executionTimeMs: 5
+            )
+        }
+    }
+
     /// Records whether the read or write path was used, and always fails — so
     /// tests can assert which executor method ran without a real database.
     private struct FailingWriteExecutor: QueryExecuting {
@@ -990,6 +1019,34 @@ struct SessionControllerTests {
         #expect(controller.chatVM.messages.map(\.role) == [.user, .assistant])
     }
 
+    @Test func submitValidationRepairRejectsWriteForGeneratedRead() async {
+        let connectionID = UUID()
+        let (state, dir) = makeState(connectionID: connectionID, connected: true)
+        defer { try? FileManager.default.removeItem(at: dir) }
+        state.schemas[connectionID] = makeSchema()
+        let badRead = makeGeneration(
+            sql: "SELECT missing FROM public.users",
+            explanation: "Uses a missing column."
+        )
+        let writeAttempt = makeGeneration(
+            sql: "INSERT INTO public.users (id) VALUES (1)",
+            explanation: "Attempts to write instead."
+        )
+        let generator = RecordingRepairGenerator(results: [badRead, writeAttempt])
+        state.sqlGeneratorOverride = generator
+        let controller = makeController(connectionID: connectionID)
+        controller.chatVM.input = "show users"
+
+        await controller.submit(appState: state)
+
+        #expect(generator.contexts.count == 2)
+        #expect(generator.contexts[1].mode == .repair)
+        #expect(controller.queryVM.sqlText.isEmpty)
+        #expect(controller.queryVM.generation == nil)
+        #expect(controller.chatVM.messages.map(\.role) == [.user, .error])
+        #expect(controller.chatVM.messages.last?.text.contains("data-modifying query") == true)
+    }
+
     @Test func submitRepairForJoinableMissingColumnDoesNotForbidColumnIdentifier() async {
         let connectionID = UUID()
         let (state, dir) = makeState(connectionID: connectionID, connected: true)
@@ -1176,6 +1233,45 @@ struct SessionControllerTests {
         #expect(controller.chatVM.messages.last?.text.contains("Last error:") == true)
         #expect(controller.chatVM.messages.last?.text.contains("repeated SQL") == true)
         #expect(controller.chatVM.messages.last?.text.contains("smarter cloud model") == true)
+    }
+
+    @Test func generatedRunErrorForbidsOnlyMissingRelationFromDiagnosticMessage() async {
+        let connectionID = UUID()
+        let (state, dir) = makeState(connectionID: connectionID, connected: true)
+        defer { try? FileManager.default.removeItem(at: dir) }
+        state.schemas[connectionID] = makeSchema()
+        let badGeneration = makeGeneration(
+            sql: """
+                SELECT users.id
+                FROM public.users
+                JOIN public.bad_orders ON bad_orders.user_id = users.id
+                """
+        )
+        let fixedGeneration = makeGeneration(sql: "SELECT id FROM public.users LIMIT 100")
+        let generator = RecordingRepairGenerator(results: [fixedGeneration])
+        state.sqlGeneratorOverride = generator
+        let recorder = SQLRecorder()
+        let controller = makeController(
+            connectionID: connectionID,
+            executor: MissingRelationExecutor(recorder: recorder, relation: "public.bad_orders")
+        )
+        controller.chatVM.messages = [
+            ChatMessage(role: .user, text: "show users with orders"),
+            ChatMessage(role: .assistant, text: badGeneration.explanation, generation: badGeneration),
+        ]
+        controller.queryVM.setGeneration(badGeneration)
+
+        controller.runQuery(appState: state)
+        await waitUntil {
+            !controller.queryVM.isRunning
+                && !controller.chatVM.isGenerating
+                && controller.chatVM.messages.last?.role == .result
+        }
+
+        let forbiddenIdentifiers = generator.contexts[0].repairContext?.forbiddenIdentifiers ?? []
+        #expect(forbiddenIdentifiers.contains("public.bad_orders"))
+        #expect(!forbiddenIdentifiers.contains("public.users"))
+        #expect(controller.queryVM.sqlText == fixedGeneration.sql)
     }
 
     @Test func generatedRunErrorDoesNotReexecuteAnyPriorFailedSQL() async {

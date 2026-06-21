@@ -2271,7 +2271,8 @@ struct SQLToken: Equatable, Sendable {
         "true", "false", "interval", "current_date", "current_time", "current_timestamp", "now", "like",
         "ilike", "similar", "escape", "nulls", "first", "last", "default", "conflict",
         "do", "nothing", "constraint", "window", "rows", "row", "range", "groups", "unbounded",
-        "preceding", "current", "following", "fetch",
+        "preceding", "current", "following", "fetch", "next", "ties", "grouping", "sets", "cube",
+        "rollup",
     ]
 }
 
