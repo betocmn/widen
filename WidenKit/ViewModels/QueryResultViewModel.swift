@@ -4,6 +4,7 @@ import Observation
 struct QueryExecutionAttempt {
     var result: QueryResult?
     var errorMessage: String?
+    var failure: QueryFailure?
     var wasDiscarded = false
     var wasUnsafeWrite = false
 }
@@ -18,10 +19,12 @@ public final class QueryResultViewModel {
 
     public var sqlText = ""
     public private(set) var validation: SQLValidationResult?
+    public private(set) var schemaValidation: SQLSchemaValidationResult?
     public private(set) var result: QueryResult?
     public private(set) var isRunning = false
     public private(set) var canStopWaiting = false
     public private(set) var runError: String?
+    public private(set) var runFailure: QueryFailure?
     /// Metadata of the last model generation that filled the editor.
     public private(set) var generation: SQLGenerationResult?
 
@@ -32,6 +35,7 @@ public final class QueryResultViewModel {
     private var onFinish: RunCompletion?
     private var onAttemptFinish: ((QueryExecutionAttempt) -> Void)?
     private let executor: any QueryExecuting
+    private var requiresSchemaValidationOnRun = false
 
     public init() {
         self.executor = QueryExecutionService()
@@ -41,8 +45,23 @@ public final class QueryResultViewModel {
         self.executor = executor
     }
 
-    public func validate() {
-        validation = SQLSafetyValidator.validate(sqlText)
+    public func validate(schema: DatabaseSchema? = nil) {
+        let safety = SQLSafetyValidator.validate(sqlText)
+        schemaValidation = nil
+        guard let schema,
+            safety.isValid,
+            !sqlText.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+        else {
+            validation = safety
+            return
+        }
+
+        let schemaValidation = SQLSchemaValidator.validate(sql: sqlText, against: schema)
+        self.schemaValidation = schemaValidation
+        validation = GeneratedSQLValidator.combine(
+            safety: safety,
+            schemaValidation: schemaValidation
+        )
     }
 
     /// Starts the query in a cancellable task. Cancellation only stops the app
@@ -55,12 +74,14 @@ public final class QueryResultViewModel {
         postgres: PostgresService,
         isConnected: Bool,
         confirmed: Bool = false,
+        schema: DatabaseSchema? = nil,
         onFinish: RunCompletion? = nil
     ) {
         // The guard must precede storing the callback, so a rejected start
         // never clobbers the completion of the run already in flight.
         guard !isRunning else { return }
         let runSQL = sqlText
+        let runSchema = requiresSchemaValidationOnRun ? schema : nil
         self.onFinish = onFinish
         nextRunID += 1
         let runID = nextRunID
@@ -69,12 +90,13 @@ public final class QueryResultViewModel {
         canStopWaiting = true
         result = nil
         runError = nil
+        runFailure = nil
         isRunning = true
         runTask = Task {
             await run(
                 sql: runSQL,
                 connection: connection, postgres: postgres,
-                isConnected: isConnected, runID: runID, confirmed: confirmed)
+                isConnected: isConnected, runID: runID, confirmed: confirmed, schema: runSchema)
         }
     }
 
@@ -100,12 +122,13 @@ public final class QueryResultViewModel {
             isRunning = false
             if reportError {
                 runError = Self.stoppedWaitingMessage
+                runFailure = QueryFailure(message: Self.stoppedWaitingMessage)
             }
         }
         if shouldFire {
             if runKind == .generatedSQLAttempt {
                 fireAttemptCompletion(
-                    QueryExecutionAttempt(result: nil, errorMessage: runError)
+                    QueryExecutionAttempt(result: nil, errorMessage: runError, failure: runFailure)
                 )
             } else {
                 fireCompletion()
@@ -126,20 +149,25 @@ public final class QueryResultViewModel {
         guard discardActiveRun() else { return false }
         sqlText = ""
         validation = nil
+        schemaValidation = nil
         result = nil
         runError = nil
+        runFailure = nil
         generation = nil
+        requiresSchemaValidationOnRun = false
         return true
     }
 
     /// Called by the chat flow when the model fills the editor. The generated
     /// SQL is validated immediately so the user sees its status before Run.
-    public func setGeneration(_ generation: SQLGenerationResult) {
+    public func setGeneration(_ generation: SQLGenerationResult, schema: DatabaseSchema? = nil) {
         self.generation = generation
+        requiresSchemaValidationOnRun = schema != nil
         sqlText = generation.sql
         result = nil
         runError = nil
-        validate()
+        runFailure = nil
+        validate(schema: schema)
     }
 
     /// Fills the editor with SQL the user typed directly — no generation
@@ -147,21 +175,30 @@ public final class QueryResultViewModel {
     public func setDirectSQL(_ sql: String) {
         sqlText = sql
         generation = nil
+        requiresSchemaValidationOnRun = false
         result = nil
         runError = nil
+        runFailure = nil
         validate()
     }
 
     /// Restores persisted editor state when a session is rehydrated. Unlike
     /// `setGeneration`, this never treats the SQL as a fresh generation.
-    public func restore(sqlText: String, generation: SQLGenerationResult?) {
+    public func restore(
+        sqlText: String,
+        generation: SQLGenerationResult?,
+        schema: DatabaseSchema? = nil
+    ) {
         self.sqlText = sqlText
         self.generation = generation
+        requiresSchemaValidationOnRun = generation != nil
         result = nil
         runError = nil
+        runFailure = nil
         validation = nil
+        schemaValidation = nil
         if !sqlText.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
-            validate()
+            validate(schema: generation == nil ? nil : schema)
         }
     }
 
@@ -172,35 +209,49 @@ public final class QueryResultViewModel {
         sql: String,
         connection: DatabaseConnectionConfig?,
         postgres: PostgresService,
-        isConnected: Bool
+        isConnected: Bool,
+        schema: DatabaseSchema? = nil
     ) async -> QueryExecutionAttempt {
-        let validation = SQLSafetyValidator.validate(sql)
+        let safety = SQLSafetyValidator.validate(sql)
+        let validation =
+            schema.map { GeneratedSQLValidator.validate(sql: sql, schema: $0) }
+            ?? safety
         guard validation.isValid else {
+            let failure = Self.failure(from: AppError.validationFailed(validation.errors))
             return QueryExecutionAttempt(
                 result: nil,
-                errorMessage: AppError.validationFailed(validation.errors).localizedDescription
+                errorMessage: failure.message,
+                failure: failure
             )
         }
         // Hard invariant: the auto-retry path never executes a write. If the
         // model produced one, stop here so it never reaches the database.
         guard !validation.kind.isWrite else {
+            let failure = QueryFailure(
+                message:
+                    "The model produced a data-modifying query while repairing a read, so I stopped before showing it."
+            )
             return QueryExecutionAttempt(
                 result: nil,
-                errorMessage:
-                    "The model produced a data-modifying query while repairing a read, so I stopped before showing it.",
+                errorMessage: failure.message,
+                failure: failure,
                 wasUnsafeWrite: true
             )
         }
         guard isConnected, let config = connection else {
+            let failure = Self.failure(from: AppError.notConnected)
             return QueryExecutionAttempt(
                 result: nil,
-                errorMessage: AppError.notConnected.errorDescription
+                errorMessage: failure.message,
+                failure: failure
             )
         }
         guard !isRunning else {
+            let failure = QueryFailure(message: "A query is already running.")
             return QueryExecutionAttempt(
                 result: nil,
-                errorMessage: "A query is already running."
+                errorMessage: failure.message,
+                failure: failure
             )
         }
 
@@ -229,6 +280,7 @@ public final class QueryResultViewModel {
         onAttemptFinish = onFinish
         result = nil
         runError = nil
+        runFailure = nil
         isRunning = true
         runTask = Task {
             await runGeneratedSQLAttempt(sql: sql, config: config, postgres: postgres, runID: runID)
@@ -241,20 +293,40 @@ public final class QueryResultViewModel {
         postgres: PostgresService,
         isConnected: Bool,
         runID: Int,
-        confirmed: Bool
+        confirmed: Bool,
+        schema: DatabaseSchema?
     ) async {
-        validation = SQLSafetyValidator.validate(sql)
+        let safety = SQLSafetyValidator.validate(sql)
+        if let schema,
+            safety.isValid,
+            !sql.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+        {
+            let schemaValidation = SQLSchemaValidator.validate(sql: sql, against: schema)
+            self.schemaValidation = schemaValidation
+            validation = GeneratedSQLValidator.combine(
+                safety: safety,
+                schemaValidation: schemaValidation
+            )
+        } else {
+            validation = safety
+            schemaValidation = nil
+        }
+        runFailure = nil
         guard let validation, validation.isValid else {
             if isActiveRun(runID) {
                 let errors = validation?.errors ?? ["SQL is invalid."]
-                runError = AppError.validationFailed(errors).localizedDescription
+                let failure = Self.failure(from: AppError.validationFailed(errors))
+                runError = failure.message
+                runFailure = failure
             }
             finishRun(runID)
             return
         }
         guard isConnected, let config = connection else {
             if isActiveRun(runID) {
-                runError = AppError.notConnected.errorDescription
+                let failure = Self.failure(from: AppError.notConnected)
+                runError = failure.message
+                runFailure = failure
             }
             finishRun(runID)
             return
@@ -281,14 +353,19 @@ public final class QueryResultViewModel {
                 )
             if isActiveRun(runID) {
                 result = newResult
+                runFailure = nil
             }
         } catch is CancellationError {
             if isActiveRun(runID) {
-                runError = Self.stoppedWaitingMessage
+                let failure = QueryFailure(message: Self.stoppedWaitingMessage)
+                runError = failure.message
+                runFailure = failure
             }
         } catch {
             if isActiveRun(runID) {
-                runError = error.localizedDescription
+                let failure = Self.failure(from: error)
+                runError = failure.message
+                runFailure = failure
             }
         }
         finishRun(runID)
@@ -309,12 +386,15 @@ public final class QueryResultViewModel {
             )
             attempt = QueryExecutionAttempt(result: newResult, errorMessage: nil)
         } catch is CancellationError {
+            let failure = QueryFailure(message: Self.stoppedWaitingMessage)
             attempt = QueryExecutionAttempt(
                 result: nil,
-                errorMessage: Self.stoppedWaitingMessage
+                errorMessage: failure.message,
+                failure: failure
             )
         } catch {
-            attempt = QueryExecutionAttempt(result: nil, errorMessage: error.localizedDescription)
+            let failure = Self.failure(from: error)
+            attempt = QueryExecutionAttempt(result: nil, errorMessage: failure.message, failure: failure)
         }
         finishGeneratedSQLAttempt(runID, attempt: attempt)
     }
@@ -337,6 +417,7 @@ public final class QueryResultViewModel {
         guard isActiveRun(runID) else { return }
         result = attempt.result
         runError = attempt.errorMessage
+        runFailure = attempt.failure
         isRunning = false
         runTask = nil
         activeRunID = nil
@@ -362,6 +443,17 @@ public final class QueryResultViewModel {
 
     private static let stoppedWaitingMessage =
         "Stopped waiting for the query. The server may still finish it in the background."
+
+    private static func failure(from error: any Error) -> QueryFailure {
+        if let appError = error as? AppError {
+            return QueryFailure(
+                message: appError.errorDescription ?? appError.localizedDescription,
+                diagnostic: appError.databaseDiagnostic
+            )
+        }
+        return QueryFailure(message: error.localizedDescription)
+    }
+
 }
 
 private enum ActiveRunKind {

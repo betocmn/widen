@@ -7,7 +7,7 @@ public struct MockConnectionDetailsParser: ConnectionDetailsParsing {
     public init() {}
 
     public func parse(_ text: String) async throws -> ParsedConnectionDetails {
-        // A pasted URL is parsed deterministically and wins over the
+        // A pasted URL is parsed deterministically and takes precedence over the
         // KEY=VALUE scan, matching the on-device parser's merge.
         let keyValues = Self.details(fromKeyValues: text)
         if let url = ConnectionURLParser.details(in: text) {

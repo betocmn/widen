@@ -240,6 +240,73 @@ struct QueryResultViewModelTests {
         #expect(viewModel.validation?.isValid == true)
     }
 
+    @Test func restoredGeneratedSQLRevalidatesAgainstSchemaBeforeRun() async {
+        let recorder = SQLRecorder()
+        let viewModel = QueryResultViewModel(executor: RecordingExecutor(recorder: recorder))
+        let generation = SQLGenerationResult(
+            sql: "SELECT id FROM public.missing_users",
+            explanation: "Shows users.",
+            assumptions: [],
+            referencedTables: [],
+            confidence: 1.0,
+            riskLevel: .low,
+            needsClarification: false,
+            clarificationQuestion: nil
+        )
+        let schema = makeSchema()
+
+        viewModel.restore(sqlText: generation.sql, generation: generation, schema: schema)
+        viewModel.startRun(
+            connection: DatabaseConnectionConfig(),
+            postgres: PostgresService(),
+            isConnected: true,
+            schema: schema
+        )
+        await waitUntil { !viewModel.isRunning }
+        let statements = await recorder.all()
+
+        #expect(viewModel.validation?.isValid == false)
+        #expect(viewModel.schemaValidation?.hasDefiniteErrors == true)
+        #expect(viewModel.runError?.contains("table public.missing_users") == true)
+        #expect(statements.isEmpty)
+    }
+
+    @Test func freshGeneratedSQLRevalidatesAgainstSchemaBeforeRun() async {
+        let recorder = SQLRecorder()
+        let viewModel = QueryResultViewModel(executor: RecordingExecutor(recorder: recorder))
+        let generation = SQLGenerationResult(
+            sql: "SELECT id FROM public.users",
+            explanation: "Shows users.",
+            assumptions: [],
+            referencedTables: ["public.users"],
+            confidence: 1.0,
+            riskLevel: .low,
+            needsClarification: false,
+            clarificationQuestion: nil
+        )
+        let initialSchema = makeSchema()
+        let refreshedSchema = DatabaseSchema(
+            schemas: [SchemaInfo(name: "public")],
+            tables: [],
+            foreignKeys: []
+        )
+
+        viewModel.setGeneration(generation, schema: initialSchema)
+        viewModel.startRun(
+            connection: DatabaseConnectionConfig(),
+            postgres: PostgresService(),
+            isConnected: true,
+            schema: refreshedSchema
+        )
+        await waitUntil { !viewModel.isRunning }
+        let statements = await recorder.all()
+
+        #expect(viewModel.validation?.isValid == false)
+        #expect(viewModel.schemaValidation?.hasDefiniteErrors == true)
+        #expect(viewModel.runError?.contains("table public.users") == true)
+        #expect(statements.isEmpty)
+    }
+
     @Test func cancelRunReleasesRunningStateImmediately() async {
         let viewModel = QueryResultViewModel(executor: SlowExecutor())
         viewModel.sqlText = "SELECT 1"
@@ -366,6 +433,30 @@ struct QueryResultViewModelTests {
         }
         Issue.record("Timed out waiting for condition")
     }
+
+    private func makeSchema() -> DatabaseSchema {
+        DatabaseSchema(
+            schemas: [SchemaInfo(name: "public")],
+            tables: [
+                TableInfo(
+                    schema: "public",
+                    name: "users",
+                    type: .baseTable,
+                    columns: [
+                        ColumnInfo(
+                            tableSchema: "public",
+                            tableName: "users",
+                            name: "id",
+                            dataType: "integer",
+                            isNullable: false,
+                            ordinalPosition: 1
+                        )
+                    ]
+                )
+            ],
+            foreignKeys: []
+        )
+    }
 }
 
 @Suite("SchemaIntrospectionService")
@@ -382,6 +473,8 @@ struct SchemaIntrospectionServiceTests {
         let snippets = [
             SchemaIntrospectionService.tablesSQL,
             SchemaIntrospectionService.columnsSQL,
+            SchemaIntrospectionService.enumValuesSQL,
+            SchemaIntrospectionService.columnCheckConstraintsSQL,
             SchemaIntrospectionService.foreignKeysSQL,
         ]
 
@@ -389,5 +482,52 @@ struct SchemaIntrospectionServiceTests {
             #expect(sql.contains(#"NOT LIKE 'pg\_%' ESCAPE '\'"#))
             #expect(sql.contains("<> 'information_schema'"))
         }
+    }
+
+    @Test func valueConstraintSQLReadsEnumsAndSingleColumnChecks() {
+        #expect(SchemaIntrospectionService.enumValuesSQL.contains("pg_catalog.pg_enum"))
+        #expect(SchemaIntrospectionService.enumValuesSQL.contains("enum.enumsortorder"))
+        #expect(SchemaIntrospectionService.columnCheckConstraintsSQL.contains("pg_get_constraintdef"))
+        #expect(SchemaIntrospectionService.columnCheckConstraintsSQL.contains("array_length(con.conkey, 1) = 1"))
+    }
+
+    @Test func checkValueLiteralsOnlyReportsPositiveValueSets() {
+        let allowed = SchemaIntrospectionService.checkValueLiterals(
+            in: "CHECK ((review_status = ANY (ARRAY['approved'::text, 'rejected'::text])))"
+        )
+        let disallowed = SchemaIntrospectionService.checkValueLiterals(
+            in: "CHECK (status <> 'deleted')"
+        )
+        let negated = SchemaIntrospectionService.checkValueLiterals(
+            in: "CHECK (NOT(status = 'deleted'))"
+        )
+        let negatedGroup = SchemaIntrospectionService.checkValueLiterals(
+            in: "CHECK (NOT (status = 'deleted'))"
+        )
+        let allowedPhrase = SchemaIntrospectionService.checkValueLiterals(
+            in: "CHECK (status IN ('not started', 'active'))"
+        )
+        let pattern = SchemaIntrospectionService.checkValueLiterals(
+            in: "CHECK (code ~ '^[A-Z]+$')"
+        )
+        let lowerBound = SchemaIntrospectionService.checkValueLiterals(
+            in: "CHECK (created_at >= '2024-01-01'::date)"
+        )
+        let upperBound = SchemaIntrospectionService.checkValueLiterals(
+            in: "CHECK (code <= 'Z')"
+        )
+        let mixedRange = SchemaIntrospectionService.checkValueLiterals(
+            in: "CHECK (status = 'active' OR status > 'm')"
+        )
+
+        #expect(allowed == ["approved", "rejected"])
+        #expect(disallowed.isEmpty)
+        #expect(negated.isEmpty)
+        #expect(negatedGroup.isEmpty)
+        #expect(allowedPhrase == ["not started", "active"])
+        #expect(pattern.isEmpty)
+        #expect(lowerBound.isEmpty)
+        #expect(upperBound.isEmpty)
+        #expect(mixedRange.isEmpty)
     }
 }

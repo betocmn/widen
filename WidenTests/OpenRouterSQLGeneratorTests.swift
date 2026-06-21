@@ -93,7 +93,7 @@ struct OpenRouterSQLGeneratorTests {
         #expect(messages?.count == 2)
         #expect(messages?[0]["role"] == "system")
         #expect(messages?[0]["content"]?.contains("JSON object") == true)
-        #expect(messages?[1]["content"]?.contains("Table \"public\".\"users\"") == true)
+        #expect(messages?[1]["content"]?.contains("TABLE \"public\".\"users\"") == true)
         #expect(messages?[1]["content"]?.contains("Database context:\nOnly active users count.") == true)
         #expect(messages?[1]["content"]?.contains("User question: show users") == true)
     }

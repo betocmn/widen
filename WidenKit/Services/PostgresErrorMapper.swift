@@ -14,18 +14,16 @@ enum PostgresErrorMapper {
         }
 
         if let server = psql.serverInfo {
-            let message = server[.message] ?? "The server reported an error."
-            switch server[.sqlState] ?? "" {
+            let diagnostic = diagnostic(from: server)
+            switch diagnostic.sqlState ?? "" {
             case "28P01", "28000":
-                return .authenticationFailed(message)
+                return .authenticationFailed(diagnostic.displayMessage)
             case "3D000":
-                return .databaseNotFound(message)
+                return .databaseNotFound(diagnostic.displayMessage)
             case "57014":
-                return .queryTimeout
+                return .databaseFailed(diagnostic)
             default:
-                var detail = message
-                if let hint = server[.hint] { detail += " Hint: \(hint)" }
-                return .executionFailed(detail)
+                return .databaseFailed(diagnostic)
             }
         }
 
@@ -43,6 +41,21 @@ enum PostgresErrorMapper {
         default:
             return .executionFailed(describe(psql))
         }
+    }
+
+    private static func diagnostic(from server: PSQLError.ServerInfo) -> DatabaseDiagnostic {
+        let sqlState = server[.sqlState]
+        return DatabaseDiagnostic(
+            kind: DatabaseDiagnostic.kind(forSQLState: sqlState),
+            sqlState: sqlState,
+            message: server[.message] ?? "The server reported an error.",
+            detail: server[.detail],
+            hint: server[.hint],
+            position: server[.position].flatMap(Int.init),
+            schemaName: server[.schemaName],
+            tableName: server[.tableName],
+            columnName: server[.columnName]
+        )
     }
 
     private static func describe(_ error: any Error) -> String {

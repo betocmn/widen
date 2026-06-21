@@ -96,4 +96,38 @@ struct SchemaStoreTests {
 
         #expect(loaded == [id: schema])
     }
+
+    @Test func legacyColumnWithoutValueConstraintsDecodes() throws {
+        let (store, dir) = makeTempStore()
+        defer { try? FileManager.default.removeItem(at: dir) }
+        let id = UUID()
+        let json = """
+            {
+              "\(id.uuidString)": {
+                "schemas": [{"name": "public"}],
+                "tables": [{
+                  "schema": "public",
+                  "name": "users",
+                  "type": "BASE TABLE",
+                  "columns": [{
+                    "tableSchema": "public",
+                    "tableName": "users",
+                    "name": "id",
+                    "dataType": "integer",
+                    "isNullable": false,
+                    "ordinalPosition": 1
+                  }]
+                }],
+                "foreignKeys": [],
+                "loadedAt": "2025-06-15T15:06:40Z"
+              }
+            }
+            """
+        try FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
+        try Data(json.utf8).write(to: store.fileURL, options: .atomic)
+
+        let loaded = try store.load()
+
+        #expect(loaded[id]?.tables.first?.columns.first?.valueConstraints == nil)
+    }
 }

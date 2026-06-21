@@ -36,7 +36,7 @@ public struct ParsedConnectionDetails: Equatable, Sendable {
     }
 
     /// Returns a copy where every non-nil field of `override` replaces this
-    /// one. Used to let a deterministically parsed connection URL win over the
+    /// one. Used to let a deterministically parsed connection URL take precedence over the
     /// model's guess while keeping the fields the URL did not specify.
     public func overridden(by override: ParsedConnectionDetails) -> ParsedConnectionDetails {
         ParsedConnectionDetails(

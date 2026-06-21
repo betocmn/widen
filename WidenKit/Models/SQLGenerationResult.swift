@@ -16,6 +16,7 @@ public struct SQLGenerationResult: Codable, Equatable, Sendable {
     public var riskLevel: SQLRiskLevel
     public var needsClarification: Bool
     public var clarificationQuestion: String?
+    public var generationSchemaName: String?
 
     public init(
         sql: String,
@@ -25,7 +26,8 @@ public struct SQLGenerationResult: Codable, Equatable, Sendable {
         confidence: Double,
         riskLevel: SQLRiskLevel,
         needsClarification: Bool,
-        clarificationQuestion: String?
+        clarificationQuestion: String?,
+        generationSchemaName: String? = nil
     ) {
         self.sql = sql
         self.explanation = explanation
@@ -35,6 +37,7 @@ public struct SQLGenerationResult: Codable, Equatable, Sendable {
         self.riskLevel = riskLevel
         self.needsClarification = needsClarification
         self.clarificationQuestion = clarificationQuestion
+        self.generationSchemaName = generationSchemaName
     }
 }
 

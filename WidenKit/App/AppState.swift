@@ -224,7 +224,7 @@ public final class AppState {
         }
     }
 
-    /// The active SQL generation backend: mock wins, then the selected
+    /// The active SQL generation backend: mock takes precedence, then the selected
     /// backend if it is available. Production never silently swaps to another
     /// backend when the selected one is unavailable.
     public var sqlGenerator: any SQLGenerator {
@@ -534,6 +534,65 @@ public final class AppState {
         guard let schema = schemas[connectionID] else { return nil }
         guard let name = currentSchemaName(for: connectionID) else { return schema }
         return schema.filtered(toSchema: name)
+    }
+
+    public func schemaForGeneration(
+        _ generation: SQLGenerationResult?,
+        connectionID: UUID
+    ) -> DatabaseSchema? {
+        guard let generation else { return nil }
+        guard let schema = schemas[connectionID] else { return nil }
+        if let name = generation.generationSchemaName,
+            schema.containsSchema(named: name)
+        {
+            return schema.filtered(toSchema: name)
+        }
+        if let legacyScope = schemaForLegacyGeneration(generation, schema: schema) {
+            return legacyScope
+        }
+        return promptSchema(for: connectionID)
+    }
+
+    private func schemaForLegacyGeneration(
+        _ generation: SQLGenerationResult,
+        schema: DatabaseSchema
+    ) -> DatabaseSchema? {
+        let schemaNames = referencedSchemaNames(in: generation, schema: schema)
+        if schemaNames.count == 1, let name = schemaNames.first {
+            return schema.filtered(toSchema: name)
+        }
+        if schemaNames.count > 1 {
+            return schema
+        }
+        return nil
+    }
+
+    private func referencedSchemaNames(
+        in generation: SQLGenerationResult,
+        schema: DatabaseSchema
+    ) -> Set<String> {
+        let availableNames = Set(schema.schemas.map(\.name) + schema.tables.map(\.schema))
+        var names = Set<String>()
+        for referencedTable in generation.referencedTables {
+            let parts = referencedTable.split(separator: ".", maxSplits: 1).map(String.init)
+            if let name = parts.first, parts.count == 2, availableNames.contains(name) {
+                names.insert(name)
+            }
+        }
+        let analysis = SQLReferenceAnalyzer.analyze(generation.sql)
+        for scope in analysis.scopes {
+            for relation in scope.relations {
+                if let name = relation.schema, availableNames.contains(name) {
+                    names.insert(name)
+                }
+            }
+        }
+        for relation in analysis.upsertTargetRelations {
+            if let name = relation.schema, availableNames.contains(name) {
+                names.insert(name)
+            }
+        }
+        return names
     }
 
     static var didShowInstallLLMCompatibilityAlertKey: String {
@@ -905,10 +964,11 @@ public final class AppState {
     }
 
     private func makeSessionController(_ session: QuerySession) -> SessionController {
+        let schema = schemaForGeneration(session.lastGeneration, connectionID: session.connectionID)
         if let queryExecutorOverride {
-            return SessionController(session: session, executor: queryExecutorOverride)
+            return SessionController(session: session, schema: schema, executor: queryExecutorOverride)
         }
-        return SessionController(session: session)
+        return SessionController(session: session, schema: schema)
     }
 
     /// Selects a database row for schema browsing — no session involved.

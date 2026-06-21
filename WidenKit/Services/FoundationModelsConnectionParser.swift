@@ -71,7 +71,7 @@
                 )
                 let modelDetails = Self.details(from: response.content, pastedText: text)
                 // Structured URL and KEY=VALUE details are parsed
-                // deterministically and win over the model: the small model
+                // deterministically and take precedence over the model: the small model
                 // sometimes truncates dotted usernames or drops explicit empty
                 // passwords. The model still covers free-form prose.
                 if let deterministicDetails {

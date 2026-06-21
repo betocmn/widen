@@ -84,6 +84,8 @@ public enum SQLSafetyValidator {
         "SET_CONFIG",
     ]
 
+    private static let aggregateFunctions: Set<String> = ["AVG", "SUM", "MIN", "MAX", "COUNT"]
+
     public static func validate(_ sql: String) -> SQLValidationResult {
         var errors: [String] = []
         var warnings: [String] = []
@@ -158,6 +160,11 @@ public enum SQLSafetyValidator {
         if containsWindowFunctionInsideAggregate(stripped.text) {
             errors.append(
                 "Aggregate functions cannot contain window functions. Count rows in a subquery or CTE, then aggregate those results in the outer SELECT."
+            )
+        }
+        if containsAggregateFunctionInsideAggregate(stripped.text) {
+            errors.append(
+                "Aggregate functions cannot contain other aggregate functions. Count rows in a subquery or CTE, then aggregate those results in the outer SELECT."
             )
         }
 
@@ -512,7 +519,6 @@ public enum SQLSafetyValidator {
     }
 
     static func containsWindowFunctionInsideAggregate(_ strippedText: String) -> Bool {
-        let aggregateFunctions: Set<String> = ["AVG", "SUM", "MIN", "MAX", "COUNT"]
         let chars = Array(strippedText)
         var i = 0
 
@@ -535,7 +541,7 @@ public enum SQLSafetyValidator {
             let closeIndex = matchingClosingParenthesis(chars, openingAt: openIndex)
             guard let closeIndex else { continue }
             let argumentText = String(chars[(openIndex + 1)..<closeIndex])
-            if tokenize(argumentText).contains("OVER") {
+            if containsWord(argumentText, named: ["OVER"]) {
                 return true
             }
 
@@ -544,6 +550,137 @@ public enum SQLSafetyValidator {
             i = max(closeIndex + 1, tokenStart + 1)
         }
 
+        return false
+    }
+
+    static func containsAggregateFunctionInsideAggregate(_ strippedText: String) -> Bool {
+        let chars = Array(strippedText)
+        var i = 0
+
+        while i < chars.count {
+            guard isWordStart(chars[i]) else {
+                i += 1
+                continue
+            }
+
+            let tokenStart = i
+            var token = ""
+            while i < chars.count, isWordPart(chars[i], tokenStarted: !token.isEmpty) {
+                token.append(chars[i])
+                i += 1
+            }
+
+            guard aggregateFunctions.contains(token.uppercased()) else { continue }
+            let openIndex = indexOfOpeningParenthesis(chars, after: i)
+            guard let openIndex else { continue }
+            let closeIndex = matchingClosingParenthesis(chars, openingAt: openIndex)
+            guard let closeIndex else { continue }
+            let argumentText = String(chars[(openIndex + 1)..<closeIndex])
+            if aggregateCallIsWindowFunction(chars, closingAt: closeIndex) {
+                i = max(closeIndex + 1, tokenStart + 1)
+                continue
+            }
+            if containsFunctionCall(argumentText, named: aggregateFunctions) {
+                return true
+            }
+            i = max(closeIndex + 1, tokenStart + 1)
+        }
+
+        return false
+    }
+
+    private static func aggregateCallIsWindowFunction(
+        _ chars: [Character],
+        closingAt closeIndex: Int
+    ) -> Bool {
+        var cursor = closeIndex + 1
+        guard let next = nextWord(chars, startingAt: cursor) else { return false }
+        if next.word.uppercased() == "OVER" {
+            return true
+        }
+        guard next.word.uppercased() == "FILTER" else { return false }
+        cursor = next.end
+        while cursor < chars.count, chars[cursor].isWhitespace {
+            cursor += 1
+        }
+        if cursor < chars.count,
+            chars[cursor] == "(",
+            let afterFilter = matchingClosingParenthesis(chars, openingAt: cursor).map({ $0 + 1 })
+        {
+            cursor = afterFilter
+        }
+        return nextWord(chars, startingAt: cursor)?.word.uppercased() == "OVER"
+    }
+
+    private static func nextWord(
+        _ chars: [Character],
+        startingAt offset: Int
+    ) -> (word: String, end: Int)? {
+        var cursor = offset
+        while cursor < chars.count, chars[cursor].isWhitespace {
+            cursor += 1
+        }
+        guard cursor < chars.count, isWordStart(chars[cursor]) else { return nil }
+        var word = ""
+        while cursor < chars.count, isWordPart(chars[cursor], tokenStarted: !word.isEmpty) {
+            word.append(chars[cursor])
+            cursor += 1
+        }
+        return (word, cursor)
+    }
+
+    private static func containsFunctionCall(_ text: String, named names: Set<String>) -> Bool {
+        let chars = Array(text)
+        var i = 0
+        while i < chars.count {
+            if chars[i] == "(",
+                let closeIndex = matchingClosingParenthesis(chars, openingAt: i),
+                groupContainsTopLevelSelect(chars, startingAt: i + 1, endingAt: closeIndex)
+            {
+                i = closeIndex + 1
+                continue
+            }
+            guard isWordStart(chars[i]) else {
+                i += 1
+                continue
+            }
+            var token = ""
+            while i < chars.count, isWordPart(chars[i], tokenStarted: !token.isEmpty) {
+                token.append(chars[i])
+                i += 1
+            }
+            guard names.contains(token.uppercased()) else { continue }
+            if indexOfOpeningParenthesis(chars, after: i) != nil {
+                return true
+            }
+        }
+        return false
+    }
+
+    private static func containsWord(_ text: String, named names: Set<String>) -> Bool {
+        let chars = Array(text)
+        var i = 0
+        while i < chars.count {
+            if chars[i] == "(",
+                let closeIndex = matchingClosingParenthesis(chars, openingAt: i),
+                groupContainsTopLevelSelect(chars, startingAt: i + 1, endingAt: closeIndex)
+            {
+                i = closeIndex + 1
+                continue
+            }
+            guard isWordStart(chars[i]) else {
+                i += 1
+                continue
+            }
+            var token = ""
+            while i < chars.count, isWordPart(chars[i], tokenStarted: !token.isEmpty) {
+                token.append(chars[i])
+                i += 1
+            }
+            if names.contains(token.uppercased()) {
+                return true
+            }
+        }
         return false
     }
 
@@ -580,6 +717,40 @@ public enum SQLSafetyValidator {
             i += 1
         }
         return nil
+    }
+
+    private static func groupContainsTopLevelSelect(
+        _ chars: [Character],
+        startingAt start: Int,
+        endingAt end: Int
+    ) -> Bool {
+        var depth = 0
+        var i = start
+        while i < end {
+            if chars[i] == "(" {
+                depth += 1
+                i += 1
+                continue
+            }
+            if chars[i] == ")" {
+                depth = max(0, depth - 1)
+                i += 1
+                continue
+            }
+            guard depth == 0, isWordStart(chars[i]) else {
+                i += 1
+                continue
+            }
+            var token = ""
+            while i < end, isWordPart(chars[i], tokenStarted: !token.isEmpty) {
+                token.append(chars[i])
+                i += 1
+            }
+            if token.uppercased() == "SELECT" {
+                return true
+            }
+        }
+        return false
     }
 
     private static func topLevelLimitIsBounded(_ chars: [Character], after offset: Int) -> Bool {

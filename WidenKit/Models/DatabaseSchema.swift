@@ -42,4 +42,13 @@ public struct DatabaseSchema: Codable, Equatable, Sendable {
             loadedAt: loadedAt
         )
     }
+
+    public var singleSchemaName: String? {
+        let names = Set(schemas.map(\.name) + tables.map(\.schema))
+        return names.count == 1 ? names.first : nil
+    }
+
+    public func containsSchema(named name: String) -> Bool {
+        schemas.contains { $0.name == name } || tables.contains { $0.schema == name }
+    }
 }
