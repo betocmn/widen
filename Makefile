@@ -34,7 +34,7 @@ test:
 ## Each test provisions and drops its own throwaway database, so this only
 ## needs a local PostgreSQL whose role can CREATE DATABASE — no manual seeding.
 test-db:
-	$(XCODEBUILD) test
+	env -u WIDEN_TEST_DB -u TEST_RUNNER_WIDEN_TEST_DB $(XCODEBUILD) test
 	TEST_RUNNER_WIDEN_TEST_DB=$${WIDEN_TEST_DB:-1} $(XCODEBUILD) test -only-testing:WidenTests/PostgresIntegrationTests
 
 ## Run unit + Foundation Models smoke tests (requires Apple Intelligence enabled)

@@ -205,6 +205,23 @@ struct SchemaPromptPackagerTests {
         #expect(!package.text.contains("count non-null"))
     }
 
+    @Test func primaryTablesAreIncludedIncrementallyWhenFullSectionIsTooLarge() {
+        let schema = makeIncrementalPrimarySchema()
+
+        let package = SchemaPromptPackager.package(
+            schema: schema,
+            question: "order customer invoice product",
+            context: SQLGenerationContext(),
+            databaseContext: "",
+            maxCharacters: 450
+        )
+
+        #expect(package.text.count <= 450)
+        #expect(package.text.contains("Primary tables:"))
+        #expect(!package.includedTables.isEmpty)
+        #expect(package.includedTables.count < schema.tables.count)
+    }
+
     @Test func missingColumnRelationshipHintShowsJoinToColumnOwner() {
         let schema = makeWinningToolSchema(extraTables: 8)
         let diagnostic = DatabaseDiagnostic(
@@ -324,6 +341,28 @@ struct SchemaPromptPackagerTests {
 
         #expect(tables.contains("public.preseason_match_evaluation"))
         #expect(tables.contains("public.preseason_tool"))
+    }
+
+    private func makeIncrementalPrimarySchema() -> DatabaseSchema {
+        let tableNames = ["customers", "invoices", "orders", "products"]
+        return DatabaseSchema(
+            schemas: [SchemaInfo(name: "public")],
+            tables: tableNames.map { name in
+                TableInfo(
+                    schema: "public",
+                    name: name,
+                    type: .baseTable,
+                    columns: [
+                        column(name, "id", ordinal: 1),
+                        column(name, "name", type: "text", ordinal: 2),
+                        column(name, "status", type: "text", ordinal: 3),
+                        column(name, "created_at", type: "timestamp with time zone", ordinal: 4),
+                        column(name, "description", type: "text", ordinal: 5),
+                    ]
+                )
+            },
+            foreignKeys: []
+        )
     }
 
     private func makePreseasonSchema(extraTables: Int) -> DatabaseSchema {

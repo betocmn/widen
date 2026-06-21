@@ -272,7 +272,23 @@ public enum SchemaPromptPackager {
                 }
                 return
             }
-            guard force else { return }
+            guard force else {
+                var keptLines = [title]
+                var keptTables: [TableInfo] = []
+                for tableSection in tableSections {
+                    let candidate = (keptLines + [tableSection.text]).joined(separator: "\n")
+                    if fits(sections: sections, adding: candidate, maxCharacters: maxCharacters) {
+                        keptLines.append(tableSection.text)
+                        keptTables.append(tableSection.table)
+                    }
+                }
+                guard !keptTables.isEmpty else { return }
+                sections.append(keptLines.joined(separator: "\n"))
+                for table in keptTables {
+                    includedIDs.insert(table.id)
+                }
+                return
+            }
 
             var forcedLines = [title]
             var forcedIncludedIDs: [String] = []

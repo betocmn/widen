@@ -1861,7 +1861,7 @@ struct SQLToken: Equatable, Sendable {
         "between", "case", "when", "then", "else", "end", "asc", "desc", "insert", "into",
         "update", "delete", "set", "values", "returning", "distinct", "over", "partition",
         "filter", "left", "right", "inner", "outer", "full", "cross", "natural", "lateral", "only",
-        "using", "at", "time", "zone", "with", "without", "any", "all",
+        "using", "at", "time", "zone", "with", "without", "within", "any", "all",
         "true", "false", "interval", "current_date", "current_timestamp", "now", "like",
         "ilike", "similar", "escape", "nulls", "first", "last", "default", "conflict",
         "do", "nothing", "constraint", "rows", "row", "range", "groups", "unbounded",

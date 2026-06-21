@@ -1049,7 +1049,7 @@ public enum SQLSchemaValidator {
         else {
             return false
         }
-        return left.isTemporal && right.isTemporal
+        return temporalDifferenceProducesInterval(left: left.kind, right: right.kind)
     }
 
     private static func isTemporalDifferenceExpression(
@@ -1077,7 +1077,14 @@ public enum SQLSchemaValidator {
         else {
             return false
         }
-        return left.isTemporal && right.isTemporal
+        return temporalDifferenceProducesInterval(left: left.kind, right: right.kind)
+    }
+
+    private static func temporalDifferenceProducesInterval(
+        left: TemporalExpressionKind,
+        right: TemporalExpressionKind
+    ) -> Bool {
+        !(left == .date && right == .date)
     }
 
     private static func temporalExpressionRange(
@@ -1086,32 +1093,33 @@ public enum SQLSchemaValidator {
         analysis: SQLReferenceAnalysis,
         scopeSources: [[ResolvedRelationSource]],
         schemaIndex: SchemaLookup
-    ) -> (range: Range<Int>, isTemporal: Bool)? {
+    ) -> (range: Range<Int>, kind: TemporalExpressionKind)? {
         if tokens[safe: index]?.text == ")",
             let openIndex = matchingOpeningParenthesis(endingAt: index, tokens: tokens),
             let function = tokens[safe: openIndex - 1],
-            function.isIdentifierLike
+            function.isIdentifierLike,
+            let kind = temporalSQLValueKind(function.normalized)
         {
-            return ((openIndex - 1)..<(index + 1), isTemporalSQLValue(function.normalized))
+            return ((openIndex - 1)..<(index + 1), kind)
         }
 
         guard let identifier = identifierExpressionRange(endingAt: index, tokens: tokens) else {
             return nil
         }
-        return (
-            identifier.range,
-            expressionResolvesToTemporalValue(
-                identifier.identifier,
-                scopeIndex: scopeIndexForIdentifier(
-                    tokenRange: identifier.range,
-                    tokens: tokens,
-                    analysis: analysis
-                ),
-                analysis: analysis,
-                scopeSources: scopeSources,
-                schemaIndex: schemaIndex
-            )
-        )
+        guard let kind = expressionResolvesToTemporalKind(
+            identifier.identifier,
+            scopeIndex: scopeIndexForIdentifier(
+                tokenRange: identifier.range,
+                tokens: tokens,
+                analysis: analysis
+            ),
+            analysis: analysis,
+            scopeSources: scopeSources,
+            schemaIndex: schemaIndex
+        ) else {
+            return nil
+        }
+        return (identifier.range, kind)
     }
 
     private static func temporalExpressionRange(
@@ -1120,46 +1128,48 @@ public enum SQLSchemaValidator {
         analysis: SQLReferenceAnalysis,
         scopeSources: [[ResolvedRelationSource]],
         schemaIndex: SchemaLookup
-    ) -> (range: Range<Int>, isTemporal: Bool)? {
+    ) -> (range: Range<Int>, kind: TemporalExpressionKind)? {
         if let token = tokens[safe: index],
             token.isIdentifierLike,
-            isTemporalSQLValue(token.normalized),
+            let kind = temporalSQLValueKind(token.normalized),
             tokens[safe: index + 1]?.text == "(",
             let afterGroup = indexAfterBalancedGroup(tokens, startingAt: index + 1)
         {
-            return (index..<afterGroup, true)
+            return (index..<afterGroup, kind)
         }
 
         guard let identifier = identifierExpressionRange(startingAt: index, tokens: tokens) else {
             return nil
         }
-        return (
-            identifier.range,
-            expressionResolvesToTemporalValue(
-                identifier.identifier,
-                scopeIndex: scopeIndexForIdentifier(
-                    tokenRange: identifier.range,
-                    tokens: tokens,
-                    analysis: analysis
-                ),
-                analysis: analysis,
-                scopeSources: scopeSources,
-                schemaIndex: schemaIndex
-            )
-        )
+        guard let kind = expressionResolvesToTemporalKind(
+            identifier.identifier,
+            scopeIndex: scopeIndexForIdentifier(
+                tokenRange: identifier.range,
+                tokens: tokens,
+                analysis: analysis
+            ),
+            analysis: analysis,
+            scopeSources: scopeSources,
+            schemaIndex: schemaIndex
+        ) else {
+            return nil
+        }
+        return (identifier.range, kind)
     }
 
-    private static func expressionResolvesToTemporalValue(
+    private static func expressionResolvesToTemporalKind(
         _ identifier: IdentifierExpression,
         scopeIndex: Int?,
         analysis: SQLReferenceAnalysis,
         scopeSources: [[ResolvedRelationSource]],
         schemaIndex: SchemaLookup
-    ) -> Bool {
-        if identifier.qualifier == nil, isTemporalSQLValue(identifier.name.lowercased()) {
-            return true
+    ) -> TemporalExpressionKind? {
+        if identifier.qualifier == nil,
+            let kind = temporalSQLValueKind(identifier.name.lowercased())
+        {
+            return kind
         }
-        return expressionResolvesToTemporalColumn(
+        return expressionResolvesToTemporalColumnKind(
             identifier,
             scopeIndex: scopeIndex,
             analysis: analysis,
@@ -1168,33 +1178,57 @@ public enum SQLSchemaValidator {
         )
     }
 
-    private static func isTemporalSQLValue(_ normalized: String) -> Bool {
-        [
+    private enum TemporalExpressionKind {
+        case date
+        case timestampOrTime
+    }
+
+    private static func temporalSQLValueKind(_ normalized: String) -> TemporalExpressionKind? {
+        switch normalized {
+        case "current_date":
+            return .date
+        case
             "clock_timestamp",
-            "current_date",
             "current_timestamp",
             "localtime",
             "localtimestamp",
             "now",
             "statement_timestamp",
-            "transaction_timestamp",
-        ].contains(normalized)
+            "transaction_timestamp":
+            return .timestampOrTime
+        default:
+            return nil
+        }
     }
 
-    private static func expressionResolvesToTemporalColumn(
+    private static func expressionResolvesToTemporalColumnKind(
         _ identifier: IdentifierExpression,
         scopeIndex: Int?,
         analysis: SQLReferenceAnalysis,
         scopeSources: [[ResolvedRelationSource]],
         schemaIndex: SchemaLookup
-    ) -> Bool {
+    ) -> TemporalExpressionKind? {
         resolvedColumns(
             for: identifier,
             scopeIndex: scopeIndex,
             analysis: analysis,
             scopeSources: scopeSources,
             schemaIndex: schemaIndex
-        ).contains(where: isDateOrTimeColumn)
+        ).compactMap { temporalKind(for: $0) }.first
+    }
+
+    private static func temporalKind(for column: ColumnInfo) -> TemporalExpressionKind? {
+        let type = column.dataType.lowercased()
+        guard !type.contains("interval") else { return nil }
+        if type == "date" { return .date }
+        if type.hasPrefix("timestamp")
+            || type.hasPrefix("time ")
+            || type == "time"
+            || type.contains("timestamp")
+        {
+            return .timestampOrTime
+        }
+        return nil
     }
 
     private static func scopeIndexForIdentifier(
@@ -1299,13 +1333,7 @@ public enum SQLSchemaValidator {
     }
 
     private static func isDateOrTimeColumn(_ column: ColumnInfo) -> Bool {
-        let type = column.dataType.lowercased()
-        guard !type.contains("interval") else { return false }
-        return type == "date"
-            || type.hasPrefix("timestamp")
-            || type.hasPrefix("time ")
-            || type == "time"
-            || type.contains("timestamp")
+        temporalKind(for: column) != nil
     }
 
     private static func deduplicatedColumns(_ columns: [ColumnInfo]) -> [ColumnInfo] {

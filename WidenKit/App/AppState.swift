@@ -547,7 +547,52 @@ public final class AppState {
         {
             return schema.filtered(toSchema: name)
         }
+        if let legacyScope = schemaForLegacyGeneration(generation, schema: schema) {
+            return legacyScope
+        }
         return promptSchema(for: connectionID)
+    }
+
+    private func schemaForLegacyGeneration(
+        _ generation: SQLGenerationResult,
+        schema: DatabaseSchema
+    ) -> DatabaseSchema? {
+        let schemaNames = referencedSchemaNames(in: generation, schema: schema)
+        if schemaNames.count == 1, let name = schemaNames.first {
+            return schema.filtered(toSchema: name)
+        }
+        if schemaNames.count > 1 {
+            return schema
+        }
+        return nil
+    }
+
+    private func referencedSchemaNames(
+        in generation: SQLGenerationResult,
+        schema: DatabaseSchema
+    ) -> Set<String> {
+        let availableNames = Set(schema.schemas.map(\.name) + schema.tables.map(\.schema))
+        var names = Set<String>()
+        for referencedTable in generation.referencedTables {
+            let parts = referencedTable.split(separator: ".", maxSplits: 1).map(String.init)
+            if let name = parts.first, parts.count == 2, availableNames.contains(name) {
+                names.insert(name)
+            }
+        }
+        let analysis = SQLReferenceAnalyzer.analyze(generation.sql)
+        for scope in analysis.scopes {
+            for relation in scope.relations {
+                if let name = relation.schema, availableNames.contains(name) {
+                    names.insert(name)
+                }
+            }
+        }
+        for relation in analysis.upsertTargetRelations {
+            if let name = relation.schema, availableNames.contains(name) {
+                names.insert(name)
+            }
+        }
+        return names
     }
 
     static var didShowInstallLLMCompatibilityAlertKey: String {

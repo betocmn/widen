@@ -759,6 +759,16 @@ struct SQLSchemaValidatorTests {
         #expect(!result.hasDefiniteErrors)
     }
 
+    @Test func dateDifferenceComparedToIntervalIsDefiniteError() {
+        let result = SQLSchemaValidator.validate(
+            sql: "SELECT id FROM public.orders WHERE CURRENT_DATE - order_date > INTERVAL '7 days'",
+            against: makeOrderDateSchema()
+        )
+
+        #expect(result.hasDefiniteErrors)
+        #expect(result.issues.contains { $0.kind == .invalidTemporalComparison })
+    }
+
     @Test func temporalFunctionDifferenceCanBeComparedToInterval() {
         let result = SQLSchemaValidator.validate(
             sql: "SELECT id FROM public.jobs WHERE NOW() - started_at > INTERVAL '7 days'",
@@ -772,6 +782,15 @@ struct SQLSchemaValidatorTests {
         let result = SQLSchemaValidator.validate(
             sql: "SELECT duration FROM public.jobs WHERE duration >= INTERVAL '7 days'",
             against: makeIntervalSchema()
+        )
+
+        #expect(!result.hasDefiniteErrors)
+    }
+
+    @Test func percentileWithinGroupDoesNotTreatWithinAsColumn() {
+        let result = SQLSchemaValidator.validate(
+            sql: "SELECT percentile_cont(0.5) WITHIN GROUP (ORDER BY id) FROM public.orders",
+            against: makeUsersOrdersSchema()
         )
 
         #expect(!result.hasDefiniteErrors)
@@ -1308,6 +1327,38 @@ struct SQLSchemaValidatorTests {
                             isNullable: false,
                             ordinalPosition: 1
                         )
+                    ]
+                )
+            ],
+            foreignKeys: []
+        )
+    }
+
+    private func makeOrderDateSchema() -> DatabaseSchema {
+        DatabaseSchema(
+            schemas: [SchemaInfo(name: "public")],
+            tables: [
+                TableInfo(
+                    schema: "public",
+                    name: "orders",
+                    type: .baseTable,
+                    columns: [
+                        ColumnInfo(
+                            tableSchema: "public",
+                            tableName: "orders",
+                            name: "id",
+                            dataType: "integer",
+                            isNullable: false,
+                            ordinalPosition: 1
+                        ),
+                        ColumnInfo(
+                            tableSchema: "public",
+                            tableName: "orders",
+                            name: "order_date",
+                            dataType: "date",
+                            isNullable: false,
+                            ordinalPosition: 2
+                        ),
                     ]
                 )
             ],
