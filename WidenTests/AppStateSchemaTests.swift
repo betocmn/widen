@@ -102,6 +102,39 @@ struct AppStateSchemaTests {
         #expect(prompt?.foreignKeys.allSatisfy { $0.sourceSchema == "analytics" } == true)
     }
 
+    @Test func generatedSessionRestoreUsesSavedGenerationSchema() throws {
+        defer { cleanDefaults() }
+        let (state, dir) = makeState()
+        defer { try? FileManager.default.removeItem(at: dir) }
+        let config = DatabaseConnectionConfig(database: "db", username: "u")
+        let generation = SQLGenerationResult(
+            sql: "SELECT id FROM analytics.users",
+            explanation: "Lists users.",
+            assumptions: [],
+            referencedTables: ["analytics.users"],
+            confidence: 0.9,
+            riskLevel: .low,
+            needsClarification: false,
+            clarificationQuestion: nil,
+            generationSchemaName: "analytics"
+        )
+        let session = QuerySession(
+            connectionID: config.id,
+            sqlText: generation.sql,
+            lastGeneration: generation
+        )
+        state.connections = [config]
+        state.schemas[config.id] = makeSchema(schemas: ["analytics", "public"])
+        state.selectSchema("public", for: config.id)
+        state.sessions = [session]
+
+        state.selectSession(session.id)
+        let controller = try #require(state.selectedController)
+
+        #expect(controller.queryVM.validation?.isValid == true)
+        #expect(controller.queryVM.schemaValidation?.referencedTables == ["analytics.users"])
+    }
+
     @Test func launchHydratesCachedSchemasForConfiguredConnections() async throws {
         defer { cleanDefaults() }
         let dir = FileManager.default.temporaryDirectory

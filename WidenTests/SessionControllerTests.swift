@@ -1221,10 +1221,12 @@ struct SessionControllerTests {
 
         await controller.submit(appState: state)
 
+        var expectedGeneration = generated
+        expectedGeneration.generationSchemaName = "public"
         #expect(generator.contexts.count == 1)
         #expect(controller.chatVM.messages.map(\.role) == [.user, .assistant])
         #expect(controller.queryVM.sqlText == generated.sql)
-        #expect(controller.queryVM.generation == generated)
+        #expect(controller.queryVM.generation == expectedGeneration)
     }
 
     @Test func clearConversationCancelsActiveRunWithoutAppendingCompletion() async {

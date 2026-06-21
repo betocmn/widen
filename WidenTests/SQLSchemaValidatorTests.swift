@@ -173,6 +173,19 @@ struct SQLSchemaValidatorTests {
         #expect(!result.hasDefiniteErrors)
     }
 
+    @Test func uuidTypedLiteralSyntaxIsNotTreatedAsAColumn() {
+        let result = SQLSchemaValidator.validate(
+            sql: """
+                SELECT tool_a_id
+                FROM public.preseason_match_batch
+                WHERE tool_a_id = UUID '550e8400-e29b-41d4-a716-446655440000'
+                """,
+            against: makePreseasonSchemaWithoutWinner()
+        )
+
+        #expect(!result.hasDefiniteErrors)
+    }
+
     @Test func usingAndExtractSyntaxIdentifiersAreNotTreatedAsColumns() {
         let result = SQLSchemaValidator.validate(
             sql: """
@@ -181,6 +194,19 @@ struct SQLSchemaValidatorTests {
                 JOIN public.orders USING (id)
                 GROUP BY EXTRACT(YEAR FROM orders.created_at)
                 ORDER BY order_year
+                """,
+            against: makeUsersOrdersSchema()
+        )
+
+        #expect(!result.hasDefiniteErrors)
+    }
+
+    @Test func naturalJoinDoesNotBecomeAnAlias() {
+        let result = SQLSchemaValidator.validate(
+            sql: """
+                SELECT users.email
+                FROM public.users
+                NATURAL JOIN public.orders
                 """,
             against: makeUsersOrdersSchema()
         )
@@ -651,6 +677,16 @@ struct SQLSchemaValidatorTests {
         #expect(result.hasDefiniteErrors)
         #expect(result.issues.contains { $0.kind == .invalidTemporalComparison })
         #expect(result.errors.first?.contains("NOW() - INTERVAL '7 days'") == true)
+    }
+
+    @Test func timestampComparedDirectlyToParenthesizedIntervalIsDefiniteError() {
+        let result = SQLSchemaValidator.validate(
+            sql: "SELECT id FROM public.orders WHERE created_at > (INTERVAL '7 days')",
+            against: makeUsersOrdersSchema()
+        )
+
+        #expect(result.hasDefiniteErrors)
+        #expect(result.issues.contains { $0.kind == .invalidTemporalComparison })
     }
 
     @Test func timestampBetweenBareIntervalIsDefiniteError() {

@@ -536,6 +536,20 @@ public final class AppState {
         return schema.filtered(toSchema: name)
     }
 
+    public func schemaForGeneration(
+        _ generation: SQLGenerationResult?,
+        connectionID: UUID
+    ) -> DatabaseSchema? {
+        guard let generation else { return nil }
+        guard let schema = schemas[connectionID] else { return nil }
+        if let name = generation.generationSchemaName,
+            schema.containsSchema(named: name)
+        {
+            return schema.filtered(toSchema: name)
+        }
+        return promptSchema(for: connectionID)
+    }
+
     static var didShowInstallLLMCompatibilityAlertKey: String {
         let version =
             Bundle.main.object(forInfoDictionaryKey: "CFBundleShortVersionString") as? String
@@ -905,7 +919,7 @@ public final class AppState {
     }
 
     private func makeSessionController(_ session: QuerySession) -> SessionController {
-        let schema = promptSchema(for: session.connectionID)
+        let schema = schemaForGeneration(session.lastGeneration, connectionID: session.connectionID)
         if let queryExecutorOverride {
             return SessionController(session: session, schema: schema, executor: queryExecutorOverride)
         }

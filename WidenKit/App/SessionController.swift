@@ -89,7 +89,7 @@ public final class SessionController: Identifiable {
         guard !queryVM.isRunning, !chatVM.isGenerating else { return }
         let sql = queryVM.sqlText
         let generation = queryVM.generation
-        let schema = generation == nil ? nil : appState.promptSchema(for: connectionID)
+        let schema = appState.schemaForGeneration(generation, connectionID: connectionID)
         queryVM.startRun(
             connection: appState.connection(for: connectionID),
             postgres: appState.postgres(for: connectionID),

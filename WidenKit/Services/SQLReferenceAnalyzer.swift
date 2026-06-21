@@ -1331,8 +1331,12 @@ public enum SQLReferenceAnalyzer {
     }
 
     private static func isTypedLiteralPrefix(at index: Int, tokens: [SQLToken]) -> Bool {
-        let normalized = tokens[safe: index]?.normalized
-        guard normalized == "date" || normalized == "timestamp" else { return false }
+        guard let normalized = tokens[safe: index]?.normalized else { return false }
+        let singleWordTypedLiterals: Set<String> = [
+            "date", "time", "timetz", "timestamp", "interval", "uuid", "json", "jsonb",
+            "inet", "cidr", "macaddr", "macaddr8", "xml", "bytea",
+        ]
+        guard singleWordTypedLiterals.contains(normalized) else { return false }
         if tokens[safe: index + 1]?.kind == .string {
             return true
         }
@@ -1569,7 +1573,7 @@ public enum SQLReferenceAnalyzer {
 
     private static let relationTerminatorKeywords: Set<String> = [
         "on", "using", "where", "join", "left", "right", "inner", "outer", "full", "cross",
-        "group", "order", "limit", "offset", "union", "returning", "set", "values",
+        "natural", "group", "order", "limit", "offset", "union", "returning", "set", "values",
         "default", "conflict", "do", "nothing",
     ]
 
@@ -1830,7 +1834,7 @@ struct SQLToken: Equatable, Sendable {
         "order", "limit", "offset", "having", "and", "or", "not", "null", "is", "in",
         "between", "case", "when", "then", "else", "end", "asc", "desc", "insert", "into",
         "update", "delete", "set", "values", "returning", "distinct", "over", "partition",
-        "filter", "left", "right", "inner", "outer", "full", "cross", "lateral", "only",
+        "filter", "left", "right", "inner", "outer", "full", "cross", "natural", "lateral", "only",
         "using", "at", "time", "zone", "with", "without", "any", "all",
         "true", "false", "interval", "current_date", "current_timestamp", "now", "like",
         "ilike", "similar", "escape", "nulls", "first", "last", "default", "conflict",

@@ -950,14 +950,50 @@ public enum SQLSchemaValidator {
     }
 
     private static func isIntervalLiteral(startingAt index: Int, tokens: [SQLToken]) -> Bool {
-        tokens[safe: index]?.normalized == "interval"
-            && tokens[safe: index + 1]?.kind == .string
+        intervalLiteralRange(startingAt: index, tokens: tokens) != nil
     }
 
     private static func isIntervalLiteral(endingAt index: Int, tokens: [SQLToken]) -> Bool {
-        index - 1 >= 0
-            && tokens[safe: index - 1]?.normalized == "interval"
-            && tokens[safe: index]?.kind == .string
+        intervalLiteralRange(endingAt: index, tokens: tokens) != nil
+    }
+
+    private static func intervalLiteralRange(startingAt index: Int, tokens: [SQLToken])
+        -> Range<Int>?
+    {
+        guard index >= 0, index < tokens.count else { return nil }
+        if tokens[safe: index]?.normalized == "interval",
+            tokens[safe: index + 1]?.kind == .string
+        {
+            return index..<(index + 2)
+        }
+        guard tokens[index].text == "(",
+            let afterGroup = indexAfterBalancedGroup(tokens, startingAt: index),
+            let innerRange = intervalLiteralRange(startingAt: index + 1, tokens: tokens),
+            innerRange.upperBound == afterGroup - 1
+        else {
+            return nil
+        }
+        return index..<afterGroup
+    }
+
+    private static func intervalLiteralRange(endingAt index: Int, tokens: [SQLToken])
+        -> Range<Int>?
+    {
+        guard index >= 0, index < tokens.count else { return nil }
+        if index - 1 >= 0,
+            tokens[safe: index - 1]?.normalized == "interval",
+            tokens[safe: index]?.kind == .string
+        {
+            return (index - 1)..<(index + 1)
+        }
+        guard tokens[index].text == ")",
+            let openIndex = matchingOpeningParenthesis(endingAt: index, tokens: tokens),
+            let innerRange = intervalLiteralRange(endingAt: index - 1, tokens: tokens),
+            innerRange.lowerBound == openIndex + 1
+        else {
+            return nil
+        }
+        return openIndex..<(index + 1)
     }
 
     private static func betweenUpperBoundStartIndex(
@@ -1308,12 +1344,13 @@ public enum GeneratedSQLPostprocessor {
         schema: DatabaseSchema,
         databaseContext: String
     ) -> SQLGenerationResult {
-        guard !generation.needsClarification else { return generation }
+        var copy = generation
+        copy.generationSchemaName = schema.singleSchemaName
+        guard !copy.needsClarification else { return copy }
         let sql = generation.sql.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard !sql.isEmpty else { return generation }
+        guard !sql.isEmpty else { return copy }
 
         let schemaValidation = SQLSchemaValidator.validate(sql: sql, against: schema)
-        var copy = generation
         copy.referencedTables = schemaValidation.referencedTables
         if !schemaValidation.hasDefiniteErrors,
             let clarification = undefinedRequestTermClarification(
