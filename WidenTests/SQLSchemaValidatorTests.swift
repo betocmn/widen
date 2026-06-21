@@ -80,6 +80,15 @@ struct SQLSchemaValidatorTests {
         #expect(result.referencedTables == ["public.orders", "public.users"])
     }
 
+    @Test func valuesDerivedTableAliasColumnListDefinesColumns() {
+        let result = SQLSchemaValidator.validate(
+            sql: "SELECT v.id FROM (VALUES (1)) AS v(id)",
+            against: makeUsersOrdersSchema()
+        )
+
+        #expect(!result.hasDefiniteErrors)
+    }
+
     @Test func implicitSelectAliasesResolveInOrderBy() {
         let result = SQLSchemaValidator.validate(
             sql: "SELECT COUNT(*) n FROM public.orders ORDER BY n",
@@ -219,6 +228,21 @@ struct SQLSchemaValidatorTests {
 
         #expect(result.hasDefiniteErrors)
         #expect(result.issues.contains { $0.kind == .ambiguousColumn && $0.identifier == "id" })
+    }
+
+    @Test func chainedJoinUsingValidatesEachJoinedRelation() {
+        let result = SQLSchemaValidator.validate(
+            sql: """
+                SELECT id
+                FROM public.users
+                JOIN public.orders USING (id)
+                JOIN public.notes USING (id)
+                """,
+            against: makeUsersOrdersNotesSchema()
+        )
+
+        #expect(result.hasDefiniteErrors)
+        #expect(result.errors.contains { $0.contains("JOIN USING column id") })
     }
 
     @Test func postgresOperatorWordsAreNotTreatedAsColumns() {
@@ -502,6 +526,15 @@ struct SQLSchemaValidatorTests {
         #expect(!quoted.hasDefiniteErrors)
     }
 
+    @Test func quotedLowercaseTableAliasCanBeReferencedUnquoted() {
+        let result = SQLSchemaValidator.validate(
+            sql: #"SELECT u.id FROM public.users AS "u""#,
+            against: makeUsersOrdersSchema()
+        )
+
+        #expect(!result.hasDefiniteErrors)
+    }
+
     @Test func quotedCteOutputAliasRequiresExactQuotedReference() {
         let unquoted = SQLSchemaValidator.validate(
             sql: """
@@ -540,6 +573,21 @@ struct SQLSchemaValidatorTests {
 
         #expect(result.hasDefiniteErrors)
         #expect(result.issues.contains { $0.kind == .missingRelation })
+    }
+
+    @Test func nestedSubqueryCteNamesAreParsedLocally() {
+        let result = SQLSchemaValidator.validate(
+            sql: """
+                SELECT d.id
+                FROM (
+                  WITH c AS (SELECT id FROM public.users)
+                  SELECT id FROM c
+                ) AS d
+                """,
+            against: makeUsersOrdersSchema()
+        )
+
+        #expect(!result.hasDefiniteErrors)
     }
 
     @Test func derivedTableColumnAliasListsDefineDerivedColumns() {
@@ -732,6 +780,46 @@ struct SQLSchemaValidatorTests {
 
         #expect(!result.hasDefiniteErrors)
         #expect(result.referencedTables == ["public.orders", "public.users"])
+    }
+
+    @Test func nonLateralDerivedTableCannotReferenceOuterScope() {
+        let result = SQLSchemaValidator.validate(
+            sql: """
+                SELECT d.id
+                FROM public.users AS u
+                JOIN (SELECT u.id) AS d(id) ON true
+                """,
+            against: makeUsersOrdersSchema()
+        )
+
+        #expect(result.hasDefiniteErrors)
+        #expect(result.errors.contains { $0.contains("qualifier u") })
+    }
+
+    @Test func commaDerivedTableCannotReferenceOuterScope() {
+        let result = SQLSchemaValidator.validate(
+            sql: """
+                SELECT d.id
+                FROM public.users AS u, (SELECT u.id) AS d(id)
+                """,
+            against: makeUsersOrdersSchema()
+        )
+
+        #expect(result.hasDefiniteErrors)
+        #expect(result.errors.contains { $0.contains("qualifier u") })
+    }
+
+    @Test func lateralDerivedTableCanReferenceOuterScope() {
+        let result = SQLSchemaValidator.validate(
+            sql: """
+                SELECT d.id
+                FROM public.users AS u
+                JOIN LATERAL (SELECT u.id) AS d(id) ON true
+                """,
+            against: makeUsersOrdersSchema()
+        )
+
+        #expect(!result.hasDefiniteErrors)
     }
 
     @Test func cteOutputColumnsAreValidated() {
@@ -978,6 +1066,28 @@ struct SQLSchemaValidatorTests {
             ],
             foreignKeys: []
         )
+    }
+
+    private func makeUsersOrdersNotesSchema() -> DatabaseSchema {
+        var schema = makeUsersOrdersSchema()
+        schema.tables.append(
+            TableInfo(
+                schema: "public",
+                name: "notes",
+                type: .baseTable,
+                columns: [
+                    ColumnInfo(
+                        tableSchema: "public",
+                        tableName: "notes",
+                        name: "body",
+                        dataType: "text",
+                        isNullable: false,
+                        ordinalPosition: 1
+                    )
+                ]
+            )
+        )
+        return schema
     }
 
     private func makeUsersStagingSchema() -> DatabaseSchema {

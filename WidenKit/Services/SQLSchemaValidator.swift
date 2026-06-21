@@ -93,6 +93,7 @@ public enum SQLSchemaValidator {
                     scopeSources[scopeIndex].append(
                         ResolvedRelationSource.cte(
                             name: relation.alias ?? relation.name,
+                            nameIsQuoted: relation.alias == nil && relation.nameIsQuoted,
                             alias: relation.alias,
                             aliasIsQuoted: relation.aliasIsQuoted,
                             columns: relation.derivedColumns,
@@ -213,6 +214,7 @@ public enum SQLSchemaValidator {
         if column.context == .joinUsing {
             validateJoinUsingColumn(
                 column: column,
+                scope: scope,
                 scopeIndex: scopeIndex,
                 scopeSources: scopeSources,
                 schemaIndex: schemaIndex,
@@ -390,24 +392,74 @@ public enum SQLSchemaValidator {
 
     private static func validateJoinUsingColumn(
         column: SQLColumnReference,
+        scope: SQLReferenceScope,
         scopeIndex: Int,
         scopeSources: [[ResolvedRelationSource]],
         schemaIndex: SchemaLookup,
         issues: inout [SQLSchemaValidationIssue]
     ) {
         guard let sources = scopeSources[safe: scopeIndex] else { return }
+        let sourceRelations = sources.filter { $0.role == .source }
+        guard let groupOffset = column.joinUsingGroupStartOffset else {
+            if joinUsingColumn(column, isAvailableFromAtLeastTwo: sourceRelations, schemaIndex: schemaIndex) {
+                return
+            }
+            appendMissingJoinUsingIssue(column: column, issues: &issues)
+            return
+        }
+
+        var seenGroups = Set<Int>()
+        let groupOffsets = scope.columns.compactMap { usingColumn -> Int? in
+            guard usingColumn.context == .joinUsing,
+                let offset = usingColumn.joinUsingGroupStartOffset,
+                seenGroups.insert(offset).inserted
+            else {
+                return nil
+            }
+            return offset
+        }
+        guard let groupIndex = groupOffsets.firstIndex(of: groupOffset),
+            sourceRelations.indices.contains(groupIndex + 1)
+        else {
+            appendMissingJoinUsingIssue(column: column, issues: &issues)
+            return
+        }
+
+        let leftSources = sourceRelations.prefix(groupIndex + 1)
+        let rightSource = sourceRelations[groupIndex + 1]
+        let leftContains = leftSources.contains {
+            $0.definitelyContainsColumn(column, schemaIndex: schemaIndex) || $0.hasUnknownColumns
+        }
+        let rightContains =
+            rightSource.definitelyContainsColumn(column, schemaIndex: schemaIndex)
+            || rightSource.hasUnknownColumns
+        if leftContains && rightContains {
+            return
+        }
+        appendMissingJoinUsingIssue(column: column, issues: &issues)
+    }
+
+    private static func joinUsingColumn(
+        _ column: SQLColumnReference,
+        isAvailableFromAtLeastTwo sources: [ResolvedRelationSource],
+        schemaIndex: SchemaLookup
+    ) -> Bool {
         var matches = 0
         var hasUnknown = false
-        for source in sources where source.role == .source {
+        for source in sources {
             if source.definitelyContainsColumn(column, schemaIndex: schemaIndex) {
                 matches += 1
             } else if source.hasUnknownColumns {
                 hasUnknown = true
             }
         }
-        if matches >= 2 || hasUnknown {
-            return
-        }
+        return matches >= 2 || hasUnknown
+    }
+
+    private static func appendMissingJoinUsingIssue(
+        column: SQLColumnReference,
+        issues: inout [SQLSchemaValidationIssue]
+    ) {
         issues.append(
             SQLSchemaValidationIssue(
                 severity: .error,
@@ -1684,7 +1736,10 @@ private struct ResolvedRelationSource {
         let unquotedNames: Set<String>
         let quotedNames: Set<String>
         if let alias {
-            unquotedNames = aliasIsQuoted ? [] : [alias.lowercased()]
+            unquotedNames =
+                aliasIsQuoted
+                ? (isUnquotedPostgresIdentifier(alias) ? [alias.lowercased()] : [])
+                : [alias.lowercased()]
             quotedNames = aliasIsQuoted ? [alias] : []
         } else {
             unquotedNames = unquotedTableNames(for: table)
@@ -1712,10 +1767,16 @@ private struct ResolvedRelationSource {
         let unquotedNames: Set<String>
         let quotedNames: Set<String>
         if let alias {
-            unquotedNames = aliasIsQuoted ? [] : [alias.lowercased()]
+            unquotedNames =
+                aliasIsQuoted
+                ? (isUnquotedPostgresIdentifier(alias) ? [alias.lowercased()] : [])
+                : [alias.lowercased()]
             quotedNames = aliasIsQuoted ? [alias] : []
         } else {
-            unquotedNames = nameIsQuoted ? [] : [name.lowercased()]
+            unquotedNames =
+                nameIsQuoted
+                ? (isUnquotedPostgresIdentifier(name) ? [name.lowercased()] : [])
+                : [name.lowercased()]
             quotedNames = nameIsQuoted ? [name] : []
         }
         return ResolvedRelationSource(

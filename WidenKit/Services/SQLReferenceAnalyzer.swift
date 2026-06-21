@@ -85,6 +85,7 @@ public struct SQLColumnReference: Equatable, Hashable, Sendable {
     public var context: Context
     public var startOffset: Int?
     public var endOffset: Int?
+    public var joinUsingGroupStartOffset: Int?
 
     public init(
         qualifier: String?,
@@ -93,7 +94,8 @@ public struct SQLColumnReference: Equatable, Hashable, Sendable {
         isQuoted: Bool = false,
         context: Context = .expression,
         startOffset: Int? = nil,
-        endOffset: Int? = nil
+        endOffset: Int? = nil,
+        joinUsingGroupStartOffset: Int? = nil
     ) {
         self.qualifier = qualifier
         self.name = name
@@ -102,6 +104,7 @@ public struct SQLColumnReference: Equatable, Hashable, Sendable {
         self.context = context
         self.startOffset = startOffset
         self.endOffset = endOffset
+        self.joinUsingGroupStartOffset = joinUsingGroupStartOffset
     }
 }
 
@@ -120,7 +123,11 @@ public struct SQLIdentifierName: Equatable, Hashable, Sendable {
 
     public func matches(name: String, isQuoted: Bool) -> Bool {
         if self.isQuoted {
-            return isQuoted && name == self.name
+            if isQuoted {
+                return name == self.name
+            }
+            return Self.isUnquotedPostgresIdentifier(self.name)
+                && name.lowercased() == self.name
         }
         if isQuoted {
             return name == self.name
@@ -134,6 +141,20 @@ public struct SQLIdentifierName: Equatable, Hashable, Sendable {
 
     public func matches(_ column: SQLColumnReference) -> Bool {
         matches(name: column.name, isQuoted: column.isQuoted)
+    }
+
+    private static func isUnquotedPostgresIdentifier(_ value: String) -> Bool {
+        guard let first = value.first,
+            first == "_" || (first >= "a" && first <= "z")
+        else {
+            return false
+        }
+        return value.allSatisfy { character in
+            character == "_"
+                || character == "$"
+                || (character >= "a" && character <= "z")
+                || (character >= "0" && character <= "9")
+        }
     }
 }
 
@@ -185,12 +206,18 @@ public enum SQLReferenceAnalyzer {
         parseScopes(
             Array(tokens[mainStart..<tokens.count]),
             cteNames: cteNames,
+            cteOutputColumns: &cteOutputColumns,
             parentIndex: nil,
             scopes: &scopes,
             incomplete: &incomplete
         )
         if scopes.isEmpty {
-            let relations = parseRelations(tokens, cteNames: cteNames, incomplete: &incomplete)
+            let relations = parseRelations(
+                tokens,
+                cteNames: cteNames,
+                cteOutputColumns: cteOutputColumns,
+                incomplete: &incomplete
+            )
             let outputAliases = parseOutputAliases(tokens)
             let columns = parseColumnReferences(
                 tokens,
@@ -274,6 +301,7 @@ public enum SQLReferenceAnalyzer {
             parseScopes(
                 innerTokens,
                 cteNames: cteNames,
+                cteOutputColumns: &cteOutputColumns,
                 parentIndex: nil,
                 scopes: &scopes,
                 incomplete: &incomplete
@@ -300,10 +328,31 @@ public enum SQLReferenceAnalyzer {
     private static func parseScopes(
         _ tokens: [SQLToken],
         cteNames: Set<SQLIdentifierName>,
+        cteOutputColumns: inout [SQLIdentifierName: Set<SQLDerivedColumn>?],
         parentIndex: Int?,
         scopes: inout [SQLReferenceScope],
         incomplete: inout Bool
     ) {
+        var cteNames = cteNames
+        let startIndex = parseCTEs(
+            tokens,
+            cteNames: &cteNames,
+            cteOutputColumns: &cteOutputColumns,
+            scopes: &scopes,
+            incomplete: &incomplete
+        )
+        if startIndex > 0 {
+            parseScopes(
+                Array(tokens[startIndex..<tokens.count]),
+                cteNames: cteNames,
+                cteOutputColumns: &cteOutputColumns,
+                parentIndex: parentIndex,
+                scopes: &scopes,
+                incomplete: &incomplete
+            )
+            return
+        }
+
         var index = 0
         var foundTopLevelSelect = false
         while index < tokens.count {
@@ -318,6 +367,7 @@ public enum SQLReferenceAnalyzer {
                     parseScopes(
                         innerTokens,
                         cteNames: cteNames,
+                        cteOutputColumns: &cteOutputColumns,
                         parentIndex: parentIndex,
                         scopes: &scopes,
                         incomplete: &incomplete
@@ -337,6 +387,7 @@ public enum SQLReferenceAnalyzer {
                     let targetRelations = parseRelations(
                         insertPrefix,
                         cteNames: cteNames,
+                        cteOutputColumns: cteOutputColumns,
                         incomplete: &incomplete,
                         skipCTEs: false
                     )
@@ -361,6 +412,7 @@ public enum SQLReferenceAnalyzer {
                 let relations = parseRelations(
                     statementTokens,
                     cteNames: cteNames,
+                    cteOutputColumns: cteOutputColumns,
                     incomplete: &incomplete,
                     skipCTEs: false
                 )
@@ -383,6 +435,7 @@ public enum SQLReferenceAnalyzer {
                 parseNestedSubqueryScopes(
                     Array(tokens[index..<statementEnd]),
                     cteNames: cteNames,
+                    cteOutputColumns: &cteOutputColumns,
                     parentIndex: scopeIndex,
                     scopes: &scopes,
                     incomplete: &incomplete
@@ -397,6 +450,7 @@ public enum SQLReferenceAnalyzer {
             let relations = parseRelations(
                 tokens,
                 cteNames: cteNames,
+                cteOutputColumns: cteOutputColumns,
                 incomplete: &incomplete,
                 skipCTEs: false
             )
@@ -422,6 +476,7 @@ public enum SQLReferenceAnalyzer {
     private static func parseNestedSubqueryScopes(
         _ tokens: [SQLToken],
         cteNames: Set<SQLIdentifierName>,
+        cteOutputColumns: inout [SQLIdentifierName: Set<SQLDerivedColumn>?],
         parentIndex: Int,
         scopes: inout [SQLReferenceScope],
         incomplete: inout Bool
@@ -441,7 +496,12 @@ public enum SQLReferenceAnalyzer {
                 parseScopes(
                     innerTokens,
                     cteNames: cteNames,
-                    parentIndex: parentIndex,
+                    cteOutputColumns: &cteOutputColumns,
+                    parentIndex: nestedParentIndex(
+                        forGroupAt: index,
+                        tokens: tokens,
+                        inheritedParentIndex: parentIndex
+                    ),
                     scopes: &scopes,
                     incomplete: &incomplete
                 )
@@ -450,9 +510,34 @@ public enum SQLReferenceAnalyzer {
         }
     }
 
+    private static func nestedParentIndex(
+        forGroupAt openIndex: Int,
+        tokens: [SQLToken],
+        inheritedParentIndex: Int
+    ) -> Int? {
+        isNonLateralDerivedTableGroup(at: openIndex, tokens: tokens) ? nil : inheritedParentIndex
+    }
+
+    private static func isNonLateralDerivedTableGroup(at openIndex: Int, tokens: [SQLToken]) -> Bool {
+        guard let previousIndex = previousNonParenthesisIndex(before: openIndex, in: tokens),
+            let previous = tokens[safe: previousIndex]
+        else {
+            return false
+        }
+        if previous.normalized == "lateral" {
+            return false
+        }
+        if previous.normalized == "from" || previous.normalized == "join" {
+            return true
+        }
+        return previous.text == ","
+            && topLevelClause(containing: openIndex, tokens: tokens) == "from"
+    }
+
     private static func parseRelations(
         _ tokens: [SQLToken],
         cteNames: Set<SQLIdentifierName>,
+        cteOutputColumns: [SQLIdentifierName: Set<SQLDerivedColumn>?] = [:],
         incomplete: inout Bool,
         skipCTEs: Bool = true
     ) -> [SQLRelationReference] {
@@ -504,8 +589,10 @@ public enum SQLReferenceAnalyzer {
                             if let aliasParse {
                                 index = aliasParse.nextIndex
                             }
-                            if containsTopLevelSelect(innerTokens) {
-                                let inferredColumns = inferSelectOutputColumns(innerTokens)
+                            let isSelectDerived = containsTopLevelSelect(innerTokens)
+                            if isSelectDerived || containsTopLevelValues(innerTokens) {
+                                let inferredColumns =
+                                    isSelectDerived ? inferSelectOutputColumns(innerTokens) : nil
                                 relations.append(
                                     SQLRelationReference(
                                         name: aliasParse?.alias ?? "__derived_table",
@@ -529,14 +616,20 @@ public enum SQLReferenceAnalyzer {
                     } else if let relation = parseRelation(at: &index, tokens: tokens) {
                         var roleRelation = relation
                         roleRelation.role = role
-                        if !skipCTEs
-                            || !cteNames.contains(where: {
+                        if roleRelation.schema == nil,
+                            let cteName = cteNames.first(where: {
                                 $0.matches(
                                     name: roleRelation.name,
                                     isQuoted: roleRelation.nameIsQuoted
                                 )
                             })
                         {
+                            if !skipCTEs {
+                                roleRelation.isDerived = true
+                                roleRelation.derivedColumns = cteOutputColumns[cteName] ?? nil
+                                relations.append(roleRelation)
+                            }
+                        } else {
                             relations.append(roleRelation)
                         }
                     } else {
@@ -818,7 +911,7 @@ public enum SQLReferenceAnalyzer {
                 continue
             }
 
-            if isJoinUsingColumn(at: index, tokens: tokens) {
+            if let usingGroup = joinUsingGroup(containing: index, tokens: tokens) {
                 columns.append(
                     SQLColumnReference(
                         qualifier: nil,
@@ -826,7 +919,8 @@ public enum SQLReferenceAnalyzer {
                         isQuoted: token.kind == .quotedIdentifier,
                         context: .joinUsing,
                         startOffset: token.startOffset,
-                        endOffset: token.endOffset
+                        endOffset: token.endOffset,
+                        joinUsingGroupStartOffset: tokens[safe: usingGroup.openIndex]?.startOffset
                     ))
                 index += 1
                 continue
@@ -889,6 +983,7 @@ public enum SQLReferenceAnalyzer {
                 || isArrayConstructor(at: index, tokens: tokens)
                 || isInsideExtractField(at: index, tokens: tokens)
                 || isOnConflictConstraintName(at: index, tokens: tokens)
+                || isRelationAliasColumn(at: index, tokens: tokens)
                 || tokens[safe: index + 1]?.text == "("
                 || tokens[safe: index - 1]?.text == "."
                 || tokens[safe: index + 1]?.text == "."
@@ -1042,13 +1137,59 @@ public enum SQLReferenceAnalyzer {
         return index > group.openIndex && index < group.closeIndex
     }
 
-    private static func isJoinUsingColumn(at index: Int, tokens: [SQLToken]) -> Bool {
+    private static func joinUsingGroup(
+        containing index: Int,
+        tokens: [SQLToken]
+    ) -> (openIndex: Int, closeIndex: Int)? {
         guard let group = enclosingGroup(containing: index, tokens: tokens),
             tokens[safe: group.openIndex - 1]?.normalized == "using"
         else {
+            return nil
+        }
+        return index > group.openIndex && index < group.closeIndex ? group : nil
+    }
+
+    private static func isRelationAliasColumn(at index: Int, tokens: [SQLToken]) -> Bool {
+        guard let group = enclosingGroup(containing: index, tokens: tokens),
+            index > group.openIndex,
+            index < group.closeIndex
+        else {
             return false
         }
-        return index > group.openIndex && index < group.closeIndex
+        return isRelationAliasColumnListGroup(at: group.openIndex, tokens: tokens)
+    }
+
+    private static func isRelationAliasColumnListGroup(at openIndex: Int, tokens: [SQLToken])
+        -> Bool
+    {
+        guard let aliasIndex = previousNonCommaIndex(before: openIndex, in: tokens),
+            let alias = tokens[safe: aliasIndex],
+            alias.isIdentifierLike,
+            !SQLToken.keywords.contains(alias.normalized),
+            let clause = topLevelClause(containing: openIndex, tokens: tokens),
+            clause == "from" || clause == "using"
+        else {
+            return false
+        }
+
+        var beforeAliasIndex = previousNonCommaIndex(before: aliasIndex, in: tokens)
+        if let asIndex = beforeAliasIndex,
+            tokens[safe: asIndex]?.normalized == "as"
+        {
+            beforeAliasIndex = previousNonCommaIndex(before: asIndex, in: tokens)
+        }
+
+        guard let beforeAliasIndex, let beforeAlias = tokens[safe: beforeAliasIndex] else {
+            return false
+        }
+        if relationStartKeywords.contains(beforeAlias.normalized)
+            || beforeAlias.normalized == "only"
+            || beforeAlias.normalized == "lateral"
+            || beforeAlias.text == ","
+        {
+            return false
+        }
+        return true
     }
 
     private static func isInsideExtractField(at index: Int, tokens: [SQLToken]) -> Bool {
@@ -1305,12 +1446,33 @@ public enum SQLReferenceAnalyzer {
 
     private static func previousSignificantToken(before index: Int, in tokens: [SQLToken]) -> SQLToken?
     {
+        guard let index = previousNonCommaIndex(before: index, in: tokens) else { return nil }
+        return tokens[safe: index]
+    }
+
+    private static func previousNonCommaIndex(before index: Int, in tokens: [SQLToken]) -> Int? {
         guard index > 0 else { return nil }
         var cursor = index - 1
         while cursor >= 0 {
             let token = tokens[cursor]
             if token.text != "," && token.text != "(" && token.text != ")" {
-                return token
+                return cursor
+            }
+            if cursor == 0 { break }
+            cursor -= 1
+        }
+        return nil
+    }
+
+    private static func previousNonParenthesisIndex(before index: Int, in tokens: [SQLToken])
+        -> Int?
+    {
+        guard index > 0 else { return nil }
+        var cursor = index - 1
+        while cursor >= 0 {
+            let token = tokens[cursor]
+            if token.text != "(" && token.text != ")" {
+                return cursor
             }
             if cursor == 0 { break }
             cursor -= 1
@@ -1377,6 +1539,11 @@ public enum SQLReferenceAnalyzer {
     private static func containsTopLevelSelect(_ tokens: [SQLToken]) -> Bool {
         nextTopLevelIndex(ofAny: ["select"], in: tokens, after: 0) != nil
             || tokens.first?.normalized == "select"
+    }
+
+    private static func containsTopLevelValues(_ tokens: [SQLToken]) -> Bool {
+        nextTopLevelIndex(ofAny: ["values"], in: tokens, after: 0) != nil
+            || tokens.first?.normalized == "values"
     }
 
     private static func indexAfterBalancedGroup(_ tokens: [SQLToken], startingAt start: Int) -> Int? {
