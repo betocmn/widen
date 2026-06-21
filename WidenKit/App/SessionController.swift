@@ -1056,7 +1056,7 @@ public final class SessionController: Identifiable {
 
     private static func isRetryableGeneratedSQLFailure(_ failure: QueryFailure?) -> Bool {
         guard let failure else { return false }
-        if let diagnostic = failure.diagnostic {
+        if let diagnostic = failure.diagnostic ?? Self.diagnostic(from: failure.message) {
             switch diagnostic.kind {
             case .insufficientPrivilege, .timedOut, .cancelled:
                 return false
@@ -1066,6 +1066,7 @@ public final class SessionController: Identifiable {
             if diagnostic.sqlState == "42501" || diagnostic.sqlState == "57014" {
                 return false
             }
+            return true
         }
         return isRetryableGeneratedSQLError(failure.message)
     }

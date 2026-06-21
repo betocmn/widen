@@ -152,6 +152,24 @@ struct SQLSchemaValidatorTests {
         #expect(!result.hasDefiniteErrors)
     }
 
+    @Test func schemaQualifiedFunctionCallsAreNotColumnReferences() {
+        let dateTrunc = SQLSchemaValidator.validate(
+            sql: """
+                SELECT pg_catalog.date_trunc('day', created_at) AS day, COUNT(*) n
+                FROM public.orders
+                GROUP BY pg_catalog.date_trunc('day', created_at)
+                """,
+            against: makeUsersOrdersSchema()
+        )
+        let customFunction = SQLSchemaValidator.validate(
+            sql: "SELECT public.my_func(id) AS value FROM public.users",
+            against: makeUsersOrdersSchema()
+        )
+
+        #expect(!dateTrunc.hasDefiniteErrors)
+        #expect(!customFunction.hasDefiniteErrors)
+    }
+
     @Test func multiwordDoubleColonCastTypeNamesAreNotTreatedAsColumns() {
         let result = SQLSchemaValidator.validate(
             sql: """
@@ -1135,6 +1153,20 @@ struct SQLSchemaValidatorTests {
         #expect(result.errors.first?.contains("email") == true)
     }
 
+    @Test func quotedLowercaseCTEColumnsAllowUnquotedReferences() {
+        let result = SQLSchemaValidator.validate(
+            sql: """
+                WITH recent_users("id") AS (
+                  SELECT id FROM public.users
+                )
+                SELECT id FROM recent_users
+                """,
+            against: makeUsersOrdersSchema()
+        )
+
+        #expect(!result.hasDefiniteErrors)
+    }
+
     @Test func unresolvedAliasStarIsDefiniteError() {
         let result = SQLSchemaValidator.validate(
             sql: "SELECT missing_alias.* FROM public.users AS u",
@@ -1238,6 +1270,31 @@ struct SQLSchemaValidatorTests {
         #expect(!enriched.needsClarification)
         #expect(enriched.sql == generation.sql)
         #expect(enriched.referencedTables == ["public.customers"])
+    }
+
+    @Test func unconstrainedStatusLiteralDoesNotDefineBusinessTerm() {
+        let generation = SQLGenerationResult(
+            sql: "SELECT COUNT(*) FROM public.users WHERE status = 'active'",
+            explanation: "Counts active users.",
+            assumptions: [],
+            referencedTables: [],
+            confidence: 1,
+            riskLevel: .low,
+            needsClarification: false,
+            clarificationQuestion: nil
+        )
+
+        let enriched = GeneratedSQLPostprocessor.enriched(
+            generation,
+            question: "how many active users do we have?",
+            schema: makeUsersUnconstrainedStatusSchema(),
+            databaseContext: ""
+        )
+
+        #expect(enriched.needsClarification)
+        #expect(enriched.sql.isEmpty)
+        #expect(enriched.clarificationQuestion?.contains("\"active\"") == true)
+        #expect(enriched.referencedTables == ["public.users"])
     }
 
     @Test func postprocessorAsksWhenMetricTermIsMissingFromReferencedSchema() {
@@ -1528,6 +1585,38 @@ struct SQLSchemaValidatorTests {
                         ),
                     ]
                 ),
+            ],
+            foreignKeys: []
+        )
+    }
+
+    private func makeUsersUnconstrainedStatusSchema() -> DatabaseSchema {
+        DatabaseSchema(
+            schemas: [SchemaInfo(name: "public")],
+            tables: [
+                TableInfo(
+                    schema: "public",
+                    name: "users",
+                    type: .baseTable,
+                    columns: [
+                        ColumnInfo(
+                            tableSchema: "public",
+                            tableName: "users",
+                            name: "id",
+                            dataType: "integer",
+                            isNullable: false,
+                            ordinalPosition: 1
+                        ),
+                        ColumnInfo(
+                            tableSchema: "public",
+                            tableName: "users",
+                            name: "status",
+                            dataType: "text",
+                            isNullable: false,
+                            ordinalPosition: 2
+                        ),
+                    ]
+                )
             ],
             foreignKeys: []
         )

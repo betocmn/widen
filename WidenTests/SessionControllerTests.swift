@@ -122,6 +122,28 @@ struct SessionControllerTests {
         }
     }
 
+    private struct CancelledAtColumnExecutor: QueryExecuting {
+        let recorder: SQLRecorder
+
+        func run(
+            sql: String,
+            config: DatabaseConnectionConfig,
+            postgres: PostgresService
+        ) async throws -> QueryResult {
+            await recorder.record(sql)
+            if sql.contains("cancelled_at") {
+                throw AppError.executionFailed(#"column "cancelled_at" does not exist"#)
+            }
+            return QueryResult(
+                columns: ["id"],
+                rows: [["1"]],
+                rowCount: 1,
+                truncated: false,
+                executionTimeMs: 4
+            )
+        }
+    }
+
     private struct AlwaysFailingExecutor: QueryExecuting {
         let recorder: SQLRecorder
 
@@ -657,6 +679,42 @@ struct SessionControllerTests {
         #expect(generator.contexts[0].mode == .repair)
         #expect(generator.contexts[0].repairContext?.diagnostic?.kind == .missingColumn)
         #expect(generator.contexts[0].repairContext?.forbiddenIdentifiers.contains("timeout") == true)
+        #expect(controller.queryVM.sqlText == fixedGeneration.sql)
+    }
+
+    @Test func generatedRunErrorRepairsMissingColumnNamedCancelledAt() async {
+        let connectionID = UUID()
+        let (state, dir) = makeState(connectionID: connectionID, connected: true)
+        defer { try? FileManager.default.removeItem(at: dir) }
+        state.schemas[connectionID] = makeSchema()
+        let badGeneration = makeGeneration(sql: "SELECT cancelled_at FROM public.users")
+        let fixedGeneration = makeGeneration(sql: "SELECT id FROM public.users LIMIT 100")
+        let generator = RecordingRepairGenerator(results: [fixedGeneration])
+        state.sqlGeneratorOverride = generator
+        let recorder = SQLRecorder()
+        let controller = makeController(
+            connectionID: connectionID,
+            executor: CancelledAtColumnExecutor(recorder: recorder)
+        )
+        controller.chatVM.messages = [
+            ChatMessage(role: .user, text: "show cancelled users"),
+            ChatMessage(role: .assistant, text: badGeneration.explanation, generation: badGeneration),
+        ]
+        controller.queryVM.setGeneration(badGeneration)
+
+        controller.runQuery(appState: state)
+        await waitUntil {
+            !controller.queryVM.isRunning
+                && !controller.chatVM.isGenerating
+                && controller.chatVM.messages.last?.role == .result
+        }
+
+        let statements = await recorder.all()
+        #expect(statements == [badGeneration.sql, fixedGeneration.sql])
+        #expect(generator.contexts.count == 1)
+        #expect(generator.contexts[0].mode == .repair)
+        #expect(generator.contexts[0].repairContext?.diagnostic?.kind == .missingColumn)
+        #expect(generator.contexts[0].repairContext?.forbiddenIdentifiers.contains("cancelled_at") == true)
         #expect(controller.queryVM.sqlText == fixedGeneration.sql)
     }
 

@@ -70,12 +70,29 @@ public struct SQLDerivedColumn: Equatable, Hashable, Sendable {
 
     public func matches(_ column: SQLColumnReference) -> Bool {
         if isQuoted {
-            return column.isQuoted && column.name == name
+            if column.isQuoted {
+                return column.name == name
+            }
+            return Self.isUnquotedPostgresIdentifier(name) && column.name.lowercased() == name
         }
         if column.isQuoted {
             return column.name == name
         }
         return column.name.lowercased() == name
+    }
+
+    private static func isUnquotedPostgresIdentifier(_ value: String) -> Bool {
+        guard let first = value.first,
+            first == "_" || (first >= "a" && first <= "z")
+        else {
+            return false
+        }
+        return value.allSatisfy { character in
+            character == "_"
+                || character == "$"
+                || (character >= "a" && character <= "z")
+                || (character >= "0" && character <= "9")
+        }
     }
 }
 
@@ -1047,6 +1064,10 @@ public enum SQLReferenceAnalyzer {
                 let column = tokens[safe: index + 4],
                 column.isIdentifierLike || column.text == "*"
             {
+                if tokens[safe: index + 5]?.text == "(" {
+                    index += 5
+                    continue
+                }
                 columns.append(
                     SQLColumnReference(
                         qualifier: "\(token.identifierValue).\(table.identifierValue)",
@@ -1065,6 +1086,10 @@ public enum SQLReferenceAnalyzer {
                 let column = tokens[safe: index + 2],
                 column.isIdentifierLike || column.text == "*"
             {
+                if tokens[safe: index + 3]?.text == "(" {
+                    index += 3
+                    continue
+                }
                 let qualifiedName = "\(token.identifierValue).\(column.identifierValue)".lowercased()
                 if isQualifiedRelationTarget(at: index, tokens: tokens)
                     || relationAliases.contains(qualifiedName)

@@ -1935,26 +1935,32 @@ public enum GeneratedSQLPostprocessor {
             guard token.kind == .string else { return }
             let literalTokens = Set(SchemaIndex.tokens(in: stringLiteralBody(token.text)))
             guard !literalTokens.isEmpty else { return }
-            if let comparison = comparisonColumnReference(beforeLiteralAt: index, tokens: sqlTokens),
-                let entries = constrainedValues[comparison.name.lowercased()]
-            {
-                let matchingEntries = constrainedValueEntries(matching: comparison, entries: entries)
-                if !matchingEntries.isEmpty {
-                    if comparison.qualifier == nil, matchingEntries.count > 1 {
-                        guard matchingEntries.allSatisfy({
-                            !literalTokens.isDisjoint(with: $0.valueTokens)
-                        }) else {
-                            result.rejected.formUnion(literalTokens)
-                            return
+            if let comparison = comparisonColumnReference(beforeLiteralAt: index, tokens: sqlTokens) {
+                if let entries = constrainedValues[comparison.name.lowercased()] {
+                    let matchingEntries = constrainedValueEntries(matching: comparison, entries: entries)
+                    if !matchingEntries.isEmpty {
+                        if comparison.qualifier == nil, matchingEntries.count > 1 {
+                            guard matchingEntries.allSatisfy({
+                                !literalTokens.isDisjoint(with: $0.valueTokens)
+                            }) else {
+                                result.rejected.formUnion(literalTokens)
+                                return
+                            }
+                        } else {
+                            guard matchingEntries.contains(where: {
+                                !literalTokens.isDisjoint(with: $0.valueTokens)
+                            }) else {
+                                result.rejected.formUnion(literalTokens)
+                                return
+                            }
                         }
-                    } else {
-                        guard matchingEntries.contains(where: {
-                            !literalTokens.isDisjoint(with: $0.valueTokens)
-                        }) else {
-                            result.rejected.formUnion(literalTokens)
-                            return
-                        }
+                    } else if requiresConstrainedLiteralProof(comparison) {
+                        result.rejected.formUnion(literalTokens)
+                        return
                     }
+                } else if requiresConstrainedLiteralProof(comparison) {
+                    result.rejected.formUnion(literalTokens)
+                    return
                 }
             }
             result.accepted.formUnion(literalTokens)
@@ -2023,6 +2029,14 @@ public enum GeneratedSQLPostprocessor {
         guard let qualifier = comparison.qualifier else { return entries }
         let lookup = comparison.qualifierIsQuoted ? qualifier : qualifier.lowercased()
         return entries.filter { $0.qualifiers.contains(lookup) }
+    }
+
+    private static func requiresConstrainedLiteralProof(_ comparison: ComparisonColumnReference)
+        -> Bool
+    {
+        guard !comparison.isQuoted else { return false }
+        let name = comparison.name.lowercased()
+        return name == "status" || name.hasSuffix("_status")
     }
 
     private static func comparisonColumnReference(
