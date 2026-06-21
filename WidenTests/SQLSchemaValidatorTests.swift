@@ -492,6 +492,16 @@ struct SQLSchemaValidatorTests {
         #expect(!result.hasDefiniteErrors)
     }
 
+    @Test func insertValuesExpressionsDoNotResolveAgainstInsertTarget() {
+        let result = SQLSchemaValidator.validate(
+            sql: "INSERT INTO public.users (email) VALUES (email)",
+            against: makeUsersOrdersSchema()
+        )
+
+        #expect(result.hasDefiniteErrors)
+        #expect(result.errors.contains { $0.contains("email") })
+    }
+
     @Test func excludedColumnsResolveAgainstUpsertTarget() {
         let valid = SQLSchemaValidator.validate(
             sql: """
@@ -704,6 +714,21 @@ struct SQLSchemaValidatorTests {
         )
 
         #expect(!result.hasDefiniteErrors)
+    }
+
+    @Test func singleQuotedQualifiedTableNameIsNotAQualifier() {
+        let invalid = SQLSchemaValidator.validate(
+            sql: #"SELECT "public.users".id FROM public.users"#,
+            against: makeUsersOrdersSchema()
+        )
+        let separatelyQuoted = SQLSchemaValidator.validate(
+            sql: #"SELECT "public"."users".id FROM public.users"#,
+            against: makeUsersOrdersSchema()
+        )
+
+        #expect(invalid.hasDefiniteErrors)
+        #expect(invalid.errors.contains { $0.contains("public.users") })
+        #expect(!separatelyQuoted.hasDefiniteErrors)
     }
 
     @Test func quotedCteOutputAliasRequiresExactQuotedReference() {
@@ -970,6 +995,22 @@ struct SQLSchemaValidatorTests {
         #expect(result.issues.contains { $0.kind == .invalidTemporalComparison })
     }
 
+    @Test func parenthesizedTemporalColumnComparedToIntervalIsDefiniteError() {
+        let left = SQLSchemaValidator.validate(
+            sql: "SELECT id FROM public.orders WHERE (created_at) > INTERVAL '7 days'",
+            against: makeUsersOrdersSchema()
+        )
+        let right = SQLSchemaValidator.validate(
+            sql: "SELECT id FROM public.orders WHERE INTERVAL '7 days' < (created_at)",
+            against: makeUsersOrdersSchema()
+        )
+
+        #expect(left.hasDefiniteErrors)
+        #expect(left.issues.contains { $0.kind == .invalidTemporalComparison })
+        #expect(right.hasDefiniteErrors)
+        #expect(right.issues.contains { $0.kind == .invalidTemporalComparison })
+    }
+
     @Test func temporalFunctionDifferenceCanBeComparedToInterval() {
         let result = SQLSchemaValidator.validate(
             sql: "SELECT id FROM public.jobs WHERE NOW() - started_at > INTERVAL '7 days'",
@@ -1006,6 +1047,15 @@ struct SQLSchemaValidatorTests {
                   AND TRIM(BOTH FROM email) <> ''
                   AND SUBSTRING(email FROM 1 FOR 2) = 'al'
                 """,
+            against: makeUsersOrdersSchema()
+        )
+
+        #expect(!result.hasDefiniteErrors)
+    }
+
+    @Test func fetchFirstClauseIsNotAColumnReference() {
+        let result = SQLSchemaValidator.validate(
+            sql: "SELECT id FROM public.orders ORDER BY created_at FETCH FIRST 10 ROWS ONLY",
             against: makeUsersOrdersSchema()
         )
 
@@ -1418,6 +1468,49 @@ struct SQLSchemaValidatorTests {
         #expect(enriched.sql.isEmpty)
         #expect(enriched.clarificationQuestion?.contains("\"churned\"") == true)
         #expect(enriched.referencedTables == ["public.users"])
+    }
+
+    @Test func inventedConstrainedLiteralInMembershipDoesNotDefineBusinessTerm() {
+        let inGeneration = SQLGenerationResult(
+            sql: "SELECT COUNT(*) FROM public.users WHERE status IN ('churned')",
+            explanation: "Counts churned users.",
+            assumptions: [],
+            referencedTables: [],
+            confidence: 1,
+            riskLevel: .low,
+            needsClarification: false,
+            clarificationQuestion: nil
+        )
+        let anyGeneration = SQLGenerationResult(
+            sql: "SELECT COUNT(*) FROM public.users WHERE status = ANY(ARRAY['churned'])",
+            explanation: "Counts churned users.",
+            assumptions: [],
+            referencedTables: [],
+            confidence: 1,
+            riskLevel: .low,
+            needsClarification: false,
+            clarificationQuestion: nil
+        )
+
+        let inEnriched = GeneratedSQLPostprocessor.enriched(
+            inGeneration,
+            question: "how many churned users do we have?",
+            schema: makeUsersStatusSchema(),
+            databaseContext: ""
+        )
+        let anyEnriched = GeneratedSQLPostprocessor.enriched(
+            anyGeneration,
+            question: "how many churned users do we have?",
+            schema: makeUsersStatusSchema(),
+            databaseContext: ""
+        )
+
+        #expect(inEnriched.needsClarification)
+        #expect(inEnriched.sql.isEmpty)
+        #expect(inEnriched.clarificationQuestion?.contains("\"churned\"") == true)
+        #expect(anyEnriched.needsClarification)
+        #expect(anyEnriched.sql.isEmpty)
+        #expect(anyEnriched.clarificationQuestion?.contains("\"churned\"") == true)
     }
 
     @Test func constrainedLiteralMustMatchQualifiedColumnTable() {

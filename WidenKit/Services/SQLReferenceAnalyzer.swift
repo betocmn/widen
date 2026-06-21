@@ -99,6 +99,7 @@ public struct SQLDerivedColumn: Equatable, Hashable, Sendable {
 public struct SQLColumnReference: Equatable, Hashable, Sendable {
     public enum Context: Equatable, Hashable, Sendable {
         case expression
+        case insertValuesExpression
         case insertTarget
         case joinUsing
         case updateSetTarget
@@ -107,6 +108,7 @@ public struct SQLColumnReference: Equatable, Hashable, Sendable {
     public var qualifier: String?
     public var name: String
     public var qualifierIsQuoted: Bool
+    public var qualifierIsSingleQuotedIdentifier: Bool
     public var isQuoted: Bool
     public var context: Context
     public var startOffset: Int?
@@ -117,6 +119,7 @@ public struct SQLColumnReference: Equatable, Hashable, Sendable {
         qualifier: String?,
         name: String,
         qualifierIsQuoted: Bool = false,
+        qualifierIsSingleQuotedIdentifier: Bool = false,
         isQuoted: Bool = false,
         context: Context = .expression,
         startOffset: Int? = nil,
@@ -126,6 +129,7 @@ public struct SQLColumnReference: Equatable, Hashable, Sendable {
         self.qualifier = qualifier
         self.name = name
         self.qualifierIsQuoted = qualifierIsQuoted
+        self.qualifierIsSingleQuotedIdentifier = qualifierIsSingleQuotedIdentifier
         self.isQuoted = isQuoted
         self.context = context
         self.startOffset = startOffset
@@ -1075,6 +1079,7 @@ public enum SQLReferenceAnalyzer {
                         qualifierIsQuoted: token.kind == .quotedIdentifier
                             || table.kind == .quotedIdentifier,
                         isQuoted: column.kind == .quotedIdentifier,
+                        context: expressionContext(at: index, tokens: tokens),
                         startOffset: column.startOffset,
                         endOffset: column.endOffset
                     ))
@@ -1102,7 +1107,9 @@ public enum SQLReferenceAnalyzer {
                         qualifier: token.identifierValue,
                         name: column.text == "*" ? "*" : column.identifierValue,
                         qualifierIsQuoted: token.kind == .quotedIdentifier,
+                        qualifierIsSingleQuotedIdentifier: token.kind == .quotedIdentifier,
                         isQuoted: column.kind == .quotedIdentifier,
+                        context: expressionContext(at: index, tokens: tokens),
                         startOffset: column.startOffset,
                         endOffset: column.endOffset
                     ))
@@ -1138,6 +1145,7 @@ public enum SQLReferenceAnalyzer {
                     qualifier: nil,
                     name: token.identifierValue,
                     isQuoted: token.kind == .quotedIdentifier,
+                    context: expressionContext(at: index, tokens: tokens),
                     startOffset: token.startOffset,
                     endOffset: token.endOffset
                 ))
@@ -1276,6 +1284,25 @@ public enum SQLReferenceAnalyzer {
             return false
         }
         return index > group.openIndex && index < group.closeIndex
+    }
+
+    private static func expressionContext(
+        at index: Int,
+        tokens: [SQLToken]
+    ) -> SQLColumnReference.Context {
+        isInsertValuesExpression(at: index, tokens: tokens)
+            ? .insertValuesExpression
+            : .expression
+    }
+
+    private static func isInsertValuesExpression(at index: Int, tokens: [SQLToken]) -> Bool {
+        guard topLevelClause(containing: index, tokens: tokens) == "values",
+            let valuesIndex = previousTopLevelIndex(ofAny: ["values"], in: tokens, before: index + 1),
+            previousTopLevelIndex(ofAny: ["insert"], in: tokens, before: valuesIndex) != nil
+        else {
+            return false
+        }
+        return true
     }
 
     private static func joinUsingGroup(
@@ -2244,7 +2271,7 @@ struct SQLToken: Equatable, Sendable {
         "true", "false", "interval", "current_date", "current_time", "current_timestamp", "now", "like",
         "ilike", "similar", "escape", "nulls", "first", "last", "default", "conflict",
         "do", "nothing", "constraint", "window", "rows", "row", "range", "groups", "unbounded",
-        "preceding", "current", "following",
+        "preceding", "current", "following", "fetch",
     ]
 }
 

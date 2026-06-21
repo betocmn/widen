@@ -266,10 +266,14 @@ public enum SQLSchemaValidator {
             )
             return
         }
+        let excludedRoles: Set<SQLRelationReference.Role> =
+            column.context == .insertValuesExpression ? [.insertTarget] : []
         if let qualifier = column.qualifier {
             let source = resolveSource(
                 qualifier,
                 isQuoted: column.qualifierIsQuoted,
+                quotedAsSingleIdentifier: column.qualifierIsSingleQuotedIdentifier,
+                excludingRoles: excludedRoles,
                 from: scopeIndex,
                 analysis: analysis,
                 scopeSources: scopeSources
@@ -317,7 +321,8 @@ public enum SQLSchemaValidator {
             in: scopeIndex,
             analysis: analysis,
             scopeSources: scopeSources,
-            schemaIndex: schemaIndex
+            schemaIndex: schemaIndex,
+            excludingRoles: excludedRoles
         )
         switch localResolution {
         case .resolved:
@@ -349,7 +354,8 @@ public enum SQLSchemaValidator {
                 in: index,
                 analysis: analysis,
                 scopeSources: scopeSources,
-                schemaIndex: schemaIndex
+                schemaIndex: schemaIndex,
+                excludingRoles: excludedRoles
             )
             switch parentResolution {
             case .resolved, .unknown:
@@ -613,6 +619,8 @@ public enum SQLSchemaValidator {
     private static func resolveSource(
         _ qualifier: String,
         isQuoted: Bool = false,
+        quotedAsSingleIdentifier: Bool = false,
+        excludingRoles: Set<SQLRelationReference.Role> = [],
         from scopeIndex: Int,
         analysis: SQLReferenceAnalysis,
         scopeSources: [[ResolvedRelationSource]]
@@ -620,7 +628,12 @@ public enum SQLSchemaValidator {
         var index: Int? = scopeIndex
         while let current = index {
             if let source = scopeSources[current].first(where: {
-                $0.matches(qualifier, isQuoted: isQuoted)
+                !excludingRoles.contains($0.role)
+                    && $0.matches(
+                        qualifier,
+                        isQuoted: isQuoted,
+                        quotedAsSingleIdentifier: quotedAsSingleIdentifier
+                    )
             }) {
                 return source
             }
@@ -642,12 +655,14 @@ public enum SQLSchemaValidator {
         in scopeIndex: Int,
         analysis: SQLReferenceAnalysis,
         scopeSources: [[ResolvedRelationSource]],
-        schemaIndex: SchemaLookup
+        schemaIndex: SchemaLookup,
+        excludingRoles: Set<SQLRelationReference.Role> = []
     ) -> ColumnResolution {
         var matches = 0
         var hasUnknown = false
         var quotedMatches: [(actualName: String, sourceName: String)] = []
         for source in scopeSources[scopeIndex] {
+            guard !excludingRoles.contains(source.role) else { continue }
             if source.definitelyContainsColumn(column, schemaIndex: schemaIndex) {
                 matches += 1
             } else if source.hasUnknownColumns {
@@ -1199,6 +1214,25 @@ public enum SQLSchemaValidator {
             }
         }
 
+        if tokens[safe: index]?.text == ")",
+            let openIndex = matchingOpeningParenthesis(endingAt: index, tokens: tokens),
+            let inner = temporalExpressionRange(
+                endingAt: index - 1,
+                tokens: tokens,
+                analysis: analysis,
+                scopeSources: scopeSources,
+                schemaIndex: schemaIndex
+            ),
+            inner.range.lowerBound == openIndex + 1
+        {
+            return TemporalExpression(
+                range: openIndex..<(index + 1),
+                kind: inner.kind,
+                identifier: inner.identifier,
+                identifierRange: inner.identifierRange
+            )
+        }
+
         guard let identifier = identifierExpressionRange(endingAt: index, tokens: tokens) else {
             return nil
         }
@@ -1238,6 +1272,25 @@ public enum SQLSchemaValidator {
             schemaIndex: schemaIndex
         ) {
             return cast
+        }
+
+        if tokens[safe: index]?.text == "(",
+            let afterGroup = indexAfterBalancedGroup(tokens, startingAt: index),
+            let inner = temporalExpressionRange(
+                startingAt: index + 1,
+                tokens: tokens,
+                analysis: analysis,
+                scopeSources: scopeSources,
+                schemaIndex: schemaIndex
+            ),
+            inner.range.upperBound == afterGroup - 1
+        {
+            return TemporalExpression(
+                range: index..<afterGroup,
+                kind: inner.kind,
+                identifier: inner.identifier,
+                identifierRange: inner.identifierRange
+            )
         }
 
         return baseTemporalExpressionRange(
@@ -2043,13 +2096,72 @@ public enum GeneratedSQLPostprocessor {
         beforeLiteralAt literalIndex: Int,
         tokens: [SQLToken]
     ) -> ComparisonColumnReference? {
+        equalityComparisonColumnReference(beforeLiteralAt: literalIndex, tokens: tokens)
+            ?? membershipComparisonColumnReference(containingLiteralAt: literalIndex, tokens: tokens)
+    }
+
+    private static func equalityComparisonColumnReference(
+        beforeLiteralAt literalIndex: Int,
+        tokens: [SQLToken]
+    ) -> ComparisonColumnReference? {
         guard let operatorIndex = previousSignificantIndex(before: literalIndex, tokens: tokens),
             tokens[operatorIndex].text == "=",
-            let columnIndex = previousSignificantIndex(before: operatorIndex, tokens: tokens),
-            tokens[columnIndex].isIdentifierLike
+            let columnIndex = previousSignificantIndex(before: operatorIndex, tokens: tokens)
         else {
             return nil
         }
+        return comparisonColumnReference(endingAt: columnIndex, tokens: tokens)
+    }
+
+    private static func membershipComparisonColumnReference(
+        containingLiteralAt literalIndex: Int,
+        tokens: [SQLToken]
+    ) -> ComparisonColumnReference? {
+        for group in enclosingGroups(containing: literalIndex, tokens: tokens) {
+            let functionIndex = group.openIndex - 1
+            guard functionIndex >= 0,
+                tokens[safe: functionIndex]?.isIdentifierLike == true
+            else {
+                continue
+            }
+            let function = tokens[functionIndex].normalized
+            if function == "in" {
+                guard var columnIndex = previousSignificantIndex(
+                    before: functionIndex,
+                    tokens: tokens
+                ) else { continue }
+                if tokens[columnIndex].normalized == "not" {
+                    guard let beforeNot = previousSignificantIndex(
+                        before: columnIndex,
+                        tokens: tokens
+                    ) else { continue }
+                    columnIndex = beforeNot
+                }
+                if let comparison = comparisonColumnReference(endingAt: columnIndex, tokens: tokens) {
+                    return comparison
+                }
+            } else if function == "any" || function == "all" {
+                guard let operatorIndex = previousSignificantIndex(
+                    before: functionIndex,
+                    tokens: tokens
+                ),
+                    tokens[operatorIndex].text == "=",
+                    let columnIndex = previousSignificantIndex(before: operatorIndex, tokens: tokens),
+                    let comparison = comparisonColumnReference(endingAt: columnIndex, tokens: tokens)
+                else {
+                    continue
+                }
+                return comparison
+            }
+        }
+        return nil
+    }
+
+    private static func comparisonColumnReference(
+        endingAt columnIndex: Int,
+        tokens: [SQLToken]
+    ) -> ComparisonColumnReference? {
+        guard tokens[safe: columnIndex]?.isIdentifierLike == true else { return nil }
         var qualifier: String?
         var qualifierIsQuoted = false
         if tokens[safe: columnIndex - 1]?.text == ".",
@@ -2072,6 +2184,46 @@ public enum GeneratedSQLPostprocessor {
             name: tokens[columnIndex].identifierValue,
             isQuoted: tokens[columnIndex].kind == .quotedIdentifier
         )
+    }
+
+    private static func enclosingGroups(
+        containing index: Int,
+        tokens: [SQLToken]
+    ) -> [(openIndex: Int, closeIndex: Int)] {
+        guard index > 0 else { return [] }
+        var stack: [Int] = []
+        for cursor in 0...min(index, tokens.count - 1) {
+            if tokens[cursor].text == "(" {
+                stack.append(cursor)
+            } else if tokens[cursor].text == ")" {
+                _ = stack.popLast()
+            }
+        }
+        return stack.reversed().compactMap { openIndex in
+            guard let afterGroup = indexAfterBalancedGroup(tokens, startingAt: openIndex) else {
+                return nil
+            }
+            return (openIndex, afterGroup - 1)
+        }
+    }
+
+    private static func indexAfterBalancedGroup(
+        _ tokens: [SQLToken],
+        startingAt openIndex: Int
+    ) -> Int? {
+        guard tokens[safe: openIndex]?.text == "(" else { return nil }
+        var depth = 0
+        for index in openIndex..<tokens.count {
+            if tokens[index].text == "(" {
+                depth += 1
+            } else if tokens[index].text == ")" {
+                depth -= 1
+                if depth == 0 {
+                    return index + 1
+                }
+            }
+        }
+        return nil
     }
 
     private static func previousSignificantIndex(before index: Int, tokens: [SQLToken]) -> Int? {
@@ -2472,6 +2624,7 @@ private struct ResolvedRelationSource {
     var displayName: String
     var unquotedNames: Set<String>
     var quotedNames: Set<String>
+    var singleQuotedNames: Set<String>
     var table: TableInfo?
     var cteColumns: Set<SQLDerivedColumn>?
     var hasUnknownColumns: Bool
@@ -2487,20 +2640,24 @@ private struct ResolvedRelationSource {
     ) -> ResolvedRelationSource {
         let unquotedNames: Set<String>
         let quotedNames: Set<String>
+        let singleQuotedNames: Set<String>
         if let alias {
             unquotedNames =
                 aliasIsQuoted
                 ? (isUnquotedPostgresIdentifier(alias) ? [alias.lowercased()] : [])
                 : [alias.lowercased()]
             quotedNames = aliasIsQuoted ? [alias] : []
+            singleQuotedNames = quotedNames
         } else {
             unquotedNames = unquotedTableNames(for: table)
             quotedNames = Set([table.name, table.qualifiedName])
+            singleQuotedNames = Set([table.name])
         }
         return ResolvedRelationSource(
             displayName: table.qualifiedName,
             unquotedNames: unquotedNames,
             quotedNames: quotedNames,
+            singleQuotedNames: singleQuotedNames,
             table: table,
             cteColumns: nil,
             hasUnknownColumns: false,
@@ -2520,23 +2677,27 @@ private struct ResolvedRelationSource {
     ) -> ResolvedRelationSource {
         let unquotedNames: Set<String>
         let quotedNames: Set<String>
+        let singleQuotedNames: Set<String>
         if let alias {
             unquotedNames =
                 aliasIsQuoted
                 ? (isUnquotedPostgresIdentifier(alias) ? [alias.lowercased()] : [])
                 : [alias.lowercased()]
             quotedNames = aliasIsQuoted ? [alias] : []
+            singleQuotedNames = quotedNames
         } else {
             unquotedNames =
                 nameIsQuoted
                 ? (isUnquotedPostgresIdentifier(name) ? [name.lowercased()] : [])
                 : [name.lowercased()]
             quotedNames = nameIsQuoted ? [name] : []
+            singleQuotedNames = quotedNames
         }
         return ResolvedRelationSource(
             displayName: name,
             unquotedNames: unquotedNames,
             quotedNames: quotedNames,
+            singleQuotedNames: singleQuotedNames,
             table: nil,
             cteColumns: columns,
             hasUnknownColumns: columns == nil,
@@ -2548,12 +2709,14 @@ private struct ResolvedRelationSource {
     static func unresolved(_ relation: SQLRelationReference) -> ResolvedRelationSource {
         let unquotedNames: Set<String>
         let quotedNames: Set<String>
+        let singleQuotedNames: Set<String>
         if let alias = relation.alias {
             unquotedNames =
                 relation.aliasIsQuoted
                 ? (isUnquotedPostgresIdentifier(alias) ? [alias.lowercased()] : [])
                 : [alias.lowercased()]
             quotedNames = relation.aliasIsQuoted ? [alias] : []
+            singleQuotedNames = quotedNames
         } else {
             var unquoted = Set<String>()
             if !relation.nameIsQuoted && isUnquotedPostgresIdentifier(relation.name) {
@@ -2569,11 +2732,13 @@ private struct ResolvedRelationSource {
             }
             unquotedNames = unquoted
             quotedNames = Set([relation.name, relation.displayName])
+            singleQuotedNames = Set([relation.name])
         }
         return ResolvedRelationSource(
             displayName: relation.displayName,
             unquotedNames: unquotedNames,
             quotedNames: quotedNames,
+            singleQuotedNames: singleQuotedNames,
             table: nil,
             cteColumns: nil,
             hasUnknownColumns: true,
@@ -2582,8 +2747,15 @@ private struct ResolvedRelationSource {
         )
     }
 
-    func matches(_ qualifier: String, isQuoted: Bool = false) -> Bool {
+    func matches(
+        _ qualifier: String,
+        isQuoted: Bool = false,
+        quotedAsSingleIdentifier: Bool = false
+    ) -> Bool {
         if isQuoted {
+            if quotedAsSingleIdentifier {
+                return singleQuotedNames.contains(qualifier)
+            }
             return quotedNames.contains(qualifier)
         }
         return unquotedNames.contains(qualifier.lowercased())
