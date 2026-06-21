@@ -108,6 +108,26 @@ struct SQLSchemaValidatorTests {
         #expect(result.errors.contains { $0.contains("total") })
     }
 
+    @Test func selectAliasesWithoutFromAreNotColumns() {
+        let scalar = SQLSchemaValidator.validate(
+            sql: "SELECT 1 AS c",
+            against: makeUsersOrdersSchema()
+        )
+        let ordered = SQLSchemaValidator.validate(
+            sql: "SELECT 1 AS c ORDER BY c",
+            against: makeUsersOrdersSchema()
+        )
+        let exists = SQLSchemaValidator.validate(
+            sql: "SELECT EXISTS (SELECT 1 FROM public.users) AS has_users",
+            against: makeUsersOrdersSchema()
+        )
+
+        #expect(!scalar.hasDefiniteErrors)
+        #expect(!ordered.hasDefiniteErrors)
+        #expect(!exists.hasDefiniteErrors)
+        #expect(exists.referencedTables == ["public.users"])
+    }
+
     @Test func quotedOutputAliasRequiresExactQuotedOrderByReference() {
         let result = SQLSchemaValidator.validate(
             sql: #"SELECT id AS "UserID" FROM public.users ORDER BY "userid""#,
@@ -462,6 +482,29 @@ struct SQLSchemaValidatorTests {
         #expect(!valid.hasDefiniteErrors)
         #expect(invalid.hasDefiniteErrors)
         #expect(invalid.errors.contains { $0.contains("missing_email") })
+    }
+
+    @Test func distinctFromOperatorDoesNotStartRelationParsing() {
+        let joinPredicate = SQLSchemaValidator.validate(
+            sql: """
+                SELECT u.email
+                FROM public.users AS u
+                JOIN public.users AS other ON u.email IS DISTINCT FROM other.email
+                """,
+            against: makeUsersOrdersSchema()
+        )
+        let upsertPredicate = SQLSchemaValidator.validate(
+            sql: """
+                INSERT INTO public.users (id, email)
+                VALUES (1, 'a@example.com')
+                ON CONFLICT (id) DO UPDATE SET email = excluded.email
+                WHERE public.users.email IS DISTINCT FROM excluded.email
+                """,
+            against: makeUsersOrdersSchema()
+        )
+
+        #expect(!joinPredicate.hasDefiniteErrors)
+        #expect(!upsertPredicate.hasDefiniteErrors)
     }
 
     @Test func onConflictSetTargetsAreValidatedAgainstInsertTarget() {

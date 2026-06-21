@@ -601,12 +601,14 @@ public enum SQLReferenceAnalyzer {
                 continue
             }
             let normalized = token.normalized
+            let isFromRelationStart =
+                normalized == "from" && !isDistinctFromOperatorFrom(at: index, tokens: tokens)
             let isRelationStart =
-                normalized == "from"
+                isFromRelationStart
                 || normalized == "join"
                 || normalized == "update"
                 || (normalized == "into" && previousKeyword == "insert")
-                || (normalized == "from" && previousKeyword == "delete")
+                || (isFromRelationStart && previousKeyword == "delete")
                 || (normalized == "using" && tokens[safe: index + 1]?.text != "(")
 
             if isRelationStart {
@@ -806,8 +808,7 @@ public enum SQLReferenceAnalyzer {
         guard let selectIndex = tokens.firstIndex(where: { $0.normalized == "select" }) else {
             return []
         }
-        let fromIndex = firstTopLevelIndex(ofAny: ["from"], in: tokens, after: selectIndex + 1)
-            ?? tokens.count
+        let fromIndex = topLevelSelectListEndIndex(after: selectIndex, in: tokens)
         let items = splitTopLevelCommaSeparated(Array(tokens[(selectIndex + 1)..<fromIndex]))
         var aliases = Set<SQLIdentifierName>()
         for item in items {
@@ -825,8 +826,7 @@ public enum SQLReferenceAnalyzer {
         guard let selectIndex = tokens.firstIndex(where: { $0.normalized == "select" }) else {
             return nil
         }
-        let fromIndex = firstTopLevelIndex(ofAny: ["from"], in: tokens, after: selectIndex + 1)
-            ?? tokens.count
+        let fromIndex = topLevelSelectListEndIndex(after: selectIndex, in: tokens)
         let items = splitTopLevelCommaSeparated(Array(tokens[(selectIndex + 1)..<fromIndex]))
         var columns = Set<SQLDerivedColumn>()
         for item in items {
@@ -868,8 +868,7 @@ public enum SQLReferenceAnalyzer {
         guard let selectIndex = tokens.firstIndex(where: { $0.normalized == "select" }) else {
             return nil
         }
-        let fromIndex = firstTopLevelIndex(ofAny: ["from"], in: tokens, after: selectIndex + 1)
-            ?? tokens.count
+        let fromIndex = topLevelSelectListEndIndex(after: selectIndex, in: tokens)
         let items = splitTopLevelCommaSeparated(Array(tokens[(selectIndex + 1)..<fromIndex]))
         guard !items.isEmpty,
             items.allSatisfy({ item in
@@ -1173,11 +1172,11 @@ public enum SQLReferenceAnalyzer {
     }
 
     private static func isWithinTopLevelSelectList(_ index: Int, tokens: [SQLToken]) -> Bool {
-        guard let selectIndex = previousTopLevelIndex(ofAny: ["select"], in: tokens, before: index),
-            let fromIndex = nextTopLevelIndex(ofAny: ["from"], in: tokens, after: selectIndex + 1)
+        guard let selectIndex = previousTopLevelIndex(ofAny: ["select"], in: tokens, before: index)
         else {
             return false
         }
+        let fromIndex = topLevelSelectListEndIndex(after: selectIndex, in: tokens)
         return index > selectIndex && index < fromIndex
     }
 
@@ -1185,13 +1184,12 @@ public enum SQLReferenceAnalyzer {
         containing index: Int,
         tokens: [SQLToken]
     ) -> Range<Int>? {
-        guard let selectIndex = previousTopLevelIndex(ofAny: ["select"], in: tokens, before: index),
-            let fromIndex = nextTopLevelIndex(ofAny: ["from"], in: tokens, after: selectIndex + 1),
-            index > selectIndex,
-            index < fromIndex
+        guard let selectIndex = previousTopLevelIndex(ofAny: ["select"], in: tokens, before: index)
         else {
             return nil
         }
+        let fromIndex = topLevelSelectListEndIndex(after: selectIndex, in: tokens)
+        guard index > selectIndex, index < fromIndex else { return nil }
         var start = selectIndex + 1
         var cursor = selectIndex + 1
         var depth = 0
@@ -1688,6 +1686,26 @@ public enum SQLReferenceAnalyzer {
         return true
     }
 
+    private static func isDistinctFromOperatorFrom(at index: Int, tokens: [SQLToken]) -> Bool {
+        guard tokens[safe: index]?.normalized == "from",
+            let distinctIndex = previousNonCommaIndex(before: index, in: tokens),
+            tokens[safe: distinctIndex]?.normalized == "distinct",
+            let beforeDistinctIndex = previousNonCommaIndex(before: distinctIndex, in: tokens)
+        else {
+            return false
+        }
+
+        if tokens[safe: beforeDistinctIndex]?.normalized == "is" {
+            return true
+        }
+        guard tokens[safe: beforeDistinctIndex]?.normalized == "not",
+            let isIndex = previousNonCommaIndex(before: beforeDistinctIndex, in: tokens)
+        else {
+            return false
+        }
+        return tokens[safe: isIndex]?.normalized == "is"
+    }
+
     private static func previousSignificantToken(before index: Int, in tokens: [SQLToken]) -> SQLToken?
     {
         guard let index = previousNonCommaIndex(before: index, in: tokens) else { return nil }
@@ -1760,6 +1778,27 @@ public enum SQLReferenceAnalyzer {
             }
         }
         return nil
+    }
+
+    private static func topLevelSelectListEndIndex(after selectIndex: Int, in tokens: [SQLToken])
+        -> Int
+    {
+        var depth = 0
+        var index = selectIndex + 1
+        while index < tokens.count {
+            if tokens[index].text == "(" {
+                depth += 1
+            } else if tokens[index].text == ")" {
+                depth = max(0, depth - 1)
+            } else if depth == 0,
+                selectListTerminatorKeywords.contains(tokens[index].normalized),
+                !isDistinctFromOperatorFrom(at: index, tokens: tokens)
+            {
+                return index
+            }
+            index += 1
+        }
+        return tokens.count
     }
 
     private static func previousTopLevelIndex(
@@ -1865,6 +1904,11 @@ public enum SQLReferenceAnalyzer {
 
     private static let relationStartKeywords: Set<String> = [
         "from", "join", "update", "into", "using",
+    ]
+
+    private static let selectListTerminatorKeywords: Set<String> = [
+        "from", "where", "group", "having", "window", "order", "limit", "offset", "fetch",
+        "union", "intersect", "except", "returning",
     ]
 }
 
