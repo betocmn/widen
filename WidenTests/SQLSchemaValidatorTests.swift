@@ -23,6 +23,7 @@ struct SQLSchemaValidatorTests {
 
         #expect(result.hasDefiniteErrors)
         #expect(result.errors.first?.contains("missing_column") == true)
+        #expect(result.issues.first?.kind == .missingBaseColumn)
     }
 
     @Test func cteNamesAreNotSchemaValidatedAsTables() {
@@ -1223,6 +1224,26 @@ struct SQLSchemaValidatorTests {
 
         #expect(result.hasDefiniteErrors)
         #expect(result.errors.first?.contains("email") == true)
+    }
+
+    @Test func cteProjectionFailuresUseSpecificIssueKind() {
+        let result = SQLSchemaValidator.validate(
+            sql: """
+                WITH recent_wins AS (
+                  SELECT id FROM public.users
+                )
+                SELECT winner_id FROM recent_wins
+                """,
+            against: makeUsersOrdersSchema()
+        )
+
+        #expect(result.hasDefiniteErrors)
+        #expect(result.issues.contains { $0.kind == .columnNotProjectedByCTE })
+        #expect(
+            result.errors.contains {
+                $0.contains("winner_id is not an output column of recent_wins")
+                    && $0.contains("project it from the CTE")
+            })
     }
 
     @Test func quotedLowercaseCTEColumnsAllowUnquotedReferences() {

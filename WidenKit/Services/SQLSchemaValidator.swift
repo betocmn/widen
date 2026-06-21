@@ -10,6 +10,9 @@ public struct SQLSchemaValidationIssue: Equatable, Sendable {
         case missingRelation
         case unresolvedQualifier
         case missingColumn
+        case missingBaseColumn
+        case missingDerivedColumn
+        case columnNotProjectedByCTE
         case ambiguousColumn
         case requiresQuotedIdentifier
         case invalidTemporalComparison
@@ -120,6 +123,7 @@ public enum SQLSchemaValidator {
                             alias: relation.alias,
                             aliasIsQuoted: relation.aliasIsQuoted,
                             columns: columns,
+                            kind: cteName == nil ? .derived : .cte,
                             role: relation.role,
                             startOffset: relation.startOffset
                         ))
@@ -143,6 +147,7 @@ public enum SQLSchemaValidator {
                             alias: relation.alias,
                             aliasIsQuoted: relation.aliasIsQuoted,
                             columns: columns,
+                            kind: .cte,
                             role: relation.role,
                             startOffset: relation.startOffset
                         ))
@@ -306,12 +311,8 @@ public enum SQLSchemaValidator {
                     return
                 }
                 issues.append(
-                    SQLSchemaValidationIssue(
-                        severity: .error,
-                        message: "Schema validation failed: column \(column.name) is not on \(source.displayName).",
-                        kind: .missingColumn,
-                        identifier: column.name
-                    ))
+                    missingColumnIssue(column: column, source: source)
+                )
             }
             return
         }
@@ -383,11 +384,9 @@ public enum SQLSchemaValidator {
         }
 
         issues.append(
-            SQLSchemaValidationIssue(
-                severity: .error,
-                message: "Schema validation failed: column \(column.name) is not available from the referenced tables.",
-                kind: .missingColumn,
-                identifier: column.name
+            missingUnqualifiedColumnIssue(
+                column: column,
+                scopeSources: scopeSources[safe: scopeIndex] ?? []
             ))
     }
 
@@ -421,12 +420,8 @@ public enum SQLSchemaValidator {
             return
         }
         issues.append(
-            SQLSchemaValidationIssue(
-                severity: .error,
-                message: "Schema validation failed: column \(column.name) is not on \(source.displayName).",
-                kind: .missingColumn,
-                identifier: column.name
-            ))
+            missingColumnIssue(column: column, source: source)
+        )
     }
 
     private static func validateJoinUsingColumn(
@@ -496,9 +491,81 @@ public enum SQLSchemaValidator {
             SQLSchemaValidationIssue(
                 severity: .error,
                 message: "Schema validation failed: JOIN USING column \(column.name) is not available from both joined relations.",
-                kind: .missingColumn,
+                kind: .missingBaseColumn,
                 identifier: column.name
             ))
+    }
+
+    private static func missingColumnIssue(
+        column: SQLColumnReference,
+        source: ResolvedRelationSource
+    ) -> SQLSchemaValidationIssue {
+        switch source.kind {
+        case .table:
+            return SQLSchemaValidationIssue(
+                severity: .error,
+                message: "Schema validation failed: column \(column.name) is not on \(source.displayName).",
+                kind: .missingBaseColumn,
+                identifier: column.name
+            )
+        case .cte:
+            return SQLSchemaValidationIssue(
+                severity: .error,
+                message:
+                    "Schema validation failed: column \(column.name) is not an output column of \(source.displayName); project it from the CTE or do not reference it outside the CTE.",
+                kind: .columnNotProjectedByCTE,
+                identifier: column.name
+            )
+        case .derived:
+            return SQLSchemaValidationIssue(
+                severity: .error,
+                message:
+                    "Schema validation failed: column \(column.name) is not an output column of \(source.displayName); project it from the derived query or do not reference it outside the derived query.",
+                kind: .missingDerivedColumn,
+                identifier: column.name
+            )
+        case .unresolved:
+            return SQLSchemaValidationIssue(
+                severity: .error,
+                message: "Schema validation failed: column \(column.name) is not available from the referenced tables.",
+                kind: .missingColumn,
+                identifier: column.name
+            )
+        }
+    }
+
+    private static func missingUnqualifiedColumnIssue(
+        column: SQLColumnReference,
+        scopeSources: [ResolvedRelationSource]
+    ) -> SQLSchemaValidationIssue {
+        let knownSources = scopeSources.filter { !$0.hasUnknownColumns }
+        if knownSources.count == 1, let source = knownSources.first {
+            return missingColumnIssue(column: column, source: source)
+        }
+        if !knownSources.isEmpty, knownSources.allSatisfy(\.isDerivedLike) {
+            return SQLSchemaValidationIssue(
+                severity: .error,
+                message:
+                    "Schema validation failed: column \(column.name) is not an output column of the referenced derived relations.",
+                kind: knownSources.contains { $0.kind == .cte }
+                    ? .columnNotProjectedByCTE : .missingDerivedColumn,
+                identifier: column.name
+            )
+        }
+        if knownSources.contains(where: { $0.kind == .table }) {
+            return SQLSchemaValidationIssue(
+                severity: .error,
+                message: "Schema validation failed: column \(column.name) is not available from the referenced base tables.",
+                kind: .missingBaseColumn,
+                identifier: column.name
+            )
+        }
+        return SQLSchemaValidationIssue(
+            severity: .error,
+            message: "Schema validation failed: column \(column.name) is not available from the referenced tables.",
+            kind: .missingColumn,
+            identifier: column.name
+        )
     }
 
     private static func quotedIdentifierIssue(
@@ -566,7 +633,7 @@ public enum SQLSchemaValidator {
                     SQLSchemaValidationIssue(
                         severity: .error,
                         message: "Schema validation failed: column \(column.name) is not on \(table.qualifiedName).",
-                        kind: .missingColumn,
+                        kind: .missingBaseColumn,
                         identifier: column.name
                     ))
             }
@@ -598,8 +665,8 @@ public enum SQLSchemaValidator {
                 issues.append(
                     SQLSchemaValidationIssue(
                         severity: .error,
-                        message: "Schema validation failed: column \(column.name) is not available from the referenced tables.",
-                        kind: .missingColumn,
+                        message: "Schema validation failed: column \(column.name) is not available from the referenced base tables.",
+                        kind: .missingBaseColumn,
                         identifier: column.name
                     ))
             }
@@ -2444,6 +2511,13 @@ public enum GeneratedSQLPostprocessor {
 }
 
 public enum GeneratedSQLValidator {
+    public static func canonicalize(sql: String, schema: DatabaseSchema) -> String {
+        let trimmed = sql.trimmingCharacters(in: .whitespacesAndNewlines)
+        let safety = SQLSafetyValidator.validate(trimmed)
+        let normalized = safety.normalizedSQL ?? trimmed
+        return quoteUnquotedIdentifiers(sql: normalized, schema: schema) ?? normalized
+    }
+
     public static func validate(sql: String, schema: DatabaseSchema) -> SQLValidationResult {
         combine(
             safety: SQLSafetyValidator.validate(sql),
@@ -2452,6 +2526,14 @@ public enum GeneratedSQLValidator {
     }
 
     public static func repairQuotedIdentifiers(sql: String, schema: DatabaseSchema) -> String? {
+        guard let repaired = quoteUnquotedIdentifiers(sql: sql, schema: schema),
+            repaired != sql,
+            validate(sql: repaired, schema: schema).isValid
+        else { return nil }
+        return repaired
+    }
+
+    private static func quoteUnquotedIdentifiers(sql: String, schema: DatabaseSchema) -> String? {
         let schemaValidation = SQLSchemaValidator.validate(sql: sql, against: schema)
         let replacements = schemaValidation.issues.reduce(into: [String: String]()) {
             result,
@@ -2475,11 +2557,7 @@ public enum GeneratedSQLValidator {
         }
         guard !replacementRanges.isEmpty else { return nil }
 
-        let repaired = rewriteUnquotedIdentifiers(in: sql, replacementRanges: replacementRanges)
-        guard repaired != sql,
-            validate(sql: repaired, schema: schema).isValid
-        else { return nil }
-        return repaired
+        return rewriteUnquotedIdentifiers(in: sql, replacementRanges: replacementRanges)
     }
 
     public static func combine(
@@ -2711,15 +2789,27 @@ private enum ColumnResolution {
 }
 
 private struct ResolvedRelationSource {
+    enum Kind {
+        case table
+        case cte
+        case derived
+        case unresolved
+    }
+
     var displayName: String
     var unquotedNames: Set<String>
     var quotedNames: Set<String>
     var singleQuotedNames: Set<String>
+    var kind: Kind
     var table: TableInfo?
     var cteColumns: Set<SQLDerivedColumn>?
     var hasUnknownColumns: Bool
     var role: SQLRelationReference.Role
     var startOffset: Int?
+
+    var isDerivedLike: Bool {
+        kind == .cte || kind == .derived
+    }
 
     static func table(
         _ table: TableInfo,
@@ -2748,6 +2838,7 @@ private struct ResolvedRelationSource {
             unquotedNames: unquotedNames,
             quotedNames: quotedNames,
             singleQuotedNames: singleQuotedNames,
+            kind: .table,
             table: table,
             cteColumns: nil,
             hasUnknownColumns: false,
@@ -2762,6 +2853,7 @@ private struct ResolvedRelationSource {
         alias: String?,
         aliasIsQuoted: Bool = false,
         columns: Set<SQLDerivedColumn>?,
+        kind: Kind = .cte,
         role: SQLRelationReference.Role = .source,
         startOffset: Int? = nil
     ) -> ResolvedRelationSource {
@@ -2788,6 +2880,7 @@ private struct ResolvedRelationSource {
             unquotedNames: unquotedNames,
             quotedNames: quotedNames,
             singleQuotedNames: singleQuotedNames,
+            kind: kind,
             table: nil,
             cteColumns: columns,
             hasUnknownColumns: columns == nil,
@@ -2829,6 +2922,7 @@ private struct ResolvedRelationSource {
             unquotedNames: unquotedNames,
             quotedNames: quotedNames,
             singleQuotedNames: singleQuotedNames,
+            kind: .unresolved,
             table: nil,
             cteColumns: nil,
             hasUnknownColumns: true,

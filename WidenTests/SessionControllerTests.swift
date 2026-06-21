@@ -1105,7 +1105,7 @@ struct SessionControllerTests {
         #expect(controller.chatVM.messages.map(\.role) == [.user, .assistant])
     }
 
-    @Test func repairCoordinatorRejectsOnlyUnquotedMixedCaseIdentifier() {
+    @Test func repairCoordinatorCanonicalizesUnquotedMixedCaseIdentifier() {
         var coordinator = GeneratedSQLRepairCoordinator(
             failedSQL: "SELECT createdAt FROM public.events",
             firstError:
@@ -1126,19 +1126,9 @@ struct SessionControllerTests {
             schema: makeMixedCaseSchema(),
             allowWrites: false
         )
-        let quoted = coordinator.evaluateCandidate(
-            makeGeneration(sql: #"SELECT "createdAt" FROM public.events LIMIT 100"#),
-            mode: .repair,
-            schema: makeMixedCaseSchema(),
-            allowWrites: false
-        )
 
-        if case .rejected(let reason) = unquoted.outcome {
-            #expect(reason == .forbiddenIdentifier("createdAt"))
-        } else {
-            Issue.record("Expected unquoted createdAt to be rejected")
-        }
-        #expect(quoted.outcome == .accepted)
+        #expect(unquoted.outcome == .accepted)
+        #expect(unquoted.sql == #"SELECT "createdAt" FROM public.events LIMIT 100"#)
     }
 
     @Test func repairCoordinatorAllowsQualifiedRepairForAmbiguousBareColumn() {
@@ -1187,7 +1177,36 @@ struct SessionControllerTests {
         #expect(failed == recasedSyntax)
     }
 
-    @Test func generatedRunErrorGivesUpAfterRepairAndReconstruction() async {
+    @Test func repairCoordinatorRejectsStructuralRepeatWithSameValidationIssue() {
+        var coordinator = GeneratedSQLRepairCoordinator(
+            failedSQL: "SELECT u.name FROM public.users AS u",
+            firstError:
+                "The SQL failed validation: Schema validation failed: column name is not on public.users.",
+            diagnostic: DatabaseDiagnostic(
+                kind: .missingColumn,
+                sqlState: "42703",
+                message: "column name is not on public.users",
+                columnName: "name"
+            ),
+            forbiddenIdentifiers: []
+        )
+
+        let repeated = coordinator.evaluateCandidate(
+            makeGeneration(sql: "SELECT x.name FROM public.users AS x LIMIT 100"),
+            mode: .repair,
+            schema: makeSchema(),
+            allowWrites: false
+        )
+
+        if case .rejected(let reason) = repeated.outcome {
+            #expect(reason == .repeatedFingerprint)
+        } else {
+            Issue.record("Expected structurally repeated SQL to be rejected")
+        }
+        #expect(!repeated.allowsReconstruction)
+    }
+
+    @Test func generatedRunErrorClarifiesAfterRepeatedRepair() async {
         let connectionID = UUID()
         let (state, dir) = makeState(connectionID: connectionID, connected: true)
         defer { try? FileManager.default.removeItem(at: dir) }
@@ -1210,29 +1229,23 @@ struct SessionControllerTests {
         await waitUntil {
             !controller.queryVM.isRunning
                 && !controller.chatVM.isGenerating
-                && controller.chatVM.messages.last?.role == .error
+                && controller.chatVM.messages.last?.role == .assistant
+                && controller.chatVM.messages.count == 3
         }
 
         let statements = await recorder.all()
         #expect(statements.count == 1)
-        #expect(generator.contexts.count == 2)
+        #expect(generator.contexts.count == 1)
         #expect(generator.contexts[0].mode == .repair)
         #expect(generator.contexts[0].currentSQL == badGeneration.sql)
         #expect(generator.contexts[0].repairContext?.failedSQL == badGeneration.sql)
-        #expect(generator.contexts[1].mode == .reconstructAfterFailedRepair)
-        #expect(generator.contexts[1].currentSQL == nil)
-        #expect(generator.contexts[1].repairContext?.failedSQL == nil)
-        #expect(generator.contexts[1].repairContext?.forbiddenIdentifiers.contains("public.bad_table") == true)
+        #expect(generator.contexts[0].repairContext?.priorFingerprints.isEmpty == true)
         #expect(controller.queryVM.sqlText == badGeneration.sql)
         #expect(controller.queryVM.generation?.sql == badGeneration.sql)
-        #expect(controller.chatVM.messages.map(\.role) == [.user, .assistant, .error])
+        #expect(controller.chatVM.messages.map(\.role) == [.user, .assistant, .assistant])
         #expect(controller.chatVM.messages[1].generation?.sql == badGeneration.sql)
-        #expect(controller.chatVM.messages.last?.text.contains("focused repair") == true)
-        #expect(controller.chatVM.messages.last?.text.contains("Initial generation") == true)
-        #expect(controller.chatVM.messages.last?.text.contains("Reconstruction") == true)
-        #expect(controller.chatVM.messages.last?.text.contains("Last error:") == true)
-        #expect(controller.chatVM.messages.last?.text.contains("repeated SQL") == true)
-        #expect(controller.chatVM.messages.last?.text.contains("smarter cloud model") == true)
+        #expect(controller.chatVM.messages.last?.text.contains("public.bad_table") == true)
+        #expect(controller.chatVM.messages.last?.text.contains("Which table") == true)
     }
 
     @Test func generatedRunErrorForbidsOnlyMissingRelationFromDiagnosticMessage() async {
@@ -1309,7 +1322,8 @@ struct SessionControllerTests {
         await waitUntil {
             !controller.queryVM.isRunning
                 && !controller.chatVM.isGenerating
-                && controller.chatVM.messages.last?.role == .error
+                && controller.chatVM.messages.last?.role == .assistant
+                && controller.chatVM.messages.count == 3
         }
 
         let statements = await recorder.all()
@@ -1317,7 +1331,8 @@ struct SessionControllerTests {
         #expect(generator.contexts.count == 2)
         #expect(generator.contexts[0].mode == .repair)
         #expect(generator.contexts[1].mode == .reconstructAfterFailedRepair)
-        #expect(controller.chatVM.messages.last?.text.contains("Reconstruction") == true)
+        #expect(controller.chatVM.messages.last?.text.contains("public.bad_table") == true)
+        #expect(controller.chatVM.messages.last?.text.contains("Which table") == true)
     }
 
     @Test func generatedRunErrorRejectsForbiddenRepairSQLBeforeExecution() async {
@@ -1344,16 +1359,18 @@ struct SessionControllerTests {
         await waitUntil {
             !controller.queryVM.isRunning
                 && !controller.chatVM.isGenerating
-                && controller.chatVM.messages.last?.role == .error
+                && controller.chatVM.messages.last?.role == .assistant
+                && controller.chatVM.messages.count == 3
         }
 
         let statements = await recorder.all()
         #expect(statements == [badGeneration.sql])
-        #expect(generator.contexts.count == 2)
+        #expect(generator.contexts.count == 1)
         #expect(controller.queryVM.sqlText == badGeneration.sql)
         #expect(controller.queryVM.generation?.sql == badGeneration.sql)
         #expect(controller.chatVM.messages[1].generation?.sql == badGeneration.sql)
-        #expect(controller.chatVM.messages.last?.text.contains("forbidden identifier") == true)
+        #expect(controller.chatVM.messages.last?.text.contains("public.bad_table") == true)
+        #expect(controller.chatVM.messages.last?.text.contains("Which table") == true)
     }
 
     @Test func generatedRunErrorAsksForClarificationWhenRepairRepeatsMissingColumn() async {

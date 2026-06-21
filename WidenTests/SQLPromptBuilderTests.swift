@@ -514,6 +514,7 @@ struct SQLPromptBuilderTests {
         #expect(prompt.contains("<forbidden_identifier>"))
         #expect(prompt.contains("public.match_batch"))
         #expect(prompt.contains("<sqlstate>42P01</sqlstate>"))
+        #expect(!prompt.contains("<prior_fingerprints>"))
     }
 
     @Test func repairPromptUsesFailedFollowUpRequest() {
@@ -571,6 +572,7 @@ struct SQLPromptBuilderTests {
         #expect(!prompt.contains(failedSQL))
         #expect(prompt.contains("<must_not_use>"))
         #expect(prompt.contains("public.match_batch"))
+        #expect(!prompt.contains("<prior_attempts>"))
     }
 
     @Test func contextSectionIncludesOriginalQuestionAndKeepsLastThreeQuestionsInHistory() {

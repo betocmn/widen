@@ -500,20 +500,29 @@ public final class SessionController: Identifiable {
                 return
 
             case .rejected(let reason):
-                if case .repeatedFingerprint = reason,
-                    !Self.missingColumnsCanBeResolvedByJoining(
+                if reason.isZeroProgressRepair {
+                    let diagnosticText = firstDiagnostic?.displayMessage ?? firstError
+                    if !Self.missingColumnsCanBeResolvedByJoining(
                         sql: startingSQL,
-                        error: firstDiagnostic?.displayMessage ?? firstError,
+                        error: diagnosticText,
                         schema: schema
                     ),
-                    let clarification = SQLPromptBuilder.missingColumnClarificationQuestion(
-                        for: firstDiagnostic?.displayMessage ?? firstError,
-                        question: questionContext.originalQuestion ?? questionContext.question,
-                        schema: schema)
-                {
-                    chatVM.messages.append(ChatMessage(role: .assistant, text: clarification))
-                    appState.sessionDidChange(sessionID)
-                    return
+                        let clarification = SQLPromptBuilder.missingColumnClarificationQuestion(
+                            for: diagnosticText,
+                            question: questionContext.originalQuestion ?? questionContext.question,
+                            schema: schema)
+                    {
+                        chatVM.messages.append(ChatMessage(role: .assistant, text: clarification))
+                        appState.sessionDidChange(sessionID)
+                        return
+                    }
+                    if let clarification = SQLPromptBuilder.missingRelationClarificationQuestion(
+                        for: diagnosticText
+                    ) {
+                        chatVM.messages.append(ChatMessage(role: .assistant, text: clarification))
+                        appState.sessionDidChange(sessionID)
+                        return
+                    }
                 }
                 if evaluation.allowsReconstruction, coordinator.canRequestAnotherModelCall {
                     continue
@@ -771,7 +780,7 @@ public final class SessionController: Identifiable {
         if let columnName = firstCapturedValue(
             in: error,
             pattern:
-                #"Schema validation failed: column ([A-Za-z_][A-Za-z0-9_$]*) is (?:not available from the referenced tables|not on [^.\s]+(?:\.[^.\s]+)?)"#
+                #"Schema validation failed: column ([A-Za-z_][A-Za-z0-9_$]*) is (?:not available from the referenced(?: base)? tables|not on [^.\s]+(?:\.[^.\s]+)?|not an output column of [^.;]+)"#
         ) {
             return DatabaseDiagnostic(
                 kind: .missingColumn,
@@ -917,7 +926,7 @@ public final class SessionController: Identifiable {
             contentsOf: capturedValues(
                 in: text,
                 pattern:
-                    #"Schema validation failed: column ([A-Za-z_][A-Za-z0-9_$]*) is (?:not available from the referenced tables|not on [^.\s]+(?:\.[^.\s]+)?|ambiguous across referenced tables)"#
+                    #"Schema validation failed: column ([A-Za-z_][A-Za-z0-9_$]*) is (?:not available from the referenced(?: base)? tables|not on [^.\s]+(?:\.[^.\s]+)?|not an output column of [^.;]+|ambiguous across referenced tables)"#
             ))
         identifiers.append(
             contentsOf: capturedValues(
