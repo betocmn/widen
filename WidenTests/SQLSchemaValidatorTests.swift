@@ -669,6 +669,36 @@ struct SQLSchemaValidatorTests {
         #expect(invalid.errors.contains { $0.contains("id") })
     }
 
+    @Test func cteSelectStarExpandsKnownTableColumns() {
+        let result = SQLSchemaValidator.validate(
+            sql: """
+                WITH u AS (
+                  SELECT * FROM public.users
+                )
+                SELECT missing FROM u
+                """,
+            against: makeUsersOrdersSchema()
+        )
+
+        #expect(result.hasDefiniteErrors)
+        #expect(result.errors.contains { $0.contains("missing") })
+    }
+
+    @Test func derivedSelectStarExpandsKnownTableColumns() {
+        let result = SQLSchemaValidator.validate(
+            sql: """
+                SELECT missing
+                FROM (
+                  SELECT * FROM public.users
+                ) AS u
+                """,
+            against: makeUsersOrdersSchema()
+        )
+
+        #expect(result.hasDefiniteErrors)
+        #expect(result.errors.contains { $0.contains("missing") })
+    }
+
     @Test func generatedValidatorCanRepairUnquotedMixedCaseColumns() {
         let repaired = GeneratedSQLValidator.repairQuotedIdentifiers(
             sql:
@@ -724,6 +754,27 @@ struct SQLSchemaValidatorTests {
     @Test func timestampBetweenBareIntervalIsDefiniteError() {
         let result = SQLSchemaValidator.validate(
             sql: "SELECT id FROM public.orders WHERE created_at BETWEEN INTERVAL '7 days' AND NOW()",
+            against: makeUsersOrdersSchema()
+        )
+
+        #expect(result.hasDefiniteErrors)
+        #expect(result.issues.contains { $0.kind == .invalidTemporalComparison })
+    }
+
+    @Test func castedTimestampComparedToIntervalIsDefiniteError() {
+        let result = SQLSchemaValidator.validate(
+            sql: "SELECT id FROM public.orders WHERE created_at::date >= INTERVAL '7 days'",
+            against: makeUsersOrdersSchema()
+        )
+
+        #expect(result.hasDefiniteErrors)
+        #expect(result.issues.contains { $0.kind == .invalidTemporalComparison })
+    }
+
+    @Test func dateTruncComparedToIntervalIsDefiniteError() {
+        let result = SQLSchemaValidator.validate(
+            sql:
+                "SELECT id FROM public.orders WHERE DATE_TRUNC('day', created_at) >= INTERVAL '7 days'",
             against: makeUsersOrdersSchema()
         )
 
@@ -941,6 +992,17 @@ struct SQLSchemaValidatorTests {
         )
 
         #expect(result.hasDefiniteErrors)
+        #expect(result.errors.first?.contains("missing_table") == true)
+    }
+
+    @Test func missingRelationDoesNotCascadeIntoMissingColumn() {
+        let result = SQLSchemaValidator.validate(
+            sql: "SELECT id FROM public.missing_table",
+            against: makeUsersOrdersSchema()
+        )
+
+        #expect(result.hasDefiniteErrors)
+        #expect(result.errors.count == 1)
         #expect(result.errors.first?.contains("missing_table") == true)
     }
 

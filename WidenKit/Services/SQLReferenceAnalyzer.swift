@@ -17,6 +17,7 @@ public struct SQLRelationReference: Equatable, Hashable, Sendable {
     public var role: Role
     public var isDerived: Bool
     public var derivedColumns: Set<SQLDerivedColumn>?
+    public var derivedOutputRelations: [SQLRelationReference]?
     public var startOffset: Int?
 
     public init(
@@ -29,6 +30,7 @@ public struct SQLRelationReference: Equatable, Hashable, Sendable {
         role: Role = .source,
         isDerived: Bool = false,
         derivedColumns: Set<SQLDerivedColumn>? = nil,
+        derivedOutputRelations: [SQLRelationReference]? = nil,
         startOffset: Int? = nil
     ) {
         self.schema = schema
@@ -40,6 +42,7 @@ public struct SQLRelationReference: Equatable, Hashable, Sendable {
         self.role = role
         self.isDerived = isDerived
         self.derivedColumns = derivedColumns
+        self.derivedOutputRelations = derivedOutputRelations
         self.startOffset = startOffset
     }
 
@@ -166,6 +169,7 @@ public struct SQLReferenceAnalysis: Equatable, Sendable {
     public var columns: [SQLColumnReference]
     public var cteNames: Set<SQLIdentifierName>
     public var cteOutputColumns: [SQLIdentifierName: Set<SQLDerivedColumn>?]
+    public var cteOutputRelations: [SQLIdentifierName: [SQLRelationReference]]
     public var outputAliases: Set<SQLIdentifierName>
     public var upsertTargetRelations: [SQLRelationReference]
     public var scopes: [SQLReferenceScope]
@@ -196,6 +200,7 @@ public enum SQLReferenceAnalyzer {
         let tokens = SQLToken.tokenize(sql)
         var cteNames = Set<SQLIdentifierName>()
         var cteOutputColumns: [SQLIdentifierName: Set<SQLDerivedColumn>?] = [:]
+        var cteOutputRelations: [SQLIdentifierName: [SQLRelationReference]] = [:]
         var scopes: [SQLReferenceScope] = []
         var incomplete = false
 
@@ -203,6 +208,7 @@ public enum SQLReferenceAnalyzer {
             tokens,
             cteNames: &cteNames,
             cteOutputColumns: &cteOutputColumns,
+            cteOutputRelations: &cteOutputRelations,
             scopes: &scopes,
             incomplete: &incomplete
         )
@@ -210,6 +216,7 @@ public enum SQLReferenceAnalyzer {
             Array(tokens[mainStart..<tokens.count]),
             cteNames: cteNames,
             cteOutputColumns: &cteOutputColumns,
+            cteOutputRelations: &cteOutputRelations,
             parentIndex: nil,
             scopes: &scopes,
             incomplete: &incomplete
@@ -248,6 +255,7 @@ public enum SQLReferenceAnalyzer {
             columns: deduplicated(columns),
             cteNames: cteNames,
             cteOutputColumns: cteOutputColumns,
+            cteOutputRelations: cteOutputRelations,
             outputAliases: outputAliases,
             upsertTargetRelations: parseUpsertTargetRelations(tokens),
             scopes: scopes,
@@ -260,6 +268,7 @@ public enum SQLReferenceAnalyzer {
         _ tokens: [SQLToken],
         cteNames: inout Set<SQLIdentifierName>,
         cteOutputColumns: inout [SQLIdentifierName: Set<SQLDerivedColumn>?],
+        cteOutputRelations: inout [SQLIdentifierName: [SQLRelationReference]],
         scopes: inout [SQLReferenceScope],
         incomplete: inout Bool
     ) -> Int {
@@ -305,6 +314,7 @@ public enum SQLReferenceAnalyzer {
                 innerTokens,
                 cteNames: cteNames,
                 cteOutputColumns: &cteOutputColumns,
+                cteOutputRelations: &cteOutputRelations,
                 parentIndex: nil,
                 scopes: &scopes,
                 incomplete: &incomplete
@@ -314,7 +324,15 @@ public enum SQLReferenceAnalyzer {
             } else {
                 let inferred = inferSelectOutputColumns(innerTokens)
                 cteOutputColumns[cteName] = inferred
-                if inferred == nil {
+                if inferred == nil,
+                    let outputRelations = inferSelectWildcardOutputRelations(
+                        innerTokens,
+                        cteNames: cteNames,
+                        cteOutputColumns: cteOutputColumns
+                    )
+                {
+                    cteOutputRelations[cteName] = outputRelations
+                } else if inferred == nil {
                     incomplete = true
                 }
             }
@@ -332,6 +350,7 @@ public enum SQLReferenceAnalyzer {
         _ tokens: [SQLToken],
         cteNames: Set<SQLIdentifierName>,
         cteOutputColumns: inout [SQLIdentifierName: Set<SQLDerivedColumn>?],
+        cteOutputRelations: inout [SQLIdentifierName: [SQLRelationReference]],
         parentIndex: Int?,
         scopes: inout [SQLReferenceScope],
         incomplete: inout Bool
@@ -341,6 +360,7 @@ public enum SQLReferenceAnalyzer {
             tokens,
             cteNames: &cteNames,
             cteOutputColumns: &cteOutputColumns,
+            cteOutputRelations: &cteOutputRelations,
             scopes: &scopes,
             incomplete: &incomplete
         )
@@ -349,6 +369,7 @@ public enum SQLReferenceAnalyzer {
                 Array(tokens[startIndex..<tokens.count]),
                 cteNames: cteNames,
                 cteOutputColumns: &cteOutputColumns,
+                cteOutputRelations: &cteOutputRelations,
                 parentIndex: parentIndex,
                 scopes: &scopes,
                 incomplete: &incomplete
@@ -372,6 +393,7 @@ public enum SQLReferenceAnalyzer {
                         innerTokens,
                         cteNames: cteNames,
                         cteOutputColumns: &cteOutputColumns,
+                        cteOutputRelations: &cteOutputRelations,
                         parentIndex: parentIndex,
                         scopes: &scopes,
                         incomplete: &incomplete
@@ -440,6 +462,7 @@ public enum SQLReferenceAnalyzer {
                     Array(tokens[index..<statementEnd]),
                     cteNames: cteNames,
                     cteOutputColumns: &cteOutputColumns,
+                    cteOutputRelations: &cteOutputRelations,
                     parentIndex: scopeIndex,
                     scopes: &scopes,
                     incomplete: &incomplete
@@ -479,6 +502,7 @@ public enum SQLReferenceAnalyzer {
                 tokens,
                 cteNames: cteNames,
                 cteOutputColumns: &cteOutputColumns,
+                cteOutputRelations: &cteOutputRelations,
                 parentIndex: scopeIndex,
                 scopes: &scopes,
                 incomplete: &incomplete
@@ -497,6 +521,7 @@ public enum SQLReferenceAnalyzer {
         _ tokens: [SQLToken],
         cteNames: Set<SQLIdentifierName>,
         cteOutputColumns: inout [SQLIdentifierName: Set<SQLDerivedColumn>?],
+        cteOutputRelations: inout [SQLIdentifierName: [SQLRelationReference]],
         parentIndex: Int,
         scopes: inout [SQLReferenceScope],
         incomplete: inout Bool
@@ -517,6 +542,7 @@ public enum SQLReferenceAnalyzer {
                     innerTokens,
                     cteNames: cteNames,
                     cteOutputColumns: &cteOutputColumns,
+                    cteOutputRelations: &cteOutputRelations,
                     parentIndex: nestedParentIndex(
                         forGroupAt: index,
                         tokens: tokens,
@@ -614,6 +640,15 @@ public enum SQLReferenceAnalyzer {
                             if isSelectDerived || containsTopLevelValues(innerTokens) {
                                 let inferredColumns =
                                     isSelectDerived ? inferSelectOutputColumns(innerTokens) : nil
+                                let outputRelations =
+                                    isSelectDerived && aliasParse?.columns == nil
+                                        && inferredColumns == nil
+                                    ? inferSelectWildcardOutputRelations(
+                                        innerTokens,
+                                        cteNames: cteNames,
+                                        cteOutputColumns: cteOutputColumns
+                                    )
+                                    : nil
                                 relations.append(
                                     SQLRelationReference(
                                         name: aliasParse?.alias ?? "__derived_table",
@@ -621,6 +656,7 @@ public enum SQLReferenceAnalyzer {
                                         aliasIsQuoted: aliasParse?.aliasIsQuoted ?? false,
                                         isDerived: true,
                                         derivedColumns: aliasParse?.columns ?? inferredColumns,
+                                        derivedOutputRelations: outputRelations,
                                         startOffset: relationStartOffset
                                     ))
                             }
@@ -811,6 +847,38 @@ public enum SQLReferenceAnalyzer {
             return nil
         }
         return columns
+    }
+
+    private static func inferSelectWildcardOutputRelations(
+        _ tokens: [SQLToken],
+        cteNames: Set<SQLIdentifierName>,
+        cteOutputColumns: [SQLIdentifierName: Set<SQLDerivedColumn>?]
+    ) -> [SQLRelationReference]? {
+        guard let selectIndex = tokens.firstIndex(where: { $0.normalized == "select" }) else {
+            return nil
+        }
+        let fromIndex = firstTopLevelIndex(ofAny: ["from"], in: tokens, after: selectIndex + 1)
+            ?? tokens.count
+        let items = splitTopLevelCommaSeparated(Array(tokens[(selectIndex + 1)..<fromIndex]))
+        guard !items.isEmpty,
+            items.allSatisfy({ item in
+                let significant = item.filter { $0.text != "," }
+                return significant.count == 1 && significant.first?.text == "*"
+            })
+        else {
+            return nil
+        }
+
+        var relationIncomplete = false
+        let relations = parseRelations(
+            tokens,
+            cteNames: cteNames,
+            cteOutputColumns: cteOutputColumns,
+            incomplete: &relationIncomplete,
+            skipCTEs: false
+        ).filter { $0.role == .source }
+        guard !relationIncomplete, !relations.isEmpty else { return nil }
+        return relations
     }
 
     private static func explicitOutputAlias(in tokens: [SQLToken]) -> SQLToken? {

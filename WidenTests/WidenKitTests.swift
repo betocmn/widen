@@ -271,6 +271,42 @@ struct QueryResultViewModelTests {
         #expect(statements.isEmpty)
     }
 
+    @Test func freshGeneratedSQLRevalidatesAgainstSchemaBeforeRun() async {
+        let recorder = SQLRecorder()
+        let viewModel = QueryResultViewModel(executor: RecordingExecutor(recorder: recorder))
+        let generation = SQLGenerationResult(
+            sql: "SELECT id FROM public.users",
+            explanation: "Shows users.",
+            assumptions: [],
+            referencedTables: ["public.users"],
+            confidence: 1.0,
+            riskLevel: .low,
+            needsClarification: false,
+            clarificationQuestion: nil
+        )
+        let initialSchema = makeSchema()
+        let refreshedSchema = DatabaseSchema(
+            schemas: [SchemaInfo(name: "public")],
+            tables: [],
+            foreignKeys: []
+        )
+
+        viewModel.setGeneration(generation, schema: initialSchema)
+        viewModel.startRun(
+            connection: DatabaseConnectionConfig(),
+            postgres: PostgresService(),
+            isConnected: true,
+            schema: refreshedSchema
+        )
+        await waitUntil { !viewModel.isRunning }
+        let statements = await recorder.all()
+
+        #expect(viewModel.validation?.isValid == false)
+        #expect(viewModel.schemaValidation?.hasDefiniteErrors == true)
+        #expect(viewModel.runError?.contains("table public.users") == true)
+        #expect(statements.isEmpty)
+    }
+
     @Test func cancelRunReleasesRunningStateImmediately() async {
         let viewModel = QueryResultViewModel(executor: SlowExecutor())
         viewModel.sqlText = "SELECT 1"

@@ -843,7 +843,7 @@ struct SessionControllerTests {
         }
 
         let statements = await recorder.all()
-        #expect(statements == [badGeneration.sql, fixedGeneration.sql])
+        #expect(statements == [fixedGeneration.sql])
         #expect(generator.schemaNames == ["analytics"])
         #expect(controller.queryVM.sqlText == fixedGeneration.sql)
         #expect(controller.queryVM.generation?.generationSchemaName == "analytics")

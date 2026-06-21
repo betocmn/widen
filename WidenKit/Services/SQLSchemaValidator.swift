@@ -95,13 +95,31 @@ public enum SQLSchemaValidator {
         for (scopeIndex, scope) in analysis.scopes.enumerated() {
             for relation in scope.relations {
                 if relation.isDerived {
+                    let cteName =
+                        relation.schema == nil
+                        ? analysis.cteNames.first(where: {
+                            $0.matches(name: relation.name, isQuoted: relation.nameIsQuoted)
+                        })
+                        : nil
+                    let columns =
+                        relation.derivedColumns
+                        ?? cteName.flatMap {
+                            derivedColumns(
+                                from: analysis.cteOutputRelations[$0],
+                                schemaIndex: schemaIndex
+                            )
+                        }
+                        ?? derivedColumns(
+                            from: relation.derivedOutputRelations,
+                            schemaIndex: schemaIndex
+                        )
                     scopeSources[scopeIndex].append(
                         ResolvedRelationSource.cte(
                             name: relation.alias ?? relation.name,
                             nameIsQuoted: relation.alias == nil && relation.nameIsQuoted,
                             alias: relation.alias,
                             aliasIsQuoted: relation.aliasIsQuoted,
-                            columns: relation.derivedColumns,
+                            columns: columns,
                             role: relation.role,
                             startOffset: relation.startOffset
                         ))
@@ -112,13 +130,19 @@ public enum SQLSchemaValidator {
                         $0.matches(name: relation.name, isQuoted: relation.nameIsQuoted)
                     })
                 {
+                    let columns =
+                        analysis.cteOutputColumns[cteName] ?? nil
+                        ?? derivedColumns(
+                            from: analysis.cteOutputRelations[cteName],
+                            schemaIndex: schemaIndex
+                        )
                     scopeSources[scopeIndex].append(
                         ResolvedRelationSource.cte(
                             name: cteName.name,
                             nameIsQuoted: cteName.isQuoted,
                             alias: relation.alias,
                             aliasIsQuoted: relation.aliasIsQuoted,
-                            columns: analysis.cteOutputColumns[cteName] ?? nil,
+                            columns: columns,
                             role: relation.role,
                             startOffset: relation.startOffset
                         ))
@@ -132,6 +156,7 @@ public enum SQLSchemaValidator {
                             kind: .missingRelation,
                             identifier: relation.displayName
                         ))
+                    scopeSources[scopeIndex].append(.unresolved(relation))
                     continue
                 }
                 referencedTables.append(table.qualifiedName)
@@ -706,11 +731,16 @@ public enum SQLSchemaValidator {
                     scopeSources: scopeSources,
                     schemaIndex: schemaIndex
                 ),
-                let identifier = identifierExpressionRange(endingAt: index - 1, tokens: tokens)
+                let expression = temporalExpressionRange(
+                    endingAt: index - 1,
+                    tokens: tokens,
+                    analysis: analysis,
+                    scopeSources: scopeSources,
+                    schemaIndex: schemaIndex
+                )
             {
                 appendTemporalIntervalIssue(
-                    for: identifier.identifier,
-                    tokenRange: identifier.range,
+                    for: expression,
                     tokens: tokens,
                     analysis: analysis,
                     scopeSources: scopeSources,
@@ -728,14 +758,16 @@ public enum SQLSchemaValidator {
                     scopeSources: scopeSources,
                     schemaIndex: schemaIndex
                 ),
-                let identifier = identifierExpressionRange(
+                let expression = temporalExpressionRange(
                     startingAt: comparison.nextIndex,
-                    tokens: tokens
+                    tokens: tokens,
+                    analysis: analysis,
+                    scopeSources: scopeSources,
+                    schemaIndex: schemaIndex
                 )
             {
                 appendTemporalIntervalIssue(
-                    for: identifier.identifier,
-                    tokenRange: identifier.range,
+                    for: expression,
                     tokens: tokens,
                     analysis: analysis,
                     scopeSources: scopeSources,
@@ -773,13 +805,18 @@ public enum SQLSchemaValidator {
                 scopeSources: scopeSources,
                 schemaIndex: schemaIndex
             ),
-            let identifier = identifierExpressionRange(endingAt: expressionEnd, tokens: tokens)
+            let expression = temporalExpressionRange(
+                endingAt: expressionEnd,
+                tokens: tokens,
+                analysis: analysis,
+                scopeSources: scopeSources,
+                schemaIndex: schemaIndex
+            )
         else {
             return
         }
         appendTemporalIntervalIssue(
-            for: identifier.identifier,
-            tokenRange: identifier.range,
+            for: expression,
             tokens: tokens,
             analysis: analysis,
             scopeSources: scopeSources,
@@ -790,8 +827,7 @@ public enum SQLSchemaValidator {
     }
 
     private static func appendTemporalIntervalIssue(
-        for identifier: IdentifierExpression,
-        tokenRange: Range<Int>,
+        for expression: TemporalExpression,
         tokens: [SQLToken],
         analysis: SQLReferenceAnalysis,
         scopeSources: [[ResolvedRelationSource]],
@@ -799,10 +835,11 @@ public enum SQLSchemaValidator {
         reported: inout Set<String>,
         issues: inout [SQLSchemaValidationIssue]
     ) {
+        guard let identifier = expression.identifier else { return }
         let columns = resolvedColumns(
             for: identifier,
             scopeIndex: scopeIndexForIdentifier(
-                tokenRange: tokenRange,
+                tokenRange: expression.identifierRange ?? expression.range,
                 tokens: tokens,
                 analysis: analysis
             ),
@@ -1093,14 +1130,41 @@ public enum SQLSchemaValidator {
         analysis: SQLReferenceAnalysis,
         scopeSources: [[ResolvedRelationSource]],
         schemaIndex: SchemaLookup
-    ) -> (range: Range<Int>, kind: TemporalExpressionKind)? {
+    ) -> TemporalExpression? {
+        if let cast = castTemporalExpression(
+            endingAt: index,
+            tokens: tokens,
+            analysis: analysis,
+            scopeSources: scopeSources,
+            schemaIndex: schemaIndex
+        ) {
+            return cast
+        }
+
         if tokens[safe: index]?.text == ")",
             let openIndex = matchingOpeningParenthesis(endingAt: index, tokens: tokens),
             let function = tokens[safe: openIndex - 1],
-            function.isIdentifierLike,
-            let kind = temporalSQLValueKind(function.normalized)
+            function.isIdentifierLike
         {
-            return ((openIndex - 1)..<(index + 1), kind)
+            if let kind = temporalSQLValueKind(function.normalized) {
+                return TemporalExpression(range: (openIndex - 1)..<(index + 1), kind: kind)
+            }
+            if function.normalized == "date_trunc",
+                let argument = temporalArgumentExpression(
+                    in: (openIndex + 1)..<index,
+                    tokens: tokens,
+                    analysis: analysis,
+                    scopeSources: scopeSources,
+                    schemaIndex: schemaIndex
+                )
+            {
+                return TemporalExpression(
+                    range: (openIndex - 1)..<(index + 1),
+                    kind: .timestampOrTime,
+                    identifier: argument.identifier,
+                    identifierRange: argument.identifierRange
+                )
+            }
         }
 
         guard let identifier = identifierExpressionRange(endingAt: index, tokens: tokens) else {
@@ -1119,7 +1183,12 @@ public enum SQLSchemaValidator {
         ) else {
             return nil
         }
-        return (identifier.range, kind)
+        return TemporalExpression(
+            range: identifier.range,
+            kind: kind,
+            identifier: identifier.identifier,
+            identifierRange: identifier.range
+        )
     }
 
     private static func temporalExpressionRange(
@@ -1128,14 +1197,61 @@ public enum SQLSchemaValidator {
         analysis: SQLReferenceAnalysis,
         scopeSources: [[ResolvedRelationSource]],
         schemaIndex: SchemaLookup
-    ) -> (range: Range<Int>, kind: TemporalExpressionKind)? {
+    ) -> TemporalExpression? {
+        if let cast = castTemporalExpression(
+            startingAt: index,
+            tokens: tokens,
+            analysis: analysis,
+            scopeSources: scopeSources,
+            schemaIndex: schemaIndex
+        ) {
+            return cast
+        }
+
+        return baseTemporalExpressionRange(
+            startingAt: index,
+            tokens: tokens,
+            analysis: analysis,
+            scopeSources: scopeSources,
+            schemaIndex: schemaIndex
+        )
+    }
+
+    private static func baseTemporalExpressionRange(
+        startingAt index: Int,
+        tokens: [SQLToken],
+        analysis: SQLReferenceAnalysis,
+        scopeSources: [[ResolvedRelationSource]],
+        schemaIndex: SchemaLookup
+    ) -> TemporalExpression? {
         if let token = tokens[safe: index],
             token.isIdentifierLike,
             let kind = temporalSQLValueKind(token.normalized),
             tokens[safe: index + 1]?.text == "(",
             let afterGroup = indexAfterBalancedGroup(tokens, startingAt: index + 1)
         {
-            return (index..<afterGroup, kind)
+            return TemporalExpression(range: index..<afterGroup, kind: kind)
+        }
+
+        if let token = tokens[safe: index],
+            token.isIdentifierLike,
+            token.normalized == "date_trunc",
+            tokens[safe: index + 1]?.text == "(",
+            let afterGroup = indexAfterBalancedGroup(tokens, startingAt: index + 1),
+            let argument = temporalArgumentExpression(
+                in: (index + 2)..<(afterGroup - 1),
+                tokens: tokens,
+                analysis: analysis,
+                scopeSources: scopeSources,
+                schemaIndex: schemaIndex
+            )
+        {
+            return TemporalExpression(
+                range: index..<afterGroup,
+                kind: .timestampOrTime,
+                identifier: argument.identifier,
+                identifierRange: argument.identifierRange
+            )
         }
 
         guard let identifier = identifierExpressionRange(startingAt: index, tokens: tokens) else {
@@ -1154,7 +1270,254 @@ public enum SQLSchemaValidator {
         ) else {
             return nil
         }
-        return (identifier.range, kind)
+        return TemporalExpression(
+            range: identifier.range,
+            kind: kind,
+            identifier: identifier.identifier,
+            identifierRange: identifier.range
+        )
+    }
+
+    private static func castTemporalExpression(
+        endingAt index: Int,
+        tokens: [SQLToken],
+        analysis: SQLReferenceAnalysis,
+        scopeSources: [[ResolvedRelationSource]],
+        schemaIndex: SchemaLookup
+    ) -> TemporalExpression? {
+        if let doubleColon = doubleColonCastTemporalExpression(
+            endingAt: index,
+            tokens: tokens,
+            analysis: analysis,
+            scopeSources: scopeSources,
+            schemaIndex: schemaIndex
+        ) {
+            return doubleColon
+        }
+        return castFunctionTemporalExpression(
+            endingAt: index,
+            tokens: tokens,
+            analysis: analysis,
+            scopeSources: scopeSources,
+            schemaIndex: schemaIndex
+        )
+    }
+
+    private static func castTemporalExpression(
+        startingAt index: Int,
+        tokens: [SQLToken],
+        analysis: SQLReferenceAnalysis,
+        scopeSources: [[ResolvedRelationSource]],
+        schemaIndex: SchemaLookup
+    ) -> TemporalExpression? {
+        if let doubleColon = doubleColonCastTemporalExpression(
+            startingAt: index,
+            tokens: tokens,
+            analysis: analysis,
+            scopeSources: scopeSources,
+            schemaIndex: schemaIndex
+        ) {
+            return doubleColon
+        }
+        return castFunctionTemporalExpression(
+            startingAt: index,
+            tokens: tokens,
+            analysis: analysis,
+            scopeSources: scopeSources,
+            schemaIndex: schemaIndex
+        )
+    }
+
+    private static func doubleColonCastTemporalExpression(
+        endingAt index: Int,
+        tokens: [SQLToken],
+        analysis: SQLReferenceAnalysis,
+        scopeSources: [[ResolvedRelationSource]],
+        schemaIndex: SchemaLookup
+    ) -> TemporalExpression? {
+        guard let kind = temporalCastTypeKind(at: index, tokens: tokens),
+            tokens[safe: index - 1]?.text == ":",
+            tokens[safe: index - 2]?.text == ":",
+            let operand = temporalExpressionRange(
+                endingAt: index - 3,
+                tokens: tokens,
+                analysis: analysis,
+                scopeSources: scopeSources,
+                schemaIndex: schemaIndex
+            )
+        else {
+            return nil
+        }
+        return TemporalExpression(
+            range: operand.range.lowerBound..<(index + 1),
+            kind: kind,
+            identifier: operand.identifier,
+            identifierRange: operand.identifierRange
+        )
+    }
+
+    private static func doubleColonCastTemporalExpression(
+        startingAt index: Int,
+        tokens: [SQLToken],
+        analysis: SQLReferenceAnalysis,
+        scopeSources: [[ResolvedRelationSource]],
+        schemaIndex: SchemaLookup
+    ) -> TemporalExpression? {
+        guard let operand = baseTemporalExpressionRange(
+            startingAt: index,
+            tokens: tokens,
+            analysis: analysis,
+            scopeSources: scopeSources,
+            schemaIndex: schemaIndex
+        ),
+            tokens[safe: operand.range.upperBound]?.text == ":",
+            tokens[safe: operand.range.upperBound + 1]?.text == ":",
+            let kind = temporalCastTypeKind(
+                at: operand.range.upperBound + 2,
+                tokens: tokens
+            )
+        else {
+            return nil
+        }
+        return TemporalExpression(
+            range: operand.range.lowerBound..<(operand.range.upperBound + 3),
+            kind: kind,
+            identifier: operand.identifier,
+            identifierRange: operand.identifierRange
+        )
+    }
+
+    private static func castFunctionTemporalExpression(
+        endingAt index: Int,
+        tokens: [SQLToken],
+        analysis: SQLReferenceAnalysis,
+        scopeSources: [[ResolvedRelationSource]],
+        schemaIndex: SchemaLookup
+    ) -> TemporalExpression? {
+        guard tokens[safe: index]?.text == ")",
+            let openIndex = matchingOpeningParenthesis(endingAt: index, tokens: tokens),
+            tokens[safe: openIndex - 1]?.normalized == "cast",
+            let asIndex = topLevelIndex(of: "as", in: (openIndex + 1)..<index, tokens: tokens),
+            let kind = temporalCastTypeKind(at: asIndex + 1, tokens: tokens),
+            let operand = temporalExpressionRange(
+                endingAt: asIndex - 1,
+                tokens: tokens,
+                analysis: analysis,
+                scopeSources: scopeSources,
+                schemaIndex: schemaIndex
+            )
+        else {
+            return nil
+        }
+        return TemporalExpression(
+            range: (openIndex - 1)..<(index + 1),
+            kind: kind,
+            identifier: operand.identifier,
+            identifierRange: operand.identifierRange
+        )
+    }
+
+    private static func castFunctionTemporalExpression(
+        startingAt index: Int,
+        tokens: [SQLToken],
+        analysis: SQLReferenceAnalysis,
+        scopeSources: [[ResolvedRelationSource]],
+        schemaIndex: SchemaLookup
+    ) -> TemporalExpression? {
+        guard tokens[safe: index]?.normalized == "cast",
+            tokens[safe: index + 1]?.text == "(",
+            let afterGroup = indexAfterBalancedGroup(tokens, startingAt: index + 1),
+            let asIndex = topLevelIndex(
+                of: "as",
+                in: (index + 2)..<(afterGroup - 1),
+                tokens: tokens
+            ),
+            let kind = temporalCastTypeKind(at: asIndex + 1, tokens: tokens),
+            let operand = temporalExpressionRange(
+                endingAt: asIndex - 1,
+                tokens: tokens,
+                analysis: analysis,
+                scopeSources: scopeSources,
+                schemaIndex: schemaIndex
+            )
+        else {
+            return nil
+        }
+        return TemporalExpression(
+            range: index..<afterGroup,
+            kind: kind,
+            identifier: operand.identifier,
+            identifierRange: operand.identifierRange
+        )
+    }
+
+    private static func temporalArgumentExpression(
+        in range: Range<Int>,
+        tokens: [SQLToken],
+        analysis: SQLReferenceAnalysis,
+        scopeSources: [[ResolvedRelationSource]],
+        schemaIndex: SchemaLookup
+    ) -> TemporalExpression? {
+        for argumentRange in topLevelArgumentRanges(in: range, tokens: tokens).dropFirst().reversed() {
+            guard let expression = temporalExpressionRange(
+                endingAt: argumentRange.upperBound - 1,
+                tokens: tokens,
+                analysis: analysis,
+                scopeSources: scopeSources,
+                schemaIndex: schemaIndex
+            ),
+                expression.range.lowerBound >= argumentRange.lowerBound
+            else {
+                continue
+            }
+            return expression
+        }
+        return nil
+    }
+
+    private static func topLevelArgumentRanges(
+        in range: Range<Int>,
+        tokens: [SQLToken]
+    ) -> [Range<Int>] {
+        var ranges: [Range<Int>] = []
+        var depth = 0
+        var start = range.lowerBound
+        for index in range {
+            let token = tokens[index]
+            if token.text == "(" {
+                depth += 1
+            } else if token.text == ")" {
+                depth = max(0, depth - 1)
+            } else if depth == 0, token.text == "," {
+                if start < index {
+                    ranges.append(start..<index)
+                }
+                start = index + 1
+            }
+        }
+        if start < range.upperBound {
+            ranges.append(start..<range.upperBound)
+        }
+        return ranges
+    }
+
+    private static func topLevelIndex(
+        of normalized: String,
+        in range: Range<Int>,
+        tokens: [SQLToken]
+    ) -> Int? {
+        var depth = 0
+        for index in range {
+            let token = tokens[index]
+            if token.text == "(" {
+                depth += 1
+            } else if token.text == ")" {
+                depth = max(0, depth - 1)
+            } else if depth == 0, token.normalized == normalized {
+                return index
+            }
+        }
+        return nil
     }
 
     private static func expressionResolvesToTemporalKind(
@@ -1178,6 +1541,13 @@ public enum SQLSchemaValidator {
         )
     }
 
+    private struct TemporalExpression {
+        var range: Range<Int>
+        var kind: TemporalExpressionKind
+        var identifier: IdentifierExpression?
+        var identifierRange: Range<Int>?
+    }
+
     private enum TemporalExpressionKind {
         case date
         case timestampOrTime
@@ -1195,6 +1565,21 @@ public enum SQLSchemaValidator {
             "now",
             "statement_timestamp",
             "transaction_timestamp":
+            return .timestampOrTime
+        default:
+            return nil
+        }
+    }
+
+    private static func temporalCastTypeKind(
+        at index: Int,
+        tokens: [SQLToken]
+    ) -> TemporalExpressionKind? {
+        guard let token = tokens[safe: index], token.isIdentifierLike else { return nil }
+        switch token.normalized {
+        case "date":
+            return .date
+        case "time", "timetz", "timestamp", "timestamptz":
             return .timestampOrTime
         default:
             return nil
@@ -1339,6 +1724,39 @@ public enum SQLSchemaValidator {
     private static func deduplicatedColumns(_ columns: [ColumnInfo]) -> [ColumnInfo] {
         var seen = Set<String>()
         return columns.filter { seen.insert($0.id).inserted }
+    }
+
+    private static func derivedColumns(
+        from relations: [SQLRelationReference]?,
+        schemaIndex: SchemaLookup
+    ) -> Set<SQLDerivedColumn>? {
+        guard let relations, !relations.isEmpty else { return nil }
+        var columns = Set<SQLDerivedColumn>()
+        for relation in relations {
+            guard let table = schemaIndex.resolve(relation) else { return nil }
+            for column in table.columns {
+                columns.insert(
+                    SQLDerivedColumn(
+                        name: column.name,
+                        isQuoted: !isUnquotedPostgresIdentifier(column.name)
+                    ))
+            }
+        }
+        return columns
+    }
+
+    private static func isUnquotedPostgresIdentifier(_ value: String) -> Bool {
+        guard let first = value.first,
+            first == "_" || (first >= "a" && first <= "z")
+        else {
+            return false
+        }
+        return value.allSatisfy { character in
+            character == "_"
+                || character == "$"
+                || (character >= "a" && character <= "z")
+                || (character >= "0" && character <= "9")
+        }
     }
 }
 
@@ -1894,6 +2312,43 @@ private struct ResolvedRelationSource {
         )
     }
 
+    static func unresolved(_ relation: SQLRelationReference) -> ResolvedRelationSource {
+        let unquotedNames: Set<String>
+        let quotedNames: Set<String>
+        if let alias = relation.alias {
+            unquotedNames =
+                relation.aliasIsQuoted
+                ? (isUnquotedPostgresIdentifier(alias) ? [alias.lowercased()] : [])
+                : [alias.lowercased()]
+            quotedNames = relation.aliasIsQuoted ? [alias] : []
+        } else {
+            var unquoted = Set<String>()
+            if !relation.nameIsQuoted && isUnquotedPostgresIdentifier(relation.name) {
+                unquoted.insert(relation.name.lowercased())
+            }
+            if let schema = relation.schema,
+                !relation.schemaIsQuoted,
+                !relation.nameIsQuoted,
+                isUnquotedPostgresIdentifier(schema),
+                isUnquotedPostgresIdentifier(relation.name)
+            {
+                unquoted.insert(relation.displayName.lowercased())
+            }
+            unquotedNames = unquoted
+            quotedNames = Set([relation.name, relation.displayName])
+        }
+        return ResolvedRelationSource(
+            displayName: relation.displayName,
+            unquotedNames: unquotedNames,
+            quotedNames: quotedNames,
+            table: nil,
+            cteColumns: nil,
+            hasUnknownColumns: true,
+            role: relation.role,
+            startOffset: relation.startOffset
+        )
+    }
+
     func matches(_ qualifier: String, isQuoted: Bool = false) -> Bool {
         if isQuoted {
             return quotedNames.contains(qualifier)
@@ -1940,6 +2395,11 @@ private struct ResolvedRelationSource {
         for column: SQLColumnReference,
         schemaIndex: SchemaLookup
     ) -> String? {
+        if let cteColumns, !column.isQuoted {
+            return cteColumns.first {
+                $0.isQuoted && $0.name.lowercased() == column.name.lowercased()
+            }?.name
+        }
         guard !column.isQuoted, let table else { return nil }
         return schemaIndex.actualColumnName(on: table, foldedName: column.name)
     }

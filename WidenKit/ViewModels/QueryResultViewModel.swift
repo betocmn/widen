@@ -162,7 +162,7 @@ public final class QueryResultViewModel {
     /// SQL is validated immediately so the user sees its status before Run.
     public func setGeneration(_ generation: SQLGenerationResult, schema: DatabaseSchema? = nil) {
         self.generation = generation
-        requiresSchemaValidationOnRun = false
+        requiresSchemaValidationOnRun = schema != nil
         sqlText = generation.sql
         result = nil
         runError = nil
