@@ -1849,7 +1849,11 @@ public enum GeneratedSQLPostprocessor {
         ).union(Set(SchemaIndex.tokens(in: databaseContext)))
 
         let terms = meaningfulRequestWords(question)
-        let literalTokens = literalValueTokens(in: sql)
+        let literalTokens = acceptedLiteralValueTokens(
+            in: sql,
+            referencedTables: referencedTables,
+            schema: schema
+        )
         let unresolved = terms.filter { word in
             let variants = SchemaIndex.tokens(in: word)
             guard !variants.isEmpty else { return false }
@@ -1865,11 +1869,80 @@ public enum GeneratedSQLPostprocessor {
         return "What column, condition, or table defines \"\(first)\" for this question?"
     }
 
-    private static func literalValueTokens(in sql: String) -> Set<String> {
-        SQLToken.tokenize(sql).reduce(into: Set<String>()) { tokens, token in
+    private static func acceptedLiteralValueTokens(
+        in sql: String,
+        referencedTables: [String],
+        schema: DatabaseSchema
+    ) -> Set<String> {
+        let constrainedValues = constrainedValueTokensByColumnName(
+            referencedTables: referencedTables,
+            schema: schema
+        )
+        let sqlTokens = SQLToken.tokenize(sql)
+        return sqlTokens.enumerated().reduce(into: Set<String>()) { tokens, pair in
+            let (index, token) = pair
             guard token.kind == .string else { return }
-            tokens.formUnion(SchemaIndex.tokens(in: stringLiteralBody(token.text)))
+            let literalTokens = Set(SchemaIndex.tokens(in: stringLiteralBody(token.text)))
+            guard !literalTokens.isEmpty else { return }
+            if let columnName = comparisonColumnName(beforeLiteralAt: index, tokens: sqlTokens),
+                let allowedTokens = constrainedValues[columnName.lowercased()]
+            {
+                guard !literalTokens.isDisjoint(with: allowedTokens) else { return }
+            }
+            tokens.formUnion(literalTokens)
         }
+    }
+
+    private static func constrainedValueTokensByColumnName(
+        referencedTables: [String],
+        schema: DatabaseSchema
+    ) -> [String: Set<String>] {
+        let referenced = Set(referencedTables.map { $0.lowercased() })
+        guard !referenced.isEmpty else { return [:] }
+
+        var tokensByColumn: [String: Set<String>] = [:]
+        for table in schema.tables where referenced.contains(table.qualifiedName.lowercased()) {
+            for column in table.columns {
+                var valueTokens = Set<String>()
+                for constraint in column.valueConstraints ?? [] {
+                    for value in constraint.values {
+                        valueTokens.formUnion(SchemaIndex.tokens(in: value))
+                    }
+                }
+                if !valueTokens.isEmpty {
+                    tokensByColumn[column.name.lowercased(), default: []].formUnion(valueTokens)
+                }
+            }
+        }
+        return tokensByColumn
+    }
+
+    private static func comparisonColumnName(
+        beforeLiteralAt literalIndex: Int,
+        tokens: [SQLToken]
+    ) -> String? {
+        guard let operatorIndex = previousSignificantIndex(before: literalIndex, tokens: tokens),
+            tokens[operatorIndex].text == "=",
+            let columnIndex = previousSignificantIndex(before: operatorIndex, tokens: tokens),
+            tokens[columnIndex].isIdentifierLike
+        else {
+            return nil
+        }
+        return tokens[columnIndex].identifierValue
+    }
+
+    private static func previousSignificantIndex(before index: Int, tokens: [SQLToken]) -> Int? {
+        guard index > 0 else { return nil }
+        var cursor = index - 1
+        while cursor >= 0 {
+            let token = tokens[cursor]
+            if token.text != "," && token.text != "(" && token.text != ")" {
+                return cursor
+            }
+            if cursor == 0 { break }
+            cursor -= 1
+        }
+        return nil
     }
 
     private static func stringLiteralBody(_ text: String) -> String {

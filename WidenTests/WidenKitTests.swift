@@ -510,6 +510,12 @@ struct SchemaIntrospectionServiceTests {
         let pattern = SchemaIntrospectionService.checkValueLiterals(
             in: "CHECK (code ~ '^[A-Z]+$')"
         )
+        let lowerBound = SchemaIntrospectionService.checkValueLiterals(
+            in: "CHECK (created_at >= '2024-01-01'::date)"
+        )
+        let upperBound = SchemaIntrospectionService.checkValueLiterals(
+            in: "CHECK (code <= 'Z')"
+        )
 
         #expect(allowed == ["approved", "rejected"])
         #expect(disallowed.isEmpty)
@@ -517,5 +523,7 @@ struct SchemaIntrospectionServiceTests {
         #expect(negatedGroup.isEmpty)
         #expect(allowedPhrase == ["not started", "active"])
         #expect(pattern.isEmpty)
+        #expect(lowerBound.isEmpty)
+        #expect(upperBound.isEmpty)
     }
 }

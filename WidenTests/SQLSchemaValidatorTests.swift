@@ -381,6 +381,20 @@ struct SQLSchemaValidatorTests {
         #expect(!doNothing.hasDefiniteErrors)
     }
 
+    @Test func postgresClauseWordsDoNotBecomeColumns() {
+        let overriding = SQLSchemaValidator.validate(
+            sql: "INSERT INTO public.users (id) OVERRIDING SYSTEM VALUE VALUES (1)",
+            against: makeUsersOrdersSchema()
+        )
+        let collate = SQLSchemaValidator.validate(
+            sql: #"SELECT email FROM public.users WHERE email COLLATE "C" = 'a@example.com'"#,
+            against: makeUsersOrdersSchema()
+        )
+
+        #expect(!overriding.hasDefiniteErrors)
+        #expect(!collate.hasDefiniteErrors)
+    }
+
     @Test func onConflictConstraintNamesAreNotTreatedAsColumns() {
         let result = SQLSchemaValidator.validate(
             sql: """
@@ -1255,6 +1269,31 @@ struct SQLSchemaValidatorTests {
         #expect(enriched.referencedTables == ["public.customers"])
     }
 
+    @Test func inventedConstrainedLiteralDoesNotDefineBusinessTerm() {
+        let generation = SQLGenerationResult(
+            sql: "SELECT COUNT(*) FROM public.users WHERE status = 'churned'",
+            explanation: "Counts churned users.",
+            assumptions: [],
+            referencedTables: [],
+            confidence: 1,
+            riskLevel: .low,
+            needsClarification: false,
+            clarificationQuestion: nil
+        )
+
+        let enriched = GeneratedSQLPostprocessor.enriched(
+            generation,
+            question: "how many churned users do we have?",
+            schema: makeUsersStatusSchema(),
+            databaseContext: ""
+        )
+
+        #expect(enriched.needsClarification)
+        #expect(enriched.sql.isEmpty)
+        #expect(enriched.clarificationQuestion?.contains("\"churned\"") == true)
+        #expect(enriched.referencedTables == ["public.users"])
+    }
+
     private func makeUsersOrdersSchema() -> DatabaseSchema {
         DatabaseSchema(
             schemas: [SchemaInfo(name: "public")],
@@ -1313,6 +1352,37 @@ struct SQLSchemaValidatorTests {
                         ),
                     ]
                 ),
+            ],
+            foreignKeys: []
+        )
+    }
+
+    private func makeUsersStatusSchema() -> DatabaseSchema {
+        DatabaseSchema(
+            schemas: [SchemaInfo(name: "public")],
+            tables: [
+                TableInfo(
+                    schema: "public",
+                    name: "users",
+                    type: .baseTable,
+                    columns: [
+                        ColumnInfo(
+                            tableSchema: "public",
+                            tableName: "users",
+                            name: "status",
+                            dataType: "text",
+                            isNullable: false,
+                            ordinalPosition: 1,
+                            valueConstraints: [
+                                ColumnValueConstraint(
+                                    kind: .check,
+                                    values: ["active", "inactive"],
+                                    expression: "CHECK (status IN ('active', 'inactive'))"
+                                )
+                            ]
+                        )
+                    ]
+                )
             ],
             foreignKeys: []
         )

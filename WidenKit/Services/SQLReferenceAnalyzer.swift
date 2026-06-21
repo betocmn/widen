@@ -1089,6 +1089,7 @@ public enum SQLReferenceAnalyzer {
                 || isInsideExtractField(at: index, tokens: tokens)
                 || isPostgreSQLExpressionGrammarWord(at: index, tokens: tokens)
                 || isPostgreSQLRelationGrammarWord(at: index, tokens: tokens)
+                || isPostgreSQLClauseGrammarWord(at: index, tokens: tokens)
                 || isOnConflictConstraintName(at: index, tokens: tokens)
                 || isRelationAliasColumn(at: index, tokens: tokens)
                 || tokens[safe: index + 1]?.text == "("
@@ -1373,6 +1374,64 @@ public enum SQLReferenceAnalyzer {
         return false
     }
 
+    private static func isPostgreSQLClauseGrammarWord(at index: Int, tokens: [SQLToken]) -> Bool {
+        isCollationClauseWord(at: index, tokens: tokens)
+            || isInsertOverridingClauseWord(at: index, tokens: tokens)
+    }
+
+    private static func isCollationClauseWord(at index: Int, tokens: [SQLToken]) -> Bool {
+        guard let token = tokens[safe: index] else { return false }
+        if token.normalized == "collate" {
+            return true
+        }
+        return previousNonCommaIndex(before: index, in: tokens).flatMap {
+            tokens[safe: $0]?.normalized == "collate"
+        } ?? false
+    }
+
+    private static func isInsertOverridingClauseWord(at index: Int, tokens: [SQLToken]) -> Bool {
+        guard let token = tokens[safe: index],
+            previousTopLevelIndex(ofAny: ["insert"], in: tokens, before: index + 1) != nil
+        else {
+            return false
+        }
+        if let valuesIndex = firstTopLevelIndex(ofAny: ["values", "select"], in: tokens, after: 0),
+            index >= valuesIndex
+        {
+            return false
+        }
+
+        switch token.normalized {
+        case "overriding":
+            guard let modeIndex = nextNonCommaIndex(after: index, in: tokens),
+                ["system", "user"].contains(tokens[modeIndex].normalized),
+                let valueIndex = nextNonCommaIndex(after: modeIndex, in: tokens)
+            else {
+                return false
+            }
+            return tokens[valueIndex].normalized == "value"
+        case "system", "user":
+            guard previousNonCommaIndex(before: index, in: tokens).flatMap({
+                tokens[safe: $0]?.normalized == "overriding"
+            }) ?? false,
+                let valueIndex = nextNonCommaIndex(after: index, in: tokens)
+            else {
+                return false
+            }
+            return tokens[valueIndex].normalized == "value"
+        case "value":
+            guard let modeIndex = previousNonCommaIndex(before: index, in: tokens),
+                ["system", "user"].contains(tokens[modeIndex].normalized),
+                let overridingIndex = previousNonCommaIndex(before: modeIndex, in: tokens)
+            else {
+                return false
+            }
+            return tokens[overridingIndex].normalized == "overriding"
+        default:
+            return false
+        }
+    }
+
     private static func isInsideExtractField(at index: Int, tokens: [SQLToken]) -> Bool {
         guard let group = enclosingGroup(containing: index, tokens: tokens),
             tokens[safe: group.openIndex - 1]?.normalized == "extract"
@@ -1645,6 +1704,18 @@ public enum SQLReferenceAnalyzer {
             }
             if cursor == 0 { break }
             cursor -= 1
+        }
+        return nil
+    }
+
+    private static func nextNonCommaIndex(after index: Int, in tokens: [SQLToken]) -> Int? {
+        var cursor = index + 1
+        while cursor < tokens.count {
+            let token = tokens[cursor]
+            if token.text != "," && token.text != "(" && token.text != ")" {
+                return cursor
+            }
+            cursor += 1
         }
         return nil
     }

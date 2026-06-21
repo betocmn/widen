@@ -171,6 +171,8 @@ public struct SchemaIntrospectionService: Sendable {
         let operatorText = expressionWithoutStringLiterals(expression).lowercased()
         if operatorText.contains("<>")
             || operatorText.contains("!=")
+            || operatorText.contains(">=")
+            || operatorText.contains("<=")
             || operatorText.range(of: #"\bnot\b"#, options: .regularExpression) != nil
             || operatorText.contains("!~")
         {
