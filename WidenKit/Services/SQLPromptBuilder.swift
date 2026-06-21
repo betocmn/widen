@@ -150,7 +150,7 @@ public enum SQLPromptBuilder {
         let failedSQL = repair?.failedSQL ?? context.currentSQL ?? ""
         var lines = [
             "<repair_task>",
-            taggedCDATASection("original_request", context.originalQuestion ?? question),
+            taggedCDATASection("original_request", repairRequest(question: question, context: context)),
         ]
         if !failedSQL.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
             lines.append(taggedCDATASection("failed_sql", failedSQL))
@@ -180,7 +180,7 @@ public enum SQLPromptBuilder {
         let repair = context.repairContext
         var lines = [
             "<reconstruction_task>",
-            taggedCDATASection("original_request", context.originalQuestion ?? question),
+            taggedCDATASection("original_request", repairRequest(question: question, context: context)),
         ]
         if let repair {
             lines.append("<must_not_use>")
@@ -207,6 +207,11 @@ public enum SQLPromptBuilder {
             ))
         lines.append("</reconstruction_task>")
         return lines.joined(separator: "\n")
+    }
+
+    private static func repairRequest(question: String, context: SQLGenerationContext) -> String {
+        let trimmed = question.trimmingCharacters(in: .whitespacesAndNewlines)
+        return trimmed.isEmpty ? (context.originalQuestion ?? question) : trimmed
     }
 
     private static func databaseDiagnosticSection(

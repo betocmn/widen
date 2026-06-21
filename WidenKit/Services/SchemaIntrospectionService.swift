@@ -168,10 +168,11 @@ public struct SchemaIntrospectionService: Sendable {
 
     private static func isPositiveValueCheckExpression(_ expression: String) -> Bool {
         let lowered = expression.lowercased()
-        if lowered.contains("<>")
-            || lowered.contains("!=")
-            || lowered.contains(" not ")
-            || lowered.contains("!~")
+        let operatorText = expressionWithoutStringLiterals(expression).lowercased()
+        if operatorText.contains("<>")
+            || operatorText.contains("!=")
+            || operatorText.range(of: #"\bnot\b"#, options: .regularExpression) != nil
+            || operatorText.contains("!~")
         {
             return false
         }
@@ -181,6 +182,18 @@ public struct SchemaIntrospectionService: Sendable {
                 options: .regularExpression
             ) != nil
             || lowered.range(of: #"=\s*'"#, options: .regularExpression) != nil
+    }
+
+    private static func expressionWithoutStringLiterals(_ expression: String) -> String {
+        guard let regex = try? NSRegularExpression(pattern: #"'(?:''|[^'])*'"#) else {
+            return expression
+        }
+        let range = NSRange(expression.startIndex..<expression.endIndex, in: expression)
+        return regex.stringByReplacingMatches(
+            in: expression,
+            range: range,
+            withTemplate: "''"
+        )
     }
 
     private static func stringLiterals(in expression: String) -> [String] {

@@ -965,7 +965,7 @@ struct SQLSchemaValidatorTests {
 
         let enriched = GeneratedSQLPostprocessor.enriched(
             generation,
-            question: "How many orders were placed last week?",
+            question: "How many orders did we make last week?",
             schema: makeUsersOrdersSchema(),
             databaseContext: ""
         )

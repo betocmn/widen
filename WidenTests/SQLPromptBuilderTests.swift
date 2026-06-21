@@ -516,6 +516,37 @@ struct SQLPromptBuilderTests {
         #expect(prompt.contains("<sqlstate>42P01</sqlstate>"))
     }
 
+    @Test func repairPromptUsesFailedFollowUpRequest() {
+        let failedSQL = "SELECT id FROM public.users WHERE status = 'active'"
+        let context = SQLGenerationContext(
+            mode: .repair,
+            originalQuestion: "show users",
+            currentSQL: failedSQL,
+            lastRunError: #"Query failed: column "status" does not exist"#,
+            repairContext: SQLRepairContext(
+                failedSQL: failedSQL,
+                diagnostic: DatabaseDiagnostic(
+                    kind: .missingColumn,
+                    sqlState: "42703",
+                    message: #"column "status" does not exist"#,
+                    columnName: "status"
+                ),
+                forbiddenIdentifiers: ["status"],
+                priorFingerprints: ["select id from public.users where status = 'active'"]
+            )
+        )
+
+        let prompt = SQLPromptBuilder.prompt(
+            question: "only active users",
+            schema: makeSampleSchema(),
+            context: context
+        )
+
+        #expect(prompt.contains("<original_request>"))
+        #expect(prompt.contains("only active users"))
+        #expect(!prompt.contains("show users"))
+    }
+
     @Test func reconstructionPromptExcludesFailedSQL() {
         let failedSQL = "SELECT id FROM public.match_batch"
         let context = SQLGenerationContext(

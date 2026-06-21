@@ -462,12 +462,24 @@ struct SchemaIntrospectionServiceTests {
         let disallowed = SchemaIntrospectionService.checkValueLiterals(
             in: "CHECK (status <> 'deleted')"
         )
+        let negated = SchemaIntrospectionService.checkValueLiterals(
+            in: "CHECK (NOT(status = 'deleted'))"
+        )
+        let negatedGroup = SchemaIntrospectionService.checkValueLiterals(
+            in: "CHECK (NOT (status = 'deleted'))"
+        )
+        let allowedPhrase = SchemaIntrospectionService.checkValueLiterals(
+            in: "CHECK (status IN ('not started', 'active'))"
+        )
         let pattern = SchemaIntrospectionService.checkValueLiterals(
             in: "CHECK (code ~ '^[A-Z]+$')"
         )
 
         #expect(allowed == ["approved", "rejected"])
         #expect(disallowed.isEmpty)
+        #expect(negated.isEmpty)
+        #expect(negatedGroup.isEmpty)
+        #expect(allowedPhrase == ["not started", "active"])
         #expect(pattern.isEmpty)
     }
 }

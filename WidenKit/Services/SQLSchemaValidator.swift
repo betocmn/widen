@@ -1463,6 +1463,7 @@ public enum GeneratedSQLPostprocessor {
             let variants = SchemaIndex.tokens(in: word)
             guard variants.contains(where: { !$0.allSatisfy(\.isNumber) }) else { return false }
             guard !variants.contains(where: requestStopWords.contains) else { return false }
+            guard !variants.contains(where: genericVerbStopWords.contains) else { return false }
             guard !variants.contains(where: metricOperatorStopWords.contains) else { return false }
             return seen.insert(word).inserted
         }
@@ -1499,6 +1500,10 @@ public enum GeneratedSQLPostprocessor {
         "average", "avg", "bottom", "count", "highest", "least", "lowest", "many", "max",
         "maximum", "min", "minimum", "most", "much", "number", "percent", "percentage",
         "rank", "rate", "ratio", "sum", "top", "total",
+    ]
+
+    private static let genericVerbStopWords: Set<String> = [
+        "create", "created", "creating", "make", "made", "makes", "making",
     ]
 
     private static let requestStopWords: Set<String> = [
