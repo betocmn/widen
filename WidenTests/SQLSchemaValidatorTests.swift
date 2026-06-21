@@ -234,6 +234,19 @@ struct SQLSchemaValidatorTests {
         #expect(!result.hasDefiniteErrors)
     }
 
+    @Test func naturalJoinMergedColumnsAreNotAmbiguous() {
+        let result = SQLSchemaValidator.validate(
+            sql: """
+                SELECT id
+                FROM public.users
+                NATURAL JOIN public.orders
+                """,
+            against: makeUsersOrdersSchema()
+        )
+
+        #expect(!result.hasDefiniteErrors)
+    }
+
     @Test func joinUsingColumnsResolveAsMergedOutputColumns() {
         let result = SQLSchemaValidator.validate(
             sql: """
@@ -1036,6 +1049,19 @@ struct SQLSchemaValidatorTests {
         #expect(!result.hasDefiniteErrors)
     }
 
+    @Test func namedWindowClauseDoesNotBecomeAliasOrColumn() {
+        let result = SQLSchemaValidator.validate(
+            sql: """
+                SELECT COUNT(*) OVER w AS n
+                FROM public.orders
+                WINDOW w AS (PARTITION BY user_id ORDER BY created_at)
+                """,
+            against: makeUsersOrdersSchema()
+        )
+
+        #expect(!result.hasDefiniteErrors)
+    }
+
     @Test func nestedSubqueryScopesDoNotFalseAmbiguateOuterColumn() {
         let result = SQLSchemaValidator.validate(
             sql: """
@@ -1337,6 +1363,36 @@ struct SQLSchemaValidatorTests {
         #expect(enriched.referencedTables == ["public.users"])
     }
 
+    @Test func constrainedLiteralMustMatchQualifiedColumnTable() {
+        let generation = SQLGenerationResult(
+            sql: """
+                SELECT COUNT(*)
+                FROM public.users
+                JOIN public.orders ON users.id = orders.user_id
+                WHERE orders.status = 'active'
+                """,
+            explanation: "Counts active orders.",
+            assumptions: [],
+            referencedTables: [],
+            confidence: 1,
+            riskLevel: .low,
+            needsClarification: false,
+            clarificationQuestion: nil
+        )
+
+        let enriched = GeneratedSQLPostprocessor.enriched(
+            generation,
+            question: "how many active orders do we have?",
+            schema: makeUsersOrdersStatusSchema(),
+            databaseContext: ""
+        )
+
+        #expect(enriched.needsClarification)
+        #expect(enriched.sql.isEmpty)
+        #expect(enriched.clarificationQuestion?.contains("\"active\"") == true)
+        #expect(enriched.referencedTables == ["public.orders", "public.users"])
+    }
+
     private func makeUsersOrdersSchema() -> DatabaseSchema {
         DatabaseSchema(
             schemas: [SchemaInfo(name: "public")],
@@ -1392,6 +1448,83 @@ struct SQLSchemaValidatorTests {
                             dataType: "timestamp with time zone",
                             isNullable: false,
                             ordinalPosition: 3
+                        ),
+                    ]
+                ),
+            ],
+            foreignKeys: []
+        )
+    }
+
+    private func makeUsersOrdersStatusSchema() -> DatabaseSchema {
+        DatabaseSchema(
+            schemas: [SchemaInfo(name: "public")],
+            tables: [
+                TableInfo(
+                    schema: "public",
+                    name: "users",
+                    type: .baseTable,
+                    columns: [
+                        ColumnInfo(
+                            tableSchema: "public",
+                            tableName: "users",
+                            name: "id",
+                            dataType: "integer",
+                            isNullable: false,
+                            ordinalPosition: 1
+                        ),
+                        ColumnInfo(
+                            tableSchema: "public",
+                            tableName: "users",
+                            name: "status",
+                            dataType: "text",
+                            isNullable: false,
+                            ordinalPosition: 2,
+                            valueConstraints: [
+                                ColumnValueConstraint(
+                                    kind: .check,
+                                    values: ["active", "inactive"],
+                                    expression: "CHECK (status IN ('active', 'inactive'))"
+                                )
+                            ]
+                        ),
+                    ]
+                ),
+                TableInfo(
+                    schema: "public",
+                    name: "orders",
+                    type: .baseTable,
+                    columns: [
+                        ColumnInfo(
+                            tableSchema: "public",
+                            tableName: "orders",
+                            name: "id",
+                            dataType: "integer",
+                            isNullable: false,
+                            ordinalPosition: 1
+                        ),
+                        ColumnInfo(
+                            tableSchema: "public",
+                            tableName: "orders",
+                            name: "user_id",
+                            dataType: "integer",
+                            isNullable: false,
+                            ordinalPosition: 2
+                        ),
+                        ColumnInfo(
+                            tableSchema: "public",
+                            tableName: "orders",
+                            name: "status",
+                            dataType: "text",
+                            isNullable: false,
+                            ordinalPosition: 3,
+                            valueConstraints: [
+                                ColumnValueConstraint(
+                                    kind: .check,
+                                    values: ["paid", "refunded"],
+                                    expression: "CHECK (status IN ('paid', 'refunded'))"
+                                )
+                            ]
                         ),
                     ]
                 ),

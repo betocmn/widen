@@ -32,6 +32,14 @@ public struct SchemaIndex: Sendable {
                 columns[NormalizedIdentifier(column.name), default: []].append(column)
                 let columnTokens = Self.tokens(in: column.name)
                 tableTokens.formUnion(columnTokens)
+                for constraint in column.valueConstraints ?? [] {
+                    for value in constraint.values {
+                        tableTokens.formUnion(Self.tokens(in: value))
+                    }
+                    if let expression = constraint.expression {
+                        tableTokens.formUnion(Self.tokens(in: expression))
+                    }
+                }
                 if Self.isTemporal(column) {
                     temporalColumns[table.id, default: []].append(column)
                 }

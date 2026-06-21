@@ -668,7 +668,14 @@ public enum SQLSchemaValidator {
         case 1:
             return .resolved
         default:
-            if isMergedUsingColumn(column, in: analysis.scopes[scopeIndex], matchCount: matches) {
+            if isMergedUsingColumn(column, in: analysis.scopes[scopeIndex], matchCount: matches)
+                || isMergedNaturalJoinColumn(
+                    column,
+                    in: analysis.scopes[scopeIndex],
+                    sources: scopeSources[scopeIndex],
+                    schemaIndex: schemaIndex
+                )
+            {
                 return .resolved
             }
             return .ambiguous
@@ -689,6 +696,29 @@ public enum SQLSchemaValidator {
             return usingColumn.name.lowercased() == column.name.lowercased()
         }.count
         return mergedJoinCount >= max(1, matchCount - 1)
+    }
+
+    private static func isMergedNaturalJoinColumn(
+        _ column: SQLColumnReference,
+        in scope: SQLReferenceScope,
+        sources: [ResolvedRelationSource],
+        schemaIndex: SchemaLookup
+    ) -> Bool {
+        guard scope.relations.contains(where: \.isNaturalJoin) else { return false }
+        var previousSources: [ResolvedRelationSource] = []
+        for (index, relation) in scope.relations.enumerated() {
+            guard let source = sources[safe: index] else { break }
+            if relation.isNaturalJoin,
+                source.definitelyContainsColumn(column, schemaIndex: schemaIndex),
+                previousSources.contains(where: {
+                    $0.definitelyContainsColumn(column, schemaIndex: schemaIndex)
+                })
+            {
+                return true
+            }
+            previousSources.append(source)
+        }
+        return false
     }
 
     private static func temporalIntervalComparisonIssues(
@@ -1849,7 +1879,7 @@ public enum GeneratedSQLPostprocessor {
         ).union(Set(SchemaIndex.tokens(in: databaseContext)))
 
         let terms = meaningfulRequestWords(question)
-        let literalTokens = acceptedLiteralValueTokens(
+        let literalTokens = literalValueTokenEvaluation(
             in: sql,
             referencedTables: referencedTables,
             schema: schema
@@ -1857,7 +1887,10 @@ public enum GeneratedSQLPostprocessor {
         let unresolved = terms.filter { word in
             let variants = SchemaIndex.tokens(in: word)
             guard !variants.isEmpty else { return false }
-            if variants.contains(where: literalTokens.contains) {
+            if variants.contains(where: literalTokens.rejected.contains) {
+                return true
+            }
+            if variants.contains(where: literalTokens.accepted.contains) {
                 return false
             }
             return !variants.contains { variant in
@@ -1869,38 +1902,100 @@ public enum GeneratedSQLPostprocessor {
         return "What column, condition, or table defines \"\(first)\" for this question?"
     }
 
-    private static func acceptedLiteralValueTokens(
+    private struct ConstrainedColumnValueTokens {
+        var qualifiers: Set<String>
+        var valueTokens: Set<String>
+    }
+
+    private struct ComparisonColumnReference {
+        var qualifier: String?
+        var qualifierIsQuoted: Bool
+        var name: String
+        var isQuoted: Bool
+    }
+
+    private struct LiteralValueTokenEvaluation {
+        var accepted: Set<String> = []
+        var rejected: Set<String> = []
+    }
+
+    private static func literalValueTokenEvaluation(
         in sql: String,
         referencedTables: [String],
         schema: DatabaseSchema
-    ) -> Set<String> {
+    ) -> LiteralValueTokenEvaluation {
         let constrainedValues = constrainedValueTokensByColumnName(
             referencedTables: referencedTables,
-            schema: schema
+            schema: schema,
+            sql: sql
         )
         let sqlTokens = SQLToken.tokenize(sql)
-        return sqlTokens.enumerated().reduce(into: Set<String>()) { tokens, pair in
+        return sqlTokens.enumerated().reduce(into: LiteralValueTokenEvaluation()) { result, pair in
             let (index, token) = pair
             guard token.kind == .string else { return }
             let literalTokens = Set(SchemaIndex.tokens(in: stringLiteralBody(token.text)))
             guard !literalTokens.isEmpty else { return }
-            if let columnName = comparisonColumnName(beforeLiteralAt: index, tokens: sqlTokens),
-                let allowedTokens = constrainedValues[columnName.lowercased()]
+            if let comparison = comparisonColumnReference(beforeLiteralAt: index, tokens: sqlTokens),
+                let entries = constrainedValues[comparison.name.lowercased()]
             {
-                guard !literalTokens.isDisjoint(with: allowedTokens) else { return }
+                let matchingEntries = constrainedValueEntries(matching: comparison, entries: entries)
+                if !matchingEntries.isEmpty {
+                    if comparison.qualifier == nil, matchingEntries.count > 1 {
+                        guard matchingEntries.allSatisfy({
+                            !literalTokens.isDisjoint(with: $0.valueTokens)
+                        }) else {
+                            result.rejected.formUnion(literalTokens)
+                            return
+                        }
+                    } else {
+                        guard matchingEntries.contains(where: {
+                            !literalTokens.isDisjoint(with: $0.valueTokens)
+                        }) else {
+                            result.rejected.formUnion(literalTokens)
+                            return
+                        }
+                    }
+                }
             }
-            tokens.formUnion(literalTokens)
+            result.accepted.formUnion(literalTokens)
         }
     }
 
     private static func constrainedValueTokensByColumnName(
         referencedTables: [String],
-        schema: DatabaseSchema
-    ) -> [String: Set<String>] {
+        schema: DatabaseSchema,
+        sql: String
+    ) -> [String: [ConstrainedColumnValueTokens]] {
         let referenced = Set(referencedTables.map { $0.lowercased() })
         guard !referenced.isEmpty else { return [:] }
 
-        var tokensByColumn: [String: Set<String>] = [:]
+        let schemaLookup = SchemaLookup(schema: schema)
+        var qualifiersByTableID: [String: Set<String>] = [:]
+        for table in schema.tables where referenced.contains(table.qualifiedName.lowercased()) {
+            qualifiersByTableID[table.id, default: []].formUnion([
+                table.name.lowercased(),
+                table.qualifiedName.lowercased(),
+            ])
+        }
+        for relation in SQLReferenceAnalyzer.analyze(sql).relations {
+            guard let table = schemaLookup.resolve(relation),
+                referenced.contains(table.qualifiedName.lowercased())
+            else {
+                continue
+            }
+            if let alias = relation.alias {
+                qualifiersByTableID[table.id, default: []].insert(
+                    relation.aliasIsQuoted ? alias : alias.lowercased()
+                )
+            } else {
+                qualifiersByTableID[table.id, default: []].insert(
+                    relation.nameIsQuoted ? relation.name : relation.name.lowercased()
+                )
+                qualifiersByTableID[table.id, default: []].insert(relation.displayName.lowercased())
+            }
+        }
+
+        var tokensByColumn: [String: [ConstrainedColumnValueTokens]] = [:]
         for table in schema.tables where referenced.contains(table.qualifiedName.lowercased()) {
             for column in table.columns {
                 var valueTokens = Set<String>()
@@ -1910,17 +2005,30 @@ public enum GeneratedSQLPostprocessor {
                     }
                 }
                 if !valueTokens.isEmpty {
-                    tokensByColumn[column.name.lowercased(), default: []].formUnion(valueTokens)
+                    tokensByColumn[column.name.lowercased(), default: []].append(
+                        ConstrainedColumnValueTokens(
+                            qualifiers: qualifiersByTableID[table.id, default: []],
+                            valueTokens: valueTokens
+                        ))
                 }
             }
         }
         return tokensByColumn
     }
 
-    private static func comparisonColumnName(
+    private static func constrainedValueEntries(
+        matching comparison: ComparisonColumnReference,
+        entries: [ConstrainedColumnValueTokens]
+    ) -> [ConstrainedColumnValueTokens] {
+        guard let qualifier = comparison.qualifier else { return entries }
+        let lookup = comparison.qualifierIsQuoted ? qualifier : qualifier.lowercased()
+        return entries.filter { $0.qualifiers.contains(lookup) }
+    }
+
+    private static func comparisonColumnReference(
         beforeLiteralAt literalIndex: Int,
         tokens: [SQLToken]
-    ) -> String? {
+    ) -> ComparisonColumnReference? {
         guard let operatorIndex = previousSignificantIndex(before: literalIndex, tokens: tokens),
             tokens[operatorIndex].text == "=",
             let columnIndex = previousSignificantIndex(before: operatorIndex, tokens: tokens),
@@ -1928,7 +2036,28 @@ public enum GeneratedSQLPostprocessor {
         else {
             return nil
         }
-        return tokens[columnIndex].identifierValue
+        var qualifier: String?
+        var qualifierIsQuoted = false
+        if tokens[safe: columnIndex - 1]?.text == ".",
+            let tableIndex = previousSignificantIndex(before: columnIndex - 1, tokens: tokens),
+            tokens[safe: tableIndex]?.isIdentifierLike == true
+        {
+            var parts = [tokens[tableIndex]]
+            if tokens[safe: tableIndex - 1]?.text == ".",
+                let schemaIndex = previousSignificantIndex(before: tableIndex - 1, tokens: tokens),
+                tokens[safe: schemaIndex]?.isIdentifierLike == true
+            {
+                parts.insert(tokens[schemaIndex], at: 0)
+            }
+            qualifier = parts.map(\.identifierValue).joined(separator: ".")
+            qualifierIsQuoted = parts.contains { $0.kind == .quotedIdentifier }
+        }
+        return ComparisonColumnReference(
+            qualifier: qualifier,
+            qualifierIsQuoted: qualifierIsQuoted,
+            name: tokens[columnIndex].identifierValue,
+            isQuoted: tokens[columnIndex].kind == .quotedIdentifier
+        )
     }
 
     private static func previousSignificantIndex(before index: Int, tokens: [SQLToken]) -> Int? {

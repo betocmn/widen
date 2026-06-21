@@ -19,6 +19,7 @@ public struct SQLRelationReference: Equatable, Hashable, Sendable {
     public var derivedColumns: Set<SQLDerivedColumn>?
     public var derivedOutputRelations: [SQLRelationReference]?
     public var startOffset: Int?
+    public var isNaturalJoin: Bool
 
     public init(
         schema: String? = nil,
@@ -31,7 +32,8 @@ public struct SQLRelationReference: Equatable, Hashable, Sendable {
         isDerived: Bool = false,
         derivedColumns: Set<SQLDerivedColumn>? = nil,
         derivedOutputRelations: [SQLRelationReference]? = nil,
-        startOffset: Int? = nil
+        startOffset: Int? = nil,
+        isNaturalJoin: Bool = false
     ) {
         self.schema = schema
         self.name = name
@@ -44,6 +46,7 @@ public struct SQLRelationReference: Equatable, Hashable, Sendable {
         self.derivedColumns = derivedColumns
         self.derivedOutputRelations = derivedOutputRelations
         self.startOffset = startOffset
+        self.isNaturalJoin = isNaturalJoin
     }
 
     public var displayName: String {
@@ -673,27 +676,34 @@ public enum SQLReferenceAnalyzer {
                         )
                     {
                         relations.append(functionRelation)
-                    } else if let relation = parseRelation(at: &index, tokens: tokens) {
-                        var roleRelation = relation
-                        roleRelation.role = role
-                        if roleRelation.schema == nil,
-                            let cteName = cteNames.first(where: {
-                                $0.matches(
-                                    name: roleRelation.name,
-                                    isQuoted: roleRelation.nameIsQuoted
-                                )
-                            })
-                        {
-                            if !skipCTEs {
-                                roleRelation.isDerived = true
-                                roleRelation.derivedColumns = cteOutputColumns[cteName] ?? nil
+                    } else {
+                        let relationStartIndex = index
+                        if let relation = parseRelation(at: &index, tokens: tokens) {
+                            var roleRelation = relation
+                            roleRelation.role = role
+                            roleRelation.isNaturalJoin = isNaturalJoinStart(
+                                at: relationStartIndex,
+                                tokens: tokens
+                            )
+                            if roleRelation.schema == nil,
+                                let cteName = cteNames.first(where: {
+                                    $0.matches(
+                                        name: roleRelation.name,
+                                        isQuoted: roleRelation.nameIsQuoted
+                                    )
+                                })
+                            {
+                                if !skipCTEs {
+                                    roleRelation.isDerived = true
+                                    roleRelation.derivedColumns = cteOutputColumns[cteName] ?? nil
+                                    relations.append(roleRelation)
+                                }
+                            } else {
                                 relations.append(roleRelation)
                             }
                         } else {
-                            relations.append(roleRelation)
+                            break
                         }
-                    } else {
-                        break
                     }
                     if tokens[safe: index]?.text == "," {
                         index += 1
@@ -1375,6 +1385,25 @@ public enum SQLReferenceAnalyzer {
     private static func isPostgreSQLClauseGrammarWord(at index: Int, tokens: [SQLToken]) -> Bool {
         isCollationClauseWord(at: index, tokens: tokens)
             || isInsertOverridingClauseWord(at: index, tokens: tokens)
+            || isNamedWindowClauseWord(at: index, tokens: tokens)
+    }
+
+    private static func isNamedWindowClauseWord(at index: Int, tokens: [SQLToken]) -> Bool {
+        guard tokens[safe: index]?.isIdentifierLike == true else { return false }
+        if previousNonCommaIndex(before: index, in: tokens).flatMap({
+            tokens[safe: $0]?.normalized == "over"
+        }) ?? false {
+            return true
+        }
+        guard topLevelClause(containing: index, tokens: tokens) == "window" else {
+            return false
+        }
+        if previousNonCommaIndex(before: index, in: tokens).flatMap({
+            tokens[safe: $0]?.normalized == "window"
+        }) ?? false {
+            return tokens[safe: index + 1]?.normalized == "as"
+        }
+        return tokens[safe: index - 1]?.text == "," && tokens[safe: index + 1]?.normalized == "as"
     }
 
     private static func isCollationClauseWord(at index: Int, tokens: [SQLToken]) -> Bool {
@@ -1706,6 +1735,27 @@ public enum SQLReferenceAnalyzer {
         return tokens[safe: isIndex]?.normalized == "is"
     }
 
+    private static func isNaturalJoinStart(at relationIndex: Int, tokens: [SQLToken]) -> Bool {
+        guard var cursor = previousNonCommaIndex(before: relationIndex, in: tokens),
+            tokens[safe: cursor]?.normalized == "join"
+        else {
+            return false
+        }
+        cursor -= 1
+        while cursor >= 0 {
+            guard let token = tokens[safe: cursor] else { return false }
+            if token.normalized == "natural" {
+                return true
+            }
+            if ["left", "right", "inner", "outer", "full"].contains(token.normalized) {
+                cursor -= 1
+                continue
+            }
+            return false
+        }
+        return false
+    }
+
     private static func previousSignificantToken(before index: Int, in tokens: [SQLToken]) -> SQLToken?
     {
         guard let index = previousNonCommaIndex(before: index, in: tokens) else { return nil }
@@ -1825,7 +1875,7 @@ public enum SQLReferenceAnalyzer {
     private static func topLevelClause(containing index: Int, tokens: [SQLToken]) -> String? {
         let clauseKeywords: Set<String> = [
             "select", "from", "where", "group", "having", "order", "limit", "offset", "set",
-            "values", "returning", "on", "using",
+            "values", "returning", "on", "using", "window",
         ]
         return previousTopLevelIndex(ofAny: clauseKeywords, in: tokens, before: index + 1)
             .map { tokens[$0].normalized }
@@ -1899,7 +1949,7 @@ public enum SQLReferenceAnalyzer {
     private static let relationTerminatorKeywords: Set<String> = [
         "on", "using", "where", "join", "left", "right", "inner", "outer", "full", "cross",
         "natural", "group", "order", "limit", "offset", "union", "returning", "set", "values",
-        "default", "conflict", "do", "nothing",
+        "default", "conflict", "do", "nothing", "window",
     ]
 
     private static let relationStartKeywords: Set<String> = [
@@ -2168,7 +2218,7 @@ struct SQLToken: Equatable, Sendable {
         "using", "at", "time", "zone", "with", "without", "within", "any", "all",
         "true", "false", "interval", "current_date", "current_time", "current_timestamp", "now", "like",
         "ilike", "similar", "escape", "nulls", "first", "last", "default", "conflict",
-        "do", "nothing", "constraint", "rows", "row", "range", "groups", "unbounded",
+        "do", "nothing", "constraint", "window", "rows", "row", "range", "groups", "unbounded",
         "preceding", "current", "following",
     ]
 }

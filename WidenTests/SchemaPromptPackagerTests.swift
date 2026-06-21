@@ -343,6 +343,58 @@ struct SchemaPromptPackagerTests {
         #expect(tables.contains("public.preseason_tool"))
     }
 
+    @Test func schemaRankingAndSearchUseConstrainedValues() {
+        let schema = DatabaseSchema(
+            schemas: [SchemaInfo(name: "public")],
+            tables: [
+                TableInfo(
+                    schema: "public",
+                    name: "review_queue",
+                    type: .baseTable,
+                    columns: [
+                        column("review_queue", "id", ordinal: 1),
+                        column(
+                            "review_queue",
+                            "status",
+                            type: "text",
+                            ordinal: 2,
+                            valueConstraints: [
+                                ColumnValueConstraint(
+                                    kind: .check,
+                                    values: ["approved", "rejected"],
+                                    expression: "CHECK (status IN ('approved', 'rejected'))"
+                                )
+                            ]
+                        ),
+                    ]
+                ),
+                TableInfo(
+                    schema: "public",
+                    name: "generic_events",
+                    type: .baseTable,
+                    columns: [
+                        column("generic_events", "id", ordinal: 1),
+                        column("generic_events", "status", type: "text", ordinal: 2),
+                    ]
+                ),
+            ],
+            foreignKeys: []
+        )
+
+        let ranked = SchemaRelevanceRanker.rank(
+            schema: schema,
+            input: SchemaRankingInput(question: "count approved")
+        )
+        let searchResults = SchemaDiscoveryService.search(
+            schema: schema,
+            queries: ["approved"],
+            limit: 2
+        ).map(\.qualifiedName)
+
+        #expect(ranked.first?.table.qualifiedName == "public.review_queue")
+        #expect(searchResults.contains("public.review_queue"))
+    }
+
     private func makeIncrementalPrimarySchema() -> DatabaseSchema {
         let tableNames = ["customers", "invoices", "orders", "products"]
         return DatabaseSchema(
