@@ -15,6 +15,16 @@ struct SessionRow: View {
     var body: some View {
         HStack(spacing: 6) {
             titleContent
+
+            // A spinner next to the title while the agent is generating SQL
+            // or running a query — visible from any session so in-progress
+            // work elsewhere stays glanceable; it disappears when the run ends.
+            if appState.isSessionWorking(session.id) {
+                ProgressView()
+                    .controlSize(.mini)
+                    .help("Working…")
+            }
+
             Spacer(minLength: 4)
 
             if isHovering && renamingSessionID != session.id {

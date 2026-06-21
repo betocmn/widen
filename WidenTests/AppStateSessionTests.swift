@@ -492,6 +492,48 @@ struct AppStateSessionTests {
         #expect(try state.connectionStore.load().map(\.id) == [other.id])
     }
 
+    @Test func isSessionWorkingTracksGeneration() throws {
+        let (state, dir) = makeState()
+        defer { try? FileManager.default.removeItem(at: dir) }
+        let connectionID = UUID()
+
+        let session = state.createSession(connectionID: connectionID)
+        let controller = try #require(state.selectedController)
+        #expect(state.isSessionWorking(session.id) == false)
+
+        controller.chatVM.beginGeneration()
+        #expect(state.isSessionWorking(session.id) == true)
+
+        controller.chatVM.finishGeneration()
+        #expect(state.isSessionWorking(session.id) == false)
+    }
+
+    @Test func isSessionWorkingSurvivesSessionSwitch() throws {
+        let (state, dir) = makeState()
+        defer { try? FileManager.default.removeItem(at: dir) }
+        let connectionID = UUID()
+
+        let working = state.createSession(connectionID: connectionID)
+        let workingController = try #require(state.selectedController)
+        workingController.chatVM.beginGeneration()
+
+        // Switching away keeps the controller cached, so the busy session still
+        // reports as working from the sidebar while another session is on screen.
+        let other = state.createSession(connectionID: connectionID)
+        #expect(state.selectedSessionID == other.id)
+        #expect(state.isSessionWorking(working.id) == true)
+        #expect(state.isSessionWorking(other.id) == false)
+    }
+
+    @Test func isSessionWorkingFalseForUnopenedSession() throws {
+        let (state, dir) = makeState()
+        defer { try? FileManager.default.removeItem(at: dir) }
+
+        // A session that was never selected has no controller yet, so it can
+        // never be mid-run — no spinner.
+        #expect(state.isSessionWorking(UUID()) == false)
+    }
+
     private func waitUntil(_ condition: @MainActor @escaping () -> Bool) async {
         for _ in 0..<100 {
             if condition() { return }

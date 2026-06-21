@@ -19,6 +19,14 @@ public final class SessionController: Identifiable {
     /// persisted — after a relaunch the records render as summary rows.
     public private(set) var results: [UUID: QueryResult] = [:]
 
+    /// True while the session is mid-generation or mid-run. Surfaced in the
+    /// sidebar so work in progress stays visible even when another session is
+    /// on screen (controllers persist once created, so the flag survives a
+    /// session switch).
+    public var isWorking: Bool {
+        chatVM.isGenerating || queryVM.isRunning
+    }
+
     public convenience init(session: QuerySession, schema: DatabaseSchema? = nil) {
         self.init(session: session, schema: schema, executor: QueryExecutionService())
     }
