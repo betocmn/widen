@@ -35,26 +35,42 @@ public final class OpenRouterSQLGenerator: SQLGenerator, Sendable {
         let instructions =
             SQLPromptBuilder.instructions(defaultRowLimit: config.defaultRowLimit)
             + "\n\n" + Self.jsonInstructions
-        let prompt = SQLPromptBuilder.prompt(
+        let bundle = SQLPromptBuilder.promptBundle(
             question: question,
             schema: schema,
             context: context,
             databaseContext: config.databaseContext,
             maxSchemaCharacters: Self.schemaCharacterBudget
         )
+        let prompt = bundle.prompt
         let started = Date()
         do {
-            let result = try await respond(instructions: instructions, prompt: prompt)
+            var result = try await respond(instructions: instructions, prompt: prompt)
+            result.generationCallCount = max(1, context.modelCallCount)
             await GenerationLog.shared.append(
                 prompt: prompt,
                 outcome: result.logDescription,
-                durationMs: Int(Date().timeIntervalSince(started) * 1_000))
+                durationMs: Int(Date().timeIntervalSince(started) * 1_000),
+                telemetry: PromptTelemetry(
+                    phase: context.mode,
+                    package: bundle.schemaPackage,
+                    context: context,
+                    callCount: max(1, context.modelCallCount),
+                    stopReason: result.needsClarification ? "clarification" : "success"
+                ))
             return result
         } catch {
             await GenerationLog.shared.append(
                 prompt: prompt,
                 outcome: "error: \(error)",
-                durationMs: Int(Date().timeIntervalSince(started) * 1_000))
+                durationMs: Int(Date().timeIntervalSince(started) * 1_000),
+                telemetry: PromptTelemetry(
+                    phase: context.mode,
+                    package: bundle.schemaPackage,
+                    context: context,
+                    callCount: max(1, context.modelCallCount),
+                    stopReason: "error"
+                ))
             throw error
         }
     }

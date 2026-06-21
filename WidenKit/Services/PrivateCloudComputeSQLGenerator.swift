@@ -80,12 +80,13 @@
                 model: model,
                 instructions: SQLPromptBuilder.instructions(defaultRowLimit: config.defaultRowLimit)
             )
-            let prompt = SQLPromptBuilder.prompt(
+            let bundle = SQLPromptBuilder.promptBundle(
                 question: question,
                 schema: schema,
                 context: context,
                 maxSchemaCharacters: Self.schemaCharacterBudget
             )
+            let prompt = bundle.prompt
             let started = Date()
             do {
                 let response = try await session.respond(
@@ -93,17 +94,32 @@
                     generating: GeneratedSQLResponse.self,
                     options: GenerationOptions(sampling: .greedy, maximumResponseTokens: 1_024)
                 )
-                let result = FoundationModelsSQLGenerator.result(from: response.content)
+                var result = FoundationModelsSQLGenerator.result(from: response.content)
+                result.generationCallCount = max(1, context.modelCallCount)
                 await GenerationLog.shared.append(
                     prompt: prompt,
                     outcome: result.logDescription,
-                    durationMs: Int(Date().timeIntervalSince(started) * 1_000))
+                    durationMs: Int(Date().timeIntervalSince(started) * 1_000),
+                    telemetry: PromptTelemetry(
+                        phase: context.mode,
+                        package: bundle.schemaPackage,
+                        context: context,
+                        callCount: max(1, context.modelCallCount),
+                        stopReason: result.needsClarification ? "clarification" : "success"
+                    ))
                 return result
             } catch {
                 await GenerationLog.shared.append(
                     prompt: prompt,
                     outcome: "error: \(error)",
-                    durationMs: Int(Date().timeIntervalSince(started) * 1_000))
+                    durationMs: Int(Date().timeIntervalSince(started) * 1_000),
+                    telemetry: PromptTelemetry(
+                        phase: context.mode,
+                        package: bundle.schemaPackage,
+                        context: context,
+                        callCount: max(1, context.modelCallCount),
+                        stopReason: "error"
+                    ))
                 throw Self.map(error)
             }
         }

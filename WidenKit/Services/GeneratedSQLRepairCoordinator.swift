@@ -345,6 +345,7 @@ public struct GeneratedSQLRepairCoordinator: Sendable {
 
     public private(set) var constraints: RepairConstraints
     public private(set) var attempts: [SQLRepairAttempt]
+    private let maxModelCalls: Int
     private var modelCallCount = 0
     private var failedCandidateSignatures: [SQLFailedCandidateSignature]
 
@@ -353,7 +354,8 @@ public struct GeneratedSQLRepairCoordinator: Sendable {
         firstError: String,
         diagnostic: DatabaseDiagnostic?,
         forbiddenIdentifiers: [String],
-        repairConstraints: [RepairConstraint] = []
+        repairConstraints: [RepairConstraint] = [],
+        maxModelCalls: Int = Self.maxModelCalls
     ) {
         let fingerprint = SQLFingerprint(failedSQL)
         let failureSignature = SQLFailedCandidateSignature(
@@ -372,11 +374,12 @@ public struct GeneratedSQLRepairCoordinator: Sendable {
             lastError: firstError
         )
         self.attempts = [SQLRepairAttempt(mode: .initial, sql: failedSQL, error: firstError)]
+        self.maxModelCalls = max(1, maxModelCalls)
         self.failedCandidateSignatures = [failureSignature]
     }
 
     public var canRequestAnotherModelCall: Bool {
-        modelCallCount < Self.maxModelCalls
+        modelCallCount < maxModelCalls
     }
 
     public mutating func beginNextAttempt() -> SQLGenerationMode? {

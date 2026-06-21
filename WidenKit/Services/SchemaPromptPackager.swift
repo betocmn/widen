@@ -6,25 +6,42 @@ public struct PromptBudget: Equatable, Sendable {
     public var contextWindowTokens: Int
     public var outputReserveTokens: Int
     public var safetyMarginTokens: Int
+    public var instructionOverheadTokens: Int
+    public var structuredOutputOverheadTokens: Int
+    public var toolOverheadTokens: Int
 
     public init(
         contextWindowTokens: Int,
         outputReserveTokens: Int,
-        safetyMarginTokens: Int
+        safetyMarginTokens: Int,
+        instructionOverheadTokens: Int = 0,
+        structuredOutputOverheadTokens: Int = 0,
+        toolOverheadTokens: Int = 0
     ) {
         self.contextWindowTokens = contextWindowTokens
         self.outputReserveTokens = outputReserveTokens
         self.safetyMarginTokens = safetyMarginTokens
+        self.instructionOverheadTokens = instructionOverheadTokens
+        self.structuredOutputOverheadTokens = structuredOutputOverheadTokens
+        self.toolOverheadTokens = toolOverheadTokens
     }
 
     public static let localFoundationModels = PromptBudget(
         contextWindowTokens: 4_096,
         outputReserveTokens: 512,
-        safetyMarginTokens: 512
+        safetyMarginTokens: 512,
+        instructionOverheadTokens: 128,
+        structuredOutputOverheadTokens: 192,
+        toolOverheadTokens: 0
     )
+
+    public var hiddenOverheadTokens: Int {
+        instructionOverheadTokens + structuredOutputOverheadTokens + toolOverheadTokens
+    }
 
     public func inputTokenAllowance(scale: Double = 1.0) -> Int {
         let raw = contextWindowTokens - outputReserveTokens - safetyMarginTokens
+            - hiddenOverheadTokens
         return max(256, Int(Double(raw) * scale))
     }
 
@@ -45,10 +62,23 @@ public struct PromptBudget: Equatable, Sendable {
     }
 
     public func schemaCharacterAllowance(fixedPromptCharacters: Int, scale: Double) -> Int {
+        schemaCharacterAllowance(
+            fixedPromptCharacters: fixedPromptCharacters,
+            hiddenOverheadCharacters: 0,
+            scale: scale
+        )
+    }
+
+    public func schemaCharacterAllowance(
+        fixedPromptCharacters: Int,
+        hiddenOverheadCharacters: Int,
+        scale: Double
+    ) -> Int {
         let fixedTokens = estimatedTokenCount(for: max(0, fixedPromptCharacters))
+        let hiddenTokens = estimatedTokenCount(for: max(0, hiddenOverheadCharacters))
         let availableTokens = max(
             256,
-            inputTokenAllowance(scale: scale) - fixedTokens
+            inputTokenAllowance(scale: scale) - fixedTokens - hiddenTokens
         )
         return availableTokens * Self.estimatedCharactersPerToken
     }
@@ -181,13 +211,22 @@ public enum SchemaPromptPackager {
     }
 
     public struct PackageDiagnostics: Equatable, Sendable {
+        public struct RankedTableDiagnostic: Equatable, Sendable {
+            public var tableID: String
+            public var score: Int
+            public var reasons: [String]
+        }
+
         public var estimatedTokens: Int
+        public var estimatedEnvelopeTokens: Int
+        public var hiddenOverheadTokens: Int
         public var maxCharacters: Int
         public var compressionLevel: CompressionLevel
         public var includedTables: [String]
         public var pinnedTables: [String]
         public var omittedTableCount: Int
         public var overflowedBudget: Bool
+        public var rankedTables: [RankedTableDiagnostic]
     }
 
     public static func package(
@@ -212,7 +251,7 @@ public enum SchemaPromptPackager {
             schema: schema,
             ranked: ranked,
             input: input,
-            options: PackageOptions(maxCharacters: maxCharacters)
+            options: PackageOptions(maxCharacters: maxCharacters, includeCatalog: false)
         )
     }
 
@@ -392,12 +431,23 @@ public enum SchemaPromptPackager {
             estimatedTokens: PromptBudget.localFoundationModels.estimatedTokenCount(
                 for: finalText.count
             ),
+            estimatedEnvelopeTokens: PromptBudget.localFoundationModels.estimatedTokenCount(
+                for: finalText.count
+            ) + PromptBudget.localFoundationModels.hiddenOverheadTokens,
+            hiddenOverheadTokens: PromptBudget.localFoundationModels.hiddenOverheadTokens,
             maxCharacters: maxCharacters,
             compressionLevel: compression,
             includedTables: Array(includedIDs).sorted(),
             pinnedTables: Array(pinnedIDs).sorted(),
             omittedTableCount: omitted,
-            overflowedBudget: finalText.count > maxCharacters
+            overflowedBudget: finalText.count > maxCharacters,
+            rankedTables: ranked.prefix(16).map {
+                PackageDiagnostics.RankedTableDiagnostic(
+                    tableID: $0.table.id,
+                    score: $0.score,
+                    reasons: $0.reasons
+                )
+            }
         )
         return SchemaPromptPackage(
             text: finalText,
@@ -449,13 +499,23 @@ public enum SchemaPromptPackager {
                 pinned.insert(table.id)
             }
         }
-        for table in ranked.prefix(2).map(\.table) where ranked.first(where: { $0.table.id == table.id })?.score ?? 0 >= 300 {
-            pinned.insert(table.id)
+
+        let discoveryIdentifiers = Set(
+            input.schemaSearchQueries.map(SchemaRelevanceRanker.canonicalIdentifier)
+        )
+        for table in schema.tables {
+            if discoveryIdentifiers.contains(SchemaRelevanceRanker.canonicalIdentifier(table.qualifiedName))
+                || discoveryIdentifiers.contains(SchemaRelevanceRanker.canonicalIdentifier(table.name))
+            {
+                pinned.insert(table.id)
+            }
         }
+
         if let diagnostic = input.diagnostic,
             diagnostic.kind == .missingRelation
         {
-            for entry in ranked.prefix(3) where entry.score >= 300 {
+            for entry in ranked.prefix(3)
+            where entry.reasons.contains("strong replacement candidate") {
                 pinned.insert(entry.table.id)
             }
         }
@@ -624,30 +684,29 @@ public enum SchemaPromptPackager {
         columns: [ColumnInfo],
         omittedCount: Int
     ) -> String {
-        var lines = ["TABLE \(qualifiedName(table))"]
+        var lines = [tableCardHeader(table)]
+        lines.append(
+            "  Ownership: listed columns belong to table_id \(table.id); use only listed FKs to bring in columns from other table_ids."
+        )
         let columnNames = Set(columns.map(\.name))
         for column in columns {
             let nullability = column.isNullable ? "" : " NOT NULL"
             let constraints = valueConstraintSummary(column).map { " \($0)" } ?? ""
             lines.append(
-                "  \(quotedIdentifier(column.name)) \(column.dataType.lowercased())\(nullability)\(constraints)"
+                "  \(quotedIdentifier(column.name)) \(column.dataType.lowercased())\(nullability)\(constraints)\(quotedOnlyTag(column.name))"
             )
         }
         if omittedCount > 0 {
             lines.append("  ... \(omittedCount) low-relevance column\(omittedCount == 1 ? "" : "s") omitted")
         }
-        var seenForeignKeys = Set<String>()
-        for foreignKey in schema.foreignKeys
-        where foreignKey.sourceSchema == table.schema
-            && foreignKey.sourceTable == table.name
-            && (columnNames.contains(foreignKey.sourceColumn) || omittedCount == 0)
-        {
-            let key =
-                "\(foreignKey.sourceColumn)->\(foreignKey.targetSchema).\(foreignKey.targetTable).\(foreignKey.targetColumn)"
-            guard seenForeignKeys.insert(key).inserted else { continue }
-            lines.append(
-                "  FK \(quotedIdentifier(foreignKey.sourceColumn)) -> \(qualifiedName(schema: foreignKey.targetSchema, table: foreignKey.targetTable)).\(quotedIdentifier(foreignKey.targetColumn))"
-            )
+        for group in groupedForeignKeys(
+            schema.foreignKeys.filter {
+                $0.sourceSchema == table.schema
+                    && $0.sourceTable == table.name
+                    && (columnNames.contains($0.sourceColumn) || omittedCount == 0)
+            }
+        ) {
+            lines.append("  \(tableForeignKeyLine(group))")
         }
         return lines.joined(separator: "\n")
     }
@@ -657,7 +716,10 @@ public enum SchemaPromptPackager {
         schema: DatabaseSchema,
         input: SchemaRankingInput
     ) -> [String] {
-        var lines = ["TABLE \(qualifiedName(table))"]
+        var lines = [tableCardHeader(table)]
+        lines.append(
+            "  Ownership: listed columns belong to table_id \(table.id); use listed FKs for other table_ids."
+        )
         let columns = focusedColumns(
             table,
             schema: schema,
@@ -668,25 +730,23 @@ public enum SchemaPromptPackager {
         let columnNames = Set(selectedColumns.map(\.name))
         for column in selectedColumns {
             let nullability = column.isNullable ? "" : " NOT NULL"
-            lines.append("  \(quotedIdentifier(column.name)) \(column.dataType.lowercased())\(nullability)")
+            lines.append(
+                "  \(quotedIdentifier(column.name)) \(column.dataType.lowercased())\(nullability)\(quotedOnlyTag(column.name))"
+            )
         }
         if table.columns.count > selectedColumns.count {
             lines.append(
                 "  ... \(table.columns.count - selectedColumns.count) low-relevance column\(table.columns.count - selectedColumns.count == 1 ? "" : "s") omitted"
             )
         }
-        var seenForeignKeys = Set<String>()
-        for foreignKey in schema.foreignKeys
-        where foreignKey.sourceSchema == table.schema
-            && foreignKey.sourceTable == table.name
-            && columnNames.contains(foreignKey.sourceColumn)
-        {
-            let key =
-                "\(foreignKey.sourceColumn)->\(foreignKey.targetSchema).\(foreignKey.targetTable).\(foreignKey.targetColumn)"
-            guard seenForeignKeys.insert(key).inserted else { continue }
-            lines.append(
-                "  FK \(quotedIdentifier(foreignKey.sourceColumn)) -> \(qualifiedName(schema: foreignKey.targetSchema, table: foreignKey.targetTable)).\(quotedIdentifier(foreignKey.targetColumn))"
-            )
+        for group in groupedForeignKeys(
+            schema.foreignKeys.filter {
+                $0.sourceSchema == table.schema
+                    && $0.sourceTable == table.name
+                    && columnNames.contains($0.sourceColumn)
+            }
+        ) {
+            lines.append("  \(tableForeignKeyLine(group))")
         }
         return lines
     }
@@ -829,12 +889,79 @@ public enum SchemaPromptPackager {
     }
 
     private static func relationshipLines(schema: DatabaseSchema, touching tableIDs: Set<String>) -> [String] {
-        schema.foreignKeys.compactMap { foreignKey in
-            let sourceID = "\(foreignKey.sourceSchema).\(foreignKey.sourceTable)"
-            let targetID = "\(foreignKey.targetSchema).\(foreignKey.targetTable)"
+        groupedForeignKeys(schema.foreignKeys).compactMap { group in
+            let sourceID = "\(group.sourceSchema).\(group.sourceTable)"
+            let targetID = "\(group.targetSchema).\(group.targetTable)"
             guard tableIDs.contains(sourceID) || tableIDs.contains(targetID) else { return nil }
-            return "FK \(qualifiedName(schema: foreignKey.sourceSchema, table: foreignKey.sourceTable)).\(quotedIdentifier(foreignKey.sourceColumn)) -> \(qualifiedName(schema: foreignKey.targetSchema, table: foreignKey.targetTable)).\(quotedIdentifier(foreignKey.targetColumn))"
+            return relationshipForeignKeyLine(group)
         }
+    }
+
+    private struct ForeignKeyGroup {
+        var constraintName: String
+        var sourceSchema: String
+        var sourceTable: String
+        var targetSchema: String
+        var targetTable: String
+        var pairs: [(source: String, target: String)]
+
+        var sourceColumns: [String] { pairs.map(\.source) }
+        var targetColumns: [String] { pairs.map(\.target) }
+    }
+
+    private static func groupedForeignKeys(_ foreignKeys: [ForeignKeyInfo]) -> [ForeignKeyGroup] {
+        var groups: [String: ForeignKeyGroup] = [:]
+        for foreignKey in foreignKeys {
+            let key = [
+                foreignKey.constraintName,
+                foreignKey.sourceSchema,
+                foreignKey.sourceTable,
+                foreignKey.targetSchema,
+                foreignKey.targetTable,
+            ].joined(separator: "\u{1F}")
+            var group =
+                groups[key]
+                ?? ForeignKeyGroup(
+                    constraintName: foreignKey.constraintName,
+                    sourceSchema: foreignKey.sourceSchema,
+                    sourceTable: foreignKey.sourceTable,
+                    targetSchema: foreignKey.targetSchema,
+                    targetTable: foreignKey.targetTable,
+                    pairs: []
+                )
+            group.pairs.append((foreignKey.sourceColumn, foreignKey.targetColumn))
+            groups[key] = group
+        }
+        return groups.values
+            .map { group in
+                var group = group
+                group.pairs.sort {
+                    if $0.source == $1.source { return $0.target < $1.target }
+                    return $0.source < $1.source
+                }
+                return group
+            }
+            .sorted {
+                if $0.sourceSchema != $1.sourceSchema { return $0.sourceSchema < $1.sourceSchema }
+                if $0.sourceTable != $1.sourceTable { return $0.sourceTable < $1.sourceTable }
+                if $0.targetSchema != $1.targetSchema { return $0.targetSchema < $1.targetSchema }
+                if $0.targetTable != $1.targetTable { return $0.targetTable < $1.targetTable }
+                return $0.constraintName < $1.constraintName
+            }
+    }
+
+    private static func tableForeignKeyLine(_ group: ForeignKeyGroup) -> String {
+        if group.pairs.count == 1, let pair = group.pairs.first {
+            return "FK \(quotedIdentifier(pair.source)) -> \(qualifiedName(schema: group.targetSchema, table: group.targetTable)).\(quotedIdentifier(pair.target))"
+        }
+        return "FK (\(quotedIdentifiers(group.sourceColumns))) -> \(qualifiedName(schema: group.targetSchema, table: group.targetTable))(\(quotedIdentifiers(group.targetColumns)))"
+    }
+
+    private static func relationshipForeignKeyLine(_ group: ForeignKeyGroup) -> String {
+        if group.pairs.count == 1, let pair = group.pairs.first {
+            return "FK \(qualifiedName(schema: group.sourceSchema, table: group.sourceTable)).\(quotedIdentifier(pair.source)) -> \(qualifiedName(schema: group.targetSchema, table: group.targetTable)).\(quotedIdentifier(pair.target))"
+        }
+        return "FK \(qualifiedName(schema: group.sourceSchema, table: group.sourceTable))(\(quotedIdentifiers(group.sourceColumns))) -> \(qualifiedName(schema: group.targetSchema, table: group.targetTable))(\(quotedIdentifiers(group.targetColumns)))"
     }
 
     private static func relevantColumnNames(_ table: TableInfo, input: SchemaRankingInput) -> [String] {
@@ -856,6 +983,10 @@ public enum SchemaPromptPackager {
         qualifiedName(schema: table.schema, table: table.name)
     }
 
+    private static func tableCardHeader(_ table: TableInfo) -> String {
+        "TABLE \(qualifiedName(table)) [table_id: \(table.id)]\(quotedOnlyTag(table.schema, table.name))"
+    }
+
     private static func qualifiedName(schema: String, table: String) -> String {
         "\(quotedIdentifier(schema)).\(quotedIdentifier(table))"
     }
@@ -866,6 +997,28 @@ public enum SchemaPromptPackager {
 
     private static func quotedIdentifier(_ identifier: String) -> String {
         "\"\(identifier.replacingOccurrences(of: "\"", with: "\"\""))\""
+    }
+
+    private static func quotedIdentifiers(_ identifiers: [String]) -> String {
+        identifiers.map(quotedIdentifier).joined(separator: ", ")
+    }
+
+    private static func quotedOnlyTag(_ identifiers: String...) -> String {
+        identifiers.contains { !isUnquotedPostgresIdentifier($0) } ? " [QUOTED_ONLY]" : ""
+    }
+
+    private static func isUnquotedPostgresIdentifier(_ value: String) -> Bool {
+        guard let first = value.first,
+            first == "_" || (first >= "a" && first <= "z")
+        else {
+            return false
+        }
+        return value.allSatisfy { character in
+            character == "_"
+                || character == "$"
+                || (character >= "a" && character <= "z")
+                || (character >= "0" && character <= "9")
+        }
     }
 
     private static func quotedLiterals(_ values: [String]) -> String {

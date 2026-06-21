@@ -54,6 +54,32 @@
         var reason: String
     }
 
+    struct LocalSQLDecision: Equatable, Sendable {
+        enum Action: String, Equatable, Sendable {
+            case generateSQL
+            case clarify
+        }
+
+        var action: Action
+        var sql: String
+        var clarificationQuestion: String?
+
+        init(generated: GeneratedSQLResponse) {
+            let trimmedSQL = generated.sql.trimmingCharacters(in: .whitespacesAndNewlines)
+            let clarification = generated.clarificationQuestion?
+                .trimmingCharacters(in: .whitespacesAndNewlines)
+            if generated.needsClarification || (trimmedSQL.isEmpty && clarification?.isEmpty == false) {
+                self.action = .clarify
+                self.sql = ""
+                self.clarificationQuestion = clarification
+            } else {
+                self.action = .generateSQL
+                self.sql = trimmedSQL
+                self.clarificationQuestion = clarification
+            }
+        }
+    }
+
     /// Generates SQL with Apple's on-device Foundation Model. Local-only: no
     /// network, no external LLM APIs.
     public final class FoundationModelsSQLGenerator: SQLGenerator, Sendable {
@@ -121,7 +147,7 @@
             let instructions = SQLPromptBuilder.compactInstructions(
                 defaultRowLimit: config.defaultRowLimit
             )
-            let generationContext = try await contextWithOptionalDiscovery(
+            var generationContext = try await contextWithOptionalDiscovery(
                 question: question,
                 schema: schema,
                 context: context,
@@ -132,6 +158,9 @@
                 inputScale: inputScale,
                 allowDiscovery: allowDiscovery
             )
+            if generationContext.modelCallCount == 0 {
+                generationContext.modelCallCount = 1
+            }
             let session = LanguageModelSession(
                 model: model,
                 instructions: instructions
@@ -153,17 +182,32 @@
                     generating: GeneratedSQLResponse.self,
                     options: GenerationOptions(sampling: .greedy, maximumResponseTokens: 512)
                 )
-                let result = Self.result(from: response.content)
+                var result = Self.result(from: response.content)
+                result.generationCallCount = generationContext.modelCallCount
                 await GenerationLog.shared.append(
                     prompt: prompt,
                     outcome: result.logDescription,
-                    durationMs: Int(Date().timeIntervalSince(started) * 1_000))
+                    durationMs: Int(Date().timeIntervalSince(started) * 1_000),
+                    telemetry: PromptTelemetry(
+                        phase: generationContext.mode,
+                        package: bundle.schemaPackage,
+                        context: generationContext,
+                        callCount: generationContext.modelCallCount,
+                        stopReason: result.needsClarification ? "clarification" : "success"
+                    ))
                 return result
             } catch {
                 await GenerationLog.shared.append(
                     prompt: prompt,
                     outcome: "error: \(error)",
-                    durationMs: Int(Date().timeIntervalSince(started) * 1_000))
+                    durationMs: Int(Date().timeIntervalSince(started) * 1_000),
+                    telemetry: PromptTelemetry(
+                        phase: generationContext.mode,
+                        package: bundle.schemaPackage,
+                        context: generationContext,
+                        callCount: generationContext.modelCallCount,
+                        stopReason: "error"
+                    ))
                 throw error
             }
         }
@@ -194,12 +238,14 @@
                 throwIfOversized: false
             )
             let budget = PromptBudget.localFoundationModels
-            let shouldDiscover =
-                schema.tables.count > 25
-                || !budget.fits(
-                    inputCharacters: instructions.count + initialBundle.prompt.count,
-                    scale: inputScale
-                )
+            let shouldDiscover = Self.needsSchemaDiscovery(
+                question: question,
+                schema: schema,
+                databaseContext: config.databaseContext,
+                instructions: instructions,
+                initialPromptCharacters: initialBundle.prompt.count,
+                inputScale: inputScale
+            )
             guard shouldDiscover else { return context }
 
             let discoveryCharacters = min(
@@ -253,9 +299,74 @@
                 guard !searchResults.isEmpty else { return context }
                 var copy = context
                 copy.schemaSearchQueries = queries + searchResults.map(\.qualifiedName)
+                copy.modelCallCount = max(1, context.modelCallCount) + 1
                 return copy
             } catch {
                 return context
+            }
+        }
+
+        private static func needsSchemaDiscovery(
+            question: String,
+            schema: DatabaseSchema,
+            databaseContext: String,
+            instructions: String,
+            initialPromptCharacters: Int,
+            inputScale: Double
+        ) -> Bool {
+            let budget = PromptBudget.localFoundationModels
+            if !budget.fits(
+                inputCharacters: instructions.count + initialPromptCharacters,
+                scale: inputScale
+            ) {
+                return true
+            }
+            if schema.tables.count > 25 {
+                return true
+            }
+            guard schema.tables.count > 8 else {
+                return false
+            }
+            return !hasConfidentDeterministicCoverage(
+                question: question,
+                schema: schema,
+                databaseContext: databaseContext
+            )
+        }
+
+        private static func hasConfidentDeterministicCoverage(
+            question: String,
+            schema: DatabaseSchema,
+            databaseContext: String
+        ) -> Bool {
+            let ranked = SchemaRelevanceRanker.rank(
+                schema: schema,
+                input: SchemaRankingInput(question: question, databaseContext: databaseContext)
+            )
+            guard let top = ranked.first, top.score >= 150 else { return false }
+            let schemaTokens = schema.tables.reduce(into: Set<String>()) { result, table in
+                result.formUnion(SchemaIndex.tokens(in: table.schema))
+                result.formUnion(SchemaIndex.tokens(in: table.name))
+                for column in table.columns {
+                    result.formUnion(SchemaIndex.tokens(in: column.name))
+                    for constraint in column.valueConstraints ?? [] {
+                        for value in constraint.values {
+                            result.formUnion(SchemaIndex.tokens(in: value))
+                        }
+                    }
+                }
+            }.union(Set(SchemaIndex.tokens(in: databaseContext)))
+
+            let requiredTokens = Set(SchemaIndex.tokens(in: question))
+                .subtracting(discoveryStopWords)
+                .filter { !$0.allSatisfy(\.isNumber) }
+            guard !requiredTokens.isEmpty else { return true }
+            return requiredTokens.allSatisfy { token in
+                schemaTokens.contains(token)
+                    || schemaTokens.contains { candidate in
+                        token.count >= 4
+                            && (candidate.hasPrefix(token) || token.hasPrefix(candidate))
+                    }
             }
         }
 
@@ -327,17 +438,28 @@
         /// Shared with `PrivateCloudComputeSQLGenerator`, which produces the
         /// same structured response from the server-side model.
         static func result(from generated: GeneratedSQLResponse) -> SQLGenerationResult {
-            SQLGenerationResult(
-                sql: generated.sql.trimmingCharacters(in: .whitespacesAndNewlines),
+            let decision = LocalSQLDecision(generated: generated)
+            return SQLGenerationResult(
+                sql: decision.sql,
                 explanation: generated.explanation,
                 assumptions: generated.assumptions,
                 referencedTables: generated.referencedTables,
                 confidence: min(max(generated.confidence, 0), 1),
                 riskLevel: SQLRiskLevel(rawValue: generated.riskLevel) ?? .medium,
-                needsClarification: generated.needsClarification,
-                clarificationQuestion: generated.clarificationQuestion
+                needsClarification: decision.action == .clarify,
+                clarificationQuestion: decision.clarificationQuestion
             )
         }
+
+        private static let discoveryStopWords: Set<String> = [
+            "a", "about", "after", "all", "and", "any", "are", "as", "at", "be", "by",
+            "can", "could", "day", "days", "do", "does", "each", "for", "from", "get",
+            "give", "have", "how", "i", "in", "is", "it", "last", "latest", "limit",
+            "list", "me", "month", "months", "most", "newest", "of", "on", "or", "our",
+            "over", "per", "please", "recent", "show", "since", "sort", "the", "this",
+            "to", "top", "us", "week", "weeks", "what", "when", "where", "which", "with",
+            "year", "years",
+        ]
 
         private static func contextWindowMessage(package: SchemaPromptPackage) -> String {
             let tables = package.includedTables.prefix(6).joined(separator: ", ")

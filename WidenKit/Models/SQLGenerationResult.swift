@@ -17,6 +17,7 @@ public struct SQLGenerationResult: Codable, Equatable, Sendable {
     public var needsClarification: Bool
     public var clarificationQuestion: String?
     public var generationSchemaName: String?
+    public var generationCallCount: Int?
 
     public init(
         sql: String,
@@ -27,7 +28,8 @@ public struct SQLGenerationResult: Codable, Equatable, Sendable {
         riskLevel: SQLRiskLevel,
         needsClarification: Bool,
         clarificationQuestion: String?,
-        generationSchemaName: String? = nil
+        generationSchemaName: String? = nil,
+        generationCallCount: Int? = nil
     ) {
         self.sql = sql
         self.explanation = explanation
@@ -38,6 +40,7 @@ public struct SQLGenerationResult: Codable, Equatable, Sendable {
         self.needsClarification = needsClarification
         self.clarificationQuestion = clarificationQuestion
         self.generationSchemaName = generationSchemaName
+        self.generationCallCount = generationCallCount
     }
 }
 
@@ -52,6 +55,7 @@ extension SQLGenerationResult {
         referencedTables: \(referencedTables.joined(separator: ", "))
         confidence: \(confidence) · risk: \(riskLevel.rawValue) · needsClarification: \(needsClarification)
         clarificationQuestion: \(clarificationQuestion ?? "-")
+        generationCallCount: \(generationCallCount.map(String.init) ?? "-")
         """
     }
 }

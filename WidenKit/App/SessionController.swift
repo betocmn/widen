@@ -190,7 +190,8 @@ public final class SessionController: Identifiable {
                     error: error
                 ),
                 priorFingerprints: [Self.normalizedSQL(failedSQL)]
-            )
+            ),
+            modelCallCount: 1
         )
         let connection = appState.connection(for: connectionID)
         let config = SQLGenerationConfig(
@@ -428,7 +429,8 @@ public final class SessionController: Identifiable {
             repairConstraints: Self.repairConstraints(
                 forbiddenIdentifiers: forbiddenIdentifiers,
                 error: firstError,
-            )
+            ),
+            maxModelCalls: (startingGeneration?.generationCallCount ?? 1) > 1 ? 1 : 2
         )
 
         while let repairMode = coordinator.beginNextAttempt() {
@@ -450,7 +452,8 @@ public final class SessionController: Identifiable {
                     ? questionContext.conversationMessages : [],
                 currentSQL: repairMode == .repair ? repairContext.failedSQL : nil,
                 lastRunError: repairMode == .repair ? coordinator.constraints.lastError : nil,
-                repairContext: repairContext
+                repairContext: repairContext,
+                modelCallCount: attemptNumber
             )
 
             let generation: SQLGenerationResult
