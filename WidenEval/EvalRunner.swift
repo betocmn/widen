@@ -203,7 +203,8 @@ struct EvalRunner {
         message: String,
         options: TextToSQLEvalRunOptions
     ) -> TextToSQLEvalResult {
-        TextToSQLEvalResult(
+        let coverage = evalCase.expected.decision == .sql ? 0.0 : 1.0
+        return TextToSQLEvalResult(
             caseID: evalCase.id,
             backend: backend,
             model: options.model,
@@ -214,6 +215,8 @@ struct EvalRunner {
                 transportSuccess: false,
                 structuredResponseParsed: false,
                 decisionMatches: false,
+                requiredTableCoverage: coverage,
+                requiredColumnBindingCoverage: coverage,
                 latencyMs: 0,
                 promptSize: options.promptSize
             ),
