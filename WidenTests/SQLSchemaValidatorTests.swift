@@ -1563,7 +1563,34 @@ struct SQLSchemaValidatorTests {
             FROM public.feedback_cluster_membership AS fcm
             JOIN public.feedback_cluster AS fc ON fcm.cluster_id = fc.id
             GROUP BY fc.id
+            ORDER BY n ASC, fc.id DESC
+            LIMIT 1
+            """,
+            """
+            SELECT fc.id, COUNT(*) AS n
+            FROM public.feedback_cluster_membership AS fcm
+            JOIN public.feedback_cluster AS fc ON fcm.cluster_id = fc.id
+            GROUP BY fc.id
             ORDER BY fc.id DESC
+            LIMIT 1
+            """,
+            """
+            SELECT fc.id, COUNT(*) AS n
+            FROM (
+              SELECT cluster_id
+              FROM public.feedback_cluster_membership
+              LIMIT 1
+            ) AS fcm
+            JOIN public.feedback_cluster AS fc ON fcm.cluster_id = fc.id
+            GROUP BY fc.id
+            ORDER BY n DESC
+            """,
+            """
+            SELECT fc.id, COUNT(*) AS n
+            FROM public.feedback_cluster_membership AS fcm
+            JOIN public.feedback_cluster AS fc ON true
+            GROUP BY fc.id
+            ORDER BY n DESC
             LIMIT 1
             """,
         ]
@@ -1594,6 +1621,18 @@ struct SQLSchemaValidatorTests {
             """
 
         #expect(SQLIntentConformanceValidator.validate(sql: spacedCount, plan: plan, schema: schema).isValid)
+
+        let newlineGroup = """
+            SELECT fc.id, COUNT(*) AS n
+            FROM public.feedback_cluster_membership AS fcm
+            JOIN public.feedback_cluster AS fc ON fcm.cluster_id = fc.id
+            GROUP
+            BY fc.id
+            ORDER BY n DESC
+            LIMIT 1
+            """
+
+        #expect(SQLIntentConformanceValidator.validate(sql: newlineGroup, plan: plan, schema: schema).isValid)
     }
 
     @Test func storedCountColumnCanSatisfyFrequencyIntent() {
@@ -1680,6 +1719,55 @@ struct SQLSchemaValidatorTests {
             "public.feedback_cluster_membership",
             "public.feedback_cluster",
         ])
+    }
+
+    @Test func subjectTableBindingResolvesAmbiguousSubjectSlot() {
+        let intent = QueryIntentPlanner.deterministicIntent(for: "show users")
+        let schema = makeDuplicateUsersSchema()
+
+        let ambiguous = GroundedQueryPlanner.ground(intent: intent, schema: schema)
+        #expect(ambiguous.slots.first { $0.kind == .subjectEntity }?.state == .ambiguous)
+
+        let grounded = GroundedQueryPlanner.ground(
+            intent: intent,
+            schema: schema,
+            confirmedSemanticBindings: ["users: table:auth.users"]
+        )
+
+        let subject = grounded.slots.first { $0.kind == .subjectEntity }
+        #expect(subject?.state == .grounded)
+        #expect(subject?.selectedCandidate?.objectIDs == ["table:auth.users"])
+        #expect(grounded.selectedTables == ["auth.users"])
+    }
+
+    @Test func customMetricBindingObjectsMustConform() {
+        let schema = makeBestCustomerSchema()
+        let intent = QueryIntentPlanner.deterministicIntent(for: "best customers")
+        let plan = GroundedQueryPlanner.ground(
+            intent: intent,
+            schema: schema,
+            confirmedSemanticBindings: ["best: column:public.customers.score"]
+        )
+        let missingMetric = "SELECT id FROM public.customers"
+        let usesMetric = "SELECT id, score FROM public.customers ORDER BY score DESC"
+
+        #expect(!SQLIntentConformanceValidator.validate(sql: missingMetric, plan: plan, schema: schema).isValid)
+        #expect(SQLIntentConformanceValidator.validate(sql: usesMetric, plan: plan, schema: schema).isValid)
+    }
+
+    @Test func customMetricBindingLiteralsMustConform() {
+        let schema = makeBestCustomerSchema()
+        let intent = QueryIntentPlanner.deterministicIntent(for: "healthy customers")
+        let plan = GroundedQueryPlanner.ground(
+            intent: intent,
+            schema: schema,
+            confirmedSemanticBindings: ["healthy: column:public.customers.status 'enabled'"]
+        )
+        let wrongLiteral = "SELECT id FROM public.customers WHERE status = 'disabled'"
+        let matchingLiteral = "SELECT id FROM public.customers WHERE status = 'enabled'"
+
+        #expect(!SQLIntentConformanceValidator.validate(sql: wrongLiteral, plan: plan, schema: schema).isValid)
+        #expect(SQLIntentConformanceValidator.validate(sql: matchingLiteral, plan: plan, schema: schema).isValid)
     }
 
     @Test func analyticCompilerSkipsRequestsWithTimeIntent() {
@@ -2694,6 +2782,60 @@ struct SQLSchemaValidatorTests {
                     targetColumn: "id"
                 )
             ]
+        )
+    }
+
+    private func makeDuplicateUsersSchema() -> DatabaseSchema {
+        DatabaseSchema(
+            schemas: [SchemaInfo(name: "public"), SchemaInfo(name: "auth")],
+            tables: [
+                TableInfo(
+                    schema: "public",
+                    name: "users",
+                    type: .baseTable,
+                    columns: [
+                        ColumnInfo(
+                            tableSchema: "public", tableName: "users", name: "id",
+                            dataType: "integer", isNullable: false, ordinalPosition: 1),
+                    ]
+                ),
+                TableInfo(
+                    schema: "auth",
+                    name: "users",
+                    type: .baseTable,
+                    columns: [
+                        ColumnInfo(
+                            tableSchema: "auth", tableName: "users", name: "id",
+                            dataType: "integer", isNullable: false, ordinalPosition: 1),
+                    ]
+                ),
+            ],
+            foreignKeys: []
+        )
+    }
+
+    private func makeBestCustomerSchema() -> DatabaseSchema {
+        DatabaseSchema(
+            schemas: [SchemaInfo(name: "public")],
+            tables: [
+                TableInfo(
+                    schema: "public",
+                    name: "customers",
+                    type: .baseTable,
+                    columns: [
+                        ColumnInfo(
+                            tableSchema: "public", tableName: "customers", name: "id",
+                            dataType: "integer", isNullable: false, ordinalPosition: 1),
+                        ColumnInfo(
+                            tableSchema: "public", tableName: "customers", name: "score",
+                            dataType: "integer", isNullable: false, ordinalPosition: 2),
+                        ColumnInfo(
+                            tableSchema: "public", tableName: "customers", name: "status",
+                            dataType: "text", isNullable: false, ordinalPosition: 3),
+                    ]
+                )
+            ],
+            foreignKeys: []
         )
     }
 

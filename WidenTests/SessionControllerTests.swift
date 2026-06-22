@@ -2150,6 +2150,63 @@ struct SessionControllerTests {
         #expect(state.semanticBindings[0].referencedObjectIDs == ["column:public.users.status"])
     }
 
+    @Test func validationRepairPreservesResolvedClarificationMetadata() async {
+        let connectionID = UUID()
+        let (state, dir) = makeState(connectionID: connectionID, connected: true)
+        defer { try? FileManager.default.removeItem(at: dir) }
+        let schema = makeUsersUnconstrainedStatusSchema()
+        state.schemas[connectionID] = schema
+        let controller = makeController(connectionID: connectionID)
+        let option = ClarificationOption(
+            label: "status = active",
+            replyText: #"Use "public"."users"."status" = 'active'"#,
+            definition: #""public"."users"."status" = 'active'"#,
+            evidence: ["public.users.status"]
+        )
+        let pending = PendingClarification(
+            concept: SQLGroundingConcept(
+                term: "active",
+                kind: .filter,
+                state: .unsupported,
+                required: true
+            ),
+            originalQuestion: "how many active users?",
+            question: "What defines active users?",
+            options: [option]
+        )
+        controller.chatVM.messages = [
+            ChatMessage(role: .user, text: "how many active users?"),
+            ChatMessage(
+                role: .assistant,
+                text: pending.question,
+                pendingClarification: pending
+            ),
+        ]
+        controller.chatVM.input = option.replyText
+        let invalid = makeGeneration(
+            sql: "SELECT AVG(COUNT(*) OVER ()) FROM public.users WHERE status = 'active'",
+            explanation: "Uses an invalid nested aggregate."
+        )
+        let fixed = makeGeneration(
+            sql: "SELECT COUNT(*) FROM public.users WHERE status = 'active'",
+            explanation: "Counts active users."
+        )
+        let generator = RecordingRepairGenerator(results: [invalid, fixed])
+        state.sqlGeneratorOverride = generator
+
+        await controller.submit(appState: state)
+
+        #expect(generator.contexts.count == 2)
+        #expect(controller.queryVM.generation?.sql == fixed.sql)
+        #expect(controller.queryVM.generation?.resolvedClarification?.id == pending.id)
+        #expect(controller.queryVM.generation?.resolvedClarificationOption == option)
+
+        controller.rememberResolvedClarification(appState: state)
+
+        #expect(state.semanticBindings.count == 1)
+        #expect(state.semanticBindings[0].referencedObjectIDs == ["column:public.users.status"])
+    }
+
     @Test func occurrenceClarificationOptionResolvesTypedSlotAmbiguity() async throws {
         let connectionID = UUID()
         let (state, dir) = makeState(connectionID: connectionID, connected: true)
@@ -2349,6 +2406,27 @@ struct SessionControllerTests {
         #expect(controller.queryVM.sqlText.isEmpty)
         #expect(controller.chatVM.messages.last?.pendingClarification?.concept.term == "best")
         #expect(controller.chatVM.messages.last?.pendingClarification?.turnCount == 1)
+    }
+
+    @Test func metricLeadingClarificationReplyStartsNewRequest() {
+        let pending = PendingClarification(
+            concept: SQLGroundingConcept(
+                term: "active",
+                kind: .filter,
+                state: .unsupported,
+                required: true
+            ),
+            originalQuestion: "show active users",
+            question: "What defines active users?",
+            options: []
+        )
+
+        let resolution = ClarificationResolver.resolve(
+            reply: "count orders instead",
+            pending: pending
+        )
+
+        #expect(resolution.action == .newRequest)
     }
 
     @Test func clarificationReplyWithoutConceptTermResolvesOriginalQuestion() async {

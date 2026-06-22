@@ -785,7 +785,7 @@ public final class SessionController: Identifiable {
                 confirmedSemanticBindings: appState.semanticBindingPromptLines(
                     for: connectionID,
                     schema: schema
-                )
+                ) + (startingGeneration?.repairResolvedClarificationPromptLines() ?? [])
             )
 
             let generation: SQLGenerationResult
@@ -812,6 +812,9 @@ public final class SessionController: Identifiable {
                     )
                 {
                     enriched = enriched.withPendingClarification(pending)
+                }
+                if !enriched.needsClarification {
+                    enriched = enriched.withResolvedClarification(from: startingGeneration)
                 }
                 generation = enriched
             } catch {
@@ -1628,6 +1631,27 @@ private extension SQLGenerationResult {
         copy.resolvedClarificationReply = replyText
         copy.resolvedClarificationOption = selectedOption
         return copy
+    }
+
+    func withResolvedClarification(from previous: SQLGenerationResult?) -> SQLGenerationResult {
+        guard let previous,
+            let pending = previous.resolvedClarification
+        else {
+            return self
+        }
+        var copy = self
+        copy.resolvedClarification = pending
+        copy.resolvedClarificationReply = previous.resolvedClarificationReply
+        copy.resolvedClarificationOption = previous.resolvedClarificationOption
+        return copy
+    }
+
+    func repairResolvedClarificationPromptLines() -> [String] {
+        guard let pending = resolvedClarification else { return [] }
+        let definition = (resolvedClarificationOption?.definition ?? resolvedClarificationReply ?? "")
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !definition.isEmpty else { return [] }
+        return ["\(pending.concept.term): \(definition)"]
     }
 
     func applyingClarificationProgress(from previous: PendingClarification?) -> SQLGenerationResult {
