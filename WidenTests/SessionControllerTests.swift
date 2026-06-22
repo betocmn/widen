@@ -566,7 +566,8 @@ struct SessionControllerTests {
         sql: String,
         explanation: String = "Generated SQL.",
         needsClarification: Bool = false,
-        clarificationQuestion: String? = nil
+        clarificationQuestion: String? = nil,
+        generationCallCount: Int? = nil
     ) -> SQLGenerationResult {
         SQLGenerationResult(
             sql: sql,
@@ -576,7 +577,8 @@ struct SessionControllerTests {
             confidence: 0.8,
             riskLevel: .low,
             needsClarification: needsClarification,
-            clarificationQuestion: clarificationQuestion
+            clarificationQuestion: clarificationQuestion,
+            generationCallCount: generationCallCount
         )
     }
 
@@ -660,6 +662,49 @@ struct SessionControllerTests {
         #expect(controller.chatVM.messages.map(\.role) == [.user, .assistant, .result])
         #expect(controller.chatVM.messages[1].generation?.sql == fixedGeneration.sql)
         #expect(controller.chatVM.messages[2].runSummary?.sql == fixedGeneration.sql)
+    }
+
+    @Test func generatedRunErrorSkipsRepairWhenModelCallBudgetIsExhausted() async {
+        let connectionID = UUID()
+        let (state, dir) = makeState(connectionID: connectionID, connected: true)
+        defer { try? FileManager.default.removeItem(at: dir) }
+        state.schemas[connectionID] = makeSchema()
+        let badGeneration = makeGeneration(
+            sql: "SELECT id FROM public.bad_table",
+            explanation: "Uses the wrong table.",
+            generationCallCount: 3
+        )
+        let fixedGeneration = makeGeneration(
+            sql: "SELECT id FROM public.users LIMIT 100",
+            explanation: "Uses the users table."
+        )
+        let generator = RecordingRepairGenerator(results: [fixedGeneration])
+        state.sqlGeneratorOverride = generator
+        let recorder = SQLRecorder()
+        let controller = makeController(
+            connectionID: connectionID,
+            executor: BadTableExecutor(recorder: recorder)
+        )
+        controller.chatVM.messages = [
+            ChatMessage(role: .user, text: "show users"),
+            ChatMessage(role: .assistant, text: badGeneration.explanation, generation: badGeneration),
+        ]
+        controller.queryVM.setGeneration(badGeneration)
+
+        controller.runQuery(appState: state)
+        await waitUntil {
+            !controller.queryVM.isRunning
+                && !controller.chatVM.isGenerating
+                && controller.chatVM.messages.last?.role == .error
+        }
+
+        let statements = await recorder.all()
+        #expect(statements == [badGeneration.sql])
+        #expect(generator.contexts.isEmpty)
+        #expect(controller.queryVM.sqlText == badGeneration.sql)
+        #expect(controller.queryVM.generation?.sql == badGeneration.sql)
+        #expect(controller.chatVM.messages.map(\.role) == [.user, .assistant, .error])
+        #expect(controller.chatVM.messages.last?.text.contains("model-call budget") == true)
     }
 
     @Test func generatedRunErrorRestoresOriginalSQLWhenRepairGeneratorFails() async {

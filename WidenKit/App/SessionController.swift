@@ -9,6 +9,7 @@ import Observation
 @Observable
 public final class SessionController: Identifiable {
     private static let generatedSQLRepairRetryLimit = GeneratedSQLRepairCoordinator.maxModelCalls
+    private static let generatedSQLLocalModelCallBudget = 3
 
     public let sessionID: UUID
     public let connectionID: UUID
@@ -566,7 +567,7 @@ public final class SessionController: Identifiable {
                 forbiddenIdentifiers: forbiddenIdentifiers,
                 error: firstError,
             ),
-            maxModelCalls: (startingGeneration?.generationCallCount ?? 1) > 1 ? 1 : 2
+            maxModelCalls: Self.remainingGeneratedSQLRepairCalls(after: startingGeneration)
         )
 
         while let repairMode = coordinator.beginNextAttempt() {
@@ -782,6 +783,13 @@ public final class SessionController: Identifiable {
         appState.sessionDidChange(sessionID)
     }
 
+    private static func remainingGeneratedSQLRepairCalls(
+        after generation: SQLGenerationResult?
+    ) -> Int {
+        let spentModelCalls = max(1, generation?.generationCallCount ?? 1)
+        return max(0, generatedSQLLocalModelCallBudget - spentModelCalls)
+    }
+
     private func appendAssistantGeneration(_ generation: SQLGenerationResult) {
         chatVM.messages.append(
             ChatMessage(
@@ -865,6 +873,18 @@ public final class SessionController: Identifiable {
             mode == .validationOnly
             ? "The rejected SQL was not shown in the editor. Add more context in chat so the model can adjust it, or switch to a smarter cloud model and try again."
             : "The SQL shown above was restored to the last valid or original generation. Add more context in chat so the model can adjust it, or switch to a smarter cloud model and try again."
+        if attempts.count <= 1 {
+            return """
+                The generated SQL already used this request's model-call budget, so I did not ask the model to repair it.
+
+                Last error: \(lastError)
+
+                Errors seen:
+                \(history)
+
+                \(recoveryGuidance)
+                """
+        }
         return """
             I tried a focused repair and, when needed, one reconstruction, but \(failureReason).
 

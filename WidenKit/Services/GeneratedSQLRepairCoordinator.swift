@@ -374,7 +374,7 @@ public struct GeneratedSQLRepairCoordinator: Sendable {
             lastError: firstError
         )
         self.attempts = [SQLRepairAttempt(mode: .initial, sql: failedSQL, error: firstError)]
-        self.maxModelCalls = max(1, maxModelCalls)
+        self.maxModelCalls = max(0, maxModelCalls)
         self.failedCandidateSignatures = [failureSignature]
     }
 

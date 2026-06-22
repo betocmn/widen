@@ -113,23 +113,37 @@
                 return try await respond(
                     question: question, schema: schema, context: context, config: config,
                     model: model, maxSchemaCharacters: 8_000, inputScale: 1.0,
-                    allowDiscovery: true)
-            } catch let error as LanguageModelSession.GenerationError {
-                if case .exceededContextWindowSize = error {
+                    allowDiscovery: true
+                ).result
+            } catch let error as GenerationAttemptError {
+                if case .exceededContextWindowSize = error.error {
                     // Retry once with a smaller whole-prompt target. Discovery is
                     // skipped here so a context-window retry cannot spend another
                     // model call before SQL generation.
                     do {
-                        return try await respond(
+                        let retry = try await respond(
                             question: question, schema: schema, context: context, config: config,
                             model: model, maxSchemaCharacters: 8_000, inputScale: 0.8,
                             allowDiscovery: false)
-                    } catch let retryError as LanguageModelSession.GenerationError {
-                        throw Self.map(retryError)
+                        var result = retry.result
+                        result.generationCallCount = error.spentModelCalls + retry.spentModelCalls
+                        return result
+                    } catch let retryError as GenerationAttemptError {
+                        throw Self.map(retryError.error)
                     }
                 }
-                throw Self.map(error)
+                throw Self.map(error.error)
             }
+        }
+
+        private struct GenerationAttempt {
+            var result: SQLGenerationResult
+            var spentModelCalls: Int
+        }
+
+        private struct GenerationAttemptError: Error {
+            var error: LanguageModelSession.GenerationError
+            var spentModelCalls: Int
         }
 
         private func respond(
@@ -141,7 +155,7 @@
             maxSchemaCharacters: Int,
             inputScale: Double,
             allowDiscovery: Bool
-        ) async throws -> SQLGenerationResult {
+        ) async throws -> GenerationAttempt {
             // A fresh session per request keeps the context window small and
             // the generation stateless; follow-up awareness comes from the
             // compact context section in the prompt instead.
@@ -162,6 +176,10 @@
             if generationContext.modelCallCount == 0 {
                 generationContext.modelCallCount = 1
             }
+            let spentModelCalls = Self.spentModelCalls(
+                startingContext: context,
+                generationContext: generationContext
+            )
             let session = LanguageModelSession(
                 model: model,
                 instructions: instructions
@@ -196,7 +214,20 @@
                         callCount: generationContext.modelCallCount,
                         stopReason: result.needsClarification ? "clarification" : "success"
                     ))
-                return result
+                return GenerationAttempt(result: result, spentModelCalls: spentModelCalls)
+            } catch let error as LanguageModelSession.GenerationError {
+                await GenerationLog.shared.append(
+                    prompt: prompt,
+                    outcome: "error: \(error)",
+                    durationMs: Int(Date().timeIntervalSince(started) * 1_000),
+                    telemetry: PromptTelemetry(
+                        phase: generationContext.mode,
+                        package: bundle.schemaPackage,
+                        context: generationContext,
+                        callCount: generationContext.modelCallCount,
+                        stopReason: "error"
+                    ))
+                throw GenerationAttemptError(error: error, spentModelCalls: spentModelCalls)
             } catch {
                 await GenerationLog.shared.append(
                     prompt: prompt,
@@ -211,6 +242,15 @@
                     ))
                 throw error
             }
+        }
+
+        private static func spentModelCalls(
+            startingContext: SQLGenerationContext,
+            generationContext: SQLGenerationContext
+        ) -> Int {
+            let starting = max(0, startingContext.modelCallCount)
+            let current = max(0, generationContext.modelCallCount)
+            return max(1, current - starting)
         }
 
         private func contextWithOptionalDiscovery(
@@ -303,7 +343,9 @@
                 copy.modelCallCount = max(1, context.modelCallCount) + 1
                 return copy
             } catch {
-                return context
+                var copy = context
+                copy.modelCallCount = max(1, context.modelCallCount) + 1
+                return copy
             }
         }
 
