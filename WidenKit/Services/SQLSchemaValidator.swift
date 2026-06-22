@@ -2629,6 +2629,7 @@ public enum GeneratedSQLPostprocessor {
             guard !variants.contains(where: requestStopWords.contains) else { return false }
             guard !variants.contains(where: genericVerbStopWords.contains) else { return false }
             guard !variants.contains(where: metricOperatorStopWords.contains) else { return false }
+            guard !variants.contains(where: comparisonOperatorStopWords.contains) else { return false }
             return seen.insert(word).inserted
         }
     }
@@ -2674,6 +2675,12 @@ public enum GeneratedSQLPostprocessor {
         "average", "avg", "bottom", "count", "highest", "least", "lowest", "many", "max",
         "maximum", "min", "minimum", "most", "much", "number", "percent", "percentage",
         "rank", "rate", "ratio", "sum", "top", "total",
+    ]
+
+    private static let comparisonOperatorStopWords: Set<String> = [
+        "after", "before", "below", "earlier", "equal", "equaling", "equals", "exceed",
+        "exceeding", "exceeds", "fewer", "greater", "higher", "later", "less", "lower",
+        "more", "newer", "older", "than", "younger",
     ]
 
     private static let genericVerbStopWords: Set<String> = [

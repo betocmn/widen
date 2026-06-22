@@ -1451,6 +1451,59 @@ struct SQLSchemaValidatorTests {
         #expect(enriched.referencedTables == ["public.users"])
     }
 
+    @Test func comparisonFilterTermsDoNotRequireGrounding() {
+        let schema = DatabaseSchema(
+            schemas: [SchemaInfo(name: "public")],
+            tables: [
+                TableInfo(
+                    schema: "public",
+                    name: "users",
+                    type: .baseTable,
+                    columns: [
+                        ColumnInfo(
+                            tableSchema: "public",
+                            tableName: "users",
+                            name: "id",
+                            dataType: "integer",
+                            isNullable: false,
+                            ordinalPosition: 1
+                        ),
+                        ColumnInfo(
+                            tableSchema: "public",
+                            tableName: "users",
+                            name: "age",
+                            dataType: "integer",
+                            isNullable: false,
+                            ordinalPosition: 2
+                        ),
+                    ]
+                )
+            ],
+            foreignKeys: []
+        )
+        let generation = SQLGenerationResult(
+            sql: "SELECT id FROM public.users WHERE age > 30",
+            explanation: "Lists users older than 30.",
+            assumptions: [],
+            referencedTables: [],
+            confidence: 1,
+            riskLevel: .low,
+            needsClarification: false,
+            clarificationQuestion: nil
+        )
+
+        let enriched = GeneratedSQLPostprocessor.enriched(
+            generation,
+            question: "show users older than 30",
+            schema: schema,
+            databaseContext: ""
+        )
+
+        #expect(!enriched.needsClarification)
+        #expect(enriched.sql == "SELECT id FROM public.users WHERE age > 30")
+        #expect(enriched.clarificationQuestion == nil)
+    }
+
     @Test func generatedWriteRequiresGroundingForUnsupportedLiteral() {
         let generation = SQLGenerationResult(
             sql: "DELETE FROM public.users WHERE status = 'churned'",

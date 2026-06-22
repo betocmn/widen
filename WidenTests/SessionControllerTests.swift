@@ -144,6 +144,28 @@ struct SessionControllerTests {
         }
     }
 
+    private struct FavoriteColorColumnExecutor: QueryExecuting {
+        let recorder: SQLRecorder
+
+        func run(
+            sql: String,
+            config: DatabaseConnectionConfig,
+            postgres: PostgresService
+        ) async throws -> QueryResult {
+            await recorder.record(sql)
+            if sql.contains("favorite_color") {
+                throw AppError.executionFailed(#"column "favorite_color" does not exist"#)
+            }
+            return QueryResult(
+                columns: ["id"],
+                rows: [["1"]],
+                rowCount: 1,
+                truncated: false,
+                executionTimeMs: 4
+            )
+        }
+    }
+
     private struct AlwaysFailingExecutor: QueryExecuting {
         let recorder: SQLRecorder
 
@@ -397,6 +419,71 @@ struct SessionControllerTests {
                 )
             ],
             foreignKeys: []
+        )
+    }
+
+    private func makeOrdersAccountsSchema() -> DatabaseSchema {
+        DatabaseSchema(
+            schemas: [SchemaInfo(name: "public")],
+            tables: [
+                TableInfo(
+                    schema: "public",
+                    name: "orders",
+                    type: .baseTable,
+                    columns: [
+                        ColumnInfo(
+                            tableSchema: "public",
+                            tableName: "orders",
+                            name: "id",
+                            dataType: "integer",
+                            isNullable: false,
+                            ordinalPosition: 1
+                        ),
+                        ColumnInfo(
+                            tableSchema: "public",
+                            tableName: "orders",
+                            name: "account_id",
+                            dataType: "integer",
+                            isNullable: false,
+                            ordinalPosition: 2
+                        ),
+                    ]
+                ),
+                TableInfo(
+                    schema: "public",
+                    name: "accounts",
+                    type: .baseTable,
+                    columns: [
+                        ColumnInfo(
+                            tableSchema: "public",
+                            tableName: "accounts",
+                            name: "id",
+                            dataType: "integer",
+                            isNullable: false,
+                            ordinalPosition: 1
+                        ),
+                        ColumnInfo(
+                            tableSchema: "public",
+                            tableName: "accounts",
+                            name: "plan_name",
+                            dataType: "text",
+                            isNullable: false,
+                            ordinalPosition: 2
+                        ),
+                    ]
+                ),
+            ],
+            foreignKeys: [
+                ForeignKeyInfo(
+                    constraintName: "orders_account_id_fkey",
+                    sourceSchema: "public",
+                    sourceTable: "orders",
+                    sourceColumn: "account_id",
+                    targetSchema: "public",
+                    targetTable: "accounts",
+                    targetColumn: "id"
+                )
+            ]
         )
     }
 
@@ -853,7 +940,7 @@ struct SessionControllerTests {
         }
     }
 
-    @Test func generatedRunErrorRepairsMissingColumnNamedTimeout() async {
+    @Test func generatedRunErrorClarifiesWhenRepairDropsMissingColumnNamedTimeout() async {
         let connectionID = UUID()
         let (state, dir) = makeState(connectionID: connectionID, connected: true)
         defer { try? FileManager.default.removeItem(at: dir) }
@@ -877,19 +964,20 @@ struct SessionControllerTests {
         await waitUntil {
             !controller.queryVM.isRunning
                 && !controller.chatVM.isGenerating
-                && controller.chatVM.messages.last?.role == .result
+                && controller.chatVM.messages.count == 3
         }
 
         let statements = await recorder.all()
-        #expect(statements == [badGeneration.sql, fixedGeneration.sql])
+        #expect(statements == [badGeneration.sql])
         #expect(generator.contexts.count == 1)
         #expect(generator.contexts[0].mode == .repair)
         #expect(generator.contexts[0].repairContext?.diagnostic?.kind == .missingColumn)
         #expect(generator.contexts[0].repairContext?.forbiddenIdentifiers.contains("timeout") == true)
-        #expect(controller.queryVM.sqlText == fixedGeneration.sql)
+        #expect(controller.queryVM.sqlText == badGeneration.sql)
+        #expect(controller.chatVM.messages.last?.pendingClarification?.concept.term == "timeout")
     }
 
-    @Test func generatedRunErrorRepairsMissingColumnNamedCancelledAt() async {
+    @Test func generatedRunErrorClarifiesWhenRepairDropsMissingColumnNamedCancelledAt() async {
         let connectionID = UUID()
         let (state, dir) = makeState(connectionID: connectionID, connected: true)
         defer { try? FileManager.default.removeItem(at: dir) }
@@ -913,16 +1001,63 @@ struct SessionControllerTests {
         await waitUntil {
             !controller.queryVM.isRunning
                 && !controller.chatVM.isGenerating
-                && controller.chatVM.messages.last?.role == .result
+                && controller.chatVM.messages.count == 3
         }
 
         let statements = await recorder.all()
-        #expect(statements == [badGeneration.sql, fixedGeneration.sql])
+        #expect(statements == [badGeneration.sql])
         #expect(generator.contexts.count == 1)
         #expect(generator.contexts[0].mode == .repair)
         #expect(generator.contexts[0].repairContext?.diagnostic?.kind == .missingColumn)
         #expect(generator.contexts[0].repairContext?.forbiddenIdentifiers.contains("cancelled_at") == true)
-        #expect(controller.queryVM.sqlText == fixedGeneration.sql)
+        #expect(controller.queryVM.sqlText == badGeneration.sql)
+        #expect(controller.chatVM.messages.last?.pendingClarification?.concept.term == "cancelled")
+    }
+
+    @Test func generatedRunErrorClarifiesWhenRepairDropsRequestedFavoriteColor() async {
+        let connectionID = UUID()
+        let (state, dir) = makeState(connectionID: connectionID, connected: true)
+        defer { try? FileManager.default.removeItem(at: dir) }
+        state.schemas[connectionID] = makeSchema()
+        let initialGeneration = makeGeneration(
+            sql: "SELECT favorite_color FROM public.users",
+            explanation: "Uses a missing favorite color column."
+        )
+        let repairedGeneration = makeGeneration(
+            sql: "SELECT id FROM public.users",
+            explanation: "Lists users."
+        )
+        let generator = RecordingRepairGenerator(results: [repairedGeneration])
+        state.sqlGeneratorOverride = generator
+        let recorder = SQLRecorder()
+        let controller = makeController(
+            connectionID: connectionID,
+            executor: FavoriteColorColumnExecutor(recorder: recorder)
+        )
+        controller.chatVM.messages = [
+            ChatMessage(role: .user, text: "show users favorite color"),
+            ChatMessage(
+                role: .assistant,
+                text: initialGeneration.explanation,
+                generation: initialGeneration
+            ),
+        ]
+        controller.queryVM.setGeneration(initialGeneration)
+
+        controller.runQuery(appState: state)
+        await waitUntil {
+            !controller.queryVM.isRunning
+                && !controller.chatVM.isGenerating
+                && controller.chatVM.messages.count == 3
+        }
+
+        let statements = await recorder.all()
+        #expect(statements == [initialGeneration.sql])
+        #expect(generator.contexts.count == 1)
+        #expect(generator.contexts[0].mode == .repair)
+        #expect(controller.queryVM.sqlText == initialGeneration.sql)
+        #expect(controller.chatVM.messages.last?.pendingClarification?.concept.term == "favorite")
+        #expect(controller.chatVM.messages.last?.generation?.needsClarification == true)
     }
 
     @Test func generatedRunErrorKeepsOriginalSQLWhileRepairGeneratorIsPending() async {
@@ -1397,6 +1532,32 @@ struct SessionControllerTests {
         #expect(!repeated.allowsReconstruction)
     }
 
+    @Test func repairCoordinatorAllowsReconstructionForRepeatedJoinableMissingColumn() {
+        let schema = makeOrdersAccountsSchema()
+        let failedSQL = "SELECT plan_name FROM public.orders"
+        let initialValidation = GeneratedSQLValidator.validate(sql: failedSQL, schema: schema)
+        var coordinator = GeneratedSQLRepairCoordinator(
+            failedSQL: failedSQL,
+            firstError: AppError.validationFailed(initialValidation.errors).localizedDescription,
+            diagnostic: nil,
+            forbiddenIdentifiers: []
+        )
+
+        let repeated = coordinator.evaluateCandidate(
+            makeGeneration(sql: failedSQL),
+            mode: .repair,
+            schema: schema,
+            allowWrites: false
+        )
+
+        if case .rejected(let reason) = repeated.outcome {
+            #expect(reason == .repeatedFingerprint)
+        } else {
+            Issue.record("Expected repeated SQL to be rejected before reconstruction")
+        }
+        #expect(repeated.allowsReconstruction)
+    }
+
     @Test func repairCoordinatorKeepsDerivedAndBaseColumnIssuesDistinct() {
         let schema = makeSchema()
         let failedSQL = """
@@ -1496,7 +1657,7 @@ struct SessionControllerTests {
         #expect(controller.chatVM.messages.last?.text.contains("Which table") == true)
     }
 
-    @Test func generatedRunErrorForbidsOnlyMissingRelationFromDiagnosticMessage() async {
+    @Test func generatedRunErrorClarifiesWhenRepairDropsMissingRelationIntent() async {
         let connectionID = UUID()
         let (state, dir) = makeState(connectionID: connectionID, connected: true)
         defer { try? FileManager.default.removeItem(at: dir) }
@@ -1526,13 +1687,16 @@ struct SessionControllerTests {
         await waitUntil {
             !controller.queryVM.isRunning
                 && !controller.chatVM.isGenerating
-                && controller.chatVM.messages.last?.role == .result
+                && controller.chatVM.messages.count == 3
         }
 
+        let statements = await recorder.all()
+        #expect(statements == [badGeneration.sql])
         let forbiddenIdentifiers = generator.contexts[0].repairContext?.forbiddenIdentifiers ?? []
         #expect(forbiddenIdentifiers.contains("public.bad_orders"))
         #expect(!forbiddenIdentifiers.contains("public.users"))
-        #expect(controller.queryVM.sqlText == fixedGeneration.sql)
+        #expect(controller.queryVM.sqlText == badGeneration.sql)
+        #expect(controller.chatVM.messages.last?.pendingClarification?.concept.term == "orders")
     }
 
     @Test func generatedRunErrorDoesNotReexecuteAnyPriorFailedSQL() async {
@@ -1994,6 +2158,10 @@ struct SessionControllerTests {
         #expect(generator.contexts.first?.conversationMessages.contains {
             $0.text == pending.question
         } == false)
+        #expect(generator.contexts.first?.conversationMessages.contains {
+            $0.text == pending.originalQuestion
+        } == false)
+        #expect(generator.contexts.first?.recentQuestions.contains(pending.originalQuestion) == false)
         #expect(state.semanticBindings.isEmpty)
         #expect(controller.queryVM.sqlText == fixed.sql)
     }
@@ -2038,6 +2206,10 @@ struct SessionControllerTests {
         #expect(generator.contexts.first?.conversationMessages.contains {
             $0.text == pending.question
         } == false)
+        #expect(generator.contexts.first?.conversationMessages.contains {
+            $0.text == pending.originalQuestion
+        } == false)
+        #expect(generator.contexts.first?.recentQuestions.contains(pending.originalQuestion) == false)
         #expect(state.semanticBindings.isEmpty)
         #expect(controller.queryVM.sqlText == fixed.sql)
     }

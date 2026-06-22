@@ -436,6 +436,16 @@ public struct GeneratedSQLRepairCoordinator: Sendable {
         }
 
         let fingerprint = SQLFingerprint(sql)
+        let safety = SQLSafetyValidator.validate(sql)
+        let schemaValidation = SQLSchemaValidator.validate(sql: sql, against: schema)
+        let validation = GeneratedSQLValidator.combine(
+            safety: safety,
+            schemaValidation: schemaValidation
+        )
+        let issueSignatures = SQLRepairIssueSignature.signatures(
+            safety: safety,
+            schemaValidation: schemaValidation
+        )
         if constraints.priorFingerprints.contains(fingerprint) {
             return reject(
                 mode: mode,
@@ -443,7 +453,13 @@ public struct GeneratedSQLRepairCoordinator: Sendable {
                 reason: .repeatedFingerprint,
                 message:
                     "The model repeated SQL that already failed. It must produce a different query or ask a clarification question.",
-                allowsReconstruction: false
+                allowsReconstruction: mode == .repair && safety.kind == .read
+                    && Self.missingColumnsCanBeResolvedByJoining(
+                        sql: sql,
+                        schemaValidation: schemaValidation,
+                        schema: schema
+                    ),
+                issueSignatures: issueSignatures
             )
         }
 
@@ -458,18 +474,8 @@ public struct GeneratedSQLRepairCoordinator: Sendable {
             )
         }
 
-        let safety = SQLSafetyValidator.validate(sql)
-        let schemaValidation = SQLSchemaValidator.validate(sql: sql, against: schema)
-        let validation = GeneratedSQLValidator.combine(
-            safety: safety,
-            schemaValidation: schemaValidation
-        )
         guard validation.isValid else {
             let message = AppError.validationFailed(validation.errors).localizedDescription
-            let issueSignatures = SQLRepairIssueSignature.signatures(
-                safety: safety,
-                schemaValidation: schemaValidation
-            )
             if structurallyRepeatsFailedCandidate(sql: sql, issueSignatures: issueSignatures) {
                 return reject(
                     mode: mode,
@@ -651,6 +657,87 @@ public struct GeneratedSQLRepairCoordinator: Sendable {
         return !failedCandidateSignatures.contains {
             !$0.issueSignatures.isDisjoint(with: issueSignatures)
         }
+    }
+
+    private static func missingColumnsCanBeResolvedByJoining(
+        sql: String,
+        schemaValidation: SQLSchemaValidationResult,
+        schema: DatabaseSchema
+    ) -> Bool {
+        let missingColumns = schemaValidation.issues.compactMap { issue -> String? in
+            guard issue.severity == .error,
+                issue.kind == .missingColumn || issue.kind == .missingBaseColumn,
+                let identifier = issue.identifier,
+                !identifier.contains(".")
+            else { return nil }
+            return identifier
+        }
+        guard !missingColumns.isEmpty else { return false }
+        let referencedTables = resolvedTables(
+            from: schemaValidation.referencedTables,
+            fallbackSQL: sql,
+            schema: schema
+        )
+        guard !referencedTables.isEmpty else { return false }
+        let reachableTableIDs = reachableTableIDs(
+            from: Set(referencedTables.map(\.id)),
+            schema: schema
+        )
+        return missingColumns.allSatisfy { columnName in
+            let foldedColumn = columnName.lowercased()
+            return schema.tables.contains { table in
+                reachableTableIDs.contains(table.id)
+                    && table.columns.contains { $0.name.lowercased() == foldedColumn }
+            }
+        }
+    }
+
+    private static func resolvedTables(
+        from referencedTables: [String],
+        fallbackSQL: String,
+        schema: DatabaseSchema
+    ) -> [TableInfo] {
+        let identifiers = referencedTables.isEmpty
+            ? SQLReferenceAnalyzer.analyze(fallbackSQL).relations.map(\.displayName)
+            : referencedTables
+        return identifiers.compactMap { identifier in
+            let canonical = canonicalIdentifier(identifier)
+            if let table = schema.tables.first(where: {
+                canonicalIdentifier($0.qualifiedName) == canonical
+            }) {
+                return table
+            }
+            let matches = schema.tables.filter {
+                canonicalIdentifier($0.name) == canonical
+            }
+            return matches.count == 1 ? matches[0] : nil
+        }
+    }
+
+    private static func reachableTableIDs(
+        from tableIDs: Set<String>,
+        schema: DatabaseSchema,
+        maxHops: Int = 2
+    ) -> Set<String> {
+        var reachable = tableIDs
+        var frontier = tableIDs
+        guard maxHops > 0 else { return reachable }
+        for _ in 0..<maxHops {
+            var next = Set<String>()
+            for foreignKey in schema.foreignKeys {
+                let sourceID = "\(foreignKey.sourceSchema).\(foreignKey.sourceTable)"
+                let targetID = "\(foreignKey.targetSchema).\(foreignKey.targetTable)"
+                if frontier.contains(sourceID), reachable.insert(targetID).inserted {
+                    next.insert(targetID)
+                }
+                if frontier.contains(targetID), reachable.insert(sourceID).inserted {
+                    next.insert(sourceID)
+                }
+            }
+            guard !next.isEmpty else { break }
+            frontier = next
+        }
+        return reachable
     }
 
     private static func canonicalIdentifier(_ identifier: String) -> String {

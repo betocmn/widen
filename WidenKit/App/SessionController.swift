@@ -325,14 +325,22 @@ public final class SessionController: Identifiable {
                 confirmedBindings.append("\(pendingClarification.concept.term): \(definition)")
             }
         }
-        let transcriptUpperBound = abandonsPendingClarification
-            ? max(0, chatVM.messages.count - 1) : chatVM.messages.count
+        let transcriptUpperBound = Self.transcriptUpperBound(
+            excludingAbandonedClarification: unresolvedClarification,
+            in: chatVM.messages,
+            abandonsPendingClarification: abandonsPendingClarification
+        )
         var conversationMessages = chatVM.messages.sqlConversationMessages(upTo: transcriptUpperBound)
+        let recentQuestions = chatVM.messages
+            .prefix(upTo: min(transcriptUpperBound, chatVM.messages.count))
+            .filter { $0.role == .user }
+            .suffix(3)
+            .map(\.text)
         if pendingClarification != nil {
             conversationMessages.append(SQLConversationMessage(role: .user, text: question))
         }
         let context = SQLGenerationContext(
-            recentQuestions: chatVM.messages.filter { $0.role == .user }.suffix(3).map(\.text),
+            recentQuestions: recentQuestions,
             originalQuestion: pendingClarification?.originalQuestion
                 ?? (abandonsPendingClarification
                     ? question : chatVM.messages.originalUserQuestion()),
@@ -517,27 +525,6 @@ public final class SessionController: Identifiable {
         ].contains(stripped)
     }
 
-    private static func repairGroundingQuestion(
-        _ question: String,
-        repairContext: SQLRepairContext
-    ) -> String {
-        let forbiddenTokens = Set(
-            SchemaIndex.tokens(
-                in: (
-                    repairContext.forbiddenIdentifiers
-                        + repairContext.repairConstraints.map(\.identifier)
-                        + [repairContext.diagnostic?.identifierForRepair].compactMap { $0 }
-                ).joined(separator: " ")
-            )
-        )
-        guard !forbiddenTokens.isEmpty else { return question }
-        let keptWords = question.split(separator: " ").filter { word in
-            Set(SchemaIndex.tokens(in: String(word))).isDisjoint(with: forbiddenTokens)
-        }
-        let filtered = keptWords.joined(separator: " ")
-        return filtered.isEmpty ? question : filtered
-    }
-
     private static func isExplicitSemanticDefinitionReply(
         _ text: String,
         conceptTerm: String?
@@ -594,6 +581,26 @@ public final class SessionController: Identifiable {
             .trimmingCharacters(in: CharacterSet(charactersIn: ".!?, \n\t"))
             .lowercased()
         return negativeClarificationReplies.contains(stripped)
+    }
+
+    private static func transcriptUpperBound(
+        excludingAbandonedClarification pending: PendingClarification?,
+        in messages: [ChatMessage],
+        abandonsPendingClarification: Bool
+    ) -> Int {
+        guard abandonsPendingClarification, let pending else {
+            return messages.count
+        }
+        guard let clarificationIndex = messages.lastIndex(where: {
+            $0.pendingClarification?.id == pending.id
+        }) else {
+            return max(0, messages.count - 1)
+        }
+        let previousIndex = clarificationIndex - 1
+        if previousIndex >= 0, messages[previousIndex].role == .user {
+            return previousIndex
+        }
+        return clarificationIndex
     }
 
     private func repairGeneratedSQL(
@@ -712,10 +719,7 @@ public final class SessionController: Identifiable {
                 )
                 generation = GeneratedSQLPostprocessor.enriched(
                     generated,
-                    question: Self.repairGroundingQuestion(
-                        questionContext.question,
-                        repairContext: repairContext
-                    ),
+                    question: questionContext.question,
                     schema: schema,
                     databaseContext: config.databaseContext,
                     confirmedSemanticBindings: context.confirmedSemanticBindings,
