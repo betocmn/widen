@@ -1971,11 +1971,18 @@ public enum GeneratedSQLPostprocessor {
         if !schemaValidation.hasDefiniteErrors {
             let intent = QueryIntentPlanner.deterministicIntent(for: question)
             if shouldApplyIntentPlan(intent) {
+                let semanticBindings = semanticBindingsForIntentGrounding(
+                    confirmedSemanticBindings: confirmedSemanticBindings,
+                    databaseContext: databaseContext,
+                    intent: intent,
+                    schema: schema,
+                    referencedTables: schemaValidation.referencedTables
+                )
                 let plan = GroundedQueryPlanner.ground(
                     intent: intent,
                     schema: schema,
                     referencedTables: schemaValidation.referencedTables,
-                    confirmedSemanticBindings: confirmedSemanticBindings
+                    confirmedSemanticBindings: semanticBindings
                 )
                 if let pending = GroundedQueryPlanner.clarification(
                     for: plan,
@@ -2033,7 +2040,13 @@ public enum GeneratedSQLPostprocessor {
                 referencedTables: schemaValidation.referencedTables,
                 schema: schema,
                 databaseContext: databaseContext,
-                confirmedSemanticBindings: confirmedSemanticBindings
+                confirmedSemanticBindings: semanticBindingsForIntentGrounding(
+                    confirmedSemanticBindings: confirmedSemanticBindings,
+                    databaseContext: databaseContext,
+                    intent: QueryIntentPlanner.deterministicIntent(for: question),
+                    schema: schema,
+                    referencedTables: schemaValidation.referencedTables
+                )
             )
             copy.groundingConcepts = grounding.concepts
             if allowGroundingClarification,
@@ -2057,6 +2070,146 @@ public enum GeneratedSQLPostprocessor {
         intent.operation == .read
             && (!intent.customBusinessTerms.isEmpty
                 || (intent.measure == .countRows && intent.ranking != nil))
+    }
+
+    private static func semanticBindingsForIntentGrounding(
+        confirmedSemanticBindings: [String],
+        databaseContext: String,
+        intent: QueryIntentFrame,
+        schema: DatabaseSchema,
+        referencedTables: [String]
+    ) -> [String] {
+        confirmedSemanticBindings
+            + databaseContextSemanticBindings(
+                databaseContext: databaseContext,
+                intent: intent,
+                schema: schema,
+                referencedTables: referencedTables
+            )
+    }
+
+    private static func databaseContextSemanticBindings(
+        databaseContext: String,
+        intent: QueryIntentFrame,
+        schema: DatabaseSchema,
+        referencedTables: [String]
+    ) -> [String] {
+        guard !databaseContext.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty,
+            !intent.customBusinessTerms.isEmpty
+        else {
+            return []
+        }
+        let contextStatements = semanticContextStatements(in: databaseContext)
+        var bindings: [String] = []
+        for term in intent.customBusinessTerms {
+            let termTokens = Set(SchemaIndex.tokens(in: term))
+            guard !termTokens.isEmpty else { continue }
+            guard let statement = contextStatements.first(where: { statement in
+                !termTokens.isDisjoint(with: Set(SchemaIndex.tokens(in: statement)))
+                    && semanticDefinition(in: statement) != nil
+            }),
+                let definition = semanticDefinition(in: statement)
+            else {
+                continue
+            }
+            let enrichedDefinition = definitionWithSchemaObjectIDs(
+                definition,
+                schema: schema,
+                referencedTables: referencedTables
+            )
+            bindings.append("\(term): \(enrichedDefinition)")
+        }
+        return bindings
+    }
+
+    private static func semanticContextStatements(in databaseContext: String) -> [String] {
+        var statements: [String] = []
+        var current = ""
+        var index = databaseContext.startIndex
+        while index < databaseContext.endIndex {
+            let character = databaseContext[index]
+            let nextIndex = databaseContext.index(after: index)
+            let shouldSplit =
+                character == "\n"
+                || character == ";"
+                || (character == "."
+                    && (nextIndex == databaseContext.endIndex
+                        || databaseContext[nextIndex].isWhitespace))
+            if shouldSplit {
+                let statement = current.trimmingCharacters(in: .whitespacesAndNewlines)
+                if !statement.isEmpty {
+                    statements.append(statement)
+                }
+                current = ""
+            } else {
+                current.append(character)
+            }
+            index = nextIndex
+        }
+        let trailing = current.trimmingCharacters(in: .whitespacesAndNewlines)
+        if !trailing.isEmpty {
+            statements.append(trailing)
+        }
+        return statements
+    }
+
+    private static func semanticDefinition(in statement: String) -> String? {
+        let markers = [
+            " defined as ", " refers to ", " means ", " mean ", " is ", " are ",
+        ]
+        for marker in markers {
+            guard let range = statement.range(of: marker, options: [.caseInsensitive]) else {
+                continue
+            }
+            let definition = String(statement[range.upperBound...])
+                .trimmingCharacters(in: .whitespacesAndNewlines)
+            return definition.isEmpty ? nil : definition
+        }
+        return nil
+    }
+
+    private static func definitionWithSchemaObjectIDs(
+        _ definition: String,
+        schema: DatabaseSchema,
+        referencedTables: [String]
+    ) -> String {
+        guard !definition.contains("column:") else { return definition }
+        guard let columnID = uniqueColumnObjectID(
+            mentionedIn: definition,
+            schema: schema,
+            referencedTables: referencedTables
+        ) else {
+            return definition
+        }
+        return "column:\(columnID) \(definition)"
+    }
+
+    private static func uniqueColumnObjectID(
+        mentionedIn text: String,
+        schema: DatabaseSchema,
+        referencedTables: [String]
+    ) -> String? {
+        let textTokens = Set(SchemaIndex.tokens(in: text))
+        guard !textTokens.isEmpty else { return nil }
+        let referenced = Set(referencedTables.map { $0.lowercased() })
+        let matches = schema.tables.flatMap { table in
+            table.columns.compactMap { column -> String? in
+                let columnTokens = Set(SchemaIndex.tokens(in: column.name))
+                guard !columnTokens.isEmpty,
+                    !columnTokens.isDisjoint(with: textTokens)
+                else {
+                    return nil
+                }
+                return column.id
+            }
+        }
+        let referencedMatches = matches.filter { objectID in
+            let parts = objectID.split(separator: ".", maxSplits: 2).map(String.init)
+            guard parts.count == 3 else { return false }
+            return referenced.contains("\(parts[0]).\(parts[1])".lowercased())
+        }
+        if referencedMatches.count == 1 { return referencedMatches[0] }
+        return matches.count == 1 ? matches[0] : nil
     }
 
     private static func groundingConceptKind(

@@ -39,12 +39,14 @@ public enum QueryIntentPlanner {
         } else if normalized.contains("average") || normalized.contains(" avg ") {
             measure = .average
             measurePhrase = "average"
-            subjectPhrases = subjectBeforeGrouping(in: normalized)
+            subjectPhrases = subjectBeforeGrouping(in: normalized, preservingStopWords: ["total"])
             groupingPhrases = groupingAfterPerOrBy(in: normalized)
         } else if normalized.contains("total") || normalized.contains(" sum ") {
             measure = normalized.contains("count") ? .countRows : .sum
             measurePhrase = normalized.contains("total") ? "total" : "sum"
-            subjectPhrases = subjectBeforeGrouping(in: normalized)
+            ranking = aggregateRanking(in: normalized)
+            requestedLimit = ranking?.takeFirst == true ? 1 : nil
+            subjectPhrases = subjectBeforeGrouping(in: normalized, preservingStopWords: ["total"])
             groupingPhrases = groupingAfterPerOrBy(in: normalized)
         } else if normalized.contains("unique") || normalized.contains("distinct") {
             measure = .countDistinct
@@ -105,11 +107,14 @@ public enum QueryIntentPlanner {
         return cleanedSubject(String(suffix))
     }
 
-    private static func subjectBeforeGrouping(in text: String) -> [String] {
+    private static func subjectBeforeGrouping(
+        in text: String,
+        preservingStopWords: Set<String> = []
+    ) -> [String] {
         let chunks = text.components(separatedBy: " by ")
         let beforeBy = chunks.first ?? text
         let beforePer = beforeBy.components(separatedBy: " per ").first ?? beforeBy
-        let subject = cleanedSubject(beforePer)
+        let subject = cleanedSubject(beforePer, preservingStopWords: preservingStopWords)
         return subject.isEmpty ? [] : [subject]
     }
 
@@ -121,15 +126,34 @@ public enum QueryIntentPlanner {
         return []
     }
 
-    private static func cleanedSubject(_ text: String) -> String {
+    private static func cleanedSubject(
+        _ text: String,
+        preservingStopWords: Set<String> = []
+    ) -> String {
         var tokens = text.split(separator: " ").map(String.init)
-        while let first = tokens.first, subjectStopWords.contains(first) {
+        while let first = tokens.first,
+            subjectStopWords.contains(first),
+            !preservingStopWords.contains(first)
+        {
             tokens.removeFirst()
         }
-        while let last = tokens.last, subjectStopWords.contains(last) {
+        while let last = tokens.last,
+            subjectStopWords.contains(last),
+            !preservingStopWords.contains(last)
+        {
             tokens.removeLast()
         }
         return tokens.joined(separator: " ")
+    }
+
+    private static func aggregateRanking(in text: String) -> RankingIntent? {
+        if firstPhrase(in: text, from: descendingAggregateRankingPhrases) != nil {
+            return RankingIntent(direction: .descending, takeFirst: true)
+        }
+        if firstPhrase(in: text, from: ascendingAggregateRankingPhrases) != nil {
+            return RankingIntent(direction: .ascending, takeFirst: true)
+        }
+        return nil
     }
 
     private static func customTerms(in text: String) -> [String] {
@@ -150,11 +174,17 @@ public enum QueryIntentPlanner {
     ]
     private static let latestPhrases = ["latest", "newest", "most recent"]
     private static let oldestPhrases = ["oldest", "earliest"]
+    private static let descendingAggregateRankingPhrases = [
+        "top", "highest", "highest volume", "largest", "most",
+    ]
+    private static let ascendingAggregateRankingPhrases = [
+        "bottom", "lowest", "smallest", "least",
+    ]
     private static let subjectStopWords: Set<String> = [
         "a", "an", "are", "average", "avg", "calculate", "can", "count", "distinct",
-        "each", "for", "get", "have", "in", "is", "list", "me", "number", "of", "one",
-        "return", "see", "show", "sum", "the", "to", "total", "unique", "what", "which",
-        "with",
+        "each", "for", "get", "have", "highest", "in", "is", "largest", "least", "list",
+        "lowest", "me", "most", "number", "of", "one", "return", "see", "show", "smallest",
+        "sum", "the", "to", "top", "total", "unique", "what", "which", "with",
     ]
     private static let customBusinessTerms: Set<String> = [
         "best", "engaged", "healthy", "quality", "successful", "valuable", "win", "winning",
@@ -972,14 +1002,27 @@ public enum SQLIntentConformanceValidator {
         }
         for slot in plan.slots where slot.kind == .customBusinessTerm {
             guard slot.state == .grounded, let candidate = slot.selectedCandidate else { continue }
-            for objectID in candidate.objectIDs where objectID.hasPrefix("column:") {
+            let columnObjectIDs = candidate.objectIDs.filter { $0.hasPrefix("column:") }
+            for objectID in columnObjectIDs {
                 if !referencesColumn(objectID: objectID, in: schemaValidation.analysis, schema: schema) {
                     issues.append("SQL does not reference grounded definition object \(objectID).")
                 }
             }
             for literal in stringLiteralBodies(in: ([candidate.label] + candidate.evidence).joined(separator: " ")) {
-                if !sqlStringLiterals.contains(literal.lowercased()) {
-                    issues.append("SQL does not include grounded definition literal '\(literal)'.")
+                if columnObjectIDs.isEmpty {
+                    if !sqlStringLiterals.contains(literal.lowercased()) {
+                        issues.append("SQL does not include grounded definition literal '\(literal)'.")
+                    }
+                } else if !columnObjectIDs.contains(where: {
+                    hasColumnLiteralPredicate(
+                        columnObjectID: $0,
+                        literal: literal,
+                        analysis: schemaValidation.analysis,
+                        schema: schema,
+                        tokens: tokens
+                    )
+                }) {
+                    issues.append("SQL does not apply grounded definition literal '\(literal)' to the grounded column.")
                 }
             }
         }
@@ -1086,6 +1129,75 @@ public enum SQLIntentConformanceValidator {
             }
         }
         return false
+    }
+
+    private static func hasColumnLiteralPredicate(
+        columnObjectID: String,
+        literal: String,
+        analysis: SQLReferenceAnalysis,
+        schema: DatabaseSchema,
+        tokens: [SQLToken]
+    ) -> Bool {
+        for index in tokens.indices {
+            if isPredicateOperator(tokens[index]) {
+                guard let leftRange = expressionOffsetRange(before: index, tokens: tokens),
+                    let rightRange = expressionOffsetRange(after: index, tokens: tokens)
+                else {
+                    continue
+                }
+                let columnLeft = referencesColumn(
+                    objectID: columnObjectID,
+                    in: analysis,
+                    schema: schema,
+                    offsetRange: leftRange
+                )
+                let columnRight = referencesColumn(
+                    objectID: columnObjectID,
+                    in: analysis,
+                    schema: schema,
+                    offsetRange: rightRange
+                )
+                let literalLeft = rangeContainsStringLiteral(literal, in: leftRange, tokens: tokens)
+                let literalRight = rangeContainsStringLiteral(literal, in: rightRange, tokens: tokens)
+                if (columnLeft && literalRight) || (literalLeft && columnRight) {
+                    return true
+                }
+            }
+            if tokens[index].normalized == "in",
+                let leftRange = expressionOffsetRange(before: index, tokens: tokens),
+                let rightRange = expressionOffsetRange(after: index, tokens: tokens),
+                referencesColumn(
+                    objectID: columnObjectID,
+                    in: analysis,
+                    schema: schema,
+                    offsetRange: leftRange
+                ),
+                rangeContainsStringLiteral(literal, in: rightRange, tokens: tokens)
+            {
+                return true
+            }
+        }
+        return false
+    }
+
+    private static func isPredicateOperator(_ token: SQLToken) -> Bool {
+        ["=", "<>", "!=", "<", ">", "<=", ">="].contains(token.text)
+            || ["like", "ilike"].contains(token.normalized)
+    }
+
+    private static func rangeContainsStringLiteral(
+        _ literal: String,
+        in offsetRange: Range<Int>,
+        tokens: [SQLToken]
+    ) -> Bool {
+        tokens.contains { token in
+            token.kind == .string
+                && offsetRange.contains(token.startOffset)
+                && token.endOffset <= offsetRange.upperBound
+                && stringLiteralBodies(in: token.text).contains {
+                    $0.caseInsensitiveCompare(literal) == .orderedSame
+                }
+        }
     }
 
     private static func rangeContainsProjectedColumn(
@@ -1764,17 +1876,23 @@ public enum AnalyticQueryCompiler {
         {
             return compileRankedRow(intent: intent, schema: schema, direction: ranking.direction)
         }
+        if [.average, .countDistinct, .sum, .minimum, .maximum].contains(intent.measure),
+            !intent.groupingPhrases.isEmpty
+        {
+            if let groupedMeasure = compileGroupedMeasure(
+                intent: intent,
+                schema: schema,
+                defaultRowLimit: defaultRowLimit
+            ) {
+                return groupedMeasure
+            }
+        }
         if intent.measure == .average,
             !intent.groupingPhrases.isEmpty
         {
             if let averageRows = compileAverageRowsPerTimeBucket(intent: intent, schema: schema) {
                 return averageRows
             }
-        }
-        if [.average, .countDistinct, .sum, .minimum, .maximum].contains(intent.measure),
-            !intent.groupingPhrases.isEmpty
-        {
-            return compileGroupedMeasure(intent: intent, schema: schema, defaultRowLimit: defaultRowLimit)
         }
         return nil
     }
@@ -1998,12 +2116,20 @@ public enum AnalyticQueryCompiler {
             return nil
         }
         let groupExpression = group.expression(alias)
-        let sql = """
-            SELECT \(groupExpression) AS \(quotedIdentifier(group.alias)), \(measureSQL) AS \(quotedIdentifier(measureAlias))
-            FROM \(qualifiedName(table)) AS \(alias)
-            GROUP BY \(groupExpression)
-            LIMIT \(sanitizedLimit(defaultRowLimit))
-            """
+        var sqlLines = [
+            "SELECT \(groupExpression) AS \(quotedIdentifier(group.alias)), \(measureSQL) AS \(quotedIdentifier(measureAlias))",
+            "FROM \(qualifiedName(table)) AS \(alias)",
+            "GROUP BY \(groupExpression)",
+        ]
+        if let ranking = intent.ranking {
+            let directionSQL = ranking.direction == .descending ? "DESC" : "ASC"
+            sqlLines.append("ORDER BY \(quotedIdentifier(measureAlias)) \(directionSQL)")
+        }
+        let limit = intent.ranking?.takeFirst == true
+            ? 1
+            : (intent.requestedLimit ?? defaultRowLimit)
+        sqlLines.append("LIMIT \(sanitizedLimit(limit))")
+        let sql = sqlLines.joined(separator: "\n")
         let interpretation = "\(intent.measure.rawValue) of \(subject.column.name), grouped by \(group.label)."
         let plan = compiledPlan(
             intent: intent,
@@ -2153,9 +2279,11 @@ public enum AnalyticQueryCompiler {
                 let tableTokens = Set(SchemaIndex.tokens(in: table.name))
                 let exact = column.name.lowercased() == phrase.replacingOccurrences(of: " ", with: "_")
                 let containsAll = phraseTokens.isSubset(of: columnTokens)
+                let columnOverlap = phraseTokens.intersection(columnTokens).count
+                guard exact || containsAll || columnOverlap > 0 else { return nil }
                 let score = (exact ? 120 : 0)
                     + (containsAll ? 70 : 0)
-                    + phraseTokens.intersection(columnTokens).count * 25
+                    + columnOverlap * 25
                     + phraseTokens.intersection(tableTokens).count * 3
                     - (column.name.lowercased() == "id" ? 15 : 0)
                 return score > 0 ? ColumnMatch(column: column, score: score) : nil

@@ -1535,6 +1535,30 @@ struct SQLSchemaValidatorTests {
         }
     }
 
+    @Test func databaseContextGroundsCustomTermBeforePlanClarification() {
+        let generation = SQLGenerationResult(
+            sql: "SELECT id FROM public.customers WHERE status = 'enabled'",
+            explanation: "Lists healthy customers.",
+            assumptions: [],
+            referencedTables: [],
+            confidence: 1,
+            riskLevel: .low,
+            needsClarification: false,
+            clarificationQuestion: nil
+        )
+
+        let enriched = GeneratedSQLPostprocessor.enriched(
+            generation,
+            question: "healthy customers",
+            schema: makeBestCustomerSchema(),
+            databaseContext: "Healthy customers means status = 'enabled'."
+        )
+
+        #expect(!enriched.needsClarification)
+        #expect(enriched.sql == generation.sql)
+        #expect(enriched.clarificationQuestion == nil)
+    }
+
     @Test func omittedSchemaTermBlocksWrongOrdinaryRead() {
         let generation = SQLGenerationResult(
             sql: "SELECT id, email FROM public.users LIMIT 100",
@@ -1922,9 +1946,11 @@ struct SQLSchemaValidatorTests {
             confirmedSemanticBindings: ["healthy: column:public.customers.status 'enabled'"]
         )
         let wrongLiteral = "SELECT id FROM public.customers WHERE status = 'disabled'"
+        let projectedLiteral = "SELECT id, status, 'enabled' AS label FROM public.customers"
         let matchingLiteral = "SELECT id FROM public.customers WHERE status = 'enabled'"
 
         #expect(!SQLIntentConformanceValidator.validate(sql: wrongLiteral, plan: plan, schema: schema).isValid)
+        #expect(!SQLIntentConformanceValidator.validate(sql: projectedLiteral, plan: plan, schema: schema).isValid)
         #expect(SQLIntentConformanceValidator.validate(sql: matchingLiteral, plan: plan, schema: schema).isValid)
     }
 
@@ -1993,6 +2019,43 @@ struct SQLSchemaValidatorTests {
                 #expect(result?.sql.localizedCaseInsensitiveContains(fragment) == true, "Missing \(fragment) for: \(question)")
             }
         }
+    }
+
+    @Test func analyticCompilerOrdersRankedGroupedMeasures() {
+        let result = AnalyticQueryCompiler.compile(
+            question: "highest total sales by customer",
+            schema: makeSalesSchema(),
+            defaultRowLimit: 100
+        )
+
+        #expect(result != nil)
+        #expect(result?.sql.localizedCaseInsensitiveContains(#"SUM(t."total_sales")"#) == true)
+        #expect(result?.sql.localizedCaseInsensitiveContains(#"GROUP BY t."customer_id""#) == true)
+        let sql = result?.sql ?? ""
+        let aliasPrefix = #"SUM(t."total_sales") AS ""#
+        let measureAlias = sql
+            .components(separatedBy: aliasPrefix)
+            .dropFirst()
+            .first?
+            .split(separator: "\"", maxSplits: 1)
+            .first
+            .map(String.init)
+        #expect(measureAlias != nil)
+        #expect(measureAlias.map { sql.localizedCaseInsensitiveContains("ORDER BY \"\($0)\" DESC") } == true)
+        #expect(result?.sql.localizedCaseInsensitiveContains("LIMIT 1") == true)
+    }
+
+    @Test func analyticCompilerAveragesNumericColumnsBeforeRowCounts() {
+        let result = AnalyticQueryCompiler.compile(
+            question: "average order total by day",
+            schema: makeSalesSchema(),
+            defaultRowLimit: 100
+        )
+
+        #expect(result != nil)
+        #expect(result?.sql.localizedCaseInsensitiveContains(#"AVG(t."order_total")"#) == true)
+        #expect(result?.sql.localizedCaseInsensitiveContains("AVG(row_count)") == false)
+        #expect(result?.sql.localizedCaseInsensitiveContains(#"GROUP BY t."created_at"::date"#) == true)
     }
 
     @Test func universalAnalyticalOperatorsDoNotRequireSchemaTokenGrounding() {
@@ -2940,6 +3003,38 @@ struct SQLSchemaValidatorTests {
                     targetColumn: "id"
                 )
             ]
+        )
+    }
+
+    private func makeSalesSchema() -> DatabaseSchema {
+        DatabaseSchema(
+            schemas: [SchemaInfo(name: "public")],
+            tables: [
+                TableInfo(
+                    schema: "public",
+                    name: "sales",
+                    type: .baseTable,
+                    columns: [
+                        ColumnInfo(
+                            tableSchema: "public", tableName: "sales", name: "id",
+                            dataType: "integer", isNullable: false, ordinalPosition: 1),
+                        ColumnInfo(
+                            tableSchema: "public", tableName: "sales", name: "customer_id",
+                            dataType: "integer", isNullable: false, ordinalPosition: 2),
+                        ColumnInfo(
+                            tableSchema: "public", tableName: "sales", name: "total_sales",
+                            dataType: "integer", isNullable: false, ordinalPosition: 3),
+                        ColumnInfo(
+                            tableSchema: "public", tableName: "sales", name: "order_total",
+                            dataType: "integer", isNullable: false, ordinalPosition: 4),
+                        ColumnInfo(
+                            tableSchema: "public", tableName: "sales", name: "created_at",
+                            dataType: "timestamp with time zone", isNullable: false,
+                            ordinalPosition: 5),
+                    ]
+                )
+            ],
+            foreignKeys: []
         )
     }
 
