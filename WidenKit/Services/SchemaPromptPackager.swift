@@ -244,7 +244,8 @@ public enum SchemaPromptPackager {
             databaseContext: databaseContext,
             diagnostic: repairContext?.diagnostic,
             forbiddenIdentifiers: repairContext?.forbiddenIdentifiers ?? [],
-            schemaSearchQueries: context.schemaSearchQueries
+            schemaSearchQueries: context.schemaSearchQueries,
+            semanticBindings: context.confirmedSemanticBindings
         )
         let ranked = SchemaRelevanceRanker.rank(schema: schema, input: input)
         return package(
@@ -687,6 +688,7 @@ public enum SchemaPromptPackager {
                     input.databaseContext,
                     input.currentSQL ?? "",
                     input.forbiddenIdentifiers.joined(separator: " "),
+                    input.semanticBindings.joined(separator: " "),
                 ].joined(separator: " ")
             ))
     }
@@ -821,6 +823,7 @@ public enum SchemaPromptPackager {
                     input.forbiddenIdentifiers.joined(separator: " "),
                     diagnosticText(input.diagnostic),
                     input.schemaSearchQueries.joined(separator: " "),
+                    input.semanticBindings.joined(separator: " "),
                 ].joined(separator: " ")
             )
         )
@@ -1017,7 +1020,14 @@ public enum SchemaPromptPackager {
 
     private static func relevantColumnNames(_ table: TableInfo, input: SchemaRankingInput) -> [String] {
         let tokens = Set(
-            SchemaIndex.tokens(in: input.question + " " + input.databaseContext + " " + (input.currentSQL ?? ""))
+            SchemaIndex.tokens(
+                in: [
+                    input.question,
+                    input.databaseContext,
+                    input.currentSQL ?? "",
+                    input.semanticBindings.joined(separator: " "),
+                ].joined(separator: " ")
+            )
         )
         let matches = table.columns.filter { column in
             !tokens.intersection(SchemaIndex.tokens(in: column.name)).isEmpty

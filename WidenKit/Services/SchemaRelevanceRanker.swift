@@ -13,6 +13,7 @@ public struct SchemaRankingInput: Equatable, Sendable {
     public var diagnostic: DatabaseDiagnostic?
     public var forbiddenIdentifiers: [String]
     public var schemaSearchQueries: [String]
+    public var semanticBindings: [String]
 
     public init(
         question: String,
@@ -20,7 +21,8 @@ public struct SchemaRankingInput: Equatable, Sendable {
         databaseContext: String = "",
         diagnostic: DatabaseDiagnostic? = nil,
         forbiddenIdentifiers: [String] = [],
-        schemaSearchQueries: [String] = []
+        schemaSearchQueries: [String] = [],
+        semanticBindings: [String] = []
     ) {
         self.question = question
         self.currentSQL = currentSQL
@@ -28,6 +30,7 @@ public struct SchemaRankingInput: Equatable, Sendable {
         self.diagnostic = diagnostic
         self.forbiddenIdentifiers = forbiddenIdentifiers
         self.schemaSearchQueries = schemaSearchQueries
+        self.semanticBindings = semanticBindings
     }
 }
 
@@ -41,6 +44,9 @@ public enum SchemaRelevanceRanker {
             SchemaIndex.tokens(in: ([input.question] + input.schemaSearchQueries).joined(separator: " "))
         )
         let contextTokens = Set(SchemaIndex.tokens(in: input.databaseContext))
+        let semanticBindingTokens = Set(
+            SchemaIndex.tokens(in: input.semanticBindings.joined(separator: " "))
+        )
         let failedSQLIdentifiers = Set(extractRelationLikeIdentifiers(from: input.currentSQL ?? ""))
         let failedSQLTokens = Set(SchemaIndex.tokens(in: (input.currentSQL ?? "") + " " + input.forbiddenIdentifiers.joined(separator: " ")))
         let diagnosticTokens = Set(SchemaIndex.tokens(in: diagnosticText(input.diagnostic)))
@@ -81,6 +87,12 @@ public enum SchemaRelevanceRanker {
             if contextMatches > 0 {
                 score += min(contextMatches * 30, 150)
                 reasons.append("database context matches")
+            }
+
+            let semanticBindingMatches = semanticBindingTokens.intersection(tableTokens).count
+            if semanticBindingMatches > 0 {
+                score += min(semanticBindingMatches * 70, 350)
+                reasons.append("semantic binding matches")
             }
 
             let failedOverlap = failedSQLTokens.intersection(tableTokens).count

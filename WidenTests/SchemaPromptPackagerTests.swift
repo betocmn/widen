@@ -479,6 +479,54 @@ struct SchemaPromptPackagerTests {
         #expect(searchResults.contains("public.review_queue"))
     }
 
+    @Test func confirmedSemanticBindingsInfluenceSchemaPackagingRanking() {
+        var tables = (0..<12).map { index in
+            TableInfo(
+                schema: "public",
+                name: "alpha_events_\(index)",
+                type: .baseTable,
+                columns: [
+                    column("alpha_events_\(index)", "id", ordinal: 1),
+                    column("alpha_events_\(index)", "created_at", type: "timestamp with time zone", ordinal: 2),
+                ]
+            )
+        }
+        tables.append(
+            TableInfo(
+                schema: "public",
+                name: "match_results",
+                type: .baseTable,
+                columns: [
+                    column("match_results", "id", ordinal: 1),
+                    column("match_results", "tool_id", ordinal: 2),
+                    column("match_results", "winner_id", ordinal: 3),
+                ]
+            )
+        )
+        let schema = DatabaseSchema(
+            schemas: [SchemaInfo(name: "public")],
+            tables: tables,
+            foreignKeys: []
+        )
+
+        let package = SchemaPromptPackager.package(
+            schema: schema,
+            question: "show wins",
+            context: SQLGenerationContext(
+                confirmedSemanticBindings: [
+                    #"wins: "public"."match_results"."winner_id" is not null"#
+                ]
+            ),
+            databaseContext: "",
+            maxCharacters: 700
+        )
+
+        #expect(package.includedTables.contains("public.match_results"))
+        #expect(package.diagnostics.rankedTables.first?.tableID == "public.match_results")
+        #expect(package.diagnostics.rankedTables.first?.reasons.contains("semantic binding matches") == true)
+        #expect(package.text.contains(#""winner_id" uuid NOT NULL"#))
+    }
+
     @Test func highScoringPrimaryTablesAreNotBlindlyPinned() {
         let schema = DatabaseSchema(
             schemas: [SchemaInfo(name: "public")],
