@@ -106,8 +106,31 @@ struct ConnectionStoreTests {
 
 @Suite("DatabaseSemanticBindingStore")
 struct DatabaseSemanticBindingStoreTests {
-    private func makeSchema(includeName: Bool = true) -> DatabaseSchema {
-        DatabaseSchema(
+    private func makeSchema(
+        includeName: Bool = true,
+        statusValues: [String]? = nil
+    ) -> DatabaseSchema {
+        let statusColumns =
+            statusValues.map { values in
+                [
+                    ColumnInfo(
+                        tableSchema: "public",
+                        tableName: "users",
+                        name: "status",
+                        dataType: "text",
+                        isNullable: false,
+                        ordinalPosition: 3,
+                        valueConstraints: [
+                            ColumnValueConstraint(
+                                kind: .check,
+                                values: values,
+                                expression: "CHECK (status IN (\(values.map { "'\($0)'" }.joined(separator: ", "))))"
+                            )
+                        ]
+                    )
+                ]
+            } ?? []
+        return DatabaseSchema(
             schemas: [SchemaInfo(name: "public")],
             tables: [
                 TableInfo(
@@ -132,7 +155,7 @@ struct DatabaseSemanticBindingStoreTests {
                             isNullable: true,
                             ordinalPosition: 2
                         )
-                    ] : [])
+                    ] : []) + statusColumns
                 )
             ],
             foreignKeys: []
@@ -174,6 +197,26 @@ struct DatabaseSemanticBindingStoreTests {
         let connectionID = UUID()
         let original = makeSchema()
         let drifted = makeSchema(includeName: false)
+        let binding = DatabaseSemanticBinding(
+            connectionID: connectionID,
+            schemaNames: original.semanticBindingSchemaNames,
+            schemaFingerprint: original.semanticFingerprint,
+            concept: "active users",
+            definition: #"status = 'active'"#
+        )
+
+        #expect(store.currentBindings([binding], connectionID: connectionID, schema: original) == [binding])
+        #expect(store.currentBindings([binding], connectionID: connectionID, schema: drifted).isEmpty)
+    }
+
+    @Test func currentBindingsExcludeConstraintDrift() {
+        let dir = FileManager.default.temporaryDirectory
+            .appendingPathComponent("widen-bindings-\(UUID().uuidString)", isDirectory: true)
+        defer { try? FileManager.default.removeItem(at: dir) }
+        let store = DatabaseSemanticBindingStore(directory: dir)
+        let connectionID = UUID()
+        let original = makeSchema(statusValues: ["active", "inactive"])
+        let drifted = makeSchema(statusValues: ["enabled", "disabled"])
         let binding = DatabaseSemanticBinding(
             connectionID: connectionID,
             schemaNames: original.semanticBindingSchemaNames,

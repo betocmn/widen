@@ -132,9 +132,18 @@ extension DatabaseSchema {
                 .map { table in
                     let columns = table.columns
                         .sorted { $0.ordinalPosition < $1.ordinalPosition }
-                        .map { "\($0.name):\($0.dataType):\($0.isNullable)" }
+                        .map {
+                            [
+                                $0.name,
+                                $0.dataType,
+                                $0.udtSchema ?? "",
+                                $0.udtName ?? "",
+                                "\($0.isNullable)",
+                                Self.semanticConstraintFingerprint($0.valueConstraints ?? []),
+                            ].joined(separator: ":")
+                        }
                         .joined(separator: ",")
-                    return "\(table.schema).\(table.name)[\(columns)]"
+                    return "\(table.schema).\(table.name):\(table.type.rawValue)[\(columns)]"
                 }
                 .joined(separator: "|"),
             foreignKeys
@@ -145,6 +154,20 @@ extension DatabaseSchema {
                 .joined(separator: "|"),
         ].joined(separator: "\n")
         return Self.stableFingerprint(parts)
+    }
+
+    private static func semanticConstraintFingerprint(_ constraints: [ColumnValueConstraint]) -> String {
+        constraints
+            .map { constraint in
+                [
+                    constraint.kind.rawValue,
+                    constraint.constraintName ?? "",
+                    constraint.expression ?? "",
+                    constraint.values.sorted().joined(separator: ","),
+                ].joined(separator: "=")
+            }
+            .sorted()
+            .joined(separator: ";")
     }
 
     private static func stableFingerprint(_ text: String) -> String {

@@ -2637,6 +2637,16 @@ public enum GeneratedSQLPostprocessor {
 
     private static func rawWords(in text: String) -> [String] {
         text.lowercased()
+            .replacingOccurrences(
+                of: #"([[:alnum:]])['’ʼ]s\b"#,
+                with: "$1",
+                options: .regularExpression
+            )
+            .replacingOccurrences(
+                of: #"([[:alnum:]])['’ʼ]\b"#,
+                with: "$1",
+                options: .regularExpression
+            )
             .split { !$0.isLetter && !$0.isNumber }
             .map(String.init)
             .filter { !$0.isEmpty }

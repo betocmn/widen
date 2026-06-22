@@ -116,13 +116,14 @@
                     allowDiscovery: true)
             } catch let error as LanguageModelSession.GenerationError {
                 if case .exceededContextWindowSize = error {
-                    // Retry once with a smaller whole-prompt target while
-                    // preserving the same deterministic ranking and pins.
+                    // Retry once with a smaller whole-prompt target. Discovery is
+                    // skipped here so a context-window retry cannot spend another
+                    // model call before SQL generation.
                     do {
                         return try await respond(
                             question: question, schema: schema, context: context, config: config,
                             model: model, maxSchemaCharacters: 8_000, inputScale: 0.8,
-                            allowDiscovery: true)
+                            allowDiscovery: false)
                     } catch let retryError as LanguageModelSession.GenerationError {
                         throw Self.map(retryError)
                     }

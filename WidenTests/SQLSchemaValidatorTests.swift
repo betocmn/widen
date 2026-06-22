@@ -1313,6 +1313,38 @@ struct SQLSchemaValidatorTests {
         #expect(enriched.referencedTables == ["public.users"])
     }
 
+    @Test func possessiveSuffixDoesNotBecomeUnsupportedGroundingConcept() {
+        let generation = SQLGenerationResult(
+            sql: """
+                SELECT o.id
+                FROM public.orders AS o
+                JOIN public.users AS u ON u.id = o.user_id
+                WHERE u.email = 'alice@example.com'
+                """,
+            explanation: "Lists Alice's orders.",
+            assumptions: [],
+            referencedTables: [],
+            confidence: 1,
+            riskLevel: .low,
+            needsClarification: false,
+            clarificationQuestion: nil
+        )
+
+        for question in ["Show Alice's orders", "Show Alice’s orders"] {
+            let enriched = GeneratedSQLPostprocessor.enriched(
+                generation,
+                question: question,
+                schema: makeUsersOrdersSchema(),
+                databaseContext: ""
+            )
+
+            #expect(!enriched.needsClarification)
+            #expect(enriched.sql == generation.sql)
+            #expect(enriched.referencedTables == ["public.orders", "public.users"])
+            #expect(!enriched.groundingConcepts.contains { $0.term == "s" })
+        }
+    }
+
     @Test func genericMetricVerbsDoNotForceClarification() {
         let generation = SQLGenerationResult(
             sql: """
