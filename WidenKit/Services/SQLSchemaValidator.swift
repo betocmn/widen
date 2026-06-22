@@ -1974,30 +1974,34 @@ public enum GeneratedSQLPostprocessor {
                 let plan = GroundedQueryPlanner.ground(
                     intent: intent,
                     schema: schema,
-                    referencedTables: schemaValidation.referencedTables
+                    referencedTables: schemaValidation.referencedTables,
+                    confirmedSemanticBindings: confirmedSemanticBindings
                 )
                 if let pending = GroundedQueryPlanner.clarification(
                     for: plan,
                     originalQuestion: question
                 ) {
-                    copy.sql = ""
-                    copy.explanation = pending.question
-                    copy.needsClarification = true
-                    copy.clarificationQuestion = pending.question
-                    copy.clarificationOptions = pending.options
-                    copy.pendingClarificationID = pending.id
-                    copy.pendingClarification = pending
-                    copy.groundingConcepts = plan.slots.map {
-                        SQLGroundingConcept(
-                            term: $0.phrase,
-                            kind: groundingConceptKind(for: $0.kind),
-                            state: $0.state,
-                            required: $0.required,
-                            evidence: $0.selectedCandidate?.evidence ?? $0.candidates.flatMap(\.evidence)
-                        )
+                    if allowGroundingClarification {
+                        copy.sql = ""
+                        copy.explanation = pending.question
+                        copy.needsClarification = true
+                        copy.clarificationQuestion = pending.question
+                        copy.clarificationOptions = pending.options
+                        copy.pendingClarificationID = pending.id
+                        copy.pendingClarification = pending
+                        copy.groundingConcepts = plan.slots.map {
+                            SQLGroundingConcept(
+                                term: $0.phrase,
+                                kind: groundingConceptKind(for: $0.kind),
+                                state: $0.state,
+                                required: $0.required,
+                                evidence: $0.selectedCandidate?.evidence ?? $0.candidates.flatMap(\.evidence)
+                            )
+                        }
+                        copy.confidence = min(copy.confidence, 0.2)
+                        copy.riskLevel = .medium
+                        return copy
                     }
-                    copy.confidence = min(copy.confidence, 0.2)
-                    copy.riskLevel = .medium
                     return copy
                 }
                 let conformance = SQLIntentConformanceValidator.validate(
@@ -2006,6 +2010,7 @@ public enum GeneratedSQLPostprocessor {
                     schema: schema
                 )
                 if !conformance.isValid {
+                    guard allowGroundingClarification else { return copy }
                     let message = "The generated SQL does not match the grounded request: \(conformance.issues.joined(separator: " "))"
                     copy.sql = ""
                     copy.explanation = message

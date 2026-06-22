@@ -168,7 +168,7 @@ struct AppStateSchemaTests {
         defer { try? FileManager.default.removeItem(at: dir) }
         let pending = PendingClarification(
             concept: SQLGroundingConcept(
-                term: "frequent",
+                term: "most frequent",
                 kind: .metric,
                 state: .unsupported,
                 required: true

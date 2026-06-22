@@ -146,13 +146,14 @@ public enum QueryIntentPlanner {
 
     private static let countRankingPhrases = [
         "most frequent", "most common", "most recurring", "occurs most often",
-        "occur most often", "highest volume", "highest volume",
+        "occur most often", "highest volume",
     ]
     private static let latestPhrases = ["latest", "newest", "most recent"]
     private static let oldestPhrases = ["oldest", "earliest"]
     private static let subjectStopWords: Set<String> = [
-        "a", "an", "are", "calculate", "can", "each", "for", "get", "have", "in", "is",
-        "list", "me", "of", "one", "return", "see", "show", "the", "to", "what", "which",
+        "a", "an", "are", "average", "avg", "calculate", "can", "count", "distinct",
+        "each", "for", "get", "have", "in", "is", "list", "me", "number", "of", "one",
+        "return", "see", "show", "sum", "the", "to", "total", "unique", "what", "which",
         "with",
     ]
     private static let customBusinessTerms: Set<String> = [
@@ -161,15 +162,149 @@ public enum QueryIntentPlanner {
     ]
 }
 
+public enum ClarificationResolutionAction: String, Codable, Equatable, Sendable {
+    case answer
+    case newRequest
+    case stillAmbiguous
+    case cancel
+}
+
+public struct ClarificationResolution: Codable, Equatable, Sendable {
+    public var action: ClarificationResolutionAction
+    public var selectedOptionIndex: Int?
+    public var normalizedDefinition: String
+    public var mentionedSchemaTerms: [String]
+
+    public init(
+        action: ClarificationResolutionAction,
+        selectedOptionIndex: Int? = nil,
+        normalizedDefinition: String = "",
+        mentionedSchemaTerms: [String] = []
+    ) {
+        self.action = action
+        self.selectedOptionIndex = selectedOptionIndex
+        self.normalizedDefinition = normalizedDefinition
+        self.mentionedSchemaTerms = mentionedSchemaTerms
+    }
+}
+
+public enum ClarificationResolver {
+    public static func resolve(
+        reply: String,
+        pending: PendingClarification,
+        selectedOption: ClarificationOption? = nil
+    ) -> ClarificationResolution {
+        let trimmed = reply.trimmingCharacters(in: .whitespacesAndNewlines)
+        let normalized = normalize(trimmed)
+        guard !normalized.isEmpty else {
+            return ClarificationResolution(action: .stillAmbiguous)
+        }
+        if ["cancel", "stop", "never mind", "nevermind"].contains(normalized) {
+            return ClarificationResolution(action: .cancel)
+        }
+        if let selectedOption,
+            let index = pending.options.firstIndex(where: { $0.id == selectedOption.id })
+        {
+            return ClarificationResolution(
+                action: .answer,
+                selectedOptionIndex: index,
+                normalizedDefinition: selectedOption.definition,
+                mentionedSchemaTerms: mentionedTerms(in: selectedOption.definition, pending: pending)
+            )
+        }
+        if let index = pending.options.firstIndex(where: {
+            normalize($0.replyText) == normalized || normalize($0.label) == normalized
+        }) {
+            return ClarificationResolution(
+                action: .answer,
+                selectedOptionIndex: index,
+                normalizedDefinition: pending.options[index].definition,
+                mentionedSchemaTerms: mentionedTerms(in: pending.options[index].definition, pending: pending)
+            )
+        }
+        if isAffirmative(normalized), pending.options.count == 1 {
+            return ClarificationResolution(
+                action: .answer,
+                selectedOptionIndex: 0,
+                normalizedDefinition: pending.options[0].definition,
+                mentionedSchemaTerms: mentionedTerms(in: pending.options[0].definition, pending: pending)
+            )
+        }
+        if isNegative(normalized) {
+            return ClarificationResolution(action: .stillAmbiguous)
+        }
+        if isDirectSQL(normalized) || isQuestionLike(normalized) {
+            return ClarificationResolution(action: .newRequest)
+        }
+        return ClarificationResolution(
+            action: .answer,
+            normalizedDefinition: trimmed,
+            mentionedSchemaTerms: mentionedTerms(in: trimmed, pending: pending)
+        )
+    }
+
+    private static func normalize(_ text: String) -> String {
+        text.lowercased()
+            .trimmingCharacters(in: CharacterSet(charactersIn: ".!?, \n\t"))
+            .replacingOccurrences(of: #"\s+"#, with: " ", options: .regularExpression)
+    }
+
+    private static func isAffirmative(_ normalized: String) -> Bool {
+        [
+            "y", "yes", "yeah", "yep", "correct", "right", "that's right",
+            "that is right", "sounds good", "ok", "okay", "sure", "use that",
+            "do that", "exactly",
+        ].contains(normalized)
+    }
+
+    private static func isNegative(_ normalized: String) -> Bool {
+        [
+            "n", "no", "nope", "nah", "not sure", "i don't know", "i dont know",
+            "unknown", "something else",
+        ].contains(normalized)
+    }
+
+    private static func isDirectSQL(_ normalized: String) -> Bool {
+        ["select", "with", "insert", "update", "delete"].contains {
+            normalized == $0 || normalized.hasPrefix("\($0) ")
+        }
+    }
+
+    private static func isQuestionLike(_ normalized: String) -> Bool {
+        let tokens = normalized.split { !$0.isLetter && !$0.isNumber }.map(String.init)
+        guard let first = tokens.first else { return false }
+        let starters: Set<String> = [
+            "find", "give", "how", "list", "return", "show", "what", "when",
+            "where", "which", "who", "why",
+        ]
+        return normalized.contains("?") || starters.contains(first)
+    }
+
+    private static func mentionedTerms(
+        in text: String,
+        pending: PendingClarification
+    ) -> [String] {
+        let tokens = Set(SchemaIndex.tokens(in: text))
+        guard !tokens.isEmpty else { return [] }
+        return pending.options.flatMap { option in
+            ([option.label] + option.evidence).filter { candidate in
+                !Set(SchemaIndex.tokens(in: candidate)).intersection(tokens).isEmpty
+            }
+        }
+    }
+}
+
 public enum GroundedQueryPlanner {
     public static func ground(
         intent: QueryIntentFrame,
         schema: DatabaseSchema,
-        referencedTables: [String] = []
+        referencedTables: [String] = [],
+        confirmedSemanticBindings: [String] = []
     ) -> GroundedQueryPlan {
         var slots: [GroundingSlot] = []
         var selectedTables: [String] = []
         var selectedJoinPaths: [SchemaJoinPath] = []
+        let bindingHints = bindingHints(from: confirmedSemanticBindings)
         let subjectPhrase = (intent.groupingPhrases.first ?? intent.subjectPhrases.first ?? "")
             .trimmingCharacters(in: .whitespacesAndNewlines)
         let subjectCandidates = rankedTables(matching: subjectPhrase, schema: schema)
@@ -190,13 +325,32 @@ public enum GroundedQueryPlanner {
         }
 
         for term in intent.customBusinessTerms {
+            let binding = bindingHint(for: term, kind: .customBusinessTerm, hints: bindingHints)
             slots.append(
                 GroundingSlot(
                     id: .customBusinessTerm,
                     kind: .customBusinessTerm,
                     phrase: term,
                     required: true,
-                    state: .unsupported
+                    candidates: binding.map {
+                        [
+                            GroundingCandidate(
+                                id: "binding:\(term)",
+                                label: $0.normalizedDefinition,
+                                objectIDs: Array($0.objectIDs).sorted(),
+                                evidence: [$0.normalizedDefinition]
+                            )
+                        ]
+                    } ?? [],
+                    selectedCandidate: binding.map {
+                        GroundingCandidate(
+                            id: "binding:\(term)",
+                            label: $0.normalizedDefinition,
+                            objectIDs: Array($0.objectIDs).sorted(),
+                            evidence: [$0.normalizedDefinition]
+                        )
+                    },
+                    state: binding == nil ? .unsupported : .grounded
                 )
             )
         }
@@ -221,16 +375,27 @@ public enum GroundedQueryPlanner {
                     )
                 )
             }
-            let selected = occurrence.count == 1 ? occurrence[0] : nil
+            let occurrenceSlotPhrase = occurrencePhrase(for: intent)
+            let selectedFromBinding = occurrenceCandidate(
+                matching: bindingHint(
+                    for: occurrenceSlotPhrase,
+                    kind: .occurrenceRelation,
+                    hints: bindingHints
+                ),
+                candidates: occurrence
+            )
+            let selected = selectedFromBinding ?? (occurrence.count == 1 ? occurrence[0] : nil)
             slots.append(
                 GroundingSlot(
                     id: .occurrenceRelation,
                     kind: .occurrenceRelation,
-                    phrase: occurrencePhrase(for: intent),
+                    phrase: occurrenceSlotPhrase,
                     required: true,
                     candidates: occurrence.map(\.candidate),
                     selectedCandidate: selected?.candidate,
-                    state: occurrence.isEmpty ? .unsupported : (occurrence.count == 1 ? .grounded : .ambiguous)
+                    state: occurrence.isEmpty
+                        ? .unsupported
+                        : (selected == nil ? .ambiguous : .grounded)
                 )
             )
             if let selected {
@@ -305,6 +470,86 @@ public enum GroundedQueryPlanner {
         var candidate: GroundingCandidate
         var tableIDs: [String]
         var joinPath: SchemaJoinPath?
+    }
+
+    private struct BindingHint {
+        var phraseTokens: Set<String>
+        var normalizedDefinition: String
+        var objectIDs: Set<String>
+        var definitionTokens: Set<String>
+    }
+
+    private static func bindingHints(from lines: [String]) -> [BindingHint] {
+        lines.compactMap { line -> BindingHint? in
+            let parts = line.split(separator: ":", maxSplits: 1, omittingEmptySubsequences: false)
+            guard parts.count == 2 else { return nil }
+            let phrase = String(parts[0]).trimmingCharacters(in: .whitespacesAndNewlines)
+            let definition = String(parts[1]).trimmingCharacters(in: .whitespacesAndNewlines)
+            guard !phrase.isEmpty, !definition.isEmpty else { return nil }
+            return BindingHint(
+                phraseTokens: Set(SchemaIndex.tokens(in: phrase)),
+                normalizedDefinition: definition,
+                objectIDs: objectIDs(in: definition),
+                definitionTokens: Set(SchemaIndex.tokens(in: definition))
+            )
+        }
+    }
+
+    private static func objectIDs(in definition: String) -> Set<String> {
+        let separators = CharacterSet.whitespacesAndNewlines
+            .union(CharacterSet(charactersIn: ",;"))
+        return Set(
+            definition
+                .components(separatedBy: separators)
+                .map { $0.trimmingCharacters(in: CharacterSet(charactersIn: ".()[]{}\"'")) }
+                .filter { value in
+                    value.hasPrefix("table:")
+                        || value.hasPrefix("column:")
+                        || value.hasPrefix("fk:")
+                }
+        )
+    }
+
+    private static func bindingHint(
+        for phrase: String,
+        kind: GroundingSlotKind,
+        hints: [BindingHint]
+    ) -> BindingHint? {
+        let phraseTokens = Set(SchemaIndex.tokens(in: phrase))
+        guard !phraseTokens.isEmpty else { return nil }
+        return hints.first { hint in
+            let overlap = phraseTokens.intersection(hint.phraseTokens)
+            switch kind {
+            case .occurrenceRelation, .relationshipPath:
+                return overlap.count >= min(2, phraseTokens.count)
+                    || (!hint.objectIDs.isEmpty && !overlap.isEmpty)
+            default:
+                return overlap.count == phraseTokens.count
+                    || hint.phraseTokens.intersection(phraseTokens).count >= 1
+            }
+        }
+    }
+
+    private static func occurrenceCandidate(
+        matching hint: BindingHint?,
+        candidates: [OccurrenceCandidate]
+    ) -> OccurrenceCandidate? {
+        guard let hint else { return nil }
+        if !hint.objectIDs.isEmpty {
+            let matching = candidates.filter { candidate in
+                !Set(candidate.candidate.objectIDs).intersection(hint.objectIDs).isEmpty
+            }
+            if matching.count == 1 { return matching[0] }
+        }
+        let matching = candidates.filter { candidate in
+            let candidateTokens = Set(
+                SchemaIndex.tokens(
+                    in: ([candidate.candidate.label] + candidate.candidate.evidence).joined(separator: " ")
+                )
+            )
+            return !candidateTokens.intersection(hint.definitionTokens).isEmpty
+        }
+        return matching.count == 1 ? matching[0] : nil
     }
 
     private static func rankedTables(matching phrase: String, schema: DatabaseSchema) -> [RankedTable] {
@@ -523,13 +768,39 @@ public enum AnalyticQueryCompiler {
         databaseContext: String = ""
     ) -> SQLGenerationResult? {
         let intent = QueryIntentPlanner.deterministicIntent(for: question)
-        guard intent.operation == .read,
-            intent.measure == .countRows,
+        guard intent.operation == .read else { return nil }
+        if intent.measure == .countRows,
             intent.ranking?.direction == .descending,
             intent.ranking?.takeFirst == true
-        else {
-            return nil
+        {
+            return compileTopCountOverJoin(intent: intent, schema: schema)
+                ?? compileTopCountOverColumn(intent: intent, schema: schema)
         }
+        if intent.measure == .none,
+            let ranking = intent.ranking,
+            ranking.takeFirst
+        {
+            return compileRankedRow(intent: intent, schema: schema, direction: ranking.direction)
+        }
+        if intent.measure == .average,
+            !intent.groupingPhrases.isEmpty
+        {
+            if let averageRows = compileAverageRowsPerTimeBucket(intent: intent, schema: schema) {
+                return averageRows
+            }
+        }
+        if [.average, .countDistinct, .sum, .minimum, .maximum].contains(intent.measure),
+            !intent.groupingPhrases.isEmpty
+        {
+            return compileGroupedMeasure(intent: intent, schema: schema)
+        }
+        return nil
+    }
+
+    private static func compileTopCountOverJoin(
+        intent: QueryIntentFrame,
+        schema: DatabaseSchema
+    ) -> SQLGenerationResult? {
         let plan = GroundedQueryPlanner.ground(intent: intent, schema: schema)
         guard plan.readiness == .readyWithInterpretation || plan.readiness == .ready,
             let joinPath = plan.selectedJoinPaths.first,
@@ -560,15 +831,223 @@ public enum AnalyticQueryCompiler {
             ORDER BY occurrence_count DESC
             LIMIT 1
             """
+        return result(
+            sql: sql,
+            plan: plan,
+            schema: schema,
+            referencedTables: [occurrenceTable.qualifiedName, groupTable.qualifiedName],
+            fallbackExplanation: "Generated a count-ranked query."
+        )
+    }
+
+    private static func compileTopCountOverColumn(
+        intent: QueryIntentFrame,
+        schema: DatabaseSchema
+    ) -> SQLGenerationResult? {
+        guard let phrase = intent.groupingPhrases.first ?? intent.subjectPhrases.first,
+            let match = uniqueColumn(matching: phrase, schema: schema),
+            let table = table(schema: match.column.tableSchema, name: match.column.tableName, in: schema)
+        else {
+            return nil
+        }
+        let alias = "t"
+        let dimension = qualifiedColumn(alias: alias, column: match.column.name)
+        let sql = """
+            SELECT \(dimension), COUNT(*) AS occurrence_count
+            FROM \(qualifiedName(table)) AS \(alias)
+            GROUP BY \(dimension)
+            ORDER BY occurrence_count DESC
+            LIMIT 1
+            """
+        let interpretation = "\"\(intent.measurePhrase ?? "count")\" means count rows in \(table.qualifiedName), grouped by \(match.column.name)."
+        let plan = compiledPlan(
+            intent: intent,
+            selectedTables: [table.qualifiedName],
+            phrase: phrase,
+            evidence: ["\(table.qualifiedName).\(match.column.name)"],
+            interpretation: interpretation
+        )
+        return result(
+            sql: sql,
+            plan: plan,
+            schema: schema,
+            referencedTables: [table.qualifiedName],
+            fallbackExplanation: "Generated a count-ranked query."
+        )
+    }
+
+    private static func compileRankedRow(
+        intent: QueryIntentFrame,
+        schema: DatabaseSchema,
+        direction: RankingDirection
+    ) -> SQLGenerationResult? {
+        guard let phrase = intent.subjectPhrases.first,
+            let table = uniqueTable(matching: phrase, schema: schema),
+            let column = preferredTemporalColumn(in: table)
+        else {
+            return nil
+        }
+        let alias = "t"
+        let directionSQL = direction == .descending ? "DESC" : "ASC"
+        let sql = """
+            SELECT \(alias).*
+            FROM \(qualifiedName(table)) AS \(alias)
+            ORDER BY \(qualifiedColumn(alias: alias, column: column.name)) \(directionSQL)
+            LIMIT 1
+            """
+        let interpretation = "Rank \(table.qualifiedName) by \(column.name) \(directionSQL.lowercased()) and take the first row."
+        let plan = compiledPlan(
+            intent: intent,
+            selectedTables: [table.qualifiedName],
+            phrase: phrase,
+            evidence: ["\(table.qualifiedName).\(column.name)"],
+            interpretation: interpretation
+        )
+        return result(
+            sql: sql,
+            plan: plan,
+            schema: schema,
+            referencedTables: [table.qualifiedName],
+            fallbackExplanation: "Generated a ranked-row query."
+        )
+    }
+
+    private static func compileAverageRowsPerTimeBucket(
+        intent: QueryIntentFrame,
+        schema: DatabaseSchema
+    ) -> SQLGenerationResult? {
+        guard let subjectPhrase = intent.subjectPhrases.first,
+            let table = uniqueTable(matching: subjectPhrase, schema: schema),
+            let group = groupingSelection(for: intent.groupingPhrases[0], table: table),
+            ["day", "date", "week", "month", "year"].contains(
+                intent.groupingPhrases[0].lowercased().trimmingCharacters(in: .whitespacesAndNewlines)
+            )
+        else {
+            return nil
+        }
+        let alias = "t"
+        let groupExpression = group.expression(alias)
+        let sql = """
+            SELECT AVG(row_count) AS \(quotedIdentifier("average_\(safeAlias(table.name))_per_\(group.alias)"))
+            FROM (
+              SELECT \(groupExpression) AS \(quotedIdentifier(group.alias)), COUNT(*) AS row_count
+              FROM \(qualifiedName(table)) AS \(alias)
+              GROUP BY \(groupExpression)
+            ) AS grouped_counts
+            """
+        let interpretation = "Average row count in \(table.qualifiedName) per \(group.alias)."
+        let plan = compiledPlan(
+            intent: intent,
+            selectedTables: [table.qualifiedName],
+            phrase: subjectPhrase,
+            evidence: ["\(table.qualifiedName).\(group.label)"],
+            interpretation: interpretation
+        )
+        return result(
+            sql: sql,
+            plan: plan,
+            schema: schema,
+            referencedTables: [table.qualifiedName],
+            fallbackExplanation: "Generated an average per-time-bucket query."
+        )
+    }
+
+    private static func compileGroupedMeasure(
+        intent: QueryIntentFrame,
+        schema: DatabaseSchema
+    ) -> SQLGenerationResult? {
+        guard let subjectPhrase = intent.subjectPhrases.first,
+            let subject = uniqueColumn(
+                matching: subjectPhrase,
+                schema: schema,
+                requireNumeric: intent.measure != .countDistinct
+            ),
+            let table = table(
+                schema: subject.column.tableSchema,
+                name: subject.column.tableName,
+                in: schema
+            ),
+            let group = groupingSelection(for: intent.groupingPhrases[0], table: table)
+        else {
+            return nil
+        }
+        let alias = "t"
+        let measureSQL: String
+        let measureAlias: String
+        switch intent.measure {
+        case .countDistinct:
+            measureSQL = "COUNT(DISTINCT \(qualifiedColumn(alias: alias, column: subject.column.name)))"
+            measureAlias = "distinct_\(safeAlias(subject.column.name))_count"
+        case .average:
+            measureSQL = "AVG(\(qualifiedColumn(alias: alias, column: subject.column.name)))"
+            measureAlias = "average_\(safeAlias(subject.column.name))"
+        case .sum:
+            measureSQL = "SUM(\(qualifiedColumn(alias: alias, column: subject.column.name)))"
+            measureAlias = "total_\(safeAlias(subject.column.name))"
+        case .minimum:
+            measureSQL = "MIN(\(qualifiedColumn(alias: alias, column: subject.column.name)))"
+            measureAlias = "minimum_\(safeAlias(subject.column.name))"
+        case .maximum:
+            measureSQL = "MAX(\(qualifiedColumn(alias: alias, column: subject.column.name)))"
+            measureAlias = "maximum_\(safeAlias(subject.column.name))"
+        default:
+            return nil
+        }
+        let groupExpression = group.expression(alias)
+        let sql = """
+            SELECT \(groupExpression) AS \(quotedIdentifier(group.alias)), \(measureSQL) AS \(quotedIdentifier(measureAlias))
+            FROM \(qualifiedName(table)) AS \(alias)
+            GROUP BY \(groupExpression)
+            """
+        let interpretation = "\(intent.measure.rawValue) of \(subject.column.name), grouped by \(group.label)."
+        let plan = compiledPlan(
+            intent: intent,
+            selectedTables: [table.qualifiedName],
+            phrase: subjectPhrase,
+            evidence: [
+                "\(table.qualifiedName).\(subject.column.name)",
+                "\(table.qualifiedName).\(group.label)",
+            ],
+            interpretation: interpretation
+        )
+        return result(
+            sql: sql,
+            plan: plan,
+            schema: schema,
+            referencedTables: [table.qualifiedName],
+            fallbackExplanation: "Generated a grouped aggregate query."
+        )
+    }
+
+    private struct ColumnMatch {
+        var column: ColumnInfo
+        var score: Int
+    }
+
+    private struct GroupingSelection {
+        var label: String
+        var alias: String
+        var expression: (String) -> String
+    }
+
+    private static func result(
+        sql: String,
+        plan: GroundedQueryPlan,
+        schema: DatabaseSchema,
+        referencedTables: [String],
+        fallbackExplanation: String
+    ) -> SQLGenerationResult? {
+        let schemaValidation = SQLSchemaValidator.validate(sql: sql, against: schema)
+        guard !schemaValidation.hasDefiniteErrors else { return nil }
         let conformance = SQLIntentConformanceValidator.validate(sql: sql, plan: plan, schema: schema)
         guard conformance.isValid else { return nil }
         return SQLGenerationResult(
             sql: sql,
             explanation: plan.interpretationSummary.isEmpty
-                ? "Generated a count-ranked query."
+                ? fallbackExplanation
                 : "Interpretation: \(plan.interpretationSummary)",
             assumptions: plan.interpretationSummary.isEmpty ? [] : [plan.interpretationSummary],
-            referencedTables: [occurrenceTable.qualifiedName, groupTable.qualifiedName],
+            referencedTables: referencedTables,
             confidence: 0.9,
             riskLevel: .low,
             needsClarification: false,
@@ -585,8 +1064,150 @@ public enum AnalyticQueryCompiler {
         )
     }
 
+    private static func compiledPlan(
+        intent: QueryIntentFrame,
+        selectedTables: [String],
+        phrase: String,
+        evidence: [String],
+        interpretation: String
+    ) -> GroundedQueryPlan {
+        GroundedQueryPlan(
+            intent: intent,
+            slots: [
+                GroundingSlot(
+                    id: .subject,
+                    kind: .subjectEntity,
+                    phrase: phrase,
+                    required: true,
+                    selectedCandidate: GroundingCandidate(
+                        id: "compiled:\(phrase)",
+                        label: evidence.first ?? phrase,
+                        evidence: evidence
+                    ),
+                    state: .grounded
+                )
+            ],
+            selectedTables: selectedTables,
+            readiness: .readyWithInterpretation,
+            interpretationSummary: interpretation
+        )
+    }
+
     private static func table(schema schemaName: String, name: String, in schema: DatabaseSchema) -> TableInfo? {
         schema.tables.first { $0.schema == schemaName && $0.name == name }
+    }
+
+    private static func uniqueTable(matching phrase: String, schema: DatabaseSchema) -> TableInfo? {
+        let phraseTokens = Set(SchemaIndex.tokens(in: phrase))
+        guard !phraseTokens.isEmpty else { return nil }
+        let matches = schema.tables.compactMap { table -> (TableInfo, Int)? in
+            let tableTokens = Set(SchemaIndex.tokens(in: table.name))
+            let columnTokens = Set(table.columns.flatMap { SchemaIndex.tokens(in: $0.name) })
+            let exact = table.name.lowercased() == phrase.replacingOccurrences(of: " ", with: "_")
+            let score = (exact ? 100 : 0)
+                + phraseTokens.intersection(tableTokens).count * 30
+                + phraseTokens.intersection(columnTokens).count * 2
+            return score > 0 ? (table, score) : nil
+        }
+        .sorted { lhs, rhs in
+            lhs.1 == rhs.1 ? lhs.0.qualifiedName < rhs.0.qualifiedName : lhs.1 > rhs.1
+        }
+        guard let top = matches.first else { return nil }
+        return matches.filter { $0.1 == top.1 }.count == 1 ? top.0 : nil
+    }
+
+    private static func uniqueColumn(
+        matching phrase: String,
+        schema: DatabaseSchema,
+        in table: TableInfo? = nil,
+        requireNumeric: Bool = false
+    ) -> ColumnMatch? {
+        let phraseTokens = Set(SchemaIndex.tokens(in: phrase))
+        guard !phraseTokens.isEmpty else { return nil }
+        let candidateTables = table.map { [$0] } ?? schema.tables
+        let matches = candidateTables.flatMap { table in
+            table.columns.compactMap { column -> ColumnMatch? in
+                guard !requireNumeric || isNumeric(column) else { return nil }
+                let columnTokens = Set(SchemaIndex.tokens(in: column.name))
+                let tableTokens = Set(SchemaIndex.tokens(in: table.name))
+                let exact = column.name.lowercased() == phrase.replacingOccurrences(of: " ", with: "_")
+                let containsAll = phraseTokens.isSubset(of: columnTokens)
+                let score = (exact ? 120 : 0)
+                    + (containsAll ? 70 : 0)
+                    + phraseTokens.intersection(columnTokens).count * 25
+                    + phraseTokens.intersection(tableTokens).count * 3
+                    - (column.name.lowercased() == "id" ? 15 : 0)
+                return score > 0 ? ColumnMatch(column: column, score: score) : nil
+            }
+        }
+        .sorted { lhs, rhs in
+            if lhs.score == rhs.score {
+                return lhs.column.id < rhs.column.id
+            }
+            return lhs.score > rhs.score
+        }
+        guard let top = matches.first else { return nil }
+        return matches.filter { $0.score == top.score }.count == 1 ? top : nil
+    }
+
+    private static func groupingSelection(for phrase: String, table: TableInfo) -> GroupingSelection? {
+        let normalized = phrase.lowercased().trimmingCharacters(in: .whitespacesAndNewlines)
+        if ["day", "date"].contains(normalized),
+            let column = preferredTemporalColumn(in: table)
+        {
+            return GroupingSelection(
+                label: column.name,
+                alias: "day",
+                expression: { alias in "\(qualifiedColumn(alias: alias, column: column.name))::date" }
+            )
+        }
+        if ["week", "month", "year"].contains(normalized),
+            let column = preferredTemporalColumn(in: table)
+        {
+            return GroupingSelection(
+                label: column.name,
+                alias: normalized,
+                expression: { alias in
+                    "DATE_TRUNC('\(normalized)', \(qualifiedColumn(alias: alias, column: column.name)))"
+                }
+            )
+        }
+        guard let match = uniqueColumn(matching: phrase, schema: DatabaseSchema(tables: [table]), in: table) else {
+            return nil
+        }
+        return GroupingSelection(
+            label: match.column.name,
+            alias: safeAlias(match.column.name),
+            expression: { alias in qualifiedColumn(alias: alias, column: match.column.name) }
+        )
+    }
+
+    private static func preferredTemporalColumn(in table: TableInfo) -> ColumnInfo? {
+        let temporal = table.columns.filter(isTemporal)
+        let preferred = ["created_at", "created_on", "occurred_at", "timestamp", "updated_at", "date"]
+        for name in preferred {
+            if let match = temporal.first(where: { $0.name.caseInsensitiveCompare(name) == .orderedSame }) {
+                return match
+            }
+        }
+        return temporal.first
+    }
+
+    private static func isNumeric(_ column: ColumnInfo) -> Bool {
+        let type = column.dataType.lowercased()
+        return [
+            "bigint", "decimal", "double", "integer", "numeric", "real", "smallint",
+        ].contains { type.contains($0) }
+    }
+
+    private static func isTemporal(_ column: ColumnInfo) -> Bool {
+        let name = column.name.lowercased()
+        let type = column.dataType.lowercased()
+        return type.contains("date")
+            || type.contains("time")
+            || name.hasSuffix("_at")
+            || name.hasSuffix("_date")
+            || name == "date"
     }
 
     private static func qualifiedName(_ table: TableInfo) -> String {
@@ -599,5 +1220,10 @@ public enum AnalyticQueryCompiler {
 
     private static func quotedIdentifier(_ identifier: String) -> String {
         "\"\(identifier.replacingOccurrences(of: "\"", with: "\"\""))\""
+    }
+
+    private static func safeAlias(_ identifier: String) -> String {
+        let alias = SchemaIndex.tokens(in: identifier).joined(separator: "_")
+        return alias.isEmpty ? "value" : alias
     }
 }

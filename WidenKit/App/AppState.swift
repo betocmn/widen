@@ -1157,7 +1157,7 @@ public final class AppState {
         guard !definition.isEmpty else { return }
         let concept = pending.concept.term.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !concept.isEmpty else { return }
-        guard !Self.genericSemanticOperatorTerms.contains(concept.lowercased()) else { return }
+        guard !Self.isGenericSemanticOperatorConcept(concept) else { return }
         let evidence = Array(Set(pending.evidence + (selectedOption?.evidence ?? []))).sorted()
         let referencedObjectIDs = Self.referencedObjectIDs(
             pending: pending,
@@ -1186,9 +1186,25 @@ public final class AppState {
 
     private static let genericSemanticOperatorTerms: Set<String> = [
         "average", "avg", "bottom", "count", "distinct", "earliest", "frequent", "highest",
-        "latest", "lowest", "maximum", "minimum", "most", "oldest", "sum", "top", "total",
+        "latest", "lowest", "maximum", "minimum", "most", "newest", "oldest", "recurring",
+        "recent", "sum", "top", "total", "unique", "volume",
+    ]
+
+    private static let genericSemanticOperatorPhrases: Set<String> = [
+        "average", "bottom", "count", "distinct", "earliest", "highest volume",
+        "highest-volume", "latest", "lowest", "most common", "most frequent",
+        "most recent", "most recurring", "newest", "oldest", "sum", "top", "total",
         "unique",
     ]
+
+    private static func isGenericSemanticOperatorConcept(_ concept: String) -> Bool {
+        let normalized = normalizedSemanticDefinition(concept).lowercased()
+        if genericSemanticOperatorPhrases.contains(normalized) {
+            return true
+        }
+        let tokens = SchemaIndex.tokens(in: normalized)
+        return !tokens.isEmpty && tokens.allSatisfy { genericSemanticOperatorTerms.contains($0) }
+    }
 
     private static func normalizedSemanticDefinition(_ definition: String) -> String {
         definition

@@ -1450,6 +1450,73 @@ struct SQLSchemaValidatorTests {
         #expect((pending?.options.count ?? 0) >= 2)
     }
 
+    @Test func confirmedOccurrenceBindingResolvesAmbiguousFrequencySource() {
+        let generation = SQLGenerationResult(
+            sql: """
+                SELECT fc.id, COUNT(*) AS feedback_count
+                FROM public.feedback_cluster AS fc
+                JOIN public.feedback_cluster_membership AS fcm
+                  ON fcm.cluster_id = fc.id
+                GROUP BY fc.id
+                ORDER BY feedback_count DESC
+                LIMIT 1
+                """,
+            explanation: "Finds the most frequent feedback cluster.",
+            assumptions: [],
+            referencedTables: [],
+            confidence: 1,
+            riskLevel: .low,
+            needsClarification: false,
+            clarificationQuestion: nil
+        )
+
+        let enriched = GeneratedSQLPostprocessor.enriched(
+            generation,
+            question: "what is the most frequent feedback cluster?",
+            schema: makeAmbiguousFeedbackClusterSchema(),
+            databaseContext: "",
+            confirmedSemanticBindings: [
+                "feedback cluster occurrences: fk:feedback_cluster_membership_cluster_fkey, table:public.feedback_cluster_membership"
+            ]
+        )
+
+        #expect(!enriched.needsClarification)
+        #expect(enriched.clarificationQuestion == nil)
+        #expect(enriched.sql == generation.sql)
+    }
+
+    @Test func disabledGroundingClarificationDoesNotBlockOnIntentAmbiguity() {
+        let generation = SQLGenerationResult(
+            sql: """
+                SELECT fc.id, COUNT(*) AS feedback_count
+                FROM public.feedback_cluster AS fc
+                JOIN public.feedback_cluster_membership AS fcm
+                  ON fcm.cluster_id = fc.id
+                GROUP BY fc.id
+                ORDER BY feedback_count DESC
+                LIMIT 1
+                """,
+            explanation: "Finds the most frequent feedback cluster.",
+            assumptions: [],
+            referencedTables: [],
+            confidence: 1,
+            riskLevel: .low,
+            needsClarification: false,
+            clarificationQuestion: nil
+        )
+
+        let enriched = GeneratedSQLPostprocessor.enriched(
+            generation,
+            question: "what is the most frequent feedback cluster?",
+            schema: makeAmbiguousFeedbackClusterSchema(),
+            databaseContext: "",
+            allowGroundingClarification: false
+        )
+
+        #expect(!enriched.needsClarification)
+        #expect(enriched.sql == generation.sql)
+    }
+
     @Test func customMetricTermsProduceMetricClarification() {
         for question in [
             "best customer",
@@ -1527,6 +1594,50 @@ struct SQLSchemaValidatorTests {
             "public.feedback_cluster_membership",
             "public.feedback_cluster",
         ])
+    }
+
+    @Test func analyticCompilerBuildsCommonSingleTableQueries() {
+        let schema = makeAnalyticsOperatorSchema()
+        let cases: [(String, [String])] = [
+            (
+                "most common error code",
+                ["COUNT(*)", #"GROUP BY t."error_code""#, "ORDER BY occurrence_count DESC", "LIMIT 1"]
+            ),
+            (
+                "highest-volume endpoint",
+                ["COUNT(*)", #"GROUP BY t."endpoint""#, "ORDER BY occurrence_count DESC", "LIMIT 1"]
+            ),
+            (
+                "latest order",
+                [#"ORDER BY t."created_at" DESC"#, "LIMIT 1"]
+            ),
+            (
+                "oldest account",
+                [#"ORDER BY t."created_at" ASC"#, "LIMIT 1"]
+            ),
+            (
+                "unique users per organization",
+                [#"COUNT(DISTINCT t."user_id")"#, #"GROUP BY t."organization_id""#]
+            ),
+            (
+                "average orders per day",
+                ["AVG(row_count)", #"GROUP BY t."created_at"::date"#]
+            ),
+        ]
+
+        for (question, expectedFragments) in cases {
+            let result = AnalyticQueryCompiler.compile(
+                question: question,
+                schema: schema,
+                defaultRowLimit: 100
+            )
+
+            #expect(result != nil, "Expected compiler result for: \(question)")
+            #expect(result?.needsClarification == false)
+            for fragment in expectedFragments {
+                #expect(result?.sql.localizedCaseInsensitiveContains(fragment) == true, "Missing \(fragment) for: \(question)")
+            }
+        }
     }
 
     @Test func universalAnalyticalOperatorsDoNotRequireSchemaTokenGrounding() {

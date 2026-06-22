@@ -602,6 +602,47 @@ struct SessionControllerTests {
         )
     }
 
+    private func makeAmbiguousFeedbackClusterSchema() -> DatabaseSchema {
+        var schema = makeFeedbackClusterSchema()
+        schema.tables.append(
+            TableInfo(
+                schema: "public",
+                name: "feedback_item",
+                type: .baseTable,
+                columns: [
+                    ColumnInfo(
+                        tableSchema: "public",
+                        tableName: "feedback_item",
+                        name: "id",
+                        dataType: "uuid",
+                        isNullable: false,
+                        ordinalPosition: 1
+                    ),
+                    ColumnInfo(
+                        tableSchema: "public",
+                        tableName: "feedback_item",
+                        name: "cluster_id",
+                        dataType: "uuid",
+                        isNullable: true,
+                        ordinalPosition: 2
+                    ),
+                ]
+            )
+        )
+        schema.foreignKeys.append(
+            ForeignKeyInfo(
+                constraintName: "feedback_item_cluster_fkey",
+                sourceSchema: "public",
+                sourceTable: "feedback_item",
+                sourceColumn: "cluster_id",
+                targetSchema: "public",
+                targetTable: "feedback_cluster",
+                targetColumn: "id"
+            )
+        )
+        return schema
+    }
+
     private func makeSchema(schemas: [String]) -> DatabaseSchema {
         DatabaseSchema(
             schemas: schemas.map(SchemaInfo.init(name:)),
@@ -2050,6 +2091,57 @@ struct SessionControllerTests {
         #expect(controller.chatVM.messages.last?.generation?.needsClarification == false)
     }
 
+    @Test func occurrenceClarificationOptionResolvesTypedSlotAmbiguity() async throws {
+        let connectionID = UUID()
+        let (state, dir) = makeState(connectionID: connectionID, connected: true)
+        defer { try? FileManager.default.removeItem(at: dir) }
+        let schema = makeAmbiguousFeedbackClusterSchema()
+        state.schemas[connectionID] = schema
+        let controller = makeController(connectionID: connectionID)
+        let original = "what is the most frequent feedback cluster?"
+        let intent = QueryIntentPlanner.deterministicIntent(for: original)
+        let plan = GroundedQueryPlanner.ground(intent: intent, schema: schema)
+        let pending = try #require(GroundedQueryPlanner.clarification(for: plan, originalQuestion: original))
+        let option = try #require(pending.options.first {
+            $0.definition.contains("feedback_cluster_membership_cluster_fkey")
+        })
+        controller.chatVM.messages = [
+            ChatMessage(role: .user, text: original),
+            ChatMessage(
+                role: .assistant,
+                text: pending.question,
+                pendingClarification: pending
+            ),
+        ]
+        let fixed = makeGeneration(
+            sql: """
+                SELECT fc.id, COUNT(*) AS feedback_count
+                FROM public.feedback_cluster AS fc
+                JOIN public.feedback_cluster_membership AS fcm ON fcm.cluster_id = fc.id
+                GROUP BY fc.id
+                ORDER BY feedback_count DESC
+                LIMIT 1
+                """,
+            explanation: "Finds the most frequent feedback cluster."
+        )
+        let generator = RecordingRepairGenerator(results: [fixed])
+        state.sqlGeneratorOverride = generator
+
+        await controller.selectClarificationOption(
+            appState: state,
+            pending: pending,
+            option: option
+        )
+
+        #expect(generator.questions == [original])
+        #expect(generator.contexts.first?.confirmedSemanticBindings.contains {
+            $0.contains("feedback_cluster_membership_cluster_fkey")
+        } == true)
+        #expect(controller.queryVM.sqlText == fixed.sql)
+        #expect(controller.chatVM.messages.last?.pendingClarification == nil)
+        #expect(controller.chatVM.messages.last?.generation?.needsClarification == false)
+    }
+
     @Test func staleClarificationOptionTapIsIgnored() async {
         let connectionID = UUID()
         let (state, dir) = makeState(connectionID: connectionID, connected: true)
@@ -2397,6 +2489,44 @@ struct SessionControllerTests {
         #expect(state.semanticBindings.isEmpty)
         #expect(generator.contexts.first?.confirmedSemanticBindings.isEmpty == true)
         #expect(generator.contexts.first?.conversationMessages.last?.text == "no")
+    }
+
+    @Test func repeatedNoProgressClarificationReplyUsesTwoTurnCap() async throws {
+        let connectionID = UUID()
+        let (state, dir) = makeState(connectionID: connectionID, connected: true)
+        defer { try? FileManager.default.removeItem(at: dir) }
+        let schema = makeAmbiguousFeedbackClusterSchema()
+        state.schemas[connectionID] = schema
+        let controller = makeController(connectionID: connectionID)
+        let original = "what is the most frequent feedback cluster?"
+        let intent = QueryIntentPlanner.deterministicIntent(for: original)
+        let plan = GroundedQueryPlanner.ground(intent: intent, schema: schema)
+        var pending = try #require(GroundedQueryPlanner.clarification(for: plan, originalQuestion: original))
+        pending.turnCount = 1
+        controller.chatVM.messages = [
+            ChatMessage(role: .user, text: original),
+            ChatMessage(
+                role: .assistant,
+                text: pending.question,
+                pendingClarification: pending
+            ),
+        ]
+        controller.chatVM.input = "no"
+        let repeated = makeGeneration(
+            sql: "",
+            explanation: "Still needs clarification.",
+            needsClarification: true,
+            clarificationQuestion: pending.question
+        )
+        let generator = RecordingRepairGenerator(results: [repeated])
+        state.sqlGeneratorOverride = generator
+
+        await controller.submit(appState: state)
+
+        #expect(generator.questions == [original])
+        #expect(controller.chatVM.messages.last?.text.contains("I still cannot identify") == true)
+        #expect(controller.chatVM.messages.last?.pendingClarification?.turnCount == 2)
+        #expect(controller.chatVM.messages.last?.pendingClarification?.slotID == .occurrenceRelation)
     }
 
     @Test func submitWithDirectSQLSkipsGenerator() async {

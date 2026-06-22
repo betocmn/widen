@@ -299,11 +299,24 @@ public final class SessionController: Identifiable {
             unresolvedClarification,
             replyText: question
         )
-        let resolvesPendingClarification = shouldResolvePendingClarification(
-            question,
-            selectedOption: selectedOption,
-            pending: unresolvedClarification
-        )
+        let clarificationResolution = unresolvedClarification.map {
+            ClarificationResolver.resolve(
+                reply: question,
+                pending: $0,
+                selectedOption: selectedOption
+            )
+        }
+        if clarificationResolution?.action == .cancel {
+            chatVM.input = ""
+            chatVM.messages.append(ChatMessage(role: .user, text: question))
+            chatVM.messages.append(
+                ChatMessage(role: .assistant, text: "Okay, I abandoned that clarification.")
+            )
+            return
+        }
+        let resolvesPendingClarification =
+            clarificationResolution?.action == .answer
+            || clarificationResolution?.action == .stillAmbiguous
         let pendingClarification = resolvesPendingClarification ? unresolvedClarification : nil
         let abandonsPendingClarification =
             unresolvedClarification != nil && pendingClarification == nil
@@ -313,13 +326,12 @@ public final class SessionController: Identifiable {
             schema: schema
         )
         if let pendingClarification,
-            shouldUseClarificationReplyAsContext(
-                question,
-                selectedOption: selectedOption,
-                pending: pendingClarification
-            )
+            clarificationResolution?.action == .answer
         {
-            let definition = (selectedOption?.definition ?? question)
+            let resolvedDefinition = clarificationResolution?.normalizedDefinition
+            let definition = ((resolvedDefinition?.isEmpty == false ? resolvedDefinition : nil)
+                ?? selectedOption?.definition
+                ?? question)
                 .trimmingCharacters(in: .whitespacesAndNewlines)
             if !definition.isEmpty {
                 confirmedBindings.append("\(pendingClarification.concept.term): \(definition)")
@@ -418,6 +430,7 @@ public final class SessionController: Identifiable {
                 databaseContext: config.databaseContext,
                 confirmedSemanticBindings: context.confirmedSemanticBindings
             )
+            .applyingClarificationProgress(from: pendingClarification)
             if result.needsClarification,
                 let clarification = result.clarificationQuestion,
                 !clarification.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
@@ -1574,5 +1587,73 @@ private extension SQLGenerationResult {
         copy.confidence = min(copy.confidence, 0.2)
         copy.riskLevel = .medium
         return copy
+    }
+
+    func applyingClarificationProgress(from previous: PendingClarification?) -> SQLGenerationResult {
+        guard let previous, needsClarification else { return self }
+        let next = pendingClarification ?? previous
+        guard Self.isAllowedFollowUpClarification(next, after: previous) else {
+            return withPendingClarification(Self.incrementedClarification(previous))
+        }
+        guard Self.isSameClarificationSlot(next, previous) else {
+            return self
+        }
+        return withPendingClarification(Self.incrementedClarification(next, after: previous))
+    }
+
+    private static func isAllowedFollowUpClarification(
+        _ next: PendingClarification,
+        after previous: PendingClarification
+    ) -> Bool {
+        if isSameClarificationSlot(next, previous) {
+            return true
+        }
+        guard let plan = previous.plan else {
+            return false
+        }
+        return plan.slots.contains { slot in
+            slot.required
+                && (slot.state == .unsupported || slot.state == .ambiguous)
+                && (next.slotID == slot.id
+                    || next.concept.term.caseInsensitiveCompare(slot.phrase) == .orderedSame)
+        }
+    }
+
+    private static func isSameClarificationSlot(
+        _ lhs: PendingClarification,
+        _ rhs: PendingClarification
+    ) -> Bool {
+        if let lhsSlot = lhs.slotID, let rhsSlot = rhs.slotID {
+            return lhsSlot == rhsSlot
+        }
+        return lhs.concept.term.caseInsensitiveCompare(rhs.concept.term) == .orderedSame
+    }
+
+    private static func incrementedClarification(
+        _ pending: PendingClarification,
+        after previous: PendingClarification? = nil
+    ) -> PendingClarification {
+        var copy = pending
+        copy.turnCount = (previous?.turnCount ?? pending.turnCount) + 1
+        if copy.turnCount >= 2 {
+            copy.question = cappedClarificationQuestion(for: copy)
+        }
+        return copy
+    }
+
+    private static func cappedClarificationQuestion(for pending: PendingClarification) -> String {
+        let choices = pending.options.prefix(3).map { "- \($0.label)" }.joined(separator: "\n")
+        let suffix = choices.isEmpty ? "" : "\n\(choices)"
+        if pending.slotID == .occurrenceRelation || pending.concept.kind == .relationship {
+            return """
+                I still cannot identify the relationship to use. Choose one of these schema objects, or add a database definition:
+                \(choices)
+                """
+                .trimmingCharacters(in: .whitespacesAndNewlines)
+        }
+        return """
+            I still cannot identify \(pending.concept.term). Choose one of these schema objects, or add a database definition:\(suffix)
+            """
+            .trimmingCharacters(in: .whitespacesAndNewlines)
     }
 }
