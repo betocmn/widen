@@ -1947,11 +1947,140 @@ struct SQLSchemaValidatorTests {
         )
         let wrongLiteral = "SELECT id FROM public.customers WHERE status = 'disabled'"
         let projectedLiteral = "SELECT id, status, 'enabled' AS label FROM public.customers"
+        let projectedPredicate = "SELECT id, status = 'enabled' AS healthy FROM public.customers"
+        let invertedLiteral = "SELECT id FROM public.customers WHERE status <> 'enabled'"
+        let rangeLiteral = "SELECT id FROM public.customers WHERE status < 'enabled'"
         let matchingLiteral = "SELECT id FROM public.customers WHERE status = 'enabled'"
+        let matchingInLiteral = "SELECT id FROM public.customers WHERE status IN ('enabled')"
 
         #expect(!SQLIntentConformanceValidator.validate(sql: wrongLiteral, plan: plan, schema: schema).isValid)
         #expect(!SQLIntentConformanceValidator.validate(sql: projectedLiteral, plan: plan, schema: schema).isValid)
+        #expect(!SQLIntentConformanceValidator.validate(sql: projectedPredicate, plan: plan, schema: schema).isValid)
+        #expect(!SQLIntentConformanceValidator.validate(sql: invertedLiteral, plan: plan, schema: schema).isValid)
+        #expect(!SQLIntentConformanceValidator.validate(sql: rangeLiteral, plan: plan, schema: schema).isValid)
         #expect(SQLIntentConformanceValidator.validate(sql: matchingLiteral, plan: plan, schema: schema).isValid)
+        #expect(SQLIntentConformanceValidator.validate(sql: matchingInLiteral, plan: plan, schema: schema).isValid)
+    }
+
+    @Test func unresolvedDefinitionLiteralsMustBePredicates() {
+        let schema = makeBestCustomerSchema()
+        let intent = QueryIntentFrame(operation: .read, subjectPhrases: ["customers"], customBusinessTerms: ["healthy"])
+        let candidate = GroundingCandidate(
+            id: "definition:healthy",
+            label: "status = 'enabled'",
+            evidence: ["status = 'enabled'"]
+        )
+        let plan = GroundedQueryPlan(
+            intent: intent,
+            slots: [
+                GroundingSlot(
+                    id: GroundingSlotID(rawValue: "custom:healthy"),
+                    kind: .customBusinessTerm,
+                    phrase: "healthy",
+                    required: true,
+                    candidates: [candidate],
+                    selectedCandidate: candidate,
+                    state: .grounded
+                )
+            ]
+        )
+        let projectedLiteral = "SELECT id, 'enabled' AS label FROM public.customers"
+        let projectedPredicate = "SELECT id, status = 'enabled' AS healthy FROM public.customers"
+        let matchingLiteral = "SELECT id FROM public.customers WHERE status = 'enabled'"
+
+        #expect(!SQLIntentConformanceValidator.validate(sql: projectedLiteral, plan: plan, schema: schema).isValid)
+        #expect(!SQLIntentConformanceValidator.validate(sql: projectedPredicate, plan: plan, schema: schema).isValid)
+        #expect(SQLIntentConformanceValidator.validate(sql: matchingLiteral, plan: plan, schema: schema).isValid)
+    }
+
+    @Test func joinPathConformanceRequiresExactGroundedColumns() throws {
+        let schema = makeUsersOrdersNotesForeignKeySchema()
+        let foreignKey = try #require(schema.foreignKeys.first { $0.constraintName == "orders_user_fkey" })
+        let intent = QueryIntentFrame(
+            operation: .read,
+            subjectPhrases: ["users"],
+            measure: .countRows,
+            groupingPhrases: ["users"],
+            ranking: RankingIntent(direction: .descending, takeFirst: true),
+            requestedLimit: 1
+        )
+        let plan = GroundedQueryPlan(
+            intent: intent,
+            selectedTables: ["public.orders", "public.users"],
+            selectedJoinPaths: [
+                SchemaJoinPath(id: "fk:orders_user_fkey", foreignKeys: [foreignKey], summary: foreignKey.summary)
+            ]
+        )
+        let wrongSameNamedColumn = """
+            SELECT u.id, COUNT(*) AS occurrence_count
+            FROM public.orders AS o
+            JOIN public.notes AS n ON true
+            JOIN public.users AS u ON n.user_id = u.id
+            GROUP BY u.id
+            ORDER BY occurrence_count DESC
+            LIMIT 1
+            """
+        let wrongDerivedProjection = """
+            WITH counts AS (
+              SELECT n.user_id, COUNT(*) AS occurrence_count
+              FROM public.notes AS n
+              GROUP BY n.user_id
+            )
+            SELECT u.id, counts.occurrence_count
+            FROM public.orders AS o
+            JOIN counts ON true
+            JOIN public.users AS u ON counts.user_id = u.id
+            GROUP BY u.id, counts.occurrence_count
+            ORDER BY counts.occurrence_count DESC
+            LIMIT 1
+            """
+        let matchingJoinPath = """
+            SELECT u.id, COUNT(*) AS occurrence_count
+            FROM public.orders AS o
+            JOIN public.users AS u ON o.user_id = u.id
+            GROUP BY u.id
+            ORDER BY occurrence_count DESC
+            LIMIT 1
+            """
+
+        #expect(!SQLIntentConformanceValidator.validate(sql: wrongSameNamedColumn, plan: plan, schema: schema).isValid)
+        #expect(!SQLIntentConformanceValidator.validate(sql: wrongDerivedProjection, plan: plan, schema: schema).isValid)
+        #expect(SQLIntentConformanceValidator.validate(sql: matchingJoinPath, plan: plan, schema: schema).isValid)
+    }
+
+    @Test func customDefinitionTableAndForeignKeyObjectsMustConform() {
+        let schema = makeUsersWinsEventSchema()
+        let intent = QueryIntentFrame(operation: .read, subjectPhrases: ["users"], customBusinessTerms: ["wins"])
+        let candidate = GroundingCandidate(
+            id: "definition:wins",
+            label: "users with wins",
+            objectIDs: ["table:public.wins", "fk:wins_user_fkey"]
+        )
+        let plan = GroundedQueryPlan(
+            intent: intent,
+            slots: [
+                GroundingSlot(
+                    id: GroundingSlotID(rawValue: "custom:wins"),
+                    kind: .customBusinessTerm,
+                    phrase: "wins",
+                    required: true,
+                    candidates: [candidate],
+                    selectedCandidate: candidate,
+                    state: .grounded
+                )
+            ]
+        )
+        let missingDefinitionTable = "SELECT u.id FROM public.users AS u"
+        let missingDefinitionRelationship = "SELECT u.id FROM public.users AS u JOIN public.wins AS w ON true"
+        let matchingDefinitionObjects = """
+            SELECT u.id
+            FROM public.users AS u
+            JOIN public.wins AS w ON w.user_id = u.id
+            """
+
+        #expect(!SQLIntentConformanceValidator.validate(sql: missingDefinitionTable, plan: plan, schema: schema).isValid)
+        #expect(!SQLIntentConformanceValidator.validate(sql: missingDefinitionRelationship, plan: plan, schema: schema).isValid)
+        #expect(SQLIntentConformanceValidator.validate(sql: matchingDefinitionObjects, plan: plan, schema: schema).isValid)
     }
 
     @Test func analyticCompilerSkipsRequestsWithTimeIntent() {
@@ -3114,6 +3243,48 @@ struct SQLSchemaValidatorTests {
         )
     }
 
+    private func makeUsersWinsEventSchema() -> DatabaseSchema {
+        DatabaseSchema(
+            schemas: [SchemaInfo(name: "public")],
+            tables: [
+                TableInfo(
+                    schema: "public",
+                    name: "users",
+                    type: .baseTable,
+                    columns: [
+                        ColumnInfo(
+                            tableSchema: "public", tableName: "users", name: "id",
+                            dataType: "integer", isNullable: false, ordinalPosition: 1),
+                    ]
+                ),
+                TableInfo(
+                    schema: "public",
+                    name: "wins",
+                    type: .baseTable,
+                    columns: [
+                        ColumnInfo(
+                            tableSchema: "public", tableName: "wins", name: "id",
+                            dataType: "integer", isNullable: false, ordinalPosition: 1),
+                        ColumnInfo(
+                            tableSchema: "public", tableName: "wins", name: "user_id",
+                            dataType: "integer", isNullable: false, ordinalPosition: 2),
+                    ]
+                ),
+            ],
+            foreignKeys: [
+                ForeignKeyInfo(
+                    constraintName: "wins_user_fkey",
+                    sourceSchema: "public",
+                    sourceTable: "wins",
+                    sourceColumn: "user_id",
+                    targetSchema: "public",
+                    targetTable: "users",
+                    targetColumn: "id"
+                )
+            ]
+        )
+    }
+
     private func makeUsersOrdersStatusSchema() -> DatabaseSchema {
         DatabaseSchema(
             schemas: [SchemaInfo(name: "public")],
@@ -3274,6 +3445,70 @@ struct SQLSchemaValidatorTests {
             )
         )
         return schema
+    }
+
+    private func makeUsersOrdersNotesForeignKeySchema() -> DatabaseSchema {
+        DatabaseSchema(
+            schemas: [SchemaInfo(name: "public")],
+            tables: [
+                TableInfo(
+                    schema: "public",
+                    name: "users",
+                    type: .baseTable,
+                    columns: [
+                        ColumnInfo(
+                            tableSchema: "public", tableName: "users", name: "id",
+                            dataType: "integer", isNullable: false, ordinalPosition: 1),
+                    ]
+                ),
+                TableInfo(
+                    schema: "public",
+                    name: "orders",
+                    type: .baseTable,
+                    columns: [
+                        ColumnInfo(
+                            tableSchema: "public", tableName: "orders", name: "id",
+                            dataType: "integer", isNullable: false, ordinalPosition: 1),
+                        ColumnInfo(
+                            tableSchema: "public", tableName: "orders", name: "user_id",
+                            dataType: "integer", isNullable: false, ordinalPosition: 2),
+                    ]
+                ),
+                TableInfo(
+                    schema: "public",
+                    name: "notes",
+                    type: .baseTable,
+                    columns: [
+                        ColumnInfo(
+                            tableSchema: "public", tableName: "notes", name: "id",
+                            dataType: "integer", isNullable: false, ordinalPosition: 1),
+                        ColumnInfo(
+                            tableSchema: "public", tableName: "notes", name: "user_id",
+                            dataType: "integer", isNullable: false, ordinalPosition: 2),
+                    ]
+                ),
+            ],
+            foreignKeys: [
+                ForeignKeyInfo(
+                    constraintName: "orders_user_fkey",
+                    sourceSchema: "public",
+                    sourceTable: "orders",
+                    sourceColumn: "user_id",
+                    targetSchema: "public",
+                    targetTable: "users",
+                    targetColumn: "id"
+                ),
+                ForeignKeyInfo(
+                    constraintName: "notes_user_fkey",
+                    sourceSchema: "public",
+                    sourceTable: "notes",
+                    sourceColumn: "user_id",
+                    targetSchema: "public",
+                    targetTable: "users",
+                    targetColumn: "id"
+                ),
+            ]
+        )
     }
 
     private func makeUsersStagingSchema() -> DatabaseSchema {

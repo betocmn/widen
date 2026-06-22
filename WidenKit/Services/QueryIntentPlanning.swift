@@ -911,7 +911,6 @@ public enum SQLIntentConformanceValidator {
         schema: DatabaseSchema
     ) -> SQLIntentConformanceResult {
         let tokens = SQLToken.tokenize(sql)
-        let sqlStringLiterals = Set(stringLiteralBodies(in: sql).map { $0.lowercased() })
         var issues: [String] = []
         let schemaValidation = SQLSchemaValidator.validate(sql: sql, against: schema)
         let storedCountColumn = selectedStoredCountColumnObjectID(in: plan)
@@ -1003,6 +1002,24 @@ public enum SQLIntentConformanceValidator {
         for slot in plan.slots where slot.kind == .customBusinessTerm {
             guard slot.state == .grounded, let candidate = slot.selectedCandidate else { continue }
             let columnObjectIDs = candidate.objectIDs.filter { $0.hasPrefix("column:") }
+            let tableObjectIDs = candidate.objectIDs.filter { $0.hasPrefix("table:") }
+            let foreignKeyObjectIDs = candidate.objectIDs.filter { $0.hasPrefix("fk:") }
+            for objectID in tableObjectIDs {
+                let tableID = String(objectID.dropFirst("table:".count))
+                if !referenced.contains(tableID) {
+                    issues.append("SQL does not reference grounded definition object \(objectID).")
+                }
+            }
+            for objectID in foreignKeyObjectIDs {
+                if !usesForeignKeyObjectID(
+                    objectID,
+                    in: schemaValidation.analysis,
+                    schema: schema,
+                    tokens: tokens
+                ) {
+                    issues.append("SQL does not use grounded definition relationship \(objectID).")
+                }
+            }
             for objectID in columnObjectIDs {
                 if !referencesColumn(objectID: objectID, in: schemaValidation.analysis, schema: schema) {
                     issues.append("SQL does not reference grounded definition object \(objectID).")
@@ -1010,8 +1027,8 @@ public enum SQLIntentConformanceValidator {
             }
             for literal in stringLiteralBodies(in: ([candidate.label] + candidate.evidence).joined(separator: " ")) {
                 if columnObjectIDs.isEmpty {
-                    if !sqlStringLiterals.contains(literal.lowercased()) {
-                        issues.append("SQL does not include grounded definition literal '\(literal)'.")
+                    if !hasLiteralPredicate(literal: literal, tokens: tokens) {
+                        issues.append("SQL does not apply grounded definition literal '\(literal)' in a predicate.")
                     }
                 } else if !columnObjectIDs.contains(where: {
                     hasColumnLiteralPredicate(
@@ -1082,6 +1099,26 @@ public enum SQLIntentConformanceValidator {
         return false
     }
 
+    private static func usesForeignKeyObjectID(
+        _ objectID: String,
+        in analysis: SQLReferenceAnalysis,
+        schema: DatabaseSchema,
+        tokens: [SQLToken]
+    ) -> Bool {
+        guard objectID.hasPrefix("fk:") else { return false }
+        let constraintName = String(objectID.dropFirst("fk:".count))
+        guard let foreignKey = schema.foreignKeys.first(where: { $0.constraintName == constraintName }) else {
+            return false
+        }
+        return hasColumnEquality(
+            sourceObjectID: "column:\(foreignKey.sourceSchema).\(foreignKey.sourceTable).\(foreignKey.sourceColumn)",
+            targetObjectID: "column:\(foreignKey.targetSchema).\(foreignKey.targetTable).\(foreignKey.targetColumn)",
+            in: analysis,
+            schema: schema,
+            tokens: tokens
+        )
+    }
+
     private static func hasColumnEquality(
         sourceObjectID: String,
         targetObjectID: String,
@@ -1089,12 +1126,7 @@ public enum SQLIntentConformanceValidator {
         schema: DatabaseSchema,
         tokens: [SQLToken]
     ) -> Bool {
-        guard let sourceReference = columnObjectReference(from: sourceObjectID),
-            let targetReference = columnObjectReference(from: targetObjectID)
-        else {
-            return false
-        }
-        for index in tokens.indices where tokens[index].text == "=" {
+        for index in tokens.indices where tokens[index].text == "=" && isConditionPredicate(at: index, tokens: tokens) {
             guard let leftRange = expressionOffsetRange(before: index, tokens: tokens),
                 let rightRange = expressionOffsetRange(after: index, tokens: tokens)
             else {
@@ -1105,30 +1137,221 @@ public enum SQLIntentConformanceValidator {
                 in: analysis,
                 schema: schema,
                 offsetRange: leftRange
-            ) || rangeContainsProjectedColumn(sourceReference.column, in: leftRange, tokens: tokens)
+            ) || rangeContainsDerivedProjection(
+                objectID: sourceObjectID,
+                in: leftRange,
+                analysis: analysis,
+                schema: schema,
+                tokens: tokens
+            )
             let targetLeft = referencesColumn(
                 objectID: targetObjectID,
                 in: analysis,
                 schema: schema,
                 offsetRange: leftRange
-            ) || rangeContainsProjectedColumn(targetReference.column, in: leftRange, tokens: tokens)
+            ) || rangeContainsDerivedProjection(
+                objectID: targetObjectID,
+                in: leftRange,
+                analysis: analysis,
+                schema: schema,
+                tokens: tokens
+            )
             let sourceRight = referencesColumn(
                 objectID: sourceObjectID,
                 in: analysis,
                 schema: schema,
                 offsetRange: rightRange
-            ) || rangeContainsProjectedColumn(sourceReference.column, in: rightRange, tokens: tokens)
+            ) || rangeContainsDerivedProjection(
+                objectID: sourceObjectID,
+                in: rightRange,
+                analysis: analysis,
+                schema: schema,
+                tokens: tokens
+            )
             let targetRight = referencesColumn(
                 objectID: targetObjectID,
                 in: analysis,
                 schema: schema,
                 offsetRange: rightRange
-            ) || rangeContainsProjectedColumn(targetReference.column, in: rightRange, tokens: tokens)
+            ) || rangeContainsDerivedProjection(
+                objectID: targetObjectID,
+                in: rightRange,
+                analysis: analysis,
+                schema: schema,
+                tokens: tokens
+            )
             if (sourceLeft && targetRight) || (targetLeft && sourceRight) {
                 return true
             }
         }
         return false
+    }
+
+    private static func rangeContainsDerivedProjection(
+        objectID: String,
+        in offsetRange: Range<Int>,
+        analysis: SQLReferenceAnalysis,
+        schema: DatabaseSchema,
+        tokens: [SQLToken]
+    ) -> Bool {
+        guard let columnRef = columnObjectReference(from: objectID) else { return false }
+        let columns = Set(analysis.columns + analysis.scopes.flatMap(\.columns))
+        for column in columns {
+            guard let start = column.startOffset,
+                let end = column.endOffset,
+                offsetRange.contains(start),
+                end <= offsetRange.upperBound,
+                let qualifier = column.qualifier,
+                columnNameMatches(column.name, columnRef.column, isQuoted: column.isQuoted)
+            else {
+                continue
+            }
+            for relation in analysis.relations where relation.isDerived {
+                guard derivedRelation(relation, matchesQualifierFor: column, qualifier: qualifier) else {
+                    continue
+                }
+                if let derivedColumns = relation.derivedColumns,
+                    !derivedColumns.contains(where: { $0.matches(column) })
+                {
+                    continue
+                }
+                if derivedRelation(relation, projects: objectID, as: column, schema: schema, tokens: tokens) {
+                    return true
+                }
+            }
+        }
+        return false
+    }
+
+    private static func derivedRelation(
+        _ relation: SQLRelationReference,
+        matchesQualifierFor column: SQLColumnReference,
+        qualifier: String
+    ) -> Bool {
+        let qualifiers = [
+            ColumnQualifier(name: relation.name, isQuoted: relation.nameIsQuoted),
+            ColumnQualifier(name: relation.displayName, isQuoted: relation.schemaIsQuoted || relation.nameIsQuoted),
+        ] + (relation.alias.map { [ColumnQualifier(name: $0, isQuoted: relation.aliasIsQuoted)] } ?? [])
+        return qualifiers.contains {
+            qualifierMatches(
+                qualifier,
+                qualifierIsQuoted: column.qualifierIsQuoted,
+                expected: $0.name,
+                expectedIsQuoted: $0.isQuoted
+            )
+        }
+    }
+
+    private static func derivedRelation(
+        _ relation: SQLRelationReference,
+        projects objectID: String,
+        as column: SQLColumnReference,
+        schema: DatabaseSchema,
+        tokens: [SQLToken]
+    ) -> Bool {
+        guard let innerTokens = derivedRelationInnerTokens(relation, in: tokens) else {
+            return false
+        }
+        let innerSQL = innerTokens.map(\.text).joined(separator: " ")
+        let parsedTokens = SQLToken.tokenize(innerSQL)
+        let innerAnalysis = SQLReferenceAnalyzer.analyze(innerSQL)
+        for item in topLevelSelectItems(in: parsedTokens) {
+            guard let outputName = selectItemOutputName(item),
+                columnNameMatches(outputName.name, column.name, isQuoted: outputName.isQuoted),
+                let lower = item.first?.startOffset,
+                let upper = item.last?.endOffset,
+                lower < upper
+            else {
+                continue
+            }
+            if referencesColumn(objectID: objectID, in: innerAnalysis, schema: schema, offsetRange: lower..<upper) {
+                return true
+            }
+        }
+        return false
+    }
+
+    private static func derivedRelationInnerTokens(
+        _ relation: SQLRelationReference,
+        in tokens: [SQLToken]
+    ) -> [SQLToken]? {
+        if let startOffset = relation.startOffset,
+            let openIndex = tokens.firstIndex(where: { $0.startOffset == startOffset && $0.text == "(" }),
+            let closeIndex = matchingCloseParenIndex(openIndex: openIndex, tokens: tokens)
+        {
+            return Array(tokens[(openIndex + 1)..<closeIndex])
+        }
+        return cteInnerTokens(named: relation.name, nameIsQuoted: relation.nameIsQuoted, in: tokens)
+    }
+
+    private static func cteInnerTokens(
+        named name: String,
+        nameIsQuoted: Bool,
+        in tokens: [SQLToken]
+    ) -> [SQLToken]? {
+        guard tokens.first?.normalized == "with" else { return nil }
+        var index = tokens[safe: 1]?.normalized == "recursive" ? 2 : 1
+        while index < tokens.count {
+            guard let nameToken = tokens[safe: index], nameToken.isIdentifierLike else { return nil }
+            let cteName = nameToken.identifierValue
+            let cteNameIsQuoted = nameToken.kind == .quotedIdentifier
+            index += 1
+            if tokens[safe: index]?.text == "(",
+                let closeIndex = matchingCloseParenIndex(openIndex: index, tokens: tokens)
+            {
+                index = closeIndex + 1
+            }
+            guard tokens[safe: index]?.normalized == "as" else { return nil }
+            index += 1
+            if tokens[safe: index]?.normalized == "materialized" {
+                index += 1
+            } else if tokens[safe: index]?.normalized == "not",
+                tokens[safe: index + 1]?.normalized == "materialized"
+            {
+                index += 2
+            }
+            guard tokens[safe: index]?.text == "(",
+                let closeIndex = matchingCloseParenIndex(openIndex: index, tokens: tokens)
+            else {
+                return nil
+            }
+            if qualifierMatches(
+                cteName,
+                qualifierIsQuoted: cteNameIsQuoted,
+                expected: name,
+                expectedIsQuoted: nameIsQuoted
+            ) {
+                return Array(tokens[(index + 1)..<closeIndex])
+            }
+            index = closeIndex + 1
+            if tokens[safe: index]?.text == "," {
+                index += 1
+                continue
+            }
+            break
+        }
+        return nil
+    }
+
+    private static func selectItemOutputName(_ item: [SQLToken]) -> (name: String, isQuoted: Bool)? {
+        var depth = 0
+        for index in item.indices {
+            let token = item[index]
+            if depth == 0,
+                token.normalized == "as",
+                let alias = item[safe: index + 1],
+                alias.isIdentifierLike
+            {
+                return (alias.identifierValue, alias.kind == .quotedIdentifier)
+            }
+            if token.text == "(" {
+                depth += 1
+            } else if token.text == ")" {
+                depth = max(0, depth - 1)
+            }
+        }
+        guard let last = item.last, last.isIdentifierLike else { return nil }
+        return (last.identifierValue, last.kind == .quotedIdentifier)
     }
 
     private static func hasColumnLiteralPredicate(
@@ -1139,7 +1362,7 @@ public enum SQLIntentConformanceValidator {
         tokens: [SQLToken]
     ) -> Bool {
         for index in tokens.indices {
-            if isPredicateOperator(tokens[index]) {
+            if tokens[index].text == "=", isConditionPredicate(at: index, tokens: tokens) {
                 guard let leftRange = expressionOffsetRange(before: index, tokens: tokens),
                     let rightRange = expressionOffsetRange(after: index, tokens: tokens)
                 else {
@@ -1163,7 +1386,8 @@ public enum SQLIntentConformanceValidator {
                     return true
                 }
             }
-            if tokens[index].normalized == "in",
+            if isPositiveInOperator(at: index, tokens: tokens),
+                isConditionPredicate(at: index, tokens: tokens),
                 let leftRange = expressionOffsetRange(before: index, tokens: tokens),
                 let rightRange = expressionOffsetRange(after: index, tokens: tokens),
                 referencesColumn(
@@ -1180,9 +1404,62 @@ public enum SQLIntentConformanceValidator {
         return false
     }
 
-    private static func isPredicateOperator(_ token: SQLToken) -> Bool {
-        ["=", "<>", "!=", "<", ">", "<=", ">="].contains(token.text)
-            || ["like", "ilike"].contains(token.normalized)
+    private static func hasLiteralPredicate(literal: String, tokens: [SQLToken]) -> Bool {
+        for index in tokens.indices {
+            if tokens[index].text == "=", isConditionPredicate(at: index, tokens: tokens) {
+                guard let leftRange = expressionOffsetRange(before: index, tokens: tokens),
+                    let rightRange = expressionOffsetRange(after: index, tokens: tokens)
+                else {
+                    continue
+                }
+                let literalLeft = rangeContainsStringLiteral(literal, in: leftRange, tokens: tokens)
+                let literalRight = rangeContainsStringLiteral(literal, in: rightRange, tokens: tokens)
+                let identifierLeft = rangeContainsIdentifierLike(in: leftRange, tokens: tokens)
+                let identifierRight = rangeContainsIdentifierLike(in: rightRange, tokens: tokens)
+                if (literalLeft && identifierRight) || (identifierLeft && literalRight)
+                {
+                    return true
+                }
+            }
+            if isPositiveInOperator(at: index, tokens: tokens),
+                isConditionPredicate(at: index, tokens: tokens),
+                let leftRange = expressionOffsetRange(before: index, tokens: tokens),
+                let rightRange = expressionOffsetRange(after: index, tokens: tokens),
+                rangeContainsIdentifierLike(in: leftRange, tokens: tokens),
+                rangeContainsStringLiteral(literal, in: rightRange, tokens: tokens)
+            {
+                return true
+            }
+        }
+        return false
+    }
+
+    private static func isPositiveInOperator(at index: Int, tokens: [SQLToken]) -> Bool {
+        tokens[index].normalized == "in" && tokens[safe: index - 1]?.normalized != "not"
+    }
+
+    private static func isConditionPredicate(at index: Int, tokens: [SQLToken]) -> Bool {
+        var cursor = index - 1
+        var depth = 0
+        while cursor >= 0 {
+            let token = tokens[cursor]
+            if token.text == ")" {
+                depth += 1
+            } else if token.text == "(" {
+                depth = max(0, depth - 1)
+            }
+            if ["where", "having", "on"].contains(token.normalized) {
+                return true
+            }
+            if depth == 0,
+                ["select", "from", "group", "order", "limit", "union", "intersect", "except"].contains(token.normalized)
+            {
+                return false
+            }
+            if cursor == 0 { break }
+            cursor -= 1
+        }
+        return false
     }
 
     private static func rangeContainsStringLiteral(
@@ -1200,17 +1477,14 @@ public enum SQLIntentConformanceValidator {
         }
     }
 
-    private static func rangeContainsProjectedColumn(
-        _ columnName: String,
+    private static func rangeContainsIdentifierLike(
         in offsetRange: Range<Int>,
         tokens: [SQLToken]
     ) -> Bool {
-        guard columnName.lowercased() != "id" else { return false }
-        return tokens.contains { token in
+        tokens.contains { token in
             token.isIdentifierLike
                 && offsetRange.contains(token.startOffset)
                 && token.endOffset <= offsetRange.upperBound
-                && token.identifierValue.caseInsensitiveCompare(columnName) == .orderedSame
         }
     }
 
