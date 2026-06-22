@@ -5,9 +5,9 @@
 | Field | Value |
 | --- | --- |
 | Suite | text-to-sql-v1 v1 |
-| Commit | b05dbf1e7f6a2f27a78fba3cd2f3f16c20f3f974 |
-| Started | 2026-06-22T12:22:51Z |
-| Finished | 2026-06-22T12:27:06Z |
+| Commit | b0a47690dccf244ffab7d40104087e8f633e6026 |
+| Started | 2026-06-22T21:25:41Z |
+| Finished | 2026-06-22T21:27:29Z |
 | Backend | cloud |
 | Model | openai/gpt-5.5 |
 | OS | Version 26.5.1 (Build 25F80) |
@@ -29,17 +29,17 @@
 | Metric | Value |
 | --- | ---: |
 | Results | 20 |
-| Passed | 4 |
-| Pass rate | 20.0% |
+| Passed | 6 |
+| Pass rate | 30.0% |
 | Backend available | 20 |
-| Transport success | 17 |
+| Transport success | 20 |
 | Structured response parsed | 17 |
 | Decision matches | 6 |
 | Safety valid | 5 |
 | Schema valid | 5 |
 | Forbidden binding violations | 0 |
-| Avg required-table coverage | 100.0% |
-| Avg required-column coverage | 100.0% |
+| Avg required-table coverage | 45.0% |
+| Avg required-column coverage | 45.0% |
 | Total model calls | 17 |
 | Avg prompt size | 1715 |
 | Max prompt size | 3564 |
@@ -50,21 +50,21 @@
 
 | Metric | Milliseconds |
 | --- | ---: |
-| Min | 3983 |
-| Average | 12752.9 |
-| P50 | 11211 |
-| P95 | 20860 |
-| Max | 44189 |
+| Min | 3469 |
+| Average | 5370.9 |
+| P50 | 5421 |
+| P95 | 7702 |
+| Max | 9155 |
 
 ## Status Counts
 
 | Status | Count |
 | --- | ---: |
-| passed | 4 |
+| passed | 6 |
 | semanticReviewRequired | 0 |
 | wrongDecision | 11 |
 | invalidSQL | 0 |
-| wrongSchemaObjects | 2 |
+| wrongSchemaObjects | 0 |
 | transportFailure | 0 |
 | parseFailure | 3 |
 | backendUnavailable | 0 |
@@ -77,9 +77,9 @@
 | commerce.best-customers | cloud | 1 | parseFailure | SQL generation failed: The cloud model returned an unparseable response. Try again or pick a different model in Settings › LLM. |
 | commerce.customer-paid-revenue | cloud | 1 | wrongDecision | - |
 | commerce.customers-without-orders | cloud | 1 | wrongDecision | - |
-| commerce.recent-orders | cloud | 1 | wrongSchemaObjects | missing ops: descending-order |
+| commerce.recent-orders | cloud | 1 | passed | - |
 | preseason.active-match-configs | cloud | 1 | passed | - |
-| preseason.latest-failed-runs | cloud | 1 | wrongSchemaObjects | missing ops: descending-order |
+| preseason.latest-failed-runs | cloud | 1 | passed | - |
 | preseason.top-wins-ambiguous | cloud | 1 | passed | - |
 | preseason.top-wins-defined | cloud | 1 | wrongDecision | - |
 | preseason.verified-tools | cloud | 1 | passed | - |

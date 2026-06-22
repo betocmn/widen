@@ -5,9 +5,9 @@
 | Field | Value |
 | --- | --- |
 | Suite | text-to-sql-v1 v1 |
-| Commit | b05dbf1e7f6a2f27a78fba3cd2f3f16c20f3f974 |
-| Started | 2026-06-22T12:20:46Z |
-| Finished | 2026-06-22T12:22:33Z |
+| Commit | b0a47690dccf244ffab7d40104087e8f633e6026 |
+| Started | 2026-06-22T21:23:41Z |
+| Finished | 2026-06-22T21:25:27Z |
 | Backend | local |
 | Model | - |
 | OS | Version 26.5.1 (Build 25F80) |
@@ -38,8 +38,8 @@
 | Safety valid | 11 |
 | Schema valid | 2 |
 | Forbidden binding violations | 1 |
-| Avg required-table coverage | 83.3% |
-| Avg required-column coverage | 82.4% |
+| Avg required-table coverage | 58.3% |
+| Avg required-column coverage | 57.4% |
 | Total model calls | 20 |
 | Avg prompt size | 1715 |
 | Max prompt size | 3564 |
@@ -50,11 +50,11 @@
 
 | Metric | Milliseconds |
 | --- | ---: |
-| Min | 3257 |
-| Average | 5346.9 |
-| P50 | 4977 |
-| P95 | 7402 |
-| Max | 8515 |
+| Min | 3198 |
+| Average | 5280.7 |
+| P50 | 4891 |
+| P95 | 7308 |
+| Max | 8427 |
 
 ## Status Counts
 
