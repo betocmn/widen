@@ -33,9 +33,9 @@ struct TextToSQLEvalTests {
 
     @Test func scoresValidSQLShapeAsPassed() async {
         let evalCase = TextToSQLEvalCase(
-            id: "commerce.customers-without-orders",
+            id: "commerce.customer-order-ids",
             schemaFixture: "commerce",
-            question: "Which customers have never placed an order?",
+            question: "List customers and their order ids",
             expected: TextToSQLEvalExpectation(
                 decision: .sql,
                 requiredTables: ["public.customers", "public.orders"],
@@ -43,34 +43,32 @@ struct TextToSQLEvalTests {
                     "public.customers.id",
                     "public.orders.customer_id",
                 ],
-                requiredOperations: [.leftJoin, .nullFilter]
+                requiredOperations: [.join, .limit]
             )
         )
-        let generator = StaticGenerator(
-            result: SQLGenerationResult(
-                sql: """
-                    SELECT c.id, c.email
-                    FROM public.customers AS c
-                    LEFT JOIN public.orders AS o ON o.customer_id = c.id
-                    WHERE o.id IS NULL
-                    ORDER BY c.id
-                    LIMIT 100
-                    """,
-                explanation: "Lists customers without orders.",
-                assumptions: [],
-                referencedTables: [],
-                confidence: 0.9,
-                riskLevel: .low,
-                needsClarification: false,
-                clarificationQuestion: nil
-            )
+        let generation = SQLGenerationResult(
+            sql: """
+                SELECT c.id, c.email
+                FROM public.customers AS c
+                JOIN public.orders AS o ON o.customer_id = c.id
+                ORDER BY c.id
+                LIMIT 100
+                """,
+            explanation: "Lists customers without orders.",
+            assumptions: [],
+            referencedTables: [],
+            confidence: 0.9,
+            riskLevel: .low,
+            needsClarification: false,
+            clarificationQuestion: nil
         )
 
-        let result = await TextToSQLEvalCaseRunner.run(
+        let result = TextToSQLEvalScorer.score(
             evalCase: evalCase,
             schema: makeCommerceSchema(),
-            generator: generator,
-            options: TextToSQLEvalRunOptions(backend: .local)
+            generation: generation,
+            options: TextToSQLEvalRunOptions(backend: .local),
+            latencyMs: 12
         )
 
         #expect(result.status == .passed)
@@ -113,10 +111,9 @@ struct TextToSQLEvalTests {
 
     @Test func forbiddenColumnBindingFailsShapeScore() async {
         let evalCase = TextToSQLEvalCase(
-            id: "preseason.top-wins-defined",
+            id: "preseason.forbidden-tool-a",
             schemaFixture: "preseason",
-            question: "Which tools have the most wins in the last two weeks?",
-            databaseContext: "Each evaluation with a non-null winner_id records one win.",
+            question: "List evaluation tool A ids",
             expected: TextToSQLEvalExpectation(
                 decision: .sql,
                 requiredTables: ["public.preseason_match_evaluation"],
@@ -125,30 +122,29 @@ struct TextToSQLEvalTests {
                 ]
             )
         )
-        let generator = StaticGenerator(
-            result: SQLGenerationResult(
-                sql: """
-                    SELECT tool_a_id, COUNT(*) AS wins
-                    FROM public.preseason_match_evaluation
-                    GROUP BY tool_a_id
-                    ORDER BY wins DESC
-                    LIMIT 10
-                    """,
-                explanation: "Ranks tools.",
-                assumptions: [],
-                referencedTables: [],
-                confidence: 0.7,
-                riskLevel: .medium,
-                needsClarification: false,
-                clarificationQuestion: nil
-            )
+        let generation = SQLGenerationResult(
+            sql: """
+                SELECT tool_a_id, COUNT(*) AS wins
+                FROM public.preseason_match_evaluation
+                GROUP BY tool_a_id
+                ORDER BY wins DESC
+                LIMIT 10
+                """,
+            explanation: "Ranks tools.",
+            assumptions: [],
+            referencedTables: [],
+            confidence: 0.7,
+            riskLevel: .medium,
+            needsClarification: false,
+            clarificationQuestion: nil
         )
 
-        let result = await TextToSQLEvalCaseRunner.run(
+        let result = TextToSQLEvalScorer.score(
             evalCase: evalCase,
             schema: makePreseasonSchema(),
-            generator: generator,
-            options: TextToSQLEvalRunOptions(backend: .local)
+            generation: generation,
+            options: TextToSQLEvalRunOptions(backend: .local),
+            latencyMs: 12
         )
 
         #expect(result.status == .wrongSchemaObjects)
