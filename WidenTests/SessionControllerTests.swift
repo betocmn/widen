@@ -2418,7 +2418,9 @@ struct SessionControllerTests {
 
         controller.rememberResolvedClarification(appState: state)
 
-        #expect(state.semanticBindings.isEmpty)
+        #expect(state.semanticBindings.count == 1)
+        #expect(state.semanticBindings[0].concept == "active")
+        #expect(state.semanticBindings[0].referencedObjectIDs == ["column:public.users.status"])
     }
 
     @Test func bareAffirmativeClarificationReplyDoesNotInventDefinition() async throws {
@@ -2476,6 +2478,25 @@ struct SessionControllerTests {
         )
 
         #expect(resolution.action == .newRequest)
+    }
+
+    @Test func fillerPrefixedClarificationRepliesStartNewRequests() {
+        let pending = PendingClarification(
+            concept: SQLGroundingConcept(
+                term: "active",
+                kind: .filter,
+                state: .unsupported,
+                required: true
+            ),
+            originalQuestion: "show active users",
+            question: "What defines active users?",
+            options: []
+        )
+
+        for reply in ["please show orders", "just list users", "can you show invoices"] {
+            let resolution = ClarificationResolver.resolve(reply: reply, pending: pending)
+            #expect(resolution.action == .newRequest, "Expected new request for: \(reply)")
+        }
     }
 
     @Test func clarificationReplyWithoutConceptTermResolvesOriginalQuestion() async {
@@ -2715,6 +2736,50 @@ struct SessionControllerTests {
         #expect(state.semanticBindings.isEmpty)
         #expect(generator.contexts.first?.confirmedSemanticBindings.isEmpty == true)
         #expect(generator.contexts.first?.conversationMessages.last?.text == "no")
+    }
+
+    @Test func negativeClarificationReplyIsNotMarkedResolvedWhenSQLIsReturned() async {
+        let connectionID = UUID()
+        let (state, dir) = makeState(connectionID: connectionID, connected: true)
+        defer { try? FileManager.default.removeItem(at: dir) }
+        let schema = makeUsersStatusSchema()
+        state.schemas[connectionID] = schema
+        let controller = makeController(connectionID: connectionID)
+        let pending = PendingClarification(
+            concept: SQLGroundingConcept(
+                term: "active",
+                kind: .filter,
+                state: .unsupported,
+                required: true
+            ),
+            originalQuestion: "how many active users?",
+            question: "What defines active users?"
+        )
+        controller.chatVM.messages = [
+            ChatMessage(role: .user, text: pending.originalQuestion),
+            ChatMessage(
+                role: .assistant,
+                text: pending.question,
+                pendingClarification: pending
+            ),
+        ]
+        controller.chatVM.input = "no"
+        let generated = makeGeneration(
+            sql: "SELECT COUNT(*) FROM public.users WHERE status = 'active'",
+            explanation: "Counts active users."
+        )
+        let generator = RecordingRepairGenerator(results: [generated])
+        state.sqlGeneratorOverride = generator
+
+        await controller.submit(appState: state)
+
+        #expect(generator.questions == [pending.originalQuestion])
+        #expect(controller.queryVM.generation?.resolvedClarification == nil)
+        #expect(controller.queryVM.generation?.resolvedClarificationReply == nil)
+
+        controller.rememberResolvedClarification(appState: state)
+
+        #expect(state.semanticBindings.isEmpty)
     }
 
     @Test func repeatedNoProgressClarificationReplyUsesTwoTurnCap() async throws {

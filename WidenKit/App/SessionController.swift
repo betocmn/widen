@@ -293,11 +293,16 @@ public final class SessionController: Identifiable {
         else {
             return
         }
-        let selectedOption = generation.resolvedClarificationOption
         let replyText = generation.resolvedClarificationReply
-            ?? selectedOption?.replyText
-            ?? selectedOption?.definition
+            ?? generation.resolvedClarificationOption?.replyText
+            ?? generation.resolvedClarificationOption?.definition
             ?? ""
+        let selectedOption = generation.resolvedClarificationOption
+            ?? inferredClarificationOption(
+                replyText: replyText,
+                generation: generation,
+                schema: schema
+            )
         appState.confirmSemanticBinding(
             connectionID: connectionID,
             pending: pending,
@@ -306,6 +311,61 @@ public final class SessionController: Identifiable {
             schema: schema
         )
         appState.sessionDidChange(sessionID)
+    }
+
+    private func inferredClarificationOption(
+        replyText: String,
+        generation: SQLGenerationResult,
+        schema: DatabaseSchema
+    ) -> ClarificationOption? {
+        let definition = replyText.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !definition.isEmpty else { return nil }
+        let evidence = Self.definitionEvidence(
+            definition: definition,
+            sql: generation.sql,
+            schema: schema
+        )
+        guard !evidence.isEmpty else { return nil }
+        return ClarificationOption(
+            label: "Typed definition",
+            replyText: definition,
+            definition: definition,
+            evidence: evidence
+        )
+    }
+
+    private static func definitionEvidence(
+        definition: String,
+        sql: String,
+        schema: DatabaseSchema
+    ) -> [String] {
+        let definitionIdentifiers = Set(
+            SQLToken.tokenize(definition)
+                .filter(\.isIdentifierLike)
+                .map { $0.identifierValue.lowercased() }
+        )
+        guard !definitionIdentifiers.isEmpty else { return [] }
+        let schemaValidation = SQLSchemaValidator.validate(sql: sql, against: schema)
+        guard !schemaValidation.hasDefiniteErrors else { return [] }
+        let referencedTableNames = Set(schemaValidation.referencedTables.map { $0.lowercased() })
+        let referencedTables = schema.tables.filter {
+            referencedTableNames.contains($0.qualifiedName.lowercased())
+        }
+        var evidence: [String] = []
+        for identifier in definitionIdentifiers {
+            let matches = referencedTables.flatMap { table in
+                table.columns.compactMap { column -> String? in
+                    guard column.name.caseInsensitiveCompare(identifier) == .orderedSame else {
+                        return nil
+                    }
+                    return "\(table.qualifiedName).\(column.name)"
+                }
+            }
+            if matches.count == 1, let match = matches.first {
+                evidence.append(match)
+            }
+        }
+        return Array(Set(evidence)).sorted()
     }
 
     private func submitGeneratedSQL(appState: AppState) async {
@@ -341,6 +401,8 @@ public final class SessionController: Identifiable {
         let resolvesPendingClarification =
             clarificationResolution?.action == .answer
             || clarificationResolution?.action == .stillAmbiguous
+        let resolvedPendingClarification =
+            clarificationResolution?.action == .answer
         let pendingClarification = resolvesPendingClarification ? unresolvedClarification : nil
         let abandonsPendingClarification =
             unresolvedClarification != nil && pendingClarification == nil
@@ -455,7 +517,7 @@ public final class SessionController: Identifiable {
                 confirmedSemanticBindings: context.confirmedSemanticBindings
             )
             .applyingClarificationProgress(from: pendingClarification)
-            if !result.needsClarification {
+            if resolvedPendingClarification, !result.needsClarification {
                 result = result.withResolvedClarification(
                     pendingClarification,
                     replyText: question,

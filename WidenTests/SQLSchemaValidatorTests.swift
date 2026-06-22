@@ -1733,6 +1733,29 @@ struct SQLSchemaValidatorTests {
         #expect(SQLIntentConformanceValidator.validate(sql: groupedCountCTE, plan: plan, schema: schema).isValid)
     }
 
+    @Test func frequencyIntentConformanceRejectsSiblingGroupingColumn() {
+        let schema = makeAnalyticsOperatorSchema()
+        let intent = QueryIntentPlanner.deterministicIntent(for: "most common error code")
+        let plan = GroundedQueryPlanner.ground(intent: intent, schema: schema)
+        let wrongGrouping = """
+            SELECT endpoint, COUNT(*) AS n
+            FROM public.events
+            GROUP BY endpoint
+            ORDER BY n DESC
+            LIMIT 1
+            """
+        let correctGrouping = """
+            SELECT error_code, COUNT(*) AS n
+            FROM public.events
+            GROUP BY error_code
+            ORDER BY n DESC
+            LIMIT 1
+            """
+
+        #expect(!SQLIntentConformanceValidator.validate(sql: wrongGrouping, plan: plan, schema: schema).isValid)
+        #expect(SQLIntentConformanceValidator.validate(sql: correctGrouping, plan: plan, schema: schema).isValid)
+    }
+
     @Test func storedCountColumnCanSatisfyFrequencyIntent() {
         let intent = QueryIntentPlanner.deterministicIntent(
             for: "what is the most frequent feedback cluster?"
@@ -1836,6 +1859,43 @@ struct SQLSchemaValidatorTests {
         #expect(subject?.state == .grounded)
         #expect(subject?.selectedCandidate?.objectIDs == ["table:auth.users"])
         #expect(grounded.selectedTables == ["auth.users"])
+    }
+
+    @Test func subjectTableBindingCanGroundSynonymWithoutLexicalCandidate() {
+        let schema = DatabaseSchema(
+            schemas: [SchemaInfo(name: "public")],
+            tables: [
+                TableInfo(
+                    schema: "public",
+                    name: "accounts",
+                    type: .baseTable,
+                    columns: [
+                        ColumnInfo(
+                            tableSchema: "public",
+                            tableName: "accounts",
+                            name: "id",
+                            dataType: "integer",
+                            isNullable: false,
+                            ordinalPosition: 1
+                        )
+                    ]
+                )
+            ],
+            foreignKeys: []
+        )
+        let intent = QueryIntentPlanner.deterministicIntent(for: "show customers")
+        let ungrounded = GroundedQueryPlanner.ground(intent: intent, schema: schema)
+        let grounded = GroundedQueryPlanner.ground(
+            intent: intent,
+            schema: schema,
+            confirmedSemanticBindings: ["customers: table:public.accounts"]
+        )
+
+        #expect(ungrounded.slots.first { $0.kind == .subjectEntity }?.state == .unsupported)
+        let subject = grounded.slots.first { $0.kind == .subjectEntity }
+        #expect(subject?.state == .grounded)
+        #expect(subject?.selectedCandidate?.objectIDs == ["table:public.accounts"])
+        #expect(grounded.selectedTables == ["public.accounts"])
     }
 
     @Test func customMetricBindingObjectsMustConform() {

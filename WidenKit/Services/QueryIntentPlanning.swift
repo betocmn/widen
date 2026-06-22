@@ -274,7 +274,10 @@ public enum ClarificationResolver {
     }
 
     private static func isQuestionLike(_ normalized: String) -> Bool {
-        let tokens = normalized.split { !$0.isLetter && !$0.isNumber }.map(String.init)
+        var tokens = normalized.split { !$0.isLetter && !$0.isNumber }.map(String.init)
+        while let first = tokens.first, questionPrefixFillers.contains(first) {
+            tokens.removeFirst()
+        }
         guard let first = tokens.first else { return false }
         let starters: Set<String> = [
             "average", "avg", "calculate", "count", "distinct", "find", "give", "how",
@@ -284,6 +287,11 @@ public enum ClarificationResolver {
         ]
         return normalized.contains("?") || starters.contains(first)
     }
+
+    private static let questionPrefixFillers: Set<String> = [
+        "actually", "also", "can", "could", "do", "does", "did", "just", "now",
+        "ok", "okay", "please", "then", "will", "would", "you",
+    ]
 
     private static func mentionedTerms(
         in text: String,
@@ -313,22 +321,34 @@ public enum GroundedQueryPlanner {
         let subjectPhrase = (intent.groupingPhrases.first ?? intent.subjectPhrases.first ?? "")
             .trimmingCharacters(in: .whitespacesAndNewlines)
         let subjectCandidates = rankedTables(matching: subjectPhrase, schema: schema)
+        let subjectBindingHint = bindingHint(
+            for: subjectPhrase,
+            kind: .subjectEntity,
+            hints: bindingHints
+        )
         let selectedSubjectFromBinding = tableCandidate(
-            matching: bindingHint(for: subjectPhrase, kind: .subjectEntity, hints: bindingHints),
+            matching: subjectBindingHint,
             candidates: subjectCandidates
         )
+            ?? tableCandidate(matching: subjectBindingHint, schema: schema)
         let selectedSubjectCandidate = selectedSubjectFromBinding
             ?? (subjectCandidates.count == 1 ? subjectCandidates[0] : nil)
         let selectedSubject = selectedSubjectCandidate?.table ?? subjectCandidates.first?.table
+        let subjectSlotCandidates = rankedTableCandidates(
+            subjectCandidates,
+            selectedCandidate: selectedSubjectCandidate
+        )
         slots.append(
             GroundingSlot(
                 id: .subject,
                 kind: .subjectEntity,
                 phrase: subjectPhrase,
                 required: !subjectPhrase.isEmpty,
-                candidates: subjectCandidates.map(\.candidate),
+                candidates: subjectSlotCandidates,
                 selectedCandidate: selectedSubjectCandidate?.candidate,
-                state: subjectCandidates.isEmpty ? .unsupported : (selectedSubjectCandidate == nil ? .ambiguous : .grounded)
+                state: selectedSubjectCandidate == nil
+                    ? (subjectCandidates.isEmpty ? .unsupported : .ambiguous)
+                    : .grounded
             )
         )
         if let selectedSubject {
@@ -583,6 +603,53 @@ public enum GroundedQueryPlanner {
             return !candidateTokens.intersection(hint.definitionTokens).isEmpty
         }
         return matching.count == 1 ? matching[0] : nil
+    }
+
+    private static func tableCandidate(
+        matching hint: BindingHint?,
+        schema: DatabaseSchema
+    ) -> RankedTable? {
+        guard let hint, !hint.objectIDs.isEmpty else { return nil }
+        let tableIDs = Set(hint.objectIDs.compactMap { objectID -> String? in
+            if objectID.hasPrefix("table:") {
+                return String(objectID.dropFirst("table:".count))
+            }
+            if objectID.hasPrefix("column:") {
+                let value = String(objectID.dropFirst("column:".count))
+                let parts = value.split(separator: ".").map(String.init)
+                guard parts.count >= 3 else { return nil }
+                return "\(parts[0]).\(parts[1])"
+            }
+            return nil
+        })
+        let matches = schema.tables.filter { tableIDs.contains($0.id) }
+        guard matches.count == 1, let table = matches.first else { return nil }
+        return RankedTable(
+            table: table,
+            score: 1_000,
+            candidate: GroundingCandidate(
+                id: "table:\(table.id)",
+                label: table.qualifiedName,
+                objectIDs: ["table:\(table.id)"],
+                evidence: [hint.normalizedDefinition, table.qualifiedName]
+            )
+        )
+    }
+
+    private static func rankedTableCandidates(
+        _ rankedTables: [RankedTable],
+        selectedCandidate: RankedTable?
+    ) -> [GroundingCandidate] {
+        var seen = Set<String>()
+        var candidates: [GroundingCandidate] = []
+        if let selectedCandidate {
+            candidates.append(selectedCandidate.candidate)
+            seen.insert(selectedCandidate.candidate.id)
+        }
+        for rankedTable in rankedTables where seen.insert(rankedTable.candidate.id).inserted {
+            candidates.append(rankedTable.candidate)
+        }
+        return candidates
     }
 
     private static func schemaObjectCandidates(
@@ -1308,6 +1375,14 @@ public enum SQLIntentConformanceValidator {
         schema: DatabaseSchema
     ) -> Set<String> {
         var objectIDs = Set<String>()
+        let requestedTokens = tokenVariants(
+            Set(
+                (plan.intent.groupingPhrases
+                    + plan.intent.subjectPhrases
+                    + plan.intent.outputPhrases)
+                    .flatMap { SchemaIndex.tokens(in: $0) }
+            )
+        )
         let subjectObjectIDs = plan.slots
             .first { $0.kind == .subjectEntity }?
             .selectedCandidate?
@@ -1319,7 +1394,14 @@ public enum SQLIntentConformanceValidator {
         objectIDs.formUnion(subjectObjectIDs.filter { $0.hasPrefix("column:") })
         for tableID in subjectTableIDs {
             if let table = schema.tables.first(where: { $0.id == tableID }) {
-                objectIDs.formUnion(table.columns.map { "column:\($0.id)" })
+                let requestedColumnIDs = requestedFrequencyColumnObjectIDs(
+                    in: table,
+                    requestedTokens: requestedTokens
+                )
+                objectIDs.formUnion(requestedColumnIDs)
+                if requestedColumnIDs.isEmpty {
+                    objectIDs.formUnion(entityGroupingColumnObjectIDs(in: table))
+                }
             }
         }
         for joinPath in plan.selectedJoinPaths {
@@ -1333,6 +1415,66 @@ public enum SQLIntentConformanceValidator {
             }
         }
         return objectIDs
+    }
+
+    private static func requestedFrequencyColumnObjectIDs(
+        in table: TableInfo,
+        requestedTokens: Set<String>
+    ) -> Set<String> {
+        guard !requestedTokens.isEmpty else { return [] }
+        return Set(
+            table.columns.compactMap { column -> String? in
+                let columnTokens = tokenVariants(Set(SchemaIndex.tokens(in: column.name)))
+                guard !columnTokens.isEmpty,
+                    columnTokens.isSubset(of: requestedTokens)
+                        || requestedTokens.isSubset(of: columnTokens)
+                else {
+                    return nil
+                }
+                return "column:\(column.id)"
+            }
+        )
+    }
+
+    private static func entityGroupingColumnObjectIDs(in table: TableInfo) -> Set<String> {
+        let tableTokens = tokenVariants(Set(SchemaIndex.tokens(in: table.name)))
+        let tableName = table.name.lowercased()
+        let singularTableName = singularToken(tableName)
+        let labelNames: Set<String> = ["display_name", "label", "name", "title"]
+        return Set(
+            table.columns.compactMap { column -> String? in
+                let columnName = column.name.lowercased()
+                let columnTokens = tokenVariants(Set(SchemaIndex.tokens(in: column.name)))
+                let isIdentifier =
+                    columnName == "id"
+                    || columnName == "\(tableName)_id"
+                    || columnName == "\(singularTableName)_id"
+                    || (columnTokens.contains("id")
+                        && !columnTokens.isDisjoint(with: tableTokens))
+                guard isIdentifier || labelNames.contains(columnName) else { return nil }
+                return "column:\(column.id)"
+            }
+        )
+    }
+
+    private static func tokenVariants(_ tokens: Set<String>) -> Set<String> {
+        Set(tokens.flatMap { token -> [String] in
+            let singular = singularToken(token)
+            return singular == token ? [token] : [token, singular]
+        })
+    }
+
+    private static func singularToken(_ token: String) -> String {
+        if token.hasSuffix("ies"), token.count > 3 {
+            return String(token.dropLast(3)) + "y"
+        }
+        if token.hasSuffix("ses"), token.count > 3 {
+            return String(token.dropLast(2))
+        }
+        if token.hasSuffix("s"), token.count > 1 {
+            return String(token.dropLast())
+        }
+        return token
     }
 
     private static func topLevelOrderByClause(in tokens: [SQLToken]) -> (

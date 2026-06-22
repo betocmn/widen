@@ -32,6 +32,29 @@ private let fmTestEnabled =
                     == "GeneratedLocalSQLDecision"
             )
         }
+
+        @Test func localIntentSearchQueriesIncludeFilterPhrases() {
+            let generated = GeneratedQueryIntentFrame(
+                operation: "read",
+                subjectPhrases: ["customers"],
+                outputPhrases: [],
+                measure: "none",
+                measurePhrase: nil,
+                groupingPhrases: [],
+                ranking: "none",
+                takeFirst: false,
+                filterPhrases: ["unpaid invoices"],
+                timePhrase: nil,
+                customBusinessTerms: [],
+                schemaSearchQueries: []
+            )
+
+            let queries = FoundationModelsSQLGenerator.intentSearchQueriesForTesting(
+                from: generated
+            )
+
+            #expect(queries.contains("unpaid invoices"))
+        }
     }
 #endif
 

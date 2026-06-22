@@ -165,6 +165,12 @@
                 + max(0, retrySpentCalls)
         }
 
+        static func intentSearchQueriesForTesting(
+            from generated: GeneratedQueryIntentFrame
+        ) -> [String] {
+            intentSearchQueries(from: generated)
+        }
+
         public func generateSQL(
             question: String,
             schema: DatabaseSchema,
@@ -444,6 +450,7 @@
                 + generated.subjectPhrases
                 + generated.outputPhrases
                 + generated.groupingPhrases
+                + generated.filterPhrases
                 + generated.customBusinessTerms
             {
                 let cleaned = candidate.trimmingCharacters(in: .whitespacesAndNewlines)
