@@ -70,14 +70,14 @@ enum EvalReporter {
             "",
             "| Field | Value |",
             "| --- | --- |",
-            "| Suite | \(run.manifest.suiteName) v\(run.manifest.suiteVersion) |",
-            "| Commit | \(run.manifest.commitSHA) |",
-            "| Started | \(run.manifest.startedAt) |",
-            "| Finished | \(run.manifest.finishedAt) |",
-            "| Backend | \(run.manifest.backendMode) |",
-            "| Model | \(run.manifest.model ?? "-") |",
-            "| OS | \(run.manifest.osVersion) |",
-            "| Architecture | \(run.manifest.architecture) |",
+            "| Suite | \(tableCell("\(run.manifest.suiteName) v\(run.manifest.suiteVersion)")) |",
+            "| Commit | \(tableCell(run.manifest.commitSHA)) |",
+            "| Started | \(tableCell(run.manifest.startedAt)) |",
+            "| Finished | \(tableCell(run.manifest.finishedAt)) |",
+            "| Backend | \(tableCell(run.manifest.backendMode)) |",
+            "| Model | \(tableCell(run.manifest.model ?? "-")) |",
+            "| OS | \(tableCell(run.manifest.osVersion)) |",
+            "| Architecture | \(tableCell(run.manifest.architecture)) |",
             "| Cases | \(run.manifest.caseCount) |",
             "| Repeats | \(run.manifest.repeatCount) |",
             "",
@@ -87,7 +87,9 @@ enum EvalReporter {
             "| --- | --- |",
         ]
         for key in run.manifest.schemaFixtureHashes.keys.sorted() {
-            lines.append("| \(key) | \(run.manifest.schemaFixtureHashes[key] ?? "-") |")
+            lines.append(
+                "| \(tableCell(key)) | \(tableCell(run.manifest.schemaFixtureHashes[key] ?? "-")) |"
+            )
         }
 
         lines += [
@@ -142,7 +144,7 @@ enum EvalReporter {
         ]
         for result in run.results.sorted(by: resultSort) {
             lines.append(
-                "| \(result.caseID) | \(result.backend.rawValue) | \(result.repeatIndex) | \(result.status.rawValue) | \(diagnosticsSummary(result)) |"
+                "| \(tableCell(result.caseID)) | \(tableCell(result.backend.rawValue)) | \(result.repeatIndex) | \(tableCell(result.status.rawValue)) | \(diagnosticsSummary(result)) |"
             )
         }
 
@@ -194,7 +196,16 @@ enum EvalReporter {
         if let error = result.diagnostics.errorMessage {
             parts.append(error)
         }
-        return parts.isEmpty ? "-" : parts.joined(separator: "; ").replacingOccurrences(of: "|", with: "\\|")
+        return parts.isEmpty ? "-" : tableCell(parts.joined(separator: "; "))
+    }
+
+    private static func tableCell(_ value: String) -> String {
+        value
+            .replacingOccurrences(of: "\r\n", with: " ")
+            .replacingOccurrences(of: "\n", with: " ")
+            .replacingOccurrences(of: "\r", with: " ")
+            .replacingOccurrences(of: "|", with: "\\|")
+            .trimmingCharacters(in: .whitespacesAndNewlines)
     }
 }
 
@@ -206,7 +217,7 @@ private struct EvalRunFile: Codable {
 extension DateFormatter {
     fileprivate static let evalTimestamp: DateFormatter = {
         let formatter = DateFormatter()
-        formatter.dateFormat = "yyyyMMdd-HHmmss"
+        formatter.dateFormat = "yyyyMMdd-HHmmss-SSS"
         formatter.locale = Locale(identifier: "en_US_POSIX")
         formatter.timeZone = TimeZone(secondsFromGMT: 0)
         return formatter

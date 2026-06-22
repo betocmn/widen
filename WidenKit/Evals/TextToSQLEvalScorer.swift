@@ -78,28 +78,34 @@ public enum TextToSQLEvalCaseRunner {
     ) -> TextToSQLEvalResult {
         let status: TextToSQLEvalCaseStatus
         let backendAvailable: Bool
+        let transportSuccess: Bool
         let structuredParsed: Bool
         if let appError = error as? AppError {
             switch appError {
             case .modelUnavailable:
                 status = .backendUnavailable
                 backendAvailable = false
+                transportSuccess = false
                 structuredParsed = false
             case .modelGenerationFailed(let message)
                 where message.localizedCaseInsensitiveContains("unparseable"):
                 status = .parseFailure
                 backendAvailable = true
+                transportSuccess = true
                 structuredParsed = false
             default:
                 status = .transportFailure
                 backendAvailable = true
+                transportSuccess = false
                 structuredParsed = false
             }
         } else {
             status = .transportFailure
             backendAvailable = true
+            transportSuccess = false
             structuredParsed = false
         }
+        let coverage = evalCase.expected.decision == .sql ? 0.0 : 1.0
 
         return TextToSQLEvalResult(
             caseID: evalCase.id,
@@ -109,9 +115,11 @@ public enum TextToSQLEvalCaseRunner {
             status: status,
             metrics: TextToSQLEvalMetrics(
                 backendAvailable: backendAvailable,
-                transportSuccess: false,
+                transportSuccess: transportSuccess,
                 structuredResponseParsed: structuredParsed,
                 decisionMatches: false,
+                requiredTableCoverage: coverage,
+                requiredColumnBindingCoverage: coverage,
                 latencyMs: latencyMs,
                 promptSize: options.promptSize
             ),
@@ -173,6 +181,8 @@ public enum TextToSQLEvalScorer {
                     transportSuccess: true,
                     structuredResponseParsed: true,
                     decisionMatches: false,
+                    requiredTableCoverage: 0,
+                    requiredColumnBindingCoverage: 0,
                     clarificationQuality: clarificationQuality(generation.clarificationQuestion),
                     latencyMs: latencyMs,
                     modelCallCount: generation.generationCallCount,
@@ -200,6 +210,8 @@ public enum TextToSQLEvalScorer {
                     decisionMatches: true,
                     safetyValid: false,
                     schemaValid: nil,
+                    requiredTableCoverage: 0,
+                    requiredColumnBindingCoverage: 0,
                     latencyMs: latencyMs,
                     modelCallCount: generation.generationCallCount,
                     promptSize: options.promptSize
@@ -303,45 +315,49 @@ public enum TextToSQLEvalScorer {
     private static func detectedOperations(in sql: String) -> Set<TextToSQLEvalOperation> {
         let lower = sql.lowercased()
         var result = Set<TextToSQLEvalOperation>()
-        if lower.range(of: #"count\s*\("#, options: .regularExpression) != nil {
+        if matches(#"\bcount\s*\("#, in: lower) {
             result.insert(.count)
         }
-        if lower.range(of: #"avg\s*\("#, options: .regularExpression) != nil {
+        if matches(#"\bavg\s*\("#, in: lower) {
             result.insert(.average)
         }
-        if lower.range(of: #"sum\s*\("#, options: .regularExpression) != nil {
+        if matches(#"\bsum\s*\("#, in: lower) {
             result.insert(.sum)
         }
-        if lower.contains(" group by ") || lower.contains("\ngroup by ") {
+        if matches(#"\bgroup\s+by\b"#, in: lower) {
             result.insert(.group)
         }
-        if lower.contains(" join ") || lower.contains("\njoin ") {
+        if matches(#"\bjoin\b"#, in: lower) {
             result.insert(.join)
         }
-        if lower.contains(" left join ") || lower.contains(" left outer join ") {
+        if matches(#"\bleft\s+(outer\s+)?join\b"#, in: lower) {
             result.insert(.leftJoin)
             result.insert(.join)
         }
-        if lower.contains(" not exists ") {
+        if matches(#"\bnot\s+exists\b"#, in: lower) {
             result.insert(.notExists)
         }
-        if lower.contains(" is null") || lower.contains(" is not null") {
+        if matches(#"\bis\s+(not\s+)?null\b"#, in: lower) {
             result.insert(.nullFilter)
         }
-        if lower.contains(" order by "), lower.contains(" desc") {
+        if matches(#"\border\s+by\b"#, in: lower), matches(#"\bdesc\b"#, in: lower) {
             result.insert(.descendingOrder)
         }
-        if lower.range(of: #"\blimit\s+\d+"#, options: .regularExpression) != nil {
+        if matches(#"\blimit\s+\d+\b"#, in: lower) {
             result.insert(.limit)
         }
-        if lower.contains("interval")
-            || lower.contains("current_date")
-            || lower.contains("current_timestamp")
+        if matches(#"\binterval\b"#, in: lower)
+            || matches(#"\bcurrent_date\b"#, in: lower)
+            || matches(#"\bcurrent_timestamp\b"#, in: lower)
             || lower.contains("now()")
         {
             result.insert(.relativeTimeFilter)
         }
         return result
+    }
+
+    private static func matches(_ pattern: String, in value: String) -> Bool {
+        value.range(of: pattern, options: .regularExpression) != nil
     }
 
     private static func referencedColumns(in sql: String, schema: DatabaseSchema) -> [String] {
