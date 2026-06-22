@@ -1376,6 +1376,31 @@ struct SQLSchemaValidatorTests {
         })
     }
 
+    @Test func pastTenseGenericVerbMadeDoesNotRequireGrounding() {
+        let generation = SQLGenerationResult(
+            sql: "SELECT id FROM public.orders WHERE created_at >= CURRENT_DATE - INTERVAL '7 days'",
+            explanation: "Lists recent orders.",
+            assumptions: [],
+            referencedTables: [],
+            confidence: 1,
+            riskLevel: .low,
+            needsClarification: false,
+            clarificationQuestion: nil
+        )
+
+        let enriched = GeneratedSQLPostprocessor.enriched(
+            generation,
+            question: "show orders made last week",
+            schema: makeUsersOrdersSchema(),
+            databaseContext: ""
+        )
+
+        #expect(!enriched.needsClarification)
+        #expect(enriched.sql == generation.sql)
+        #expect(enriched.clarificationQuestion == nil)
+        #expect(enriched.referencedTables == ["public.orders"])
+    }
+
     @Test func literalFilterValuesDoNotForceClarification() {
         let generation = SQLGenerationResult(
             sql: "SELECT COUNT(*) FROM public.customers WHERE state = 'California'",
@@ -1603,6 +1628,32 @@ struct SQLSchemaValidatorTests {
         #expect(enriched.groundingConcepts.contains {
             $0.term == "active" && $0.evidence.contains("Confirmed semantic binding")
         })
+    }
+
+    @Test func semanticBindingLabelDoesNotDefineUnconstrainedStatusLiteral() {
+        let generation = SQLGenerationResult(
+            sql: "SELECT COUNT(*) FROM public.users WHERE status = 'churned'",
+            explanation: "Counts churned users.",
+            assumptions: [],
+            referencedTables: [],
+            confidence: 1,
+            riskLevel: .low,
+            needsClarification: false,
+            clarificationQuestion: nil
+        )
+
+        let enriched = GeneratedSQLPostprocessor.enriched(
+            generation,
+            question: "how many churned users do we have?",
+            schema: makeUsersUnconstrainedStatusSchema(),
+            databaseContext: "",
+            confirmedSemanticBindings: ["churned: \"public\".\"users\".\"cancelled_at\" IS NOT NULL"]
+        )
+
+        #expect(enriched.needsClarification)
+        #expect(enriched.sql.isEmpty)
+        #expect(enriched.clarificationQuestion?.contains("\"churned\"") == true)
+        #expect(enriched.pendingClarification?.concept.term == "churned")
     }
 
     @Test func postprocessorAsksWhenMetricTermIsMissingFromReferencedSchema() {

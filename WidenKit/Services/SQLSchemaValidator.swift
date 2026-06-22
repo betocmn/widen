@@ -2003,12 +2003,15 @@ public enum GeneratedSQLPostprocessor {
         databaseContext: String,
         confirmedSemanticBindings: [String] = []
     ) -> SQLGroundingEvaluation {
-        let availableTokens = referencedSchemaTokens(
+        let schemaAndContextTokens = referencedSchemaTokens(
             referencedTables: referencedTables,
             schema: schema
         )
         .union(Set(SchemaIndex.tokens(in: databaseContext)))
+        let availableTokens = schemaAndContextTokens
         .union(Set(SchemaIndex.tokens(in: confirmedSemanticBindings.joined(separator: "\n"))))
+        let literalProofTokens = schemaAndContextTokens
+            .union(semanticBindingDefinitionTokens(in: confirmedSemanticBindings))
 
         let terms = meaningfulRequestWords(question)
         guard !terms.isEmpty else {
@@ -2018,7 +2021,7 @@ public enum GeneratedSQLPostprocessor {
             in: sql,
             referencedTables: referencedTables,
             schema: schema,
-            availableTokens: availableTokens
+            availableTokens: literalProofTokens
         )
         let unresolved = terms.filter { word in
             let variants = SchemaIndex.tokens(in: word)
@@ -2167,6 +2170,19 @@ public enum GeneratedSQLPostprocessor {
         }
         var seen = Set<String>()
         return evidence.filter { seen.insert($0).inserted }.prefix(6).map { $0 }
+    }
+
+    private static func semanticBindingDefinitionTokens(in bindings: [String]) -> Set<String> {
+        bindings.reduce(into: Set<String>()) { tokens, binding in
+            if let separator = binding.firstIndex(of: ":") {
+                let definitionStart = binding.index(after: separator)
+                tokens.formUnion(
+                    SchemaIndex.tokens(in: String(binding[definitionStart...]))
+                )
+            } else {
+                tokens.formUnion(SchemaIndex.tokens(in: binding))
+            }
+        }
     }
 
     private static func clarificationOptions(
@@ -2684,7 +2700,7 @@ public enum GeneratedSQLPostprocessor {
     ]
 
     private static let genericVerbStopWords: Set<String> = [
-        "create", "creating", "make", "makes", "making",
+        "create", "created", "creating", "made", "make", "makes", "making",
         "delete", "deleting", "insert", "inserting", "remove",
         "removing", "set", "update", "updating",
     ]

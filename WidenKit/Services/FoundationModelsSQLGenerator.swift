@@ -95,6 +95,16 @@
             }
         }
 
+        static func cumulativeModelCallCountAfterContextRetry(
+            startingModelCallCount: Int,
+            failedAttemptSpentCalls: Int,
+            retrySpentCalls: Int
+        ) -> Int {
+            max(0, startingModelCallCount)
+                + max(0, failedAttemptSpentCalls)
+                + max(0, retrySpentCalls)
+        }
+
         public func generateSQL(
             question: String,
             schema: DatabaseSchema,
@@ -126,7 +136,12 @@
                             model: model, maxSchemaCharacters: 8_000, inputScale: 0.8,
                             allowDiscovery: false)
                         var result = retry.result
-                        result.generationCallCount = error.spentModelCalls + retry.spentModelCalls
+                        result.generationCallCount =
+                            Self.cumulativeModelCallCountAfterContextRetry(
+                                startingModelCallCount: context.modelCallCount,
+                                failedAttemptSpentCalls: error.spentModelCalls,
+                                retrySpentCalls: retry.spentModelCalls
+                            )
                         return result
                     } catch let retryError as GenerationAttemptError {
                         throw Self.map(retryError.error)
