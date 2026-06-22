@@ -73,24 +73,77 @@ public struct PendingClarification: Identifiable, Codable, Equatable, Sendable {
     public var id: UUID
     public var concept: SQLGroundingConcept
     public var originalQuestion: String
+    public var plan: GroundedQueryPlan?
+    public var slotID: GroundingSlotID?
     public var question: String
     public var options: [ClarificationOption]
+    public var turnCount: Int
     public var evidence: [String]
+
+    private enum CodingKeys: String, CodingKey {
+        case id
+        case concept
+        case originalQuestion
+        case plan
+        case slotID
+        case question
+        case options
+        case turnCount
+        case evidence
+    }
 
     public init(
         id: UUID = UUID(),
         concept: SQLGroundingConcept,
         originalQuestion: String,
+        plan: GroundedQueryPlan? = nil,
+        slotID: GroundingSlotID? = nil,
         question: String,
         options: [ClarificationOption] = [],
+        turnCount: Int = 0,
         evidence: [String] = []
     ) {
         self.id = id
         self.concept = concept
         self.originalQuestion = originalQuestion
+        self.plan = plan
+        self.slotID = slotID
         self.question = question
         self.options = options
+        self.turnCount = turnCount
         self.evidence = evidence
+    }
+
+    public init(from decoder: any Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        id = try container.decode(UUID.self, forKey: .id)
+        concept = try container.decode(SQLGroundingConcept.self, forKey: .concept)
+        originalQuestion = try container.decode(String.self, forKey: .originalQuestion)
+        plan = try container.decodeIfPresent(GroundedQueryPlan.self, forKey: .plan)
+        slotID = try container.decodeIfPresent(GroundingSlotID.self, forKey: .slotID)
+        question = try container.decode(String.self, forKey: .question)
+        options = try container.decodeIfPresent([ClarificationOption].self, forKey: .options) ?? []
+        turnCount = try container.decodeIfPresent(Int.self, forKey: .turnCount) ?? 0
+        evidence = try container.decodeIfPresent([String].self, forKey: .evidence) ?? []
+    }
+
+    public func encode(to encoder: any Encoder) throws {
+        var container = encoder.container(keyedBy: CodingKeys.self)
+        try container.encode(id, forKey: .id)
+        try container.encode(concept, forKey: .concept)
+        try container.encode(originalQuestion, forKey: .originalQuestion)
+        try container.encodeIfPresent(plan, forKey: .plan)
+        try container.encodeIfPresent(slotID, forKey: .slotID)
+        try container.encode(question, forKey: .question)
+        if !options.isEmpty {
+            try container.encode(options, forKey: .options)
+        }
+        if turnCount != 0 {
+            try container.encode(turnCount, forKey: .turnCount)
+        }
+        if !evidence.isEmpty {
+            try container.encode(evidence, forKey: .evidence)
+        }
     }
 }
 

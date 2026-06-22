@@ -25,6 +25,13 @@ private let fmTestEnabled =
                 ) == 5
             )
         }
+
+        @Test func localGeneratorUsesMinimalStructuredOutputType() {
+            #expect(
+                FoundationModelsSQLGenerator.localStructuredOutputTypeName
+                    == "GeneratedLocalSQLDecision"
+            )
+        }
     }
 #endif
 

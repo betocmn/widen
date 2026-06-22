@@ -43,15 +43,58 @@
         var clarificationQuestion: String?
     }
 
-    @Generable(description: "Schema search queries needed before SQL generation.")
-    struct GeneratedSchemaDiscoveryResponse {
-        @Guide(
-            description: "Short schema search phrases, not SQL. Use table, column, metric, and relationship words.",
-            .maximumCount(3))
-        var searchQueries: [String]
+    @Generable(description: "A compact database-query intent frame.")
+    struct GeneratedQueryIntentFrame {
+        @Guide(.anyOf(["read", "insert", "update", "delete"]))
+        var operation: String
 
-        @Guide(description: "One short sentence explaining why these schema searches are needed.")
-        var reason: String
+        @Guide(.maximumCount(3))
+        var subjectPhrases: [String]
+
+        @Guide(.maximumCount(3))
+        var outputPhrases: [String]
+
+        @Guide(.anyOf([
+            "none", "countRows", "countDistinct", "sum", "average", "minimum", "maximum", "custom",
+        ]))
+        var measure: String
+
+        var measurePhrase: String?
+
+        @Guide(.maximumCount(3))
+        var groupingPhrases: [String]
+
+        @Guide(.anyOf(["none", "ascending", "descending"]))
+        var ranking: String
+
+        var takeFirst: Bool
+
+        @Guide(.maximumCount(3))
+        var filterPhrases: [String]
+
+        var timePhrase: String?
+
+        @Guide(.maximumCount(2))
+        var customBusinessTerms: [String]
+
+        @Guide(.maximumCount(4))
+        var schemaSearchQueries: [String]
+    }
+
+    @Generable(description: "A minimal local SQL decision.")
+    struct GeneratedLocalSQLDecision {
+        @Guide(.anyOf(["sql", "clarify"]))
+        var action: String
+
+        @Guide(
+            description:
+                "Exactly one PostgreSQL statement when action is sql; otherwise an empty string.")
+        var sql: String
+
+        @Guide(
+            description:
+                "One concise question when action is clarify; otherwise an empty string.")
+        var clarificationQuestion: String
     }
 
     struct LocalSQLDecision: Equatable, Sendable {
@@ -63,6 +106,21 @@
         var action: Action
         var sql: String
         var clarificationQuestion: String?
+
+        init(generated: GeneratedLocalSQLDecision) {
+            let trimmedSQL = generated.sql.trimmingCharacters(in: .whitespacesAndNewlines)
+            let clarification = generated.clarificationQuestion
+                .trimmingCharacters(in: .whitespacesAndNewlines)
+            if generated.action == "clarify" || (trimmedSQL.isEmpty && !clarification.isEmpty) {
+                self.action = .clarify
+                self.sql = ""
+                self.clarificationQuestion = clarification.isEmpty ? nil : clarification
+            } else {
+                self.action = .generateSQL
+                self.sql = trimmedSQL
+                self.clarificationQuestion = clarification.isEmpty ? nil : clarification
+            }
+        }
 
         init(generated: GeneratedSQLResponse) {
             let trimmedSQL = generated.sql.trimmingCharacters(in: .whitespacesAndNewlines)
@@ -84,6 +142,8 @@
     /// network, no external LLM APIs.
     public final class FoundationModelsSQLGenerator: SQLGenerator, Sendable {
         public init() {}
+
+        static let localStructuredOutputTypeName = "GeneratedLocalSQLDecision"
 
         /// nil when the model is ready; otherwise a user-readable reason.
         public static var availabilityMessage: String? {
@@ -213,10 +273,10 @@
             do {
                 let response = try await session.respond(
                     to: prompt,
-                    generating: GeneratedSQLResponse.self,
-                    options: GenerationOptions(sampling: .greedy, maximumResponseTokens: 512)
+                    generating: GeneratedLocalSQLDecision.self,
+                    options: GenerationOptions(sampling: .greedy, maximumResponseTokens: 256)
                 )
-                var result = Self.result(from: response.content)
+                var result = Self.result(from: response.content, schema: schema)
                 result.generationCallCount = generationContext.modelCallCount
                 await GenerationLog.shared.append(
                     prompt: prompt,
@@ -317,19 +377,36 @@
                 databaseContext: config.databaseContext,
                 maxCharacters: discoveryCharacters
             )
+            let planningInstructions = """
+                Convert the request into database-query intent.
+
+                Identify:
+                - the entities being requested;
+                - the relational measure, if one is stated;
+                - grouping, ranking, filters, and time constraints;
+                - genuinely database-specific business terms;
+                - short schema search phrases.
+
+                Words such as frequent, count, total, average, latest, earliest, unique,
+                highest, lowest, and per describe query operations. Do not mark them as
+                business terms merely because they may not appear in a schema.
+
+                Do not write SQL.
+                Do not invent table names, column names, status values, or business definitions.
+                """
             let discoveryPrompt = [
-                "<schema_discovery_task>",
+                "<query_intent_planning_task>",
                 SQLPromptBuilder.taggedCDATASectionForGenerator("user_request", question),
                 SQLPromptBuilder.taggedCDATASectionForGenerator("schema_catalog", catalog),
                 SQLPromptBuilder.taggedCDATASectionForGenerator(
                     "instruction",
-                    "Return up to 3 short schema search queries that Widen should use to retrieve detailed table definitions. Do not write SQL."
+                    planningInstructions
                 ),
-                "</schema_discovery_task>",
+                "</query_intent_planning_task>",
             ].joined(separator: "\n")
 
             guard budget.fits(
-                inputCharacters: instructions.count + discoveryPrompt.count,
+                inputCharacters: planningInstructions.count + discoveryPrompt.count,
                 scale: inputScale
             ) else {
                 return context
@@ -338,18 +415,14 @@
             do {
                 let session = LanguageModelSession(
                     model: model,
-                    instructions: instructions
+                    instructions: planningInstructions
                 )
                 let response = try await session.respond(
                     to: discoveryPrompt,
-                    generating: GeneratedSchemaDiscoveryResponse.self,
-                    options: GenerationOptions(sampling: .greedy, maximumResponseTokens: 160)
+                    generating: GeneratedQueryIntentFrame.self,
+                    options: GenerationOptions(sampling: .greedy, maximumResponseTokens: 224)
                 )
-                let discovery = SchemaDiscoveryRequestResult(
-                    searchQueries: response.content.searchQueries,
-                    reason: response.content.reason
-                )
-                let queries = discovery.sanitizedSearchQueries
+                let queries = Self.intentSearchQueries(from: response.content)
                 var copy = context
                 copy.modelCallCount = max(1, context.modelCallCount) + 1
                 guard !queries.isEmpty else { return copy }
@@ -362,6 +435,25 @@
                 copy.modelCallCount = max(1, context.modelCallCount) + 1
                 return copy
             }
+        }
+
+        private static func intentSearchQueries(from generated: GeneratedQueryIntentFrame) -> [String] {
+            var seen = Set<String>()
+            var queries: [String] = []
+            for candidate in generated.schemaSearchQueries
+                + generated.subjectPhrases
+                + generated.outputPhrases
+                + generated.groupingPhrases
+                + generated.customBusinessTerms
+            {
+                let cleaned = candidate.trimmingCharacters(in: .whitespacesAndNewlines)
+                guard !cleaned.isEmpty, cleaned.count <= 80 else { continue }
+                let key = cleaned.lowercased()
+                guard seen.insert(key).inserted else { continue }
+                queries.append(cleaned)
+                if queries.count == 4 { break }
+            }
+            return queries
         }
 
         private static func needsSchemaDiscovery(
@@ -507,6 +599,40 @@
                 needsClarification: decision.action == .clarify,
                 clarificationQuestion: decision.clarificationQuestion
             )
+        }
+
+        static func result(
+            from generated: GeneratedLocalSQLDecision,
+            schema: DatabaseSchema
+        ) -> SQLGenerationResult {
+            let decision = LocalSQLDecision(generated: generated)
+            switch decision.action {
+            case .clarify:
+                return SQLGenerationResult(
+                    sql: "",
+                    explanation: "Needs clarification before generating SQL.",
+                    assumptions: [],
+                    referencedTables: [],
+                    confidence: 0,
+                    riskLevel: .medium,
+                    needsClarification: true,
+                    clarificationQuestion: decision.clarificationQuestion
+                )
+            case .generateSQL:
+                let validation = SQLSchemaValidator.validate(sql: decision.sql, against: schema)
+                let risk: SQLRiskLevel = validation.errors.isEmpty ? .low : .medium
+                let confidence = validation.errors.isEmpty ? 0.78 : 0.45
+                return SQLGenerationResult(
+                    sql: decision.sql,
+                    explanation: "Generated one PostgreSQL statement for the request.",
+                    assumptions: [],
+                    referencedTables: validation.referencedTables,
+                    confidence: confidence,
+                    riskLevel: risk,
+                    needsClarification: false,
+                    clarificationQuestion: decision.clarificationQuestion
+                )
+            }
         }
 
         private static let discoveryStopWords: Set<String> = [

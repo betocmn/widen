@@ -358,6 +358,42 @@ public final class SessionController: Identifiable {
             databaseContext: connection?.databaseContext ?? ""
         )
 
+        if pendingClarification == nil,
+            let compiled = AnalyticQueryCompiler.compile(
+                question: question,
+                schema: schema,
+                defaultRowLimit: config.defaultRowLimit,
+                databaseContext: config.databaseContext
+            )
+        {
+            let result = GeneratedSQLPostprocessor.enriched(
+                compiled,
+                question: question,
+                schema: schema,
+                databaseContext: config.databaseContext,
+                confirmedSemanticBindings: context.confirmedSemanticBindings
+            )
+            chatVM.input = ""
+            chatVM.messages.append(ChatMessage(role: .user, text: question))
+            if result.needsClarification,
+                let clarification = result.clarificationQuestion,
+                !clarification.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+            {
+                chatVM.messages.append(
+                    ChatMessage(
+                        role: .assistant,
+                        text: clarification,
+                        generation: result,
+                        pendingClarification: result.pendingClarification
+                    )
+                )
+            } else {
+                appendAssistantGeneration(result)
+                queryVM.setGeneration(result, schema: schema)
+            }
+            return
+        }
+
         chatVM.input = ""
         chatVM.messages.append(ChatMessage(role: .user, text: question))
         chatVM.beginGeneration()

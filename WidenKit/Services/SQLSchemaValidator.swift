@@ -1969,6 +1969,59 @@ public enum GeneratedSQLPostprocessor {
         let schemaValidation = SQLSchemaValidator.validate(sql: sql, against: schema)
         copy.referencedTables = schemaValidation.referencedTables
         if !schemaValidation.hasDefiniteErrors {
+            let intent = QueryIntentPlanner.deterministicIntent(for: question)
+            if shouldApplyIntentPlan(intent) {
+                let plan = GroundedQueryPlanner.ground(
+                    intent: intent,
+                    schema: schema,
+                    referencedTables: schemaValidation.referencedTables
+                )
+                if let pending = GroundedQueryPlanner.clarification(
+                    for: plan,
+                    originalQuestion: question
+                ) {
+                    copy.sql = ""
+                    copy.explanation = pending.question
+                    copy.needsClarification = true
+                    copy.clarificationQuestion = pending.question
+                    copy.clarificationOptions = pending.options
+                    copy.pendingClarificationID = pending.id
+                    copy.pendingClarification = pending
+                    copy.groundingConcepts = plan.slots.map {
+                        SQLGroundingConcept(
+                            term: $0.phrase,
+                            kind: groundingConceptKind(for: $0.kind),
+                            state: $0.state,
+                            required: $0.required,
+                            evidence: $0.selectedCandidate?.evidence ?? $0.candidates.flatMap(\.evidence)
+                        )
+                    }
+                    copy.confidence = min(copy.confidence, 0.2)
+                    copy.riskLevel = .medium
+                    return copy
+                }
+                let conformance = SQLIntentConformanceValidator.validate(
+                    sql: sql,
+                    plan: plan,
+                    schema: schema
+                )
+                if !conformance.isValid {
+                    let message = "The generated SQL does not match the grounded request: \(conformance.issues.joined(separator: " "))"
+                    copy.sql = ""
+                    copy.explanation = message
+                    copy.needsClarification = true
+                    copy.clarificationQuestion = message
+                    copy.confidence = min(copy.confidence, 0.2)
+                    copy.riskLevel = .medium
+                    return copy
+                }
+                if !plan.interpretationSummary.isEmpty {
+                    copy.assumptions.append(plan.interpretationSummary)
+                    if copy.explanation.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+                        copy.explanation = "Interpretation: \(plan.interpretationSummary)"
+                    }
+                }
+            }
             let grounding = groundingEvaluation(
                 question: question,
                 sql: sql,
@@ -1993,6 +2046,31 @@ public enum GeneratedSQLPostprocessor {
             }
         }
         return copy
+    }
+
+    private static func shouldApplyIntentPlan(_ intent: QueryIntentFrame) -> Bool {
+        intent.operation == .read
+            && (!intent.customBusinessTerms.isEmpty
+                || (intent.measure == .countRows && intent.ranking != nil))
+    }
+
+    private static func groundingConceptKind(
+        for slotKind: GroundingSlotKind
+    ) -> SQLGroundingConcept.Kind {
+        switch slotKind {
+        case .occurrenceRelation, .relationshipPath:
+            .relationship
+        case .measureColumn:
+            .metric
+        case .filterColumn, .filterValue:
+            .filter
+        case .timeColumn:
+            .time
+        case .customBusinessTerm:
+            .businessTerm
+        case .subjectEntity, .outputEntity, .groupingColumn:
+            .entity
+        }
     }
 
     public static func groundingEvaluation(

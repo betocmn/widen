@@ -25,6 +25,7 @@
 		16FF5393670F9E93FD53B778 /* PrivateCloudComputeSQLGenerator.swift in Sources */ = {isa = PBXBuildFile; fileRef = 6D97D661282C7D49C7D9844A /* PrivateCloudComputeSQLGenerator.swift */; };
 		174D9DBB71A59BDCC9E707B8 /* OpenRouterSQLGenerator.swift in Sources */ = {isa = PBXBuildFile; fileRef = F6F18482BAFDA08E3E215F02 /* OpenRouterSQLGenerator.swift */; };
 		17B58BDBFC1AD9599BE083EC /* QuerySession.swift in Sources */ = {isa = PBXBuildFile; fileRef = 0B7BA9550419C079DAB74703 /* QuerySession.swift */; };
+		18A25B27808E9E4D8315E3A1 /* QueryIntentFrame.swift in Sources */ = {isa = PBXBuildFile; fileRef = 18A25B26808E9E4D8315E3A1 /* QueryIntentFrame.swift */; };
 		1B4AF2DDDDEF130CA473EE1F /* AppStateSchemaTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = A8D7D7EDCCE8B5638DAF4989 /* AppStateSchemaTests.swift */; };
 		1B7ED3BD37EE6A5727850143 /* SQLPromptBuilder.swift in Sources */ = {isa = PBXBuildFile; fileRef = 6BA8E6CFAEE004F6DB3C4D6B /* SQLPromptBuilder.swift */; };
 		1D500705EAC9A667A2702299 /* SchemaBrowserView.swift in Sources */ = {isa = PBXBuildFile; fileRef = ABCA8C831C2698A2155AD49F /* SchemaBrowserView.swift */; };
@@ -83,6 +84,7 @@
 		97F621F20475215531A2FE1D /* SessionController.swift in Sources */ = {isa = PBXBuildFile; fileRef = 4E3224013C3BD2A7894756D9 /* SessionController.swift */; };
 		982986ED6DA188054F14BCE9 /* MainView.swift in Sources */ = {isa = PBXBuildFile; fileRef = A181CFBD27E3620C8C3C902E /* MainView.swift */; };
 		98CECE67670288333751B170 /* QueryExecutionService.swift in Sources */ = {isa = PBXBuildFile; fileRef = 8D3B5C38E209E366A7B9413D /* QueryExecutionService.swift */; };
+		9963C1A38B2C1A7D0442A5E4 /* QueryIntentPlanning.swift in Sources */ = {isa = PBXBuildFile; fileRef = 9963C1A28B2C1A7D0442A5E4 /* QueryIntentPlanning.swift */; };
 		9FC5F80BD37E41A1A2235094 /* AppearanceToggle.swift in Sources */ = {isa = PBXBuildFile; fileRef = 230B04423A505F20C3D79EF5 /* AppearanceToggle.swift */; };
 		A4619CBD00076D2F2CCA24D8 /* SQLSchemaValidator.swift in Sources */ = {isa = PBXBuildFile; fileRef = C02CB7A7DD58AC6FA1FDE0A2 /* SQLSchemaValidator.swift */; };
 		A4D6C3096A4BCC48EEC9114A /* ConnectionDetailsParser.swift in Sources */ = {isa = PBXBuildFile; fileRef = D4040E3CB88247BE7A857541 /* ConnectionDetailsParser.swift */; };
@@ -173,6 +175,7 @@
 		1C4B123ACB7D6A07BF9C56B1 /* SessionRow.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SessionRow.swift; sourceTree = "<group>"; };
 		1C82BFC72C1C05541743CC9D /* MockConnectionDetailsParser.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MockConnectionDetailsParser.swift; sourceTree = "<group>"; };
 		1E304574ECE296ACFF37B3B2 /* ConnectionAutofillSheet.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ConnectionAutofillSheet.swift; sourceTree = "<group>"; };
+		18A25B26808E9E4D8315E3A1 /* QueryIntentFrame.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = QueryIntentFrame.swift; sourceTree = "<group>"; };
 		21DDF1337274FDB5AB132977 /* WidenTests.xctest */ = {isa = PBXFileReference; explicitFileType = wrapper.cfbundle; includeInIndex = 0; path = WidenTests.xctest; sourceTree = BUILT_PRODUCTS_DIR; };
 		230B04423A505F20C3D79EF5 /* AppearanceToggle.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AppearanceToggle.swift; sourceTree = "<group>"; };
 		238DB6D552B7AF2D295338FD /* FoundationModelsSQLGenerator.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = FoundationModelsSQLGenerator.swift; sourceTree = "<group>"; };
@@ -223,6 +226,7 @@
 		940033E79D8170BF75FF21E8 /* SchemaRelevanceRanker.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SchemaRelevanceRanker.swift; sourceTree = "<group>"; };
 		9548C6FFDED1BB0553160789 /* LLMSettingsView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = LLMSettingsView.swift; sourceTree = "<group>"; };
 		980EE95F99B9CDF2F26BBC47 /* ErrorBannerView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ErrorBannerView.swift; sourceTree = "<group>"; };
+		9963C1A28B2C1A7D0442A5E4 /* QueryIntentPlanning.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = QueryIntentPlanning.swift; sourceTree = "<group>"; };
 		9D65EBBAD5352C90A92D303B /* AIBackendPreferences.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AIBackendPreferences.swift; sourceTree = "<group>"; };
 		A0D6E491DE3F8E28E3DE6BA0 /* ResultsGridView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ResultsGridView.swift; sourceTree = "<group>"; };
 		A181CFBD27E3620C8C3C902E /* MainView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MainView.swift; sourceTree = "<group>"; };
@@ -434,6 +438,7 @@
 				EC8949F7F4C8FC5E472D3909 /* PostgresService.swift */,
 				6D97D661282C7D49C7D9844A /* PrivateCloudComputeSQLGenerator.swift */,
 				8D3B5C38E209E366A7B9413D /* QueryExecutionService.swift */,
+				9963C1A28B2C1A7D0442A5E4 /* QueryIntentPlanning.swift */,
 				87A557902EE4B1497CFCF264 /* SchemaIndex.swift */,
 				5A2C062CE92CC29EB34DC339 /* SchemaIntrospectionService.swift */,
 				934D246292381050D06E03C9 /* SchemaPromptPackager.swift */,
@@ -518,6 +523,7 @@
 				53B157FCABED3A63DEE715A3 /* ForeignKeyInfo.swift */,
 				0875D9B4DCE517781B097472 /* OpenRouterCatalog.swift */,
 				C9706E30965E3905E64B2FA9 /* ParsedConnectionDetails.swift */,
+				18A25B26808E9E4D8315E3A1 /* QueryIntentFrame.swift */,
 				62528AEFE710F6485BD8680B /* QueryResult.swift */,
 				0B7BA9550419C079DAB74703 /* QuerySession.swift */,
 				2DAAF8DAFFED5A966828C8C4 /* SQLGenerationResult.swift */,
@@ -737,6 +743,8 @@
 				AFA418FA05A4579D14F1DA77 /* PostgresService.swift in Sources */,
 				16FF5393670F9E93FD53B778 /* PrivateCloudComputeSQLGenerator.swift in Sources */,
 				98CECE67670288333751B170 /* QueryExecutionService.swift in Sources */,
+				18A25B27808E9E4D8315E3A1 /* QueryIntentFrame.swift in Sources */,
+				9963C1A38B2C1A7D0442A5E4 /* QueryIntentPlanning.swift in Sources */,
 				16E7184CC8CEBDD110063DD0 /* QueryResult.swift in Sources */,
 				31AAD4FFD25B413C6BB2410E /* QueryResultViewModel.swift in Sources */,
 				17B58BDBFC1AD9599BE083EC /* QuerySession.swift in Sources */,

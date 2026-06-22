@@ -1410,6 +1410,125 @@ struct SQLSchemaValidatorTests {
         })
     }
 
+    @Test func frequentFeedbackClusterIntentGroundsToMembershipRows() {
+        let intent = QueryIntentPlanner.deterministicIntent(
+            for: "what is the most frequent feedback cluster?"
+        )
+
+        #expect(intent.measure == .countRows)
+        #expect(intent.ranking?.direction == .descending)
+        #expect(intent.ranking?.takeFirst == true)
+        #expect(intent.requestedLimit == 1)
+        #expect(intent.customBusinessTerms.isEmpty)
+        #expect(intent.groupingPhrases == ["feedback cluster"])
+
+        let plan = GroundedQueryPlanner.ground(intent: intent, schema: makeFeedbackClusterSchema())
+
+        #expect(plan.readiness == .readyWithInterpretation)
+        #expect(plan.selectedTables.contains("public.feedback_cluster"))
+        #expect(plan.selectedTables.contains("public.feedback_cluster_membership"))
+        #expect(GroundedQueryPlanner.clarification(for: plan) == nil)
+        #expect(plan.slots.contains {
+            $0.kind == .occurrenceRelation && $0.state == .grounded
+        })
+    }
+
+    @Test func multipleOccurrenceRelationsAskAboutRelationshipNotFrequent() {
+        let intent = QueryIntentPlanner.deterministicIntent(
+            for: "what is the most frequent feedback cluster?"
+        )
+        let plan = GroundedQueryPlanner.ground(
+            intent: intent,
+            schema: makeAmbiguousFeedbackClusterSchema()
+        )
+        let pending = GroundedQueryPlanner.clarification(for: plan)
+
+        #expect(plan.readiness == .needsClarification)
+        #expect(pending?.slotID == .occurrenceRelation)
+        #expect(pending?.question.localizedCaseInsensitiveContains("frequent") == false)
+        #expect(pending?.question.localizedCaseInsensitiveContains("count") == true)
+        #expect((pending?.options.count ?? 0) >= 2)
+    }
+
+    @Test func customMetricTermsProduceMetricClarification() {
+        for question in [
+            "best customer",
+            "healthy account",
+            "successful campaign",
+            "valuable product",
+            "engaged user",
+        ] {
+            let intent = QueryIntentPlanner.deterministicIntent(for: question)
+            let plan = GroundedQueryPlanner.ground(intent: intent, schema: makeUsersOrdersSchema())
+            let pending = GroundedQueryPlanner.clarification(for: plan)
+
+            #expect(intent.measure == .custom, "Expected custom metric for: \(question)")
+            #expect(pending?.slotID == .customBusinessTerm, "Expected custom slot for: \(question)")
+            #expect(pending?.question.localizedCaseInsensitiveContains("metric") == true)
+        }
+    }
+
+    @Test func frequencyIntentConformanceRejectsWrongSQLShapes() {
+        let intent = QueryIntentPlanner.deterministicIntent(
+            for: "what is the most frequent feedback cluster?"
+        )
+        let plan = GroundedQueryPlanner.ground(intent: intent, schema: makeFeedbackClusterSchema())
+        let schema = makeFeedbackClusterSchema()
+
+        let badSQL = [
+            "SELECT DISTINCT cluster_id FROM public.feedback_cluster_membership",
+            "SELECT COUNT(*) FROM public.feedback_cluster_membership",
+            """
+            SELECT cluster_id, COUNT(*) AS n
+            FROM public.feedback_cluster_membership
+            GROUP BY cluster_id
+            ORDER BY n ASC
+            LIMIT 1
+            """,
+            """
+            SELECT cluster_id, COUNT(*) AS n
+            FROM public.feedback_cluster_membership
+            GROUP BY cluster_id
+            ORDER BY n DESC
+            """,
+        ]
+
+        for sql in badSQL {
+            let result = SQLIntentConformanceValidator.validate(sql: sql, plan: plan, schema: schema)
+            #expect(!result.isValid, "Expected conformance failure for: \(sql)")
+        }
+
+        let good = """
+            SELECT fc.id, COUNT(*) AS n
+            FROM public.feedback_cluster_membership AS fcm
+            JOIN public.feedback_cluster AS fc ON fcm.cluster_id = fc.id
+            GROUP BY fc.id
+            ORDER BY n DESC
+            LIMIT 1
+            """
+
+        #expect(SQLIntentConformanceValidator.validate(sql: good, plan: plan, schema: schema).isValid)
+    }
+
+    @Test func analyticCompilerBuildsTopCountQuery() {
+        let result = AnalyticQueryCompiler.compile(
+            question: "what is the most frequent feedback cluster?",
+            schema: makeFeedbackClusterSchema(),
+            defaultRowLimit: 100
+        )
+
+        #expect(result != nil)
+        #expect(result?.needsClarification == false)
+        #expect(result?.sql.localizedCaseInsensitiveContains("COUNT(*)") == true)
+        #expect(result?.sql.localizedCaseInsensitiveContains("GROUP BY") == true)
+        #expect(result?.sql.localizedCaseInsensitiveContains("ORDER BY occurrence_count DESC") == true)
+        #expect(result?.sql.localizedCaseInsensitiveContains("LIMIT 1") == true)
+        #expect(result?.referencedTables == [
+            "public.feedback_cluster_membership",
+            "public.feedback_cluster",
+        ])
+    }
+
     @Test func universalAnalyticalOperatorsDoNotRequireSchemaTokenGrounding() {
         let cases: [(String, String)] = [
             (
@@ -2135,6 +2254,34 @@ struct SQLSchemaValidatorTests {
                 ),
             ]
         )
+    }
+
+    private func makeAmbiguousFeedbackClusterSchema() -> DatabaseSchema {
+        var schema = makeFeedbackClusterSchema()
+        if let index = schema.tables.firstIndex(where: { $0.name == "feedback_item" }) {
+            schema.tables[index].columns.append(
+                ColumnInfo(
+                    tableSchema: "public",
+                    tableName: "feedback_item",
+                    name: "cluster_id",
+                    dataType: "uuid",
+                    isNullable: true,
+                    ordinalPosition: 2
+                )
+            )
+        }
+        schema.foreignKeys.append(
+            ForeignKeyInfo(
+                constraintName: "feedback_item_cluster_fkey",
+                sourceSchema: "public",
+                sourceTable: "feedback_item",
+                sourceColumn: "cluster_id",
+                targetSchema: "public",
+                targetTable: "feedback_cluster",
+                targetColumn: "id"
+            )
+        )
+        return schema
     }
 
     private func makeAnalyticsOperatorSchema() -> DatabaseSchema {
