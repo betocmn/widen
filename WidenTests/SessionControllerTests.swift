@@ -2034,7 +2034,7 @@ struct SessionControllerTests {
         #expect(controller.chatVM.messages.last?.generation?.needsClarification == true)
     }
 
-    @Test func clarificationOptionReplyResolvesPendingClarificationWithoutPersistingBinding() async {
+    @Test func clarificationOptionReplyResolvesPendingClarificationAndCanBeRemembered() async {
         let connectionID = UUID()
         let (state, dir) = makeState(connectionID: connectionID, connected: true)
         defer { try? FileManager.default.removeItem(at: dir) }
@@ -2089,6 +2089,65 @@ struct SessionControllerTests {
         #expect(state.semanticBindings.isEmpty)
         #expect(controller.queryVM.sqlText == fixed.sql)
         #expect(controller.chatVM.messages.last?.generation?.needsClarification == false)
+        #expect(controller.queryVM.generation?.resolvedClarification?.id == pending.id)
+        #expect(controller.queryVM.generation?.resolvedClarificationOption == option)
+
+        controller.rememberResolvedClarification(appState: state)
+
+        #expect(state.semanticBindings.count == 1)
+        #expect(state.semanticBindings[0].concept == "active")
+        #expect(state.semanticBindings[0].referencedObjectIDs == ["column:public.users.status"])
+    }
+
+    @Test func exactClarificationOptionLabelCanBeRememberedAfterValidation() async {
+        let connectionID = UUID()
+        let (state, dir) = makeState(connectionID: connectionID, connected: true)
+        defer { try? FileManager.default.removeItem(at: dir) }
+        let schema = makeUsersUnconstrainedStatusSchema()
+        state.schemas[connectionID] = schema
+        let controller = makeController(connectionID: connectionID)
+        let option = ClarificationOption(
+            label: "status = active",
+            replyText: #"Use "public"."users"."status" = 'active'"#,
+            definition: #""public"."users"."status" = 'active'"#,
+            evidence: ["public.users.status"]
+        )
+        let pending = PendingClarification(
+            concept: SQLGroundingConcept(
+                term: "active",
+                kind: .filter,
+                state: .unsupported,
+                required: true
+            ),
+            originalQuestion: "how many active users?",
+            question: "What defines active users?",
+            options: [option]
+        )
+        controller.chatVM.messages = [
+            ChatMessage(role: .user, text: "how many active users?"),
+            ChatMessage(
+                role: .assistant,
+                text: pending.question,
+                pendingClarification: pending
+            ),
+        ]
+        controller.chatVM.input = option.label
+        let fixed = makeGeneration(
+            sql: "SELECT COUNT(*) FROM public.users WHERE status = 'active'",
+            explanation: "Counts active users."
+        )
+        let generator = RecordingRepairGenerator(results: [fixed])
+        state.sqlGeneratorOverride = generator
+
+        await controller.submit(appState: state)
+
+        #expect(generator.questions == ["how many active users?"])
+        #expect(controller.queryVM.generation?.resolvedClarificationOption == option)
+
+        controller.rememberResolvedClarification(appState: state)
+
+        #expect(state.semanticBindings.count == 1)
+        #expect(state.semanticBindings[0].referencedObjectIDs == ["column:public.users.status"])
     }
 
     @Test func occurrenceClarificationOptionResolvesTypedSlotAmbiguity() async throws {
@@ -2250,6 +2309,46 @@ struct SessionControllerTests {
         #expect(state.semanticBindings.isEmpty)
         #expect(controller.queryVM.sqlText == fixed.sql)
         #expect(controller.chatVM.messages.last?.generation?.needsClarification == false)
+
+        controller.rememberResolvedClarification(appState: state)
+
+        #expect(state.semanticBindings.isEmpty)
+    }
+
+    @Test func bareAffirmativeClarificationReplyDoesNotInventDefinition() async throws {
+        let connectionID = UUID()
+        let (state, dir) = makeState(connectionID: connectionID, connected: true)
+        defer { try? FileManager.default.removeItem(at: dir) }
+        let schema = makeSchema()
+        state.schemas[connectionID] = schema
+        let controller = makeController(connectionID: connectionID)
+        let original = "best user"
+        let intent = QueryIntentPlanner.deterministicIntent(for: original)
+        let plan = GroundedQueryPlanner.ground(intent: intent, schema: schema)
+        let pending = try #require(GroundedQueryPlanner.clarification(for: plan, originalQuestion: original))
+        controller.chatVM.messages = [
+            ChatMessage(role: .user, text: original),
+            ChatMessage(
+                role: .assistant,
+                text: pending.question,
+                pendingClarification: pending
+            ),
+        ]
+        controller.chatVM.input = "yes"
+        let generated = makeGeneration(
+            sql: "SELECT id FROM public.users LIMIT 1",
+            explanation: "Generated SQL."
+        )
+        let generator = RecordingRepairGenerator(results: [generated])
+        state.sqlGeneratorOverride = generator
+
+        await controller.submit(appState: state)
+
+        #expect(generator.questions == [original])
+        #expect(generator.contexts.first?.confirmedSemanticBindings.isEmpty == true)
+        #expect(controller.queryVM.sqlText.isEmpty)
+        #expect(controller.chatVM.messages.last?.pendingClarification?.concept.term == "best")
+        #expect(controller.chatVM.messages.last?.pendingClarification?.turnCount == 1)
     }
 
     @Test func clarificationReplyWithoutConceptTermResolvesOriginalQuestion() async {

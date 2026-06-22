@@ -205,10 +205,31 @@ struct SQLCardView: View {
                 .lineLimit(1)
                 .truncationMode(.middle)
             }
+            if canRememberDefinition(generation) {
+                Button("Remember Definition", systemImage: "bookmark") {
+                    controller.rememberResolvedClarification(appState: appState)
+                }
+                .buttonStyle(.bordered)
+                .controlSize(.small)
+                .hoverBrightness()
+                .help("Remember this validated definition for this database")
+            }
             Spacer()
         }
         .font(.caption)
         .foregroundStyle(.secondary)
+    }
+
+    private func canRememberDefinition(_ generation: SQLGenerationResult) -> Bool {
+        guard let pending = generation.resolvedClarification,
+            generation.resolvedClarificationOption != nil,
+            controller.queryVM.validation?.isValid == true
+        else {
+            return false
+        }
+        return !appState.semanticBindings.contains {
+            $0.originatingClarificationID == pending.id
+        }
     }
 
     private func detailsView(_ generation: SQLGenerationResult) -> some View {

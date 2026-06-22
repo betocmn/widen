@@ -222,7 +222,10 @@ public enum ClarificationResolver {
                 mentionedSchemaTerms: mentionedTerms(in: pending.options[index].definition, pending: pending)
             )
         }
-        if isAffirmative(normalized), pending.options.count == 1 {
+        if isAffirmative(normalized) {
+            guard pending.options.count == 1 else {
+                return ClarificationResolution(action: .stillAmbiguous)
+            }
             return ClarificationResolution(
                 action: .answer,
                 selectedOptionIndex: 0,
@@ -731,13 +734,22 @@ public enum SQLIntentConformanceValidator {
     ) -> SQLIntentConformanceResult {
         let normalized = sql.lowercased()
         var issues: [String] = []
+        let storedCountColumn = selectedStoredCountColumnObjectID(in: plan)
+        let usesStoredCountColumn = storedCountColumn.map {
+            referencesColumn(objectID: $0, in: normalized)
+        } ?? false
+        if storedCountColumn != nil, !usesStoredCountColumn {
+            issues.append("Stored count intent requires the selected count column.")
+        }
         if plan.intent.measure == .countRows,
-            !normalized.contains("count(")
+            !normalized.contains("count("),
+            !usesStoredCountColumn
         {
             issues.append("Frequency intent requires COUNT.")
         }
         if !plan.intent.groupingPhrases.isEmpty,
-            !normalized.contains("group by")
+            !normalized.contains("group by"),
+            !usesStoredCountColumn
         {
             issues.append("Frequency intent requires GROUP BY for the requested entity.")
         }
@@ -757,6 +769,22 @@ public enum SQLIntentConformanceValidator {
             issues.append("SQL does not reference grounded table \(table).")
         }
         return SQLIntentConformanceResult(isValid: issues.isEmpty, issues: issues)
+    }
+
+    private static func selectedStoredCountColumnObjectID(in plan: GroundedQueryPlan) -> String? {
+        plan.slots
+            .first { $0.kind == .occurrenceRelation }?
+            .selectedCandidate?
+            .objectIDs
+            .first { $0.hasPrefix("column:") }
+    }
+
+    private static func referencesColumn(objectID: String, in normalizedSQL: String) -> Bool {
+        let parts = objectID.dropFirst("column:".count).split(separator: ".")
+        guard let column = parts.last?.lowercased(), !column.isEmpty else { return false }
+        let escaped = NSRegularExpression.escapedPattern(for: String(column))
+        let pattern = #"(^|[^a-z0-9_])"?\#(escaped)"?([^a-z0-9_]|$)"#
+        return normalizedSQL.range(of: pattern, options: .regularExpression) != nil
     }
 }
 

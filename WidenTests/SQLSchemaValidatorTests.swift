@@ -1577,6 +1577,46 @@ struct SQLSchemaValidatorTests {
         #expect(SQLIntentConformanceValidator.validate(sql: good, plan: plan, schema: schema).isValid)
     }
 
+    @Test func storedCountColumnCanSatisfyFrequencyIntent() {
+        let intent = QueryIntentPlanner.deterministicIntent(
+            for: "what is the most frequent feedback cluster?"
+        )
+        let schema = makeFeedbackClusterStoredCountSchema()
+        let plan = GroundedQueryPlanner.ground(intent: intent, schema: schema)
+        let sql = """
+            SELECT id, feedback_count
+            FROM public.feedback_cluster
+            ORDER BY feedback_count DESC
+            LIMIT 1
+            """
+
+        #expect(plan.readiness == .readyWithInterpretation)
+        #expect(plan.slots.contains {
+            $0.kind == .occurrenceRelation
+                && $0.selectedCandidate?.objectIDs.contains("column:public.feedback_cluster.feedback_count") == true
+        })
+        #expect(SQLIntentConformanceValidator.validate(sql: sql, plan: plan, schema: schema).isValid)
+
+        let enriched = GeneratedSQLPostprocessor.enriched(
+            SQLGenerationResult(
+                sql: sql,
+                explanation: "Finds the cluster with the highest stored feedback count.",
+                assumptions: [],
+                referencedTables: [],
+                confidence: 1,
+                riskLevel: .low,
+                needsClarification: false,
+                clarificationQuestion: nil
+            ),
+            question: "what is the most frequent feedback cluster?",
+            schema: schema,
+            databaseContext: ""
+        )
+
+        #expect(!enriched.needsClarification)
+        #expect(enriched.sql == sql)
+    }
+
     @Test func analyticCompilerBuildsTopCountQuery() {
         let result = AnalyticQueryCompiler.compile(
             question: "what is the most frequent feedback cluster?",
@@ -2393,6 +2433,29 @@ struct SQLSchemaValidatorTests {
             )
         )
         return schema
+    }
+
+    private func makeFeedbackClusterStoredCountSchema() -> DatabaseSchema {
+        DatabaseSchema(
+            schemas: [SchemaInfo(name: "public")],
+            tables: [
+                TableInfo(
+                    schema: "public",
+                    name: "feedback_cluster",
+                    type: .baseTable,
+                    columns: [
+                        ColumnInfo(
+                            tableSchema: "public", tableName: "feedback_cluster", name: "id",
+                            dataType: "uuid", isNullable: false, ordinalPosition: 1),
+                        ColumnInfo(
+                            tableSchema: "public", tableName: "feedback_cluster",
+                            name: "feedback_count", dataType: "integer", isNullable: false,
+                            ordinalPosition: 2),
+                    ]
+                )
+            ],
+            foreignKeys: []
+        )
     }
 
     private func makeAnalyticsOperatorSchema() -> DatabaseSchema {

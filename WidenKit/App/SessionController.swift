@@ -284,6 +284,26 @@ public final class SessionController: Identifiable {
         await submit(appState: appState)
     }
 
+    public func rememberResolvedClarification(appState: AppState) {
+        guard let generation = queryVM.generation,
+            queryVM.validation?.isValid == true,
+            let pending = generation.resolvedClarification,
+            let selectedOption = generation.resolvedClarificationOption,
+            let schema = appState.schemaForGeneration(generation, connectionID: connectionID)
+                ?? appState.promptSchema(for: connectionID)
+        else {
+            return
+        }
+        appState.confirmSemanticBinding(
+            connectionID: connectionID,
+            pending: pending,
+            replyText: generation.resolvedClarificationReply ?? selectedOption.replyText,
+            selectedOption: selectedOption,
+            schema: schema
+        )
+        appState.sessionDidChange(sessionID)
+    }
+
     private func submitGeneratedSQL(appState: AppState) async {
         let question = chatVM.input.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !question.isEmpty, !chatVM.isGenerating, !queryVM.isRunning else { return }
@@ -423,7 +443,7 @@ public final class SessionController: Identifiable {
                 context: context,
                 config: config
             )
-            let result = GeneratedSQLPostprocessor.enriched(
+            var result = GeneratedSQLPostprocessor.enriched(
                 generated,
                 question: generationQuestion,
                 schema: schema,
@@ -431,6 +451,13 @@ public final class SessionController: Identifiable {
                 confirmedSemanticBindings: context.confirmedSemanticBindings
             )
             .applyingClarificationProgress(from: pendingClarification)
+            if !result.needsClarification {
+                result = result.withResolvedClarification(
+                    pendingClarification,
+                    replyText: question,
+                    selectedOption: selectedOption
+                )
+            }
             if result.needsClarification,
                 let clarification = result.clarificationQuestion,
                 !clarification.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
@@ -512,6 +539,7 @@ public final class SessionController: Identifiable {
         let trimmed = replyText.trimmingCharacters(in: .whitespacesAndNewlines)
         if let exact = pending.options.first(where: {
             $0.replyText.caseInsensitiveCompare(trimmed) == .orderedSame
+                || $0.label.caseInsensitiveCompare(trimmed) == .orderedSame
         }) {
             return exact
         }
@@ -1586,6 +1614,19 @@ private extension SQLGenerationResult {
         copy.groundingConcepts = [pending.concept]
         copy.confidence = min(copy.confidence, 0.2)
         copy.riskLevel = .medium
+        return copy
+    }
+
+    func withResolvedClarification(
+        _ pending: PendingClarification?,
+        replyText: String,
+        selectedOption: ClarificationOption?
+    ) -> SQLGenerationResult {
+        guard let pending else { return self }
+        var copy = self
+        copy.resolvedClarification = pending
+        copy.resolvedClarificationReply = replyText
+        copy.resolvedClarificationOption = selectedOption
         return copy
     }
 

@@ -176,6 +176,9 @@ public struct SQLGenerationResult: Codable, Equatable, Sendable {
     public var clarificationOptions: [ClarificationOption]
     public var pendingClarificationID: UUID?
     public var pendingClarification: PendingClarification?
+    public var resolvedClarification: PendingClarification?
+    public var resolvedClarificationReply: String?
+    public var resolvedClarificationOption: ClarificationOption?
 
     private enum CodingKeys: String, CodingKey {
         case sql
@@ -192,6 +195,9 @@ public struct SQLGenerationResult: Codable, Equatable, Sendable {
         case clarificationOptions
         case pendingClarificationID
         case pendingClarification
+        case resolvedClarification
+        case resolvedClarificationReply
+        case resolvedClarificationOption
     }
 
     public init(
@@ -208,7 +214,10 @@ public struct SQLGenerationResult: Codable, Equatable, Sendable {
         groundingConcepts: [SQLGroundingConcept] = [],
         clarificationOptions: [ClarificationOption] = [],
         pendingClarificationID: UUID? = nil,
-        pendingClarification: PendingClarification? = nil
+        pendingClarification: PendingClarification? = nil,
+        resolvedClarification: PendingClarification? = nil,
+        resolvedClarificationReply: String? = nil,
+        resolvedClarificationOption: ClarificationOption? = nil
     ) {
         self.sql = sql
         self.explanation = explanation
@@ -224,6 +233,9 @@ public struct SQLGenerationResult: Codable, Equatable, Sendable {
         self.clarificationOptions = clarificationOptions
         self.pendingClarificationID = pendingClarificationID
         self.pendingClarification = pendingClarification
+        self.resolvedClarification = resolvedClarification
+        self.resolvedClarificationReply = resolvedClarificationReply
+        self.resolvedClarificationOption = resolvedClarificationOption
     }
 
     public init(from decoder: any Decoder) throws {
@@ -263,6 +275,18 @@ public struct SQLGenerationResult: Codable, Equatable, Sendable {
             PendingClarification.self,
             forKey: .pendingClarification
         )
+        resolvedClarification = try container.decodeIfPresent(
+            PendingClarification.self,
+            forKey: .resolvedClarification
+        )
+        resolvedClarificationReply = try container.decodeIfPresent(
+            String.self,
+            forKey: .resolvedClarificationReply
+        )
+        resolvedClarificationOption = try container.decodeIfPresent(
+            ClarificationOption.self,
+            forKey: .resolvedClarificationOption
+        )
     }
 
     public func encode(to encoder: any Encoder) throws {
@@ -285,6 +309,9 @@ public struct SQLGenerationResult: Codable, Equatable, Sendable {
         }
         try container.encodeIfPresent(pendingClarificationID, forKey: .pendingClarificationID)
         try container.encodeIfPresent(pendingClarification, forKey: .pendingClarification)
+        try container.encodeIfPresent(resolvedClarification, forKey: .resolvedClarification)
+        try container.encodeIfPresent(resolvedClarificationReply, forKey: .resolvedClarificationReply)
+        try container.encodeIfPresent(resolvedClarificationOption, forKey: .resolvedClarificationOption)
     }
 }
 

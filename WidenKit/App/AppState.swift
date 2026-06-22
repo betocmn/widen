@@ -1163,6 +1163,7 @@ public final class AppState {
             pending: pending,
             selectedOption: selectedOption
         )
+        guard !referencedObjectIDs.isEmpty else { return }
         let binding = DatabaseSemanticBinding(
             connectionID: connectionID,
             schemaNames: schema.semanticBindingSchemaNames,
@@ -1221,11 +1222,17 @@ public final class AppState {
             for candidate in optionObjectIDs(selectedOption.definition) {
                 ids.insert(candidate)
             }
+            for candidate in evidenceObjectIDs(selectedOption.evidence) {
+                ids.insert(candidate)
+            }
             if let slot = pending.plan?.slots.first(where: { $0.id == pending.slotID }),
                 let candidate = slot.candidates.first(where: { $0.label == selectedOption.label })
             {
                 ids.formUnion(candidate.objectIDs)
             }
+        }
+        for candidate in evidenceObjectIDs(pending.evidence) {
+            ids.insert(candidate)
         }
         if let slot = pending.plan?.slots.first(where: { $0.id == pending.slotID }),
             let selected = slot.selectedCandidate
@@ -1244,6 +1251,26 @@ public final class AppState {
                     || value.hasPrefix("column:")
                     || value.hasPrefix("fk:")
             }
+    }
+
+    private static func evidenceObjectIDs(_ evidence: [String]) -> [String] {
+        evidence.flatMap { value -> [String] in
+            let trimmed = value.trimmingCharacters(in: .whitespacesAndNewlines)
+            if trimmed.hasPrefix("table:")
+                || trimmed.hasPrefix("column:")
+                || trimmed.hasPrefix("fk:")
+            {
+                return [trimmed]
+            }
+            let parts = trimmed.split(separator: ".")
+            if parts.count == 3 {
+                return ["column:\(trimmed)"]
+            }
+            if parts.count == 2 {
+                return ["table:\(trimmed)"]
+            }
+            return []
+        }
     }
 
     public func deleteSemanticBinding(_ id: UUID) {
