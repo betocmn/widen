@@ -283,7 +283,12 @@ public enum SchemaPromptPackager {
         )
         let rankedIDs = ranked.map(\.table.id)
         let relationshipHints = relationshipHints(schema: schema, input: input)
-        var pinnedIDs = pinnedTableIDs(schema: schema, ranked: ranked, input: input)
+        var pinnedIDs = pinnedTableIDs(
+            schema: schema,
+            ranked: ranked,
+            input: input,
+            compression: compression
+        )
         for hint in relationshipHints {
             pinnedIDs.formUnion(hint.tableIDs)
         }
@@ -487,7 +492,8 @@ public enum SchemaPromptPackager {
     private static func pinnedTableIDs(
         schema: DatabaseSchema,
         ranked: [RankedSchemaTable],
-        input: SchemaRankingInput
+        input: SchemaRankingInput,
+        compression: CompressionLevel
     ) -> Set<String> {
         var pinned = Set<String>()
         let referenced = Set(
@@ -520,7 +526,29 @@ public enum SchemaPromptPackager {
                 pinned.insert(entry.table.id)
             }
         }
+        if compression == .minimal {
+            pinned.formUnion(dominantPrimaryMatchIDs(ranked))
+        }
         return pinned
+    }
+
+    private static func dominantPrimaryMatchIDs(_ ranked: [RankedSchemaTable]) -> Set<String> {
+        guard let first = ranked.first, isStrongPrimaryMatch(first) else { return [] }
+        if let second = ranked.dropFirst().first,
+            isStrongPrimaryMatch(second),
+            first.score - second.score < 100
+        {
+            return []
+        }
+        return [first.table.id]
+    }
+
+    private static func isStrongPrimaryMatch(_ entry: RankedSchemaTable) -> Bool {
+        entry.score >= 140
+            && (
+                entry.reasons.contains("table name matches request")
+                    || entry.reasons.contains("semantic binding matches")
+            )
     }
 
     private static func relationshipHints(

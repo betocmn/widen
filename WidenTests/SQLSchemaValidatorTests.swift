@@ -1476,6 +1476,31 @@ struct SQLSchemaValidatorTests {
         #expect(enriched.referencedTables == ["public.users"])
     }
 
+    @Test func statusLikePastParticipleValuesRequireGrounding() {
+        let generation = SQLGenerationResult(
+            sql: "SELECT id FROM public.users WHERE status = 'deleted'",
+            explanation: "Lists deleted users.",
+            assumptions: [],
+            referencedTables: [],
+            confidence: 1,
+            riskLevel: .low,
+            needsClarification: false,
+            clarificationQuestion: nil
+        )
+
+        let enriched = GeneratedSQLPostprocessor.enriched(
+            generation,
+            question: "show deleted users",
+            schema: makeUsersUnconstrainedStatusSchema(),
+            databaseContext: ""
+        )
+
+        #expect(enriched.needsClarification)
+        #expect(enriched.sql.isEmpty)
+        #expect(enriched.clarificationQuestion?.contains("\"deleted\"") == true)
+        #expect(enriched.pendingClarification?.concept.term == "deleted")
+    }
+
     @Test func databaseContextCanDefineUnconstrainedStatusLiteral() {
         let generation = SQLGenerationResult(
             sql: "SELECT COUNT(*) FROM public.users WHERE status = 'active'",

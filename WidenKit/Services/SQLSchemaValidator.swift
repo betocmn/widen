@@ -2677,9 +2677,9 @@ public enum GeneratedSQLPostprocessor {
     ]
 
     private static let genericVerbStopWords: Set<String> = [
-        "create", "created", "creating", "make", "made", "makes", "making",
-        "delete", "deleted", "deleting", "insert", "inserted", "inserting", "remove",
-        "removed", "removing", "set", "update", "updated", "updating",
+        "create", "creating", "make", "makes", "making",
+        "delete", "deleting", "insert", "inserting", "remove",
+        "removing", "set", "update", "updating",
     ]
 
     private static let requestStopWords: Set<String> = [

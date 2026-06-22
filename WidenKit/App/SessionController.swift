@@ -301,7 +301,8 @@ public final class SessionController: Identifiable {
         )
         let resolvesPendingClarification = shouldResolvePendingClarification(
             question,
-            selectedOption: selectedOption
+            selectedOption: selectedOption,
+            pending: unresolvedClarification
         )
         let pendingClarification = resolvesPendingClarification ? unresolvedClarification : nil
         let abandonsPendingClarification =
@@ -312,7 +313,11 @@ public final class SessionController: Identifiable {
             schema: schema
         )
         if let pendingClarification,
-            shouldRememberClarificationReply(question, selectedOption: selectedOption)
+            shouldRememberClarificationReply(
+                question,
+                selectedOption: selectedOption,
+                pending: pendingClarification
+            )
         {
             let definition = (selectedOption?.definition ?? question)
                 .trimmingCharacters(in: .whitespacesAndNewlines)
@@ -348,7 +353,11 @@ public final class SessionController: Identifiable {
         chatVM.input = ""
         chatVM.messages.append(ChatMessage(role: .user, text: question))
         if let pendingClarification,
-            shouldRememberClarificationReply(question, selectedOption: selectedOption)
+            shouldRememberClarificationReply(
+                question,
+                selectedOption: selectedOption,
+                pending: pendingClarification
+            )
         {
             appState.confirmSemanticBinding(
                 connectionID: connectionID,
@@ -474,17 +483,26 @@ public final class SessionController: Identifiable {
 
     private func shouldRememberClarificationReply(
         _ replyText: String,
-        selectedOption: ClarificationOption?
+        selectedOption: ClarificationOption?,
+        pending: PendingClarification?
     ) -> Bool {
-        selectedOption != nil || Self.isExplicitSemanticDefinitionReply(replyText)
+        selectedOption != nil
+            || Self.isExplicitSemanticDefinitionReply(
+                replyText,
+                conceptTerm: pending?.concept.term
+            )
     }
 
     private func shouldResolvePendingClarification(
         _ replyText: String,
-        selectedOption: ClarificationOption?
+        selectedOption: ClarificationOption?,
+        pending: PendingClarification?
     ) -> Bool {
         selectedOption != nil
-            || Self.isExplicitSemanticDefinitionReply(replyText)
+            || Self.isExplicitSemanticDefinitionReply(
+                replyText,
+                conceptTerm: pending?.concept.term
+            )
             || Self.isNegativeClarificationReply(replyText)
     }
 
@@ -499,18 +517,71 @@ public final class SessionController: Identifiable {
         ].contains(stripped)
     }
 
-    private static func isExplicitSemanticDefinitionReply(_ text: String) -> Bool {
+    private static func repairGroundingQuestion(
+        _ question: String,
+        repairContext: SQLRepairContext
+    ) -> String {
+        let forbiddenTokens = Set(
+            SchemaIndex.tokens(
+                in: (
+                    repairContext.forbiddenIdentifiers
+                        + repairContext.repairConstraints.map(\.identifier)
+                        + [repairContext.diagnostic?.identifierForRepair].compactMap { $0 }
+                ).joined(separator: " ")
+            )
+        )
+        guard !forbiddenTokens.isEmpty else { return question }
+        let keptWords = question.split(separator: " ").filter { word in
+            Set(SchemaIndex.tokens(in: String(word))).isDisjoint(with: forbiddenTokens)
+        }
+        let filtered = keptWords.joined(separator: " ")
+        return filtered.isEmpty ? question : filtered
+    }
+
+    private static func isExplicitSemanticDefinitionReply(
+        _ text: String,
+        conceptTerm: String?
+    ) -> Bool {
         let normalized = text
             .trimmingCharacters(in: .whitespacesAndNewlines)
             .lowercased()
         guard normalized.count >= 6 else { return false }
         let stripped = normalized.trimmingCharacters(in: CharacterSet(charactersIn: ".!?, "))
         guard !negativeClarificationReplies.contains(stripped) else { return false }
+        guard !isQuestionLikeClarificationReply(normalized) else { return false }
+        if normalized.hasPrefix("use ") || normalized.contains("=") {
+            return true
+        }
         let definitionMarkers = [
             " means ", " mean ", " is ", " are ", " equals ", " equal ",
-            " defined as ", " refers to ", " should be ", " use ", "=",
+            " defined as ", " refers to ", " should be ",
         ]
-        return normalized.hasPrefix("use ") || definitionMarkers.contains { normalized.contains($0) }
+        guard definitionMarkers.contains(where: normalized.contains) else { return false }
+        let conceptTokens = semanticReplyTokens(in: conceptTerm ?? "")
+        guard !conceptTokens.isEmpty else { return true }
+        let replyTokens = semanticReplyTokens(in: normalized)
+        return !replyTokens.isDisjoint(with: conceptTokens)
+    }
+
+    private static func isQuestionLikeClarificationReply(_ normalized: String) -> Bool {
+        let tokens = semanticReplyTokenList(in: normalized)
+        guard let first = tokens.first else { return false }
+        let questionStarters: Set<String> = [
+            "find", "give", "how", "list", "return", "select", "show",
+            "what", "when", "where", "which", "who", "why",
+        ]
+        return normalized.contains("?") || questionStarters.contains(first)
+    }
+
+    private static func semanticReplyTokens(in text: String) -> Set<String> {
+        Set(semanticReplyTokenList(in: text))
+    }
+
+    private static func semanticReplyTokenList(in text: String) -> [String] {
+        text.lowercased()
+            .split { !$0.isLetter && !$0.isNumber }
+            .map(String.init)
+            .filter { !$0.isEmpty }
     }
 
     private static let negativeClarificationReplies: Set<String> = [
@@ -641,11 +712,14 @@ public final class SessionController: Identifiable {
                 )
                 generation = GeneratedSQLPostprocessor.enriched(
                     generated,
-                    question: questionContext.question,
+                    question: Self.repairGroundingQuestion(
+                        questionContext.question,
+                        repairContext: repairContext
+                    ),
                     schema: schema,
                     databaseContext: config.databaseContext,
                     confirmedSemanticBindings: context.confirmedSemanticBindings,
-                    allowGroundingClarification: mode == .validationOnly
+                    allowGroundingClarification: true
                 )
             } catch {
                 restoreStartingGeneration(schema: schema)

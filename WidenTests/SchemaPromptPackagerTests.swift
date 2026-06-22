@@ -567,6 +567,49 @@ struct SchemaPromptPackagerTests {
         #expect(package.pinnedTables.isEmpty)
     }
 
+    @Test func strongPrimaryTableMatchSurvivesTinyBudget() {
+        let auditColumns = [
+            column("audit_events", "id", ordinal: 1),
+            column("audit_events", "actor_id", ordinal: 2),
+            column("audit_events", "occurred_at", type: "timestamp with time zone", ordinal: 3),
+        ] + (0..<40).map {
+            column("audit_events", "metadata_\($0)", type: "jsonb", ordinal: 100 + $0)
+        }
+        let schema = DatabaseSchema(
+            schemas: [SchemaInfo(name: "public")],
+            tables: [
+                TableInfo(
+                    schema: "public",
+                    name: "audit_events",
+                    type: .baseTable,
+                    columns: auditColumns
+                ),
+                TableInfo(
+                    schema: "public",
+                    name: "users",
+                    type: .baseTable,
+                    columns: [
+                        column("users", "id", ordinal: 1),
+                        column("users", "name", type: "text", ordinal: 2),
+                    ]
+                ),
+            ],
+            foreignKeys: []
+        )
+
+        let package = SchemaPromptPackager.package(
+            schema: schema,
+            question: "show audit events by actor_id",
+            context: SQLGenerationContext(),
+            databaseContext: "",
+            maxCharacters: 520
+        )
+
+        #expect(package.pinnedTables.contains("public.audit_events"))
+        #expect(package.includedTables.contains("public.audit_events"))
+        #expect(package.text.contains(#"TABLE "public"."audit_events""#))
+    }
+
     @Test func exactDiscoveryTableHintsArePinnedButCatalogIsNotRenderedInFinalPrompt() {
         let schema = makePreseasonSchema(extraTables: 30)
         let context = SQLGenerationContext(

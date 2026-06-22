@@ -640,6 +640,14 @@ public struct GeneratedSQLRepairCoordinator: Sendable {
 
     private func madeValidationProgress(_ issueSignatures: Set<SQLRepairIssueSignature>) -> Bool {
         guard !issueSignatures.isEmpty else { return false }
+        if failedCandidateSignatures.contains(where: { $0.issueSignatures == issueSignatures }) {
+            return false
+        }
+        if failedCandidateSignatures.contains(where: {
+            issueSignatures.isStrictSubset(of: $0.issueSignatures)
+        }) {
+            return true
+        }
         return !failedCandidateSignatures.contains {
             !$0.issueSignatures.isDisjoint(with: issueSignatures)
         }
