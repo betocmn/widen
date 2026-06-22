@@ -102,7 +102,7 @@ struct ChatModeView: View {
                     .trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
             case .user:
                 return ChatViewModel.isDirectSQL(message.text)
-            case .error, .result:
+            case .activity, .error, .result:
                 return false
             }
         })?.id

@@ -1,10 +1,10 @@
 import SwiftUI
 
-/// One transcript entry. User/assistant/error messages render as bubbles;
-/// `.result` records render as a compact full-width row. (Run records whose
-/// result is still in memory are rendered by the transcript as a full
-/// `ResultsCardView` instead, and SQL-bearing messages get their card from
-/// the transcript too.)
+/// One transcript entry. User/assistant/error messages render as bubbles,
+/// activity messages render as compact timeline rows, and `.result` records
+/// render as a compact full-width row. (Run records whose result is still in
+/// memory are rendered by the transcript as a full `ResultsCardView` instead,
+/// and SQL-bearing messages get their card from the transcript too.)
 struct MessageBubbleView: View {
     let message: ChatMessage
     /// Present on a failed-write error bubble: asks the model to repair the
@@ -13,7 +13,9 @@ struct MessageBubbleView: View {
     var onClarificationOptionSelected: ((PendingClarification, ClarificationOption) -> Void)? = nil
 
     var body: some View {
-        if message.role == .result {
+        if message.role == .activity {
+            activityRow
+        } else if message.role == .result {
             resultRow
         } else {
             HStack {
@@ -32,6 +34,24 @@ struct MessageBubbleView: View {
             Spacer()
         }
         .padding(.vertical, 2)
+    }
+
+    private var activityRow: some View {
+        HStack(alignment: .top, spacing: 8) {
+            Image(systemName: "text.bubble")
+                .font(.caption)
+                .foregroundStyle(.secondary)
+                .frame(width: 14)
+                .padding(.top, 2)
+            Text(message.text)
+                .font(.callout)
+                .foregroundStyle(.secondary)
+                .textSelection(.enabled)
+            Spacer(minLength: 60)
+        }
+        .padding(.horizontal, 10)
+        .padding(.vertical, 6)
+        .background(.regularMaterial, in: RoundedRectangle(cornerRadius: 10))
     }
 
     /// The user bubble gets real glass; assistant and error bubbles use a

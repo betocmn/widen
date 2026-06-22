@@ -7,6 +7,9 @@ public struct ChatMessage: Identifiable, Codable, Equatable, Sendable {
         case user
         case assistant
         case error
+        /// A transcript-visible, prompt-excluded record of internal work such
+        /// as validation, repair, or execution attempts.
+        case activity
         /// A persistent record of one finished query run.
         case result
     }
@@ -128,6 +131,8 @@ extension SQLConversationMessage.Role {
             self = .result
         case .error:
             self = .error
+        case .activity:
+            self = .assistant
         }
     }
 }
@@ -182,7 +187,7 @@ extension Array where Element == ChatMessage {
         -> [SQLConversationMessage]
     {
         let bounded = prefix(upTo: Swift.min(upperBound ?? count, count))
-        return bounded.suffix(limit).map { message in
+        return bounded.filter { $0.role != .activity }.suffix(limit).map { message in
             SQLConversationMessage(
                 role: SQLConversationMessage.Role(message.role),
                 text: message.promptContextText
