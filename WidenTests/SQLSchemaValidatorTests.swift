@@ -1558,6 +1558,14 @@ struct SQLSchemaValidatorTests {
             GROUP BY cluster_id
             ORDER BY n DESC
             """,
+            """
+            SELECT fc.id, COUNT(*) AS n
+            FROM public.feedback_cluster_membership AS fcm
+            JOIN public.feedback_cluster AS fc ON fcm.cluster_id = fc.id
+            GROUP BY fc.id
+            ORDER BY fc.id DESC
+            LIMIT 1
+            """,
         ]
 
         for sql in badSQL {
@@ -1575,6 +1583,17 @@ struct SQLSchemaValidatorTests {
             """
 
         #expect(SQLIntentConformanceValidator.validate(sql: good, plan: plan, schema: schema).isValid)
+
+        let spacedCount = """
+            SELECT fc.id, COUNT (*) AS n
+            FROM public.feedback_cluster_membership AS fcm
+            JOIN public.feedback_cluster AS fc ON fcm.cluster_id = fc.id
+            GROUP BY fc.id
+            ORDER BY n DESC
+            LIMIT 1
+            """
+
+        #expect(SQLIntentConformanceValidator.validate(sql: spacedCount, plan: plan, schema: schema).isValid)
     }
 
     @Test func storedCountColumnCanSatisfyFrequencyIntent() {
@@ -1617,6 +1636,33 @@ struct SQLSchemaValidatorTests {
         #expect(enriched.sql == sql)
     }
 
+    @Test func storedCountColumnMustReferenceGroundedTable() {
+        let intent = QueryIntentPlanner.deterministicIntent(
+            for: "what is the most frequent feedback cluster?"
+        )
+        let schema = makeFeedbackClusterStoredCountWithSameNamedMetricSchema()
+        let plan = GroundedQueryPlanner.ground(intent: intent, schema: schema)
+        let wrongTableMetric = """
+            SELECT fc.id, other.feedback_count
+            FROM public.feedback_cluster AS fc
+            JOIN public.other_metric AS other ON other.cluster_id = fc.id
+            ORDER BY other.feedback_count DESC
+            LIMIT 1
+            """
+
+        #expect(!SQLIntentConformanceValidator.validate(sql: wrongTableMetric, plan: plan, schema: schema).isValid)
+
+        let groundedMetric = """
+            SELECT fc.id, fc.feedback_count
+            FROM public.feedback_cluster AS fc
+            JOIN public.other_metric AS other ON other.cluster_id = fc.id
+            ORDER BY fc.feedback_count DESC
+            LIMIT 1
+            """
+
+        #expect(SQLIntentConformanceValidator.validate(sql: groundedMetric, plan: plan, schema: schema).isValid)
+    }
+
     @Test func analyticCompilerBuildsTopCountQuery() {
         let result = AnalyticQueryCompiler.compile(
             question: "what is the most frequent feedback cluster?",
@@ -1634,6 +1680,29 @@ struct SQLSchemaValidatorTests {
             "public.feedback_cluster_membership",
             "public.feedback_cluster",
         ])
+    }
+
+    @Test func analyticCompilerSkipsRequestsWithTimeIntent() {
+        let result = AnalyticQueryCompiler.compile(
+            question: "most common error code last week",
+            schema: makeAnalyticsOperatorSchema(),
+            defaultRowLimit: 100
+        )
+
+        #expect(result == nil)
+    }
+
+    @Test func analyticCompilerPreservesSourceSideFrequencyGrouping() {
+        let result = AnalyticQueryCompiler.compile(
+            question: "most frequent orders",
+            schema: makeOrderCustomerSchema(),
+            defaultRowLimit: 100
+        )
+
+        #expect(result != nil)
+        #expect(result?.sql.localizedCaseInsensitiveContains(#"FROM "public"."customers" AS o"#) == true)
+        #expect(result?.sql.localizedCaseInsensitiveContains(#"JOIN "public"."orders" AS g"#) == true)
+        #expect(result?.sql.localizedCaseInsensitiveContains(#"GROUP BY g."customer_id""#) == true)
     }
 
     @Test func analyticCompilerBuildsCommonSingleTableQueries() {
@@ -1657,7 +1726,7 @@ struct SQLSchemaValidatorTests {
             ),
             (
                 "unique users per organization",
-                [#"COUNT(DISTINCT t."user_id")"#, #"GROUP BY t."organization_id""#]
+                [#"COUNT(DISTINCT t."user_id")"#, #"GROUP BY t."organization_id""#, "LIMIT 100"]
             ),
             (
                 "average orders per day",
@@ -2143,6 +2212,32 @@ struct SQLSchemaValidatorTests {
         #expect(enriched.referencedTables == ["public.users"])
     }
 
+    @Test func constrainedStatusInequalityLiteralRequiresAllowedValue() {
+        for operatorSQL in ["<>", "!="] {
+            let generation = SQLGenerationResult(
+                sql: "SELECT COUNT(*) FROM public.users WHERE status \(operatorSQL) 'churned'",
+                explanation: "Counts users not churned.",
+                assumptions: [],
+                referencedTables: [],
+                confidence: 1,
+                riskLevel: .low,
+                needsClarification: false,
+                clarificationQuestion: nil
+            )
+
+            let enriched = GeneratedSQLPostprocessor.enriched(
+                generation,
+                question: "how many non-churned users?",
+                schema: makeUsersStatusSchema(),
+                databaseContext: ""
+            )
+
+            #expect(enriched.needsClarification, "Expected clarification for \(operatorSQL)")
+            #expect(enriched.sql.isEmpty, "Expected SQL to be blocked for \(operatorSQL)")
+            #expect(enriched.clarificationQuestion?.contains("\"churned\"") == true)
+        }
+    }
+
     @Test func constrainedLiteralMustMatchExactValue() {
         let generation = SQLGenerationResult(
             sql: "SELECT COUNT(*) FROM public.users WHERE status = 'Active'",
@@ -2458,6 +2553,43 @@ struct SQLSchemaValidatorTests {
         )
     }
 
+    private func makeFeedbackClusterStoredCountWithSameNamedMetricSchema() -> DatabaseSchema {
+        DatabaseSchema(
+            schemas: [SchemaInfo(name: "public")],
+            tables: [
+                TableInfo(
+                    schema: "public",
+                    name: "feedback_cluster",
+                    type: .baseTable,
+                    columns: [
+                        ColumnInfo(
+                            tableSchema: "public", tableName: "feedback_cluster", name: "id",
+                            dataType: "uuid", isNullable: false, ordinalPosition: 1),
+                        ColumnInfo(
+                            tableSchema: "public", tableName: "feedback_cluster",
+                            name: "feedback_count", dataType: "integer", isNullable: false,
+                            ordinalPosition: 2),
+                    ]
+                ),
+                TableInfo(
+                    schema: "public",
+                    name: "other_metric",
+                    type: .baseTable,
+                    columns: [
+                        ColumnInfo(
+                            tableSchema: "public", tableName: "other_metric", name: "cluster_id",
+                            dataType: "uuid", isNullable: false, ordinalPosition: 1),
+                        ColumnInfo(
+                            tableSchema: "public", tableName: "other_metric",
+                            name: "feedback_count", dataType: "integer", isNullable: false,
+                            ordinalPosition: 2),
+                    ]
+                ),
+            ],
+            foreignKeys: []
+        )
+    }
+
     private func makeAnalyticsOperatorSchema() -> DatabaseSchema {
         DatabaseSchema(
             schemas: [SchemaInfo(name: "public")],
@@ -2520,6 +2652,48 @@ struct SQLSchemaValidatorTests {
                 ),
             ],
             foreignKeys: []
+        )
+    }
+
+    private func makeOrderCustomerSchema() -> DatabaseSchema {
+        DatabaseSchema(
+            schemas: [SchemaInfo(name: "public")],
+            tables: [
+                TableInfo(
+                    schema: "public",
+                    name: "orders",
+                    type: .baseTable,
+                    columns: [
+                        ColumnInfo(
+                            tableSchema: "public", tableName: "orders", name: "id",
+                            dataType: "integer", isNullable: false, ordinalPosition: 1),
+                        ColumnInfo(
+                            tableSchema: "public", tableName: "orders", name: "customer_id",
+                            dataType: "integer", isNullable: false, ordinalPosition: 2),
+                    ]
+                ),
+                TableInfo(
+                    schema: "public",
+                    name: "customers",
+                    type: .baseTable,
+                    columns: [
+                        ColumnInfo(
+                            tableSchema: "public", tableName: "customers", name: "id",
+                            dataType: "integer", isNullable: false, ordinalPosition: 1),
+                    ]
+                ),
+            ],
+            foreignKeys: [
+                ForeignKeyInfo(
+                    constraintName: "orders_customer_fkey",
+                    sourceSchema: "public",
+                    sourceTable: "orders",
+                    sourceColumn: "customer_id",
+                    targetSchema: "public",
+                    targetTable: "customers",
+                    targetColumn: "id"
+                )
+            ]
         )
     }
 

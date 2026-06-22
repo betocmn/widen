@@ -2645,21 +2645,40 @@ public enum GeneratedSQLPostprocessor {
         beforeLiteralAt literalIndex: Int,
         tokens: [SQLToken]
     ) -> ComparisonColumnReference? {
-        equalityComparisonColumnReference(beforeLiteralAt: literalIndex, tokens: tokens)
+        binaryComparisonColumnReference(beforeLiteralAt: literalIndex, tokens: tokens)
             ?? membershipComparisonColumnReference(containingLiteralAt: literalIndex, tokens: tokens)
     }
 
-    private static func equalityComparisonColumnReference(
+    private static func binaryComparisonColumnReference(
         beforeLiteralAt literalIndex: Int,
         tokens: [SQLToken]
     ) -> ComparisonColumnReference? {
-        guard let operatorIndex = previousSignificantIndex(before: literalIndex, tokens: tokens),
-            tokens[operatorIndex].text == "=",
-            let columnIndex = previousSignificantIndex(before: operatorIndex, tokens: tokens)
+        guard let operatorEndIndex = previousSignificantIndex(before: literalIndex, tokens: tokens),
+            let operatorStartIndex = comparisonOperatorStartIndex(
+                endingAt: operatorEndIndex,
+                tokens: tokens
+            ),
+            let columnIndex = previousSignificantIndex(before: operatorStartIndex, tokens: tokens)
         else {
             return nil
         }
         return comparisonColumnReference(endingAt: columnIndex, tokens: tokens)
+    }
+
+    private static func comparisonOperatorStartIndex(
+        endingAt operatorEndIndex: Int,
+        tokens: [SQLToken]
+    ) -> Int? {
+        guard let token = tokens[safe: operatorEndIndex] else { return nil }
+        if ["=", "<", ">"].contains(token.text) {
+            if let previous = previousSignificantIndex(before: operatorEndIndex, tokens: tokens),
+                ["!", "<", ">"].contains(tokens[previous].text)
+            {
+                return previous
+            }
+            return operatorEndIndex
+        }
+        return nil
     }
 
     private static func membershipComparisonColumnReference(

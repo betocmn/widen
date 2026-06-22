@@ -733,16 +733,19 @@ public enum SQLIntentConformanceValidator {
         schema: DatabaseSchema
     ) -> SQLIntentConformanceResult {
         let normalized = sql.lowercased()
+        let tokens = SQLToken.tokenize(sql)
         var issues: [String] = []
+        let schemaValidation = SQLSchemaValidator.validate(sql: sql, against: schema)
         let storedCountColumn = selectedStoredCountColumnObjectID(in: plan)
         let usesStoredCountColumn = storedCountColumn.map {
-            referencesColumn(objectID: $0, in: normalized)
+            referencesColumn(objectID: $0, in: schemaValidation.analysis, schema: schema)
         } ?? false
+        let hasCountAggregate = containsAggregateFunction(named: "count", in: tokens)
         if storedCountColumn != nil, !usesStoredCountColumn {
             issues.append("Stored count intent requires the selected count column.")
         }
         if plan.intent.measure == .countRows,
-            !normalized.contains("count("),
+            !hasCountAggregate,
             !usesStoredCountColumn
         {
             issues.append("Frequency intent requires COUNT.")
@@ -754,8 +757,33 @@ public enum SQLIntentConformanceValidator {
             issues.append("Frequency intent requires GROUP BY for the requested entity.")
         }
         if plan.intent.ranking?.direction == .descending {
-            if !normalized.contains("order by") || !normalized.contains("desc") {
+            let orderByClause = topLevelOrderByClause(in: tokens)
+            if orderByClause == nil || orderByClause?.tokens.contains(where: { $0.normalized == "desc" }) != true {
                 issues.append("Descending ranking intent requires ORDER BY ... DESC.")
+            }
+            if plan.intent.measure == .countRows,
+                let orderByClause,
+                orderByClause.tokens.contains(where: { $0.normalized == "desc" })
+            {
+                if let storedCountColumn {
+                    if !referencesColumn(
+                        objectID: storedCountColumn,
+                        in: schemaValidation.analysis,
+                        schema: schema,
+                        offsetRange: orderByClause.offsetRange
+                    ) {
+                        issues.append("Frequency ranking must order by the selected count column.")
+                    }
+                } else {
+                    let countAliases = aggregateAliases(named: "count", in: tokens)
+                    if !orderByUsesAggregateMetric(
+                        named: "count",
+                        aliases: countAliases,
+                        orderByTokens: orderByClause.tokens
+                    ) {
+                        issues.append("Frequency ranking must order by the count metric.")
+                    }
+                }
             }
         }
         if plan.intent.ranking?.takeFirst == true || plan.intent.requestedLimit == 1 {
@@ -763,7 +791,6 @@ public enum SQLIntentConformanceValidator {
                 issues.append("Singular top result intent requires LIMIT 1.")
             }
         }
-        let schemaValidation = SQLSchemaValidator.validate(sql: sql, against: schema)
         let referenced = Set(schemaValidation.referencedTables)
         for table in plan.selectedTables where !referenced.contains(table) {
             issues.append("SQL does not reference grounded table \(table).")
@@ -779,12 +806,246 @@ public enum SQLIntentConformanceValidator {
             .first { $0.hasPrefix("column:") }
     }
 
-    private static func referencesColumn(objectID: String, in normalizedSQL: String) -> Bool {
-        let parts = objectID.dropFirst("column:".count).split(separator: ".")
-        guard let column = parts.last?.lowercased(), !column.isEmpty else { return false }
-        let escaped = NSRegularExpression.escapedPattern(for: String(column))
-        let pattern = #"(^|[^a-z0-9_])"?\#(escaped)"?([^a-z0-9_]|$)"#
-        return normalizedSQL.range(of: pattern, options: .regularExpression) != nil
+    private static func referencesColumn(
+        objectID: String,
+        in analysis: SQLReferenceAnalysis,
+        schema: DatabaseSchema,
+        offsetRange: Range<Int>? = nil
+    ) -> Bool {
+        guard let columnRef = columnObjectReference(from: objectID) else { return false }
+        let tableQualifiers = qualifiers(for: columnRef.tableID, in: analysis)
+        let columns = Set(analysis.columns + analysis.scopes.flatMap(\.columns))
+        for column in columns {
+            if let offsetRange {
+                guard let start = column.startOffset,
+                    let end = column.endOffset,
+                    offsetRange.contains(start),
+                    end <= offsetRange.upperBound
+                else {
+                    continue
+                }
+            }
+            guard columnNameMatches(column.name, columnRef.column, isQuoted: column.isQuoted) else {
+                continue
+            }
+            if let qualifier = column.qualifier {
+                if tableQualifiers.contains(where: {
+                    qualifierMatches(
+                        qualifier,
+                        qualifierIsQuoted: column.qualifierIsQuoted,
+                        expected: $0.name,
+                        expectedIsQuoted: $0.isQuoted
+                    )
+                }) {
+                    return true
+                }
+                continue
+            }
+            let matchingTables = referencedTables(in: analysis, schema: schema).filter {
+                $0.columns.contains { columnNameMatches(column.name, $0.name, isQuoted: column.isQuoted) }
+            }
+            if matchingTables.count == 1, matchingTables[0].id == columnRef.tableID {
+                return true
+            }
+        }
+        return false
+    }
+
+    private struct ColumnObjectReference {
+        var schema: String
+        var table: String
+        var column: String
+        var tableID: String { "\(schema).\(table)" }
+    }
+
+    private struct ColumnQualifier {
+        var name: String
+        var isQuoted: Bool
+    }
+
+    private static func columnObjectReference(from objectID: String) -> ColumnObjectReference? {
+        guard objectID.hasPrefix("column:") else { return nil }
+        let parts = objectID.dropFirst("column:".count).split(separator: ".", omittingEmptySubsequences: false)
+        guard parts.count == 3 else { return nil }
+        return ColumnObjectReference(
+            schema: String(parts[0]),
+            table: String(parts[1]),
+            column: String(parts[2])
+        )
+    }
+
+    private static func qualifiers(
+        for tableID: String,
+        in analysis: SQLReferenceAnalysis
+    ) -> [ColumnQualifier] {
+        analysis.relations.flatMap { relation -> [ColumnQualifier] in
+            guard relationMatches(relation, tableID: tableID) else { return [] }
+            var qualifiers = [
+                ColumnQualifier(name: relation.name, isQuoted: relation.nameIsQuoted),
+                ColumnQualifier(name: relation.displayName, isQuoted: relation.schemaIsQuoted || relation.nameIsQuoted),
+            ]
+            if let alias = relation.alias {
+                qualifiers.append(ColumnQualifier(name: alias, isQuoted: relation.aliasIsQuoted))
+            }
+            return qualifiers
+        }
+    }
+
+    private static func referencedTables(
+        in analysis: SQLReferenceAnalysis,
+        schema: DatabaseSchema
+    ) -> [TableInfo] {
+        analysis.relations.compactMap { relation in
+            table(matching: relation, schema: schema)
+        }
+    }
+
+    private static func table(matching relation: SQLRelationReference, schema: DatabaseSchema) -> TableInfo? {
+        if let relationSchema = relation.schema {
+            let schemaName = relation.schemaIsQuoted ? relationSchema : relationSchema.lowercased()
+            let tableName = relation.nameIsQuoted ? relation.name : relation.name.lowercased()
+            return schema.tables.first { $0.schema == schemaName && $0.name == tableName }
+        }
+        let tableName = relation.nameIsQuoted ? relation.name : relation.name.lowercased()
+        let matches = schema.tables.filter { $0.name == tableName }
+        return matches.count == 1 ? matches[0] : nil
+    }
+
+    private static func relationMatches(_ relation: SQLRelationReference, tableID: String) -> Bool {
+        let tableParts = tableID.split(separator: ".", maxSplits: 1).map(String.init)
+        guard tableParts.count == 2 else { return false }
+        let schemaName = tableParts[0]
+        let tableName = tableParts[1]
+        if let relationSchema = relation.schema {
+            let schemaMatches = relation.schemaIsQuoted
+                ? relationSchema == schemaName
+                : relationSchema.lowercased() == schemaName.lowercased()
+            let tableMatches = relation.nameIsQuoted
+                ? relation.name == tableName
+                : relation.name.lowercased() == tableName.lowercased()
+            return schemaMatches && tableMatches
+        }
+        return relation.nameIsQuoted
+            ? relation.name == tableName
+            : relation.name.lowercased() == tableName.lowercased()
+    }
+
+    private static func qualifierMatches(
+        _ qualifier: String,
+        qualifierIsQuoted: Bool,
+        expected: String,
+        expectedIsQuoted: Bool
+    ) -> Bool {
+        if qualifierIsQuoted || expectedIsQuoted {
+            return qualifier == expected
+        }
+        return qualifier.lowercased() == expected.lowercased()
+    }
+
+    private static func columnNameMatches(_ actual: String, _ expected: String, isQuoted: Bool) -> Bool {
+        isQuoted ? actual == expected : actual.lowercased() == expected.lowercased()
+    }
+
+    private static func containsAggregateFunction(named name: String, in tokens: [SQLToken]) -> Bool {
+        tokens.indices.contains { index in
+            tokens[index].normalized == name
+                && tokens[safe: index + 1]?.text == "("
+        }
+    }
+
+    private static func aggregateAliases(named name: String, in tokens: [SQLToken]) -> Set<String> {
+        var aliases = Set<String>()
+        for index in tokens.indices where tokens[index].normalized == name {
+            guard tokens[safe: index + 1]?.text == "(",
+                let closeIndex = matchingCloseParenIndex(openIndex: index + 1, tokens: tokens)
+            else {
+                continue
+            }
+            var aliasIndex = closeIndex + 1
+            if tokens[safe: aliasIndex]?.normalized == "as" {
+                aliasIndex += 1
+            }
+            if let alias = tokens[safe: aliasIndex],
+                alias.isIdentifierLike,
+                !SQLToken.keywords.contains(alias.normalized)
+            {
+                aliases.insert(alias.identifierValue.lowercased())
+            }
+        }
+        return aliases
+    }
+
+    private static func orderByUsesAggregateMetric(
+        named name: String,
+        aliases: Set<String>,
+        orderByTokens: [SQLToken]
+    ) -> Bool {
+        containsAggregateFunction(named: name, in: orderByTokens)
+            || orderByTokens.contains {
+                $0.isIdentifierLike && aliases.contains($0.identifierValue.lowercased())
+            }
+    }
+
+    private static func topLevelOrderByClause(in tokens: [SQLToken]) -> (
+        tokens: [SQLToken], offsetRange: Range<Int>
+    )? {
+        var depth = 0
+        var index = 0
+        while index < tokens.count {
+            let token = tokens[index]
+            if depth == 0,
+                token.normalized == "order",
+                tokens[safe: index + 1]?.normalized == "by"
+            {
+                let start = index + 2
+                var end = start
+                var clauseDepth = 0
+                while end < tokens.count {
+                    let current = tokens[end]
+                    if clauseDepth == 0,
+                        ["limit", "offset", "fetch", "union", "intersect", "except"].contains(current.normalized)
+                    {
+                        break
+                    }
+                    if current.text == "(" {
+                        clauseDepth += 1
+                    } else if current.text == ")" {
+                        clauseDepth = max(0, clauseDepth - 1)
+                    }
+                    end += 1
+                }
+                guard start < end,
+                    let lower = tokens[safe: start]?.startOffset,
+                    let upper = tokens[safe: end - 1]?.endOffset
+                else {
+                    return nil
+                }
+                return (Array(tokens[start..<end]), lower..<upper)
+            }
+            if token.text == "(" {
+                depth += 1
+            } else if token.text == ")" {
+                depth = max(0, depth - 1)
+            }
+            index += 1
+        }
+        return nil
+    }
+
+    private static func matchingCloseParenIndex(openIndex: Int, tokens: [SQLToken]) -> Int? {
+        guard tokens[safe: openIndex]?.text == "(" else { return nil }
+        var depth = 0
+        for index in openIndex..<tokens.count {
+            if tokens[index].text == "(" {
+                depth += 1
+            } else if tokens[index].text == ")" {
+                depth -= 1
+                if depth == 0 {
+                    return index
+                }
+            }
+        }
+        return nil
     }
 }
 
@@ -797,6 +1058,7 @@ public enum AnalyticQueryCompiler {
     ) -> SQLGenerationResult? {
         let intent = QueryIntentPlanner.deterministicIntent(for: question)
         guard intent.operation == .read else { return nil }
+        guard intent.timeIntent == nil else { return nil }
         if intent.measure == .countRows,
             intent.ranking?.direction == .descending,
             intent.ranking?.takeFirst == true
@@ -820,7 +1082,7 @@ public enum AnalyticQueryCompiler {
         if [.average, .countDistinct, .sum, .minimum, .maximum].contains(intent.measure),
             !intent.groupingPhrases.isEmpty
         {
-            return compileGroupedMeasure(intent: intent, schema: schema)
+            return compileGroupedMeasure(intent: intent, schema: schema, defaultRowLimit: defaultRowLimit)
         }
         return nil
     }
@@ -832,24 +1094,45 @@ public enum AnalyticQueryCompiler {
         let plan = GroundedQueryPlanner.ground(intent: intent, schema: schema)
         guard plan.readiness == .readyWithInterpretation || plan.readiness == .ready,
             let joinPath = plan.selectedJoinPaths.first,
-            let foreignKey = joinPath.foreignKeys.first,
-            let groupTable = table(
-                schema: foreignKey.targetSchema,
-                name: foreignKey.targetTable,
-                in: schema
-            ),
-            let occurrenceTable = table(
-                schema: foreignKey.sourceSchema,
-                name: foreignKey.sourceTable,
-                in: schema
-            )
+            let foreignKey = joinPath.foreignKeys.first
+        else {
+            return nil
+        }
+        let sourceID = "\(foreignKey.sourceSchema).\(foreignKey.sourceTable)"
+        let targetID = "\(foreignKey.targetSchema).\(foreignKey.targetTable)"
+        let subjectTableID = selectedSubjectTableID(in: plan) ?? targetID
+        let groupSchema: String
+        let groupName: String
+        let groupColumnName: String
+        let occurrenceSchema: String
+        let occurrenceName: String
+        let occurrenceColumnName: String
+        if subjectTableID == sourceID {
+            groupSchema = foreignKey.sourceSchema
+            groupName = foreignKey.sourceTable
+            groupColumnName = foreignKey.sourceColumn
+            occurrenceSchema = foreignKey.targetSchema
+            occurrenceName = foreignKey.targetTable
+            occurrenceColumnName = foreignKey.targetColumn
+        } else if subjectTableID == targetID {
+            groupSchema = foreignKey.targetSchema
+            groupName = foreignKey.targetTable
+            groupColumnName = foreignKey.targetColumn
+            occurrenceSchema = foreignKey.sourceSchema
+            occurrenceName = foreignKey.sourceTable
+            occurrenceColumnName = foreignKey.sourceColumn
+        } else {
+            return nil
+        }
+        guard let groupTable = table(schema: groupSchema, name: groupName, in: schema),
+            let occurrenceTable = table(schema: occurrenceSchema, name: occurrenceName, in: schema)
         else {
             return nil
         }
         let groupAlias = "g"
         let occurrenceAlias = "o"
-        let groupID = qualifiedColumn(alias: groupAlias, column: foreignKey.targetColumn)
-        let occurrenceFK = qualifiedColumn(alias: occurrenceAlias, column: foreignKey.sourceColumn)
+        let groupID = qualifiedColumn(alias: groupAlias, column: groupColumnName)
+        let occurrenceFK = qualifiedColumn(alias: occurrenceAlias, column: occurrenceColumnName)
         let sql = """
             SELECT \(groupID), COUNT(*) AS occurrence_count
             FROM \(qualifiedName(occurrenceTable)) AS \(occurrenceAlias)
@@ -982,7 +1265,8 @@ public enum AnalyticQueryCompiler {
 
     private static func compileGroupedMeasure(
         intent: QueryIntentFrame,
-        schema: DatabaseSchema
+        schema: DatabaseSchema,
+        defaultRowLimit: Int
     ) -> SQLGenerationResult? {
         guard let subjectPhrase = intent.subjectPhrases.first,
             let subject = uniqueColumn(
@@ -1026,6 +1310,7 @@ public enum AnalyticQueryCompiler {
             SELECT \(groupExpression) AS \(quotedIdentifier(group.alias)), \(measureSQL) AS \(quotedIdentifier(measureAlias))
             FROM \(qualifiedName(table)) AS \(alias)
             GROUP BY \(groupExpression)
+            LIMIT \(sanitizedLimit(defaultRowLimit))
             """
         let interpretation = "\(intent.measure.rawValue) of \(subject.column.name), grouped by \(group.label)."
         let plan = compiledPlan(
@@ -1045,6 +1330,22 @@ public enum AnalyticQueryCompiler {
             referencedTables: [table.qualifiedName],
             fallbackExplanation: "Generated a grouped aggregate query."
         )
+    }
+
+    private static func selectedSubjectTableID(in plan: GroundedQueryPlan) -> String? {
+        plan.slots
+            .first { $0.kind == .subjectEntity }?
+            .selectedCandidate?
+            .objectIDs
+            .compactMap { objectID -> String? in
+                guard objectID.hasPrefix("table:") else { return nil }
+                return String(objectID.dropFirst("table:".count))
+            }
+            .first
+    }
+
+    private static func sanitizedLimit(_ limit: Int) -> Int {
+        max(1, limit)
     }
 
     private struct ColumnMatch {
@@ -1253,5 +1554,11 @@ public enum AnalyticQueryCompiler {
     private static func safeAlias(_ identifier: String) -> String {
         let alias = SchemaIndex.tokens(in: identifier).joined(separator: "_")
         return alias.isEmpty ? "value" : alias
+    }
+}
+
+private extension Collection {
+    subscript(safe index: Index) -> Element? {
+        indices.contains(index) ? self[index] : nil
     }
 }
