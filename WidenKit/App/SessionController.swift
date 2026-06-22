@@ -313,7 +313,7 @@ public final class SessionController: Identifiable {
             schema: schema
         )
         if let pendingClarification,
-            shouldRememberClarificationReply(
+            shouldUseClarificationReplyAsContext(
                 question,
                 selectedOption: selectedOption,
                 pending: pendingClarification
@@ -360,21 +360,6 @@ public final class SessionController: Identifiable {
 
         chatVM.input = ""
         chatVM.messages.append(ChatMessage(role: .user, text: question))
-        if let pendingClarification,
-            shouldRememberClarificationReply(
-                question,
-                selectedOption: selectedOption,
-                pending: pendingClarification
-            )
-        {
-            appState.confirmSemanticBinding(
-                connectionID: connectionID,
-                pending: pendingClarification,
-                replyText: question,
-                selectedOption: selectedOption,
-                schema: schema
-            )
-        }
         chatVM.beginGeneration()
         appState.sessionDidChange(sessionID)
         defer {
@@ -489,16 +474,16 @@ public final class SessionController: Identifiable {
         return nil
     }
 
-    private func shouldRememberClarificationReply(
+    private func shouldUseClarificationReplyAsContext(
         _ replyText: String,
         selectedOption: ClarificationOption?,
         pending: PendingClarification?
     ) -> Bool {
-        selectedOption != nil
-            || Self.isExplicitSemanticDefinitionReply(
-                replyText,
-                conceptTerm: pending?.concept.term
-            )
+        guard pending != nil else { return false }
+        guard !Self.isNegativeClarificationReply(replyText) else { return false }
+        return selectedOption != nil
+            || Self.isExplicitSemanticDefinitionReply(replyText, conceptTerm: pending?.concept.term)
+            || Self.isLikelyClarificationAnswer(replyText)
     }
 
     private func shouldResolvePendingClarification(
@@ -512,6 +497,23 @@ public final class SessionController: Identifiable {
                 conceptTerm: pending?.concept.term
             )
             || Self.isNegativeClarificationReply(replyText)
+            || (pending != nil && Self.isLikelyClarificationAnswer(replyText))
+    }
+
+    private static func isLikelyClarificationAnswer(_ text: String) -> Bool {
+        let normalized = text
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+            .lowercased()
+        guard normalized.count >= 3 else { return false }
+        let stripped = normalized.trimmingCharacters(in: CharacterSet(charactersIn: ".!?, "))
+        guard !negativeClarificationReplies.contains(stripped) else { return false }
+        guard !isQuestionLikeClarificationReply(normalized) else { return false }
+        let tokens = semanticReplyTokenList(in: normalized)
+        guard !tokens.isEmpty else { return false }
+        if let first = tokens.first, first == "select" || first == "with" {
+            return false
+        }
+        return true
     }
 
     private static func isAffirmativeClarificationReply(_ text: String) -> Bool {
@@ -717,7 +719,7 @@ public final class SessionController: Identifiable {
                     context: context,
                     config: config
                 )
-                generation = GeneratedSQLPostprocessor.enriched(
+                var enriched = GeneratedSQLPostprocessor.enriched(
                     generated,
                     question: questionContext.question,
                     schema: schema,
@@ -725,6 +727,16 @@ public final class SessionController: Identifiable {
                     confirmedSemanticBindings: context.confirmedSemanticBindings,
                     allowGroundingClarification: true
                 )
+                if !enriched.needsClarification,
+                    let pending = Self.repairIntentClarification(
+                        question: questionContext.originalQuestion ?? questionContext.question,
+                        diagnostic: firstDiagnostic,
+                        candidateSQL: enriched.sql
+                    )
+                {
+                    enriched = enriched.withPendingClarification(pending)
+                }
+                generation = enriched
             } catch {
                 restoreStartingGeneration(schema: schema)
                 chatVM.appendRunError(error.localizedDescription)
@@ -1016,6 +1028,82 @@ public final class SessionController: Identifiable {
             \(recoveryGuidance)
             """
     }
+
+    private static func repairIntentClarification(
+        question: String,
+        diagnostic: DatabaseDiagnostic?,
+        candidateSQL: String
+    ) -> PendingClarification? {
+        guard let diagnostic else { return nil }
+        let identifier: String?
+        let kind: SQLGroundingConcept.Kind
+        switch diagnostic.kind {
+        case .missingColumn, .ambiguousColumn:
+            identifier = diagnostic.columnName
+            kind = .entity
+        case .missingRelation:
+            identifier = diagnostic.tableName ?? missingRelationIdentifier(in: diagnostic.displayMessage)
+            kind = .relationship
+        default:
+            return nil
+        }
+        guard let identifier,
+            let term = droppedRepairIntentTerm(
+                identifier: identifier,
+                question: question,
+                candidateSQL: candidateSQL
+            )
+        else {
+            return nil
+        }
+        let concept = SQLGroundingConcept(
+            term: term,
+            kind: kind,
+            state: .unsupported,
+            required: true,
+            evidence: [identifier]
+        )
+        let questionText =
+            kind == .relationship
+            ? "Which schema relationship should Widen use for \"\(term)\"?"
+            : "Which schema table or column should \"\(term)\" refer to?"
+        return PendingClarification(
+            concept: concept,
+            originalQuestion: question,
+            question: questionText,
+            evidence: [identifier]
+        )
+    }
+
+    private static func droppedRepairIntentTerm(
+        identifier: String,
+        question: String,
+        candidateSQL: String
+    ) -> String? {
+        let identifierTokens = semanticReplyTokenList(in: identifier)
+            .filter { !repairIntentTokenStopWords.contains($0) }
+        guard !identifierTokens.isEmpty else { return nil }
+        let questionTokens = semanticReplyTokenList(in: question)
+            .filter { !repairIntentTokenStopWords.contains($0) }
+        let candidateTokens = Set(semanticReplyTokenList(in: candidateSQL))
+        for token in identifierTokens {
+            guard questionTokens.contains(where: { questionToken in
+                questionToken == token
+                    || (token.count >= 4 && questionToken.hasPrefix(token))
+                    || (questionToken.count >= 4 && token.hasPrefix(questionToken))
+            }) else {
+                continue
+            }
+            guard !candidateTokens.contains(token) else { continue }
+            return token
+        }
+        return nil
+    }
+
+    private static let repairIntentTokenStopWords: Set<String> = [
+        "a", "an", "and", "at", "bad", "by", "id", "public", "schema", "the",
+        "to", "user", "users", "with",
+    ]
 
     private func questionContextForRepair(
         startingSQL: String
@@ -1434,6 +1522,21 @@ private extension SQLGenerationResult {
     func withSQL(_ sql: String) -> SQLGenerationResult {
         var copy = self
         copy.sql = sql
+        return copy
+    }
+
+    func withPendingClarification(_ pending: PendingClarification) -> SQLGenerationResult {
+        var copy = self
+        copy.sql = ""
+        copy.explanation = pending.question
+        copy.needsClarification = true
+        copy.clarificationQuestion = pending.question
+        copy.clarificationOptions = pending.options
+        copy.pendingClarificationID = pending.id
+        copy.pendingClarification = pending
+        copy.groundingConcepts = [pending.concept]
+        copy.confidence = min(copy.confidence, 0.2)
+        copy.riskLevel = .medium
         return copy
     }
 }

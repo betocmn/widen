@@ -1376,6 +1376,100 @@ struct SQLSchemaValidatorTests {
         })
     }
 
+    @Test func frequentFeedbackClusterDoesNotAskToDefineFrequent() {
+        let generation = SQLGenerationResult(
+            sql: """
+                SELECT fc.id, COUNT(*) AS feedback_count
+                FROM public.feedback_cluster AS fc
+                JOIN public.feedback_cluster_membership AS fcm
+                  ON fcm.cluster_id = fc.id
+                GROUP BY fc.id
+                ORDER BY feedback_count DESC
+                LIMIT 1
+                """,
+            explanation: "Finds the cluster with the most feedback memberships.",
+            assumptions: [],
+            referencedTables: [],
+            confidence: 1,
+            riskLevel: .low,
+            needsClarification: false,
+            clarificationQuestion: nil
+        )
+
+        let enriched = GeneratedSQLPostprocessor.enriched(
+            generation,
+            question: "what is the most frequent feedback cluster?",
+            schema: makeFeedbackClusterSchema(),
+            databaseContext: ""
+        )
+
+        #expect(!enriched.needsClarification)
+        #expect(enriched.clarificationQuestion == nil)
+        #expect(!enriched.groundingConcepts.contains {
+            $0.term == "frequent" && $0.required
+        })
+    }
+
+    @Test func universalAnalyticalOperatorsDoNotRequireSchemaTokenGrounding() {
+        let cases: [(String, String)] = [
+            (
+                "most common error code",
+                "SELECT error_code, COUNT(*) AS n FROM public.events GROUP BY error_code ORDER BY n DESC LIMIT 1"
+            ),
+            (
+                "most recurring failure",
+                "SELECT failure_code, COUNT(*) AS n FROM public.events GROUP BY failure_code ORDER BY n DESC LIMIT 1"
+            ),
+            (
+                "highest-volume endpoint",
+                "SELECT endpoint, COUNT(*) AS n FROM public.events GROUP BY endpoint ORDER BY n DESC LIMIT 1"
+            ),
+            (
+                "latest order",
+                "SELECT id FROM public.orders ORDER BY created_at DESC LIMIT 1"
+            ),
+            (
+                "oldest account",
+                "SELECT id FROM public.accounts ORDER BY created_at ASC LIMIT 1"
+            ),
+            (
+                "average orders per day",
+                "SELECT AVG(order_count) FROM (SELECT created_at::date AS day, COUNT(*) AS order_count FROM public.orders GROUP BY created_at::date) AS daily"
+            ),
+            (
+                "total revenue by month",
+                "SELECT DATE_TRUNC('month', created_at) AS month, SUM(total_cents) FROM public.orders GROUP BY DATE_TRUNC('month', created_at)"
+            ),
+            (
+                "unique users per organization",
+                "SELECT organization_id, COUNT(DISTINCT user_id) FROM public.events GROUP BY organization_id"
+            ),
+        ]
+
+        for (question, sql) in cases {
+            let generation = SQLGenerationResult(
+                sql: sql,
+                explanation: "Generated SQL.",
+                assumptions: [],
+                referencedTables: [],
+                confidence: 1,
+                riskLevel: .low,
+                needsClarification: false,
+                clarificationQuestion: nil
+            )
+
+            let enriched = GeneratedSQLPostprocessor.enriched(
+                generation,
+                question: question,
+                schema: makeAnalyticsOperatorSchema(),
+                databaseContext: ""
+            )
+
+            #expect(!enriched.needsClarification, "Unexpected clarification for: \(question)")
+            #expect(enriched.clarificationQuestion == nil)
+        }
+    }
+
     @Test func pastTenseGenericVerbMadeDoesNotRequireGrounding() {
         let generation = SQLGenerationResult(
             sql: "SELECT id FROM public.orders WHERE created_at >= CURRENT_DATE - INTERVAL '7 days'",
@@ -1970,6 +2064,137 @@ struct SQLSchemaValidatorTests {
                             isNullable: false,
                             ordinalPosition: 3
                         ),
+                    ]
+                ),
+            ],
+            foreignKeys: []
+        )
+    }
+
+    private func makeFeedbackClusterSchema() -> DatabaseSchema {
+        DatabaseSchema(
+            schemas: [SchemaInfo(name: "public")],
+            tables: [
+                TableInfo(
+                    schema: "public",
+                    name: "feedback_cluster",
+                    type: .baseTable,
+                    columns: [
+                        ColumnInfo(
+                            tableSchema: "public", tableName: "feedback_cluster", name: "id",
+                            dataType: "uuid", isNullable: false, ordinalPosition: 1),
+                        ColumnInfo(
+                            tableSchema: "public", tableName: "feedback_cluster", name: "label",
+                            dataType: "text", isNullable: true, ordinalPosition: 2),
+                    ]
+                ),
+                TableInfo(
+                    schema: "public",
+                    name: "feedback_item",
+                    type: .baseTable,
+                    columns: [
+                        ColumnInfo(
+                            tableSchema: "public", tableName: "feedback_item", name: "id",
+                            dataType: "uuid", isNullable: false, ordinalPosition: 1),
+                    ]
+                ),
+                TableInfo(
+                    schema: "public",
+                    name: "feedback_cluster_membership",
+                    type: .baseTable,
+                    columns: [
+                        ColumnInfo(
+                            tableSchema: "public", tableName: "feedback_cluster_membership",
+                            name: "cluster_id", dataType: "uuid", isNullable: false,
+                            ordinalPosition: 1),
+                        ColumnInfo(
+                            tableSchema: "public", tableName: "feedback_cluster_membership",
+                            name: "feedback_item_id", dataType: "uuid", isNullable: false,
+                            ordinalPosition: 2),
+                    ]
+                ),
+            ],
+            foreignKeys: [
+                ForeignKeyInfo(
+                    constraintName: "feedback_cluster_membership_cluster_fkey",
+                    sourceSchema: "public",
+                    sourceTable: "feedback_cluster_membership",
+                    sourceColumn: "cluster_id",
+                    targetSchema: "public",
+                    targetTable: "feedback_cluster",
+                    targetColumn: "id"
+                ),
+                ForeignKeyInfo(
+                    constraintName: "feedback_cluster_membership_item_fkey",
+                    sourceSchema: "public",
+                    sourceTable: "feedback_cluster_membership",
+                    sourceColumn: "feedback_item_id",
+                    targetSchema: "public",
+                    targetTable: "feedback_item",
+                    targetColumn: "id"
+                ),
+            ]
+        )
+    }
+
+    private func makeAnalyticsOperatorSchema() -> DatabaseSchema {
+        DatabaseSchema(
+            schemas: [SchemaInfo(name: "public")],
+            tables: [
+                TableInfo(
+                    schema: "public",
+                    name: "events",
+                    type: .baseTable,
+                    columns: [
+                        ColumnInfo(
+                            tableSchema: "public", tableName: "events", name: "id",
+                            dataType: "integer", isNullable: false, ordinalPosition: 1),
+                        ColumnInfo(
+                            tableSchema: "public", tableName: "events", name: "error_code",
+                            dataType: "text", isNullable: true, ordinalPosition: 2),
+                        ColumnInfo(
+                            tableSchema: "public", tableName: "events", name: "failure_code",
+                            dataType: "text", isNullable: true, ordinalPosition: 3),
+                        ColumnInfo(
+                            tableSchema: "public", tableName: "events", name: "endpoint",
+                            dataType: "text", isNullable: true, ordinalPosition: 4),
+                        ColumnInfo(
+                            tableSchema: "public", tableName: "events", name: "user_id",
+                            dataType: "integer", isNullable: true, ordinalPosition: 5),
+                        ColumnInfo(
+                            tableSchema: "public", tableName: "events", name: "organization_id",
+                            dataType: "integer", isNullable: true, ordinalPosition: 6),
+                    ]
+                ),
+                TableInfo(
+                    schema: "public",
+                    name: "orders",
+                    type: .baseTable,
+                    columns: [
+                        ColumnInfo(
+                            tableSchema: "public", tableName: "orders", name: "id",
+                            dataType: "integer", isNullable: false, ordinalPosition: 1),
+                        ColumnInfo(
+                            tableSchema: "public", tableName: "orders", name: "created_at",
+                            dataType: "timestamp with time zone", isNullable: false,
+                            ordinalPosition: 2),
+                        ColumnInfo(
+                            tableSchema: "public", tableName: "orders", name: "total_cents",
+                            dataType: "integer", isNullable: false, ordinalPosition: 3),
+                    ]
+                ),
+                TableInfo(
+                    schema: "public",
+                    name: "accounts",
+                    type: .baseTable,
+                    columns: [
+                        ColumnInfo(
+                            tableSchema: "public", tableName: "accounts", name: "id",
+                            dataType: "integer", isNullable: false, ordinalPosition: 1),
+                        ColumnInfo(
+                            tableSchema: "public", tableName: "accounts", name: "created_at",
+                            dataType: "timestamp with time zone", isNullable: false,
+                            ordinalPosition: 2),
                     ]
                 ),
             ],

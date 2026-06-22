@@ -2008,68 +2008,50 @@ public enum GeneratedSQLPostprocessor {
             schema: schema
         )
         .union(Set(SchemaIndex.tokens(in: databaseContext)))
-        let availableTokens = schemaAndContextTokens
-        .union(Set(SchemaIndex.tokens(in: confirmedSemanticBindings.joined(separator: "\n"))))
         let literalProofTokens = schemaAndContextTokens
             .union(semanticBindingDefinitionTokens(in: confirmedSemanticBindings))
-
-        let terms = meaningfulRequestWords(question)
-        guard !terms.isEmpty else {
-            return SQLGroundingEvaluation(concepts: notRequiredConcepts(question))
-        }
         let literalTokens = literalValueTokenEvaluation(
             in: sql,
             referencedTables: referencedTables,
             schema: schema,
             availableTokens: literalProofTokens
         )
-        let unresolved = terms.filter { word in
-            let variants = SchemaIndex.tokens(in: word)
-            guard !variants.isEmpty else { return false }
-            if variants.contains(where: literalTokens.rejected.contains) {
-                return true
-            }
-            if variants.contains(where: literalTokens.accepted.contains) {
-                return false
-            }
-            return !variants.contains { variant in
-                tokenSet(availableTokens, containsRelatedTo: variant)
-            }
-        }
 
-        var concepts = terms.map { term -> SQLGroundingConcept in
-            let variants = SchemaIndex.tokens(in: term)
-            let state: GroundingState
-            let evidence: [String]
-            if variants.contains(where: literalTokens.rejected.contains) || unresolved.contains(term) {
-                state = .unsupported
-                evidence = []
-            } else if variants.contains(where: literalTokens.accepted.contains)
-                || variants.contains(where: {
-                    tokenSet(availableTokens, containsRelatedTo: $0)
-                })
-            {
-                state = .grounded
-                evidence = groundingEvidence(
-                    for: variants,
-                    schema: schema,
-                    databaseContext: databaseContext,
-                    confirmedSemanticBindings: confirmedSemanticBindings
-                )
-            } else {
-                state = .notRequired
-                evidence = []
-            }
-            return SQLGroundingConcept(
-                term: term,
-                kind: conceptKind(for: term, question: question),
-                state: state,
-                required: state == .unsupported || state == .ambiguous,
-                evidence: evidence
+        var concepts = notRequiredConcepts(question)
+        concepts.append(
+            contentsOf: groundedSchemaMentionConcepts(
+                question: question,
+                availableTokens: schemaAndContextTokens,
+                schema: schema,
+                databaseContext: databaseContext,
+                confirmedSemanticBindings: confirmedSemanticBindings
             )
-        }
+        )
+        concepts.append(
+            contentsOf: unresolvedCustomBusinessTermConcepts(
+                question: question,
+                availableTokens: schemaAndContextTokens
+                    .union(Set(SchemaIndex.tokens(in: confirmedSemanticBindings.joined(separator: "\n")))),
+                schema: schema,
+                databaseContext: databaseContext,
+                confirmedSemanticBindings: confirmedSemanticBindings
+            )
+        )
+        concepts.append(
+            contentsOf: unsupportedLiteralConcepts(
+                question: question,
+                rejectedTokens: literalTokens.rejected
+            )
+        )
+        concepts.append(
+            contentsOf: acceptedLiteralConcepts(
+                acceptedTokens: literalTokens.accepted,
+                schema: schema,
+                databaseContext: databaseContext,
+                confirmedSemanticBindings: confirmedSemanticBindings
+            )
+        )
 
-        concepts.append(contentsOf: notRequiredConcepts(question))
         guard let first = concepts.first(where: {
             $0.required && ($0.state == .unsupported || $0.state == .ambiguous)
         }) else {
@@ -2077,8 +2059,7 @@ public enum GeneratedSQLPostprocessor {
         }
 
         let options = clarificationOptions(for: first, schema: schema, referencedTables: referencedTables)
-        let clarificationQuestion =
-            "What column, condition, or table defines \"\(first.term)\" for this question?"
+        let clarificationQuestion = clarificationQuestion(for: first, options: options)
         let pending = PendingClarification(
             concept: first,
             originalQuestion: question,
@@ -2087,6 +2068,144 @@ public enum GeneratedSQLPostprocessor {
             evidence: first.evidence
         )
         return SQLGroundingEvaluation(concepts: concepts, pendingClarification: pending)
+    }
+
+    private static func unresolvedCustomBusinessTermConcepts(
+        question: String,
+        availableTokens: Set<String>,
+        schema: DatabaseSchema,
+        databaseContext: String,
+        confirmedSemanticBindings: [String]
+    ) -> [SQLGroundingConcept] {
+        let questionTokens = rawWords(in: question)
+        var seen = Set<String>()
+        return questionTokens.compactMap { word in
+            let variants = SchemaIndex.tokens(in: word)
+            guard variants.contains(where: customBusinessMetricWords.contains) else { return nil }
+            guard seen.insert(word).inserted else { return nil }
+            if variants.contains(where: { tokenSet(availableTokens, containsRelatedTo: $0) }) {
+                return SQLGroundingConcept(
+                    term: word,
+                    kind: .businessTerm,
+                    state: .grounded,
+                    required: false,
+                    evidence: groundingEvidence(
+                        for: variants,
+                        schema: schema,
+                        databaseContext: databaseContext,
+                        confirmedSemanticBindings: confirmedSemanticBindings
+                    )
+                )
+            }
+            return SQLGroundingConcept(
+                term: word,
+                kind: .businessTerm,
+                state: .unsupported,
+                required: true,
+                evidence: []
+            )
+        }
+    }
+
+    private static func groundedSchemaMentionConcepts(
+        question: String,
+        availableTokens: Set<String>,
+        schema: DatabaseSchema,
+        databaseContext: String,
+        confirmedSemanticBindings: [String]
+    ) -> [SQLGroundingConcept] {
+        var seen = Set<String>()
+        return rawWords(in: question).compactMap { word in
+            let variants = SchemaIndex.tokens(in: word)
+            guard !variants.isEmpty else { return nil }
+            guard variants.contains(where: {
+                tokenSet(availableTokens, containsRelatedTo: $0)
+            }) else {
+                return nil
+            }
+            guard seen.insert(word).inserted else { return nil }
+            return SQLGroundingConcept(
+                term: word,
+                kind: .entity,
+                state: .grounded,
+                required: false,
+                evidence: groundingEvidence(
+                    for: variants,
+                    schema: schema,
+                    databaseContext: databaseContext,
+                    confirmedSemanticBindings: confirmedSemanticBindings
+                )
+            )
+        }
+    }
+
+    private static func unsupportedLiteralConcepts(
+        question: String,
+        rejectedTokens: Set<String>
+    ) -> [SQLGroundingConcept] {
+        guard !rejectedTokens.isEmpty else { return [] }
+        let questionWords = rawWords(in: question)
+        var seen = Set<String>()
+        let literalTerms = questionWords.filter { word in
+            let variants = SchemaIndex.tokens(in: word)
+            guard !variants.isEmpty else { return false }
+            return variants.contains(where: rejectedTokens.contains)
+                && seen.insert(word).inserted
+        }
+        let terms = literalTerms.isEmpty ? rejectedTokens.sorted() : literalTerms
+        return terms.map { term in
+            SQLGroundingConcept(
+                term: term,
+                kind: .filter,
+                state: .unsupported,
+                required: true,
+                evidence: []
+            )
+        }
+    }
+
+    private static func acceptedLiteralConcepts(
+        acceptedTokens: Set<String>,
+        schema: DatabaseSchema,
+        databaseContext: String,
+        confirmedSemanticBindings: [String]
+    ) -> [SQLGroundingConcept] {
+        acceptedTokens.sorted().map { token in
+            SQLGroundingConcept(
+                term: token,
+                kind: .filter,
+                state: .grounded,
+                required: false,
+                evidence: groundingEvidence(
+                    for: [token],
+                    schema: schema,
+                    databaseContext: databaseContext,
+                    confirmedSemanticBindings: confirmedSemanticBindings
+                )
+            )
+        }
+    }
+
+    private static func clarificationQuestion(
+        for concept: SQLGroundingConcept,
+        options: [ClarificationOption]
+    ) -> String {
+        switch concept.kind {
+        case .filter:
+            if options.isEmpty {
+                return "Which schema value or condition should represent \"\(concept.term)\"?"
+            }
+            let labels = options.map(\.label).joined(separator: ", ")
+            return "The schema does not show \"\(concept.term)\" as a supported value. Which value should represent it: \(labels)?"
+        case .time:
+            return "Which date or timestamp column should define \"\(concept.term)\"?"
+        case .relationship:
+            return "Which schema relationship should Widen use for \"\(concept.term)\"?"
+        case .metric, .businessTerm:
+            return "What metric should \"\(concept.term)\" mean here?"
+        case .entity:
+            return "Which schema table or column should \"\(concept.term)\" refer to?"
+        }
     }
 
     private static func notRequiredConcepts(_ question: String) -> [SQLGroundingConcept] {
@@ -2691,6 +2810,11 @@ public enum GeneratedSQLPostprocessor {
         "average", "avg", "bottom", "count", "highest", "least", "lowest", "many", "max",
         "maximum", "min", "minimum", "most", "much", "number", "percent", "percentage",
         "rank", "rate", "ratio", "sum", "top", "total",
+    ]
+
+    private static let customBusinessMetricWords: Set<String> = [
+        "best", "engaged", "healthy", "quality", "successful", "valuable", "win", "winning",
+        "wins", "worst",
     ]
 
     private static let comparisonOperatorStopWords: Set<String> = [

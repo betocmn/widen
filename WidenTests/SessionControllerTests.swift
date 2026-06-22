@@ -558,6 +558,50 @@ struct SessionControllerTests {
         )
     }
 
+    private func makeFeedbackClusterSchema() -> DatabaseSchema {
+        DatabaseSchema(
+            schemas: [SchemaInfo(name: "public")],
+            tables: [
+                TableInfo(
+                    schema: "public",
+                    name: "feedback_cluster",
+                    type: .baseTable,
+                    columns: [
+                        ColumnInfo(
+                            tableSchema: "public", tableName: "feedback_cluster", name: "id",
+                            dataType: "uuid", isNullable: false, ordinalPosition: 1),
+                    ]
+                ),
+                TableInfo(
+                    schema: "public",
+                    name: "feedback_cluster_membership",
+                    type: .baseTable,
+                    columns: [
+                        ColumnInfo(
+                            tableSchema: "public", tableName: "feedback_cluster_membership",
+                            name: "cluster_id", dataType: "uuid", isNullable: false,
+                            ordinalPosition: 1),
+                        ColumnInfo(
+                            tableSchema: "public", tableName: "feedback_cluster_membership",
+                            name: "feedback_item_id", dataType: "uuid", isNullable: false,
+                            ordinalPosition: 2),
+                    ]
+                ),
+            ],
+            foreignKeys: [
+                ForeignKeyInfo(
+                    constraintName: "feedback_cluster_membership_cluster_fkey",
+                    sourceSchema: "public",
+                    sourceTable: "feedback_cluster_membership",
+                    sourceColumn: "cluster_id",
+                    targetSchema: "public",
+                    targetTable: "feedback_cluster",
+                    targetColumn: "id"
+                )
+            ]
+        )
+    }
+
     private func makeSchema(schemas: [String]) -> DatabaseSchema {
         DatabaseSchema(
             schemas: schemas.map(SchemaInfo.init(name:)),
@@ -1949,7 +1993,7 @@ struct SessionControllerTests {
         #expect(controller.chatVM.messages.last?.generation?.needsClarification == true)
     }
 
-    @Test func clarificationOptionReplyResolvesPendingClarificationAndStoresBinding() async {
+    @Test func clarificationOptionReplyResolvesPendingClarificationWithoutPersistingBinding() async {
         let connectionID = UUID()
         let (state, dir) = makeState(connectionID: connectionID, connected: true)
         defer { try? FileManager.default.removeItem(at: dir) }
@@ -2001,9 +2045,7 @@ struct SessionControllerTests {
         #expect(generator.contexts.first?.confirmedSemanticBindings.contains {
             $0.contains(#""public"."users"."status" = 'active'"#)
         } == true)
-        #expect(state.semanticBindings.count == 1)
-        #expect(state.semanticBindings.first?.concept == "active")
-        #expect(state.semanticBindings.first?.definition == option.definition)
+        #expect(state.semanticBindings.isEmpty)
         #expect(controller.queryVM.sqlText == fixed.sql)
         #expect(controller.chatVM.messages.last?.generation?.needsClarification == false)
     }
@@ -2113,9 +2155,110 @@ struct SessionControllerTests {
         #expect(generator.contexts.first?.confirmedSemanticBindings.contains {
             $0.contains("Active means users whose status is active.")
         } == true)
-        #expect(state.semanticBindings.first?.definition == "Active means users whose status is active.")
+        #expect(state.semanticBindings.isEmpty)
         #expect(controller.queryVM.sqlText == fixed.sql)
         #expect(controller.chatVM.messages.last?.generation?.needsClarification == false)
+    }
+
+    @Test func clarificationReplyWithoutConceptTermResolvesOriginalQuestion() async {
+        let connectionID = UUID()
+        let (state, dir) = makeState(connectionID: connectionID, connected: true)
+        defer { try? FileManager.default.removeItem(at: dir) }
+        state.schemas[connectionID] = makeFeedbackClusterSchema()
+        let controller = makeController(connectionID: connectionID)
+        let pending = PendingClarification(
+            concept: SQLGroundingConcept(
+                term: "frequency source",
+                kind: .relationship,
+                state: .ambiguous,
+                required: true
+            ),
+            originalQuestion: "what is the most frequent feedback cluster?",
+            question: "Which relationship should define cluster frequency?"
+        )
+        controller.chatVM.messages = [
+            ChatMessage(role: .user, text: pending.originalQuestion),
+            ChatMessage(
+                role: .assistant,
+                text: pending.question,
+                pendingClarification: pending
+            ),
+        ]
+        controller.chatVM.input =
+            "We can see the total number of feedback items in the feedback cluster table"
+        let fixed = makeGeneration(
+            sql: """
+                SELECT fc.id, COUNT(*) AS feedback_count
+                FROM public.feedback_cluster AS fc
+                JOIN public.feedback_cluster_membership AS fcm ON fcm.cluster_id = fc.id
+                GROUP BY fc.id
+                ORDER BY feedback_count DESC
+                LIMIT 1
+                """,
+            explanation: "Finds the most frequent feedback cluster."
+        )
+        let generator = RecordingRepairGenerator(results: [fixed])
+        state.sqlGeneratorOverride = generator
+
+        await controller.submit(appState: state)
+
+        #expect(generator.questions == [pending.originalQuestion])
+        #expect(generator.contexts.first?.conversationMessages.last?.text == controller.chatVM.messages[2].text)
+        #expect(generator.contexts.first?.confirmedSemanticBindings.contains {
+            $0.contains("total number of feedback items")
+        } == true)
+        #expect(state.semanticBindings.isEmpty)
+        #expect(controller.queryVM.sqlText == fixed.sql)
+        #expect(controller.chatVM.messages.last?.pendingClarification == nil)
+    }
+
+    @Test func clarificationReplyDoesNotCreateTargetsFromReplyOnlyWords() async {
+        let connectionID = UUID()
+        let (state, dir) = makeState(connectionID: connectionID, connected: true)
+        defer { try? FileManager.default.removeItem(at: dir) }
+        state.schemas[connectionID] = makeFeedbackClusterSchema()
+        let controller = makeController(connectionID: connectionID)
+        let pending = PendingClarification(
+            concept: SQLGroundingConcept(
+                term: "frequency source",
+                kind: .relationship,
+                state: .ambiguous,
+                required: true
+            ),
+            originalQuestion: "what is the most frequent feedback cluster?",
+            question: "Which relationship should define cluster frequency?"
+        )
+        controller.chatVM.messages = [
+            ChatMessage(role: .user, text: pending.originalQuestion),
+            ChatMessage(
+                role: .assistant,
+                text: pending.question,
+                pendingClarification: pending
+            ),
+        ]
+        controller.chatVM.input =
+            "We just calculate the total number of feedback items in each cluster and get the one with the most"
+        let fixed = makeGeneration(
+            sql: """
+                SELECT fc.id, COUNT(*) AS feedback_count
+                FROM public.feedback_cluster AS fc
+                JOIN public.feedback_cluster_membership AS fcm ON fcm.cluster_id = fc.id
+                GROUP BY fc.id
+                ORDER BY feedback_count DESC
+                LIMIT 1
+                """,
+            explanation: "Finds the most frequent feedback cluster."
+        )
+        let generator = RecordingRepairGenerator(results: [fixed])
+        state.sqlGeneratorOverride = generator
+
+        await controller.submit(appState: state)
+
+        #expect(generator.questions == [pending.originalQuestion])
+        #expect(controller.chatVM.messages.last?.text.contains("\"just\"") != true)
+        #expect(controller.chatVM.messages.last?.text.contains("\"calculate\"") != true)
+        #expect(controller.chatVM.messages.last?.text.contains("\"get\"") != true)
+        #expect(controller.queryVM.sqlText == fixed.sql)
     }
 
     @Test func newQuestionAfterPendingClarificationStartsFreshRequest() async {
