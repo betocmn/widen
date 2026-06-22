@@ -63,6 +63,9 @@ public struct ChatMessage: Identifiable, Codable, Equatable, Sendable {
     /// the failing SQL the "Try Again" button asks the model to repair. Writes
     /// never auto-retry, so the retry is a one-shot, execution-free regenerate.
     public var failedWriteSQL: String?
+    /// Present on assistant clarification messages that can be resolved by
+    /// choosing an option or by replying in free form.
+    public var pendingClarification: PendingClarification?
     public var timestamp: Date
 
     public init(
@@ -70,7 +73,8 @@ public struct ChatMessage: Identifiable, Codable, Equatable, Sendable {
         text: String,
         generation: SQLGenerationResult? = nil,
         runSummary: RunSummary? = nil,
-        failedWriteSQL: String? = nil
+        failedWriteSQL: String? = nil,
+        pendingClarification: PendingClarification? = nil
     ) {
         self.id = UUID()
         self.role = role
@@ -78,6 +82,7 @@ public struct ChatMessage: Identifiable, Codable, Equatable, Sendable {
         self.generation = generation
         self.runSummary = runSummary
         self.failedWriteSQL = failedWriteSQL
+        self.pendingClarification = pendingClarification
         self.timestamp = Date()
     }
 
@@ -140,6 +145,18 @@ extension ChatMessage {
                 !clarification.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
             {
                 lines.append("Clarification requested:\n\(clarification)")
+            }
+            if let pendingClarification {
+                lines.append("Pending clarification ID: \(pendingClarification.id.uuidString)")
+                lines.append("Pending concept: \(pendingClarification.concept.term)")
+                if !pendingClarification.options.isEmpty {
+                    lines.append(
+                        "Clarification options:\n"
+                            + pendingClarification.options
+                            .map { "- \($0.label): \($0.definition)" }
+                            .joined(separator: "\n")
+                    )
+                }
             }
         }
         if let runSummary {

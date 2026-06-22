@@ -144,6 +144,28 @@ struct SessionControllerTests {
         }
     }
 
+    private struct FavoriteColorColumnExecutor: QueryExecuting {
+        let recorder: SQLRecorder
+
+        func run(
+            sql: String,
+            config: DatabaseConnectionConfig,
+            postgres: PostgresService
+        ) async throws -> QueryResult {
+            await recorder.record(sql)
+            if sql.contains("favorite_color") {
+                throw AppError.executionFailed(#"column "favorite_color" does not exist"#)
+            }
+            return QueryResult(
+                columns: ["id"],
+                rows: [["1"]],
+                rowCount: 1,
+                truncated: false,
+                executionTimeMs: 4
+            )
+        }
+    }
+
     private struct AlwaysFailingExecutor: QueryExecuting {
         let recorder: SQLRecorder
 
@@ -253,6 +275,7 @@ struct SessionControllerTests {
         private let results: [SQLGenerationResult]
         private(set) var contexts: [SQLGenerationContext] = []
         private(set) var schemaNames: [String?] = []
+        private(set) var questions: [String] = []
 
         init(results: [SQLGenerationResult]) {
             self.results = results
@@ -264,9 +287,31 @@ struct SessionControllerTests {
             context: SQLGenerationContext,
             config: SQLGenerationConfig
         ) async throws -> SQLGenerationResult {
+            questions.append(question)
             contexts.append(context)
             schemaNames.append(schema.singleSchemaName)
             return results[min(contexts.count - 1, results.count - 1)]
+        }
+    }
+
+    private final class ContextCallCountRepairGenerator: SQLGenerator, @unchecked Sendable {
+        private let result: SQLGenerationResult
+        private(set) var contexts: [SQLGenerationContext] = []
+
+        init(result: SQLGenerationResult) {
+            self.result = result
+        }
+
+        func generateSQL(
+            question: String,
+            schema: DatabaseSchema,
+            context: SQLGenerationContext,
+            config: SQLGenerationConfig
+        ) async throws -> SQLGenerationResult {
+            contexts.append(context)
+            var copy = result
+            copy.generationCallCount = max(1, context.modelCallCount)
+            return copy
         }
     }
 
@@ -370,6 +415,142 @@ struct SessionControllerTests {
                             isNullable: false,
                             ordinalPosition: 1
                         )
+                    ]
+                )
+            ],
+            foreignKeys: []
+        )
+    }
+
+    private func makeOrdersAccountsSchema() -> DatabaseSchema {
+        DatabaseSchema(
+            schemas: [SchemaInfo(name: "public")],
+            tables: [
+                TableInfo(
+                    schema: "public",
+                    name: "orders",
+                    type: .baseTable,
+                    columns: [
+                        ColumnInfo(
+                            tableSchema: "public",
+                            tableName: "orders",
+                            name: "id",
+                            dataType: "integer",
+                            isNullable: false,
+                            ordinalPosition: 1
+                        ),
+                        ColumnInfo(
+                            tableSchema: "public",
+                            tableName: "orders",
+                            name: "account_id",
+                            dataType: "integer",
+                            isNullable: false,
+                            ordinalPosition: 2
+                        ),
+                    ]
+                ),
+                TableInfo(
+                    schema: "public",
+                    name: "accounts",
+                    type: .baseTable,
+                    columns: [
+                        ColumnInfo(
+                            tableSchema: "public",
+                            tableName: "accounts",
+                            name: "id",
+                            dataType: "integer",
+                            isNullable: false,
+                            ordinalPosition: 1
+                        ),
+                        ColumnInfo(
+                            tableSchema: "public",
+                            tableName: "accounts",
+                            name: "plan_name",
+                            dataType: "text",
+                            isNullable: false,
+                            ordinalPosition: 2
+                        ),
+                    ]
+                ),
+            ],
+            foreignKeys: [
+                ForeignKeyInfo(
+                    constraintName: "orders_account_id_fkey",
+                    sourceSchema: "public",
+                    sourceTable: "orders",
+                    sourceColumn: "account_id",
+                    targetSchema: "public",
+                    targetTable: "accounts",
+                    targetColumn: "id"
+                )
+            ]
+        )
+    }
+
+    private func makeUsersStatusSchema() -> DatabaseSchema {
+        DatabaseSchema(
+            schemas: [SchemaInfo(name: "public")],
+            tables: [
+                TableInfo(
+                    schema: "public",
+                    name: "users",
+                    type: .baseTable,
+                    columns: [
+                        ColumnInfo(
+                            tableSchema: "public",
+                            tableName: "users",
+                            name: "id",
+                            dataType: "uuid",
+                            isNullable: false,
+                            ordinalPosition: 1
+                        ),
+                        ColumnInfo(
+                            tableSchema: "public",
+                            tableName: "users",
+                            name: "status",
+                            dataType: "text",
+                            isNullable: false,
+                            ordinalPosition: 2,
+                            valueConstraints: [
+                                ColumnValueConstraint(
+                                    kind: .check,
+                                    values: ["active", "inactive"],
+                                    expression: "CHECK (status IN ('active', 'inactive'))"
+                                )
+                            ]
+                        ),
+                    ]
+                )
+            ],
+            foreignKeys: []
+        )
+    }
+
+    private func makeUsersUnconstrainedStatusSchema() -> DatabaseSchema {
+        DatabaseSchema(
+            schemas: [SchemaInfo(name: "public")],
+            tables: [
+                TableInfo(
+                    schema: "public",
+                    name: "users",
+                    type: .baseTable,
+                    columns: [
+                        ColumnInfo(
+                            tableSchema: "public",
+                            tableName: "users",
+                            name: "id",
+                            dataType: "uuid",
+                            isNullable: false,
+                            ordinalPosition: 1
+                        ),
+                        ColumnInfo(
+                            tableSchema: "public",
+                            tableName: "users",
+                            name: "status",
+                            dataType: "text",
+                            isNullable: false,
+                            ordinalPosition: 2
+                        ),
                     ]
                 )
             ],
@@ -493,7 +674,8 @@ struct SessionControllerTests {
         sql: String,
         explanation: String = "Generated SQL.",
         needsClarification: Bool = false,
-        clarificationQuestion: String? = nil
+        clarificationQuestion: String? = nil,
+        generationCallCount: Int? = nil
     ) -> SQLGenerationResult {
         SQLGenerationResult(
             sql: sql,
@@ -503,7 +685,8 @@ struct SessionControllerTests {
             confidence: 0.8,
             riskLevel: .low,
             needsClarification: needsClarification,
-            clarificationQuestion: clarificationQuestion
+            clarificationQuestion: clarificationQuestion,
+            generationCallCount: generationCallCount
         )
     }
 
@@ -587,6 +770,88 @@ struct SessionControllerTests {
         #expect(controller.chatVM.messages.map(\.role) == [.user, .assistant, .result])
         #expect(controller.chatVM.messages[1].generation?.sql == fixedGeneration.sql)
         #expect(controller.chatVM.messages[2].runSummary?.sql == fixedGeneration.sql)
+    }
+
+    @Test func generatedRunErrorSkipsRepairWhenModelCallBudgetIsExhausted() async {
+        let connectionID = UUID()
+        let (state, dir) = makeState(connectionID: connectionID, connected: true)
+        defer { try? FileManager.default.removeItem(at: dir) }
+        state.schemas[connectionID] = makeSchema()
+        let badGeneration = makeGeneration(
+            sql: "SELECT id FROM public.bad_table",
+            explanation: "Uses the wrong table.",
+            generationCallCount: 3
+        )
+        let fixedGeneration = makeGeneration(
+            sql: "SELECT id FROM public.users LIMIT 100",
+            explanation: "Uses the users table."
+        )
+        let generator = RecordingRepairGenerator(results: [fixedGeneration])
+        state.sqlGeneratorOverride = generator
+        let recorder = SQLRecorder()
+        let controller = makeController(
+            connectionID: connectionID,
+            executor: BadTableExecutor(recorder: recorder)
+        )
+        controller.chatVM.messages = [
+            ChatMessage(role: .user, text: "show users"),
+            ChatMessage(role: .assistant, text: badGeneration.explanation, generation: badGeneration),
+        ]
+        controller.queryVM.setGeneration(badGeneration)
+
+        controller.runQuery(appState: state)
+        await waitUntil {
+            !controller.queryVM.isRunning
+                && !controller.chatVM.isGenerating
+                && controller.chatVM.messages.last?.role == .error
+        }
+
+        let statements = await recorder.all()
+        #expect(statements == [badGeneration.sql])
+        #expect(generator.contexts.isEmpty)
+        #expect(controller.queryVM.sqlText == badGeneration.sql)
+        #expect(controller.queryVM.generation?.sql == badGeneration.sql)
+        #expect(controller.chatVM.messages.map(\.role) == [.user, .assistant, .error])
+        #expect(controller.chatVM.messages.last?.text.contains("model-call budget") == true)
+    }
+
+    @Test func generatedRunRepairPreservesCumulativeModelCallCount() async {
+        let connectionID = UUID()
+        let (state, dir) = makeState(connectionID: connectionID, connected: true)
+        defer { try? FileManager.default.removeItem(at: dir) }
+        state.schemas[connectionID] = makeSchema()
+        let badGeneration = makeGeneration(
+            sql: "SELECT id FROM public.bad_table",
+            explanation: "Uses the wrong table.",
+            generationCallCount: 2
+        )
+        let fixedGeneration = makeGeneration(
+            sql: "SELECT id FROM public.users LIMIT 100",
+            explanation: "Uses the users table."
+        )
+        let generator = ContextCallCountRepairGenerator(result: fixedGeneration)
+        state.sqlGeneratorOverride = generator
+        let recorder = SQLRecorder()
+        let controller = makeController(
+            connectionID: connectionID,
+            executor: BadTableExecutor(recorder: recorder)
+        )
+        controller.chatVM.messages = [
+            ChatMessage(role: .user, text: "show users"),
+            ChatMessage(role: .assistant, text: badGeneration.explanation, generation: badGeneration),
+        ]
+        controller.queryVM.setGeneration(badGeneration)
+
+        controller.runQuery(appState: state)
+        await waitUntil {
+            !controller.queryVM.isRunning
+                && !controller.chatVM.isGenerating
+                && controller.chatVM.messages.last?.role == .result
+        }
+
+        #expect(generator.contexts.count == 1)
+        #expect(generator.contexts[0].modelCallCount == 3)
+        #expect(controller.queryVM.generation?.generationCallCount == 3)
     }
 
     @Test func generatedRunErrorRestoresOriginalSQLWhenRepairGeneratorFails() async {
@@ -675,7 +940,7 @@ struct SessionControllerTests {
         }
     }
 
-    @Test func generatedRunErrorRepairsMissingColumnNamedTimeout() async {
+    @Test func generatedRunErrorClarifiesWhenRepairDropsMissingColumnNamedTimeout() async {
         let connectionID = UUID()
         let (state, dir) = makeState(connectionID: connectionID, connected: true)
         defer { try? FileManager.default.removeItem(at: dir) }
@@ -699,19 +964,20 @@ struct SessionControllerTests {
         await waitUntil {
             !controller.queryVM.isRunning
                 && !controller.chatVM.isGenerating
-                && controller.chatVM.messages.last?.role == .result
+                && controller.chatVM.messages.count == 3
         }
 
         let statements = await recorder.all()
-        #expect(statements == [badGeneration.sql, fixedGeneration.sql])
+        #expect(statements == [badGeneration.sql])
         #expect(generator.contexts.count == 1)
         #expect(generator.contexts[0].mode == .repair)
         #expect(generator.contexts[0].repairContext?.diagnostic?.kind == .missingColumn)
         #expect(generator.contexts[0].repairContext?.forbiddenIdentifiers.contains("timeout") == true)
-        #expect(controller.queryVM.sqlText == fixedGeneration.sql)
+        #expect(controller.queryVM.sqlText == badGeneration.sql)
+        #expect(controller.chatVM.messages.last?.pendingClarification?.concept.term == "timeout")
     }
 
-    @Test func generatedRunErrorRepairsMissingColumnNamedCancelledAt() async {
+    @Test func generatedRunErrorClarifiesWhenRepairDropsMissingColumnNamedCancelledAt() async {
         let connectionID = UUID()
         let (state, dir) = makeState(connectionID: connectionID, connected: true)
         defer { try? FileManager.default.removeItem(at: dir) }
@@ -735,16 +1001,63 @@ struct SessionControllerTests {
         await waitUntil {
             !controller.queryVM.isRunning
                 && !controller.chatVM.isGenerating
-                && controller.chatVM.messages.last?.role == .result
+                && controller.chatVM.messages.count == 3
         }
 
         let statements = await recorder.all()
-        #expect(statements == [badGeneration.sql, fixedGeneration.sql])
+        #expect(statements == [badGeneration.sql])
         #expect(generator.contexts.count == 1)
         #expect(generator.contexts[0].mode == .repair)
         #expect(generator.contexts[0].repairContext?.diagnostic?.kind == .missingColumn)
         #expect(generator.contexts[0].repairContext?.forbiddenIdentifiers.contains("cancelled_at") == true)
-        #expect(controller.queryVM.sqlText == fixedGeneration.sql)
+        #expect(controller.queryVM.sqlText == badGeneration.sql)
+        #expect(controller.chatVM.messages.last?.pendingClarification?.concept.term == "cancelled")
+    }
+
+    @Test func generatedRunErrorClarifiesWhenRepairDropsRequestedFavoriteColor() async {
+        let connectionID = UUID()
+        let (state, dir) = makeState(connectionID: connectionID, connected: true)
+        defer { try? FileManager.default.removeItem(at: dir) }
+        state.schemas[connectionID] = makeSchema()
+        let initialGeneration = makeGeneration(
+            sql: "SELECT favorite_color FROM public.users",
+            explanation: "Uses a missing favorite color column."
+        )
+        let repairedGeneration = makeGeneration(
+            sql: "SELECT id FROM public.users",
+            explanation: "Lists users."
+        )
+        let generator = RecordingRepairGenerator(results: [repairedGeneration])
+        state.sqlGeneratorOverride = generator
+        let recorder = SQLRecorder()
+        let controller = makeController(
+            connectionID: connectionID,
+            executor: FavoriteColorColumnExecutor(recorder: recorder)
+        )
+        controller.chatVM.messages = [
+            ChatMessage(role: .user, text: "show users favorite color"),
+            ChatMessage(
+                role: .assistant,
+                text: initialGeneration.explanation,
+                generation: initialGeneration
+            ),
+        ]
+        controller.queryVM.setGeneration(initialGeneration)
+
+        controller.runQuery(appState: state)
+        await waitUntil {
+            !controller.queryVM.isRunning
+                && !controller.chatVM.isGenerating
+                && controller.chatVM.messages.count == 3
+        }
+
+        let statements = await recorder.all()
+        #expect(statements == [initialGeneration.sql])
+        #expect(generator.contexts.count == 1)
+        #expect(generator.contexts[0].mode == .repair)
+        #expect(controller.queryVM.sqlText == initialGeneration.sql)
+        #expect(controller.chatVM.messages.last?.pendingClarification?.concept.term == "favorite")
+        #expect(controller.chatVM.messages.last?.generation?.needsClarification == true)
     }
 
     @Test func generatedRunErrorKeepsOriginalSQLWhileRepairGeneratorIsPending() async {
@@ -1105,7 +1418,7 @@ struct SessionControllerTests {
         #expect(controller.chatVM.messages.map(\.role) == [.user, .assistant])
     }
 
-    @Test func repairCoordinatorRejectsOnlyUnquotedMixedCaseIdentifier() {
+    @Test func repairCoordinatorCanonicalizesUnquotedMixedCaseIdentifier() {
         var coordinator = GeneratedSQLRepairCoordinator(
             failedSQL: "SELECT createdAt FROM public.events",
             firstError:
@@ -1126,19 +1439,9 @@ struct SessionControllerTests {
             schema: makeMixedCaseSchema(),
             allowWrites: false
         )
-        let quoted = coordinator.evaluateCandidate(
-            makeGeneration(sql: #"SELECT "createdAt" FROM public.events LIMIT 100"#),
-            mode: .repair,
-            schema: makeMixedCaseSchema(),
-            allowWrites: false
-        )
 
-        if case .rejected(let reason) = unquoted.outcome {
-            #expect(reason == .forbiddenIdentifier("createdAt"))
-        } else {
-            Issue.record("Expected unquoted createdAt to be rejected")
-        }
-        #expect(quoted.outcome == .accepted)
+        #expect(unquoted.outcome == .accepted)
+        #expect(unquoted.sql == #"SELECT "createdAt" FROM public.events LIMIT 100"#)
     }
 
     @Test func repairCoordinatorAllowsQualifiedRepairForAmbiguousBareColumn() {
@@ -1187,7 +1490,132 @@ struct SessionControllerTests {
         #expect(failed == recasedSyntax)
     }
 
-    @Test func generatedRunErrorGivesUpAfterRepairAndReconstruction() async {
+    @Test func structuralFingerprintHandlesGroupedQueryWithTerminator() {
+        let fingerprint = SQLStructuralFingerprint(
+            """
+            SELECT user_id, COUNT(*)
+            FROM public.orders
+            GROUP BY user_id
+            LIMIT 100
+            """
+        )
+
+        #expect(fingerprint.value.contains("group:user_id"))
+    }
+
+    @Test func repairCoordinatorRejectsStructuralRepeatWithSameValidationIssue() {
+        var coordinator = GeneratedSQLRepairCoordinator(
+            failedSQL: "SELECT u.name FROM public.users AS u",
+            firstError:
+                "The SQL failed validation: Schema validation failed: column name is not on public.users.",
+            diagnostic: DatabaseDiagnostic(
+                kind: .missingColumn,
+                sqlState: "42703",
+                message: "column name is not on public.users",
+                columnName: "name"
+            ),
+            forbiddenIdentifiers: []
+        )
+
+        let repeated = coordinator.evaluateCandidate(
+            makeGeneration(sql: "SELECT x.name FROM public.users AS x LIMIT 100"),
+            mode: .repair,
+            schema: makeSchema(),
+            allowWrites: false
+        )
+
+        if case .rejected(let reason) = repeated.outcome {
+            #expect(reason == .repeatedFingerprint)
+        } else {
+            Issue.record("Expected structurally repeated SQL to be rejected")
+        }
+        #expect(!repeated.allowsReconstruction)
+    }
+
+    @Test func repairCoordinatorAllowsReconstructionForRepeatedJoinableMissingColumn() {
+        let schema = makeOrdersAccountsSchema()
+        let failedSQL = "SELECT plan_name FROM public.orders"
+        let initialValidation = GeneratedSQLValidator.validate(sql: failedSQL, schema: schema)
+        var coordinator = GeneratedSQLRepairCoordinator(
+            failedSQL: failedSQL,
+            firstError: AppError.validationFailed(initialValidation.errors).localizedDescription,
+            diagnostic: nil,
+            forbiddenIdentifiers: []
+        )
+
+        let repeated = coordinator.evaluateCandidate(
+            makeGeneration(sql: failedSQL),
+            mode: .repair,
+            schema: schema,
+            allowWrites: false
+        )
+
+        if case .rejected(let reason) = repeated.outcome {
+            #expect(reason == .repeatedFingerprint)
+        } else {
+            Issue.record("Expected repeated SQL to be rejected before reconstruction")
+        }
+        #expect(repeated.allowsReconstruction)
+    }
+
+    @Test func repairCoordinatorKeepsDerivedAndBaseColumnIssuesDistinct() {
+        let schema = makeSchema()
+        let failedSQL = """
+            WITH c AS (
+              SELECT id FROM public.users
+            )
+            SELECT email FROM c
+            """
+        let initialValidation = GeneratedSQLValidator.validate(sql: failedSQL, schema: schema)
+        var coordinator = GeneratedSQLRepairCoordinator(
+            failedSQL: failedSQL,
+            firstError: AppError.validationFailed(initialValidation.errors).localizedDescription,
+            diagnostic: nil,
+            forbiddenIdentifiers: []
+        )
+
+        let baseColumnFailure = coordinator.evaluateCandidate(
+            makeGeneration(sql: "SELECT email FROM public.users"),
+            mode: .repair,
+            schema: schema,
+            allowWrites: false
+        )
+
+        if case .rejected(let reason) = baseColumnFailure.outcome {
+            #expect(reason == .validationFailure)
+        } else {
+            Issue.record("Expected base column failure to be rejected for validation")
+        }
+        #expect(baseColumnFailure.allowsReconstruction)
+    }
+
+    @Test func repairCoordinatorTreatsStrictSubsetOfValidationIssuesAsProgress() {
+        let schema = makeSchema()
+        let failedSQL = "SELECT email, name FROM public.users"
+        let initialValidation = GeneratedSQLValidator.validate(sql: failedSQL, schema: schema)
+        var coordinator = GeneratedSQLRepairCoordinator(
+            failedSQL: failedSQL,
+            firstError: AppError.validationFailed(initialValidation.errors).localizedDescription,
+            diagnostic: nil,
+            forbiddenIdentifiers: []
+        )
+
+        let partialFailure = coordinator.evaluateCandidate(
+            makeGeneration(sql: "SELECT email FROM public.users"),
+            mode: .repair,
+            schema: schema,
+            allowWrites: false
+        )
+
+        if case .rejected(let reason) = partialFailure.outcome {
+            #expect(reason == .validationFailure)
+        } else {
+            Issue.record("Expected partial repair to remain invalid")
+        }
+        #expect(partialFailure.allowsReconstruction)
+    }
+
+    @Test func generatedRunErrorClarifiesAfterRepeatedRepair() async {
         let connectionID = UUID()
         let (state, dir) = makeState(connectionID: connectionID, connected: true)
         defer { try? FileManager.default.removeItem(at: dir) }
@@ -1210,32 +1638,26 @@ struct SessionControllerTests {
         await waitUntil {
             !controller.queryVM.isRunning
                 && !controller.chatVM.isGenerating
-                && controller.chatVM.messages.last?.role == .error
+                && controller.chatVM.messages.last?.role == .assistant
+                && controller.chatVM.messages.count == 3
         }
 
         let statements = await recorder.all()
         #expect(statements.count == 1)
-        #expect(generator.contexts.count == 2)
+        #expect(generator.contexts.count == 1)
         #expect(generator.contexts[0].mode == .repair)
         #expect(generator.contexts[0].currentSQL == badGeneration.sql)
         #expect(generator.contexts[0].repairContext?.failedSQL == badGeneration.sql)
-        #expect(generator.contexts[1].mode == .reconstructAfterFailedRepair)
-        #expect(generator.contexts[1].currentSQL == nil)
-        #expect(generator.contexts[1].repairContext?.failedSQL == nil)
-        #expect(generator.contexts[1].repairContext?.forbiddenIdentifiers.contains("public.bad_table") == true)
+        #expect(generator.contexts[0].repairContext?.priorFingerprints.isEmpty == true)
         #expect(controller.queryVM.sqlText == badGeneration.sql)
         #expect(controller.queryVM.generation?.sql == badGeneration.sql)
-        #expect(controller.chatVM.messages.map(\.role) == [.user, .assistant, .error])
+        #expect(controller.chatVM.messages.map(\.role) == [.user, .assistant, .assistant])
         #expect(controller.chatVM.messages[1].generation?.sql == badGeneration.sql)
-        #expect(controller.chatVM.messages.last?.text.contains("focused repair") == true)
-        #expect(controller.chatVM.messages.last?.text.contains("Initial generation") == true)
-        #expect(controller.chatVM.messages.last?.text.contains("Reconstruction") == true)
-        #expect(controller.chatVM.messages.last?.text.contains("Last error:") == true)
-        #expect(controller.chatVM.messages.last?.text.contains("repeated SQL") == true)
-        #expect(controller.chatVM.messages.last?.text.contains("smarter cloud model") == true)
+        #expect(controller.chatVM.messages.last?.text.contains("public.bad_table") == true)
+        #expect(controller.chatVM.messages.last?.text.contains("Which table") == true)
     }
 
-    @Test func generatedRunErrorForbidsOnlyMissingRelationFromDiagnosticMessage() async {
+    @Test func generatedRunErrorClarifiesWhenRepairDropsMissingRelationIntent() async {
         let connectionID = UUID()
         let (state, dir) = makeState(connectionID: connectionID, connected: true)
         defer { try? FileManager.default.removeItem(at: dir) }
@@ -1265,13 +1687,16 @@ struct SessionControllerTests {
         await waitUntil {
             !controller.queryVM.isRunning
                 && !controller.chatVM.isGenerating
-                && controller.chatVM.messages.last?.role == .result
+                && controller.chatVM.messages.count == 3
         }
 
+        let statements = await recorder.all()
+        #expect(statements == [badGeneration.sql])
         let forbiddenIdentifiers = generator.contexts[0].repairContext?.forbiddenIdentifiers ?? []
         #expect(forbiddenIdentifiers.contains("public.bad_orders"))
         #expect(!forbiddenIdentifiers.contains("public.users"))
-        #expect(controller.queryVM.sqlText == fixedGeneration.sql)
+        #expect(controller.queryVM.sqlText == badGeneration.sql)
+        #expect(controller.chatVM.messages.last?.pendingClarification?.concept.term == "orders")
     }
 
     @Test func generatedRunErrorDoesNotReexecuteAnyPriorFailedSQL() async {
@@ -1309,7 +1734,8 @@ struct SessionControllerTests {
         await waitUntil {
             !controller.queryVM.isRunning
                 && !controller.chatVM.isGenerating
-                && controller.chatVM.messages.last?.role == .error
+                && controller.chatVM.messages.last?.role == .assistant
+                && controller.chatVM.messages.count == 3
         }
 
         let statements = await recorder.all()
@@ -1317,7 +1743,8 @@ struct SessionControllerTests {
         #expect(generator.contexts.count == 2)
         #expect(generator.contexts[0].mode == .repair)
         #expect(generator.contexts[1].mode == .reconstructAfterFailedRepair)
-        #expect(controller.chatVM.messages.last?.text.contains("Reconstruction") == true)
+        #expect(controller.chatVM.messages.last?.text.contains("public.bad_table") == true)
+        #expect(controller.chatVM.messages.last?.text.contains("Which table") == true)
     }
 
     @Test func generatedRunErrorRejectsForbiddenRepairSQLBeforeExecution() async {
@@ -1344,16 +1771,18 @@ struct SessionControllerTests {
         await waitUntil {
             !controller.queryVM.isRunning
                 && !controller.chatVM.isGenerating
-                && controller.chatVM.messages.last?.role == .error
+                && controller.chatVM.messages.last?.role == .assistant
+                && controller.chatVM.messages.count == 3
         }
 
         let statements = await recorder.all()
         #expect(statements == [badGeneration.sql])
-        #expect(generator.contexts.count == 2)
+        #expect(generator.contexts.count == 1)
         #expect(controller.queryVM.sqlText == badGeneration.sql)
         #expect(controller.queryVM.generation?.sql == badGeneration.sql)
         #expect(controller.chatVM.messages[1].generation?.sql == badGeneration.sql)
-        #expect(controller.chatVM.messages.last?.text.contains("forbidden identifier") == true)
+        #expect(controller.chatVM.messages.last?.text.contains("public.bad_table") == true)
+        #expect(controller.chatVM.messages.last?.text.contains("Which table") == true)
     }
 
     @Test func generatedRunErrorAsksForClarificationWhenRepairRepeatsMissingColumn() async {
@@ -1445,6 +1874,388 @@ struct SessionControllerTests {
         #expect(controller.chatVM.messages.last?.text == "Which table should I use for users?")
     }
 
+    @Test func validationRepairRunsGroundingBeforeShowingRepairedSQL() async {
+        let connectionID = UUID()
+        let (state, dir) = makeState(connectionID: connectionID, connected: true)
+        defer { try? FileManager.default.removeItem(at: dir) }
+        let schema = makeUsersUnconstrainedStatusSchema()
+        state.schemas[connectionID] = schema
+        let invalidGeneration = makeGeneration(
+            sql: "SELECT timeout FROM public.users WHERE status = 'active'",
+            explanation: "Uses an invalid column."
+        )
+        let repairedGeneration = makeGeneration(
+            sql: "SELECT id FROM public.users WHERE status = 'active'",
+            explanation: "Lists active users."
+        )
+        let generator = RecordingRepairGenerator(results: [invalidGeneration, repairedGeneration])
+        state.sqlGeneratorOverride = generator
+        let controller = makeController(connectionID: connectionID)
+        controller.chatVM.input = "show active users"
+
+        await controller.submit(appState: state)
+
+        #expect(generator.contexts.count == 2)
+        #expect(generator.contexts[1].mode == .repair)
+        #expect(controller.queryVM.sqlText.isEmpty)
+        #expect(controller.chatVM.messages.map(\.role) == [.user, .assistant])
+        #expect(controller.chatVM.messages.last?.pendingClarification?.concept.term == "active")
+        #expect(controller.chatVM.messages.last?.generation?.needsClarification == true)
+    }
+
+    @Test func generatedRunRepairRunsGroundingBeforeExecutingRepairedSQL() async {
+        let connectionID = UUID()
+        let (state, dir) = makeState(connectionID: connectionID, connected: true)
+        defer { try? FileManager.default.removeItem(at: dir) }
+        let schema = makeUsersUnconstrainedStatusSchema()
+        state.schemas[connectionID] = schema
+        let initialGeneration = makeGeneration(
+            sql: "SELECT timeout FROM public.users",
+            explanation: "Uses a missing timeout column."
+        )
+        let repairedGeneration = makeGeneration(
+            sql: "SELECT id FROM public.users WHERE status = 'churned'",
+            explanation: "Lists churned users."
+        )
+        let generator = RecordingRepairGenerator(results: [repairedGeneration])
+        state.sqlGeneratorOverride = generator
+        let recorder = SQLRecorder()
+        let controller = makeController(
+            connectionID: connectionID,
+            executor: TimeoutColumnExecutor(recorder: recorder)
+        )
+        controller.chatVM.messages = [
+            ChatMessage(role: .user, text: "show churned users"),
+            ChatMessage(
+                role: .assistant,
+                text: initialGeneration.explanation,
+                generation: initialGeneration
+            ),
+        ]
+        controller.queryVM.setGeneration(initialGeneration)
+
+        controller.runQuery(appState: state)
+        await waitUntil {
+            !controller.queryVM.isRunning
+                && !controller.chatVM.isGenerating
+                && controller.chatVM.messages.count == 3
+        }
+
+        let statements = await recorder.all()
+        #expect(statements == [initialGeneration.sql])
+        #expect(generator.contexts.count == 1)
+        #expect(controller.queryVM.sqlText == initialGeneration.sql)
+        #expect(controller.chatVM.messages.last?.pendingClarification?.concept.term == "churned")
+        #expect(controller.chatVM.messages.last?.generation?.needsClarification == true)
+    }
+
+    @Test func clarificationOptionReplyResolvesPendingClarificationAndStoresBinding() async {
+        let connectionID = UUID()
+        let (state, dir) = makeState(connectionID: connectionID, connected: true)
+        defer { try? FileManager.default.removeItem(at: dir) }
+        let schema = makeUsersUnconstrainedStatusSchema()
+        state.schemas[connectionID] = schema
+        let controller = makeController(connectionID: connectionID)
+        let option = ClarificationOption(
+            label: "status = active",
+            replyText: #"Use "public"."users"."status" = 'active'"#,
+            definition: #""public"."users"."status" = 'active'"#,
+            evidence: ["public.users.status"]
+        )
+        let pending = PendingClarification(
+            concept: SQLGroundingConcept(
+                term: "active",
+                kind: .filter,
+                state: .unsupported,
+                required: true
+            ),
+            originalQuestion: "how many active users?",
+            question: "What defines active users?",
+            options: [option]
+        )
+        controller.chatVM.messages = [
+            ChatMessage(role: .user, text: "how many active users?"),
+            ChatMessage(
+                role: .assistant,
+                text: pending.question,
+                pendingClarification: pending
+            ),
+        ]
+        let fixed = makeGeneration(
+            sql: "SELECT COUNT(*) FROM public.users WHERE status = 'active'",
+            explanation: "Counts active users."
+        )
+        let generator = RecordingRepairGenerator(results: [fixed])
+        state.sqlGeneratorOverride = generator
+
+        await controller.selectClarificationOption(
+            appState: state,
+            pending: pending,
+            option: option
+        )
+
+        #expect(controller.chatVM.messages.contains {
+            $0.role == .user && $0.text == option.replyText
+        })
+        #expect(generator.questions == ["how many active users?"])
+        #expect(generator.contexts.first?.confirmedSemanticBindings.contains {
+            $0.contains(#""public"."users"."status" = 'active'"#)
+        } == true)
+        #expect(state.semanticBindings.count == 1)
+        #expect(state.semanticBindings.first?.concept == "active")
+        #expect(state.semanticBindings.first?.definition == option.definition)
+        #expect(controller.queryVM.sqlText == fixed.sql)
+        #expect(controller.chatVM.messages.last?.generation?.needsClarification == false)
+    }
+
+    @Test func staleClarificationOptionTapIsIgnored() async {
+        let connectionID = UUID()
+        let (state, dir) = makeState(connectionID: connectionID, connected: true)
+        defer { try? FileManager.default.removeItem(at: dir) }
+        let schema = makeUsersUnconstrainedStatusSchema()
+        state.schemas[connectionID] = schema
+        let controller = makeController(connectionID: connectionID)
+        let oldOption = ClarificationOption(
+            label: "old active",
+            replyText: "Use old active definition",
+            definition: "old active definition"
+        )
+        let oldPending = PendingClarification(
+            concept: SQLGroundingConcept(
+                term: "active",
+                kind: .filter,
+                state: .unsupported,
+                required: true
+            ),
+            originalQuestion: "how many active users?",
+            question: "What defines active users?",
+            options: [oldOption]
+        )
+        let currentPending = PendingClarification(
+            concept: SQLGroundingConcept(
+                term: "churned",
+                kind: .filter,
+                state: .unsupported,
+                required: true
+            ),
+            originalQuestion: "how many churned users?",
+            question: "What defines churned users?"
+        )
+        let generator = RecordingRepairGenerator(results: [makeGeneration(sql: "SELECT 1")])
+        state.sqlGeneratorOverride = generator
+        controller.chatVM.messages = [
+            ChatMessage(role: .user, text: oldPending.originalQuestion),
+            ChatMessage(
+                role: .assistant,
+                text: oldPending.question,
+                pendingClarification: oldPending
+            ),
+            ChatMessage(role: .user, text: currentPending.originalQuestion),
+            ChatMessage(
+                role: .assistant,
+                text: currentPending.question,
+                pendingClarification: currentPending
+            ),
+        ]
+
+        await controller.selectClarificationOption(
+            appState: state,
+            pending: oldPending,
+            option: oldOption
+        )
+
+        #expect(generator.contexts.isEmpty)
+        #expect(state.semanticBindings.isEmpty)
+        #expect(controller.chatVM.input.isEmpty)
+        #expect(controller.chatVM.messages.count == 4)
+    }
+
+    @Test func freeFormClarificationReplyResolvesSamePendingClarification() async {
+        let connectionID = UUID()
+        let (state, dir) = makeState(connectionID: connectionID, connected: true)
+        defer { try? FileManager.default.removeItem(at: dir) }
+        let schema = makeUsersUnconstrainedStatusSchema()
+        state.schemas[connectionID] = schema
+        let controller = makeController(connectionID: connectionID)
+        let pending = PendingClarification(
+            concept: SQLGroundingConcept(
+                term: "active",
+                kind: .filter,
+                state: .unsupported,
+                required: true
+            ),
+            originalQuestion: "how many active users?",
+            question: "What defines active users?"
+        )
+        controller.chatVM.messages = [
+            ChatMessage(role: .user, text: "how many active users?"),
+            ChatMessage(
+                role: .assistant,
+                text: pending.question,
+                pendingClarification: pending
+            ),
+        ]
+        controller.chatVM.input = "Active means users whose status is active."
+        let fixed = makeGeneration(
+            sql: "SELECT COUNT(*) FROM public.users WHERE status = 'active'",
+            explanation: "Counts active users."
+        )
+        let generator = RecordingRepairGenerator(results: [fixed])
+        state.sqlGeneratorOverride = generator
+
+        await controller.submit(appState: state)
+
+        #expect(generator.questions == ["how many active users?"])
+        #expect(
+            generator.contexts.first?.conversationMessages.last?.text
+                == "Active means users whose status is active."
+        )
+        #expect(generator.contexts.first?.confirmedSemanticBindings.contains {
+            $0.contains("Active means users whose status is active.")
+        } == true)
+        #expect(state.semanticBindings.first?.definition == "Active means users whose status is active.")
+        #expect(controller.queryVM.sqlText == fixed.sql)
+        #expect(controller.chatVM.messages.last?.generation?.needsClarification == false)
+    }
+
+    @Test func newQuestionAfterPendingClarificationStartsFreshRequest() async {
+        let connectionID = UUID()
+        let (state, dir) = makeState(connectionID: connectionID, connected: true)
+        defer { try? FileManager.default.removeItem(at: dir) }
+        let schema = makeUsersUnconstrainedStatusSchema()
+        state.schemas[connectionID] = schema
+        let controller = makeController(connectionID: connectionID)
+        let pending = PendingClarification(
+            concept: SQLGroundingConcept(
+                term: "active",
+                kind: .filter,
+                state: .unsupported,
+                required: true
+            ),
+            originalQuestion: "how many active users?",
+            question: "What defines active users?"
+        )
+        controller.chatVM.messages = [
+            ChatMessage(role: .user, text: pending.originalQuestion),
+            ChatMessage(
+                role: .assistant,
+                text: pending.question,
+                pendingClarification: pending
+            ),
+        ]
+        controller.chatVM.input = "show all users"
+        let fixed = makeGeneration(
+            sql: "SELECT id FROM public.users",
+            explanation: "Lists users."
+        )
+        let generator = RecordingRepairGenerator(results: [fixed])
+        state.sqlGeneratorOverride = generator
+
+        await controller.submit(appState: state)
+
+        #expect(generator.questions == ["show all users"])
+        #expect(generator.contexts.first?.originalQuestion == "show all users")
+        #expect(generator.contexts.first?.conversationMessages.contains {
+            $0.text == pending.question
+        } == false)
+        #expect(generator.contexts.first?.conversationMessages.contains {
+            $0.text == pending.originalQuestion
+        } == false)
+        #expect(generator.contexts.first?.recentQuestions.contains(pending.originalQuestion) == false)
+        #expect(state.semanticBindings.isEmpty)
+        #expect(controller.queryVM.sqlText == fixed.sql)
+    }
+
+    @Test func questionLikeReplyAfterPendingClarificationStartsFreshRequest() async {
+        let connectionID = UUID()
+        let (state, dir) = makeState(connectionID: connectionID, connected: true)
+        defer { try? FileManager.default.removeItem(at: dir) }
+        let schema = makeUsersUnconstrainedStatusSchema()
+        state.schemas[connectionID] = schema
+        let controller = makeController(connectionID: connectionID)
+        let pending = PendingClarification(
+            concept: SQLGroundingConcept(
+                term: "active",
+                kind: .filter,
+                state: .unsupported,
+                required: true
+            ),
+            originalQuestion: "how many active users?",
+            question: "What defines active users?"
+        )
+        controller.chatVM.messages = [
+            ChatMessage(role: .user, text: pending.originalQuestion),
+            ChatMessage(
+                role: .assistant,
+                text: pending.question,
+                pendingClarification: pending
+            ),
+        ]
+        controller.chatVM.input = "what is the count of all users?"
+        let fixed = makeGeneration(
+            sql: "SELECT COUNT(*) FROM public.users",
+            explanation: "Counts users."
+        )
+        let generator = RecordingRepairGenerator(results: [fixed])
+        state.sqlGeneratorOverride = generator
+
+        await controller.submit(appState: state)
+
+        #expect(generator.questions == ["what is the count of all users?"])
+        #expect(generator.contexts.first?.originalQuestion == "what is the count of all users?")
+        #expect(generator.contexts.first?.conversationMessages.contains {
+            $0.text == pending.question
+        } == false)
+        #expect(generator.contexts.first?.conversationMessages.contains {
+            $0.text == pending.originalQuestion
+        } == false)
+        #expect(generator.contexts.first?.recentQuestions.contains(pending.originalQuestion) == false)
+        #expect(state.semanticBindings.isEmpty)
+        #expect(controller.queryVM.sqlText == fixed.sql)
+    }
+
+    @Test func negativeClarificationReplyDoesNotStoreSemanticBinding() async {
+        let connectionID = UUID()
+        let (state, dir) = makeState(connectionID: connectionID, connected: true)
+        defer { try? FileManager.default.removeItem(at: dir) }
+        let schema = makeUsersStatusSchema()
+        state.schemas[connectionID] = schema
+        let controller = makeController(connectionID: connectionID)
+        let pending = PendingClarification(
+            concept: SQLGroundingConcept(
+                term: "active",
+                kind: .filter,
+                state: .unsupported,
+                required: true
+            ),
+            originalQuestion: "how many active users?",
+            question: "What defines active users?"
+        )
+        controller.chatVM.messages = [
+            ChatMessage(role: .user, text: "how many active users?"),
+            ChatMessage(
+                role: .assistant,
+                text: pending.question,
+                pendingClarification: pending
+            ),
+        ]
+        controller.chatVM.input = "no"
+        let clarification = makeGeneration(
+            sql: "",
+            explanation: "Still needs clarification.",
+            needsClarification: true,
+            clarificationQuestion: "What defines active users?"
+        )
+        let generator = RecordingRepairGenerator(results: [clarification])
+        state.sqlGeneratorOverride = generator
+
+        await controller.submit(appState: state)
+
+        #expect(state.semanticBindings.isEmpty)
+        #expect(generator.contexts.first?.confirmedSemanticBindings.isEmpty == true)
+        #expect(generator.contexts.first?.conversationMessages.last?.text == "no")
+    }
+
     @Test func submitWithDirectSQLSkipsGenerator() async {
         let connectionID = UUID()
         let (state, dir) = makeState(connectionID: connectionID, connected: true)
@@ -1485,16 +2296,17 @@ struct SessionControllerTests {
         let generator = RecordingRepairGenerator(results: [generated])
         state.sqlGeneratorOverride = generator
         let controller = makeController(connectionID: connectionID)
-        controller.chatVM.input = "Update Alice's email to alice@example.com"
+        controller.chatVM.input = "Update user id 1 to 2"
 
         await controller.submit(appState: state)
 
-        var expectedGeneration = generated
-        expectedGeneration.generationSchemaName = "public"
         #expect(generator.contexts.count == 1)
         #expect(controller.chatVM.messages.map(\.role) == [.user, .assistant])
         #expect(controller.queryVM.sqlText == generated.sql)
-        #expect(controller.queryVM.generation == expectedGeneration)
+        #expect(controller.queryVM.generation?.generationSchemaName == "public")
+        #expect(controller.queryVM.generation?.groundingConcepts.contains {
+            $0.term == "id" && $0.state == .grounded
+        } == true)
     }
 
     @Test func clearConversationCancelsActiveRunWithoutAppendingCompletion() async {

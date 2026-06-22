@@ -23,6 +23,7 @@ struct SQLSchemaValidatorTests {
 
         #expect(result.hasDefiniteErrors)
         #expect(result.errors.first?.contains("missing_column") == true)
+        #expect(result.issues.first?.kind == .missingBaseColumn)
     }
 
     @Test func cteNamesAreNotSchemaValidatedAsTables() {
@@ -1225,6 +1226,26 @@ struct SQLSchemaValidatorTests {
         #expect(result.errors.first?.contains("email") == true)
     }
 
+    @Test func cteProjectionFailuresUseSpecificIssueKind() {
+        let result = SQLSchemaValidator.validate(
+            sql: """
+                WITH recent_wins AS (
+                  SELECT id FROM public.users
+                )
+                SELECT winner_id FROM recent_wins
+                """,
+            against: makeUsersOrdersSchema()
+        )
+
+        #expect(result.hasDefiniteErrors)
+        #expect(result.issues.contains { $0.kind == .columnNotProjectedByCTE })
+        #expect(
+            result.errors.contains {
+                $0.contains("winner_id is not an output column of recent_wins")
+                    && $0.contains("project it from the CTE")
+            })
+    }
+
     @Test func quotedLowercaseCTEColumnsAllowUnquotedReferences() {
         let result = SQLSchemaValidator.validate(
             sql: """
@@ -1292,6 +1313,38 @@ struct SQLSchemaValidatorTests {
         #expect(enriched.referencedTables == ["public.users"])
     }
 
+    @Test func possessiveSuffixDoesNotBecomeUnsupportedGroundingConcept() {
+        let generation = SQLGenerationResult(
+            sql: """
+                SELECT o.id
+                FROM public.orders AS o
+                JOIN public.users AS u ON u.id = o.user_id
+                WHERE u.email = 'alice@example.com'
+                """,
+            explanation: "Lists Alice's orders.",
+            assumptions: [],
+            referencedTables: [],
+            confidence: 1,
+            riskLevel: .low,
+            needsClarification: false,
+            clarificationQuestion: nil
+        )
+
+        for question in ["Show Alice's orders", "Show Alice’s orders"] {
+            let enriched = GeneratedSQLPostprocessor.enriched(
+                generation,
+                question: question,
+                schema: makeUsersOrdersSchema(),
+                databaseContext: ""
+            )
+
+            #expect(!enriched.needsClarification)
+            #expect(enriched.sql == generation.sql)
+            #expect(enriched.referencedTables == ["public.orders", "public.users"])
+            #expect(!enriched.groundingConcepts.contains { $0.term == "s" })
+        }
+    }
+
     @Test func genericMetricVerbsDoNotForceClarification() {
         let generation = SQLGenerationResult(
             sql: """
@@ -1317,6 +1370,34 @@ struct SQLSchemaValidatorTests {
 
         #expect(!enriched.needsClarification)
         #expect(enriched.sql == generation.sql)
+        #expect(enriched.referencedTables == ["public.orders"])
+        #expect(enriched.groundingConcepts.contains {
+            $0.kind == .metric && $0.state == .notRequired
+        })
+    }
+
+    @Test func pastTenseGenericVerbMadeDoesNotRequireGrounding() {
+        let generation = SQLGenerationResult(
+            sql: "SELECT id FROM public.orders WHERE created_at >= CURRENT_DATE - INTERVAL '7 days'",
+            explanation: "Lists recent orders.",
+            assumptions: [],
+            referencedTables: [],
+            confidence: 1,
+            riskLevel: .low,
+            needsClarification: false,
+            clarificationQuestion: nil
+        )
+
+        let enriched = GeneratedSQLPostprocessor.enriched(
+            generation,
+            question: "show orders made last week",
+            schema: makeUsersOrdersSchema(),
+            databaseContext: ""
+        )
+
+        #expect(!enriched.needsClarification)
+        #expect(enriched.sql == generation.sql)
+        #expect(enriched.clarificationQuestion == nil)
         #expect(enriched.referencedTables == ["public.orders"])
     }
 
@@ -1366,7 +1447,136 @@ struct SQLSchemaValidatorTests {
         #expect(enriched.needsClarification)
         #expect(enriched.sql.isEmpty)
         #expect(enriched.clarificationQuestion?.contains("\"active\"") == true)
+        #expect(enriched.pendingClarification?.concept.state == .unsupported)
         #expect(enriched.referencedTables == ["public.users"])
+    }
+
+    @Test func nonMetricFilterTermsStillRequireGrounding() {
+        let generation = SQLGenerationResult(
+            sql: "SELECT id FROM public.users WHERE status = 'active'",
+            explanation: "Lists active users.",
+            assumptions: [],
+            referencedTables: [],
+            confidence: 1,
+            riskLevel: .low,
+            needsClarification: false,
+            clarificationQuestion: nil
+        )
+
+        let enriched = GeneratedSQLPostprocessor.enriched(
+            generation,
+            question: "show active users",
+            schema: makeUsersUnconstrainedStatusSchema(),
+            databaseContext: ""
+        )
+
+        #expect(enriched.needsClarification)
+        #expect(enriched.sql.isEmpty)
+        #expect(enriched.clarificationQuestion?.contains("\"active\"") == true)
+        #expect(enriched.referencedTables == ["public.users"])
+    }
+
+    @Test func comparisonFilterTermsDoNotRequireGrounding() {
+        let schema = DatabaseSchema(
+            schemas: [SchemaInfo(name: "public")],
+            tables: [
+                TableInfo(
+                    schema: "public",
+                    name: "users",
+                    type: .baseTable,
+                    columns: [
+                        ColumnInfo(
+                            tableSchema: "public",
+                            tableName: "users",
+                            name: "id",
+                            dataType: "integer",
+                            isNullable: false,
+                            ordinalPosition: 1
+                        ),
+                        ColumnInfo(
+                            tableSchema: "public",
+                            tableName: "users",
+                            name: "age",
+                            dataType: "integer",
+                            isNullable: false,
+                            ordinalPosition: 2
+                        ),
+                    ]
+                )
+            ],
+            foreignKeys: []
+        )
+        let generation = SQLGenerationResult(
+            sql: "SELECT id FROM public.users WHERE age > 30",
+            explanation: "Lists users older than 30.",
+            assumptions: [],
+            referencedTables: [],
+            confidence: 1,
+            riskLevel: .low,
+            needsClarification: false,
+            clarificationQuestion: nil
+        )
+
+        let enriched = GeneratedSQLPostprocessor.enriched(
+            generation,
+            question: "show users older than 30",
+            schema: schema,
+            databaseContext: ""
+        )
+
+        #expect(!enriched.needsClarification)
+        #expect(enriched.sql == "SELECT id FROM public.users WHERE age > 30")
+        #expect(enriched.clarificationQuestion == nil)
+    }
+
+    @Test func generatedWriteRequiresGroundingForUnsupportedLiteral() {
+        let generation = SQLGenerationResult(
+            sql: "DELETE FROM public.users WHERE status = 'churned'",
+            explanation: "Deletes churned users.",
+            assumptions: [],
+            referencedTables: [],
+            confidence: 1,
+            riskLevel: .high,
+            needsClarification: false,
+            clarificationQuestion: nil
+        )
+
+        let enriched = GeneratedSQLPostprocessor.enriched(
+            generation,
+            question: "delete churned users",
+            schema: makeUsersStatusSchema(),
+            databaseContext: ""
+        )
+
+        #expect(enriched.needsClarification)
+        #expect(enriched.sql.isEmpty)
+        #expect(enriched.clarificationQuestion?.contains("\"churned\"") == true)
+        #expect(enriched.referencedTables == ["public.users"])
+    }
+
+    @Test func statusLikePastParticipleValuesRequireGrounding() {
+        let generation = SQLGenerationResult(
+            sql: "SELECT id FROM public.users WHERE status = 'deleted'",
+            explanation: "Lists deleted users.",
+            assumptions: [],
+            referencedTables: [],
+            confidence: 1,
+            riskLevel: .low,
+            needsClarification: false,
+            clarificationQuestion: nil
+        )
+
+        let enriched = GeneratedSQLPostprocessor.enriched(
+            generation,
+            question: "show deleted users",
+            schema: makeUsersUnconstrainedStatusSchema(),
+            databaseContext: ""
+        )
+
+        #expect(enriched.needsClarification)
+        #expect(enriched.sql.isEmpty)
+        #expect(enriched.clarificationQuestion?.contains("\"deleted\"") == true)
+        #expect(enriched.pendingClarification?.concept.term == "deleted")
     }
 
     @Test func databaseContextCanDefineUnconstrainedStatusLiteral() {
@@ -1391,6 +1601,59 @@ struct SQLSchemaValidatorTests {
         #expect(!enriched.needsClarification)
         #expect(enriched.sql == generation.sql)
         #expect(enriched.referencedTables == ["public.users"])
+    }
+
+    @Test func confirmedSemanticBindingDefinesUnconstrainedStatusLiteral() {
+        let generation = SQLGenerationResult(
+            sql: "SELECT COUNT(*) FROM public.users WHERE status = 'active'",
+            explanation: "Counts active users.",
+            assumptions: [],
+            referencedTables: [],
+            confidence: 1,
+            riskLevel: .low,
+            needsClarification: false,
+            clarificationQuestion: nil
+        )
+
+        let enriched = GeneratedSQLPostprocessor.enriched(
+            generation,
+            question: "how many active users do we have?",
+            schema: makeUsersUnconstrainedStatusSchema(),
+            databaseContext: "",
+            confirmedSemanticBindings: ["active: users whose status is active"]
+        )
+
+        #expect(!enriched.needsClarification)
+        #expect(enriched.sql == generation.sql)
+        #expect(enriched.groundingConcepts.contains {
+            $0.term == "active" && $0.evidence.contains("Confirmed semantic binding")
+        })
+    }
+
+    @Test func semanticBindingLabelDoesNotDefineUnconstrainedStatusLiteral() {
+        let generation = SQLGenerationResult(
+            sql: "SELECT COUNT(*) FROM public.users WHERE status = 'churned'",
+            explanation: "Counts churned users.",
+            assumptions: [],
+            referencedTables: [],
+            confidence: 1,
+            riskLevel: .low,
+            needsClarification: false,
+            clarificationQuestion: nil
+        )
+
+        let enriched = GeneratedSQLPostprocessor.enriched(
+            generation,
+            question: "how many churned users do we have?",
+            schema: makeUsersUnconstrainedStatusSchema(),
+            databaseContext: "",
+            confirmedSemanticBindings: ["churned: \"public\".\"users\".\"cancelled_at\" IS NOT NULL"]
+        )
+
+        #expect(enriched.needsClarification)
+        #expect(enriched.sql.isEmpty)
+        #expect(enriched.clarificationQuestion?.contains("\"churned\"") == true)
+        #expect(enriched.pendingClarification?.concept.term == "churned")
     }
 
     @Test func postprocessorAsksWhenMetricTermIsMissingFromReferencedSchema() {
@@ -1538,6 +1801,10 @@ struct SQLSchemaValidatorTests {
         #expect(enriched.needsClarification)
         #expect(enriched.sql.isEmpty)
         #expect(enriched.clarificationQuestion?.contains("\"active\"") == true)
+        #expect(enriched.pendingClarification?.concept.state == .unsupported)
+        #expect(enriched.clarificationOptions.contains {
+            $0.definition.contains(#""public"."users"."status" = 'active'"#)
+        })
         #expect(enriched.referencedTables == ["public.users"])
     }
 

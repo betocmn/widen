@@ -346,8 +346,10 @@ public final class AppState {
     public let connectionStore: ConnectionStore
     public let sessionStore: SessionStore
     public let schemaStore: SchemaStore
+    public let semanticBindingStore: DatabaseSemanticBindingStore
     public let keychain = KeychainService()
     public let schemaVM = SchemaViewModel()
+    public var semanticBindings: [DatabaseSemanticBinding] = []
 
     /// The app's auto-updater, injected at launch by the app target so
     /// WidenKit's Settings UI can offer "check for updates" without depending
@@ -362,16 +364,23 @@ public final class AppState {
         self.connectionStore = ConnectionStore()
         self.sessionStore = SessionStore()
         self.schemaStore = SchemaStore()
+        self.semanticBindingStore = DatabaseSemanticBindingStore()
     }
 
     /// Test initializer: points both stores at a temporary directory.
     init(
         connectionStore: ConnectionStore, sessionStore: SessionStore,
-        schemaStore: SchemaStore
+        schemaStore: SchemaStore,
+        semanticBindingStore: DatabaseSemanticBindingStore? = nil
     ) {
         self.connectionStore = connectionStore
         self.sessionStore = sessionStore
         self.schemaStore = schemaStore
+        self.semanticBindingStore =
+            semanticBindingStore
+            ?? DatabaseSemanticBindingStore(
+                directory: connectionStore.fileURL.deletingLastPathComponent()
+            )
     }
 
     // MARK: - Launch
@@ -397,6 +406,11 @@ public final class AppState {
             sessions = try sessionStore.load()
         } catch {
             errorBanner = "Could not load the saved sessions: \(error.localizedDescription)"
+        }
+        do {
+            semanticBindings = try semanticBindingStore.load()
+        } catch {
+            errorBanner = "Could not load remembered definitions: \(error.localizedDescription)"
         }
 
         UserDefaults.standard.removeObject(forKey: Self.selectedSessionKey)
@@ -739,6 +753,8 @@ public final class AppState {
         connectionStates[id] = nil
         schemas[id] = nil
         persistSchemas()
+        semanticBindings.removeAll { $0.connectionID == id }
+        persistSemanticBindings()
         selectedSchemaNames[id] = nil
         loadingSchemas.remove(id)
 
@@ -763,6 +779,7 @@ public final class AppState {
             try connectionStore.save(connections)
             try sessionStore.save(sessions)
             try schemaStore.save(schemas)
+            try semanticBindingStore.save(semanticBindings)
         } catch {
             errorBanner = error.localizedDescription
         }
@@ -1106,6 +1123,69 @@ public final class AppState {
             try schemaStore.save(schemas)
         } catch {
             errorBanner = "Could not save schema cache: \(error.localizedDescription)"
+        }
+    }
+
+    public func currentSemanticBindings(
+        for connectionID: UUID,
+        schema: DatabaseSchema
+    ) -> [DatabaseSemanticBinding] {
+        semanticBindingStore.currentBindings(
+            semanticBindings,
+            connectionID: connectionID,
+            schema: schema
+        )
+    }
+
+    public func semanticBindingPromptLines(
+        for connectionID: UUID,
+        schema: DatabaseSchema
+    ) -> [String] {
+        currentSemanticBindings(for: connectionID, schema: schema).map(\.promptLine)
+    }
+
+    public func confirmSemanticBinding(
+        connectionID: UUID,
+        pending: PendingClarification,
+        replyText: String,
+        selectedOption: ClarificationOption?,
+        schema: DatabaseSchema
+    ) {
+        let trimmedReply = replyText.trimmingCharacters(in: .whitespacesAndNewlines)
+        let definition = (selectedOption?.definition ?? trimmedReply)
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !definition.isEmpty else { return }
+        let concept = pending.concept.term.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !concept.isEmpty else { return }
+        let evidence = Array(Set(pending.evidence + (selectedOption?.evidence ?? []))).sorted()
+        let binding = DatabaseSemanticBinding(
+            connectionID: connectionID,
+            schemaNames: schema.semanticBindingSchemaNames,
+            schemaFingerprint: schema.semanticFingerprint,
+            concept: concept,
+            definition: definition,
+            evidence: evidence
+        )
+        semanticBindings.removeAll {
+            $0.connectionID == connectionID
+                && $0.schemaNames == binding.schemaNames
+                && $0.schemaFingerprint == binding.schemaFingerprint
+                && $0.concept.caseInsensitiveCompare(binding.concept) == .orderedSame
+        }
+        semanticBindings.append(binding)
+        persistSemanticBindings()
+    }
+
+    public func deleteSemanticBinding(_ id: UUID) {
+        semanticBindings.removeAll { $0.id == id }
+        persistSemanticBindings()
+    }
+
+    private func persistSemanticBindings() {
+        do {
+            try semanticBindingStore.save(semanticBindings)
+        } catch {
+            errorBanner = "Could not save remembered definitions: \(error.localizedDescription)"
         }
     }
 

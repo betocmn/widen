@@ -54,6 +54,32 @@
         var reason: String
     }
 
+    struct LocalSQLDecision: Equatable, Sendable {
+        enum Action: String, Equatable, Sendable {
+            case generateSQL
+            case clarify
+        }
+
+        var action: Action
+        var sql: String
+        var clarificationQuestion: String?
+
+        init(generated: GeneratedSQLResponse) {
+            let trimmedSQL = generated.sql.trimmingCharacters(in: .whitespacesAndNewlines)
+            let clarification = generated.clarificationQuestion?
+                .trimmingCharacters(in: .whitespacesAndNewlines)
+            if generated.needsClarification || (trimmedSQL.isEmpty && clarification?.isEmpty == false) {
+                self.action = .clarify
+                self.sql = ""
+                self.clarificationQuestion = clarification
+            } else {
+                self.action = .generateSQL
+                self.sql = trimmedSQL
+                self.clarificationQuestion = clarification
+            }
+        }
+    }
+
     /// Generates SQL with Apple's on-device Foundation Model. Local-only: no
     /// network, no external LLM APIs.
     public final class FoundationModelsSQLGenerator: SQLGenerator, Sendable {
@@ -67,6 +93,16 @@
             case .unavailable(let reason):
                 message(for: reason)
             }
+        }
+
+        static func cumulativeModelCallCountAfterContextRetry(
+            startingModelCallCount: Int,
+            failedAttemptSpentCalls: Int,
+            retrySpentCalls: Int
+        ) -> Int {
+            max(0, startingModelCallCount)
+                + max(0, failedAttemptSpentCalls)
+                + max(0, retrySpentCalls)
         }
 
         public func generateSQL(
@@ -87,22 +123,42 @@
                 return try await respond(
                     question: question, schema: schema, context: context, config: config,
                     model: model, maxSchemaCharacters: 8_000, inputScale: 1.0,
-                    allowDiscovery: true)
-            } catch let error as LanguageModelSession.GenerationError {
-                if case .exceededContextWindowSize = error {
-                    // Retry once with a smaller whole-prompt target while
-                    // preserving the same deterministic ranking and pins.
+                    allowDiscovery: true
+                ).result
+            } catch let error as GenerationAttemptError {
+                if case .exceededContextWindowSize = error.error {
+                    // Retry once with a smaller whole-prompt target. Discovery is
+                    // skipped here so a context-window retry cannot spend another
+                    // model call before SQL generation.
                     do {
-                        return try await respond(
+                        let retry = try await respond(
                             question: question, schema: schema, context: context, config: config,
                             model: model, maxSchemaCharacters: 8_000, inputScale: 0.8,
-                            allowDiscovery: true)
-                    } catch let retryError as LanguageModelSession.GenerationError {
-                        throw Self.map(retryError)
+                            allowDiscovery: false)
+                        var result = retry.result
+                        result.generationCallCount =
+                            Self.cumulativeModelCallCountAfterContextRetry(
+                                startingModelCallCount: context.modelCallCount,
+                                failedAttemptSpentCalls: error.spentModelCalls,
+                                retrySpentCalls: retry.spentModelCalls
+                            )
+                        return result
+                    } catch let retryError as GenerationAttemptError {
+                        throw Self.map(retryError.error)
                     }
                 }
-                throw Self.map(error)
+                throw Self.map(error.error)
             }
+        }
+
+        private struct GenerationAttempt {
+            var result: SQLGenerationResult
+            var spentModelCalls: Int
+        }
+
+        private struct GenerationAttemptError: Error {
+            var error: LanguageModelSession.GenerationError
+            var spentModelCalls: Int
         }
 
         private func respond(
@@ -114,14 +170,14 @@
             maxSchemaCharacters: Int,
             inputScale: Double,
             allowDiscovery: Bool
-        ) async throws -> SQLGenerationResult {
+        ) async throws -> GenerationAttempt {
             // A fresh session per request keeps the context window small and
             // the generation stateless; follow-up awareness comes from the
             // compact context section in the prompt instead.
             let instructions = SQLPromptBuilder.compactInstructions(
                 defaultRowLimit: config.defaultRowLimit
             )
-            let generationContext = try await contextWithOptionalDiscovery(
+            var generationContext = try await contextWithOptionalDiscovery(
                 question: question,
                 schema: schema,
                 context: context,
@@ -131,6 +187,13 @@
                 maxSchemaCharacters: maxSchemaCharacters,
                 inputScale: inputScale,
                 allowDiscovery: allowDiscovery
+            )
+            if generationContext.modelCallCount == 0 {
+                generationContext.modelCallCount = 1
+            }
+            let spentModelCalls = Self.spentModelCalls(
+                startingContext: context,
+                generationContext: generationContext
             )
             let session = LanguageModelSession(
                 model: model,
@@ -153,19 +216,56 @@
                     generating: GeneratedSQLResponse.self,
                     options: GenerationOptions(sampling: .greedy, maximumResponseTokens: 512)
                 )
-                let result = Self.result(from: response.content)
+                var result = Self.result(from: response.content)
+                result.generationCallCount = generationContext.modelCallCount
                 await GenerationLog.shared.append(
                     prompt: prompt,
                     outcome: result.logDescription,
-                    durationMs: Int(Date().timeIntervalSince(started) * 1_000))
-                return result
+                    durationMs: Int(Date().timeIntervalSince(started) * 1_000),
+                    telemetry: PromptTelemetry(
+                        phase: generationContext.mode,
+                        package: bundle.schemaPackage,
+                        context: generationContext,
+                        callCount: generationContext.modelCallCount,
+                        stopReason: result.needsClarification ? "clarification" : "success"
+                    ))
+                return GenerationAttempt(result: result, spentModelCalls: spentModelCalls)
+            } catch let error as LanguageModelSession.GenerationError {
+                await GenerationLog.shared.append(
+                    prompt: prompt,
+                    outcome: "error: \(error)",
+                    durationMs: Int(Date().timeIntervalSince(started) * 1_000),
+                    telemetry: PromptTelemetry(
+                        phase: generationContext.mode,
+                        package: bundle.schemaPackage,
+                        context: generationContext,
+                        callCount: generationContext.modelCallCount,
+                        stopReason: "error"
+                    ))
+                throw GenerationAttemptError(error: error, spentModelCalls: spentModelCalls)
             } catch {
                 await GenerationLog.shared.append(
                     prompt: prompt,
                     outcome: "error: \(error)",
-                    durationMs: Int(Date().timeIntervalSince(started) * 1_000))
+                    durationMs: Int(Date().timeIntervalSince(started) * 1_000),
+                    telemetry: PromptTelemetry(
+                        phase: generationContext.mode,
+                        package: bundle.schemaPackage,
+                        context: generationContext,
+                        callCount: generationContext.modelCallCount,
+                        stopReason: "error"
+                    ))
                 throw error
             }
+        }
+
+        private static func spentModelCalls(
+            startingContext: SQLGenerationContext,
+            generationContext: SQLGenerationContext
+        ) -> Int {
+            let starting = max(0, startingContext.modelCallCount)
+            let current = max(0, generationContext.modelCallCount)
+            return max(1, current - starting)
         }
 
         private func contextWithOptionalDiscovery(
@@ -194,12 +294,14 @@
                 throwIfOversized: false
             )
             let budget = PromptBudget.localFoundationModels
-            let shouldDiscover =
-                schema.tables.count > 25
-                || !budget.fits(
-                    inputCharacters: instructions.count + initialBundle.prompt.count,
-                    scale: inputScale
-                )
+            let shouldDiscover = Self.needsSchemaDiscovery(
+                question: question,
+                schema: schema,
+                databaseContext: config.databaseContext,
+                instructions: instructions,
+                initialPromptCharacters: initialBundle.prompt.count,
+                inputScale: inputScale
+            )
             guard shouldDiscover else { return context }
 
             let discoveryCharacters = min(
@@ -248,14 +350,81 @@
                     reason: response.content.reason
                 )
                 let queries = discovery.sanitizedSearchQueries
-                guard !queries.isEmpty else { return context }
-                let searchResults = SchemaDiscoveryService.search(schema: schema, queries: queries)
-                guard !searchResults.isEmpty else { return context }
                 var copy = context
+                copy.modelCallCount = max(1, context.modelCallCount) + 1
+                guard !queries.isEmpty else { return copy }
+                let searchResults = SchemaDiscoveryService.search(schema: schema, queries: queries)
+                guard !searchResults.isEmpty else { return copy }
                 copy.schemaSearchQueries = queries + searchResults.map(\.qualifiedName)
                 return copy
             } catch {
-                return context
+                var copy = context
+                copy.modelCallCount = max(1, context.modelCallCount) + 1
+                return copy
+            }
+        }
+
+        private static func needsSchemaDiscovery(
+            question: String,
+            schema: DatabaseSchema,
+            databaseContext: String,
+            instructions: String,
+            initialPromptCharacters: Int,
+            inputScale: Double
+        ) -> Bool {
+            let budget = PromptBudget.localFoundationModels
+            if !budget.fits(
+                inputCharacters: instructions.count + initialPromptCharacters,
+                scale: inputScale
+            ) {
+                return true
+            }
+            if schema.tables.count > 25 {
+                return true
+            }
+            guard schema.tables.count > 8 else {
+                return false
+            }
+            return !hasConfidentDeterministicCoverage(
+                question: question,
+                schema: schema,
+                databaseContext: databaseContext
+            )
+        }
+
+        private static func hasConfidentDeterministicCoverage(
+            question: String,
+            schema: DatabaseSchema,
+            databaseContext: String
+        ) -> Bool {
+            let ranked = SchemaRelevanceRanker.rank(
+                schema: schema,
+                input: SchemaRankingInput(question: question, databaseContext: databaseContext)
+            )
+            guard let top = ranked.first, top.score >= 150 else { return false }
+            let schemaTokens = schema.tables.reduce(into: Set<String>()) { result, table in
+                result.formUnion(SchemaIndex.tokens(in: table.schema))
+                result.formUnion(SchemaIndex.tokens(in: table.name))
+                for column in table.columns {
+                    result.formUnion(SchemaIndex.tokens(in: column.name))
+                    for constraint in column.valueConstraints ?? [] {
+                        for value in constraint.values {
+                            result.formUnion(SchemaIndex.tokens(in: value))
+                        }
+                    }
+                }
+            }.union(Set(SchemaIndex.tokens(in: databaseContext)))
+
+            let requiredTokens = Set(SchemaIndex.tokens(in: question))
+                .subtracting(discoveryStopWords)
+                .filter { !$0.allSatisfy(\.isNumber) }
+            guard !requiredTokens.isEmpty else { return true }
+            return requiredTokens.allSatisfy { token in
+                schemaTokens.contains(token)
+                    || schemaTokens.contains { candidate in
+                        token.count >= 4
+                            && (candidate.hasPrefix(token) || token.hasPrefix(candidate))
+                    }
             }
         }
 
@@ -327,17 +496,28 @@
         /// Shared with `PrivateCloudComputeSQLGenerator`, which produces the
         /// same structured response from the server-side model.
         static func result(from generated: GeneratedSQLResponse) -> SQLGenerationResult {
-            SQLGenerationResult(
-                sql: generated.sql.trimmingCharacters(in: .whitespacesAndNewlines),
+            let decision = LocalSQLDecision(generated: generated)
+            return SQLGenerationResult(
+                sql: decision.sql,
                 explanation: generated.explanation,
                 assumptions: generated.assumptions,
                 referencedTables: generated.referencedTables,
                 confidence: min(max(generated.confidence, 0), 1),
                 riskLevel: SQLRiskLevel(rawValue: generated.riskLevel) ?? .medium,
-                needsClarification: generated.needsClarification,
-                clarificationQuestion: generated.clarificationQuestion
+                needsClarification: decision.action == .clarify,
+                clarificationQuestion: decision.clarificationQuestion
             )
         }
+
+        private static let discoveryStopWords: Set<String> = [
+            "a", "about", "after", "all", "and", "any", "are", "as", "at", "be", "by",
+            "can", "could", "day", "days", "do", "does", "each", "for", "from", "get",
+            "give", "have", "how", "i", "in", "is", "it", "last", "latest", "limit",
+            "list", "me", "month", "months", "most", "newest", "of", "on", "or", "our",
+            "over", "per", "please", "recent", "show", "since", "sort", "the", "this",
+            "to", "top", "us", "week", "weeks", "what", "when", "where", "which", "with",
+            "year", "years",
+        ]
 
         private static func contextWindowMessage(package: SchemaPromptPackage) -> String {
             let tables = package.includedTables.prefix(6).joined(separator: ", ")

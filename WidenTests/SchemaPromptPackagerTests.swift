@@ -258,6 +258,90 @@ struct SchemaPromptPackagerTests {
             ))
     }
 
+    @Test func missingColumnRelationshipHintCanUseTwoHopForeignKeyPath() {
+        let schema = DatabaseSchema(
+            schemas: [SchemaInfo(name: "public")],
+            tables: [
+                TableInfo(
+                    schema: "public",
+                    name: "orders",
+                    type: .baseTable,
+                    columns: [
+                        column("orders", "id", ordinal: 1),
+                        column("orders", "user_id", ordinal: 2),
+                    ]
+                ),
+                TableInfo(
+                    schema: "public",
+                    name: "users",
+                    type: .baseTable,
+                    columns: [
+                        column("users", "id", ordinal: 1),
+                        column("users", "account_id", ordinal: 2),
+                    ]
+                ),
+                TableInfo(
+                    schema: "public",
+                    name: "accounts",
+                    type: .baseTable,
+                    columns: [
+                        column("accounts", "id", ordinal: 1),
+                        column("accounts", "plan_name", type: "text", ordinal: 2),
+                    ]
+                ),
+            ],
+            foreignKeys: [
+                ForeignKeyInfo(
+                    constraintName: "orders_user_fkey",
+                    sourceSchema: "public",
+                    sourceTable: "orders",
+                    sourceColumn: "user_id",
+                    targetSchema: "public",
+                    targetTable: "users",
+                    targetColumn: "id"
+                ),
+                ForeignKeyInfo(
+                    constraintName: "users_account_fkey",
+                    sourceSchema: "public",
+                    sourceTable: "users",
+                    sourceColumn: "account_id",
+                    targetSchema: "public",
+                    targetTable: "accounts",
+                    targetColumn: "id"
+                ),
+            ]
+        )
+        let context = SQLGenerationContext(
+            mode: .repair,
+            originalQuestion: "show order account plan names",
+            repairContext: SQLRepairContext(
+                failedSQL: "SELECT plan_name FROM public.orders",
+                diagnostic: DatabaseDiagnostic(
+                    kind: .missingColumn,
+                    sqlState: "42703",
+                    message: "Schema validation failed: column plan_name is not available from the referenced tables.",
+                    columnName: "plan_name"
+                ),
+                forbiddenIdentifiers: ["plan_name"]
+            )
+        )
+
+        let package = SchemaPromptPackager.package(
+            schema: schema,
+            question: "show order account plan names",
+            context: context,
+            databaseContext: "",
+            maxCharacters: 4_000
+        )
+
+        #expect(
+            package.text.contains(
+                #"join "public"."orders"."user_id" -> "public"."users"."id" then "public"."users"."account_id" -> "public"."accounts"."id""#
+            ))
+        #expect(package.pinnedTables.contains("public.users"))
+        #expect(package.pinnedTables.contains("public.accounts"))
+    }
+
     @Test func widePinnedRepairTableIsCompressedButKeepsRequiredColumns() {
         let schema = makeWideWinningToolSchema(extraTables: 30)
         let diagnostic = DatabaseDiagnostic(
@@ -395,6 +479,298 @@ struct SchemaPromptPackagerTests {
         #expect(searchResults.contains("public.review_queue"))
     }
 
+    @Test func confirmedSemanticBindingsInfluenceSchemaPackagingRanking() {
+        var tables = (0..<12).map { index in
+            TableInfo(
+                schema: "public",
+                name: "alpha_events_\(index)",
+                type: .baseTable,
+                columns: [
+                    column("alpha_events_\(index)", "id", ordinal: 1),
+                    column("alpha_events_\(index)", "created_at", type: "timestamp with time zone", ordinal: 2),
+                ]
+            )
+        }
+        tables.append(
+            TableInfo(
+                schema: "public",
+                name: "match_results",
+                type: .baseTable,
+                columns: [
+                    column("match_results", "id", ordinal: 1),
+                    column("match_results", "tool_id", ordinal: 2),
+                    column("match_results", "winner_id", ordinal: 3),
+                ]
+            )
+        )
+        let schema = DatabaseSchema(
+            schemas: [SchemaInfo(name: "public")],
+            tables: tables,
+            foreignKeys: []
+        )
+
+        let package = SchemaPromptPackager.package(
+            schema: schema,
+            question: "show wins",
+            context: SQLGenerationContext(
+                confirmedSemanticBindings: [
+                    #"wins: "public"."match_results"."winner_id" is not null"#
+                ]
+            ),
+            databaseContext: "",
+            maxCharacters: 700
+        )
+
+        #expect(package.includedTables.contains("public.match_results"))
+        #expect(package.diagnostics.rankedTables.first?.tableID == "public.match_results")
+        #expect(package.diagnostics.rankedTables.first?.reasons.contains("semantic binding matches") == true)
+        #expect(package.text.contains(#""winner_id" uuid NOT NULL"#))
+    }
+
+    @Test func highScoringPrimaryTablesAreNotBlindlyPinned() {
+        let schema = DatabaseSchema(
+            schemas: [SchemaInfo(name: "public")],
+            tables: [
+                TableInfo(
+                    schema: "public",
+                    name: "customers",
+                    type: .baseTable,
+                    columns: [
+                        column("customers", "id", ordinal: 1),
+                        column("customers", "name", type: "text", ordinal: 2),
+                    ]
+                ),
+                TableInfo(
+                    schema: "public",
+                    name: "orders",
+                    type: .baseTable,
+                    columns: [
+                        column("orders", "id", ordinal: 1),
+                        column("orders", "customer_id", ordinal: 2),
+                        column("orders", "created_at", type: "timestamp with time zone", ordinal: 3),
+                    ]
+                ),
+            ],
+            foreignKeys: []
+        )
+
+        let package = SchemaPromptPackager.package(
+            schema: schema,
+            question: "show customers and orders by created_at",
+            context: SQLGenerationContext(),
+            databaseContext: "",
+            maxCharacters: 2_000
+        )
+
+        #expect(package.includedTables.contains("public.customers"))
+        #expect(package.includedTables.contains("public.orders"))
+        #expect(package.pinnedTables.isEmpty)
+    }
+
+    @Test func strongPrimaryTableMatchSurvivesTinyBudget() {
+        let auditColumns = [
+            column("audit_events", "id", ordinal: 1),
+            column("audit_events", "actor_id", ordinal: 2),
+            column("audit_events", "occurred_at", type: "timestamp with time zone", ordinal: 3),
+        ] + (0..<40).map {
+            column("audit_events", "metadata_\($0)", type: "jsonb", ordinal: 100 + $0)
+        }
+        let schema = DatabaseSchema(
+            schemas: [SchemaInfo(name: "public")],
+            tables: [
+                TableInfo(
+                    schema: "public",
+                    name: "audit_events",
+                    type: .baseTable,
+                    columns: auditColumns
+                ),
+                TableInfo(
+                    schema: "public",
+                    name: "users",
+                    type: .baseTable,
+                    columns: [
+                        column("users", "id", ordinal: 1),
+                        column("users", "name", type: "text", ordinal: 2),
+                    ]
+                ),
+            ],
+            foreignKeys: []
+        )
+
+        let package = SchemaPromptPackager.package(
+            schema: schema,
+            question: "show audit events by actor_id",
+            context: SQLGenerationContext(),
+            databaseContext: "",
+            maxCharacters: 520
+        )
+
+        #expect(package.pinnedTables.contains("public.audit_events"))
+        #expect(package.includedTables.contains("public.audit_events"))
+        #expect(package.text.contains(#"TABLE "public"."audit_events""#))
+    }
+
+    @Test func exactDiscoveryTableHintsArePinnedButCatalogIsNotRenderedInFinalPrompt() {
+        let schema = makePreseasonSchema(extraTables: 30)
+        let context = SQLGenerationContext(
+            schemaSearchQueries: ["public.preseason_match_batch"]
+        )
+
+        let bundle = SQLPromptBuilder.promptBundle(
+            question: "show match batches",
+            schema: schema,
+            context: context,
+            maxSchemaCharacters: 1_500
+        )
+
+        #expect(bundle.schemaPackage.pinnedTables.contains("public.preseason_match_batch"))
+        #expect(bundle.prompt.contains(#"TABLE "public"."preseason_match_batch""#))
+        #expect(!bundle.prompt.contains("Catalog tables:"))
+    }
+
+    @Test func tableCardsRenderOwnershipTableIDsAndQuotedOnlyMarkers() {
+        let schema = makeQuotedSalesSchema(extraTables: 0)
+
+        let package = SchemaPromptPackager.package(
+            schema: schema,
+            question: "show orders by status",
+            context: SQLGenerationContext(schemaSearchQueries: ["Sales Data.Q1 Orders"]),
+            databaseContext: "",
+            maxCharacters: 1_500
+        )
+
+        #expect(package.text.contains(#"TABLE "Sales Data"."Q1 Orders" [table_id: Sales Data.Q1 Orders] [QUOTED_ONLY]"#))
+        #expect(package.text.contains("Ownership: listed columns belong to table_id Sales Data.Q1 Orders"))
+        #expect(package.text.contains(#""id" integer NOT NULL"#))
+    }
+
+    @Test func compositeForeignKeysAreGroupedInTableCardsAndRelationships() {
+        let schema = makeCompositeForeignKeySchema()
+
+        let package = SchemaPromptPackager.package(
+            schema: schema,
+            question: "show order product allocations",
+            context: SQLGenerationContext(schemaSearchQueries: ["public.order_allocations"]),
+            databaseContext: "",
+            maxCharacters: 4_000
+        )
+
+        #expect(
+            package.text.contains(
+                #"FK ("order_id", "product_id") -> "public"."order_products"("order_id", "product_id")"#
+            ))
+        #expect(
+            package.text.contains(
+                #"FK "public"."order_allocations"("order_id", "product_id") -> "public"."order_products"("order_id", "product_id")"#
+            ))
+    }
+
+    @Test func telemetryLogRecordsPromptPackagingDiagnostics() async throws {
+        let dir = FileManager.default.temporaryDirectory
+            .appendingPathComponent("widen-log-\(UUID().uuidString)", isDirectory: true)
+        defer { try? FileManager.default.removeItem(at: dir) }
+        let log = GenerationLog(directory: dir)
+        let telemetry = PromptTelemetry(
+            phase: "initial",
+            estimatedTokens: 42,
+            estimatedEnvelopeTokens: 72,
+            selectedTables: ["public.orders"],
+            pinnedTables: ["public.customers"],
+            scoreReasons: ["public.orders": ["table name matches request"]],
+            validationIssueIDs: ["42703"],
+            canonicalizationFixes: ["quote:createdAt"],
+            callCount: 2,
+            stopReason: "success"
+        )
+
+        await log.append(prompt: "prompt", outcome: "ok", durationMs: 7, telemetry: telemetry)
+
+        let text = try String(
+            contentsOf: dir.appendingPathComponent("generation.log"),
+            encoding: .utf8
+        )
+        #expect(text.contains("--- telemetry ---"))
+        #expect(text.contains(#""phase":"initial""#))
+        #expect(text.contains(#""estimatedEnvelopeTokens":72"#))
+        #expect(text.contains(#""selectedTables":["public.orders"]"#))
+        #expect(text.contains(#""validationIssueIDs":["42703"]"#))
+        #expect(text.contains(#""canonicalizationFixes":["quote:createdAt"]"#))
+        #expect(text.contains(#""callCount":2"#))
+        #expect(text.contains(#""stopReason":"success""#))
+    }
+
+    @Test func syntheticSchemasRetrieveRelevantTablesWithoutWinsTuning() {
+        let cases: [(schema: DatabaseSchema, question: String, expected: String)] = [
+            (
+                makeSyntheticSchema(
+                    tables: [
+                        ("customers", ["id", "email", "created_at"]),
+                        ("orders", ["id", "customer_id", "total_cents", "created_at"]),
+                        ("products", ["id", "sku", "name"]),
+                    ],
+                    foreignKeys: [
+                        ("orders_customer_fkey", "orders", "customer_id", "customers", "id")
+                    ]
+                ),
+                "which customers spent the most in recent orders",
+                "public.orders"
+            ),
+            (
+                makeSyntheticSchema(
+                    tables: [
+                        ("support_tickets", ["id", "customer_id", "priority", "opened_at"]),
+                        ("ticket_comments", ["id", "ticket_id", "body", "created_at"]),
+                        ("agents", ["id", "name"]),
+                    ],
+                    foreignKeys: [
+                        ("ticket_comments_ticket_fkey", "ticket_comments", "ticket_id", "support_tickets", "id")
+                    ]
+                ),
+                "count high priority support tickets opened this week",
+                "public.support_tickets"
+            ),
+            (
+                makeSyntheticSchema(
+                    tables: [
+                        ("subscriptions", ["id", "account_id", "status", "started_at"]),
+                        ("subscription_invoices", ["id", "subscription_id", "amount_cents", "created_at"]),
+                        ("accounts", ["id", "name"]),
+                    ],
+                    foreignKeys: [
+                        ("invoices_subscription_fkey", "subscription_invoices", "subscription_id", "subscriptions", "id")
+                    ]
+                ),
+                "total subscription invoice amount by active subscription",
+                "public.subscription_invoices"
+            ),
+            (
+                makeSyntheticSchema(
+                    tables: [
+                        ("devices", ["id", "serial_number", "site_id"]),
+                        ("sensor_readings", ["id", "device_id", "temperature_celsius", "recorded_at"]),
+                        ("sites", ["id", "name"]),
+                    ],
+                    foreignKeys: [
+                        ("sensor_readings_device_fkey", "sensor_readings", "device_id", "devices", "id")
+                    ]
+                ),
+                "average device temperature from sensor readings yesterday",
+                "public.sensor_readings"
+            ),
+        ]
+
+        for entry in cases {
+            let package = SchemaPromptPackager.package(
+                schema: entry.schema,
+                question: entry.question,
+                context: SQLGenerationContext(),
+                databaseContext: "",
+                maxCharacters: 3_500
+            )
+            #expect(package.includedTables.contains(entry.expected))
+        }
+    }
+
     private func makeIncrementalPrimarySchema() -> DatabaseSchema {
         let tableNames = ["customers", "invoices", "orders", "products"]
         return DatabaseSchema(
@@ -414,6 +790,89 @@ struct SchemaPromptPackagerTests {
                 )
             },
             foreignKeys: []
+        )
+    }
+
+    private func makeCompositeForeignKeySchema() -> DatabaseSchema {
+        DatabaseSchema(
+            schemas: [SchemaInfo(name: "public")],
+            tables: [
+                TableInfo(
+                    schema: "public",
+                    name: "order_products",
+                    type: .baseTable,
+                    columns: [
+                        column("order_products", "order_id", ordinal: 1),
+                        column("order_products", "product_id", ordinal: 2),
+                        column("order_products", "quantity", type: "integer", ordinal: 3),
+                    ]
+                ),
+                TableInfo(
+                    schema: "public",
+                    name: "order_allocations",
+                    type: .baseTable,
+                    columns: [
+                        column("order_allocations", "id", ordinal: 1),
+                        column("order_allocations", "order_id", ordinal: 2),
+                        column("order_allocations", "product_id", ordinal: 3),
+                        column("order_allocations", "warehouse_id", ordinal: 4),
+                    ]
+                ),
+            ],
+            foreignKeys: [
+                ForeignKeyInfo(
+                    constraintName: "order_allocations_order_product_fkey",
+                    sourceSchema: "public",
+                    sourceTable: "order_allocations",
+                    sourceColumn: "order_id",
+                    targetSchema: "public",
+                    targetTable: "order_products",
+                    targetColumn: "order_id"
+                ),
+                ForeignKeyInfo(
+                    constraintName: "order_allocations_order_product_fkey",
+                    sourceSchema: "public",
+                    sourceTable: "order_allocations",
+                    sourceColumn: "product_id",
+                    targetSchema: "public",
+                    targetTable: "order_products",
+                    targetColumn: "product_id"
+                ),
+            ]
+        )
+    }
+
+    private func makeSyntheticSchema(
+        tables: [(name: String, columns: [String])],
+        foreignKeys: [(name: String, sourceTable: String, sourceColumn: String, targetTable: String, targetColumn: String)]
+    ) -> DatabaseSchema {
+        DatabaseSchema(
+            schemas: [SchemaInfo(name: "public")],
+            tables: tables.map { table in
+                TableInfo(
+                    schema: "public",
+                    name: table.name,
+                    type: .baseTable,
+                    columns: table.columns.enumerated().map { index, name in
+                        let type =
+                            name.hasSuffix("_at") || name.contains("date")
+                            ? "timestamp with time zone"
+                            : (name.contains("amount") || name.contains("temperature") ? "integer" : "uuid")
+                        return column(table.name, name, type: type, ordinal: index + 1)
+                    }
+                )
+            },
+            foreignKeys: foreignKeys.map {
+                ForeignKeyInfo(
+                    constraintName: $0.name,
+                    sourceSchema: "public",
+                    sourceTable: $0.sourceTable,
+                    sourceColumn: $0.sourceColumn,
+                    targetSchema: "public",
+                    targetTable: $0.targetTable,
+                    targetColumn: $0.targetColumn
+                )
+            }
         )
     }
 

@@ -212,7 +212,10 @@ struct ChatModeView: View {
             )
         } else if message.id == activeSQLAnchorID, hasActiveSQL {
             VStack(alignment: .leading, spacing: 10) {
-                MessageBubbleView(message: message)
+                MessageBubbleView(
+                    message: message,
+                    onClarificationOptionSelected: selectClarificationOption
+                )
                 SQLCardView(controller: controller, isAwaitingRun: activeSQLAwaitingRun)
             }
         } else if message.role == .assistant,
@@ -220,11 +223,18 @@ struct ChatModeView: View {
             !sql.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
         {
             VStack(alignment: .leading, spacing: 10) {
-                MessageBubbleView(message: message)
+                MessageBubbleView(
+                    message: message,
+                    onClarificationOptionSelected: selectClarificationOption
+                )
                 StaticSQLCardView(sql: sql)
             }
         } else {
-            MessageBubbleView(message: message, onRetryWrite: retryWriteAction(for: message))
+            MessageBubbleView(
+                message: message,
+                onRetryWrite: retryWriteAction(for: message),
+                onClarificationOptionSelected: selectClarificationOption
+            )
         }
     }
 
@@ -248,6 +258,19 @@ struct ChatModeView: View {
                 await controller.retryFailedWrite(
                     appState: appState, failedSQL: failedSQL, error: message.text)
             }
+        }
+    }
+
+    private func selectClarificationOption(
+        pending: PendingClarification,
+        option: ClarificationOption
+    ) {
+        Task {
+            await controller.selectClarificationOption(
+                appState: appState,
+                pending: pending,
+                option: option
+            )
         }
     }
 

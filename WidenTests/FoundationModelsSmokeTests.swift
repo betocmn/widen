@@ -13,6 +13,21 @@ private let fmTestEnabled =
     ProcessInfo.processInfo.environment["WIDEN_FM_TEST"] != nil
     || ProcessInfo.processInfo.environment["TEST_RUNNER_WIDEN_FM_TEST"] != nil
 
+#if canImport(FoundationModels)
+    @Suite("Foundation Models generator")
+    struct FoundationModelsGeneratorTests {
+        @Test func contextWindowRetryPreservesCumulativeCallCount() {
+            #expect(
+                FoundationModelsSQLGenerator.cumulativeModelCallCountAfterContextRetry(
+                    startingModelCallCount: 3,
+                    failedAttemptSpentCalls: 1,
+                    retrySpentCalls: 1
+                ) == 5
+            )
+        }
+    }
+#endif
+
 @Suite("Foundation Models smoke", .enabled(if: fmTestEnabled))
 struct FoundationModelsSmokeTests {
     private func makeTinySchema() -> DatabaseSchema {

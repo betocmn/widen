@@ -124,6 +124,10 @@ public enum SQLPromptBuilder {
             sections.append(taggedSection("database_context", databaseContextSection))
         }
 
+        if let bindingSection = confirmedSemanticBindingsSection(context.confirmedSemanticBindings) {
+            sections.append(taggedSection("confirmed_semantic_bindings", bindingSection))
+        }
+
         switch context.mode {
         case .repair:
             sections.append(repairTaskSection(question: question, context: context))
@@ -143,6 +147,17 @@ public enum SQLPromptBuilder {
             prompt: sections.joined(separator: "\n\n"),
             schemaPackage: schemaPackage
         )
+    }
+
+    private static func confirmedSemanticBindingsSection(_ bindings: [String]) -> String? {
+        let trimmed = bindings
+            .map { $0.trimmingCharacters(in: .whitespacesAndNewlines) }
+            .filter { !$0.isEmpty }
+        guard !trimmed.isEmpty else { return nil }
+        return ([
+            "User-confirmed database-specific definitions. Treat these as business semantics, but the schema remains authoritative for available tables and columns.",
+        ] + trimmed.suffix(12).map { "- \(truncated($0, to: 500))" })
+            .joined(separator: "\n")
     }
 
     static func repairTaskSection(question: String, context: SQLGenerationContext) -> String {
@@ -188,13 +203,6 @@ public enum SQLPromptBuilder {
                 lines.append(taggedCDATASection("identifier", identifier))
             }
             lines.append("</must_not_use>")
-            if !repair.priorFingerprints.isEmpty {
-                lines.append("<prior_attempts>")
-                for fingerprint in repair.priorFingerprints {
-                    lines.append(taggedCDATASection("fingerprint", fingerprint))
-                }
-                lines.append("</prior_attempts>")
-            }
         }
         lines.append(
             taggedCDATASection(
@@ -263,13 +271,6 @@ public enum SQLPromptBuilder {
                     taggedCDATASection("forbidden_unquoted_identifier", constraint.identifier)
                 )
             }
-        }
-        if let fingerprints = repair?.priorFingerprints, !fingerprints.isEmpty {
-            lines.append("<prior_fingerprints>")
-            for fingerprint in fingerprints {
-                lines.append(taggedCDATASection("fingerprint", fingerprint))
-            }
-            lines.append("</prior_fingerprints>")
         }
         lines.append("<require_new_fingerprint>true</require_new_fingerprint>")
         lines.append("</repair_constraints>")
@@ -440,7 +441,9 @@ public enum SQLPromptBuilder {
         guard lowercased.contains("column"),
             lowercased.contains("does not exist")
                 || lowercased.contains("not available from the referenced tables")
+                || lowercased.contains("not available from the referenced base tables")
                 || lowercased.contains("not on ")
+                || lowercased.contains("not an output column of")
         else {
             return nil
         }
@@ -470,7 +473,9 @@ public enum SQLPromptBuilder {
         guard lowercased.contains("column"),
             lowercased.contains("does not exist")
                 || lowercased.contains("not available from the referenced tables")
+                || lowercased.contains("not available from the referenced base tables")
                 || lowercased.contains("not on ")
+                || lowercased.contains("not an output column of")
         else {
             return nil
         }
@@ -498,6 +503,23 @@ public enum SQLPromptBuilder {
         }
     }
 
+    static func missingRelationClarificationQuestion(for text: String) -> String? {
+        let relation =
+            firstCapturedValue(
+                in: text,
+                pattern: #"Schema validation failed: table ([^\s]+) is not in the selected schema"#
+            )
+            ?? firstCapturedValue(
+                in: text,
+                pattern: #"(?i)\brelation\s+"([^"]+)"\s+does\s+not\s+exist"#
+            )
+            ?? quotedIdentifiers(in: text).first
+        guard let relation, !relation.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+        else { return nil }
+        return
+            "I could not find \"\(relation)\" in the selected schema. Which table should I use for that part of the request?"
+    }
+
     private static func missingColumnNames(in text: String) -> [String] {
         var names = capturedValues(
             in: text,
@@ -507,7 +529,7 @@ public enum SQLPromptBuilder {
             contentsOf: capturedValues(
                 in: text,
                 pattern:
-                    #"Schema validation failed: column ([A-Za-z_][A-Za-z0-9_$]*) is (?:not available from the referenced tables|not on [^.\s]+(?:\.[^.\s]+)?|ambiguous across referenced tables)"#
+                    #"Schema validation failed: column ([A-Za-z_][A-Za-z0-9_$]*) is (?:not available from the referenced(?: base)? tables|not on [^.\s]+(?:\.[^.\s]+)?|not an output column of [^.;]+|ambiguous across referenced tables)"#
             ))
         var seen = Set<String>()
         return names.filter { seen.insert($0).inserted }
@@ -543,6 +565,10 @@ public enum SQLPromptBuilder {
             guard let matchRange = Range(match.range(at: 1), in: text) else { return nil }
             return String(text[matchRange])
         }
+    }
+
+    private static func firstCapturedValue(in text: String, pattern: String) -> String? {
+        capturedValues(in: text, pattern: pattern).first
     }
 
     private static func taggedSection(_ tag: String, _ content: String) -> String {

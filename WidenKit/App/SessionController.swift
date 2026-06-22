@@ -9,6 +9,7 @@ import Observation
 @Observable
 public final class SessionController: Identifiable {
     private static let generatedSQLRepairRetryLimit = GeneratedSQLRepairCoordinator.maxModelCalls
+    private static let generatedSQLLocalModelCallBudget = 3
 
     public let sessionID: UUID
     public let connectionID: UUID
@@ -18,6 +19,7 @@ public final class SessionController: Identifiable {
     /// of this live session keeps its full table in the transcript. Never
     /// persisted — after a relaunch the records render as summary rows.
     public private(set) var results: [UUID: QueryResult] = [:]
+    private var selectedClarificationOption: (pendingID: UUID, option: ClarificationOption)?
 
     /// True while the session is mid-generation or mid-run. Surfaced in the
     /// sidebar so work in progress stays visible even when another session is
@@ -190,6 +192,14 @@ public final class SessionController: Identifiable {
                     error: error
                 ),
                 priorFingerprints: [Self.normalizedSQL(failedSQL)]
+            ),
+            modelCallCount: Self.cumulativeGeneratedSQLModelCallCount(
+                after: startingGeneration,
+                attempt: 1
+            ),
+            confirmedSemanticBindings: appState.semanticBindingPromptLines(
+                for: connectionID,
+                schema: schema
             )
         )
         let connection = appState.connection(for: connectionID)
@@ -219,7 +229,9 @@ public final class SessionController: Identifiable {
                 generated,
                 question: questionContext.question,
                 schema: schema,
-                databaseContext: config.databaseContext
+                databaseContext: config.databaseContext,
+                confirmedSemanticBindings: context.confirmedSemanticBindings,
+                allowGroundingClarification: false
             )
         } catch {
             chatVM.appendRunError(error.localizedDescription)
@@ -231,7 +243,12 @@ public final class SessionController: Identifiable {
             !clarification.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
         {
             chatVM.messages.append(
-                ChatMessage(role: .assistant, text: clarification, generation: generation)
+                ChatMessage(
+                    role: .assistant,
+                    text: clarification,
+                    generation: generation,
+                    pendingClarification: generation.pendingClarification
+                )
             )
             return
         }
@@ -255,6 +272,18 @@ public final class SessionController: Identifiable {
         results.removeAll()
     }
 
+    public func selectClarificationOption(
+        appState: AppState,
+        pending: PendingClarification,
+        option: ClarificationOption
+    ) async {
+        guard !queryVM.isRunning, !chatVM.isGenerating else { return }
+        guard unresolvedPendingClarification()?.id == pending.id else { return }
+        selectedClarificationOption = (pending.id, option)
+        chatVM.input = option.replyText
+        await submit(appState: appState)
+    }
+
     private func submitGeneratedSQL(appState: AppState) async {
         let question = chatVM.input.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !question.isEmpty, !chatVM.isGenerating, !queryVM.isRunning else { return }
@@ -265,15 +294,63 @@ public final class SessionController: Identifiable {
             return
         }
 
+        let unresolvedClarification = unresolvedPendingClarification()
+        let selectedOption = selectedOptionForPendingClarification(
+            unresolvedClarification,
+            replyText: question
+        )
+        let resolvesPendingClarification = shouldResolvePendingClarification(
+            question,
+            selectedOption: selectedOption,
+            pending: unresolvedClarification
+        )
+        let pendingClarification = resolvesPendingClarification ? unresolvedClarification : nil
+        let abandonsPendingClarification =
+            unresolvedClarification != nil && pendingClarification == nil
+        let generationQuestion = pendingClarification?.originalQuestion ?? question
+        var confirmedBindings = appState.semanticBindingPromptLines(
+            for: connectionID,
+            schema: schema
+        )
+        if let pendingClarification,
+            shouldRememberClarificationReply(
+                question,
+                selectedOption: selectedOption,
+                pending: pendingClarification
+            )
+        {
+            let definition = (selectedOption?.definition ?? question)
+                .trimmingCharacters(in: .whitespacesAndNewlines)
+            if !definition.isEmpty {
+                confirmedBindings.append("\(pendingClarification.concept.term): \(definition)")
+            }
+        }
+        let transcriptUpperBound = Self.transcriptUpperBound(
+            excludingAbandonedClarification: unresolvedClarification,
+            in: chatVM.messages,
+            abandonsPendingClarification: abandonsPendingClarification
+        )
+        var conversationMessages = chatVM.messages.sqlConversationMessages(upTo: transcriptUpperBound)
+        let recentQuestions = chatVM.messages
+            .prefix(upTo: min(transcriptUpperBound, chatVM.messages.count))
+            .filter { $0.role == .user }
+            .suffix(3)
+            .map(\.text)
+        if pendingClarification != nil {
+            conversationMessages.append(SQLConversationMessage(role: .user, text: question))
+        }
         let context = SQLGenerationContext(
-            recentQuestions: chatVM.messages.filter { $0.role == .user }.suffix(3).map(\.text),
-            originalQuestion: chatVM.messages.originalUserQuestion(),
-            conversationMessages: chatVM.messages.sqlConversationMessages(),
+            recentQuestions: recentQuestions,
+            originalQuestion: pendingClarification?.originalQuestion
+                ?? (abandonsPendingClarification
+                    ? question : chatVM.messages.originalUserQuestion()),
+            conversationMessages: conversationMessages,
             currentSQL: queryVM.sqlText
                 .trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
                 ? nil : queryVM.sqlText,
             lastRunError: queryVM.runError
-                ?? (chatVM.messages.last?.role == .error ? chatVM.messages.last?.text : nil)
+                ?? (chatVM.messages.last?.role == .error ? chatVM.messages.last?.text : nil),
+            confirmedSemanticBindings: confirmedBindings
         )
         let connection = appState.connection(for: connectionID)
         let config = SQLGenerationConfig(
@@ -283,32 +360,54 @@ public final class SessionController: Identifiable {
 
         chatVM.input = ""
         chatVM.messages.append(ChatMessage(role: .user, text: question))
+        if let pendingClarification,
+            shouldRememberClarificationReply(
+                question,
+                selectedOption: selectedOption,
+                pending: pendingClarification
+            )
+        {
+            appState.confirmSemanticBinding(
+                connectionID: connectionID,
+                pending: pendingClarification,
+                replyText: question,
+                selectedOption: selectedOption,
+                schema: schema
+            )
+        }
         chatVM.beginGeneration()
         appState.sessionDidChange(sessionID)
         defer {
+            selectedClarificationOption = nil
             chatVM.finishGeneration()
             appState.sessionDidChange(sessionID)
         }
 
         do {
             let generated = try await appState.sqlGenerator.generateSQL(
-                question: question,
+                question: generationQuestion,
                 schema: schema,
                 context: context,
                 config: config
             )
             let result = GeneratedSQLPostprocessor.enriched(
                 generated,
-                question: question,
+                question: generationQuestion,
                 schema: schema,
-                databaseContext: config.databaseContext
+                databaseContext: config.databaseContext,
+                confirmedSemanticBindings: context.confirmedSemanticBindings
             )
             if result.needsClarification,
                 let clarification = result.clarificationQuestion,
                 !clarification.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
             {
                 chatVM.messages.append(
-                    ChatMessage(role: .assistant, text: clarification, generation: result)
+                    ChatMessage(
+                        role: .assistant,
+                        text: clarification,
+                        generation: result,
+                        pendingClarification: result.pendingClarification
+                    )
                 )
                 return
             }
@@ -338,9 +437,9 @@ public final class SessionController: Identifiable {
                     firstError: firstError,
                     startingGeneration: visibleGeneration,
                     questionContext: RepairQuestionContext(
-                        question: question,
+                        question: generationQuestion,
                         recentQuestions: Array(context.recentQuestions.suffix(3)),
-                        originalQuestion: context.originalQuestion ?? question,
+                        originalQuestion: context.originalQuestion ?? generationQuestion,
                         conversationMessages: context.conversationMessages
                             + [SQLConversationMessage(role: .user, text: question)]
                     ),
@@ -354,6 +453,154 @@ public final class SessionController: Identifiable {
         } catch {
             chatVM.appendRunError(error.localizedDescription)
         }
+    }
+
+    private func unresolvedPendingClarification() -> PendingClarification? {
+        guard let last = chatVM.messages.last,
+            last.role == .assistant,
+            let pending = last.pendingClarification
+        else {
+            return nil
+        }
+        return pending
+    }
+
+    private func selectedOptionForPendingClarification(
+        _ pending: PendingClarification?,
+        replyText: String
+    ) -> ClarificationOption? {
+        guard let pending else { return nil }
+        if let selected = selectedClarificationOption,
+            selected.pendingID == pending.id
+        {
+            return selected.option
+        }
+        let trimmed = replyText.trimmingCharacters(in: .whitespacesAndNewlines)
+        if let exact = pending.options.first(where: {
+            $0.replyText.caseInsensitiveCompare(trimmed) == .orderedSame
+        }) {
+            return exact
+        }
+        if Self.isAffirmativeClarificationReply(trimmed),
+            pending.options.count == 1
+        {
+            return pending.options[0]
+        }
+        return nil
+    }
+
+    private func shouldRememberClarificationReply(
+        _ replyText: String,
+        selectedOption: ClarificationOption?,
+        pending: PendingClarification?
+    ) -> Bool {
+        selectedOption != nil
+            || Self.isExplicitSemanticDefinitionReply(
+                replyText,
+                conceptTerm: pending?.concept.term
+            )
+    }
+
+    private func shouldResolvePendingClarification(
+        _ replyText: String,
+        selectedOption: ClarificationOption?,
+        pending: PendingClarification?
+    ) -> Bool {
+        selectedOption != nil
+            || Self.isExplicitSemanticDefinitionReply(
+                replyText,
+                conceptTerm: pending?.concept.term
+            )
+            || Self.isNegativeClarificationReply(replyText)
+    }
+
+    private static func isAffirmativeClarificationReply(_ text: String) -> Bool {
+        let stripped = text
+            .trimmingCharacters(in: CharacterSet(charactersIn: ".!?, \n\t"))
+            .lowercased()
+        return [
+            "y", "yes", "yeah", "yep", "correct", "right", "that's right",
+            "that is right", "sounds good", "ok", "okay", "sure", "use that",
+            "do that", "exactly",
+        ].contains(stripped)
+    }
+
+    private static func isExplicitSemanticDefinitionReply(
+        _ text: String,
+        conceptTerm: String?
+    ) -> Bool {
+        let normalized = text
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+            .lowercased()
+        guard normalized.count >= 6 else { return false }
+        let stripped = normalized.trimmingCharacters(in: CharacterSet(charactersIn: ".!?, "))
+        guard !negativeClarificationReplies.contains(stripped) else { return false }
+        guard !isQuestionLikeClarificationReply(normalized) else { return false }
+        if normalized.hasPrefix("use ") || normalized.contains("=") {
+            return true
+        }
+        let definitionMarkers = [
+            " means ", " mean ", " is ", " are ", " equals ", " equal ",
+            " defined as ", " refers to ", " should be ",
+        ]
+        guard definitionMarkers.contains(where: normalized.contains) else { return false }
+        let conceptTokens = semanticReplyTokens(in: conceptTerm ?? "")
+        guard !conceptTokens.isEmpty else { return true }
+        let replyTokens = semanticReplyTokens(in: normalized)
+        return !replyTokens.isDisjoint(with: conceptTokens)
+    }
+
+    private static func isQuestionLikeClarificationReply(_ normalized: String) -> Bool {
+        let tokens = semanticReplyTokenList(in: normalized)
+        guard let first = tokens.first else { return false }
+        let questionStarters: Set<String> = [
+            "find", "give", "how", "list", "return", "select", "show",
+            "what", "when", "where", "which", "who", "why",
+        ]
+        return normalized.contains("?") || questionStarters.contains(first)
+    }
+
+    private static func semanticReplyTokens(in text: String) -> Set<String> {
+        Set(semanticReplyTokenList(in: text))
+    }
+
+    private static func semanticReplyTokenList(in text: String) -> [String] {
+        text.lowercased()
+            .split { !$0.isLetter && !$0.isNumber }
+            .map(String.init)
+            .filter { !$0.isEmpty }
+    }
+
+    private static let negativeClarificationReplies: Set<String> = [
+        "n", "no", "nope", "nah", "not sure", "i don't know", "i dont know",
+        "unknown", "something else",
+    ]
+
+    private static func isNegativeClarificationReply(_ text: String) -> Bool {
+        let stripped = text
+            .trimmingCharacters(in: CharacterSet(charactersIn: ".!?, \n\t"))
+            .lowercased()
+        return negativeClarificationReplies.contains(stripped)
+    }
+
+    private static func transcriptUpperBound(
+        excludingAbandonedClarification pending: PendingClarification?,
+        in messages: [ChatMessage],
+        abandonsPendingClarification: Bool
+    ) -> Int {
+        guard abandonsPendingClarification, let pending else {
+            return messages.count
+        }
+        guard let clarificationIndex = messages.lastIndex(where: {
+            $0.pendingClarification?.id == pending.id
+        }) else {
+            return max(0, messages.count - 1)
+        }
+        let previousIndex = clarificationIndex - 1
+        if previousIndex >= 0, messages[previousIndex].role == .user {
+            return previousIndex
+        }
+        return clarificationIndex
     }
 
     private func repairGeneratedSQL(
@@ -428,7 +675,8 @@ public final class SessionController: Identifiable {
             repairConstraints: Self.repairConstraints(
                 forbiddenIdentifiers: forbiddenIdentifiers,
                 error: firstError,
-            )
+            ),
+            maxModelCalls: Self.remainingGeneratedSQLRepairCalls(after: startingGeneration)
         )
 
         while let repairMode = coordinator.beginNextAttempt() {
@@ -450,7 +698,15 @@ public final class SessionController: Identifiable {
                     ? questionContext.conversationMessages : [],
                 currentSQL: repairMode == .repair ? repairContext.failedSQL : nil,
                 lastRunError: repairMode == .repair ? coordinator.constraints.lastError : nil,
-                repairContext: repairContext
+                repairContext: repairContext,
+                modelCallCount: Self.cumulativeGeneratedSQLModelCallCount(
+                    after: startingGeneration,
+                    attempt: attemptNumber
+                ),
+                confirmedSemanticBindings: appState.semanticBindingPromptLines(
+                    for: connectionID,
+                    schema: schema
+                )
             )
 
             let generation: SQLGenerationResult
@@ -465,7 +721,9 @@ public final class SessionController: Identifiable {
                     generated,
                     question: questionContext.question,
                     schema: schema,
-                    databaseContext: config.databaseContext
+                    databaseContext: config.databaseContext,
+                    confirmedSemanticBindings: context.confirmedSemanticBindings,
+                    allowGroundingClarification: true
                 )
             } catch {
                 restoreStartingGeneration(schema: schema)
@@ -494,26 +752,40 @@ public final class SessionController: Identifiable {
                     return
                 }
                 chatVM.messages.append(
-                    ChatMessage(role: .assistant, text: clarification, generation: generation)
+                    ChatMessage(
+                        role: .assistant,
+                        text: clarification,
+                        generation: generation,
+                        pendingClarification: generation.pendingClarification
+                    )
                 )
                 appState.sessionDidChange(sessionID)
                 return
 
             case .rejected(let reason):
-                if case .repeatedFingerprint = reason,
-                    !Self.missingColumnsCanBeResolvedByJoining(
+                if reason.isZeroProgressRepair {
+                    let diagnosticText = firstDiagnostic?.displayMessage ?? firstError
+                    if !Self.missingColumnsCanBeResolvedByJoining(
                         sql: startingSQL,
-                        error: firstDiagnostic?.displayMessage ?? firstError,
+                        error: diagnosticText,
                         schema: schema
                     ),
-                    let clarification = SQLPromptBuilder.missingColumnClarificationQuestion(
-                        for: firstDiagnostic?.displayMessage ?? firstError,
-                        question: questionContext.originalQuestion ?? questionContext.question,
-                        schema: schema)
-                {
-                    chatVM.messages.append(ChatMessage(role: .assistant, text: clarification))
-                    appState.sessionDidChange(sessionID)
-                    return
+                        let clarification = SQLPromptBuilder.missingColumnClarificationQuestion(
+                            for: diagnosticText,
+                            question: questionContext.originalQuestion ?? questionContext.question,
+                            schema: schema)
+                    {
+                        chatVM.messages.append(ChatMessage(role: .assistant, text: clarification))
+                        appState.sessionDidChange(sessionID)
+                        return
+                    }
+                    if let clarification = SQLPromptBuilder.missingRelationClarificationQuestion(
+                        for: diagnosticText
+                    ) {
+                        chatVM.messages.append(ChatMessage(role: .assistant, text: clarification))
+                        appState.sessionDidChange(sessionID)
+                        return
+                    }
                 }
                 if evaluation.allowsReconstruction, coordinator.canRequestAnotherModelCall {
                     continue
@@ -623,9 +895,29 @@ public final class SessionController: Identifiable {
         appState.sessionDidChange(sessionID)
     }
 
+    private static func remainingGeneratedSQLRepairCalls(
+        after generation: SQLGenerationResult?
+    ) -> Int {
+        let spentModelCalls = max(1, generation?.generationCallCount ?? 1)
+        return max(0, generatedSQLLocalModelCallBudget - spentModelCalls)
+    }
+
+    private static func cumulativeGeneratedSQLModelCallCount(
+        after generation: SQLGenerationResult?,
+        attempt: Int
+    ) -> Int {
+        let spentModelCalls = max(1, generation?.generationCallCount ?? 1)
+        return spentModelCalls + max(0, attempt)
+    }
+
     private func appendAssistantGeneration(_ generation: SQLGenerationResult) {
         chatVM.messages.append(
-            ChatMessage(role: .assistant, text: assistantText(for: generation), generation: generation)
+            ChatMessage(
+                role: .assistant,
+                text: assistantText(for: generation),
+                generation: generation,
+                pendingClarification: generation.pendingClarification
+            )
         )
     }
 
@@ -701,6 +993,18 @@ public final class SessionController: Identifiable {
             mode == .validationOnly
             ? "The rejected SQL was not shown in the editor. Add more context in chat so the model can adjust it, or switch to a smarter cloud model and try again."
             : "The SQL shown above was restored to the last valid or original generation. Add more context in chat so the model can adjust it, or switch to a smarter cloud model and try again."
+        if attempts.count <= 1 {
+            return """
+                The generated SQL already used this request's model-call budget, so I did not ask the model to repair it.
+
+                Last error: \(lastError)
+
+                Errors seen:
+                \(history)
+
+                \(recoveryGuidance)
+                """
+        }
         return """
             I tried a focused repair and, when needed, one reconstruction, but \(failureReason).
 
@@ -771,7 +1075,7 @@ public final class SessionController: Identifiable {
         if let columnName = firstCapturedValue(
             in: error,
             pattern:
-                #"Schema validation failed: column ([A-Za-z_][A-Za-z0-9_$]*) is (?:not available from the referenced tables|not on [^.\s]+(?:\.[^.\s]+)?)"#
+                #"Schema validation failed: column ([A-Za-z_][A-Za-z0-9_$]*) is (?:not available from the referenced(?: base)? tables|not on [^.\s]+(?:\.[^.\s]+)?|not an output column of [^.;]+)"#
         ) {
             return DatabaseDiagnostic(
                 kind: .missingColumn,
@@ -917,7 +1221,7 @@ public final class SessionController: Identifiable {
             contentsOf: capturedValues(
                 in: text,
                 pattern:
-                    #"Schema validation failed: column ([A-Za-z_][A-Za-z0-9_$]*) is (?:not available from the referenced tables|not on [^.\s]+(?:\.[^.\s]+)?|ambiguous across referenced tables)"#
+                    #"Schema validation failed: column ([A-Za-z_][A-Za-z0-9_$]*) is (?:not available from the referenced(?: base)? tables|not on [^.\s]+(?:\.[^.\s]+)?|not an output column of [^.;]+|ambiguous across referenced tables)"#
             ))
         identifiers.append(
             contentsOf: capturedValues(
@@ -1000,18 +1304,26 @@ public final class SessionController: Identifiable {
 
     private static func reachableTableIDs(
         from tableIDs: Set<String>,
-        schema: DatabaseSchema
+        schema: DatabaseSchema,
+        maxHops: Int = 2
     ) -> Set<String> {
         var reachable = tableIDs
-        for foreignKey in schema.foreignKeys {
-            let sourceID = "\(foreignKey.sourceSchema).\(foreignKey.sourceTable)"
-            let targetID = "\(foreignKey.targetSchema).\(foreignKey.targetTable)"
-            if tableIDs.contains(sourceID) {
-                reachable.insert(targetID)
+        var frontier = tableIDs
+        guard maxHops > 0 else { return reachable }
+        for _ in 0..<maxHops {
+            var next = Set<String>()
+            for foreignKey in schema.foreignKeys {
+                let sourceID = "\(foreignKey.sourceSchema).\(foreignKey.sourceTable)"
+                let targetID = "\(foreignKey.targetSchema).\(foreignKey.targetTable)"
+                if frontier.contains(sourceID), reachable.insert(targetID).inserted {
+                    next.insert(targetID)
+                }
+                if frontier.contains(targetID), reachable.insert(sourceID).inserted {
+                    next.insert(sourceID)
+                }
             }
-            if tableIDs.contains(targetID) {
-                reachable.insert(sourceID)
-            }
+            guard !next.isEmpty else { break }
+            frontier = next
         }
         return reachable
     }

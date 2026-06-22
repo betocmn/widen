@@ -1,6 +1,8 @@
 import Foundation
 
-public struct SQLFingerprint: Codable, Equatable, Hashable, Sendable, CustomStringConvertible {
+public typealias SQLFingerprint = SQLTextFingerprint
+
+public struct SQLTextFingerprint: Codable, Equatable, Hashable, Sendable, CustomStringConvertible {
     public var value: String
 
     public init(_ sql: String) {
@@ -105,6 +107,139 @@ public struct SQLFingerprint: Codable, Equatable, Hashable, Sendable, CustomStri
     }
 }
 
+public struct SQLStructuralFingerprint: Codable, Equatable, Hashable, Sendable,
+    CustomStringConvertible
+{
+    public var value: String
+
+    public init(_ sql: String) {
+        self.value = Self.normalized(sql)
+    }
+
+    public var description: String { value }
+
+    private static func normalized(_ sql: String) -> String {
+        let analysis = SQLReferenceAnalyzer.analyze(sql)
+        let stripped = SQLSafetyValidator.strip(sql).text
+        let safety = SQLSafetyValidator.validate(sql)
+        var relationAliases: [String: String] = [:]
+        var baseRelations = Set<String>()
+
+        for relation in analysis.relations where !relation.isDerived {
+            let canonicalRelation = canonicalRelationName(relation)
+            baseRelations.insert(canonicalRelation)
+            relationAliases[relation.name.lowercased()] = canonicalRelation
+            relationAliases[relation.displayName.lowercased()] = canonicalRelation
+            if let alias = relation.alias {
+                relationAliases[alias.lowercased()] = canonicalRelation
+            }
+        }
+
+        let columnBindings = analysis.columns
+            .filter { $0.context == .expression && $0.name != "*" }
+            .map { column in
+                let owner = column.qualifier
+                    .map { relationAliases[$0.lowercased()] ?? $0.lowercased() }
+                    ?? "*"
+                return "\(owner).\(column.name.lowercased())"
+            }
+            .sorted()
+
+        let derivedOutputs = analysis.cteOutputColumns
+            .flatMap { cteName, columns -> [String] in
+                guard let columns else { return [] }
+                return columns.map { "\(cteName.name.lowercased()).\($0.name.lowercased())" }
+            }
+            .sorted()
+
+        let functions = functionNames(in: stripped).sorted()
+        let predicateOperators = broadPredicateOperators(in: stripped).sorted()
+        let groupingColumns = groupingColumnText(in: stripped)
+
+        return [
+            "kind:\(safety.kind.rawValue)",
+            "relations:\(baseRelations.sorted().joined(separator: ","))",
+            "bindings:\(columnBindings.joined(separator: ","))",
+            "derived:\(derivedOutputs.joined(separator: ","))",
+            "functions:\(functions.joined(separator: ","))",
+            "group:\(groupingColumns)",
+            "predicates:\(predicateOperators.joined(separator: ","))",
+        ].joined(separator: "|")
+    }
+
+    private static func canonicalRelationName(_ relation: SQLRelationReference) -> String {
+        if let schema = relation.schema?.lowercased() {
+            return "\(schema).\(relation.name.lowercased())"
+        }
+        return relation.name.lowercased()
+    }
+
+    private static func functionNames(in sql: String) -> Set<String> {
+        let characters = Array(sql)
+        var names = Set<String>()
+        var index = 0
+        while index < characters.count {
+            guard isIdentifierStart(characters[index]) else {
+                index += 1
+                continue
+            }
+            let start = index
+            index += 1
+            while index < characters.count, isIdentifierContinuation(characters[index]) {
+                index += 1
+            }
+            let name = String(characters[start..<index]).lowercased()
+            var lookahead = index
+            while lookahead < characters.count, characters[lookahead].isWhitespace {
+                lookahead += 1
+            }
+            if characters[safe: lookahead] == "(", !nonFunctionKeywords.contains(name) {
+                names.insert(name)
+            }
+        }
+        return names
+    }
+
+    private static func broadPredicateOperators(in sql: String) -> Set<String> {
+        let lowercased = sql.lowercased()
+        var operators = Set<String>()
+        for token in ["=", "<>", "!=", "<=", ">=", "<", ">"] where lowercased.contains(token) {
+            operators.insert(token)
+        }
+        for word in [" like ", " ilike ", " in ", " between ", " is "]
+        where lowercased.contains(word) {
+            operators.insert(word.trimmingCharacters(in: .whitespaces))
+        }
+        return operators
+    }
+
+    private static func groupingColumnText(in sql: String) -> String {
+        let lowercased = sql.lowercased()
+        guard let groupRange = lowercased.range(of: "group by") else { return "" }
+        let afterGroup = lowercased[groupRange.upperBound...]
+        let terminators = [" order by", " having", " limit", " offset", " union", " intersect", " except"]
+        let end = terminators
+            .compactMap { afterGroup.range(of: $0)?.lowerBound }
+            .min() ?? afterGroup.endIndex
+        return afterGroup[..<end]
+            .split(whereSeparator: \.isWhitespace)
+            .joined(separator: " ")
+    }
+
+    private static let nonFunctionKeywords: Set<String> = [
+        "as", "case", "cast", "delete", "exists", "from", "insert", "join", "limit",
+        "on", "order", "select", "update", "values", "where", "with",
+    ]
+
+    private static func isIdentifierStart(_ character: Character) -> Bool {
+        character == "_" || character.isLetter
+    }
+
+    private static func isIdentifierContinuation(_ character: Character) -> Bool {
+        character == "_" || character == "$" || character.isLetter || character.isNumber
+    }
+}
+
 public struct RepairConstraints: Equatable, Sendable {
     public var failedSQL: String
     public var diagnostic: DatabaseDiagnostic?
@@ -193,6 +328,15 @@ public enum SQLRepairCandidateRejectionReason: Equatable, Sendable {
     case forbiddenIdentifier(String)
     case validationFailure
     case unsafeWrite
+
+    public var isZeroProgressRepair: Bool {
+        switch self {
+        case .repeatedFingerprint, .forbiddenIdentifier:
+            true
+        case .emptySQL, .validationFailure, .unsafeWrite:
+            false
+        }
+    }
 }
 
 public struct GeneratedSQLRepairCoordinator: Sendable {
@@ -200,16 +344,26 @@ public struct GeneratedSQLRepairCoordinator: Sendable {
 
     public private(set) var constraints: RepairConstraints
     public private(set) var attempts: [SQLRepairAttempt]
+    private let maxModelCalls: Int
     private var modelCallCount = 0
+    private var failedCandidateSignatures: [SQLFailedCandidateSignature]
 
     public init(
         failedSQL: String,
         firstError: String,
         diagnostic: DatabaseDiagnostic?,
         forbiddenIdentifiers: [String],
-        repairConstraints: [RepairConstraint] = []
+        repairConstraints: [RepairConstraint] = [],
+        maxModelCalls: Int = Self.maxModelCalls
     ) {
         let fingerprint = SQLFingerprint(failedSQL)
+        let failureSignature = SQLFailedCandidateSignature(
+            sql: failedSQL,
+            issueSignatures: SQLRepairIssueSignature.signatures(
+                error: firstError,
+                diagnostic: diagnostic
+            )
+        )
         self.constraints = RepairConstraints(
             failedSQL: failedSQL,
             diagnostic: diagnostic,
@@ -219,10 +373,12 @@ public struct GeneratedSQLRepairCoordinator: Sendable {
             lastError: firstError
         )
         self.attempts = [SQLRepairAttempt(mode: .initial, sql: failedSQL, error: firstError)]
+        self.maxModelCalls = max(0, maxModelCalls)
+        self.failedCandidateSignatures = [failureSignature]
     }
 
     public var canRequestAnotherModelCall: Bool {
-        modelCallCount < Self.maxModelCalls
+        modelCallCount < maxModelCalls
     }
 
     public mutating func beginNextAttempt() -> SQLGenerationMode? {
@@ -237,7 +393,7 @@ public struct GeneratedSQLRepairCoordinator: Sendable {
             diagnostic: constraints.diagnostic,
             forbiddenIdentifiers: constraints.forbiddenIdentifiers,
             repairConstraints: constraints.repairConstraints,
-            priorFingerprints: constraints.priorFingerprints.map(\.value)
+            priorFingerprints: []
         )
     }
 
@@ -268,7 +424,7 @@ public struct GeneratedSQLRepairCoordinator: Sendable {
             )
         }
 
-        let sql = generation.sql.trimmingCharacters(in: .whitespacesAndNewlines)
+        let sql = GeneratedSQLValidator.canonicalize(sql: generation.sql, schema: schema)
         guard !sql.isEmpty else {
             return reject(
                 mode: mode,
@@ -280,6 +436,16 @@ public struct GeneratedSQLRepairCoordinator: Sendable {
         }
 
         let fingerprint = SQLFingerprint(sql)
+        let safety = SQLSafetyValidator.validate(sql)
+        let schemaValidation = SQLSchemaValidator.validate(sql: sql, against: schema)
+        let validation = GeneratedSQLValidator.combine(
+            safety: safety,
+            schemaValidation: schemaValidation
+        )
+        let issueSignatures = SQLRepairIssueSignature.signatures(
+            safety: safety,
+            schemaValidation: schemaValidation
+        )
         if constraints.priorFingerprints.contains(fingerprint) {
             return reject(
                 mode: mode,
@@ -287,7 +453,13 @@ public struct GeneratedSQLRepairCoordinator: Sendable {
                 reason: .repeatedFingerprint,
                 message:
                     "The model repeated SQL that already failed. It must produce a different query or ask a clarification question.",
-                allowsReconstruction: mode == .repair
+                allowsReconstruction: mode == .repair && safety.kind == .read
+                    && Self.missingColumnsCanBeResolvedByJoining(
+                        sql: sql,
+                        schemaValidation: schemaValidation,
+                        schema: schema
+                    ),
+                issueSignatures: issueSignatures
             )
         }
 
@@ -298,20 +470,31 @@ public struct GeneratedSQLRepairCoordinator: Sendable {
                 reason: .forbiddenIdentifier(forbiddenIdentifier),
                 message:
                     "The model reused forbidden identifier \(forbiddenIdentifier) after it was diagnosed as invalid.",
-                allowsReconstruction: mode == .repair
+                allowsReconstruction: false
             )
         }
 
-        let validation = GeneratedSQLValidator.validate(sql: sql, schema: schema)
         guard validation.isValid else {
             let message = AppError.validationFailed(validation.errors).localizedDescription
-            let safety = SQLSafetyValidator.validate(sql)
+            if structurallyRepeatsFailedCandidate(sql: sql, issueSignatures: issueSignatures) {
+                return reject(
+                    mode: mode,
+                    sql: sql,
+                    reason: .repeatedFingerprint,
+                    message:
+                        "The model produced SQL with the same structure and validation issue that already failed.",
+                    allowsReconstruction: false,
+                    issueSignatures: issueSignatures
+                )
+            }
             return reject(
                 mode: mode,
                 sql: sql,
                 reason: .validationFailure,
                 message: message,
                 allowsReconstruction: mode == .repair && safety.kind == .read
+                    && madeValidationProgress(issueSignatures),
+                issueSignatures: issueSignatures
             )
         }
 
@@ -359,12 +542,18 @@ public struct GeneratedSQLRepairCoordinator: Sendable {
         sql: String?,
         reason: SQLRepairCandidateRejectionReason,
         message: String,
-        allowsReconstruction: Bool
+        allowsReconstruction: Bool,
+        issueSignatures: Set<SQLRepairIssueSignature> = []
     ) -> SQLRepairCandidateEvaluation {
         if let sql {
             let fingerprint = SQLFingerprint(sql)
             if !constraints.priorFingerprints.contains(fingerprint) {
                 constraints.priorFingerprints.append(fingerprint)
+            }
+            if !issueSignatures.isEmpty {
+                failedCandidateSignatures.append(
+                    SQLFailedCandidateSignature(sql: sql, issueSignatures: issueSignatures)
+                )
             }
         }
         attempts.append(SQLRepairAttempt(mode: mode, sql: sql, error: message))
@@ -443,11 +632,237 @@ public struct GeneratedSQLRepairCoordinator: Sendable {
         return nil
     }
 
+    private func structurallyRepeatsFailedCandidate(
+        sql: String,
+        issueSignatures: Set<SQLRepairIssueSignature>
+    ) -> Bool {
+        guard !issueSignatures.isEmpty else { return false }
+        let structural = SQLStructuralFingerprint(sql)
+        return failedCandidateSignatures.contains {
+            $0.structuralFingerprint == structural
+                && !$0.issueSignatures.isDisjoint(with: issueSignatures)
+        }
+    }
+
+    private func madeValidationProgress(_ issueSignatures: Set<SQLRepairIssueSignature>) -> Bool {
+        guard !issueSignatures.isEmpty else { return false }
+        if failedCandidateSignatures.contains(where: { $0.issueSignatures == issueSignatures }) {
+            return false
+        }
+        if failedCandidateSignatures.contains(where: {
+            issueSignatures.isStrictSubset(of: $0.issueSignatures)
+        }) {
+            return true
+        }
+        return !failedCandidateSignatures.contains {
+            !$0.issueSignatures.isDisjoint(with: issueSignatures)
+        }
+    }
+
+    private static func missingColumnsCanBeResolvedByJoining(
+        sql: String,
+        schemaValidation: SQLSchemaValidationResult,
+        schema: DatabaseSchema
+    ) -> Bool {
+        let missingColumns = schemaValidation.issues.compactMap { issue -> String? in
+            guard issue.severity == .error,
+                issue.kind == .missingColumn || issue.kind == .missingBaseColumn,
+                let identifier = issue.identifier,
+                !identifier.contains(".")
+            else { return nil }
+            return identifier
+        }
+        guard !missingColumns.isEmpty else { return false }
+        let referencedTables = resolvedTables(
+            from: schemaValidation.referencedTables,
+            fallbackSQL: sql,
+            schema: schema
+        )
+        guard !referencedTables.isEmpty else { return false }
+        let reachableTableIDs = reachableTableIDs(
+            from: Set(referencedTables.map(\.id)),
+            schema: schema
+        )
+        return missingColumns.allSatisfy { columnName in
+            let foldedColumn = columnName.lowercased()
+            return schema.tables.contains { table in
+                reachableTableIDs.contains(table.id)
+                    && table.columns.contains { $0.name.lowercased() == foldedColumn }
+            }
+        }
+    }
+
+    private static func resolvedTables(
+        from referencedTables: [String],
+        fallbackSQL: String,
+        schema: DatabaseSchema
+    ) -> [TableInfo] {
+        let identifiers = referencedTables.isEmpty
+            ? SQLReferenceAnalyzer.analyze(fallbackSQL).relations.map(\.displayName)
+            : referencedTables
+        return identifiers.compactMap { identifier in
+            let canonical = canonicalIdentifier(identifier)
+            if let table = schema.tables.first(where: {
+                canonicalIdentifier($0.qualifiedName) == canonical
+            }) {
+                return table
+            }
+            let matches = schema.tables.filter {
+                canonicalIdentifier($0.name) == canonical
+            }
+            return matches.count == 1 ? matches[0] : nil
+        }
+    }
+
+    private static func reachableTableIDs(
+        from tableIDs: Set<String>,
+        schema: DatabaseSchema,
+        maxHops: Int = 2
+    ) -> Set<String> {
+        var reachable = tableIDs
+        var frontier = tableIDs
+        guard maxHops > 0 else { return reachable }
+        for _ in 0..<maxHops {
+            var next = Set<String>()
+            for foreignKey in schema.foreignKeys {
+                let sourceID = "\(foreignKey.sourceSchema).\(foreignKey.sourceTable)"
+                let targetID = "\(foreignKey.targetSchema).\(foreignKey.targetTable)"
+                if frontier.contains(sourceID), reachable.insert(targetID).inserted {
+                    next.insert(targetID)
+                }
+                if frontier.contains(targetID), reachable.insert(sourceID).inserted {
+                    next.insert(sourceID)
+                }
+            }
+            guard !next.isEmpty else { break }
+            frontier = next
+        }
+        return reachable
+    }
+
     private static func canonicalIdentifier(_ identifier: String) -> String {
         identifier
             .replacingOccurrences(of: "\"", with: "")
             .replacingOccurrences(of: " ", with: "")
             .lowercased()
+    }
+}
+
+private struct SQLFailedCandidateSignature: Equatable, Sendable {
+    var structuralFingerprint: SQLStructuralFingerprint
+    var issueSignatures: Set<SQLRepairIssueSignature>
+
+    init(sql: String, issueSignatures: Set<SQLRepairIssueSignature>) {
+        self.structuralFingerprint = SQLStructuralFingerprint(sql)
+        self.issueSignatures = issueSignatures
+    }
+}
+
+private struct SQLRepairIssueSignature: Hashable, Sendable {
+    var value: String
+
+    static func signatures(
+        safety: SQLValidationResult,
+        schemaValidation: SQLSchemaValidationResult
+    ) -> Set<SQLRepairIssueSignature> {
+        var signatures = Set<SQLRepairIssueSignature>()
+        for issue in schemaValidation.issues where issue.severity == .error {
+            let identifier = issue.identifier.map(canonicalIdentifier) ?? ""
+            let suggested = issue.suggestedIdentifier.map(canonicalIdentifier) ?? ""
+            let kind = String(describing: issue.kind)
+            let value =
+                kind == "requiresQuotedIdentifier"
+                ? "\(kind):\(identifier):\(suggested)"
+                : "\(kind):\(identifier)"
+            signatures.insert(
+                SQLRepairIssueSignature(value: value)
+            )
+        }
+        for error in safety.errors {
+            signatures.insert(SQLRepairIssueSignature(value: "safety:\(canonicalIdentifier(error))"))
+        }
+        return signatures
+    }
+
+    static func signatures(
+        error: String,
+        diagnostic: DatabaseDiagnostic?
+    ) -> Set<SQLRepairIssueSignature> {
+        var signatures = Set<SQLRepairIssueSignature>()
+        if let diagnostic {
+            let identifier = diagnostic.identifierForRepair.map(canonicalIdentifier) ?? ""
+            signatures.insert(SQLRepairIssueSignature(value: "\(diagnostic.kind.rawValue):\(identifier)"))
+        }
+        for match in capturedValues(
+            in: error,
+            pattern: #"Schema validation failed: table ([^\s]+) is not in the selected schema"#
+        ) {
+            signatures.insert(SQLRepairIssueSignature(value: "missingRelation:\(canonicalIdentifier(match))"))
+        }
+        for match in capturedValues(
+            in: error,
+            pattern: #"(?i)\brelation\s+"([^"]+)"\s+does\s+not\s+exist"#
+        ) {
+            signatures.insert(SQLRepairIssueSignature(value: "missingRelation:\(canonicalIdentifier(match))"))
+        }
+        for match in capturedValues(
+            in: error,
+            pattern: #"Schema validation failed: column ([A-Za-z_][A-Za-z0-9_$]*) is not on [^.;]+"#
+        ) {
+            signatures.insert(SQLRepairIssueSignature(value: "missingBaseColumn:\(canonicalIdentifier(match))"))
+        }
+        for match in capturedValues(
+            in: error,
+            pattern: #"Schema validation failed: column ([A-Za-z_][A-Za-z0-9_$]*) is not available from the referenced base tables"#
+        ) {
+            signatures.insert(SQLRepairIssueSignature(value: "missingBaseColumn:\(canonicalIdentifier(match))"))
+        }
+        for match in capturedValues(
+            in: error,
+            pattern: #"Schema validation failed: column ([A-Za-z_][A-Za-z0-9_$]*) is not an output column of [^.;]+"#
+        ) {
+            signatures.insert(SQLRepairIssueSignature(value: "columnNotProjectedByCTE:\(canonicalIdentifier(match))"))
+        }
+        for match in capturedValues(
+            in: error,
+            pattern: #"Schema validation failed: column ([A-Za-z_][A-Za-z0-9_$]*) is not available from the referenced tables"#
+        ) {
+            signatures.insert(SQLRepairIssueSignature(value: "missingColumn:\(canonicalIdentifier(match))"))
+        }
+        for match in capturedValues(
+            in: error,
+            pattern: #"Schema validation failed: column ([A-Za-z_][A-Za-z0-9_$]*) is ambiguous across referenced tables"#
+        ) {
+            signatures.insert(SQLRepairIssueSignature(value: "ambiguousColumn:\(canonicalIdentifier(match))"))
+        }
+        for match in capturedValues(
+            in: error,
+            pattern: #"(?i)column "([^"]+)" does not exist"#
+        ) {
+            signatures.insert(SQLRepairIssueSignature(value: "missingColumn:\(canonicalIdentifier(match))"))
+        }
+        if signatures.isEmpty {
+            signatures.insert(SQLRepairIssueSignature(value: "error:\(canonicalIdentifier(error))"))
+        }
+        return signatures
+    }
+
+    private static func canonicalIdentifier(_ identifier: String) -> String {
+        identifier
+            .replacingOccurrences(of: "\"", with: "")
+            .replacingOccurrences(of: " ", with: "")
+            .lowercased()
+    }
+
+    private static func capturedValues(in text: String, pattern: String) -> [String] {
+        guard let regex = try? NSRegularExpression(pattern: pattern) else {
+            return []
+        }
+        let range = NSRange(text.startIndex..<text.endIndex, in: text)
+        return regex.matches(in: text, range: range).compactMap { match in
+            guard let matchRange = Range(match.range(at: 1), in: text) else { return nil }
+            return String(text[matchRange])
+        }
     }
 }
 

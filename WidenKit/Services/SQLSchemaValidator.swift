@@ -10,6 +10,9 @@ public struct SQLSchemaValidationIssue: Equatable, Sendable {
         case missingRelation
         case unresolvedQualifier
         case missingColumn
+        case missingBaseColumn
+        case missingDerivedColumn
+        case columnNotProjectedByCTE
         case ambiguousColumn
         case requiresQuotedIdentifier
         case invalidTemporalComparison
@@ -120,6 +123,7 @@ public enum SQLSchemaValidator {
                             alias: relation.alias,
                             aliasIsQuoted: relation.aliasIsQuoted,
                             columns: columns,
+                            kind: cteName == nil ? .derived : .cte,
                             role: relation.role,
                             startOffset: relation.startOffset
                         ))
@@ -143,6 +147,7 @@ public enum SQLSchemaValidator {
                             alias: relation.alias,
                             aliasIsQuoted: relation.aliasIsQuoted,
                             columns: columns,
+                            kind: .cte,
                             role: relation.role,
                             startOffset: relation.startOffset
                         ))
@@ -306,12 +311,8 @@ public enum SQLSchemaValidator {
                     return
                 }
                 issues.append(
-                    SQLSchemaValidationIssue(
-                        severity: .error,
-                        message: "Schema validation failed: column \(column.name) is not on \(source.displayName).",
-                        kind: .missingColumn,
-                        identifier: column.name
-                    ))
+                    missingColumnIssue(column: column, source: source)
+                )
             }
             return
         }
@@ -383,11 +384,9 @@ public enum SQLSchemaValidator {
         }
 
         issues.append(
-            SQLSchemaValidationIssue(
-                severity: .error,
-                message: "Schema validation failed: column \(column.name) is not available from the referenced tables.",
-                kind: .missingColumn,
-                identifier: column.name
+            missingUnqualifiedColumnIssue(
+                column: column,
+                scopeSources: scopeSources[safe: scopeIndex] ?? []
             ))
     }
 
@@ -421,12 +420,8 @@ public enum SQLSchemaValidator {
             return
         }
         issues.append(
-            SQLSchemaValidationIssue(
-                severity: .error,
-                message: "Schema validation failed: column \(column.name) is not on \(source.displayName).",
-                kind: .missingColumn,
-                identifier: column.name
-            ))
+            missingColumnIssue(column: column, source: source)
+        )
     }
 
     private static func validateJoinUsingColumn(
@@ -496,9 +491,81 @@ public enum SQLSchemaValidator {
             SQLSchemaValidationIssue(
                 severity: .error,
                 message: "Schema validation failed: JOIN USING column \(column.name) is not available from both joined relations.",
-                kind: .missingColumn,
+                kind: .missingBaseColumn,
                 identifier: column.name
             ))
+    }
+
+    private static func missingColumnIssue(
+        column: SQLColumnReference,
+        source: ResolvedRelationSource
+    ) -> SQLSchemaValidationIssue {
+        switch source.kind {
+        case .table:
+            return SQLSchemaValidationIssue(
+                severity: .error,
+                message: "Schema validation failed: column \(column.name) is not on \(source.displayName).",
+                kind: .missingBaseColumn,
+                identifier: column.name
+            )
+        case .cte:
+            return SQLSchemaValidationIssue(
+                severity: .error,
+                message:
+                    "Schema validation failed: column \(column.name) is not an output column of \(source.displayName); project it from the CTE or do not reference it outside the CTE.",
+                kind: .columnNotProjectedByCTE,
+                identifier: column.name
+            )
+        case .derived:
+            return SQLSchemaValidationIssue(
+                severity: .error,
+                message:
+                    "Schema validation failed: column \(column.name) is not an output column of \(source.displayName); project it from the derived query or do not reference it outside the derived query.",
+                kind: .missingDerivedColumn,
+                identifier: column.name
+            )
+        case .unresolved:
+            return SQLSchemaValidationIssue(
+                severity: .error,
+                message: "Schema validation failed: column \(column.name) is not available from the referenced tables.",
+                kind: .missingColumn,
+                identifier: column.name
+            )
+        }
+    }
+
+    private static func missingUnqualifiedColumnIssue(
+        column: SQLColumnReference,
+        scopeSources: [ResolvedRelationSource]
+    ) -> SQLSchemaValidationIssue {
+        let knownSources = scopeSources.filter { !$0.hasUnknownColumns }
+        if knownSources.count == 1, let source = knownSources.first {
+            return missingColumnIssue(column: column, source: source)
+        }
+        if !knownSources.isEmpty, knownSources.allSatisfy(\.isDerivedLike) {
+            return SQLSchemaValidationIssue(
+                severity: .error,
+                message:
+                    "Schema validation failed: column \(column.name) is not an output column of the referenced derived relations.",
+                kind: knownSources.contains { $0.kind == .cte }
+                    ? .columnNotProjectedByCTE : .missingDerivedColumn,
+                identifier: column.name
+            )
+        }
+        if knownSources.contains(where: { $0.kind == .table }) {
+            return SQLSchemaValidationIssue(
+                severity: .error,
+                message: "Schema validation failed: column \(column.name) is not available from the referenced base tables.",
+                kind: .missingBaseColumn,
+                identifier: column.name
+            )
+        }
+        return SQLSchemaValidationIssue(
+            severity: .error,
+            message: "Schema validation failed: column \(column.name) is not available from the referenced tables.",
+            kind: .missingColumn,
+            identifier: column.name
+        )
     }
 
     private static func quotedIdentifierIssue(
@@ -566,7 +633,7 @@ public enum SQLSchemaValidator {
                     SQLSchemaValidationIssue(
                         severity: .error,
                         message: "Schema validation failed: column \(column.name) is not on \(table.qualifiedName).",
-                        kind: .missingColumn,
+                        kind: .missingBaseColumn,
                         identifier: column.name
                     ))
             }
@@ -598,8 +665,8 @@ public enum SQLSchemaValidator {
                 issues.append(
                     SQLSchemaValidationIssue(
                         severity: .error,
-                        message: "Schema validation failed: column \(column.name) is not available from the referenced tables.",
-                        kind: .missingColumn,
+                        message: "Schema validation failed: column \(column.name) is not available from the referenced base tables.",
+                        kind: .missingBaseColumn,
                         identifier: column.name
                     ))
             }
@@ -1889,7 +1956,9 @@ public enum GeneratedSQLPostprocessor {
         _ generation: SQLGenerationResult,
         question: String,
         schema: DatabaseSchema,
-        databaseContext: String
+        databaseContext: String,
+        confirmedSemanticBindings: [String] = [],
+        allowGroundingClarification: Bool = true
     ) -> SQLGenerationResult {
         var copy = generation
         copy.generationSchemaName = schema.singleSchemaName
@@ -1899,44 +1968,60 @@ public enum GeneratedSQLPostprocessor {
 
         let schemaValidation = SQLSchemaValidator.validate(sql: sql, against: schema)
         copy.referencedTables = schemaValidation.referencedTables
-        if !schemaValidation.hasDefiniteErrors,
-            let clarification = undefinedRequestTermClarification(
+        if !schemaValidation.hasDefiniteErrors {
+            let grounding = groundingEvaluation(
                 question: question,
                 sql: sql,
                 referencedTables: schemaValidation.referencedTables,
                 schema: schema,
-                databaseContext: databaseContext
+                databaseContext: databaseContext,
+                confirmedSemanticBindings: confirmedSemanticBindings
             )
-        {
-            copy.sql = ""
-            copy.explanation = clarification
-            copy.needsClarification = true
-            copy.clarificationQuestion = clarification
-            copy.confidence = min(copy.confidence, 0.2)
-            copy.riskLevel = .medium
+            copy.groundingConcepts = grounding.concepts
+            if allowGroundingClarification,
+                let pending = grounding.pendingClarification
+            {
+                copy.sql = ""
+                copy.explanation = pending.question
+                copy.needsClarification = true
+                copy.clarificationQuestion = pending.question
+                copy.clarificationOptions = pending.options
+                copy.pendingClarificationID = pending.id
+                copy.pendingClarification = pending
+                copy.confidence = min(copy.confidence, 0.2)
+                copy.riskLevel = .medium
+            }
         }
         return copy
     }
 
-    private static func undefinedRequestTermClarification(
+    public static func groundingEvaluation(
         question: String,
         sql: String,
         referencedTables: [String],
         schema: DatabaseSchema,
-        databaseContext: String
-    ) -> String? {
-        guard hasMetricIntent(question) else { return nil }
-        let availableTokens = referencedSchemaTokens(
+        databaseContext: String,
+        confirmedSemanticBindings: [String] = []
+    ) -> SQLGroundingEvaluation {
+        let schemaAndContextTokens = referencedSchemaTokens(
             referencedTables: referencedTables,
             schema: schema
-        ).union(Set(SchemaIndex.tokens(in: databaseContext)))
+        )
+        .union(Set(SchemaIndex.tokens(in: databaseContext)))
+        let availableTokens = schemaAndContextTokens
+        .union(Set(SchemaIndex.tokens(in: confirmedSemanticBindings.joined(separator: "\n"))))
+        let literalProofTokens = schemaAndContextTokens
+            .union(semanticBindingDefinitionTokens(in: confirmedSemanticBindings))
 
         let terms = meaningfulRequestWords(question)
+        guard !terms.isEmpty else {
+            return SQLGroundingEvaluation(concepts: notRequiredConcepts(question))
+        }
         let literalTokens = literalValueTokenEvaluation(
             in: sql,
             referencedTables: referencedTables,
             schema: schema,
-            availableTokens: availableTokens
+            availableTokens: literalProofTokens
         )
         let unresolved = terms.filter { word in
             let variants = SchemaIndex.tokens(in: word)
@@ -1952,8 +2037,182 @@ public enum GeneratedSQLPostprocessor {
             }
         }
 
-        guard let first = unresolved.first else { return nil }
-        return "What column, condition, or table defines \"\(first)\" for this question?"
+        var concepts = terms.map { term -> SQLGroundingConcept in
+            let variants = SchemaIndex.tokens(in: term)
+            let state: GroundingState
+            let evidence: [String]
+            if variants.contains(where: literalTokens.rejected.contains) || unresolved.contains(term) {
+                state = .unsupported
+                evidence = []
+            } else if variants.contains(where: literalTokens.accepted.contains)
+                || variants.contains(where: {
+                    tokenSet(availableTokens, containsRelatedTo: $0)
+                })
+            {
+                state = .grounded
+                evidence = groundingEvidence(
+                    for: variants,
+                    schema: schema,
+                    databaseContext: databaseContext,
+                    confirmedSemanticBindings: confirmedSemanticBindings
+                )
+            } else {
+                state = .notRequired
+                evidence = []
+            }
+            return SQLGroundingConcept(
+                term: term,
+                kind: conceptKind(for: term, question: question),
+                state: state,
+                required: state == .unsupported || state == .ambiguous,
+                evidence: evidence
+            )
+        }
+
+        concepts.append(contentsOf: notRequiredConcepts(question))
+        guard let first = concepts.first(where: {
+            $0.required && ($0.state == .unsupported || $0.state == .ambiguous)
+        }) else {
+            return SQLGroundingEvaluation(concepts: concepts)
+        }
+
+        let options = clarificationOptions(for: first, schema: schema, referencedTables: referencedTables)
+        let clarificationQuestion =
+            "What column, condition, or table defines \"\(first.term)\" for this question?"
+        let pending = PendingClarification(
+            concept: first,
+            originalQuestion: question,
+            question: clarificationQuestion,
+            options: options,
+            evidence: first.evidence
+        )
+        return SQLGroundingEvaluation(concepts: concepts, pendingClarification: pending)
+    }
+
+    private static func notRequiredConcepts(_ question: String) -> [SQLGroundingConcept] {
+        let tokens = Set(SchemaIndex.tokens(in: question))
+        var concepts: [SQLGroundingConcept] = []
+        if !tokens.intersection(metricOperatorStopWords).isEmpty {
+            concepts.append(
+                SQLGroundingConcept(
+                    term: "aggregate operator",
+                    kind: .metric,
+                    state: .notRequired,
+                    required: false,
+                    evidence: []
+                ))
+        }
+        if !tokens.intersection(
+            Set(["day", "days", "week", "weeks", "month", "months", "year", "years"])
+        ).isEmpty {
+            concepts.append(
+                SQLGroundingConcept(
+                    term: "time window",
+                    kind: .time,
+                    state: .notRequired,
+                    required: false,
+                    evidence: []
+                ))
+        }
+        return concepts
+    }
+
+    private static func conceptKind(for term: String, question: String) -> SQLGroundingConcept.Kind {
+        let tokens = Set(SchemaIndex.tokens(in: term))
+        if !tokens.intersection(["status", "active", "inactive", "paid", "refunded"]).isEmpty {
+            return .filter
+        }
+        if hasMetricIntent(question) {
+            return .businessTerm
+        }
+        return .entity
+    }
+
+    private static func groundingEvidence(
+        for variants: [String],
+        schema: DatabaseSchema,
+        databaseContext: String,
+        confirmedSemanticBindings: [String]
+    ) -> [String] {
+        var evidence: [String] = []
+        for table in schema.tables {
+            let tableTokens = Set(SchemaIndex.tokens(in: table.name))
+            if variants.contains(where: { tokenSet(tableTokens, containsRelatedTo: $0) }) {
+                evidence.append(table.qualifiedName)
+            }
+            for column in table.columns {
+                let columnTokens = Set(SchemaIndex.tokens(in: column.name))
+                if variants.contains(where: { tokenSet(columnTokens, containsRelatedTo: $0) }) {
+                    evidence.append("\(table.qualifiedName).\(column.name)")
+                }
+                for constraint in column.valueConstraints ?? [] {
+                    for value in constraint.values {
+                        let valueTokens = Set(SchemaIndex.tokens(in: value))
+                        if variants.contains(where: { tokenSet(valueTokens, containsRelatedTo: $0) }) {
+                            evidence.append("\(table.qualifiedName).\(column.name) = '\(value)'")
+                        }
+                    }
+                }
+            }
+        }
+        if variants.contains(where: { token in
+            tokenSet(Set(SchemaIndex.tokens(in: databaseContext)), containsRelatedTo: token)
+        }) {
+            evidence.append("Database context")
+        }
+        for binding in confirmedSemanticBindings {
+            if variants.contains(where: { token in
+                tokenSet(Set(SchemaIndex.tokens(in: binding)), containsRelatedTo: token)
+            }) {
+                evidence.append("Confirmed semantic binding")
+                break
+            }
+        }
+        var seen = Set<String>()
+        return evidence.filter { seen.insert($0).inserted }.prefix(6).map { $0 }
+    }
+
+    private static func semanticBindingDefinitionTokens(in bindings: [String]) -> Set<String> {
+        bindings.reduce(into: Set<String>()) { tokens, binding in
+            if let separator = binding.firstIndex(of: ":") {
+                let definitionStart = binding.index(after: separator)
+                tokens.formUnion(
+                    SchemaIndex.tokens(in: String(binding[definitionStart...]))
+                )
+            } else {
+                tokens.formUnion(SchemaIndex.tokens(in: binding))
+            }
+        }
+    }
+
+    private static func clarificationOptions(
+        for concept: SQLGroundingConcept,
+        schema: DatabaseSchema,
+        referencedTables: [String]
+    ) -> [ClarificationOption] {
+        let referenced = Set(referencedTables.map { $0.lowercased() })
+        let termTokens = Set(SchemaIndex.tokens(in: concept.term))
+        var options: [ClarificationOption] = []
+        for table in schema.tables where referenced.isEmpty || referenced.contains(table.qualifiedName.lowercased()) {
+            for column in table.columns {
+                for constraint in column.valueConstraints ?? [] {
+                    for value in constraint.values {
+                        let valueTokens = Set(SchemaIndex.tokens(in: value))
+                        guard !termTokens.intersection(valueTokens).isEmpty else { continue }
+                        let definition = "\(quotedIdentifier(table.schema)).\(quotedIdentifier(table.name)).\(quotedIdentifier(column.name)) = '\(value.replacingOccurrences(of: "'", with: "''"))'"
+                        options.append(
+                            ClarificationOption(
+                                label: "\(column.name) = \(value)",
+                                replyText: "Use \(definition)",
+                                definition: definition,
+                                evidence: ["\(table.qualifiedName).\(column.name)"]
+                            ))
+                    }
+                }
+            }
+        }
+        var seen = Set<String>()
+        return options.filter { seen.insert($0.definition).inserted }.prefix(3).map { $0 }
     }
 
     private struct ConstrainedColumnValueTokens {
@@ -2386,12 +2645,23 @@ public enum GeneratedSQLPostprocessor {
             guard !variants.contains(where: requestStopWords.contains) else { return false }
             guard !variants.contains(where: genericVerbStopWords.contains) else { return false }
             guard !variants.contains(where: metricOperatorStopWords.contains) else { return false }
+            guard !variants.contains(where: comparisonOperatorStopWords.contains) else { return false }
             return seen.insert(word).inserted
         }
     }
 
     private static func rawWords(in text: String) -> [String] {
         text.lowercased()
+            .replacingOccurrences(
+                of: #"([[:alnum:]])['’ʼ]s\b"#,
+                with: "$1",
+                options: .regularExpression
+            )
+            .replacingOccurrences(
+                of: #"([[:alnum:]])['’ʼ]\b"#,
+                with: "$1",
+                options: .regularExpression
+            )
             .split { !$0.isLetter && !$0.isNumber }
             .map(String.init)
             .filter { !$0.isEmpty }
@@ -2423,8 +2693,16 @@ public enum GeneratedSQLPostprocessor {
         "rank", "rate", "ratio", "sum", "top", "total",
     ]
 
+    private static let comparisonOperatorStopWords: Set<String> = [
+        "after", "before", "below", "earlier", "equal", "equaling", "equals", "exceed",
+        "exceeding", "exceeds", "fewer", "greater", "higher", "later", "less", "lower",
+        "more", "newer", "older", "than", "younger",
+    ]
+
     private static let genericVerbStopWords: Set<String> = [
-        "create", "created", "creating", "make", "made", "makes", "making",
+        "create", "created", "creating", "made", "make", "makes", "making",
+        "delete", "deleting", "insert", "inserting", "remove",
+        "removing", "set", "update", "updating",
     ]
 
     private static let requestStopWords: Set<String> = [
@@ -2444,6 +2722,13 @@ public enum GeneratedSQLPostprocessor {
 }
 
 public enum GeneratedSQLValidator {
+    public static func canonicalize(sql: String, schema: DatabaseSchema) -> String {
+        let trimmed = sql.trimmingCharacters(in: .whitespacesAndNewlines)
+        let safety = SQLSafetyValidator.validate(trimmed)
+        let normalized = safety.normalizedSQL ?? trimmed
+        return quoteUnquotedIdentifiers(sql: normalized, schema: schema) ?? normalized
+    }
+
     public static func validate(sql: String, schema: DatabaseSchema) -> SQLValidationResult {
         combine(
             safety: SQLSafetyValidator.validate(sql),
@@ -2452,6 +2737,14 @@ public enum GeneratedSQLValidator {
     }
 
     public static func repairQuotedIdentifiers(sql: String, schema: DatabaseSchema) -> String? {
+        guard let repaired = quoteUnquotedIdentifiers(sql: sql, schema: schema),
+            repaired != sql,
+            validate(sql: repaired, schema: schema).isValid
+        else { return nil }
+        return repaired
+    }
+
+    private static func quoteUnquotedIdentifiers(sql: String, schema: DatabaseSchema) -> String? {
         let schemaValidation = SQLSchemaValidator.validate(sql: sql, against: schema)
         let replacements = schemaValidation.issues.reduce(into: [String: String]()) {
             result,
@@ -2475,11 +2768,7 @@ public enum GeneratedSQLValidator {
         }
         guard !replacementRanges.isEmpty else { return nil }
 
-        let repaired = rewriteUnquotedIdentifiers(in: sql, replacementRanges: replacementRanges)
-        guard repaired != sql,
-            validate(sql: repaired, schema: schema).isValid
-        else { return nil }
-        return repaired
+        return rewriteUnquotedIdentifiers(in: sql, replacementRanges: replacementRanges)
     }
 
     public static func combine(
@@ -2711,15 +3000,27 @@ private enum ColumnResolution {
 }
 
 private struct ResolvedRelationSource {
+    enum Kind {
+        case table
+        case cte
+        case derived
+        case unresolved
+    }
+
     var displayName: String
     var unquotedNames: Set<String>
     var quotedNames: Set<String>
     var singleQuotedNames: Set<String>
+    var kind: Kind
     var table: TableInfo?
     var cteColumns: Set<SQLDerivedColumn>?
     var hasUnknownColumns: Bool
     var role: SQLRelationReference.Role
     var startOffset: Int?
+
+    var isDerivedLike: Bool {
+        kind == .cte || kind == .derived
+    }
 
     static func table(
         _ table: TableInfo,
@@ -2748,6 +3049,7 @@ private struct ResolvedRelationSource {
             unquotedNames: unquotedNames,
             quotedNames: quotedNames,
             singleQuotedNames: singleQuotedNames,
+            kind: .table,
             table: table,
             cteColumns: nil,
             hasUnknownColumns: false,
@@ -2762,6 +3064,7 @@ private struct ResolvedRelationSource {
         alias: String?,
         aliasIsQuoted: Bool = false,
         columns: Set<SQLDerivedColumn>?,
+        kind: Kind = .cte,
         role: SQLRelationReference.Role = .source,
         startOffset: Int? = nil
     ) -> ResolvedRelationSource {
@@ -2788,6 +3091,7 @@ private struct ResolvedRelationSource {
             unquotedNames: unquotedNames,
             quotedNames: quotedNames,
             singleQuotedNames: singleQuotedNames,
+            kind: kind,
             table: nil,
             cteColumns: columns,
             hasUnknownColumns: columns == nil,
@@ -2829,6 +3133,7 @@ private struct ResolvedRelationSource {
             unquotedNames: unquotedNames,
             quotedNames: quotedNames,
             singleQuotedNames: singleQuotedNames,
+            kind: .unresolved,
             table: nil,
             cteColumns: nil,
             hasUnknownColumns: true,

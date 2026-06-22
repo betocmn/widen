@@ -246,6 +246,46 @@ struct SQLPromptBuilderTests {
         #expect(conversationRange!.lowerBound < questionRange!.lowerBound)
     }
 
+    @Test func promptIncludesConfirmedSemanticBindingsSeparatelyFromDatabaseContext() {
+        let context = SQLGenerationContext(
+            confirmedSemanticBindings: [
+                #"wins: "public"."evaluations"."winner_id" is not null"#
+            ]
+        )
+
+        let prompt = SQLPromptBuilder.prompt(
+            question: "what tools have the most wins?",
+            schema: makeSampleSchema(),
+            context: context,
+            databaseContext: "General database notes."
+        )
+
+        #expect(prompt.contains("<confirmed_semantic_bindings>"))
+        #expect(prompt.contains(#"wins: "public"."evaluations"."winner_id" is not null"#))
+        #expect(prompt.contains("<database_context>"))
+        let contextRange = prompt.range(of: "<database_context>")
+        let bindingsRange = prompt.range(of: "<confirmed_semantic_bindings>")
+        let questionRange = prompt.range(of: "<current_user_request>")
+        #expect(contextRange!.lowerBound < bindingsRange!.lowerBound)
+        #expect(bindingsRange!.lowerBound < questionRange!.lowerBound)
+    }
+
+    @Test func promptKeepsNewestConfirmedSemanticBindings() {
+        let context = SQLGenerationContext(
+            confirmedSemanticBindings: (0..<13).map { "concept\($0): definition\($0)" }
+        )
+
+        let prompt = SQLPromptBuilder.prompt(
+            question: "show users",
+            schema: makeSampleSchema(),
+            context: context
+        )
+
+        #expect(prompt.contains("concept12: definition12"))
+        #expect(prompt.contains("concept1: definition1"))
+        #expect(!prompt.contains("concept0: definition0"))
+    }
+
     @Test func emptyDatabaseContextIsOmittedAndLongContextIsTruncated() {
         #expect(SQLPromptBuilder.databaseContextSection("   \n") == nil)
 
@@ -514,6 +554,7 @@ struct SQLPromptBuilderTests {
         #expect(prompt.contains("<forbidden_identifier>"))
         #expect(prompt.contains("public.match_batch"))
         #expect(prompt.contains("<sqlstate>42P01</sqlstate>"))
+        #expect(!prompt.contains("<prior_fingerprints>"))
     }
 
     @Test func repairPromptUsesFailedFollowUpRequest() {
@@ -571,6 +612,7 @@ struct SQLPromptBuilderTests {
         #expect(!prompt.contains(failedSQL))
         #expect(prompt.contains("<must_not_use>"))
         #expect(prompt.contains("public.match_batch"))
+        #expect(!prompt.contains("<prior_attempts>"))
     }
 
     @Test func contextSectionIncludesOriginalQuestionAndKeepsLastThreeQuestionsInHistory() {

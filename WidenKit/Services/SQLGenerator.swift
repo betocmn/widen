@@ -109,6 +109,14 @@ public struct SQLGenerationContext: Equatable, Sendable {
     /// Optional app-controlled schema discovery hints. These are search terms,
     /// not schema objects, and are used only to bias deterministic packaging.
     public var schemaSearchQueries: [String]
+    /// App-side count of model calls consumed for the current user request,
+    /// including optional local discovery. Used for telemetry and local budget
+    /// enforcement only; it is never rendered into prompts.
+    public var modelCallCount: Int
+    /// User-confirmed business definitions for this database/schema scope.
+    /// These are app-managed semantic bindings, separate from connection
+    /// credentials and database context notes.
+    public var confirmedSemanticBindings: [String]
 
     public init(
         mode: SQLGenerationMode = .initial,
@@ -118,7 +126,9 @@ public struct SQLGenerationContext: Equatable, Sendable {
         currentSQL: String? = nil,
         lastRunError: String? = nil,
         repairContext: SQLRepairContext? = nil,
-        schemaSearchQueries: [String] = []
+        schemaSearchQueries: [String] = [],
+        modelCallCount: Int = 0,
+        confirmedSemanticBindings: [String] = []
     ) {
         self.mode = mode
         self.recentQuestions = recentQuestions
@@ -128,12 +138,15 @@ public struct SQLGenerationContext: Equatable, Sendable {
         self.lastRunError = lastRunError
         self.repairContext = repairContext
         self.schemaSearchQueries = schemaSearchQueries
+        self.modelCallCount = modelCallCount
+        self.confirmedSemanticBindings = confirmedSemanticBindings
     }
 
     public var isEmpty: Bool {
         recentQuestions.isEmpty && originalQuestion == nil && conversationMessages.isEmpty
             && currentSQL == nil && lastRunError == nil && repairContext == nil
-            && schemaSearchQueries.isEmpty && mode == .initial
+            && schemaSearchQueries.isEmpty && modelCallCount == 0
+            && confirmedSemanticBindings.isEmpty && mode == .initial
     }
 }
 
