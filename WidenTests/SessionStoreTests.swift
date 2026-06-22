@@ -152,7 +152,23 @@ struct ChatMessageCodableTests {
         #expect(ChatMessage.Role.user.rawValue == "user")
         #expect(ChatMessage.Role.assistant.rawValue == "assistant")
         #expect(ChatMessage.Role.error.rawValue == "error")
+        #expect(ChatMessage.Role.activity.rawValue == "activity")
         #expect(ChatMessage.Role.result.rawValue == "result")
+    }
+
+    @Test func activityMessagesAreExcludedFromPromptContext() {
+        let messages = [
+            ChatMessage(role: .user, text: "show users"),
+            ChatMessage(role: .activity, text: "Focused repair started."),
+            ChatMessage(role: .assistant, text: "Lists users."),
+        ]
+
+        let context = messages.sqlConversationMessages()
+        let roles: [SQLConversationMessage.Role] = context.map { $0.role }
+        let texts = context.map { $0.text }
+
+        #expect(roles == [.user, .assistant])
+        #expect(texts.contains("Focused repair started.") == false)
     }
 
     @Test func runRecordRoundTripPreservesSummary() throws {

@@ -767,9 +767,15 @@ struct SessionControllerTests {
         #expect(generator.contexts[0].lastRunError?.contains("bad_table") == true)
         #expect(generator.contexts[0].recentQuestions.isEmpty)
         #expect(controller.queryVM.sqlText == fixedGeneration.sql)
-        #expect(controller.chatVM.messages.map(\.role) == [.user, .assistant, .result])
-        #expect(controller.chatVM.messages[1].generation?.sql == fixedGeneration.sql)
-        #expect(controller.chatVM.messages[2].runSummary?.sql == fixedGeneration.sql)
+        #expect(conversationRoles(controller.chatVM.messages) == [.user, .assistant, .result])
+        #expect(conversationMessages(controller.chatVM.messages)[1].generation?.sql == fixedGeneration.sql)
+        #expect(conversationMessages(controller.chatVM.messages)[2].runSummary?.sql == fixedGeneration.sql)
+        let activityText = activityMessages(controller.chatVM.messages).map(\.text).joined(separator: "\n")
+        #expect(activityText.contains("Generated SQL failed while running."))
+        #expect(activityText.contains(badGeneration.sql))
+        #expect(activityText.contains("bad_table"))
+        #expect(activityText.contains("Running focused repair SQL."))
+        #expect(activityText.contains(fixedGeneration.sql))
     }
 
     @Test func generatedRunErrorSkipsRepairWhenModelCallBudgetIsExhausted() async {
@@ -811,8 +817,12 @@ struct SessionControllerTests {
         #expect(generator.contexts.isEmpty)
         #expect(controller.queryVM.sqlText == badGeneration.sql)
         #expect(controller.queryVM.generation?.sql == badGeneration.sql)
-        #expect(controller.chatVM.messages.map(\.role) == [.user, .assistant, .error])
+        #expect(conversationRoles(controller.chatVM.messages) == [.user, .assistant, .error])
         #expect(controller.chatVM.messages.last?.text.contains("model-call budget") == true)
+        let activityText = activityMessages(controller.chatVM.messages).map(\.text).joined(separator: "\n")
+        #expect(activityText.contains("Generated SQL failed while running."))
+        #expect(activityText.contains(badGeneration.sql))
+        #expect(activityText.contains("bad_table"))
     }
 
     @Test func generatedRunRepairPreservesCumulativeModelCallCount() async {
@@ -889,8 +899,8 @@ struct SessionControllerTests {
         #expect(generator.contexts[0].currentSQL == badGeneration.sql)
         #expect(controller.queryVM.sqlText == badGeneration.sql)
         #expect(controller.queryVM.generation?.sql == badGeneration.sql)
-        #expect(controller.chatVM.messages.map(\.role) == [.user, .assistant, .error])
-        #expect(controller.chatVM.messages[1].generation?.sql == badGeneration.sql)
+        #expect(conversationRoles(controller.chatVM.messages) == [.user, .assistant, .error])
+        #expect(conversationMessages(controller.chatVM.messages)[1].generation?.sql == badGeneration.sql)
         #expect(controller.chatVM.messages.last?.text.contains("rate-limiting") == true)
     }
 
@@ -964,7 +974,7 @@ struct SessionControllerTests {
         await waitUntil {
             !controller.queryVM.isRunning
                 && !controller.chatVM.isGenerating
-                && controller.chatVM.messages.count == 3
+                && conversationMessages(controller.chatVM.messages).count == 3
         }
 
         let statements = await recorder.all()
@@ -1001,7 +1011,7 @@ struct SessionControllerTests {
         await waitUntil {
             !controller.queryVM.isRunning
                 && !controller.chatVM.isGenerating
-                && controller.chatVM.messages.count == 3
+                && conversationMessages(controller.chatVM.messages).count == 3
         }
 
         let statements = await recorder.all()
@@ -1048,7 +1058,7 @@ struct SessionControllerTests {
         await waitUntil {
             !controller.queryVM.isRunning
                 && !controller.chatVM.isGenerating
-                && controller.chatVM.messages.count == 3
+                && conversationMessages(controller.chatVM.messages).count == 3
         }
 
         let statements = await recorder.all()
@@ -1098,11 +1108,11 @@ struct SessionControllerTests {
 
         #expect(controller.queryVM.sqlText == badGeneration.sql)
         #expect(controller.queryVM.generation?.sql == badGeneration.sql)
-        #expect(controller.chatVM.messages.map(\.role) == [.user, .assistant])
-        #expect(controller.chatVM.messages[1].generation?.sql == badGeneration.sql)
+        #expect(conversationRoles(controller.chatVM.messages) == [.user, .assistant])
+        #expect(conversationMessages(controller.chatVM.messages)[1].generation?.sql == badGeneration.sql)
         #expect(snapshot.sqlText == badGeneration.sql)
         #expect(snapshot.lastGeneration?.sql == badGeneration.sql)
-        #expect(snapshot.messages.map(\.role) == [.user, .assistant])
+        #expect(conversationRoles(snapshot.messages) == [.user, .assistant])
 
         generator.resume(returning: fixedGeneration)
         await waitUntil {
@@ -1159,7 +1169,7 @@ struct SessionControllerTests {
         #expect(statements == [badGeneration.sql, fixedGeneration.sql])
         #expect(controller.queryVM.sqlText == badGeneration.sql)
         #expect(controller.queryVM.generation?.sql == badGeneration.sql)
-        #expect(controller.chatVM.messages.map(\.role) == [.user, .assistant, .error])
+        #expect(conversationRoles(controller.chatVM.messages) == [.user, .assistant, .error])
         #expect(controller.chatVM.messages.last?.text.contains("Stopped waiting") == true)
     }
 
@@ -1202,7 +1212,7 @@ struct SessionControllerTests {
         #expect(generator.contexts[0].currentSQL == badGeneration.sql)
         #expect(generator.contexts[0].lastRunError?.contains("Aggregate functions cannot contain") == true)
         #expect(controller.queryVM.sqlText == fixedGeneration.sql)
-        #expect(controller.chatVM.messages.map(\.role) == [.user, .assistant, .result])
+        #expect(conversationRoles(controller.chatVM.messages) == [.user, .assistant, .result])
     }
 
     @Test func generatedRunRepairUsesGenerationSchema() async {
@@ -1276,12 +1286,17 @@ struct SessionControllerTests {
         #expect(controller.queryVM.sqlText == fixedGeneration.sql)
         #expect(controller.queryVM.generation?.sql == fixedGeneration.sql)
         #expect(controller.queryVM.validation?.isValid == true)
-        #expect(controller.chatVM.messages.map(\.role) == [.user, .assistant])
-        #expect(controller.chatVM.messages[1].text == fixedGeneration.explanation)
-        #expect(controller.chatVM.messages[1].generation?.sql == fixedGeneration.sql)
+        #expect(conversationRoles(controller.chatVM.messages) == [.user, .assistant])
+        #expect(conversationMessages(controller.chatVM.messages)[1].text == fixedGeneration.explanation)
+        #expect(conversationMessages(controller.chatVM.messages)[1].generation?.sql == fixedGeneration.sql)
+        let activityText = activityMessages(controller.chatVM.messages).map(\.text).joined(separator: "\n")
+        #expect(activityText.contains("Generated SQL failed validation."))
+        #expect(activityText.contains(badGeneration.sql))
+        #expect(activityText.contains("Focused repair passed validation."))
+        #expect(activityText.contains(fixedGeneration.sql))
     }
 
-    @Test func submitKeepsInvalidGeneratedSQLHiddenWhenRepairGeneratorFails() async {
+    @Test func submitKeepsInvalidGeneratedSQLOutOfEditorWhenRepairGeneratorFails() async {
         let connectionID = UUID()
         let (state, dir) = makeState(connectionID: connectionID, connected: true)
         defer { try? FileManager.default.removeItem(at: dir) }
@@ -1300,8 +1315,13 @@ struct SessionControllerTests {
         #expect(generator.contexts.count == 2)
         #expect(controller.queryVM.sqlText.isEmpty)
         #expect(controller.queryVM.generation == nil)
-        #expect(controller.chatVM.messages.map(\.role) == [.user, .error])
+        #expect(conversationRoles(controller.chatVM.messages) == [.user, .error])
         #expect(controller.chatVM.messages.last?.text.contains("rate-limiting") == true)
+        let activityText = activityMessages(controller.chatVM.messages).map(\.text).joined(separator: "\n")
+        #expect(activityText.contains("Generated SQL failed validation."))
+        #expect(activityText.contains(badGeneration.sql))
+        #expect(activityText.contains("Focused repair failed before producing SQL."))
+        #expect(activityText.contains("rate-limiting"))
     }
 
     @Test func submitRepairForMissingGeneratedColumnForbidsColumnIdentifier() async {
@@ -1329,7 +1349,7 @@ struct SessionControllerTests {
         #expect(generator.contexts[1].repairContext?.diagnostic?.kind == .missingColumn)
         #expect(generator.contexts[1].repairContext?.forbiddenIdentifiers.contains("name") == true)
         #expect(controller.queryVM.sqlText == fixedGeneration.sql)
-        #expect(controller.chatVM.messages.map(\.role) == [.user, .assistant])
+        #expect(conversationRoles(controller.chatVM.messages) == [.user, .assistant])
     }
 
     @Test func submitValidationRepairRejectsWriteForGeneratedRead() async {
@@ -1356,7 +1376,7 @@ struct SessionControllerTests {
         #expect(generator.contexts[1].mode == .repair)
         #expect(controller.queryVM.sqlText.isEmpty)
         #expect(controller.queryVM.generation == nil)
-        #expect(controller.chatVM.messages.map(\.role) == [.user, .error])
+        #expect(conversationRoles(controller.chatVM.messages) == [.user, .error])
         #expect(controller.chatVM.messages.last?.text.contains("data-modifying query") == true)
     }
 
@@ -1392,7 +1412,7 @@ struct SessionControllerTests {
         #expect(
             repairContext?.repairConstraints.contains(.forbiddenIdentifier("tool_a_id")) == false)
         #expect(controller.queryVM.sqlText == fixedGeneration.sql)
-        #expect(controller.chatVM.messages.map(\.role) == [.user, .assistant])
+        #expect(conversationRoles(controller.chatVM.messages) == [.user, .assistant])
     }
 
     @Test func submitAutoQuotesGeneratedMixedCaseColumnsBeforeRepairLoop() async {
@@ -1415,7 +1435,7 @@ struct SessionControllerTests {
         #expect(controller.queryVM.sqlText == #"SELECT "createdAt" FROM public.events LIMIT 100"#)
         #expect(controller.queryVM.generation?.sql == #"SELECT "createdAt" FROM public.events LIMIT 100"#)
         #expect(controller.queryVM.validation?.isValid == true)
-        #expect(controller.chatVM.messages.map(\.role) == [.user, .assistant])
+        #expect(conversationRoles(controller.chatVM.messages) == [.user, .assistant])
     }
 
     @Test func repairCoordinatorCanonicalizesUnquotedMixedCaseIdentifier() {
@@ -1639,7 +1659,7 @@ struct SessionControllerTests {
             !controller.queryVM.isRunning
                 && !controller.chatVM.isGenerating
                 && controller.chatVM.messages.last?.role == .assistant
-                && controller.chatVM.messages.count == 3
+                && conversationMessages(controller.chatVM.messages).count == 3
         }
 
         let statements = await recorder.all()
@@ -1651,8 +1671,8 @@ struct SessionControllerTests {
         #expect(generator.contexts[0].repairContext?.priorFingerprints.isEmpty == true)
         #expect(controller.queryVM.sqlText == badGeneration.sql)
         #expect(controller.queryVM.generation?.sql == badGeneration.sql)
-        #expect(controller.chatVM.messages.map(\.role) == [.user, .assistant, .assistant])
-        #expect(controller.chatVM.messages[1].generation?.sql == badGeneration.sql)
+        #expect(conversationRoles(controller.chatVM.messages) == [.user, .assistant, .assistant])
+        #expect(conversationMessages(controller.chatVM.messages)[1].generation?.sql == badGeneration.sql)
         #expect(controller.chatVM.messages.last?.text.contains("public.bad_table") == true)
         #expect(controller.chatVM.messages.last?.text.contains("Which table") == true)
     }
@@ -1687,7 +1707,7 @@ struct SessionControllerTests {
         await waitUntil {
             !controller.queryVM.isRunning
                 && !controller.chatVM.isGenerating
-                && controller.chatVM.messages.count == 3
+                && conversationMessages(controller.chatVM.messages).count == 3
         }
 
         let statements = await recorder.all()
@@ -1735,7 +1755,7 @@ struct SessionControllerTests {
             !controller.queryVM.isRunning
                 && !controller.chatVM.isGenerating
                 && controller.chatVM.messages.last?.role == .assistant
-                && controller.chatVM.messages.count == 3
+                && conversationMessages(controller.chatVM.messages).count == 3
         }
 
         let statements = await recorder.all()
@@ -1772,7 +1792,7 @@ struct SessionControllerTests {
             !controller.queryVM.isRunning
                 && !controller.chatVM.isGenerating
                 && controller.chatVM.messages.last?.role == .assistant
-                && controller.chatVM.messages.count == 3
+                && conversationMessages(controller.chatVM.messages).count == 3
         }
 
         let statements = await recorder.all()
@@ -1780,7 +1800,7 @@ struct SessionControllerTests {
         #expect(generator.contexts.count == 1)
         #expect(controller.queryVM.sqlText == badGeneration.sql)
         #expect(controller.queryVM.generation?.sql == badGeneration.sql)
-        #expect(controller.chatVM.messages[1].generation?.sql == badGeneration.sql)
+        #expect(conversationMessages(controller.chatVM.messages)[1].generation?.sql == badGeneration.sql)
         #expect(controller.chatVM.messages.last?.text.contains("public.bad_table") == true)
         #expect(controller.chatVM.messages.last?.text.contains("Which table") == true)
     }
@@ -1816,14 +1836,14 @@ struct SessionControllerTests {
         await waitUntil {
             !controller.queryVM.isRunning
                 && !controller.chatVM.isGenerating
-                && controller.chatVM.messages.count == 3
+                && conversationMessages(controller.chatVM.messages).count == 3
         }
 
         let statements = await recorder.all()
         #expect(statements == [badGeneration.sql])
         #expect(generator.contexts.count == 1)
         #expect(generator.contexts[0].lastRunError?.contains(missingColumnError) == true)
-        #expect(controller.chatVM.messages.map(\.role) == [.user, .assistant, .assistant])
+        #expect(conversationRoles(controller.chatVM.messages) == [.user, .assistant, .assistant])
         #expect(controller.chatVM.messages.last?.text.contains("\"tool_id\"") == true)
         #expect(
             controller.chatVM.messages.last?.text.contains(
@@ -1863,14 +1883,14 @@ struct SessionControllerTests {
         await waitUntil {
             !controller.queryVM.isRunning
                 && !controller.chatVM.isGenerating
-                && controller.chatVM.messages.count == 3
+                && conversationMessages(controller.chatVM.messages).count == 3
         }
 
         let statements = await recorder.all()
         #expect(statements == [badGeneration.sql])
         #expect(generator.contexts.count == 1)
         #expect(controller.queryVM.sqlText == badGeneration.sql)
-        #expect(controller.chatVM.messages.map(\.role) == [.user, .assistant, .assistant])
+        #expect(conversationRoles(controller.chatVM.messages) == [.user, .assistant, .assistant])
         #expect(controller.chatVM.messages.last?.text == "Which table should I use for users?")
     }
 
@@ -1898,7 +1918,7 @@ struct SessionControllerTests {
         #expect(generator.contexts.count == 2)
         #expect(generator.contexts[1].mode == .repair)
         #expect(controller.queryVM.sqlText.isEmpty)
-        #expect(controller.chatVM.messages.map(\.role) == [.user, .assistant])
+        #expect(conversationRoles(controller.chatVM.messages) == [.user, .assistant])
         #expect(controller.chatVM.messages.last?.pendingClarification?.concept.term == "active")
         #expect(controller.chatVM.messages.last?.generation?.needsClarification == true)
     }
@@ -1938,7 +1958,7 @@ struct SessionControllerTests {
         await waitUntil {
             !controller.queryVM.isRunning
                 && !controller.chatVM.isGenerating
-                && controller.chatVM.messages.count == 3
+                && conversationMessages(controller.chatVM.messages).count == 3
         }
 
         let statements = await recorder.all()
@@ -2067,7 +2087,7 @@ struct SessionControllerTests {
         #expect(generator.contexts.isEmpty)
         #expect(state.semanticBindings.isEmpty)
         #expect(controller.chatVM.input.isEmpty)
-        #expect(controller.chatVM.messages.count == 4)
+        #expect(conversationMessages(controller.chatVM.messages).count == 4)
     }
 
     @Test func freeFormClarificationReplyResolvesSamePendingClarification() async {
@@ -2265,7 +2285,7 @@ struct SessionControllerTests {
 
         await controller.submit(appState: state)
 
-        #expect(controller.chatVM.messages.count == 1)
+        #expect(conversationMessages(controller.chatVM.messages).count == 1)
         #expect(controller.chatVM.messages[0].role == .user)
         #expect(controller.queryVM.sqlText == "select id from users")
         #expect(controller.queryVM.generation == nil)
@@ -2280,7 +2300,7 @@ struct SessionControllerTests {
 
         await controller.submit(appState: state)
 
-        #expect(controller.chatVM.messages.count == 1)
+        #expect(conversationMessages(controller.chatVM.messages).count == 1)
         #expect(controller.chatVM.messages[0].role == .user)
         #expect(controller.queryVM.sqlText == "UPDATE public.users SET name = 'A' WHERE id = 1")
         #expect(controller.queryVM.validation?.kind == .update)
@@ -2301,7 +2321,7 @@ struct SessionControllerTests {
         await controller.submit(appState: state)
 
         #expect(generator.contexts.count == 1)
-        #expect(controller.chatVM.messages.map(\.role) == [.user, .assistant])
+        #expect(conversationRoles(controller.chatVM.messages) == [.user, .assistant])
         #expect(controller.queryVM.sqlText == generated.sql)
         #expect(controller.queryVM.generation?.generationSchemaName == "public")
         #expect(controller.queryVM.generation?.groundingConcepts.contains {
@@ -2535,5 +2555,17 @@ struct SessionControllerTests {
             try? await Task.sleep(for: .milliseconds(10))
         }
         Issue.record("Timed out waiting for condition")
+    }
+
+    private func conversationMessages(_ messages: [ChatMessage]) -> [ChatMessage] {
+        messages.filter { $0.role != .activity }
+    }
+
+    private func conversationRoles(_ messages: [ChatMessage]) -> [ChatMessage.Role] {
+        conversationMessages(messages).map(\.role)
+    }
+
+    private func activityMessages(_ messages: [ChatMessage]) -> [ChatMessage] {
+        messages.filter { $0.role == .activity }
     }
 }

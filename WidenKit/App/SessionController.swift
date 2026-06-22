@@ -626,6 +626,14 @@ public final class SessionController: Identifiable {
                 retryStatus(appState: appState, attempt: 1, error: firstError, mode: mode)
             )
         }
+        appendActivity(
+            mode == .validationOnly
+                ? "Generated SQL failed validation."
+                : "Generated SQL failed while running.",
+            sql: startingSQL,
+            error: firstError,
+            appState: appState
+        )
         appState.sessionDidChange(sessionID)
         defer {
             if ownsGenerationState {
@@ -690,6 +698,13 @@ public final class SessionController: Identifiable {
                 )
             )
             let repairContext = coordinator.repairContext(for: repairMode)
+            let repairLabel = Self.repairActivityLabel(for: repairMode)
+            appendActivity(
+                "\(repairLabel) started.",
+                sql: repairContext.failedSQL ?? coordinator.constraints.failedSQL,
+                error: coordinator.constraints.lastError,
+                appState: appState
+            )
             let context = SQLGenerationContext(
                 mode: repairMode,
                 recentQuestions: repairMode == .repair ? questionContext.recentQuestions : [],
@@ -726,6 +741,11 @@ public final class SessionController: Identifiable {
                     allowGroundingClarification: true
                 )
             } catch {
+                appendActivity(
+                    "\(repairLabel) failed before producing SQL.",
+                    error: error.localizedDescription,
+                    appState: appState
+                )
                 restoreStartingGeneration(schema: schema)
                 chatVM.appendRunError(error.localizedDescription)
                 appState.sessionDidChange(sessionID)
@@ -751,6 +771,12 @@ public final class SessionController: Identifiable {
                     appState.sessionDidChange(sessionID)
                     return
                 }
+                appendActivity(
+                    "\(repairLabel) needs clarification.",
+                    sql: evaluation.sql ?? generation.sql,
+                    error: clarification,
+                    appState: appState
+                )
                 chatVM.messages.append(
                     ChatMessage(
                         role: .assistant,
@@ -763,6 +789,12 @@ public final class SessionController: Identifiable {
                 return
 
             case .rejected(let reason):
+                appendActivity(
+                    "\(repairLabel) was rejected.",
+                    sql: evaluation.sql ?? generation.sql,
+                    error: evaluation.message ?? Self.repairRejectionMessage(reason),
+                    appState: appState
+                )
                 if reason.isZeroProgressRepair {
                     let diagnosticText = firstDiagnostic?.displayMessage ?? firstError
                     if !Self.missingColumnsCanBeResolvedByJoining(
@@ -802,6 +834,11 @@ public final class SessionController: Identifiable {
             }
 
             guard let generatedSQL = evaluation.sql else {
+                appendActivity(
+                    "\(repairLabel) did not return SQL.",
+                    error: evaluation.message ?? "The model did not return corrected SQL.",
+                    appState: appState
+                )
                 restoreStartingGeneration(schema: schema)
                 chatVM.appendRunError(
                     repairFailureMessage(attempts: coordinator.attempts, mode: mode)
@@ -812,12 +849,22 @@ public final class SessionController: Identifiable {
 
             if mode == .validationOnly {
                 let visibleGeneration = generation.withSQL(generatedSQL)
+                appendActivity(
+                    "\(repairLabel) passed validation.",
+                    sql: generatedSQL,
+                    appState: appState
+                )
                 replaceOrAppendAssistantGeneration(visibleGeneration, replacingSQL: startingSQL)
                 queryVM.setGeneration(visibleGeneration, schema: schema)
                 appState.sessionDidChange(sessionID)
                 return
             }
 
+            appendActivity(
+                "Running \(repairLabel.lowercased()) SQL.",
+                sql: generatedSQL,
+                appState: appState
+            )
             let execution = await queryVM.executeGeneratedSQLAttempt(
                 sql: generatedSQL,
                 connection: connection,
@@ -830,6 +877,13 @@ public final class SessionController: Identifiable {
                 return
             }
             if execution.wasUnsafeWrite {
+                appendActivity(
+                    "\(repairLabel) stopped before execution.",
+                    sql: generatedSQL,
+                    error: execution.errorMessage
+                        ?? "The model tried to repair this read with a data-modifying query.",
+                    appState: appState
+                )
                 restoreStartingGeneration(schema: schema)
                 chatVM.appendRunError(
                     execution.errorMessage
@@ -848,6 +902,12 @@ public final class SessionController: Identifiable {
             }
 
             guard let errorMessage = execution.errorMessage else {
+                appendActivity(
+                    "\(repairLabel) finished without a result.",
+                    sql: generatedSQL,
+                    error: "The query did not return a result.",
+                    appState: appState
+                )
                 coordinator.recordExecutionFailure(
                     mode: repairMode,
                     sql: generatedSQL,
@@ -863,6 +923,12 @@ public final class SessionController: Identifiable {
                     diagnostic: Self.diagnostic(from: errorMessage)
                 )
             guard Self.isRetryableGeneratedSQLFailure(executionFailure) else {
+                appendActivity(
+                    "\(repairLabel) hit a non-retryable error.",
+                    sql: generatedSQL,
+                    error: errorMessage,
+                    appState: appState
+                )
                 restoreStartingGeneration(schema: schema)
                 chatVM.appendRunError(errorMessage)
                 appState.sessionDidChange(sessionID)
@@ -884,6 +950,12 @@ public final class SessionController: Identifiable {
                     forbiddenIdentifiers: forbiddenIdentifiers,
                     error: errorMessage
                 )
+            )
+            appendActivity(
+                "\(repairLabel) query failed.",
+                sql: generatedSQL,
+                error: errorMessage,
+                appState: appState
             )
             if coordinator.canRequestAnotherModelCall {
                 continue
@@ -959,6 +1031,53 @@ public final class SessionController: Identifiable {
         }
     }
 
+    private func appendActivity(
+        _ title: String,
+        sql: String? = nil,
+        error: String? = nil,
+        appState: AppState? = nil
+    ) {
+        var sections = [title]
+        if let sql = sql?.trimmingCharacters(in: .whitespacesAndNewlines), !sql.isEmpty {
+            sections.append("SQL:\n\(sql)")
+        }
+        if let error = error?.trimmingCharacters(in: .whitespacesAndNewlines), !error.isEmpty {
+            sections.append("Error:\n\(error)")
+        }
+        chatVM.appendActivity(sections.joined(separator: "\n\n"))
+        appState?.sessionDidChange(sessionID)
+    }
+
+    private static func repairActivityLabel(for mode: SQLGenerationMode) -> String {
+        switch mode {
+        case .repair:
+            "Focused repair"
+        case .reconstructAfterFailedRepair:
+            "Reconstruction"
+        case .initial:
+            "Initial generation"
+        case .followUp:
+            "Follow-up generation"
+        }
+    }
+
+    private static func repairRejectionMessage(
+        _ reason: SQLRepairCandidateRejectionReason
+    ) -> String {
+        switch reason {
+        case .emptySQL:
+            "The model did not return corrected SQL."
+        case .repeatedFingerprint:
+            "The model repeated SQL that already failed."
+        case .forbiddenIdentifier(let identifier):
+            "The model reused forbidden identifier \(identifier)."
+        case .validationFailure:
+            "The SQL still failed validation."
+        case .unsafeWrite:
+            "The model produced a data-modifying query while repairing a read."
+        }
+    }
+
     private func retryStatus(
         appState: AppState,
         attempt: Int,
@@ -989,10 +1108,17 @@ public final class SessionController: Identifiable {
             mode == .validationOnly
             ? "it still failed validation"
             : "the database still rejected it"
+        let validationRecoveryGuidance =
+            "The rejected SQL and repair attempts are shown above in the chat. "
+            + "Add more context so the model can adjust it, or switch to a smarter cloud model and try again."
+        let executionRecoveryGuidance =
+            "The failed SQL and repair attempts are shown above in the chat. "
+            + "The editor was restored to the last valid or original generation. "
+            + "Add more context so the model can adjust it, or switch to a smarter cloud model and try again."
         let recoveryGuidance =
             mode == .validationOnly
-            ? "The rejected SQL was not shown in the editor. Add more context in chat so the model can adjust it, or switch to a smarter cloud model and try again."
-            : "The SQL shown above was restored to the last valid or original generation. Add more context in chat so the model can adjust it, or switch to a smarter cloud model and try again."
+            ? validationRecoveryGuidance
+            : executionRecoveryGuidance
         if attempts.count <= 1 {
             return """
                 The generated SQL already used this request's model-call budget, so I did not ask the model to repair it.

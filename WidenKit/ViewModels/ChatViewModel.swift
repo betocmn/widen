@@ -56,6 +56,10 @@ public final class ChatViewModel {
         messages.append(ChatMessage(role: .error, text: message))
     }
 
+    func appendActivity(_ message: String) {
+        messages.append(ChatMessage(role: .activity, text: message))
+    }
+
     /// Records a failed write run. `failedSQL` lets the transcript offer a
     /// "Try Again" button that asks the model to repair the query without
     /// executing it — writes never auto-retry.
