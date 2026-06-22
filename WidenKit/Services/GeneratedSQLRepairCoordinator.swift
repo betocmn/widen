@@ -216,15 +216,14 @@ public struct SQLStructuralFingerprint: Codable, Equatable, Hashable, Sendable,
     private static func groupingColumnText(in sql: String) -> String {
         let lowercased = sql.lowercased()
         guard let groupRange = lowercased.range(of: "group by") else { return "" }
-        let afterGroup = sql[groupRange.upperBound...]
+        let afterGroup = lowercased[groupRange.upperBound...]
         let terminators = [" order by", " having", " limit", " offset", " union", " intersect", " except"]
         let end = terminators
-            .compactMap { afterGroup.lowercased().range(of: $0)?.lowerBound }
+            .compactMap { afterGroup.range(of: $0)?.lowerBound }
             .min() ?? afterGroup.endIndex
         return afterGroup[..<end]
             .split(whereSeparator: \.isWhitespace)
             .joined(separator: " ")
-            .lowercased()
     }
 
     private static let nonFunctionKeywords: Set<String> = [

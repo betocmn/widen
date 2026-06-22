@@ -1295,6 +1295,19 @@ struct SessionControllerTests {
         #expect(failed == recasedSyntax)
     }
 
+    @Test func structuralFingerprintHandlesGroupedQueryWithTerminator() {
+        let fingerprint = SQLStructuralFingerprint(
+            """
+            SELECT user_id, COUNT(*)
+            FROM public.orders
+            GROUP BY user_id
+            LIMIT 100
+            """
+        )
+
+        #expect(fingerprint.value.contains("group:user_id"))
+    }
+
     @Test func repairCoordinatorRejectsStructuralRepeatWithSameValidationIssue() {
         var coordinator = GeneratedSQLRepairCoordinator(
             failedSQL: "SELECT u.name FROM public.users AS u",
