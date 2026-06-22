@@ -1535,6 +1535,61 @@ struct SQLSchemaValidatorTests {
         }
     }
 
+    @Test func omittedSchemaTermBlocksWrongOrdinaryRead() {
+        let generation = SQLGenerationResult(
+            sql: "SELECT id, email FROM public.users LIMIT 100",
+            explanation: "Lists users.",
+            assumptions: [],
+            referencedTables: [],
+            confidence: 1,
+            riskLevel: .low,
+            needsClarification: false,
+            clarificationQuestion: nil
+        )
+
+        let enriched = GeneratedSQLPostprocessor.enriched(
+            generation,
+            question: "show orders",
+            schema: makeUsersOrdersSchema(),
+            databaseContext: ""
+        )
+
+        #expect(enriched.needsClarification)
+        #expect(enriched.sql.isEmpty)
+        #expect(enriched.clarificationQuestion?.localizedCaseInsensitiveContains("orders") == true)
+    }
+
+    @Test func customTermMatchingSchemaColumnDoesNotRequireDefinition() {
+        let schema = makeUsersWinsSchema()
+        let intent = QueryIntentPlanner.deterministicIntent(for: "show users by wins")
+        let plan = GroundedQueryPlanner.ground(intent: intent, schema: schema)
+        let customSlot = plan.slots.first { $0.kind == .customBusinessTerm }
+
+        #expect(customSlot?.state == .grounded)
+        #expect(customSlot?.selectedCandidate?.objectIDs == ["column:public.users.wins"])
+        #expect(GroundedQueryPlanner.clarification(for: plan) == nil)
+
+        let generation = SQLGenerationResult(
+            sql: "SELECT id, wins FROM public.users ORDER BY wins DESC LIMIT 100",
+            explanation: "Lists users by wins.",
+            assumptions: [],
+            referencedTables: [],
+            confidence: 1,
+            riskLevel: .low,
+            needsClarification: false,
+            clarificationQuestion: nil
+        )
+        let enriched = GeneratedSQLPostprocessor.enriched(
+            generation,
+            question: "show users by wins",
+            schema: schema,
+            databaseContext: ""
+        )
+
+        #expect(!enriched.needsClarification)
+        #expect(enriched.sql == generation.sql)
+    }
+
     @Test func frequencyIntentConformanceRejectsWrongSQLShapes() {
         let intent = QueryIntentPlanner.deterministicIntent(
             for: "what is the most frequent feedback cluster?"
@@ -1593,6 +1648,23 @@ struct SQLSchemaValidatorTests {
             ORDER BY n DESC
             LIMIT 1
             """,
+            """
+            SELECT fc.id, COUNT(*) AS n
+            FROM public.feedback_cluster_membership AS fcm
+            JOIN public.feedback_cluster AS fc ON true
+            WHERE fcm.cluster_id IS NOT NULL AND fc.id IS NOT NULL
+            GROUP BY fc.id
+            ORDER BY n DESC
+            LIMIT 1
+            """,
+            """
+            SELECT fc.id, COUNT(*) AS n
+            FROM public.feedback_cluster_membership AS fcm
+            JOIN public.feedback_cluster AS fc ON fcm.cluster_id = fc.id
+            GROUP BY fcm.feedback_item_id
+            ORDER BY n DESC
+            LIMIT 1
+            """,
         ]
 
         for sql in badSQL {
@@ -1633,6 +1705,32 @@ struct SQLSchemaValidatorTests {
             """
 
         #expect(SQLIntentConformanceValidator.validate(sql: newlineGroup, plan: plan, schema: schema).isValid)
+
+        let ordinalOrder = """
+            SELECT fc.id, COUNT(*) AS n
+            FROM public.feedback_cluster_membership AS fcm
+            JOIN public.feedback_cluster AS fc ON fcm.cluster_id = fc.id
+            GROUP BY fc.id
+            ORDER BY 2 DESC
+            LIMIT 1
+            """
+
+        #expect(SQLIntentConformanceValidator.validate(sql: ordinalOrder, plan: plan, schema: schema).isValid)
+
+        let groupedCountCTE = """
+            WITH counts AS (
+              SELECT fcm.cluster_id, COUNT(*) AS n
+              FROM public.feedback_cluster_membership AS fcm
+              GROUP BY fcm.cluster_id
+            )
+            SELECT fc.id, counts.n
+            FROM counts
+            JOIN public.feedback_cluster AS fc ON counts.cluster_id = fc.id
+            ORDER BY counts.n DESC
+            LIMIT 1
+            """
+
+        #expect(SQLIntentConformanceValidator.validate(sql: groupedCountCTE, plan: plan, schema: schema).isValid)
     }
 
     @Test func storedCountColumnCanSatisfyFrequencyIntent() {
@@ -2832,6 +2930,28 @@ struct SQLSchemaValidatorTests {
                         ColumnInfo(
                             tableSchema: "public", tableName: "customers", name: "status",
                             dataType: "text", isNullable: false, ordinalPosition: 3),
+                    ]
+                )
+            ],
+            foreignKeys: []
+        )
+    }
+
+    private func makeUsersWinsSchema() -> DatabaseSchema {
+        DatabaseSchema(
+            schemas: [SchemaInfo(name: "public")],
+            tables: [
+                TableInfo(
+                    schema: "public",
+                    name: "users",
+                    type: .baseTable,
+                    columns: [
+                        ColumnInfo(
+                            tableSchema: "public", tableName: "users", name: "id",
+                            dataType: "integer", isNullable: false, ordinalPosition: 1),
+                        ColumnInfo(
+                            tableSchema: "public", tableName: "users", name: "wins",
+                            dataType: "integer", isNullable: false, ordinalPosition: 2),
                     ]
                 )
             ],

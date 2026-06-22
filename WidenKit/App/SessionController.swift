@@ -288,16 +288,20 @@ public final class SessionController: Identifiable {
         guard let generation = queryVM.generation,
             queryVM.validation?.isValid == true,
             let pending = generation.resolvedClarification,
-            let selectedOption = generation.resolvedClarificationOption,
             let schema = appState.schemaForGeneration(generation, connectionID: connectionID)
                 ?? appState.promptSchema(for: connectionID)
         else {
             return
         }
+        let selectedOption = generation.resolvedClarificationOption
+        let replyText = generation.resolvedClarificationReply
+            ?? selectedOption?.replyText
+            ?? selectedOption?.definition
+            ?? ""
         appState.confirmSemanticBinding(
             connectionID: connectionID,
             pending: pending,
-            replyText: generation.resolvedClarificationReply ?? selectedOption.replyText,
+            replyText: replyText,
             selectedOption: selectedOption,
             schema: schema
         )

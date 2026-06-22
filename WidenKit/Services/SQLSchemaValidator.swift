@@ -2111,6 +2111,13 @@ public enum GeneratedSQLPostprocessor {
             )
         )
         concepts.append(
+            contentsOf: omittedSchemaMentionConcepts(
+                question: question,
+                availableTokens: schemaAndContextTokens,
+                schema: schema
+            )
+        )
+        concepts.append(
             contentsOf: unresolvedCustomBusinessTermConcepts(
                 question: question,
                 availableTokens: schemaAndContextTokens
@@ -2218,6 +2225,33 @@ public enum GeneratedSQLPostprocessor {
                     databaseContext: databaseContext,
                     confirmedSemanticBindings: confirmedSemanticBindings
                 )
+            )
+        }
+    }
+
+    private static func omittedSchemaMentionConcepts(
+        question: String,
+        availableTokens: Set<String>,
+        schema: DatabaseSchema
+    ) -> [SQLGroundingConcept] {
+        var seen = Set<String>()
+        return meaningfulRequestWords(question).compactMap { word in
+            let variants = SchemaIndex.tokens(in: word)
+            guard !variants.isEmpty else { return nil }
+            guard !variants.contains(where: {
+                tokenSet(availableTokens, containsRelatedTo: $0)
+            }) else {
+                return nil
+            }
+            let evidence = schemaObjectEvidence(for: variants, schema: schema)
+            guard !evidence.isEmpty else { return nil }
+            guard seen.insert(word).inserted else { return nil }
+            return SQLGroundingConcept(
+                term: word,
+                kind: conceptKind(for: word, question: question),
+                state: .unsupported,
+                required: true,
+                evidence: evidence
             )
         }
     }
@@ -2368,6 +2402,27 @@ public enum GeneratedSQLPostprocessor {
             }) {
                 evidence.append("Confirmed semantic binding")
                 break
+            }
+        }
+        var seen = Set<String>()
+        return evidence.filter { seen.insert($0).inserted }.prefix(6).map { $0 }
+    }
+
+    private static func schemaObjectEvidence(
+        for variants: [String],
+        schema: DatabaseSchema
+    ) -> [String] {
+        var evidence: [String] = []
+        for table in schema.tables {
+            let tableTokens = Set(SchemaIndex.tokens(in: table.name))
+            if variants.contains(where: { tokenSet(tableTokens, containsRelatedTo: $0) }) {
+                evidence.append(table.qualifiedName)
+            }
+            for column in table.columns {
+                let columnTokens = Set(SchemaIndex.tokens(in: column.name))
+                if variants.contains(where: { tokenSet(columnTokens, containsRelatedTo: $0) }) {
+                    evidence.append("\(table.qualifiedName).\(column.name)")
+                }
             }
         }
         var seen = Set<String>()

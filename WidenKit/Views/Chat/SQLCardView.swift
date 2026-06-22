@@ -222,11 +222,15 @@ struct SQLCardView: View {
 
     private func canRememberDefinition(_ generation: SQLGenerationResult) -> Bool {
         guard let pending = generation.resolvedClarification,
-            generation.resolvedClarificationOption != nil,
             controller.queryVM.validation?.isValid == true
         else {
             return false
         }
+        let definition = (generation.resolvedClarificationOption?.definition
+            ?? generation.resolvedClarificationReply
+            ?? "")
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !definition.isEmpty else { return false }
         return !appState.semanticBindings.contains {
             $0.originatingClarificationID == pending.id
         }

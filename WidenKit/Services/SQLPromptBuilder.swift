@@ -68,11 +68,11 @@ public enum SQLPromptBuilder {
         - Use schema-qualified table names exactly as shown.
         - Prefer explicit joins and readable aliases.
         - For read queries, include LIMIT \(defaultRowLimit) unless the result is naturally small.
-        - Use real date/timestamp columns for time windows. If none exists, set needsClarification true.
+        - Use real date/timestamp columns for time windows. If none exists, set action to clarify.
         - For average counts per period, count per period in a CTE/subquery, then average those counts outside.
         - Use <database_context> as business guidance when present. Schema remains authoritative.
         - In repair mode, the diagnostic and repair constraints are authoritative.
-        - If a needed table, column, relationship, metric, status value, or business term is undefined, set needsClarification true and ask one concise question.
+        - If a needed table, column, relationship, metric, status value, or business term is undefined, set action to clarify and ask one concise question.
         - Do not invent metric, status, ownership, or business-term definitions.
         - Do not answer with a proxy metric. If the schema/context does not define the requested metric, ask for the column, condition, or table that defines it.
         - A plausible query that answers a different metric is wrong.

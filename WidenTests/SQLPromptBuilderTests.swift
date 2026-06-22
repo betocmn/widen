@@ -181,6 +181,8 @@ struct SQLPromptBuilderTests {
         #expect(instructions.contains("Business terms can have database-specific meanings"))
         #expect(instructions.contains("other proxy metric"))
         #expect(SQLPromptBuilder.compactInstructions(defaultRowLimit: 250).contains("Do not answer with a proxy metric"))
+        #expect(SQLPromptBuilder.compactInstructions(defaultRowLimit: 250).contains("set action to clarify"))
+        #expect(!SQLPromptBuilder.compactInstructions(defaultRowLimit: 250).contains("needsClarification"))
         #expect(instructions.contains("answers affirmatively to a previous assistant clarification"))
         // Follow-up handling for the conversation context section.
         #expect(instructions.contains("follow-up"))

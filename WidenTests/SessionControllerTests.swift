@@ -2150,6 +2150,55 @@ struct SessionControllerTests {
         #expect(state.semanticBindings[0].referencedObjectIDs == ["column:public.users.status"])
     }
 
+    @Test func freeTextClarificationDefinitionCanBeRememberedAfterValidation() async {
+        let connectionID = UUID()
+        let (state, dir) = makeState(connectionID: connectionID, connected: true)
+        defer { try? FileManager.default.removeItem(at: dir) }
+        let schema = makeUsersUnconstrainedStatusSchema()
+        state.schemas[connectionID] = schema
+        let controller = makeController(connectionID: connectionID)
+        let pending = PendingClarification(
+            concept: SQLGroundingConcept(
+                term: "active",
+                kind: .filter,
+                state: .unsupported,
+                required: true
+            ),
+            originalQuestion: "how many active users?",
+            question: "What defines active users?",
+            options: []
+        )
+        controller.chatVM.messages = [
+            ChatMessage(role: .user, text: "how many active users?"),
+            ChatMessage(
+                role: .assistant,
+                text: pending.question,
+                pendingClarification: pending
+            ),
+        ]
+        let reply = #"Use "public"."users"."status" = 'active'"#
+        controller.chatVM.input = reply
+        let fixed = makeGeneration(
+            sql: "SELECT COUNT(*) FROM public.users WHERE status = 'active'",
+            explanation: "Counts active users."
+        )
+        let generator = RecordingRepairGenerator(results: [fixed])
+        state.sqlGeneratorOverride = generator
+
+        await controller.submit(appState: state)
+
+        #expect(generator.questions == ["how many active users?"])
+        #expect(controller.queryVM.generation?.resolvedClarification?.id == pending.id)
+        #expect(controller.queryVM.generation?.resolvedClarificationOption == nil)
+        #expect(controller.queryVM.generation?.resolvedClarificationReply == reply)
+
+        controller.rememberResolvedClarification(appState: state)
+
+        #expect(state.semanticBindings.count == 1)
+        #expect(state.semanticBindings[0].concept == "active")
+        #expect(state.semanticBindings[0].referencedObjectIDs == ["column:public.users.status"])
+    }
+
     @Test func validationRepairPreservesResolvedClarificationMetadata() async {
         let connectionID = UUID()
         let (state, dir) = makeState(connectionID: connectionID, connected: true)

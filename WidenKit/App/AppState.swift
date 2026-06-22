@@ -1161,7 +1161,8 @@ public final class AppState {
         let evidence = Array(Set(pending.evidence + (selectedOption?.evidence ?? []))).sorted()
         let referencedObjectIDs = Self.referencedObjectIDs(
             pending: pending,
-            selectedOption: selectedOption
+            selectedOption: selectedOption,
+            definition: definition
         )
         guard !referencedObjectIDs.isEmpty else { return }
         let binding = DatabaseSemanticBinding(
@@ -1215,9 +1216,13 @@ public final class AppState {
 
     private static func referencedObjectIDs(
         pending: PendingClarification,
-        selectedOption: ClarificationOption?
+        selectedOption: ClarificationOption?,
+        definition: String
     ) -> [String] {
         var ids = Set<String>()
+        for candidate in optionObjectIDs(definition) {
+            ids.insert(candidate)
+        }
         if let selectedOption {
             for candidate in optionObjectIDs(selectedOption.definition) {
                 ids.insert(candidate)
@@ -1243,7 +1248,7 @@ public final class AppState {
     }
 
     private static func optionObjectIDs(_ definition: String) -> [String] {
-        definition
+        var ids = definition
             .split(separator: ",")
             .map { $0.trimmingCharacters(in: .whitespacesAndNewlines) }
             .filter { value in
@@ -1251,6 +1256,28 @@ public final class AppState {
                     || value.hasPrefix("column:")
                     || value.hasPrefix("fk:")
             }
+        let tokens = SQLToken.tokenize(definition)
+        for index in tokens.indices where tokens[index].isIdentifierLike {
+            if index > 0, tokens[index - 1].text == "." {
+                continue
+            }
+            if index + 4 < tokens.count,
+                tokens[index + 1].text == ".",
+                tokens[index + 2].isIdentifierLike,
+                tokens[index + 3].text == ".",
+                tokens[index + 4].isIdentifierLike
+            {
+                ids.append(
+                    "column:\(tokens[index].identifierValue).\(tokens[index + 2].identifierValue).\(tokens[index + 4].identifierValue)"
+                )
+            } else if index + 2 < tokens.count,
+                tokens[index + 1].text == ".",
+                tokens[index + 2].isIdentifierLike
+            {
+                ids.append("table:\(tokens[index].identifierValue).\(tokens[index + 2].identifierValue)")
+            }
+        }
+        return Array(Set(ids)).sorted()
     }
 
     private static func evidenceObjectIDs(_ evidence: [String]) -> [String] {

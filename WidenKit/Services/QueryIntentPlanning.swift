@@ -337,31 +337,31 @@ public enum GroundedQueryPlanner {
 
         for term in intent.customBusinessTerms {
             let binding = bindingHint(for: term, kind: .customBusinessTerm, hints: bindingHints)
+            let schemaCandidates = schemaObjectCandidates(
+                matching: term,
+                selectedSubject: selectedSubject,
+                schema: schema
+            )
+            let bindingCandidate = binding.map {
+                GroundingCandidate(
+                    id: "binding:\(term)",
+                    label: $0.normalizedDefinition,
+                    objectIDs: Array($0.objectIDs).sorted(),
+                    evidence: [$0.normalizedDefinition]
+                )
+            }
+            let selectedCandidate = bindingCandidate ?? (schemaCandidates.count == 1 ? schemaCandidates[0] : nil)
             slots.append(
                 GroundingSlot(
                     id: .customBusinessTerm,
                     kind: .customBusinessTerm,
                     phrase: term,
                     required: true,
-                    candidates: binding.map {
-                        [
-                            GroundingCandidate(
-                                id: "binding:\(term)",
-                                label: $0.normalizedDefinition,
-                                objectIDs: Array($0.objectIDs).sorted(),
-                                evidence: [$0.normalizedDefinition]
-                            )
-                        ]
-                    } ?? [],
-                    selectedCandidate: binding.map {
-                        GroundingCandidate(
-                            id: "binding:\(term)",
-                            label: $0.normalizedDefinition,
-                            objectIDs: Array($0.objectIDs).sorted(),
-                            evidence: [$0.normalizedDefinition]
-                        )
-                    },
-                    state: binding == nil ? .unsupported : .grounded
+                    candidates: ([bindingCandidate].compactMap { $0 } + schemaCandidates),
+                    selectedCandidate: selectedCandidate,
+                    state: selectedCandidate == nil
+                        ? (schemaCandidates.count > 1 ? .ambiguous : .unsupported)
+                        : .grounded
                 )
             )
         }
@@ -585,6 +585,57 @@ public enum GroundedQueryPlanner {
         return matching.count == 1 ? matching[0] : nil
     }
 
+    private static func schemaObjectCandidates(
+        matching phrase: String,
+        selectedSubject: TableInfo?,
+        schema: DatabaseSchema
+    ) -> [GroundingCandidate] {
+        let phraseTokens = Set(SchemaIndex.tokens(in: phrase))
+        guard !phraseTokens.isEmpty else { return [] }
+        let preferredTableID = selectedSubject?.id
+        let matches = schema.tables.flatMap { table -> [(GroundingCandidate, Int)] in
+            let tableTokens = Set(SchemaIndex.tokens(in: table.name))
+            var tableMatches: [(GroundingCandidate, Int)] = []
+            if phraseTokens.contains(where: { tableTokens.contains($0) }) {
+                let score = 40 + (table.id == preferredTableID ? 20 : 0)
+                tableMatches.append(
+                    (
+                        GroundingCandidate(
+                            id: "schema:table:\(table.id)",
+                            label: table.qualifiedName,
+                            objectIDs: ["table:\(table.id)"],
+                            evidence: [table.qualifiedName]
+                        ),
+                        score
+                    )
+                )
+            }
+            let columnMatches = table.columns.compactMap { column -> (GroundingCandidate, Int)? in
+                let columnTokens = Set(SchemaIndex.tokens(in: column.name))
+                guard phraseTokens.contains(where: { columnTokens.contains($0) }) else {
+                    return nil
+                }
+                let exact = column.name.caseInsensitiveCompare(phrase.replacingOccurrences(of: " ", with: "_")) == .orderedSame
+                let score = (exact ? 100 : 50) + (table.id == preferredTableID ? 25 : 0)
+                return (
+                    GroundingCandidate(
+                        id: "schema:column:\(column.id)",
+                        label: "\(table.qualifiedName).\(column.name)",
+                        objectIDs: ["column:\(column.id)"],
+                        evidence: ["\(table.qualifiedName).\(column.name)"]
+                    ),
+                    score
+                )
+            }
+            return tableMatches + columnMatches
+        }
+        .sorted { lhs, rhs in
+            lhs.1 == rhs.1 ? lhs.0.label < rhs.0.label : lhs.1 > rhs.1
+        }
+        guard let topScore = matches.first?.1 else { return [] }
+        return matches.filter { $0.1 == topScore }.map(\.0)
+    }
+
     private static func rankedTables(matching phrase: String, schema: DatabaseSchema) -> [RankedTable] {
         let phraseTokens = Set(SchemaIndex.tokens(in: phrase))
         guard !phraseTokens.isEmpty else { return [] }
@@ -780,12 +831,21 @@ public enum SQLIntentConformanceValidator {
         {
             issues.append("Frequency intent requires COUNT.")
         }
-        if !plan.intent.groupingPhrases.isEmpty,
-            !hasTopLevelClausePair("group", "by", in: tokens),
-            !hasNestedAverageCountGrouping(plan: plan, tokens: tokens),
-            !usesStoredCountColumn
-        {
-            issues.append("Frequency intent requires GROUP BY for the requested entity.")
+        if !plan.intent.groupingPhrases.isEmpty, !usesStoredCountColumn {
+            if plan.intent.measure == .countRows {
+                if !hasGroupedCountForFrequencyEntity(
+                    plan: plan,
+                    tokens: tokens,
+                    analysis: schemaValidation.analysis,
+                    schema: schema
+                ) {
+                    issues.append("Frequency intent requires GROUP BY for the requested entity.")
+                }
+            } else if !hasTopLevelClausePair("group", "by", in: tokens),
+                !hasNestedAverageCountGrouping(plan: plan, tokens: tokens)
+            {
+                issues.append("Frequency intent requires GROUP BY for the requested entity.")
+            }
         }
         if plan.intent.ranking?.direction == .descending {
             let orderByClause = topLevelOrderByClause(in: tokens)
@@ -810,7 +870,8 @@ public enum SQLIntentConformanceValidator {
                     if !orderByUsesAggregateMetric(
                         named: "count",
                         aliases: countAliases,
-                        orderByTokens: primarySortKey.tokens
+                        orderByTokens: primarySortKey.tokens,
+                        selectItems: topLevelSelectItems(in: tokens)
                     ) {
                         issues.append("Frequency ranking must order by the count metric.")
                     }
@@ -830,8 +891,13 @@ public enum SQLIntentConformanceValidator {
             for foreignKey in joinPath.foreignKeys {
                 let sourceObjectID = "column:\(foreignKey.sourceSchema).\(foreignKey.sourceTable).\(foreignKey.sourceColumn)"
                 let targetObjectID = "column:\(foreignKey.targetSchema).\(foreignKey.targetTable).\(foreignKey.targetColumn)"
-                if !referencesColumn(objectID: sourceObjectID, in: schemaValidation.analysis, schema: schema)
-                    || !referencesColumn(objectID: targetObjectID, in: schemaValidation.analysis, schema: schema)
+                if !hasColumnEquality(
+                    sourceObjectID: sourceObjectID,
+                    targetObjectID: targetObjectID,
+                    in: schemaValidation.analysis,
+                    schema: schema,
+                    tokens: tokens
+                )
                 {
                     issues.append("SQL does not use grounded join path \(foreignKey.constraintName).")
                 }
@@ -904,6 +970,141 @@ public enum SQLIntentConformanceValidator {
             }
         }
         return false
+    }
+
+    private static func hasColumnEquality(
+        sourceObjectID: String,
+        targetObjectID: String,
+        in analysis: SQLReferenceAnalysis,
+        schema: DatabaseSchema,
+        tokens: [SQLToken]
+    ) -> Bool {
+        guard let sourceReference = columnObjectReference(from: sourceObjectID),
+            let targetReference = columnObjectReference(from: targetObjectID)
+        else {
+            return false
+        }
+        for index in tokens.indices where tokens[index].text == "=" {
+            guard let leftRange = expressionOffsetRange(before: index, tokens: tokens),
+                let rightRange = expressionOffsetRange(after: index, tokens: tokens)
+            else {
+                continue
+            }
+            let sourceLeft = referencesColumn(
+                objectID: sourceObjectID,
+                in: analysis,
+                schema: schema,
+                offsetRange: leftRange
+            ) || rangeContainsProjectedColumn(sourceReference.column, in: leftRange, tokens: tokens)
+            let targetLeft = referencesColumn(
+                objectID: targetObjectID,
+                in: analysis,
+                schema: schema,
+                offsetRange: leftRange
+            ) || rangeContainsProjectedColumn(targetReference.column, in: leftRange, tokens: tokens)
+            let sourceRight = referencesColumn(
+                objectID: sourceObjectID,
+                in: analysis,
+                schema: schema,
+                offsetRange: rightRange
+            ) || rangeContainsProjectedColumn(sourceReference.column, in: rightRange, tokens: tokens)
+            let targetRight = referencesColumn(
+                objectID: targetObjectID,
+                in: analysis,
+                schema: schema,
+                offsetRange: rightRange
+            ) || rangeContainsProjectedColumn(targetReference.column, in: rightRange, tokens: tokens)
+            if (sourceLeft && targetRight) || (targetLeft && sourceRight) {
+                return true
+            }
+        }
+        return false
+    }
+
+    private static func rangeContainsProjectedColumn(
+        _ columnName: String,
+        in offsetRange: Range<Int>,
+        tokens: [SQLToken]
+    ) -> Bool {
+        guard columnName.lowercased() != "id" else { return false }
+        return tokens.contains { token in
+            token.isIdentifierLike
+                && offsetRange.contains(token.startOffset)
+                && token.endOffset <= offsetRange.upperBound
+                && token.identifierValue.caseInsensitiveCompare(columnName) == .orderedSame
+        }
+    }
+
+    private static func expressionOffsetRange(
+        before index: Int,
+        tokens: [SQLToken]
+    ) -> Range<Int>? {
+        guard index > 0 else { return nil }
+        var cursor = index - 1
+        var depth = 0
+        var start = cursor
+        while cursor >= 0 {
+            let token = tokens[cursor]
+            if token.text == ")" {
+                depth += 1
+            } else if token.text == "(" {
+                depth = max(0, depth - 1)
+            }
+            if depth == 0,
+                expressionBoundaryTokens.contains(token.normalized) || token.text == ","
+            {
+                start = cursor + 1
+                break
+            }
+            start = cursor
+            if cursor == 0 { break }
+            cursor -= 1
+        }
+        guard let lower = tokens[safe: start]?.startOffset,
+            let upper = tokens[safe: index - 1]?.endOffset,
+            lower < upper
+        else {
+            return nil
+        }
+        return lower..<upper
+    }
+
+    private static func expressionOffsetRange(
+        after index: Int,
+        tokens: [SQLToken]
+    ) -> Range<Int>? {
+        guard index + 1 < tokens.count else { return nil }
+        var cursor = index + 1
+        var depth = 0
+        var end = cursor
+        while cursor < tokens.count {
+            let token = tokens[cursor]
+            if depth == 0,
+                expressionBoundaryTokens.contains(token.normalized) || token.text == ","
+            {
+                end = cursor
+                break
+            }
+            if token.text == "(" {
+                depth += 1
+            } else if token.text == ")" {
+                if depth == 0 {
+                    end = cursor
+                    break
+                }
+                depth -= 1
+            }
+            end = cursor + 1
+            cursor += 1
+        }
+        guard end > index + 1,
+            let lower = tokens[safe: index + 1]?.startOffset,
+            let upper = tokens[safe: end - 1]?.endOffset,
+            lower < upper
+        else {
+            return nil
+        }
+        return lower..<upper
     }
 
     private struct ColumnObjectReference {
@@ -1033,10 +1234,38 @@ public enum SQLIntentConformanceValidator {
     private static func orderByUsesAggregateMetric(
         named name: String,
         aliases: Set<String>,
-        orderByTokens: [SQLToken]
+        orderByTokens: [SQLToken],
+        selectItems: [[SQLToken]]
     ) -> Bool {
         containsAggregateFunction(named: name, in: orderByTokens)
             || orderByTokens.contains {
+                $0.isIdentifierLike && aliases.contains($0.identifierValue.lowercased())
+            }
+            || orderByOrdinalUsesAggregateMetric(
+                named: name,
+                aliases: aliases,
+                orderByTokens: orderByTokens,
+                selectItems: selectItems
+            )
+    }
+
+    private static func orderByOrdinalUsesAggregateMetric(
+        named name: String,
+        aliases: Set<String>,
+        orderByTokens: [SQLToken],
+        selectItems: [[SQLToken]]
+    ) -> Bool {
+        guard let first = orderByTokens.first,
+            first.kind == .number,
+            let ordinal = Int(first.text),
+            ordinal > 0,
+            ordinal <= selectItems.count
+        else {
+            return false
+        }
+        let item = selectItems[ordinal - 1]
+        return containsAggregateFunction(named: name, in: item)
+            || item.contains {
                 $0.isIdentifierLike && aliases.contains($0.identifierValue.lowercased())
             }
     }
@@ -1049,6 +1278,61 @@ public enum SQLIntentConformanceValidator {
             && containsAggregateFunction(named: "avg", in: tokens)
             && containsAggregateFunction(named: "count", in: tokens)
             && hasClausePair("group", "by", in: tokens)
+    }
+
+    private static func hasGroupedCountForFrequencyEntity(
+        plan: GroundedQueryPlan,
+        tokens: [SQLToken],
+        analysis: SQLReferenceAnalysis,
+        schema: DatabaseSchema
+    ) -> Bool {
+        guard containsAggregateFunction(named: "count", in: tokens) else { return false }
+        let groupingObjectIDs = frequencyGroupingObjectIDs(plan: plan, schema: schema)
+        guard !groupingObjectIDs.isEmpty else {
+            return hasClausePair("group", "by", in: tokens)
+        }
+        return groupByClauses(in: tokens).contains { clause in
+            groupingObjectIDs.contains { objectID in
+                referencesColumn(
+                    objectID: objectID,
+                    in: analysis,
+                    schema: schema,
+                    offsetRange: clause.offsetRange
+                )
+            }
+        }
+    }
+
+    private static func frequencyGroupingObjectIDs(
+        plan: GroundedQueryPlan,
+        schema: DatabaseSchema
+    ) -> Set<String> {
+        var objectIDs = Set<String>()
+        let subjectObjectIDs = plan.slots
+            .first { $0.kind == .subjectEntity }?
+            .selectedCandidate?
+            .objectIDs ?? []
+        let subjectTableIDs = Set(subjectObjectIDs.compactMap { objectID -> String? in
+            guard objectID.hasPrefix("table:") else { return nil }
+            return String(objectID.dropFirst("table:".count))
+        })
+        objectIDs.formUnion(subjectObjectIDs.filter { $0.hasPrefix("column:") })
+        for tableID in subjectTableIDs {
+            if let table = schema.tables.first(where: { $0.id == tableID }) {
+                objectIDs.formUnion(table.columns.map { "column:\($0.id)" })
+            }
+        }
+        for joinPath in plan.selectedJoinPaths {
+            for foreignKey in joinPath.foreignKeys {
+                let sourceTableID = "\(foreignKey.sourceSchema).\(foreignKey.sourceTable)"
+                let targetTableID = "\(foreignKey.targetSchema).\(foreignKey.targetTable)"
+                if subjectTableIDs.contains(sourceTableID) || subjectTableIDs.contains(targetTableID) {
+                    objectIDs.insert("column:\(sourceTableID).\(foreignKey.sourceColumn)")
+                    objectIDs.insert("column:\(targetTableID).\(foreignKey.targetColumn)")
+                }
+            }
+        }
+        return objectIDs
     }
 
     private static func topLevelOrderByClause(in tokens: [SQLToken]) -> (
@@ -1121,6 +1405,104 @@ public enum SQLIntentConformanceValidator {
             return nil
         }
         return (Array(clause.tokens[0..<end]), lower..<upper)
+    }
+
+    private static func topLevelSelectItems(in tokens: [SQLToken]) -> [[SQLToken]] {
+        var depth = 0
+        var selectIndex: Int?
+        var fromIndex: Int?
+        for index in tokens.indices {
+            let token = tokens[index]
+            if depth == 0, token.normalized == "select" {
+                selectIndex = index
+            } else if depth == 0, token.normalized == "from", selectIndex != nil {
+                fromIndex = index
+                break
+            }
+            if token.text == "(" {
+                depth += 1
+            } else if token.text == ")" {
+                depth = max(0, depth - 1)
+            }
+        }
+        guard let selectIndex, let fromIndex, selectIndex + 1 < fromIndex else {
+            return []
+        }
+        return splitTopLevelItems(Array(tokens[(selectIndex + 1)..<fromIndex]))
+    }
+
+    private static func groupByClauses(in tokens: [SQLToken]) -> [(
+        tokens: [SQLToken], offsetRange: Range<Int>
+    )] {
+        var clauses: [(tokens: [SQLToken], offsetRange: Range<Int>)] = []
+        var depth = 0
+        var index = 0
+        while index < tokens.count {
+            let token = tokens[index]
+            if token.normalized == "group",
+                tokens[safe: index + 1]?.normalized == "by"
+            {
+                let baseDepth = depth
+                let start = index + 2
+                var end = start
+                var clauseDepth = baseDepth
+                while end < tokens.count {
+                    let current = tokens[end]
+                    if current.text == ")" && clauseDepth == baseDepth {
+                        break
+                    }
+                    if clauseDepth == baseDepth,
+                        groupByBoundaryTokens.contains(current.normalized)
+                    {
+                        break
+                    }
+                    if current.text == "(" {
+                        clauseDepth += 1
+                    } else if current.text == ")" {
+                        clauseDepth = max(baseDepth, clauseDepth - 1)
+                    }
+                    end += 1
+                }
+                if start < end,
+                    let lower = tokens[safe: start]?.startOffset,
+                    let upper = tokens[safe: end - 1]?.endOffset
+                {
+                    clauses.append((Array(tokens[start..<end]), lower..<upper))
+                }
+                index = max(index + 1, end)
+                continue
+            }
+            if token.text == "(" {
+                depth += 1
+            } else if token.text == ")" {
+                depth = max(0, depth - 1)
+            }
+            index += 1
+        }
+        return clauses
+    }
+
+    private static func splitTopLevelItems(_ tokens: [SQLToken]) -> [[SQLToken]] {
+        var items: [[SQLToken]] = []
+        var start = 0
+        var depth = 0
+        for index in tokens.indices {
+            let token = tokens[index]
+            if depth == 0, token.text == "," {
+                items.append(Array(tokens[start..<index]))
+                start = index + 1
+                continue
+            }
+            if token.text == "(" {
+                depth += 1
+            } else if token.text == ")" {
+                depth = max(0, depth - 1)
+            }
+        }
+        if start < tokens.count {
+            items.append(Array(tokens[start..<tokens.count]))
+        }
+        return items.filter { !$0.isEmpty }
     }
 
     private static func hasTopLevelClausePair(
@@ -1205,6 +1587,16 @@ public enum SQLIntentConformanceValidator {
                 .replacingOccurrences(of: "''", with: "'")
         }
     }
+
+    private static let expressionBoundaryTokens: Set<String> = [
+        "and", "by", "from", "group", "having", "join", "limit", "offset", "on", "or",
+        "order", "select", "using", "where",
+    ]
+
+    private static let groupByBoundaryTokens: Set<String> = [
+        "except", "fetch", "having", "intersect", "limit", "offset", "order", "union",
+        "where",
+    ]
 }
 
 public enum AnalyticQueryCompiler {
