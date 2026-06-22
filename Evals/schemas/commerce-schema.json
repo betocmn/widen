@@ -1,0 +1,53 @@
+{
+  "schemas": [
+    { "name": "public" }
+  ],
+  "tables": [
+    {
+      "schema": "public",
+      "name": "customers",
+      "type": "BASE TABLE",
+      "columns": [
+        { "tableSchema": "public", "tableName": "customers", "name": "id", "dataType": "integer", "isNullable": false, "ordinalPosition": 1 },
+        { "tableSchema": "public", "tableName": "customers", "name": "email", "dataType": "text", "isNullable": false, "ordinalPosition": 2 },
+        { "tableSchema": "public", "tableName": "customers", "name": "name", "dataType": "text", "isNullable": true, "ordinalPosition": 3 },
+        { "tableSchema": "public", "tableName": "customers", "name": "country", "dataType": "text", "isNullable": true, "ordinalPosition": 4 },
+        { "tableSchema": "public", "tableName": "customers", "name": "created_at", "dataType": "timestamp with time zone", "isNullable": false, "ordinalPosition": 5 }
+      ]
+    },
+    {
+      "schema": "public",
+      "name": "orders",
+      "type": "BASE TABLE",
+      "columns": [
+        { "tableSchema": "public", "tableName": "orders", "name": "id", "dataType": "integer", "isNullable": false, "ordinalPosition": 1 },
+        { "tableSchema": "public", "tableName": "orders", "name": "customer_id", "dataType": "integer", "isNullable": false, "ordinalPosition": 2 },
+        {
+          "tableSchema": "public",
+          "tableName": "orders",
+          "name": "status",
+          "dataType": "text",
+          "isNullable": false,
+          "ordinalPosition": 3,
+          "valueConstraints": [
+            { "kind": "check", "values": ["paid", "pending", "refunded", "cancelled"], "expression": "CHECK (status IN ('paid', 'pending', 'refunded', 'cancelled'))" }
+          ]
+        },
+        { "tableSchema": "public", "tableName": "orders", "name": "total_cents", "dataType": "integer", "isNullable": false, "ordinalPosition": 4 },
+        { "tableSchema": "public", "tableName": "orders", "name": "created_at", "dataType": "timestamp with time zone", "isNullable": false, "ordinalPosition": 5 }
+      ]
+    }
+  ],
+  "foreignKeys": [
+    {
+      "constraintName": "orders_customer_id_fkey",
+      "sourceSchema": "public",
+      "sourceTable": "orders",
+      "sourceColumn": "customer_id",
+      "targetSchema": "public",
+      "targetTable": "customers",
+      "targetColumn": "id"
+    }
+  ],
+  "loadedAt": 0
+}
