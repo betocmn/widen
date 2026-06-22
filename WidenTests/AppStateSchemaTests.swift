@@ -102,6 +102,92 @@ struct AppStateSchemaTests {
         #expect(prompt?.foreignKeys.allSatisfy { $0.sourceSchema == "analytics" } == true)
     }
 
+    @Test func confirmedSemanticBindingStoresNormalizedObjectMetadata() {
+        let (state, dir) = makeState()
+        defer { try? FileManager.default.removeItem(at: dir) }
+        let connectionID = UUID()
+        let schema = makeSchema(schemas: ["public"])
+        let option = ClarificationOption(
+            label: "public.users.status",
+            replyText: "Use public.users.status",
+            definition: "public.users.status    =   'enabled'",
+            evidence: ["public.users.status"]
+        )
+        let pending = PendingClarification(
+            concept: SQLGroundingConcept(
+                term: "active account",
+                kind: .businessTerm,
+                state: .unsupported,
+                required: true
+            ),
+            originalQuestion: "show active accounts",
+            plan: GroundedQueryPlan(
+                intent: QueryIntentFrame(customBusinessTerms: ["active"]),
+                slots: [
+                    GroundingSlot(
+                        id: .customBusinessTerm,
+                        kind: .customBusinessTerm,
+                        phrase: "active account",
+                        required: true,
+                        candidates: [
+                            GroundingCandidate(
+                                id: "column:public.users.status",
+                                label: "public.users.status",
+                                objectIDs: ["column:public.users.status"],
+                                evidence: ["public.users.status"]
+                            )
+                        ],
+                        state: .ambiguous
+                    )
+                ],
+                readiness: .needsClarification
+            ),
+            slotID: .customBusinessTerm,
+            question: "What should active account mean?",
+            options: [option],
+            evidence: ["public.users.status"]
+        )
+
+        state.confirmSemanticBinding(
+            connectionID: connectionID,
+            pending: pending,
+            replyText: option.replyText,
+            selectedOption: option,
+            schema: schema
+        )
+
+        #expect(state.semanticBindings.count == 1)
+        #expect(state.semanticBindings[0].concept == "active account")
+        #expect(state.semanticBindings[0].normalizedDefinition == "public.users.status = 'enabled'")
+        #expect(state.semanticBindings[0].referencedObjectIDs == ["column:public.users.status"])
+        #expect(state.semanticBindings[0].originatingClarificationID == pending.id)
+    }
+
+    @Test func genericOperatorSemanticBindingIsNotPersisted() {
+        let (state, dir) = makeState()
+        defer { try? FileManager.default.removeItem(at: dir) }
+        let pending = PendingClarification(
+            concept: SQLGroundingConcept(
+                term: "frequent",
+                kind: .metric,
+                state: .unsupported,
+                required: true
+            ),
+            originalQuestion: "most frequent users",
+            question: "What defines frequent?"
+        )
+
+        state.confirmSemanticBinding(
+            connectionID: UUID(),
+            pending: pending,
+            replyText: "COUNT(*)",
+            selectedOption: nil,
+            schema: makeSchema(schemas: ["public"])
+        )
+
+        #expect(state.semanticBindings.isEmpty)
+    }
+
     @Test func generatedSessionRestoreUsesSavedGenerationSchema() throws {
         defer { cleanDefaults() }
         let (state, dir) = makeState()

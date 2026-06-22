@@ -43,8 +43,13 @@ public struct DatabaseSemanticBinding: Identifiable, Codable, Equatable, Sendabl
     public var schemaFingerprint: String
     public var concept: String
     public var definition: String
+    public var normalizedDefinition: String
+    public var referencedObjectIDs: [String]
+    public var originatingClarificationID: UUID?
     public var evidence: [String]
     public var createdAt: Date
+
+    public var phrase: String { concept }
 
     public init(
         id: UUID = UUID(),
@@ -53,6 +58,9 @@ public struct DatabaseSemanticBinding: Identifiable, Codable, Equatable, Sendabl
         schemaFingerprint: String,
         concept: String,
         definition: String,
+        normalizedDefinition: String? = nil,
+        referencedObjectIDs: [String] = [],
+        originatingClarificationID: UUID? = nil,
         evidence: [String] = [],
         createdAt: Date = Date()
     ) {
@@ -62,8 +70,64 @@ public struct DatabaseSemanticBinding: Identifiable, Codable, Equatable, Sendabl
         self.schemaFingerprint = schemaFingerprint
         self.concept = concept
         self.definition = definition
+        self.normalizedDefinition = normalizedDefinition ?? definition
+        self.referencedObjectIDs = referencedObjectIDs
+        self.originatingClarificationID = originatingClarificationID
         self.evidence = evidence
         self.createdAt = createdAt
+    }
+
+    private enum CodingKeys: String, CodingKey {
+        case id
+        case connectionID
+        case schemaNames
+        case schemaFingerprint
+        case concept
+        case definition
+        case normalizedDefinition
+        case referencedObjectIDs
+        case originatingClarificationID
+        case evidence
+        case createdAt
+    }
+
+    public init(from decoder: any Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        id = try container.decode(UUID.self, forKey: .id)
+        connectionID = try container.decode(UUID.self, forKey: .connectionID)
+        schemaNames = try container.decode([String].self, forKey: .schemaNames).sorted()
+        schemaFingerprint = try container.decode(String.self, forKey: .schemaFingerprint)
+        concept = try container.decode(String.self, forKey: .concept)
+        definition = try container.decode(String.self, forKey: .definition)
+        normalizedDefinition =
+            try container.decodeIfPresent(String.self, forKey: .normalizedDefinition)
+            ?? definition
+        referencedObjectIDs =
+            try container.decodeIfPresent([String].self, forKey: .referencedObjectIDs)
+            ?? []
+        originatingClarificationID =
+            try container.decodeIfPresent(UUID.self, forKey: .originatingClarificationID)
+        evidence = try container.decodeIfPresent([String].self, forKey: .evidence) ?? []
+        createdAt = try container.decode(Date.self, forKey: .createdAt)
+    }
+
+    public func encode(to encoder: any Encoder) throws {
+        var container = encoder.container(keyedBy: CodingKeys.self)
+        try container.encode(id, forKey: .id)
+        try container.encode(connectionID, forKey: .connectionID)
+        try container.encode(schemaNames, forKey: .schemaNames)
+        try container.encode(schemaFingerprint, forKey: .schemaFingerprint)
+        try container.encode(concept, forKey: .concept)
+        try container.encode(definition, forKey: .definition)
+        try container.encode(normalizedDefinition, forKey: .normalizedDefinition)
+        if !referencedObjectIDs.isEmpty {
+            try container.encode(referencedObjectIDs, forKey: .referencedObjectIDs)
+        }
+        try container.encodeIfPresent(originatingClarificationID, forKey: .originatingClarificationID)
+        if !evidence.isEmpty {
+            try container.encode(evidence, forKey: .evidence)
+        }
+        try container.encode(createdAt, forKey: .createdAt)
     }
 
     public func isCurrent(for schema: DatabaseSchema) -> Bool {
@@ -73,7 +137,7 @@ public struct DatabaseSemanticBinding: Identifiable, Codable, Equatable, Sendabl
 
     public var promptLine: String {
         let evidenceText = evidence.isEmpty ? "" : " Evidence: \(evidence.joined(separator: "; "))."
-        return "\(concept): \(definition).\(evidenceText)"
+        return "\(concept): \(normalizedDefinition).\(evidenceText)"
     }
 }
 

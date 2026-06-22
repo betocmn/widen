@@ -1157,13 +1157,21 @@ public final class AppState {
         guard !definition.isEmpty else { return }
         let concept = pending.concept.term.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !concept.isEmpty else { return }
+        guard !Self.genericSemanticOperatorTerms.contains(concept.lowercased()) else { return }
         let evidence = Array(Set(pending.evidence + (selectedOption?.evidence ?? []))).sorted()
+        let referencedObjectIDs = Self.referencedObjectIDs(
+            pending: pending,
+            selectedOption: selectedOption
+        )
         let binding = DatabaseSemanticBinding(
             connectionID: connectionID,
             schemaNames: schema.semanticBindingSchemaNames,
             schemaFingerprint: schema.semanticFingerprint,
             concept: concept,
             definition: definition,
+            normalizedDefinition: Self.normalizedSemanticDefinition(definition),
+            referencedObjectIDs: referencedObjectIDs,
+            originatingClarificationID: pending.id,
             evidence: evidence
         )
         semanticBindings.removeAll {
@@ -1174,6 +1182,52 @@ public final class AppState {
         }
         semanticBindings.append(binding)
         persistSemanticBindings()
+    }
+
+    private static let genericSemanticOperatorTerms: Set<String> = [
+        "average", "avg", "bottom", "count", "distinct", "earliest", "frequent", "highest",
+        "latest", "lowest", "maximum", "minimum", "most", "oldest", "sum", "top", "total",
+        "unique",
+    ]
+
+    private static func normalizedSemanticDefinition(_ definition: String) -> String {
+        definition
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+            .replacingOccurrences(of: #"\s+"#, with: " ", options: .regularExpression)
+    }
+
+    private static func referencedObjectIDs(
+        pending: PendingClarification,
+        selectedOption: ClarificationOption?
+    ) -> [String] {
+        var ids = Set<String>()
+        if let selectedOption {
+            for candidate in optionObjectIDs(selectedOption.definition) {
+                ids.insert(candidate)
+            }
+            if let slot = pending.plan?.slots.first(where: { $0.id == pending.slotID }),
+                let candidate = slot.candidates.first(where: { $0.label == selectedOption.label })
+            {
+                ids.formUnion(candidate.objectIDs)
+            }
+        }
+        if let slot = pending.plan?.slots.first(where: { $0.id == pending.slotID }),
+            let selected = slot.selectedCandidate
+        {
+            ids.formUnion(selected.objectIDs)
+        }
+        return ids.sorted()
+    }
+
+    private static func optionObjectIDs(_ definition: String) -> [String] {
+        definition
+            .split(separator: ",")
+            .map { $0.trimmingCharacters(in: .whitespacesAndNewlines) }
+            .filter { value in
+                value.hasPrefix("table:")
+                    || value.hasPrefix("column:")
+                    || value.hasPrefix("fk:")
+            }
     }
 
     public func deleteSemanticBinding(_ id: UUID) {

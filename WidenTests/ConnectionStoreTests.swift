@@ -189,6 +189,38 @@ struct DatabaseSemanticBindingStoreTests {
         #expect(!connectionJSON.contains("semantic"))
     }
 
+    @Test func legacyBindingDecodeDefaultsNormalizedFields() throws {
+        let dir = FileManager.default.temporaryDirectory
+            .appendingPathComponent("widen-bindings-\(UUID().uuidString)", isDirectory: true)
+        defer { try? FileManager.default.removeItem(at: dir) }
+        let store = DatabaseSemanticBindingStore(directory: dir)
+        try FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
+        let id = UUID()
+        let connectionID = UUID()
+        let legacyJSON = """
+            [
+              {
+                "id": "\(id.uuidString)",
+                "connectionID": "\(connectionID.uuidString)",
+                "schemaNames": ["public"],
+                "schemaFingerprint": "fingerprint",
+                "concept": "active users",
+                "definition": "users.status = 'active'",
+                "evidence": ["public.users.status"],
+                "createdAt": "2025-06-15T15:06:40Z"
+              }
+            ]
+            """
+        try legacyJSON.write(to: store.fileURL, atomically: true, encoding: .utf8)
+
+        let loaded = try store.load()
+
+        #expect(loaded.count == 1)
+        #expect(loaded[0].normalizedDefinition == "users.status = 'active'")
+        #expect(loaded[0].referencedObjectIDs.isEmpty)
+        #expect(loaded[0].originatingClarificationID == nil)
+    }
+
     @Test func currentBindingsExcludeSchemaDrift() {
         let dir = FileManager.default.temporaryDirectory
             .appendingPathComponent("widen-bindings-\(UUID().uuidString)", isDirectory: true)
