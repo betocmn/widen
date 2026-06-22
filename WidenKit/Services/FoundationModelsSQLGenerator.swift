@@ -335,12 +335,12 @@
                     reason: response.content.reason
                 )
                 let queries = discovery.sanitizedSearchQueries
-                guard !queries.isEmpty else { return context }
-                let searchResults = SchemaDiscoveryService.search(schema: schema, queries: queries)
-                guard !searchResults.isEmpty else { return context }
                 var copy = context
-                copy.schemaSearchQueries = queries + searchResults.map(\.qualifiedName)
                 copy.modelCallCount = max(1, context.modelCallCount) + 1
+                guard !queries.isEmpty else { return copy }
+                let searchResults = SchemaDiscoveryService.search(schema: schema, queries: queries)
+                guard !searchResults.isEmpty else { return copy }
+                copy.schemaSearchQueries = queries + searchResults.map(\.qualifiedName)
                 return copy
             } catch {
                 var copy = context

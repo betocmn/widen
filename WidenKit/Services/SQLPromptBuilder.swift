@@ -156,7 +156,7 @@ public enum SQLPromptBuilder {
         guard !trimmed.isEmpty else { return nil }
         return ([
             "User-confirmed database-specific definitions. Treat these as business semantics, but the schema remains authoritative for available tables and columns.",
-        ] + trimmed.prefix(12).map { "- \(truncated($0, to: 500))" })
+        ] + trimmed.suffix(12).map { "- \(truncated($0, to: 500))" })
             .joined(separator: "\n")
     }
 

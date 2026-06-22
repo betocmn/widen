@@ -1966,10 +1966,8 @@ public enum GeneratedSQLPostprocessor {
         let sql = generation.sql.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !sql.isEmpty else { return copy }
 
-        let safety = SQLSafetyValidator.validate(sql)
         let schemaValidation = SQLSchemaValidator.validate(sql: sql, against: schema)
         copy.referencedTables = schemaValidation.referencedTables
-        guard !safety.kind.isWrite else { return copy }
         if !schemaValidation.hasDefiniteErrors {
             let grounding = groundingEvaluation(
                 question: question,
@@ -2680,6 +2678,8 @@ public enum GeneratedSQLPostprocessor {
 
     private static let genericVerbStopWords: Set<String> = [
         "create", "created", "creating", "make", "made", "makes", "making",
+        "delete", "deleted", "deleting", "insert", "inserted", "inserting", "remove",
+        "removed", "removing", "set", "update", "updated", "updating",
     ]
 
     private static let requestStopWords: Set<String> = [

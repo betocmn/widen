@@ -193,7 +193,10 @@ public final class SessionController: Identifiable {
                 ),
                 priorFingerprints: [Self.normalizedSQL(failedSQL)]
             ),
-            modelCallCount: 1,
+            modelCallCount: Self.cumulativeGeneratedSQLModelCallCount(
+                after: startingGeneration,
+                attempt: 1
+            ),
             confirmedSemanticBindings: appState.semanticBindingPromptLines(
                 for: connectionID,
                 schema: schema
@@ -275,6 +278,7 @@ public final class SessionController: Identifiable {
         option: ClarificationOption
     ) async {
         guard !queryVM.isRunning, !chatVM.isGenerating else { return }
+        guard unresolvedPendingClarification()?.id == pending.id else { return }
         selectedClarificationOption = (pending.id, option)
         chatVM.input = option.replyText
         await submit(appState: appState)
@@ -290,11 +294,18 @@ public final class SessionController: Identifiable {
             return
         }
 
-        let pendingClarification = unresolvedPendingClarification()
+        let unresolvedClarification = unresolvedPendingClarification()
         let selectedOption = selectedOptionForPendingClarification(
-            pendingClarification,
+            unresolvedClarification,
             replyText: question
         )
+        let resolvesPendingClarification = shouldResolvePendingClarification(
+            question,
+            selectedOption: selectedOption
+        )
+        let pendingClarification = resolvesPendingClarification ? unresolvedClarification : nil
+        let abandonsPendingClarification =
+            unresolvedClarification != nil && pendingClarification == nil
         let generationQuestion = pendingClarification?.originalQuestion ?? question
         var confirmedBindings = appState.semanticBindingPromptLines(
             for: connectionID,
@@ -309,14 +320,17 @@ public final class SessionController: Identifiable {
                 confirmedBindings.append("\(pendingClarification.concept.term): \(definition)")
             }
         }
-        var conversationMessages = chatVM.messages.sqlConversationMessages()
+        let transcriptUpperBound = abandonsPendingClarification
+            ? max(0, chatVM.messages.count - 1) : chatVM.messages.count
+        var conversationMessages = chatVM.messages.sqlConversationMessages(upTo: transcriptUpperBound)
         if pendingClarification != nil {
             conversationMessages.append(SQLConversationMessage(role: .user, text: question))
         }
         let context = SQLGenerationContext(
             recentQuestions: chatVM.messages.filter { $0.role == .user }.suffix(3).map(\.text),
             originalQuestion: pendingClarification?.originalQuestion
-                ?? chatVM.messages.originalUserQuestion(),
+                ?? (abandonsPendingClarification
+                    ? question : chatVM.messages.originalUserQuestion()),
             conversationMessages: conversationMessages,
             currentSQL: queryVM.sqlText
                 .trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
@@ -465,6 +479,15 @@ public final class SessionController: Identifiable {
         selectedOption != nil || Self.isExplicitSemanticDefinitionReply(replyText)
     }
 
+    private func shouldResolvePendingClarification(
+        _ replyText: String,
+        selectedOption: ClarificationOption?
+    ) -> Bool {
+        selectedOption != nil
+            || Self.isExplicitSemanticDefinitionReply(replyText)
+            || Self.isNegativeClarificationReply(replyText)
+    }
+
     private static func isAffirmativeClarificationReply(_ text: String) -> Bool {
         let stripped = text
             .trimmingCharacters(in: CharacterSet(charactersIn: ".!?, \n\t"))
@@ -482,16 +505,24 @@ public final class SessionController: Identifiable {
             .lowercased()
         guard normalized.count >= 6 else { return false }
         let stripped = normalized.trimmingCharacters(in: CharacterSet(charactersIn: ".!?, "))
-        let negativeAnswers: Set<String> = [
-            "n", "no", "nope", "nah", "not sure", "i don't know", "i dont know",
-            "unknown", "something else",
-        ]
-        guard !negativeAnswers.contains(stripped) else { return false }
+        guard !negativeClarificationReplies.contains(stripped) else { return false }
         let definitionMarkers = [
             " means ", " mean ", " is ", " are ", " equals ", " equal ",
             " defined as ", " refers to ", " should be ", " use ", "=",
         ]
         return normalized.hasPrefix("use ") || definitionMarkers.contains { normalized.contains($0) }
+    }
+
+    private static let negativeClarificationReplies: Set<String> = [
+        "n", "no", "nope", "nah", "not sure", "i don't know", "i dont know",
+        "unknown", "something else",
+    ]
+
+    private static func isNegativeClarificationReply(_ text: String) -> Bool {
+        let stripped = text
+            .trimmingCharacters(in: CharacterSet(charactersIn: ".!?, \n\t"))
+            .lowercased()
+        return negativeClarificationReplies.contains(stripped)
     }
 
     private func repairGeneratedSQL(
@@ -590,7 +621,10 @@ public final class SessionController: Identifiable {
                 currentSQL: repairMode == .repair ? repairContext.failedSQL : nil,
                 lastRunError: repairMode == .repair ? coordinator.constraints.lastError : nil,
                 repairContext: repairContext,
-                modelCallCount: attemptNumber,
+                modelCallCount: Self.cumulativeGeneratedSQLModelCallCount(
+                    after: startingGeneration,
+                    attempt: attemptNumber
+                ),
                 confirmedSemanticBindings: appState.semanticBindingPromptLines(
                     for: connectionID,
                     schema: schema
@@ -611,7 +645,7 @@ public final class SessionController: Identifiable {
                     schema: schema,
                     databaseContext: config.databaseContext,
                     confirmedSemanticBindings: context.confirmedSemanticBindings,
-                    allowGroundingClarification: false
+                    allowGroundingClarification: mode == .validationOnly
                 )
             } catch {
                 restoreStartingGeneration(schema: schema)
@@ -788,6 +822,14 @@ public final class SessionController: Identifiable {
     ) -> Int {
         let spentModelCalls = max(1, generation?.generationCallCount ?? 1)
         return max(0, generatedSQLLocalModelCallBudget - spentModelCalls)
+    }
+
+    private static func cumulativeGeneratedSQLModelCallCount(
+        after generation: SQLGenerationResult?,
+        attempt: Int
+    ) -> Int {
+        let spentModelCalls = max(1, generation?.generationCallCount ?? 1)
+        return spentModelCalls + max(0, attempt)
     }
 
     private func appendAssistantGeneration(_ generation: SQLGenerationResult) {

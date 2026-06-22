@@ -1451,6 +1451,31 @@ struct SQLSchemaValidatorTests {
         #expect(enriched.referencedTables == ["public.users"])
     }
 
+    @Test func generatedWriteRequiresGroundingForUnsupportedLiteral() {
+        let generation = SQLGenerationResult(
+            sql: "DELETE FROM public.users WHERE status = 'churned'",
+            explanation: "Deletes churned users.",
+            assumptions: [],
+            referencedTables: [],
+            confidence: 1,
+            riskLevel: .high,
+            needsClarification: false,
+            clarificationQuestion: nil
+        )
+
+        let enriched = GeneratedSQLPostprocessor.enriched(
+            generation,
+            question: "delete churned users",
+            schema: makeUsersStatusSchema(),
+            databaseContext: ""
+        )
+
+        #expect(enriched.needsClarification)
+        #expect(enriched.sql.isEmpty)
+        #expect(enriched.clarificationQuestion?.contains("\"churned\"") == true)
+        #expect(enriched.referencedTables == ["public.users"])
+    }
+
     @Test func databaseContextCanDefineUnconstrainedStatusLiteral() {
         let generation = SQLGenerationResult(
             sql: "SELECT COUNT(*) FROM public.users WHERE status = 'active'",

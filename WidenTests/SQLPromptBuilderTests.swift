@@ -270,6 +270,22 @@ struct SQLPromptBuilderTests {
         #expect(bindingsRange!.lowerBound < questionRange!.lowerBound)
     }
 
+    @Test func promptKeepsNewestConfirmedSemanticBindings() {
+        let context = SQLGenerationContext(
+            confirmedSemanticBindings: (0..<13).map { "concept\($0): definition\($0)" }
+        )
+
+        let prompt = SQLPromptBuilder.prompt(
+            question: "show users",
+            schema: makeSampleSchema(),
+            context: context
+        )
+
+        #expect(prompt.contains("concept12: definition12"))
+        #expect(prompt.contains("concept1: definition1"))
+        #expect(!prompt.contains("concept0: definition0"))
+    }
+
     @Test func emptyDatabaseContextIsOmittedAndLongContextIsTruncated() {
         #expect(SQLPromptBuilder.databaseContextSection("   \n") == nil)
 
