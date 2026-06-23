@@ -392,8 +392,9 @@ being misreported as transport failures.
 * Private Cloud Compute preserves `CancellationError` before generic mapping.
 * `WidenEval` supports `--case-timeout-seconds <n>` with a 120-second default.
   Timed-out cases cancel the pipeline, record `evalTimeout`, preserve elapsed
-  time and case ID, and allow later cases to continue when the backend
-  cooperates with cancellation.
+  time and case ID, and allow later cases to continue. Foundation Models
+  cancellation remains cooperative, so timed-out model work can continue in
+  process until the framework returns.
 
 ## Baseline handling
 

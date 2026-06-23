@@ -32,6 +32,92 @@ public struct TextToSQLEvalRunOptions: Equatable, Sendable {
 }
 
 public enum TextToSQLEvalCaseRunner {
+    private final class TimeoutCancellation: @unchecked Sendable {
+        private let lock = NSLock()
+        private var handler: (@Sendable () -> Void)?
+        private var wasCancelled = false
+
+        func set(_ handler: @escaping @Sendable () -> Void) {
+            let shouldCancel: Bool
+            lock.lock()
+            self.handler = handler
+            shouldCancel = wasCancelled
+            lock.unlock()
+
+            if shouldCancel { handler() }
+        }
+
+        func cancel() {
+            let handler: (@Sendable () -> Void)?
+            lock.lock()
+            wasCancelled = true
+            handler = self.handler
+            lock.unlock()
+
+            handler?()
+        }
+    }
+
+    private final class TimeoutRace: @unchecked Sendable {
+        private let lock = NSLock()
+        private var finished = false
+        private var continuation: CheckedContinuation<TextToSQLEvalResult, Never>?
+        private var pipelineTask: Task<Void, Never>?
+        private var timeoutTask: Task<Void, Never>?
+        private var cancelPipelineWhenSet = false
+        private var cancelTimeoutWhenSet = false
+
+        init(continuation: CheckedContinuation<TextToSQLEvalResult, Never>) {
+            self.continuation = continuation
+        }
+
+        func setTasks(pipelineTask: Task<Void, Never>, timeoutTask: Task<Void, Never>) {
+            let shouldCancelPipeline: Bool
+            let shouldCancelTimeout: Bool
+            lock.lock()
+            self.pipelineTask = pipelineTask
+            self.timeoutTask = timeoutTask
+            shouldCancelPipeline = cancelPipelineWhenSet
+            shouldCancelTimeout = cancelTimeoutWhenSet
+            lock.unlock()
+
+            if shouldCancelPipeline { pipelineTask.cancel() }
+            if shouldCancelTimeout { timeoutTask.cancel() }
+        }
+
+        func finish(
+            _ result: TextToSQLEvalResult,
+            cancelPipeline: Bool,
+            cancelTimeout: Bool
+        ) {
+            let continuation: CheckedContinuation<TextToSQLEvalResult, Never>?
+            let pipelineTask: Task<Void, Never>?
+            let timeoutTask: Task<Void, Never>?
+
+            lock.lock()
+            guard !finished else {
+                lock.unlock()
+                return
+            }
+            finished = true
+            continuation = self.continuation
+            self.continuation = nil
+            pipelineTask = self.pipelineTask
+            timeoutTask = self.timeoutTask
+            if cancelPipeline, pipelineTask == nil {
+                cancelPipelineWhenSet = true
+            }
+            if cancelTimeout, timeoutTask == nil {
+                cancelTimeoutWhenSet = true
+            }
+            lock.unlock()
+
+            if cancelPipeline { pipelineTask?.cancel() }
+            if cancelTimeout { timeoutTask?.cancel() }
+            continuation?.resume(returning: result)
+        }
+    }
+
     public static func run(
         evalCase: TextToSQLEvalCase,
         schema: DatabaseSchema,
@@ -64,43 +150,74 @@ public enum TextToSQLEvalCaseRunner {
         timeoutSeconds: Double
     ) async -> TextToSQLEvalResult {
         let started = Date()
-        let timeoutNanoseconds = UInt64(max(1.0, timeoutSeconds * 1_000_000_000))
-        return await withTaskGroup(of: TextToSQLEvalResult.self) { group in
-            group.addTask {
-                await runPipeline(
-                    evalCase: evalCase,
-                    schema: schema,
-                    generator: generator,
-                    options: options,
-                    started: started
-                )
-            }
-            group.addTask {
-                do {
-                    try await Task.sleep(nanoseconds: timeoutNanoseconds)
-                } catch {
-                    return cancellationResult(
+        let timeoutDuration = timeoutDuration(for: timeoutSeconds)
+        let cancellation = TimeoutCancellation()
+        return await withTaskCancellationHandler {
+            await withCheckedContinuation { continuation in
+                let race = TimeoutRace(continuation: continuation)
+                let pipelineTask = Task {
+                    let result = await runPipeline(
                         evalCase: evalCase,
+                        schema: schema,
+                        generator: generator,
                         options: options,
-                        latencyMs: elapsedMilliseconds(since: started)
+                        started: started
+                    )
+                    race.finish(result, cancelPipeline: false, cancelTimeout: true)
+                }
+                let timeoutTask = Task {
+                    do {
+                        try await Task.sleep(nanoseconds: timeoutDuration.nanoseconds)
+                    } catch {
+                        race.finish(
+                            cancellationResult(
+                                evalCase: evalCase,
+                                options: options,
+                                latencyMs: elapsedMilliseconds(since: started)
+                            ),
+                            cancelPipeline: true,
+                            cancelTimeout: false
+                        )
+                        return
+                    }
+                    race.finish(
+                        timeoutResult(
+                            evalCase: evalCase,
+                            options: options,
+                            timeoutSeconds: timeoutDuration.seconds,
+                            latencyMs: elapsedMilliseconds(since: started)
+                        ),
+                        cancelPipeline: true,
+                        cancelTimeout: false
                     )
                 }
-                return timeoutResult(
-                    evalCase: evalCase,
-                    options: options,
-                    timeoutSeconds: timeoutSeconds,
-                    latencyMs: elapsedMilliseconds(since: started)
-                )
+                race.setTasks(pipelineTask: pipelineTask, timeoutTask: timeoutTask)
+                cancellation.set {
+                    race.finish(
+                        cancellationResult(
+                            evalCase: evalCase,
+                            options: options,
+                            latencyMs: elapsedMilliseconds(since: started)
+                        ),
+                        cancelPipeline: true,
+                        cancelTimeout: true
+                    )
+                }
             }
-            let result = await group.next()
-                ?? cancellationResult(
-                    evalCase: evalCase,
-                    options: options,
-                    latencyMs: elapsedMilliseconds(since: started)
-                )
-            group.cancelAll()
-            return result
+        } onCancel: {
+            cancellation.cancel()
         }
+    }
+
+    private static func timeoutDuration(for timeoutSeconds: Double) -> (
+        seconds: Double, nanoseconds: UInt64
+    ) {
+        let seconds = timeoutSeconds.isFinite && timeoutSeconds > 0 ? timeoutSeconds : 120
+        let nanoseconds = seconds * 1_000_000_000
+        guard nanoseconds < Double(UInt64.max) else {
+            return (seconds, UInt64.max)
+        }
+        return (seconds, UInt64(max(1.0, nanoseconds)))
     }
 
     private static func runPipeline(

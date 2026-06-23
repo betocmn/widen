@@ -128,7 +128,7 @@ struct EvalCLIOptions {
                 options.repeatCount = repeatCount
             case "--case-timeout-seconds":
                 let value = try nextValue(after: argument)
-                guard let timeout = Double(value), timeout > 0 else {
+                guard let timeout = Double(value), timeout.isFinite, timeout > 0 else {
                     throw EvalCLIError.invalidValue(argument, value)
                 }
                 options.caseTimeoutSeconds = timeout

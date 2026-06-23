@@ -55,6 +55,19 @@ struct TextToSQLEvalTests {
         }
     }
 
+    private struct BlockingGenerator: SQLGenerator {
+        func generateSQL(
+            question: String,
+            schema: DatabaseSchema,
+            context: SQLGenerationContext,
+            config: SQLGenerationConfig
+        ) async throws -> SQLGenerationResult {
+            let deadline = Date().addingTimeInterval(0.3)
+            while Date() < deadline {}
+            throw SQLGenerationFailure.generation("Blocking generator unexpectedly completed.")
+        }
+    }
+
     @Test func scoresValidSQLShapeAsPassed() async {
         let evalCase = TextToSQLEvalCase(
             id: "commerce.customer-order-ids",
@@ -592,6 +605,94 @@ struct TextToSQLEvalTests {
         )
 
         #expect(nextResult.status == .passed)
+    }
+
+    @Test func parentCancellationCancelsTimedCasePromptly() async {
+        let evalCase = TextToSQLEvalCase(
+            id: "commerce.recent-orders",
+            schemaFixture: "commerce",
+            question: "Show the 10 most recent orders",
+            expected: TextToSQLEvalExpectation(decision: .sql)
+        )
+        let hangingGenerator = HangingGenerator()
+        let task = Task {
+            await TextToSQLEvalCaseRunner.run(
+                evalCase: evalCase,
+                schema: makeCommerceSchema(),
+                generator: hangingGenerator,
+                options: TextToSQLEvalRunOptions(
+                    backend: .local,
+                    caseTimeoutSeconds: 60
+                )
+            )
+        }
+
+        task.cancel()
+        let result = await task.value
+        let deadline = Date().addingTimeInterval(1)
+        while !hangingGenerator.wasCancelled, Date() < deadline {
+            try? await Task.sleep(nanoseconds: 1_000_000)
+        }
+
+        #expect(result.status == .generationFailure)
+        #expect(result.diagnostics.errorMessage?.contains("cancelled") == true)
+        #expect(hangingGenerator.wasCancelled)
+    }
+
+    @Test func caseTimeoutDoesNotWaitForNonCooperativeGenerator() async {
+        let evalCase = TextToSQLEvalCase(
+            id: "commerce.recent-orders",
+            schemaFixture: "commerce",
+            question: "Show the 10 most recent orders",
+            expected: TextToSQLEvalExpectation(decision: .sql)
+        )
+        let started = Date()
+
+        let timeoutResult = await TextToSQLEvalCaseRunner.run(
+            evalCase: evalCase,
+            schema: makeCommerceSchema(),
+            generator: BlockingGenerator(),
+            options: TextToSQLEvalRunOptions(
+                backend: .local,
+                caseTimeoutSeconds: 0.01
+            )
+        )
+
+        let elapsed = Date().timeIntervalSince(started)
+        #expect(timeoutResult.status == .evalTimeout)
+        #expect(elapsed < 0.2)
+    }
+
+    @Test func largeCaseTimeoutDoesNotOverflowNanoseconds() async {
+        let evalCase = TextToSQLEvalCase(
+            id: "commerce.recent-orders",
+            schemaFixture: "commerce",
+            question: "Show the 10 most recent orders",
+            expected: TextToSQLEvalExpectation(decision: .sql)
+        )
+
+        let result = await TextToSQLEvalCaseRunner.run(
+            evalCase: evalCase,
+            schema: makeCommerceSchema(),
+            generator: StaticGenerator(
+                result: SQLGenerationResult(
+                    sql: "SELECT id FROM public.orders LIMIT 10",
+                    explanation: "Lists orders.",
+                    assumptions: [],
+                    referencedTables: [],
+                    confidence: 0.9,
+                    riskLevel: .low,
+                    needsClarification: false,
+                    clarificationQuestion: nil
+                )
+            ),
+            options: TextToSQLEvalRunOptions(
+                backend: .local,
+                caseTimeoutSeconds: .greatestFiniteMagnitude
+            )
+        )
+
+        #expect(result.status == .passed)
     }
 
     @Test func parseFailureKeepsTransportSuccessSeparate() async {

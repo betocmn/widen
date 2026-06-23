@@ -52,11 +52,11 @@ variable. Do not commit API keys, prompts, or raw model output.
 Each case has a default 120-second timeout, covering schema discovery,
 generation, and validation repair. When the timeout fires, WidenEval cancels
 the pipeline task and records `evalTimeout` rather than a transport failure,
-then continues with the remaining cases if the backend cooperates with
-cancellation. Foundation Models cancellation is cooperative; if the framework
-does not return after task cancellation, the current case can still block until
-the framework returns. WidenEval intentionally avoids unbounded detached model
-tasks.
+then continues with the remaining cases. Foundation Models cancellation is
+cooperative; if the framework does not return after task cancellation, the
+cancelled model work can continue in process until the framework returns.
+WidenEval does not use detached model tasks and cannot force Foundation Models
+to stop earlier than the framework allows.
 
 Prompt recording defaults to off. When it is off, the eval process also
 disables Widen's append-only generation log for that process. Reported
