@@ -109,6 +109,37 @@ struct TextToSQLEvalTests {
         #expect(result.metrics.clarificationQuality == true)
     }
 
+    @Test func scoresImperativeClarificationAsPassed() async {
+        let evalCase = TextToSQLEvalCase(
+            id: "commerce.best-customers",
+            schemaFixture: "commerce",
+            question: "Who are our best customers?",
+            expected: TextToSQLEvalExpectation(decision: .clarify)
+        )
+        let generator = StaticGenerator(
+            result: SQLGenerationResult(
+                sql: "",
+                explanation: "Needs a definition.",
+                assumptions: [],
+                referencedTables: [],
+                confidence: 0.2,
+                riskLevel: .medium,
+                needsClarification: true,
+                clarificationQuestion: "Please specify the metric for best customers."
+            )
+        )
+
+        let result = await TextToSQLEvalCaseRunner.run(
+            evalCase: evalCase,
+            schema: makeCommerceSchema(),
+            generator: generator,
+            options: TextToSQLEvalRunOptions(backend: .cloud, model: "test/model")
+        )
+
+        #expect(result.status == .passed)
+        #expect(result.metrics.clarificationQuality == true)
+    }
+
     @Test func evalRunnerKeepsInitialSQLWhenGroundingWouldAskClarification() async {
         let evalCase = TextToSQLEvalCase(
             id: "commerce.active-customers",
@@ -217,6 +248,53 @@ struct TextToSQLEvalTests {
                 WHERE o.id IS NULL
                 ORDER BY c.id DESC
                 LIMIT 100
+                """,
+            explanation: "Lists customers without orders.",
+            assumptions: [],
+            referencedTables: [],
+            confidence: 0.9,
+            riskLevel: .low,
+            needsClarification: false,
+            clarificationQuestion: nil
+        )
+
+        let result = TextToSQLEvalScorer.score(
+            evalCase: evalCase,
+            schema: makeCommerceSchema(),
+            generation: generation,
+            options: TextToSQLEvalRunOptions(backend: .local),
+            latencyMs: 12
+        )
+
+        #expect(result.status == .passed)
+        #expect(result.diagnostics.missingOperations.isEmpty)
+    }
+
+    @Test func notExistsSatisfiesAbsenceOperations() async {
+        let evalCase = TextToSQLEvalCase(
+            id: "commerce.customers-without-orders",
+            schemaFixture: "commerce",
+            question: "Which customers have never placed an order?",
+            expected: TextToSQLEvalExpectation(
+                decision: .sql,
+                requiredTables: ["public.customers", "public.orders"],
+                requiredColumnBindings: [
+                    "public.customers.id",
+                    "public.orders.customer_id",
+                ],
+                requiredOperations: [.leftJoin, .nullFilter, .limit]
+            )
+        )
+        let generation = SQLGenerationResult(
+            sql: """
+                SELECT c.id
+                FROM public.customers AS c
+                WHERE NOT EXISTS (
+                  SELECT 1
+                  FROM public.orders AS o
+                  WHERE o.customer_id = c.id
+                )
+                FETCH FIRST 100 ROWS ONLY
                 """,
             explanation: "Lists customers without orders.",
             assumptions: [],
@@ -368,6 +446,50 @@ struct TextToSQLEvalTests {
                 LIMIT 100
                 """,
             explanation: "Lists customers with orders.",
+            assumptions: [],
+            referencedTables: [],
+            confidence: 0.9,
+            riskLevel: .low,
+            needsClarification: false,
+            clarificationQuestion: nil
+        )
+
+        let result = TextToSQLEvalScorer.score(
+            evalCase: evalCase,
+            schema: makeCommerceSchema(),
+            generation: generation,
+            options: TextToSQLEvalRunOptions(backend: .local),
+            latencyMs: 12
+        )
+
+        #expect(result.status == .wrongSchemaObjects)
+        #expect(result.diagnostics.missingOperations == [.nullFilter])
+    }
+
+    @Test func unrelatedNullFilterDoesNotSatisfyAbsenceAntiJoin() {
+        let evalCase = TextToSQLEvalCase(
+            id: "commerce.customers-without-orders",
+            schemaFixture: "commerce",
+            question: "Which customers have never placed an order?",
+            expected: TextToSQLEvalExpectation(
+                decision: .sql,
+                requiredTables: ["public.customers", "public.orders"],
+                requiredColumnBindings: [
+                    "public.customers.id",
+                    "public.orders.customer_id",
+                ],
+                requiredOperations: [.leftJoin, .nullFilter]
+            )
+        )
+        let generation = SQLGenerationResult(
+            sql: """
+                SELECT c.id
+                FROM public.customers AS c
+                LEFT JOIN public.orders AS o ON o.customer_id = c.id
+                WHERE c.status IS NULL
+                LIMIT 100
+                """,
+            explanation: "Filters customers with missing status.",
             assumptions: [],
             referencedTables: [],
             confidence: 0.9,

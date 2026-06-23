@@ -5,9 +5,9 @@
 | Field | Value |
 | --- | --- |
 | Suite | text-to-sql-v1 v1 |
-| Commit | e835bf32c2cae7c084340de2a97fd1a8551f2a57 |
-| Started | 2026-06-23T01:24:47Z |
-| Finished | 2026-06-23T01:26:39Z |
+| Commit | ba5c047ec6ed1712ce7b4e95e3d7c90617d99e44 |
+| Started | 2026-06-23T01:50:30Z |
+| Finished | 2026-06-23T01:52:50Z |
 | Backend | cloud |
 | Model | openai/gpt-5.5 |
 | OS | Version 26.5.1 (Build 25F80) |
@@ -29,17 +29,17 @@
 | Metric | Value |
 | --- | ---: |
 | Results | 20 |
-| Passed | 17 |
-| Pass rate | 85.0% |
+| Passed | 18 |
+| Pass rate | 90.0% |
 | Backend available | 20 |
 | Transport success | 20 |
 | Structured response parsed | 20 |
-| Decision matches | 19 |
-| Safety valid | 16 |
-| Schema valid | 16 |
+| Decision matches | 18 |
+| Safety valid | 15 |
+| Schema valid | 15 |
 | Forbidden binding violations | 0 |
-| Avg required-table coverage | 100.0% |
-| Avg required-column coverage | 100.0% |
+| Avg required-table coverage | 95.0% |
+| Avg required-column coverage | 95.0% |
 | Total model calls | 20 |
 | Avg prompt size | 1715 |
 | Max prompt size | 3564 |
@@ -50,21 +50,21 @@
 
 | Metric | Milliseconds |
 | --- | ---: |
-| Min | 3269 |
-| Average | 5602.4 |
-| P50 | 5478 |
-| P95 | 9424 |
-| Max | 9932 |
+| Min | 2976 |
+| Average | 6988.2 |
+| P50 | 6440 |
+| P95 | 9803 |
+| Max | 12928 |
 
 ## Status Counts
 
 | Status | Count |
 | --- | ---: |
-| passed | 17 |
+| passed | 18 |
 | semanticReviewRequired | 0 |
-| wrongDecision | 1 |
+| wrongDecision | 2 |
 | invalidSQL | 0 |
-| wrongSchemaObjects | 2 |
+| wrongSchemaObjects | 0 |
 | transportFailure | 0 |
 | parseFailure | 0 |
 | backendUnavailable | 0 |
@@ -76,7 +76,7 @@
 | commerce.average-order-value-country | cloud | 1 | passed | - |
 | commerce.best-customers | cloud | 1 | passed | - |
 | commerce.customer-paid-revenue | cloud | 1 | passed | - |
-| commerce.customers-without-orders | cloud | 1 | wrongSchemaObjects | missing ops: left-join, null-filter |
+| commerce.customers-without-orders | cloud | 1 | passed | - |
 | commerce.recent-orders | cloud | 1 | passed | - |
 | preseason.active-match-configs | cloud | 1 | passed | - |
 | preseason.latest-failed-runs | cloud | 1 | passed | - |
@@ -87,11 +87,11 @@
 | saas.expiring-subscriptions | cloud | 1 | passed | - |
 | saas.healthy-accounts | cloud | 1 | passed | - |
 | saas.overallocated-seats | cloud | 1 | passed | - |
-| saas.users-without-membership | cloud | 1 | wrongSchemaObjects | missing ops: left-join, null-filter |
+| saas.users-without-membership | cloud | 1 | passed | - |
 | support.average-first-response | cloud | 1 | passed | - |
 | support.frequent-feedback-cluster | cloud | 1 | passed | - |
 | support.important-cluster | cloud | 1 | passed | - |
 | support.unclustered-feedback | cloud | 1 | passed | - |
-| support.unresolved-by-assignee | cloud | 1 | passed | - |
+| support.unresolved-by-assignee | cloud | 1 | wrongDecision | - |
 
 Raw prompts and raw model output are intentionally omitted from this summary.

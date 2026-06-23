@@ -246,7 +246,12 @@ public enum TextToSQLEvalScorer {
             referencedColumnSet.contains(normalizeBinding($0))
         }
         let operations = detectedOperations(in: generation.sql)
-        let missingOperations = expected.requiredOperations.filter { !operations.contains($0) }
+        let missingOperations = missingOperations(
+            for: expected,
+            detected: operations,
+            sql: generation.sql,
+            schema: schema
+        )
 
         let tableCoverage = coverage(
             total: expected.requiredTables.count,
@@ -319,6 +324,7 @@ public enum TextToSQLEvalScorer {
             || lower.contains("which")
             || lower.contains("what")
             || lower.contains("clarif")
+            || lower.contains("specify")
     }
 
     private static func detectedOperations(in sql: String) -> Set<TextToSQLEvalOperation> {
@@ -352,7 +358,9 @@ public enum TextToSQLEvalScorer {
         if matches(#"\border\s+by\b"#, in: lower), matches(#"\bdesc\b"#, in: lower) {
             result.insert(.descendingOrder)
         }
-        if matches(#"\blimit\s+\d+\b"#, in: lower) {
+        if matches(#"\blimit\s+\d+\b"#, in: lower)
+            || matches(#"\bfetch\s+(first|next)(\s+\d+)?\s+rows?\s+only\b"#, in: lower)
+        {
             result.insert(.limit)
         }
         if matches(#"\binterval\b"#, in: lower)
@@ -367,6 +375,132 @@ public enum TextToSQLEvalScorer {
 
     private static func matches(_ pattern: String, in value: String) -> Bool {
         value.range(of: pattern, options: .regularExpression) != nil
+    }
+
+    private static func missingOperations(
+        for expected: TextToSQLEvalExpectation,
+        detected operations: Set<TextToSQLEvalOperation>,
+        sql: String,
+        schema: DatabaseSchema
+    ) -> [TextToSQLEvalOperation] {
+        expected.requiredOperations.filter {
+            !operationSatisfied(
+                $0,
+                expected: expected,
+                detected: operations,
+                sql: sql,
+                schema: schema
+            )
+        }
+    }
+
+    private static func operationSatisfied(
+        _ operation: TextToSQLEvalOperation,
+        expected: TextToSQLEvalExpectation,
+        detected operations: Set<TextToSQLEvalOperation>,
+        sql: String,
+        schema: DatabaseSchema
+    ) -> Bool {
+        let expectsAntiJoin =
+            expected.requiredOperations.contains(.leftJoin)
+            && expected.requiredOperations.contains(.nullFilter)
+        if expectsAntiJoin, operations.contains(.notExists) {
+            if operation == .leftJoin || operation == .nullFilter {
+                return true
+            }
+        }
+
+        if operation == .nullFilter,
+            expected.requiredOperations.contains(.leftJoin),
+            operations.contains(.leftJoin)
+        {
+            return nullFilterTargetsLeftJoinedRelation(in: sql, schema: schema)
+        }
+
+        return operations.contains(operation)
+    }
+
+    private static func nullFilterTargetsLeftJoinedRelation(
+        in sql: String,
+        schema: DatabaseSchema
+    ) -> Bool {
+        let analysis = SQLReferenceAnalyzer.analyze(sql)
+        let leftJoinedTables = leftJoinedTableKeys(analysis: analysis, sql: sql, schema: schema)
+        guard !leftJoinedTables.isEmpty else { return false }
+
+        let relationAliases = relationAliasMap(analysis: analysis, schema: schema)
+        let referencedTables = SQLSchemaValidator.validate(sql: sql, against: schema)
+            .referencedTables
+        let referencedTableInfos = schema.tables.filter { table in
+            referencedTables.contains(table.qualifiedName)
+        }
+
+        return analysis.columns.contains { column in
+            columnIsNullFiltered(column, in: sql)
+                && resolvedTables(
+                    for: column,
+                    relationAliases: relationAliases,
+                    referencedTables: referencedTableInfos
+                )
+                .contains {
+                    leftJoinedTables.contains(normalizeBinding($0.qualifiedName))
+                }
+        }
+    }
+
+    private static func leftJoinedTableKeys(
+        analysis: SQLReferenceAnalysis,
+        sql: String,
+        schema: DatabaseSchema
+    ) -> Set<String> {
+        var keys = Set<String>()
+        for relation in analysis.relations where !relation.isDerived {
+            guard let offset = relation.startOffset,
+                relationHasLeftJoinPrefix(offset: offset, in: sql),
+                let table = table(for: relation, in: schema)
+            else { continue }
+            keys.insert(normalizeBinding(table.qualifiedName))
+        }
+        return keys
+    }
+
+    private static func relationHasLeftJoinPrefix(offset: Int, in sql: String) -> Bool {
+        let characters = Array(sql)
+        guard offset >= 0, offset <= characters.count else { return false }
+        let lowerBound = max(0, offset - 80)
+        let prefix = String(characters[lowerBound..<offset])
+        return matches(#"(?is)\bleft\s+(outer\s+)?join\s*$"#, in: prefix)
+    }
+
+    private static func columnIsNullFiltered(_ column: SQLColumnReference, in sql: String) -> Bool {
+        guard let endOffset = column.endOffset else { return false }
+        let characters = Array(sql)
+        guard endOffset >= 0, endOffset <= characters.count else { return false }
+        let lookaheadEnd = min(characters.count, endOffset + 32)
+        let suffix = String(characters[endOffset..<lookaheadEnd])
+        return matches(#"(?is)^\s+is\s+null\b"#, in: suffix)
+    }
+
+    private static func resolvedTables(
+        for column: SQLColumnReference,
+        relationAliases: [String: TableInfo],
+        referencedTables: [TableInfo]
+    ) -> [TableInfo] {
+        if let qualifier = column.qualifier,
+            let table = relationAliases[normalizeBinding(qualifier)]
+        {
+            return [table]
+        }
+        if let qualifier = column.qualifier,
+            let table = tableMatchingQualifier(qualifier, in: referencedTables)
+        {
+            return [table]
+        }
+        guard column.qualifier == nil else { return [] }
+        let matches = referencedTables.filter {
+            columnNamed(column.name, isQuoted: column.isQuoted, existsIn: $0)
+        }
+        return matches.count == 1 ? matches : []
     }
 
     private static func referencedColumns(in sql: String, schema: DatabaseSchema) -> [String] {

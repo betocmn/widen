@@ -5,9 +5,9 @@
 | Field | Value |
 | --- | --- |
 | Suite | text-to-sql-v1 v1 |
-| Commit | e835bf32c2cae7c084340de2a97fd1a8551f2a57 |
-| Started | 2026-06-23T01:22:36Z |
-| Finished | 2026-06-23T01:24:26Z |
+| Commit | ba5c047ec6ed1712ce7b4e95e3d7c90617d99e44 |
+| Started | 2026-06-23T01:48:28Z |
+| Finished | 2026-06-23T01:50:16Z |
 | Backend | local |
 | Model | - |
 | OS | Version 26.5.1 (Build 25F80) |
@@ -50,11 +50,11 @@
 
 | Metric | Milliseconds |
 | --- | ---: |
-| Min | 3238 |
-| Average | 5477.9 |
-| P50 | 5008 |
-| P95 | 7415 |
-| Max | 8602 |
+| Min | 3204 |
+| Average | 5393.4 |
+| P50 | 5137 |
+| P95 | 7419 |
+| Max | 8522 |
 
 ## Status Counts
 
@@ -87,7 +87,7 @@
 | saas.expiring-subscriptions | local | 1 | passed | - |
 | saas.healthy-accounts | local | 1 | wrongDecision | - |
 | saas.overallocated-seats | local | 1 | wrongSchemaObjects | missing tables: public.organization_membership; missing columns: public.organization.id, public.organization_membership.organization_id, public.organization_membership.status; missing ops: count, group, join; schema: Schema validation failed: column organization_id is not on public.organization. Schema validation failed: column seats_used is not on public.organization. |
-| saas.users-without-membership | local | 1 | wrongSchemaObjects | missing columns: public.organization_membership.user_id; missing ops: left-join, null-filter; schema: Schema validation failed: column app_user_id is not on public.organization_membership. |
+| saas.users-without-membership | local | 1 | wrongSchemaObjects | missing columns: public.organization_membership.user_id; schema: Schema validation failed: column app_user_id is not on public.organization_membership. |
 | support.average-first-response | local | 1 | wrongSchemaObjects | schema: Schema validation failed: column first_response_at is not an output column of last_30_days; project it from the CTE or do not reference it outside the CTE. Schema validation failed: column created_at is not an output column of last_30_days; project it from the CTE or do not reference it outside the CTE. |
 | support.frequent-feedback-cluster | local | 1 | wrongSchemaObjects | missing tables: public.feedback_cluster; missing columns: public.feedback_cluster.id; missing ops: join |
 | support.important-cluster | local | 1 | wrongDecision | - |
