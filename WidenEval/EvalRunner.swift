@@ -77,7 +77,7 @@ struct EvalRunner {
 
     func run() async throws -> EvalRun {
         let startedAt = ISO8601DateFormatter().string(from: Date())
-        let suiteURL = URL(fileURLWithPath: options.suitePath)
+        let suiteURL = URL(fileURLWithPath: options.suitePath).standardizedFileURL
         let suiteData = try Data(contentsOf: suiteURL)
         let suite = try JSONDecoder().decode(TextToSQLEvalSuite.self, from: suiteData)
         try TextToSQLEvalSuiteValidator.validate(suite: suite, suiteURL: suiteURL)
@@ -86,6 +86,9 @@ struct EvalRunner {
             .deletingLastPathComponent()
             .deletingLastPathComponent()
             .appendingPathComponent("schemas", isDirectory: true)
+        let repositoryRoot = suiteURL
+            .deletingLastPathComponent()
+            .deletingLastPathComponent()
         let schemas = try loadSchemas(
             for: Set(selectedCases.map(\.schemaFixture)),
             schemaDirectory: schemaDirectory
@@ -100,24 +103,24 @@ struct EvalRunner {
                     throw EvalRunnerError.missingSchemaFixture(evalCase.schemaFixture)
                 }
                 for repeatIndex in 1...options.repeatCount {
-                    let prompt = promptText(for: backend, evalCase: evalCase, schema: schema)
-                    let runOptions = TextToSQLEvalRunOptions(
-                        backend: backend,
-                        model: backend == .cloud ? options.model : nil,
-                        repeatIndex: repeatIndex,
-                        estimatedInitialPromptCharacters: prompt.count,
-                        estimatedInitialPrompt: options.recordPrompts ? prompt : nil
-                    )
                     if let unavailable {
                         results.append(
                             backendUnavailableResult(
                                 evalCase: evalCase,
                                 backend: backend,
                                 message: unavailable,
-                                options: runOptions
+                                repeatIndex: repeatIndex
                             )
                         )
                     } else if let generator {
+                        let prompt = promptText(for: backend, evalCase: evalCase, schema: schema)
+                        let runOptions = TextToSQLEvalRunOptions(
+                            backend: backend,
+                            model: backend == .cloud ? options.model : nil,
+                            repeatIndex: repeatIndex,
+                            estimatedInitialPromptCharacters: prompt.count,
+                            estimatedInitialPrompt: options.recordPrompts ? prompt : nil
+                        )
                         print("Running \(evalCase.id) [\(backend.rawValue)] repeat \(repeatIndex)")
                         let result = await TextToSQLEvalCaseRunner.run(
                             evalCase: evalCase,
@@ -154,7 +157,10 @@ struct EvalRunner {
             repeatCount: options.repeatCount,
             suiteFileHash: Self.sha256(suiteData),
             scorerVersion: "static-shape-v1",
-            scorerSourceHash: Self.sourceHash(relativePath: "WidenKit/Evals/TextToSQLEvalScorer.swift"),
+            scorerSourceHash: Self.sourceHash(
+                relativePath: "WidenKit/Evals/TextToSQLEvalScorer.swift",
+                relativeTo: repositoryRoot
+            ),
             schemaFixtureHashes: schemas.mapValues(\.sha256)
         )
         return EvalRun(
@@ -231,24 +237,22 @@ struct EvalRunner {
         evalCase: TextToSQLEvalCase,
         backend: TextToSQLEvalBackend,
         message: String,
-        options: TextToSQLEvalRunOptions
+        repeatIndex: Int
     ) -> TextToSQLEvalResult {
         return TextToSQLEvalResult(
             caseID: evalCase.id,
             backend: backend,
-            model: options.model,
-            repeatIndex: options.repeatIndex,
+            model: backend == .cloud ? options.model : nil,
+            repeatIndex: repeatIndex,
             status: .backendUnavailable,
             metrics: TextToSQLEvalMetrics(
                 backendAvailable: false,
                 transportSuccess: false,
                 structuredResponseParsed: false,
                 decisionMatches: false,
-                latencyMs: 0,
-                estimatedInitialPromptCharacters: options.estimatedInitialPromptCharacters
+                latencyMs: 0
             ),
-            diagnostics: TextToSQLEvalDiagnostics(errorMessage: message),
-            estimatedInitialPrompt: options.estimatedInitialPrompt
+            diagnostics: TextToSQLEvalDiagnostics(errorMessage: message)
         )
     }
 
@@ -259,7 +263,7 @@ struct EvalRunner {
         let passed = statusCounts[TextToSQLEvalCaseStatus.passed.rawValue, default: 0]
         let latencies = results.map(\.metrics.latencyMs).sorted()
         let modelCalls = results.compactMap(\.metrics.modelCallCount)
-        let promptSizes = results.compactMap(\.metrics.estimatedInitialPromptCharacters)
+        let promptEstimateValues = results.compactMap(\.metrics.estimatedInitialPromptCharacters)
         let backendAvailableValues = results.map(\.metrics.backendAvailable)
         let transportEvaluated = results.filter(\.metrics.backendAvailable)
         let structuredEvaluated = results.filter(\.metrics.transportSuccess)
@@ -311,10 +315,10 @@ struct EvalRunner {
             ),
             latency: latencySummary(latencies),
             totalModelCalls: modelCalls.isEmpty ? nil : modelCalls.reduce(0, +),
-            averageEstimatedInitialPromptCharacters: promptSizes.isEmpty
+            averageEstimatedInitialPromptCharacters: promptEstimateValues.isEmpty
                 ? nil
-                : Double(promptSizes.reduce(0, +)) / Double(promptSizes.count),
-            maxEstimatedInitialPromptCharacters: promptSizes.max()
+                : Double(promptEstimateValues.reduce(0, +)) / Double(promptEstimateValues.count),
+            maxEstimatedInitialPromptCharacters: promptEstimateValues.max()
         )
     }
 
@@ -349,8 +353,9 @@ struct EvalRunner {
         SHA256.hash(data: data).map { String(format: "%02x", $0) }.joined()
     }
 
-    private static func sourceHash(relativePath: String) -> String {
-        guard let data = try? Data(contentsOf: URL(fileURLWithPath: relativePath)) else {
+    private static func sourceHash(relativePath: String, relativeTo directory: URL) -> String {
+        let url = directory.appendingPathComponent(relativePath)
+        guard let data = try? Data(contentsOf: url) else {
             return "unknown"
         }
         return sha256(data)
