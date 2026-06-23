@@ -484,17 +484,12 @@ public struct TextToSQLPipeline: TextToSQLRunning {
                     confirmedSemanticBindings: context.confirmedSemanticBindings,
                     allowGroundingClarification: request.allowGroundingClarification
                 )
-                trace.append(
-                    .validationRepair,
-                    outcome: .success,
-                    since: stageStart,
-                    modelCallCount: generation.generationCallCount
-                )
             } catch is CancellationError {
                 trace.append(
                     .validationRepair,
                     outcome: .failure,
                     since: stageStart,
+                    modelCallCount: context.modelCallCount,
                     failureCategory: .cancellation
                 )
                 throw CancellationError()
@@ -515,6 +510,7 @@ public struct TextToSQLPipeline: TextToSQLRunning {
                     .validationRepair,
                     outcome: .failure,
                     since: stageStart,
+                    modelCallCount: context.modelCallCount,
                     failureCategory: failure.category
                 )
                 return RepairRun(decision: .failed(failure), failureCategory: failure.category)
@@ -536,8 +532,21 @@ public struct TextToSQLPipeline: TextToSQLRunning {
                         attempts: coordinator.attempts,
                         category: .repeatedNoProgressRepair
                     )
+                    trace.append(
+                        .validationRepair,
+                        outcome: .failure,
+                        since: stageStart,
+                        modelCallCount: generation.generationCallCount,
+                        failureCategory: failure.category
+                    )
                     return RepairRun(decision: .failed(failure), failureCategory: failure.category)
                 }
+                trace.append(
+                    .validationRepair,
+                    outcome: .success,
+                    since: stageStart,
+                    modelCallCount: generation.generationCallCount
+                )
                 record(
                     TextToSQLPipelineEvent(
                         kind: .validationRepairNeedsClarification,
@@ -552,6 +561,13 @@ public struct TextToSQLPipeline: TextToSQLRunning {
 
             case .rejected(let reason):
                 let category = failureCategory(for: reason, evaluation: evaluation)
+                trace.append(
+                    .validationRepair,
+                    outcome: .failure,
+                    since: stageStart,
+                    modelCallCount: generation.generationCallCount,
+                    failureCategory: category
+                )
                 record(
                     TextToSQLPipelineEvent(
                         kind: .validationRepairRejected,
@@ -608,6 +624,13 @@ public struct TextToSQLPipeline: TextToSQLRunning {
                     attempts: coordinator.attempts,
                     category: .modelGeneration
                 )
+                trace.append(
+                    .validationRepair,
+                    outcome: .failure,
+                    since: stageStart,
+                    modelCallCount: generation.generationCallCount,
+                    failureCategory: failure.category
+                )
                 record(
                     TextToSQLPipelineEvent(
                         kind: .validationRepairMissingSQL,
@@ -622,6 +645,12 @@ public struct TextToSQLPipeline: TextToSQLRunning {
                 return RepairRun(decision: .failed(failure), failureCategory: failure.category)
             }
 
+            trace.append(
+                .validationRepair,
+                outcome: .success,
+                since: stageStart,
+                modelCallCount: generation.generationCallCount
+            )
             record(
                 TextToSQLPipelineEvent(
                     kind: .validationRepairPassedValidation,
@@ -718,17 +747,28 @@ public struct TextToSQLPipeline: TextToSQLRunning {
     ) -> TextToSQLFailureCategory {
         switch reason {
         case .repeatedFingerprint, .forbiddenIdentifier:
-            .repeatedNoProgressRepair
+            if candidateHasUnsafeSafetyIssue(evaluation) {
+                .safetyValidation
+            } else {
+                .repeatedNoProgressRepair
+            }
         case .unsafeWrite:
             .safetyValidation
         case .validationFailure:
-            if let sql = evaluation.sql, !SQLSafetyValidator.validate(sql).isValid {
+            if candidateHasUnsafeSafetyIssue(evaluation) {
                 .safetyValidation
             } else {
                 .schemaValidation
             }
         case .emptySQL:
             .modelGeneration
+        }
+    }
+
+    private func candidateHasUnsafeSafetyIssue(_ evaluation: SQLRepairCandidateEvaluation) -> Bool {
+        guard let sql = evaluation.sql else { return false }
+        return SQLSafetyValidator.validate(sql).safetyIssueKinds.contains {
+            $0.isUnsafeExecutionRisk
         }
     }
 

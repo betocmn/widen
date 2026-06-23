@@ -332,6 +332,28 @@ struct TextToSQLPipelineTests {
         #expect(generator.contexts.count == 2)
     }
 
+    @Test func repeatedUnsafeRepairPreservesSafetyFailure() async throws {
+        let unsafeSQL = "SELECT id FROM public.users; DROP TABLE public.users"
+        let generator = ScriptedGenerator([
+            .success(generation(sql: unsafeSQL)),
+            .success(generation(sql: unsafeSQL)),
+        ])
+
+        let result = try await run(generator)
+
+        guard case .failed(let failure) = result.finalDecision else {
+            Issue.record("expected failure decision")
+            return
+        }
+        #expect(failure.stage == .validationRepair)
+        #expect(failure.category == .safetyValidation)
+        #expect(result.trace.stages.contains {
+            $0.stage == .validationRepair
+                && $0.outcome == .failure
+                && $0.failureCategory == .safetyValidation
+        })
+    }
+
     @Test func repairThatRemainsInvalidReturnsSchemaFailure() async throws {
         let generator = ScriptedGenerator([
             .success(generation(sql: "SELECT missing FROM public.users")),
@@ -364,6 +386,7 @@ struct TextToSQLPipelineTests {
         #expect(failure.stage == .validationRepair)
         #expect(failure.category == .transport)
         #expect(generator.contexts.count == 2)
+        #expect(result.trace.modelCalls == 2)
     }
 
     @Test func unsafeWriteRepairForReadIsRejected() async throws {
@@ -381,6 +404,11 @@ struct TextToSQLPipelineTests {
         #expect(failure.category == .safetyValidation)
         #expect(result.events.contains {
             $0.kind == .validationRepairRejected
+                && $0.failureCategory == .safetyValidation
+        })
+        #expect(result.trace.stages.contains {
+            $0.stage == .validationRepair
+                && $0.outcome == .failure
                 && $0.failureCategory == .safetyValidation
         })
     }
@@ -402,6 +430,11 @@ struct TextToSQLPipelineTests {
         #expect(failure.category == .safetyValidation)
         #expect(result.events.contains {
             $0.kind == .validationRepairRejected
+                && $0.failureCategory == .safetyValidation
+        })
+        #expect(result.trace.stages.contains {
+            $0.stage == .validationRepair
+                && $0.outcome == .failure
                 && $0.failureCategory == .safetyValidation
         })
     }

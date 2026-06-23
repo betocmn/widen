@@ -13,11 +13,34 @@ public enum SQLStatementKind: String, Codable, Sendable, Equatable {
     public var isWrite: Bool { self != .read }
 }
 
+public enum SQLSafetyIssueKind: String, Sendable, Equatable {
+    case emptySQL
+    case unterminatedSyntax
+    case multipleStatements
+    case unsupportedStatement
+    case dataModifyingRead
+    case forbiddenKeyword
+    case forbiddenFunction
+    case aggregateWindowNesting
+    case aggregateNesting
+
+    public var isUnsafeExecutionRisk: Bool {
+        switch self {
+        case .multipleStatements, .unsupportedStatement, .dataModifyingRead,
+            .forbiddenKeyword, .forbiddenFunction:
+            true
+        case .emptySQL, .unterminatedSyntax, .aggregateWindowNesting, .aggregateNesting:
+            false
+        }
+    }
+}
+
 public struct SQLValidationResult: Equatable, Sendable {
     public var isValid: Bool
     public var normalizedSQL: String?
     public var errors: [String]
     public var warnings: [String]
+    public var safetyIssueKinds: [SQLSafetyIssueKind]
     /// True when the stripped SQL contains a top-level LIMIT token; the
     /// executor wraps the query in a `LIMIT n` subquery when absent.
     public var hasLimit: Bool
@@ -32,6 +55,7 @@ public struct SQLValidationResult: Equatable, Sendable {
         normalizedSQL: String?,
         errors: [String],
         warnings: [String],
+        safetyIssueKinds: [SQLSafetyIssueKind] = [],
         hasLimit: Bool,
         kind: SQLStatementKind = .read,
         requiresConfirmation: Bool = false
@@ -40,6 +64,7 @@ public struct SQLValidationResult: Equatable, Sendable {
         self.normalizedSQL = normalizedSQL
         self.errors = errors
         self.warnings = warnings
+        self.safetyIssueKinds = safetyIssueKinds
         self.hasLimit = hasLimit
         self.kind = kind
         self.requiresConfirmation = requiresConfirmation
@@ -89,6 +114,7 @@ public enum SQLSafetyValidator {
     public static func validate(_ sql: String) -> SQLValidationResult {
         var errors: [String] = []
         var warnings: [String] = []
+        var issueKinds: [SQLSafetyIssueKind] = []
 
         var trimmed = sql.trimmingCharacters(in: .whitespacesAndNewlines)
         // Allow exactly one trailing semicolon — people paste SQL ending in ';'.
@@ -98,16 +124,21 @@ public enum SQLSafetyValidator {
         guard !trimmed.isEmpty else {
             return SQLValidationResult(
                 isValid: false, normalizedSQL: nil,
-                errors: ["SQL is empty."], warnings: [], hasLimit: false
+                errors: ["SQL is empty."],
+                warnings: [],
+                safetyIssueKinds: [.emptySQL],
+                hasLimit: false
             )
         }
 
         let stripped = strip(trimmed)
         if stripped.unterminated {
             errors.append("SQL contains an unterminated string, identifier, or comment.")
+            issueKinds.append(.unterminatedSyntax)
         }
         if stripped.text.contains(";") {
             errors.append("Multiple statements are not allowed.")
+            issueKinds.append(.multipleStatements)
         }
 
         let tokens = tokenize(stripped.text)
@@ -123,6 +154,7 @@ public enum SQLSafetyValidator {
                     errors.append(
                         "Data-modifying statements are not allowed inside a SELECT or WITH query: \(writeToken)."
                     )
+                    issueKinds.append(.dataModifyingRead)
                 }
             case "INSERT":
                 kind = .insert
@@ -132,9 +164,11 @@ public enum SQLSafetyValidator {
                 kind = .delete
             default:
                 errors.append("Only SELECT, WITH, INSERT, UPDATE, or DELETE statements are allowed.")
+                issueKinds.append(.unsupportedStatement)
             }
         } else {
             errors.append("No SQL statement found.")
+            issueKinds.append(.emptySQL)
         }
 
         var reported: Set<String> = []
@@ -147,25 +181,30 @@ public enum SQLSafetyValidator {
                 reported.insert(token).inserted
             {
                 errors.append("Forbidden keyword: \(token).")
+                issueKinds.append(.forbiddenKeyword)
             }
             if forbiddenFunctions.contains(token), reported.insert(token).inserted {
                 errors.append("Forbidden function: \(token.lowercased())().")
+                issueKinds.append(.forbiddenFunction)
             }
         }
         for token in stripped.quotedFunctionTokens {
             if forbiddenFunctions.contains(token), reported.insert(token).inserted {
                 errors.append("Forbidden function: \(token.lowercased())().")
+                issueKinds.append(.forbiddenFunction)
             }
         }
         if containsWindowFunctionInsideAggregate(stripped.text) {
             errors.append(
                 "Aggregate functions cannot contain window functions. Count rows in a subquery or CTE, then aggregate those results in the outer SELECT."
             )
+            issueKinds.append(.aggregateWindowNesting)
         }
         if containsAggregateFunctionInsideAggregate(stripped.text) {
             errors.append(
                 "Aggregate functions cannot contain other aggregate functions. Count rows in a subquery or CTE, then aggregate those results in the outer SELECT."
             )
+            issueKinds.append(.aggregateNesting)
         }
 
         let hasLimit = hasTopLevelLimit(stripped.text)
@@ -204,6 +243,7 @@ public enum SQLSafetyValidator {
             normalizedSQL: errors.isEmpty ? trimmed : nil,
             errors: errors,
             warnings: warnings,
+            safetyIssueKinds: issueKinds,
             hasLimit: hasLimit,
             kind: kind,
             requiresConfirmation: requiresConfirmation
