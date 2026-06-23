@@ -69,7 +69,8 @@
       "schemaFixture": "commerce",
       "question": "Who are our best customers?",
       "expected": {
-        "decision": "clarify"
+        "decision": "clarify",
+        "clarificationMustMentionAny": ["metric", "revenue", "spend", "orders", "best"]
       }
     },
     {
@@ -135,7 +136,8 @@
       "schemaFixture": "support",
       "question": "What is our most important feedback cluster?",
       "expected": {
-        "decision": "clarify"
+        "decision": "clarify",
+        "clarificationMustMentionAny": ["important", "priority", "impact", "frequency"]
       }
     },
     {
@@ -216,7 +218,8 @@
       "schemaFixture": "saas",
       "question": "Which accounts are healthy?",
       "expected": {
-        "decision": "clarify"
+        "decision": "clarify",
+        "clarificationMustMentionAny": ["healthy", "health", "status", "usage"]
       }
     },
     {
@@ -236,7 +239,8 @@
       "schemaFixture": "preseason",
       "question": "Tools with the most wins in the last two weeks",
       "expected": {
-        "decision": "clarify"
+        "decision": "clarify",
+        "clarificationMustMentionAny": ["win", "winner", "status", "decision", "date", "time"]
       }
     },
     {
@@ -265,7 +269,7 @@
           "descending-order",
           "relative-time-filter"
         ],
-        "goldenSQL": "SELECT t.id, t.name, COUNT(*) AS wins FROM public.preseason_match_evaluation AS e JOIN public.preseason_tool AS t ON t.id = e.winner_id WHERE e.winner_id IS NOT NULL AND e.\"createdAt\" >= NOW() - INTERVAL '14 days' GROUP BY t.id, t.name ORDER BY wins DESC LIMIT 100"
+        "goldenSQL": "SELECT t.id, t.name, COUNT(e.winner_id) AS wins FROM public.preseason_match_evaluation AS e JOIN public.preseason_tool AS t ON t.id = e.winner_id WHERE e.winner_id IS NOT NULL AND e.\"createdAt\" >= NOW() - INTERVAL '14 days' GROUP BY t.id, t.name ORDER BY wins DESC LIMIT 100"
       }
     },
     {
@@ -298,12 +302,12 @@
           "public.preseason_match_config.tool_a_id",
           "public.preseason_match_config.tool_b_id",
           "public.preseason_match_config.category_id",
-          "public.preseason_match_config.active",
+          "public.preseason_match_config.is_active",
           "public.preseason_tool.id",
           "public.preseason_category.id"
         ],
         "requiredOperations": ["join", "limit"],
-        "goldenSQL": "SELECT c.id, ta.name AS tool_a_name, tb.name AS tool_b_name, pc.name AS category_name FROM public.preseason_match_config AS c JOIN public.preseason_tool AS ta ON ta.id = c.tool_a_id JOIN public.preseason_tool AS tb ON tb.id = c.tool_b_id JOIN public.preseason_category AS pc ON pc.id = c.category_id WHERE c.active = TRUE ORDER BY c.\"createdAt\" DESC LIMIT 100"
+        "goldenSQL": "SELECT c.id, ta.name AS tool_a_name, tb.name AS tool_b_name, pc.name AS category_name FROM public.preseason_match_config AS c JOIN public.preseason_tool AS ta ON ta.id = c.tool_a_id JOIN public.preseason_tool AS tb ON tb.id = c.tool_b_id JOIN public.preseason_category AS pc ON pc.id = c.category_id WHERE c.is_active = TRUE ORDER BY c.\"createdAt\" DESC LIMIT 100"
       }
     }
   ]
