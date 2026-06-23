@@ -19,7 +19,7 @@ struct TextToSQLEvalTests {
     }
 
     private struct ThrowingGenerator: SQLGenerator {
-        var error: AppError
+        var error: any Error
 
         func generateSQL(
             question: String,
@@ -76,6 +76,91 @@ struct TextToSQLEvalTests {
         #expect(result.metrics.schemaValid == true)
         #expect(result.metrics.requiredTableCoverage == .some(1.0))
         #expect(result.metrics.requiredColumnBindingCoverage == .some(1.0))
+    }
+
+    @Test func successfulScoringUsesPipelineTraceModelCalls() async {
+        let evalCase = TextToSQLEvalCase(
+            id: "commerce.customer-order-ids",
+            schemaFixture: "commerce",
+            question: "List customers and their order ids",
+            expected: TextToSQLEvalExpectation(
+                decision: .sql,
+                requiredTables: ["public.customers", "public.orders"],
+                requiredColumnBindings: [
+                    "public.customers.id",
+                    "public.orders.customer_id",
+                ],
+                requiredOperations: [.join, .limit]
+            )
+        )
+        let generation = SQLGenerationResult(
+            sql: """
+                SELECT c.id, c.email
+                FROM public.customers AS c
+                JOIN public.orders AS o ON o.customer_id = c.id
+                ORDER BY c.id
+                LIMIT 100
+                """,
+            explanation: "Lists customers without orders.",
+            assumptions: [],
+            referencedTables: [],
+            confidence: 0.9,
+            riskLevel: .low,
+            needsClarification: false,
+            clarificationQuestion: nil,
+            generationCallCount: nil
+        )
+
+        let result = TextToSQLEvalScorer.score(
+            evalCase: evalCase,
+            schema: makeCommerceSchema(),
+            generation: generation,
+            options: TextToSQLEvalRunOptions(backend: .local),
+            latencyMs: 12,
+            trace: TextToSQLTrace(stages: [], modelCalls: 2, elapsedMs: 12)
+        )
+
+        #expect(result.status == .passed)
+        #expect(result.metrics.modelCallCount == 2)
+    }
+
+    @Test func repeatedNoProgressFailureCountsAsSchemaInvalid() async {
+        let evalCase = TextToSQLEvalCase(
+            id: "commerce.ambiguous-id",
+            schemaFixture: "commerce",
+            question: "List customer order ids",
+            expected: TextToSQLEvalExpectation(
+                decision: .sql,
+                requiredTables: ["public.customers", "public.orders"]
+            )
+        )
+        let generator = StaticGenerator(
+            result: SQLGenerationResult(
+                sql: """
+                    SELECT id
+                    FROM public.customers
+                    JOIN public.orders ON customers.id = orders.customer_id
+                    LIMIT 100
+                    """,
+                explanation: "Uses an ambiguous id column.",
+                assumptions: [],
+                referencedTables: [],
+                confidence: 0.7,
+                riskLevel: .medium,
+                needsClarification: false,
+                clarificationQuestion: nil
+            )
+        )
+
+        let result = await TextToSQLEvalCaseRunner.run(
+            evalCase: evalCase,
+            schema: makeCommerceSchema(),
+            generator: generator,
+            options: TextToSQLEvalRunOptions(backend: .local)
+        )
+
+        #expect(result.status == .wrongSchemaObjects)
+        #expect(result.metrics.schemaValid == false)
     }
 
     @Test func scoresClarificationAsPassed() async {
@@ -370,13 +455,34 @@ struct TextToSQLEvalTests {
         let result = await TextToSQLEvalCaseRunner.run(
             evalCase: evalCase,
             schema: makeCommerceSchema(),
-            generator: ThrowingGenerator(error: .modelUnavailable("No model.")),
+            generator: ThrowingGenerator(error: SQLGenerationFailure.backendUnavailable("No model.")),
             options: TextToSQLEvalRunOptions(backend: .local)
         )
 
         #expect(result.status == .backendUnavailable)
         #expect(result.metrics.backendAvailable == false)
         #expect(result.metrics.transportSuccess == false)
+    }
+
+    @Test func untypedFailureDefaultsToTransportFailure() async {
+        let evalCase = TextToSQLEvalCase(
+            id: "commerce.recent-orders",
+            schemaFixture: "commerce",
+            question: "Show the 10 most recent orders",
+            expected: TextToSQLEvalExpectation(decision: .sql)
+        )
+
+        let result = await TextToSQLEvalCaseRunner.run(
+            evalCase: evalCase,
+            schema: makeCommerceSchema(),
+            generator: ThrowingGenerator(error: CancellationError()),
+            options: TextToSQLEvalRunOptions(backend: .cloud, model: "test/model")
+        )
+
+        #expect(result.status == .transportFailure)
+        #expect(result.metrics.backendAvailable == true)
+        #expect(result.metrics.transportSuccess == false)
+        #expect(result.metrics.structuredResponseParsed == false)
     }
 
     @Test func parseFailureKeepsTransportSuccessSeparate() async {
@@ -391,7 +497,9 @@ struct TextToSQLEvalTests {
             evalCase: evalCase,
             schema: makeCommerceSchema(),
             generator: ThrowingGenerator(
-                error: .modelGenerationFailed("The cloud model returned an unparseable response.")
+                error: SQLGenerationFailure.structuredResponseParsing(
+                    "The cloud model returned an unparseable response."
+                )
             ),
             options: TextToSQLEvalRunOptions(backend: .cloud, model: "test/model")
         )
@@ -416,7 +524,7 @@ struct TextToSQLEvalTests {
             evalCase: evalCase,
             schema: makeCommerceSchema(),
             generator: ThrowingGenerator(
-                error: .modelGenerationFailed(
+                error: SQLGenerationFailure.structuredResponseParsing(
                     "The local model failed to decode structured output."
                 )
             ),
@@ -440,7 +548,7 @@ struct TextToSQLEvalTests {
             evalCase: evalCase,
             schema: makeCommerceSchema(),
             generator: ThrowingGenerator(
-                error: .modelGenerationFailed(
+                error: SQLGenerationFailure.contextWindow(
                     "The schema and question exceed the local model's context window."
                 )
             ),
@@ -464,7 +572,7 @@ struct TextToSQLEvalTests {
             evalCase: evalCase,
             schema: makeCommerceSchema(),
             generator: ThrowingGenerator(
-                error: .modelGenerationFailed("The local model declined to answer.")
+                error: SQLGenerationFailure.generation("The local model declined to answer.")
             ),
             options: TextToSQLEvalRunOptions(backend: .local)
         )

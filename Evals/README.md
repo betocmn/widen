@@ -1,16 +1,21 @@
 # Text-to-SQL Evals
 
 `WidenEval` is the native Swift evaluation runner for Widen's text-to-SQL
-pipeline. It uses the same generator protocol and deterministic validators as
-the app, then writes per-run artifacts under `.eval-results/`.
+pipeline. It invokes the same production pipeline as the app from an
+already-prepared generation request through local validation and
+validation-only repair, then writes per-run artifacts under `.eval-results/`.
 
-**Evaluation scope:** A static-shape pass verifies the decision, SQL safety,
-schema references, and configured structural expectations. It does not
-establish result-set or semantic correctness.
+**Evaluation scope:** The production pipeline produces the final SQL,
+clarification, or typed failure. A static-shape pass then verifies the decision,
+SQL safety, schema references, and configured structural expectations. It does
+not establish result-set or semantic correctness.
 
 The runner does not execute generated SQL or compare result sets. Committed
-baselines record deterministic hashes for the suite file, scorer source, and
-schema fixtures to establish baseline compatibility.
+baselines record deterministic hashes for the suite file, pipeline/scorer
+sources, and schema fixtures to establish baseline compatibility. Baseline
+changes after PR 2 can reflect the move from generator-only evaluation to the
+full production pipeline, including canonicalization, local validation, and
+validation-only repair.
 
 ## Commands
 

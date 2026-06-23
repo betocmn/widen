@@ -120,19 +120,21 @@ public final class ChatViewModel {
         defer { finishGeneration() }
 
         do {
-            let generated = try await generator.generateSQL(
-                question: question, schema: schema, context: context, config: config)
-            let result = GeneratedSQLPostprocessor.enriched(
-                generated,
-                question: question,
-                schema: schema,
-                databaseContext: config.databaseContext
+            let run = try await TextToSQLPipeline(generator: generator).run(
+                TextToSQLRequest(
+                    question: question,
+                    schema: schema,
+                    context: context,
+                    config: config
+                )
             )
-
-            if result.needsClarification,
-                let clarification = result.clarificationQuestion,
-                !clarification.trimmingCharacters(in: .whitespaces).isEmpty
-            {
+            switch run.finalDecision {
+            case .sql(let result):
+                messages.append(
+                    ChatMessage(role: .assistant, text: result.explanation, generation: result))
+                queryVM.setGeneration(result, schema: schema)
+            case .clarification(let result):
+                let clarification = result.clarificationQuestion ?? result.explanation
                 messages.append(
                     ChatMessage(
                         role: .assistant,
@@ -140,15 +142,11 @@ public final class ChatViewModel {
                         generation: result,
                         pendingClarification: result.pendingClarification
                     ))
-            } else {
-                messages.append(
-                    ChatMessage(role: .assistant, text: result.explanation, generation: result))
+            case .failed(let failure):
+                messages.append(ChatMessage(role: .error, text: failure.localizedDescription))
             }
-
-            // Generated SQL goes to the editable preview, not only the chat.
-            if !result.sql.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
-                queryVM.setGeneration(result, schema: schema)
-            }
+        } catch is CancellationError {
+            return
         } catch {
             messages.append(ChatMessage(role: .error, text: error.localizedDescription))
         }

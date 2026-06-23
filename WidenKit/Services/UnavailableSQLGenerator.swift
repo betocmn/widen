@@ -13,6 +13,6 @@ public struct UnavailableSQLGenerator: SQLGenerator, Sendable {
         context: SQLGenerationContext,
         config: SQLGenerationConfig
     ) async throws -> SQLGenerationResult {
-        throw AppError.modelUnavailable(message)
+        throw SQLGenerationFailure.backendUnavailable(message)
     }
 }

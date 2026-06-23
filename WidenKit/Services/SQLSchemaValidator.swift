@@ -2782,6 +2782,7 @@ public enum GeneratedSQLValidator {
             normalizedSQL: errors.isEmpty ? safety.normalizedSQL : nil,
             errors: errors,
             warnings: safety.warnings + schemaValidation.warnings,
+            safetyIssueKinds: safety.safetyIssueKinds,
             hasLimit: safety.hasLimit,
             kind: safety.kind,
             requiresConfirmation: safety.requiresConfirmation

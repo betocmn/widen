@@ -34,27 +34,41 @@ public enum TextToSQLEvalCaseRunner {
     ) async -> TextToSQLEvalResult {
         let started = Date()
         do {
-            let generated = try await generator.generateSQL(
-                question: evalCase.question,
-                schema: schema,
-                context: SQLGenerationContext(),
-                config: SQLGenerationConfig(
-                    defaultRowLimit: options.defaultRowLimit,
-                    databaseContext: evalCase.databaseContext ?? ""
+            let run = try await TextToSQLPipeline(generator: generator).run(
+                TextToSQLRequest(
+                    question: evalCase.question,
+                    schema: schema,
+                    config: SQLGenerationConfig(
+                        defaultRowLimit: options.defaultRowLimit,
+                        databaseContext: evalCase.databaseContext ?? ""
+                    ),
+                    allowGroundingClarification: false
                 )
             )
-            let enriched = GeneratedSQLPostprocessor.enriched(
-                generated,
-                question: evalCase.question,
-                schema: schema,
-                databaseContext: evalCase.databaseContext ?? "",
-                allowGroundingClarification: false
-            )
-            return TextToSQLEvalScorer.score(
+            switch run.finalDecision {
+            case .sql(let generation), .clarification(let generation):
+                return TextToSQLEvalScorer.score(
+                    evalCase: evalCase,
+                    schema: schema,
+                    generation: generation,
+                    options: options,
+                    latencyMs: elapsedMilliseconds(since: started),
+                    trace: run.trace
+                )
+            case .failed(let failure):
+                return pipelineFailureResult(
+                    evalCase: evalCase,
+                    options: options,
+                    failure: failure,
+                    latencyMs: elapsedMilliseconds(since: started),
+                    trace: run.trace
+                )
+            }
+        } catch is CancellationError {
+            return failureResult(
                 evalCase: evalCase,
-                schema: schema,
-                generation: enriched,
                 options: options,
+                error: CancellationError(),
                 latencyMs: elapsedMilliseconds(since: started)
             )
         } catch {
@@ -67,34 +81,6 @@ public enum TextToSQLEvalCaseRunner {
         }
     }
 
-    private static func isStructuredParseFailureMessage(_ message: String) -> Bool {
-        let lower = message.lowercased()
-        return lower.contains("unparseable")
-            || lower.contains("structured")
-            || lower.contains("decoding")
-            || lower.contains("decoded")
-    }
-
-    private static func isContextWindowFailureMessage(_ message: String) -> Bool {
-        let lower = message.lowercased()
-        return lower.contains("context window")
-            || lower.contains("exceed")
-            || lower.contains("too large")
-            || lower.contains("narrower schema context")
-    }
-
-    private static func isTransportFailureMessage(_ message: String) -> Bool {
-        let lower = message.lowercased()
-        return lower.contains("timed out")
-            || lower.contains("timeout")
-            || lower.contains("no internet")
-            || lower.contains("network")
-            || lower.contains("connection")
-            || lower.contains("cannot connect")
-            || lower.contains("dns")
-            || lower.contains("host")
-    }
-
     private static func elapsedMilliseconds(since date: Date) -> Int {
         Int(Date().timeIntervalSince(date) * 1_000)
     }
@@ -105,52 +91,14 @@ public enum TextToSQLEvalCaseRunner {
         error: any Error,
         latencyMs: Int
     ) -> TextToSQLEvalResult {
-        let status: TextToSQLEvalCaseStatus
-        let backendAvailable: Bool
-        let transportSuccess: Bool
-        let structuredParsed: Bool
-        if let appError = error as? AppError {
-            switch appError {
-            case .modelUnavailable:
-                status = .backendUnavailable
-                backendAvailable = false
-                transportSuccess = false
-                structuredParsed = false
-            case .modelGenerationFailed(let message)
-                where isContextWindowFailureMessage(message):
-                status = .contextWindowFailure
-                backendAvailable = true
-                transportSuccess = true
-                structuredParsed = false
-            case .modelGenerationFailed(let message)
-                where isStructuredParseFailureMessage(message):
-                status = .parseFailure
-                backendAvailable = true
-                transportSuccess = true
-                structuredParsed = false
-            case .modelGenerationFailed(let message)
-                where isTransportFailureMessage(message):
-                status = .transportFailure
-                backendAvailable = true
-                transportSuccess = false
-                structuredParsed = false
-            case .modelGenerationFailed:
-                status = .generationFailure
-                backendAvailable = true
-                transportSuccess = true
-                structuredParsed = false
-            default:
-                status = .transportFailure
-                backendAvailable = true
-                transportSuccess = false
-                structuredParsed = false
-            }
-        } else {
-            status = .transportFailure
-            backendAvailable = true
-            transportSuccess = false
-            structuredParsed = false
-        }
+        let typed = SQLGenerationFailure.typed(error)
+        let status = typed.map(status(for:)) ?? .transportFailure
+        let backendAvailable = typed.map { $0.pipelineCategory != .backendUnavailable } ?? true
+        let transportSuccess = typed.map {
+            $0.pipelineCategory != .transport
+                && $0.pipelineCategory != .backendUnavailable
+        } ?? false
+        let structuredParsed = false
         return TextToSQLEvalResult(
             caseID: evalCase.id,
             backend: options.backend,
@@ -169,6 +117,73 @@ public enum TextToSQLEvalCaseRunner {
             estimatedInitialPrompt: options.estimatedInitialPrompt
         )
     }
+
+    private static func pipelineFailureResult(
+        evalCase: TextToSQLEvalCase,
+        options: TextToSQLEvalRunOptions,
+        failure: TextToSQLPipelineFailure,
+        latencyMs: Int,
+        trace: TextToSQLTrace
+    ) -> TextToSQLEvalResult {
+        TextToSQLEvalResult(
+            caseID: evalCase.id,
+            backend: options.backend,
+            model: options.model,
+            repeatIndex: options.repeatIndex,
+            status: status(for: failure.category),
+            metrics: TextToSQLEvalMetrics(
+                backendAvailable: failure.category != .backendUnavailable,
+                transportSuccess: failure.category != .transport
+                    && failure.category != .backendUnavailable,
+                structuredResponseParsed: structuredResponseParsed(for: failure.category),
+                decisionMatches: false,
+                safetyValid: failure.category == .safetyValidation ? false : nil,
+                schemaValid: (
+                    failure.category == .schemaValidation
+                        || failure.category == .repeatedNoProgressRepair
+                ) ? false : nil,
+                latencyMs: latencyMs,
+                modelCallCount: trace.modelCalls == 0 ? nil : trace.modelCalls,
+                estimatedInitialPromptCharacters: options.estimatedInitialPromptCharacters
+            ),
+            diagnostics: TextToSQLEvalDiagnostics(errorMessage: failure.localizedDescription),
+            estimatedInitialPrompt: options.estimatedInitialPrompt,
+            trace: trace
+        )
+    }
+
+    private static func status(for failure: SQLGenerationFailure) -> TextToSQLEvalCaseStatus {
+        status(for: failure.pipelineCategory)
+    }
+
+    private static func status(for category: TextToSQLFailureCategory) -> TextToSQLEvalCaseStatus {
+        switch category {
+        case .backendUnavailable:
+            .backendUnavailable
+        case .transport:
+            .transportFailure
+        case .contextWindow:
+            .contextWindowFailure
+        case .structuredResponseParsing:
+            .parseFailure
+        case .modelGeneration, .cancellation, .emptySQL:
+            .generationFailure
+        case .safetyValidation:
+            .invalidSQL
+        case .schemaValidation, .repeatedNoProgressRepair:
+            .wrongSchemaObjects
+        }
+    }
+
+    private static func structuredResponseParsed(for category: TextToSQLFailureCategory) -> Bool {
+        switch category {
+        case .safetyValidation, .schemaValidation, .repeatedNoProgressRepair, .emptySQL:
+            true
+        case .backendUnavailable, .transport, .contextWindow, .structuredResponseParsing,
+            .modelGeneration, .cancellation:
+            false
+        }
+    }
 }
 
 public enum TextToSQLEvalScorer {
@@ -177,12 +192,16 @@ public enum TextToSQLEvalScorer {
         schema: DatabaseSchema,
         generation: SQLGenerationResult,
         options: TextToSQLEvalRunOptions,
-        latencyMs: Int
+        latencyMs: Int,
+        trace: TextToSQLTrace? = nil
     ) -> TextToSQLEvalResult {
         let expected = evalCase.expected
         let actualDecision: TextToSQLEvalDecision =
             generation.needsClarification ? .clarify : .sql
         let decisionMatches = actualDecision == expected.decision
+        let modelCallCount = trace?.modelCalls == 0
+            ? generation.generationCallCount
+            : (trace?.modelCalls ?? generation.generationCallCount)
 
         if expected.decision == .clarify {
             let quality = clarificationQuality(
@@ -203,14 +222,15 @@ public enum TextToSQLEvalScorer {
                     decisionMatches: decisionMatches,
                     clarificationQuality: quality,
                     latencyMs: latencyMs,
-                    modelCallCount: generation.generationCallCount,
+                    modelCallCount: modelCallCount,
                     estimatedInitialPromptCharacters: options.estimatedInitialPromptCharacters
                 ),
                 diagnostics: TextToSQLEvalDiagnostics(),
                 generatedSQL: generation.sql.nilIfBlank,
                 clarificationQuestion: generation.clarificationQuestion,
                 referencedTables: generation.referencedTables,
-                estimatedInitialPrompt: options.estimatedInitialPrompt
+                estimatedInitialPrompt: options.estimatedInitialPrompt,
+                trace: trace
             )
         }
 
@@ -231,13 +251,14 @@ public enum TextToSQLEvalScorer {
                         mustMentionAny: expected.clarificationMustMentionAny
                     ),
                     latencyMs: latencyMs,
-                    modelCallCount: generation.generationCallCount,
+                    modelCallCount: modelCallCount,
                     estimatedInitialPromptCharacters: options.estimatedInitialPromptCharacters
                 ),
                 generatedSQL: generation.sql.nilIfBlank,
                 clarificationQuestion: generation.clarificationQuestion,
                 referencedTables: generation.referencedTables,
-                estimatedInitialPrompt: options.estimatedInitialPrompt
+                estimatedInitialPrompt: options.estimatedInitialPrompt,
+                trace: trace
             )
         }
 
@@ -257,13 +278,14 @@ public enum TextToSQLEvalScorer {
                     safetyValid: false,
                     schemaValid: nil,
                     latencyMs: latencyMs,
-                    modelCallCount: generation.generationCallCount,
+                    modelCallCount: modelCallCount,
                     estimatedInitialPromptCharacters: options.estimatedInitialPromptCharacters
                 ),
                 diagnostics: TextToSQLEvalDiagnostics(safetyErrors: safety.errors),
                 generatedSQL: generation.sql.nilIfBlank,
                 referencedTables: generation.referencedTables,
-                estimatedInitialPrompt: options.estimatedInitialPrompt
+                estimatedInitialPrompt: options.estimatedInitialPrompt,
+                trace: trace
             )
         }
 
@@ -327,7 +349,7 @@ public enum TextToSQLEvalScorer {
                 requiredColumnBindingCoverage: columnCoverage,
                 forbiddenBindingViolations: forbiddenBindingViolations,
                 latencyMs: latencyMs,
-                modelCallCount: generation.generationCallCount,
+                modelCallCount: modelCallCount,
                 estimatedInitialPromptCharacters: options.estimatedInitialPromptCharacters
             ),
             diagnostics: TextToSQLEvalDiagnostics(
@@ -340,7 +362,8 @@ public enum TextToSQLEvalScorer {
             clarificationQuestion: generation.clarificationQuestion,
             referencedTables: schemaValidation.referencedTables,
             referencedColumnBindings: referencedColumnBindings,
-            estimatedInitialPrompt: options.estimatedInitialPrompt
+            estimatedInitialPrompt: options.estimatedInitialPrompt,
+            trace: trace
         )
     }
 

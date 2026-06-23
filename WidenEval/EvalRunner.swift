@@ -144,7 +144,7 @@ struct EvalRunner {
             suiteName: suite.name,
             suiteVersion: suite.version,
             suitePath: suiteURL.path,
-            evaluationMode: "static-shape",
+            evaluationMode: "production-pipeline-static-shape",
             commitSHA: Self.commitSHA(),
             startedAt: startedAt,
             finishedAt: finishedAt,
@@ -155,9 +155,14 @@ struct EvalRunner {
             caseCount: selectedCases.count,
             repeatCount: options.repeatCount,
             suiteFileHash: Self.sha256(suiteData),
-            scorerVersion: "static-shape-v1",
+            scorerVersion: "production-pipeline-static-shape-v1",
             scorerSourceHash: Self.sourceHash(
-                relativePath: "WidenKit/Evals/TextToSQLEvalScorer.swift",
+                relativePaths: [
+                    "WidenKit/Evals/TextToSQLEvalScorer.swift",
+                    "WidenKit/Services/TextToSQLPipeline.swift",
+                    "WidenKit/Services/SQLGenerationFailure.swift",
+                    "WidenKit/Services/GeneratedSQLRepairSupport.swift",
+                ],
                 relativeTo: repositoryRoot
             ),
             schemaFixtureHashes: schemas.mapValues(\.sha256)
@@ -352,10 +357,17 @@ struct EvalRunner {
         SHA256.hash(data: data).map { String(format: "%02x", $0) }.joined()
     }
 
-    private static func sourceHash(relativePath: String, relativeTo directory: URL) -> String {
-        let url = directory.appendingPathComponent(relativePath)
-        guard let data = try? Data(contentsOf: url) else {
-            return "unknown"
+    private static func sourceHash(relativePaths: [String], relativeTo directory: URL) -> String {
+        var data = Data()
+        for path in relativePaths.sorted() {
+            data.append(Data(path.utf8))
+            data.append(0)
+            let url = directory.appendingPathComponent(path)
+            guard let fileData = try? Data(contentsOf: url) else {
+                return "unknown"
+            }
+            data.append(fileData)
+            data.append(0)
         }
         return sha256(data)
     }

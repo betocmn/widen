@@ -68,11 +68,11 @@
             case .available:
                 break
             case .unavailable(let reason):
-                throw AppError.modelUnavailable(Self.message(for: reason))
+                throw SQLGenerationFailure.backendUnavailable(Self.message(for: reason))
             }
             let usage = model.quotaUsage
             if usage.isLimitReached {
-                throw AppError.modelUnavailable(
+                throw SQLGenerationFailure.backendUnavailable(
                     Self.quotaReachedMessage(resetDate: usage.resetDate))
             }
 
@@ -134,17 +134,18 @@
             }
             switch pccError {
             case .networkFailure:
-                return AppError.modelGenerationFailed(
+                return SQLGenerationFailure.transport(
                     "Private Cloud Compute could not be reached. Check your internet connection and try again."
                 )
             case .quotaLimitReached(let info):
-                return AppError.modelUnavailable(quotaReachedMessage(resetDate: info.resetDate))
+                return SQLGenerationFailure.backendUnavailable(
+                    quotaReachedMessage(resetDate: info.resetDate))
             case .serviceUnavailable:
-                return AppError.modelUnavailable(
+                return SQLGenerationFailure.backendUnavailable(
                     "Private Cloud Compute is temporarily unavailable. Try again later or switch to the local model."
                 )
             @unknown default:
-                return AppError.modelGenerationFailed(
+                return SQLGenerationFailure.generation(
                     pccError.errorDescription ?? "Generation failed.")
             }
         }

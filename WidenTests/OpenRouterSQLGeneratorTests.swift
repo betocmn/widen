@@ -180,9 +180,9 @@ struct OpenRouterSQLGeneratorTests {
                 config: SQLGenerationConfig()
             )
             Issue.record("expected an error")
-        } catch let error as AppError {
-            guard case .modelGenerationFailed = error else {
-                Issue.record("expected modelGenerationFailed, got \(error)")
+        } catch let error as SQLGenerationFailure {
+            guard case .structuredResponseParsing = error else {
+                Issue.record("expected structuredResponseParsing, got \(error)")
                 return
             }
         }
@@ -192,7 +192,7 @@ struct OpenRouterSQLGeneratorTests {
         let transport = StubTransport([
             .success((Data("{}".utf8), response(status: 401)))
         ])
-        await #expect(throws: AppError.self) {
+        await #expect(throws: SQLGenerationFailure.self) {
             _ = try await makeGenerator(transport).generateSQL(
                 question: "show users", schema: makeSchema(), config: SQLGenerationConfig())
         }
@@ -201,9 +201,9 @@ struct OpenRouterSQLGeneratorTests {
                 .success((Data("{}".utf8), response(status: 401)))
             ])).generateSQL(
                 question: "show users", schema: makeSchema(), config: SQLGenerationConfig())
-        } catch let error as AppError {
-            guard case .modelUnavailable = error else {
-                Issue.record("expected modelUnavailable, got \(error)")
+        } catch let error as SQLGenerationFailure {
+            guard case .backendUnavailable = error else {
+                Issue.record("expected backendUnavailable, got \(error)")
                 return
             }
         }
@@ -235,9 +235,9 @@ struct OpenRouterSQLGeneratorTests {
             _ = try await makeGenerator(transport).generateSQL(
                 question: "show users", schema: makeSchema(), config: SQLGenerationConfig())
             Issue.record("expected an error")
-        } catch let error as AppError {
-            guard case .modelGenerationFailed = error else {
-                Issue.record("expected modelGenerationFailed, got \(error)")
+        } catch let error as SQLGenerationFailure {
+            guard case .structuredResponseParsing = error else {
+                Issue.record("expected structuredResponseParsing, got \(error)")
                 return
             }
         }
@@ -252,8 +252,29 @@ struct OpenRouterSQLGeneratorTests {
             _ = try await makeGenerator(transport).generateSQL(
                 question: "show users", schema: makeSchema(), config: SQLGenerationConfig())
             Issue.record("expected an error")
-        } catch let error as AppError {
+        } catch let error as SQLGenerationFailure {
             #expect(error.errorDescription?.contains("model is overloaded") == true)
+        }
+    }
+
+    @Test func serverContextLengthErrorBecomesContextWindowFailure() async throws {
+        let body = Data(
+            "{\"error\": {\"message\": \"This request exceeds the model context length.\"}}".utf8
+        )
+        let transport = StubTransport([
+            .success((body, response(status: 400)))
+        ])
+
+        do {
+            _ = try await makeGenerator(transport).generateSQL(
+                question: "show users", schema: makeSchema(), config: SQLGenerationConfig())
+            Issue.record("expected an error")
+        } catch let error as SQLGenerationFailure {
+            guard case .contextWindow(let message) = error else {
+                Issue.record("expected contextWindow, got \(error)")
+                return
+            }
+            #expect(message.contains("context length"))
         }
     }
 }

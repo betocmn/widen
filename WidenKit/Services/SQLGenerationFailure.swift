@@ -1,0 +1,67 @@
+import Foundation
+
+/// Typed generation failures shared by SQL generator backends and the
+/// headless text-to-SQL pipeline. The localized descriptions intentionally
+/// match the previous `AppError` wording for user-facing compatibility.
+public enum SQLGenerationFailure: Error, LocalizedError, Equatable, Sendable {
+    case backendUnavailable(String)
+    case transport(String)
+    case contextWindow(String)
+    case structuredResponseParsing(String)
+    case generation(String)
+
+    public var errorDescription: String? {
+        switch self {
+        case .backendUnavailable(let detail):
+            detail
+        case .transport(let detail),
+            .contextWindow(let detail),
+            .structuredResponseParsing(let detail),
+            .generation(let detail):
+            "SQL generation failed: \(detail)"
+        }
+    }
+
+    public var detail: String {
+        switch self {
+        case .backendUnavailable(let detail),
+            .transport(let detail),
+            .contextWindow(let detail),
+            .structuredResponseParsing(let detail),
+            .generation(let detail):
+            detail
+        }
+    }
+
+    var pipelineCategory: TextToSQLFailureCategory {
+        switch self {
+        case .backendUnavailable:
+            .backendUnavailable
+        case .transport:
+            .transport
+        case .contextWindow:
+            .contextWindow
+        case .structuredResponseParsing:
+            .structuredResponseParsing
+        case .generation:
+            .modelGeneration
+        }
+    }
+
+    public static func typed(_ error: any Error) -> SQLGenerationFailure? {
+        if let failure = error as? SQLGenerationFailure {
+            return failure
+        }
+        if let appError = error as? AppError {
+            switch appError {
+            case .modelUnavailable(let message):
+                return .backendUnavailable(message)
+            case .modelGenerationFailed(let message):
+                return .generation(message)
+            default:
+                return nil
+            }
+        }
+        return nil
+    }
+}
