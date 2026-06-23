@@ -1281,8 +1281,12 @@ struct SessionControllerTests {
 
         #expect(generator.contexts.count == 2)
         #expect(generator.contexts[0].isEmpty)
+        #expect(generator.contexts[0].mode == .initial)
         #expect(generator.contexts[1].currentSQL == badGeneration.sql)
+        #expect(generator.contexts[1].mode == .repair)
+        #expect(generator.contexts[1].modelCallCount == 2)
         #expect(generator.contexts[1].lastRunError?.contains("Aggregate functions cannot contain") == true)
+        #expect(generator.questions == ["average users", "average users"])
         #expect(controller.queryVM.sqlText == fixedGeneration.sql)
         #expect(controller.queryVM.generation?.sql == fixedGeneration.sql)
         #expect(controller.queryVM.validation?.isValid == true)
@@ -1291,9 +1295,11 @@ struct SessionControllerTests {
         #expect(conversationMessages(controller.chatVM.messages)[1].generation?.sql == fixedGeneration.sql)
         let activityText = activityMessages(controller.chatVM.messages).map(\.text).joined(separator: "\n")
         #expect(activityText.contains("Generated SQL failed validation."))
-        #expect(activityText.contains(badGeneration.sql))
+        #expect(activityText.contains("Generated SQL failed local validation."))
         #expect(activityText.contains("Focused repair passed validation."))
-        #expect(activityText.contains(fixedGeneration.sql))
+        #expect(activityText.contains("Validation repair produced locally valid SQL."))
+        #expect(!activityText.contains(badGeneration.sql))
+        #expect(!activityText.contains(fixedGeneration.sql))
     }
 
     @Test func submitKeepsInvalidGeneratedSQLOutOfEditorWhenRepairGeneratorFails() async {
@@ -1319,9 +1325,11 @@ struct SessionControllerTests {
         #expect(controller.chatVM.messages.last?.text.contains("rate-limiting") == true)
         let activityText = activityMessages(controller.chatVM.messages).map(\.text).joined(separator: "\n")
         #expect(activityText.contains("Generated SQL failed validation."))
-        #expect(activityText.contains(badGeneration.sql))
+        #expect(activityText.contains("Generated SQL failed local validation."))
         #expect(activityText.contains("Focused repair failed before producing SQL."))
-        #expect(activityText.contains("rate-limiting"))
+        #expect(activityText.contains("Validation repair failed before producing SQL."))
+        #expect(!activityText.contains(badGeneration.sql))
+        #expect(!activityText.contains("rate-limiting"))
     }
 
     @Test func submitRepairForMissingGeneratedColumnForbidsColumnIdentifier() async {

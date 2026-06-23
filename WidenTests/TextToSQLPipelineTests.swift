@@ -36,6 +36,18 @@ struct TextToSQLPipelineTests {
         }
     }
 
+    private actor EventCollector {
+        private var events: [TextToSQLPipelineEvent] = []
+
+        func record(_ event: TextToSQLPipelineEvent) {
+            events.append(event)
+        }
+
+        func all() -> [TextToSQLPipelineEvent] {
+            events
+        }
+    }
+
     private func makeSchema() -> DatabaseSchema {
         DatabaseSchema(
             schemas: [SchemaInfo(name: "public")],
@@ -58,6 +70,38 @@ struct TextToSQLPipelineTests {
                             tableName: "users",
                             name: "createdAt",
                             dataType: "timestamp with time zone",
+                            isNullable: false,
+                            ordinalPosition: 2
+                        ),
+                    ]
+                )
+            ],
+            foreignKeys: []
+        )
+    }
+
+    private func makeStatusSchema() -> DatabaseSchema {
+        DatabaseSchema(
+            schemas: [SchemaInfo(name: "public")],
+            tables: [
+                TableInfo(
+                    schema: "public",
+                    name: "users",
+                    type: .baseTable,
+                    columns: [
+                        ColumnInfo(
+                            tableSchema: "public",
+                            tableName: "users",
+                            name: "id",
+                            dataType: "integer",
+                            isNullable: false,
+                            ordinalPosition: 1
+                        ),
+                        ColumnInfo(
+                            tableSchema: "public",
+                            tableName: "users",
+                            name: "status",
+                            dataType: "text",
                             isNullable: false,
                             ordinalPosition: 2
                         ),
@@ -134,6 +178,31 @@ struct TextToSQLPipelineTests {
         #expect(generation.clarificationQuestion == "Which metric defines best?")
     }
 
+    @Test func productionDefaultAllowsGroundingClarification() async throws {
+        let generator = ScriptedGenerator([
+            .success(
+                generation(
+                    sql: "SELECT id FROM public.users WHERE status = 'active' LIMIT 100"
+                )
+            )
+        ])
+
+        let result = try await TextToSQLPipeline(generator: generator).run(
+            TextToSQLRequest(
+                question: "show active users",
+                schema: makeStatusSchema()
+            )
+        )
+
+        guard case .clarification(let generation) = result.finalDecision else {
+            Issue.record("expected grounding clarification decision")
+            return
+        }
+        #expect(generator.contexts.count == 1)
+        #expect(generation.pendingClarification?.concept.term == "active")
+        #expect(generation.needsClarification)
+    }
+
     @Test func mixedCaseIdentifierIsDeterministicallyQuoted() async throws {
         let result = try await run(
             ScriptedGenerator([
@@ -152,6 +221,26 @@ struct TextToSQLPipelineTests {
                     && $0.canonicalizationFixes.contains("quote-repair")
             }
         )
+    }
+
+    @Test func quoteRepairRevalidatesBeforeReturningSQL() async throws {
+        let partialSQL = "SELECT createdAt, missing FROM public.users"
+        let fixedSQL = "SELECT id FROM public.users LIMIT 100"
+        let generator = ScriptedGenerator([
+            .success(generation(sql: partialSQL)),
+            .success(generation(sql: fixedSQL)),
+        ])
+
+        let result = try await run(generator)
+
+        guard case .sql(let generation) = result.finalDecision else {
+            Issue.record("expected SQL decision")
+            return
+        }
+        #expect(generation.sql == fixedSQL)
+        #expect(generator.contexts.count == 2)
+        #expect(generator.contexts[1].mode == .repair)
+        #expect(result.events.contains { $0.kind == .validationFailed })
     }
 
     @Test func invalidInitialSQLCanRepairToValidSQL() async throws {
@@ -206,6 +295,23 @@ struct TextToSQLPipelineTests {
         #expect(failure.message.contains("still failed validation"))
     }
 
+    @Test func repairGeneratorFailureReturnsFailedDecision() async throws {
+        let generator = ScriptedGenerator([
+            .success(generation(sql: "SELECT missing FROM public.users")),
+            .failure(SQLGenerationFailure.transport("Network failed.")),
+        ])
+
+        let result = try await run(generator)
+
+        guard case .failed(let failure) = result.finalDecision else {
+            Issue.record("expected failure decision")
+            return
+        }
+        #expect(failure.stage == .validationRepair)
+        #expect(failure.category == .transport)
+        #expect(generator.contexts.count == 2)
+    }
+
     @Test func unsafeWriteRepairForReadIsRejected() async throws {
         let generator = ScriptedGenerator([
             .success(generation(sql: "SELECT missing FROM public.users")),
@@ -219,9 +325,54 @@ struct TextToSQLPipelineTests {
             return
         }
         #expect(failure.category == .schemaValidation)
-        #expect(result.events.map(\.error).contains {
-            $0?.contains("data-modifying query") == true
+        #expect(result.events.contains {
+            $0.kind == .validationRepairRejected
+                && $0.failureCategory == .schemaValidation
         })
+    }
+
+    @Test func validationRepairEventsAreTypedRedactedAndObservational() async throws {
+        let badSQL = "SELECT missing FROM public.users"
+        let fixedSQL = "SELECT id FROM public.users LIMIT 100"
+        let collector = EventCollector()
+        let generator = ScriptedGenerator([
+            .success(generation(sql: badSQL)),
+            .success(generation(sql: fixedSQL)),
+        ])
+
+        let result = try await TextToSQLPipeline(generator: generator).run(
+            TextToSQLRequest(
+                question: "show users",
+                schema: makeSchema(),
+                config: SQLGenerationConfig(defaultRowLimit: 100),
+                eventSink: { event in
+                    await collector.record(event)
+                }
+            )
+        )
+
+        guard case .sql(let generation) = result.finalDecision else {
+            Issue.record("expected SQL decision")
+            return
+        }
+        #expect(generation.sql == fixedSQL)
+        #expect(result.events.map(\.kind) == [
+            .validationFailed,
+            .validationRepairStarted,
+            .validationRepairPassedValidation,
+        ])
+        let eventText = result.events.map { "\($0.title)\n\($0.summary ?? "")" }
+            .joined(separator: "\n")
+        #expect(!eventText.contains(badSQL))
+        #expect(!eventText.contains(fixedSQL))
+
+        var collected: [TextToSQLPipelineEvent] = []
+        for _ in 0..<20 {
+            collected = await collector.all()
+            if collected.count == result.events.count { break }
+            try await Task.sleep(for: .milliseconds(10))
+        }
+        #expect(collected == result.events)
     }
 
     @Test(arguments: [

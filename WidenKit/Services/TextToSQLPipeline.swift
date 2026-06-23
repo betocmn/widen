@@ -12,6 +12,7 @@ public struct TextToSQLRequest: Sendable {
     public var config: SQLGenerationConfig
     public var allowGroundingClarification: Bool
     public var validationRepairContext: TextToSQLRepairContext?
+    public var eventSink: TextToSQLPipelineEventSink?
 
     public init(
         question: String,
@@ -19,7 +20,8 @@ public struct TextToSQLRequest: Sendable {
         context: SQLGenerationContext = SQLGenerationContext(),
         config: SQLGenerationConfig = SQLGenerationConfig(),
         allowGroundingClarification: Bool = true,
-        validationRepairContext: TextToSQLRepairContext? = nil
+        validationRepairContext: TextToSQLRepairContext? = nil,
+        eventSink: TextToSQLPipelineEventSink? = nil
     ) {
         self.question = question
         self.schema = schema
@@ -27,6 +29,7 @@ public struct TextToSQLRequest: Sendable {
         self.config = config
         self.allowGroundingClarification = allowGroundingClarification
         self.validationRepairContext = validationRepairContext
+        self.eventSink = eventSink
     }
 }
 
@@ -167,15 +170,40 @@ public struct TextToSQLStageResult: Codable, Equatable, Sendable {
     }
 }
 
-public struct TextToSQLPipelineEvent: Equatable, Sendable {
-    public var title: String
-    public var sql: String?
-    public var error: String?
+public typealias TextToSQLPipelineEventSink = @Sendable (TextToSQLPipelineEvent) async -> Void
 
-    public init(title: String, sql: String? = nil, error: String? = nil) {
+public enum TextToSQLPipelineEventKind: String, Equatable, Sendable {
+    case validationFailed
+    case validationRepairStarted
+    case validationRepairGenerationFailed
+    case validationRepairNeedsClarification
+    case validationRepairRejected
+    case validationRepairMissingSQL
+    case validationRepairPassedValidation
+}
+
+public struct TextToSQLPipelineEvent: Equatable, Sendable {
+    public var kind: TextToSQLPipelineEventKind
+    public var stage: TextToSQLStage
+    public var title: String
+    public var summary: String?
+    public var failureCategory: TextToSQLFailureCategory?
+    public var validationIssueIDs: [String]
+
+    public init(
+        kind: TextToSQLPipelineEventKind,
+        stage: TextToSQLStage,
+        title: String,
+        summary: String? = nil,
+        failureCategory: TextToSQLFailureCategory? = nil,
+        validationIssueIDs: [String] = []
+    ) {
+        self.kind = kind
+        self.stage = stage
         self.title = title
-        self.sql = sql
-        self.error = error
+        self.summary = summary
+        self.failureCategory = failureCategory
+        self.validationIssueIDs = validationIssueIDs
     }
 }
 
@@ -335,12 +363,19 @@ public struct TextToSQLPipeline: TextToSQLRunning {
         }
 
         let firstError = AppError.validationFailed(validation.combined.errors).localizedDescription
-        events.append(
+        let validationIssueIDs = validation.safety.errors.map {
+            "safety:\(SQLTextFingerprint($0).value)"
+        } + validation.schema.issues.map(\.traceID)
+        record(
             TextToSQLPipelineEvent(
+                kind: .validationFailed,
+                stage: .schemaValidation,
                 title: "Generated SQL failed validation.",
-                sql: generatedSQL,
-                error: firstError
-            )
+                summary: "Generated SQL failed local validation.",
+                validationIssueIDs: validationIssueIDs
+            ),
+            request: request,
+            events: &events
         )
         let repairRun = try await runValidationRepair(
             request: request,
@@ -406,12 +441,15 @@ public struct TextToSQLPipeline: TextToSQLRunning {
             let attemptNumber = repairMode == .repair ? 1 : 2
             let repairContext = coordinator.repairContext(for: repairMode)
             let repairLabel = repairMode.activityLabel
-            events.append(
+            record(
                 TextToSQLPipelineEvent(
+                    kind: .validationRepairStarted,
+                    stage: .validationRepair,
                     title: "\(repairLabel) started.",
-                    sql: repairContext.failedSQL ?? coordinator.constraints.failedSQL,
-                    error: coordinator.constraints.lastError
-                )
+                    summary: "Validation repair attempt started."
+                ),
+                request: request,
+                events: &events
             )
             let context = SQLGenerationContext(
                 mode: repairMode,
@@ -462,11 +500,16 @@ public struct TextToSQLPipeline: TextToSQLRunning {
                 throw CancellationError()
             } catch {
                 let failure = generationFailure(error, stage: .validationRepair)
-                events.append(
+                record(
                     TextToSQLPipelineEvent(
+                        kind: .validationRepairGenerationFailed,
+                        stage: .validationRepair,
                         title: "\(repairLabel) failed before producing SQL.",
-                        error: error.localizedDescription
-                    )
+                        summary: "Validation repair failed before producing SQL.",
+                        failureCategory: failure.category
+                    ),
+                    request: request,
+                    events: &events
                 )
                 trace.append(
                     .validationRepair,
@@ -495,23 +538,30 @@ public struct TextToSQLPipeline: TextToSQLRunning {
                     )
                     return RepairRun(decision: .failed(failure), failureCategory: failure.category)
                 }
-                events.append(
+                record(
                     TextToSQLPipelineEvent(
+                        kind: .validationRepairNeedsClarification,
+                        stage: .validationRepair,
                         title: "\(repairLabel) needs clarification.",
-                        sql: evaluation.sql ?? generation.sql,
-                        error: clarification
-                    )
+                        summary: "Validation repair needs clarification."
+                    ),
+                    request: request,
+                    events: &events
                 )
                 return RepairRun(decision: .clarification(generation))
 
             case .rejected(let reason):
-                events.append(
+                record(
                     TextToSQLPipelineEvent(
+                        kind: .validationRepairRejected,
+                        stage: .validationRepair,
                         title: "\(repairLabel) was rejected.",
-                        sql: evaluation.sql ?? generation.sql,
-                        error: evaluation.message
-                            ?? GeneratedSQLRepairSupport.repairRejectionMessage(reason)
-                    )
+                        summary: "Validation repair candidate was rejected.",
+                        failureCategory: reason.isZeroProgressRepair
+                            ? .repeatedNoProgressRepair : .schemaValidation
+                    ),
+                    request: request,
+                    events: &events
                 )
                 if reason.isZeroProgressRepair {
                     let diagnosticText = firstDiagnostic?.displayMessage ?? firstError
@@ -560,20 +610,29 @@ public struct TextToSQLPipeline: TextToSQLRunning {
                     attempts: coordinator.attempts,
                     category: .modelGeneration
                 )
-                events.append(
+                record(
                     TextToSQLPipelineEvent(
+                        kind: .validationRepairMissingSQL,
+                        stage: .validationRepair,
                         title: "\(repairLabel) did not return SQL.",
-                        error: evaluation.message ?? "The model did not return corrected SQL."
-                    )
+                        summary: "Validation repair did not return corrected SQL.",
+                        failureCategory: failure.category
+                    ),
+                    request: request,
+                    events: &events
                 )
                 return RepairRun(decision: .failed(failure), failureCategory: failure.category)
             }
 
-            events.append(
+            record(
                 TextToSQLPipelineEvent(
+                    kind: .validationRepairPassedValidation,
+                    stage: .validationRepair,
                     title: "\(repairLabel) passed validation.",
-                    sql: generatedSQL
-                )
+                    summary: "Validation repair produced locally valid SQL."
+                ),
+                request: request,
+                events: &events
             )
             return RepairRun(decision: .sql(generation.withPipelineSQL(generatedSQL)))
         }
@@ -589,6 +648,18 @@ public struct TextToSQLPipeline: TextToSQLRunning {
             failureCategory: failure.category
         )
         return RepairRun(decision: .failed(failure), failureCategory: failure.category)
+    }
+
+    private func record(
+        _ event: TextToSQLPipelineEvent,
+        request: TextToSQLRequest,
+        events: inout [TextToSQLPipelineEvent]
+    ) {
+        events.append(event)
+        guard let sink = request.eventSink else { return }
+        Task {
+            await sink(event)
+        }
     }
 
     private func validate(
