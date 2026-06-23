@@ -134,20 +134,20 @@ public final class OpenRouterSQLGenerator: SQLGenerator, Sendable {
         case 400 where includeResponseFormat && Self.complainsAboutResponseFormat(data):
             throw ResponseFormatUnsupported()
         case 401, 403:
-            throw AppError.modelUnavailable(
+            throw SQLGenerationFailure.backendUnavailable(
                 "OpenRouter rejected the API key. Check it in Settings › LLM.")
         case 402:
-            throw AppError.modelUnavailable(
+            throw SQLGenerationFailure.backendUnavailable(
                 "Your OpenRouter account is out of credits. Add credits at openrouter.ai and try again."
             )
         case 429:
-            throw AppError.modelGenerationFailed(
+            throw SQLGenerationFailure.generation(
                 "OpenRouter is rate-limiting requests. Try again in a moment.")
         default:
             let detail =
                 Self.serverErrorMessage(from: data)
                 ?? "OpenRouter returned status \(response.statusCode)."
-            throw AppError.modelGenerationFailed(detail)
+            throw SQLGenerationFailure.generation(detail)
         }
     }
 
@@ -246,7 +246,7 @@ public final class OpenRouterSQLGenerator: SQLGenerator, Sendable {
     }
 
     private static func result(from data: Data) throws -> SQLGenerationResult {
-        let parseFailure = AppError.modelGenerationFailed(
+        let parseFailure = SQLGenerationFailure.structuredResponseParsing(
             "The cloud model returned an unparseable response. Try again or pick a different model in Settings › LLM."
         )
         guard
@@ -303,15 +303,15 @@ public final class OpenRouterSQLGenerator: SQLGenerator, Sendable {
         return message
     }
 
-    private static func map(_ error: URLError) -> AppError {
+    private static func map(_ error: URLError) -> SQLGenerationFailure {
         switch error.code {
         case .timedOut:
-            .modelGenerationFailed("The cloud request timed out. Try again.")
+            .transport("The cloud request timed out. Try again.")
         case .notConnectedToInternet, .networkConnectionLost, .cannotFindHost,
             .cannotConnectToHost, .dnsLookupFailed:
-            .modelGenerationFailed("No internet connection. Check your network and try again.")
+            .transport("No internet connection. Check your network and try again.")
         default:
-            .modelGenerationFailed(error.localizedDescription)
+            .transport(error.localizedDescription)
         }
     }
 }

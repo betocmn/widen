@@ -384,72 +384,53 @@ public final class SessionController: Identifiable {
         }
 
         do {
-            let generated = try await appState.sqlGenerator.generateSQL(
-                question: generationQuestion,
-                schema: schema,
-                context: context,
-                config: config
-            )
-            let result = GeneratedSQLPostprocessor.enriched(
-                generated,
-                question: generationQuestion,
-                schema: schema,
-                databaseContext: config.databaseContext,
-                confirmedSemanticBindings: context.confirmedSemanticBindings
-            )
-            if result.needsClarification,
-                let clarification = result.clarificationQuestion,
-                !clarification.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
-            {
-                chatVM.messages.append(
-                    ChatMessage(
-                        role: .assistant,
-                        text: clarification,
-                        generation: result,
-                        pendingClarification: result.pendingClarification
-                    )
-                )
-                return
-            }
-
-            let generatedSQL = result.sql.trimmingCharacters(in: .whitespacesAndNewlines)
-            guard !generatedSQL.isEmpty else {
-                appendAssistantGeneration(result)
-                return
-            }
-
-            let visibleGeneration = result.withSQL(generatedSQL)
-            let validation = GeneratedSQLValidator.validate(sql: generatedSQL, schema: schema)
-            guard validation.isValid else {
-                if let repairedSQL = GeneratedSQLValidator.repairQuotedIdentifiers(
-                    sql: generatedSQL,
-                    schema: schema
-                ) {
-                    let repairedGeneration = result.withSQL(repairedSQL)
-                    appendAssistantGeneration(repairedGeneration)
-                    queryVM.setGeneration(repairedGeneration, schema: schema)
-                    return
-                }
-                let firstError = AppError.validationFailed(validation.errors).localizedDescription
-                await repairGeneratedSQL(
-                    appState: appState,
-                    startingSQL: generatedSQL,
-                    firstError: firstError,
-                    startingGeneration: visibleGeneration,
-                    questionContext: RepairQuestionContext(
+            let run = try await TextToSQLPipeline(generator: appState.sqlGenerator).run(
+                TextToSQLRequest(
+                    question: generationQuestion,
+                    schema: schema,
+                    context: context,
+                    config: config,
+                    validationRepairContext: TextToSQLRepairContext(
                         question: generationQuestion,
                         recentQuestions: Array(context.recentQuestions.suffix(3)),
                         originalQuestion: context.originalQuestion ?? generationQuestion,
                         conversationMessages: context.conversationMessages
                             + [SQLConversationMessage(role: .user, text: question)]
-                    ),
-                    mode: .validationOnly
+                    )
                 )
-                return
+            )
+            for event in run.events {
+                appendActivity(
+                    event.title,
+                    sql: event.sql,
+                    error: event.error,
+                    appState: appState
+                )
             }
-
-            appendAssistantGeneration(visibleGeneration)
-            queryVM.setGeneration(visibleGeneration, schema: schema)
+            switch run.finalDecision {
+            case .sql(let generation):
+                appendAssistantGeneration(generation)
+                queryVM.setGeneration(generation, schema: schema)
+            case .clarification(let generation):
+                if let clarification = generation.clarificationQuestion,
+                    !clarification.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+                {
+                    chatVM.messages.append(
+                        ChatMessage(
+                            role: .assistant,
+                            text: clarification,
+                            generation: generation,
+                            pendingClarification: generation.pendingClarification
+                        )
+                    )
+                } else {
+                    appendAssistantGeneration(generation)
+                }
+            case .failed(let failure):
+                chatVM.appendRunError(failure.localizedDescription)
+            }
+        } catch is CancellationError {
+            return
         } catch {
             chatVM.appendRunError(error.localizedDescription)
         }

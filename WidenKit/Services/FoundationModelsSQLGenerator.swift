@@ -116,7 +116,7 @@
             case .available:
                 break
             case .unavailable(let reason):
-                throw AppError.modelUnavailable(Self.message(for: reason))
+                throw SQLGenerationFailure.backendUnavailable(Self.message(for: reason))
             }
 
             do {
@@ -486,7 +486,7 @@
             }
 
             if throwIfOversized {
-                throw AppError.modelGenerationFailed(
+                throw SQLGenerationFailure.contextWindow(
                     Self.contextWindowMessage(package: latest.schemaPackage)
                 )
             }
@@ -527,30 +527,30 @@
         }
 
         /// Shared with `PrivateCloudComputeSQLGenerator`.
-        static func map(_ error: LanguageModelSession.GenerationError) -> AppError {
+        static func map(_ error: LanguageModelSession.GenerationError) -> SQLGenerationFailure {
             switch error {
             case .exceededContextWindowSize:
-                .modelGenerationFailed(
+                .contextWindow(
                     "The schema and question exceed the local model's context window. Try a smaller database or a shorter question."
                 )
             case .assetsUnavailable:
-                .modelUnavailable(
+                .backendUnavailable(
                     "Model assets are not downloaded yet. Check Apple Intelligence in System Settings and try again."
                 )
             case .guardrailViolation:
-                .modelGenerationFailed(
+                .generation(
                     "The request was blocked by Apple's safety guardrails. Try rephrasing the question."
                 )
             case .unsupportedLanguageOrLocale:
-                .modelGenerationFailed("This language is not supported by the local model.")
+                .generation("This language is not supported by the local model.")
             case .rateLimited, .concurrentRequests:
-                .modelGenerationFailed("The local model is busy. Try again in a moment.")
+                .generation("The local model is busy. Try again in a moment.")
             case .refusal:
-                .modelGenerationFailed("The local model declined to answer. Try rephrasing the question.")
+                .generation("The local model declined to answer. Try rephrasing the question.")
             case .decodingFailure, .unsupportedGuide:
-                .modelGenerationFailed(error.errorDescription ?? "Generation failed.")
+                .structuredResponseParsing(error.errorDescription ?? "Generation failed.")
             @unknown default:
-                .modelGenerationFailed(error.errorDescription ?? "Generation failed.")
+                .generation(error.errorDescription ?? "Generation failed.")
             }
         }
 

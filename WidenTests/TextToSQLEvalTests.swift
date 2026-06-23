@@ -19,7 +19,7 @@ struct TextToSQLEvalTests {
     }
 
     private struct ThrowingGenerator: SQLGenerator {
-        var error: AppError
+        var error: any Error
 
         func generateSQL(
             question: String,
@@ -370,7 +370,7 @@ struct TextToSQLEvalTests {
         let result = await TextToSQLEvalCaseRunner.run(
             evalCase: evalCase,
             schema: makeCommerceSchema(),
-            generator: ThrowingGenerator(error: .modelUnavailable("No model.")),
+            generator: ThrowingGenerator(error: SQLGenerationFailure.backendUnavailable("No model.")),
             options: TextToSQLEvalRunOptions(backend: .local)
         )
 
@@ -391,7 +391,9 @@ struct TextToSQLEvalTests {
             evalCase: evalCase,
             schema: makeCommerceSchema(),
             generator: ThrowingGenerator(
-                error: .modelGenerationFailed("The cloud model returned an unparseable response.")
+                error: SQLGenerationFailure.structuredResponseParsing(
+                    "The cloud model returned an unparseable response."
+                )
             ),
             options: TextToSQLEvalRunOptions(backend: .cloud, model: "test/model")
         )
@@ -416,7 +418,7 @@ struct TextToSQLEvalTests {
             evalCase: evalCase,
             schema: makeCommerceSchema(),
             generator: ThrowingGenerator(
-                error: .modelGenerationFailed(
+                error: SQLGenerationFailure.structuredResponseParsing(
                     "The local model failed to decode structured output."
                 )
             ),
@@ -440,7 +442,7 @@ struct TextToSQLEvalTests {
             evalCase: evalCase,
             schema: makeCommerceSchema(),
             generator: ThrowingGenerator(
-                error: .modelGenerationFailed(
+                error: SQLGenerationFailure.contextWindow(
                     "The schema and question exceed the local model's context window."
                 )
             ),
@@ -464,7 +466,7 @@ struct TextToSQLEvalTests {
             evalCase: evalCase,
             schema: makeCommerceSchema(),
             generator: ThrowingGenerator(
-                error: .modelGenerationFailed("The local model declined to answer.")
+                error: SQLGenerationFailure.generation("The local model declined to answer.")
             ),
             options: TextToSQLEvalRunOptions(backend: .local)
         )

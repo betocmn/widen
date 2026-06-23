@@ -108,6 +108,7 @@ public struct TextToSQLEvalResult: Codable, Equatable, Sendable {
     public var referencedTables: [String]
     public var referencedColumnBindings: [String]
     public var estimatedInitialPrompt: String?
+    public var trace: TextToSQLTrace?
 
     public init(
         caseID: String,
@@ -121,7 +122,8 @@ public struct TextToSQLEvalResult: Codable, Equatable, Sendable {
         clarificationQuestion: String? = nil,
         referencedTables: [String] = [],
         referencedColumnBindings: [String] = [],
-        estimatedInitialPrompt: String? = nil
+        estimatedInitialPrompt: String? = nil,
+        trace: TextToSQLTrace? = nil
     ) {
         self.caseID = caseID
         self.backend = backend
@@ -135,5 +137,6 @@ public struct TextToSQLEvalResult: Codable, Equatable, Sendable {
         self.referencedTables = referencedTables
         self.referencedColumnBindings = referencedColumnBindings
         self.estimatedInitialPrompt = estimatedInitialPrompt
+        self.trace = trace
     }
 }
