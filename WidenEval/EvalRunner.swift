@@ -28,6 +28,7 @@ struct EvalRunManifest: Codable {
     var architecture: String
     var caseCount: Int
     var repeatCount: Int
+    var caseTimeoutSeconds: Double
     var suiteFileHash: String
     var scorerVersion: String
     var scorerSourceHash: String
@@ -118,7 +119,8 @@ struct EvalRunner {
                             model: backend == .cloud ? options.model : nil,
                             repeatIndex: repeatIndex,
                             estimatedInitialPromptCharacters: prompt.count,
-                            estimatedInitialPrompt: options.recordPrompts ? prompt : nil
+                            estimatedInitialPrompt: options.recordPrompts ? prompt : nil,
+                            caseTimeoutSeconds: options.caseTimeoutSeconds
                         )
                         print("Running \(evalCase.id) [\(backend.rawValue)] repeat \(repeatIndex)")
                         let result = await TextToSQLEvalCaseRunner.run(
@@ -154,11 +156,13 @@ struct EvalRunner {
             architecture: Self.architecture(),
             caseCount: selectedCases.count,
             repeatCount: options.repeatCount,
+            caseTimeoutSeconds: options.caseTimeoutSeconds,
             suiteFileHash: Self.sha256(suiteData),
             scorerVersion: "production-pipeline-static-shape-v1",
             scorerSourceHash: Self.sourceHash(
                 relativePaths: [
                     "WidenKit/Evals/TextToSQLEvalScorer.swift",
+                    "WidenKit/Evals/TextToSQLEvalResult.swift",
                     "WidenKit/Services/TextToSQLPipeline.swift",
                     "WidenKit/Services/SQLGenerationFailure.swift",
                     "WidenKit/Services/GeneratedSQLRepairSupport.swift",

@@ -290,7 +290,7 @@ Create a thin custom provider that invokes `WidenEval` and returns its JSON. Use
 
 ---
 
-# PR 2 — Extract a headless production pipeline
+# PR 2 ✅ — Extract a headless production pipeline
 
 Suggested title:
 
@@ -362,6 +362,45 @@ final decision
 * PR 1 baseline results are unchanged, except for trace formatting.
 * Existing chat/session behavior remains unchanged.
 * Every failure names the stage where it occurred.
+
+---
+
+# PR 2.1 ✅ — Align production eval behavior and cancellation
+
+Suggested title:
+
+```text
+fix: align production eval behavior and cancellation
+```
+
+## Goal
+
+Keep normal local, cloud, and semantic eval runs aligned with production
+grounding behavior, and prevent cooperative cancellation or eval timeouts from
+being misreported as transport failures.
+
+## Implementation
+
+* Normal `WidenEval` runs use the production `TextToSQLPipeline` grounding
+  default. The previous no-grounding path is available only through an
+  explicitly named test-only option.
+* A characterization test compares the same scripted generation through
+  `SessionController` and `TextToSQLEvalCaseRunner`.
+* Foundation Models discovery rethrows cancellation before fallback accounting,
+  and the local generator checks cancellation before SQL generation.
+* OpenRouter maps task-cancelled URLSession cancellation to `CancellationError`.
+* Private Cloud Compute preserves `CancellationError` before generic mapping.
+* `WidenEval` supports `--case-timeout-seconds <n>` with a 120-second default.
+  Timed-out cases cancel the pipeline, record `evalTimeout`, preserve elapsed
+  time and case ID, and allow later cases to continue when the backend
+  cooperates with cancellation.
+
+## Baseline handling
+
+Baselines from older evaluation modes are stale. Regenerate the local baseline
+after these fixes. Regenerate the cloud baseline only with a real
+`WIDEN_EVAL_OPENROUTER_API_KEY`; never replace it with an all-`backendUnavailable`
+run.
 
 ---
 

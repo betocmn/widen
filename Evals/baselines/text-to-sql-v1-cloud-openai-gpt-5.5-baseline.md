@@ -1,5 +1,10 @@
 # Text-to-SQL Eval Baseline
 
+> Stale baseline: this file predates `production-pipeline-static-shape` eval
+> mode and must not be treated as current. Regenerate only with a real
+> `WIDEN_EVAL_OPENROUTER_API_KEY`; never replace it with an
+> all-`backendUnavailable` run.
+
 **Evaluation scope:** A static-shape pass verifies the decision, SQL safety, schema references, and configured structural expectations. It does not establish result-set or semantic correctness.
 
 ## Run

@@ -43,10 +43,20 @@ variable. Do not commit API keys, prompts, or raw model output.
 --suite <path>
 --case <case-id>
 --repeat <n>
+--case-timeout-seconds <n>
 --output <directory>
 --record-prompts
 --fail-under <percentage>
 ```
+
+Each case has a default 120-second timeout, covering schema discovery,
+generation, and validation repair. When the timeout fires, WidenEval cancels
+the pipeline task and records `evalTimeout` rather than a transport failure,
+then continues with the remaining cases if the backend cooperates with
+cancellation. Foundation Models cancellation is cooperative; if the framework
+does not return after task cancellation, the current case can still block until
+the framework returns. WidenEval intentionally avoids unbounded detached model
+tasks.
 
 Prompt recording defaults to off. When it is off, the eval process also
 disables Widen's append-only generation log for that process. Reported
@@ -68,3 +78,9 @@ Each run writes:
 `.eval-results/` is ignored by git. Committed baseline summaries must be
 sanitized and should not include estimated prompts, raw model responses,
 credentials, or private schema data.
+
+Baselines whose `Evaluation mode` is not `production-pipeline-static-shape`
+predate the shared production pipeline and must be treated as stale. Regenerate
+local baselines after pipeline/scorer changes. Regenerate cloud baselines only
+with a real `WIDEN_EVAL_OPENROUTER_API_KEY`; do not replace a cloud baseline
+with an all-`backendUnavailable` run.

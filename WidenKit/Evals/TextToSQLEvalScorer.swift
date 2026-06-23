@@ -7,6 +7,8 @@ public struct TextToSQLEvalRunOptions: Equatable, Sendable {
     public var defaultRowLimit: Int
     public var estimatedInitialPromptCharacters: Int?
     public var estimatedInitialPrompt: String?
+    public var testOnlyDisableGroundingClarification: Bool
+    public var caseTimeoutSeconds: Double?
 
     public init(
         backend: TextToSQLEvalBackend,
@@ -14,7 +16,9 @@ public struct TextToSQLEvalRunOptions: Equatable, Sendable {
         repeatIndex: Int = 1,
         defaultRowLimit: Int = 100,
         estimatedInitialPromptCharacters: Int? = nil,
-        estimatedInitialPrompt: String? = nil
+        estimatedInitialPrompt: String? = nil,
+        testOnlyDisableGroundingClarification: Bool = false,
+        caseTimeoutSeconds: Double? = nil
     ) {
         self.backend = backend
         self.model = model
@@ -22,6 +26,8 @@ public struct TextToSQLEvalRunOptions: Equatable, Sendable {
         self.defaultRowLimit = defaultRowLimit
         self.estimatedInitialPromptCharacters = estimatedInitialPromptCharacters
         self.estimatedInitialPrompt = estimatedInitialPrompt
+        self.testOnlyDisableGroundingClarification = testOnlyDisableGroundingClarification
+        self.caseTimeoutSeconds = caseTimeoutSeconds
     }
 }
 
@@ -32,7 +38,78 @@ public enum TextToSQLEvalCaseRunner {
         generator: any SQLGenerator,
         options: TextToSQLEvalRunOptions
     ) async -> TextToSQLEvalResult {
+        guard let caseTimeoutSeconds = options.caseTimeoutSeconds else {
+            return await runPipeline(
+                evalCase: evalCase,
+                schema: schema,
+                generator: generator,
+                options: options,
+                started: Date()
+            )
+        }
+        return await runWithTimeout(
+            evalCase: evalCase,
+            schema: schema,
+            generator: generator,
+            options: options,
+            timeoutSeconds: caseTimeoutSeconds
+        )
+    }
+
+    private static func runWithTimeout(
+        evalCase: TextToSQLEvalCase,
+        schema: DatabaseSchema,
+        generator: any SQLGenerator,
+        options: TextToSQLEvalRunOptions,
+        timeoutSeconds: Double
+    ) async -> TextToSQLEvalResult {
         let started = Date()
+        let timeoutNanoseconds = UInt64(max(1.0, timeoutSeconds * 1_000_000_000))
+        return await withTaskGroup(of: TextToSQLEvalResult.self) { group in
+            group.addTask {
+                await runPipeline(
+                    evalCase: evalCase,
+                    schema: schema,
+                    generator: generator,
+                    options: options,
+                    started: started
+                )
+            }
+            group.addTask {
+                do {
+                    try await Task.sleep(nanoseconds: timeoutNanoseconds)
+                } catch {
+                    return cancellationResult(
+                        evalCase: evalCase,
+                        options: options,
+                        latencyMs: elapsedMilliseconds(since: started)
+                    )
+                }
+                return timeoutResult(
+                    evalCase: evalCase,
+                    options: options,
+                    timeoutSeconds: timeoutSeconds,
+                    latencyMs: elapsedMilliseconds(since: started)
+                )
+            }
+            let result = await group.next()
+                ?? cancellationResult(
+                    evalCase: evalCase,
+                    options: options,
+                    latencyMs: elapsedMilliseconds(since: started)
+                )
+            group.cancelAll()
+            return result
+        }
+    }
+
+    private static func runPipeline(
+        evalCase: TextToSQLEvalCase,
+        schema: DatabaseSchema,
+        generator: any SQLGenerator,
+        options: TextToSQLEvalRunOptions,
+        started: Date
+    ) async -> TextToSQLEvalResult {
         do {
             let run = try await TextToSQLPipeline(generator: generator).run(
                 TextToSQLRequest(
@@ -42,7 +119,7 @@ public enum TextToSQLEvalCaseRunner {
                         defaultRowLimit: options.defaultRowLimit,
                         databaseContext: evalCase.databaseContext ?? ""
                     ),
-                    allowGroundingClarification: false
+                    allowGroundingClarification: !options.testOnlyDisableGroundingClarification
                 )
             )
             switch run.finalDecision {
@@ -83,6 +160,60 @@ public enum TextToSQLEvalCaseRunner {
 
     private static func elapsedMilliseconds(since date: Date) -> Int {
         Int(Date().timeIntervalSince(date) * 1_000)
+    }
+
+    private static func timeoutResult(
+        evalCase: TextToSQLEvalCase,
+        options: TextToSQLEvalRunOptions,
+        timeoutSeconds: Double,
+        latencyMs: Int
+    ) -> TextToSQLEvalResult {
+        TextToSQLEvalResult(
+            caseID: evalCase.id,
+            backend: options.backend,
+            model: options.model,
+            repeatIndex: options.repeatIndex,
+            status: .evalTimeout,
+            metrics: TextToSQLEvalMetrics(
+                backendAvailable: true,
+                transportSuccess: true,
+                structuredResponseParsed: false,
+                decisionMatches: false,
+                latencyMs: latencyMs,
+                estimatedInitialPromptCharacters: options.estimatedInitialPromptCharacters
+            ),
+            diagnostics: TextToSQLEvalDiagnostics(
+                errorMessage:
+                    "Eval case \(evalCase.id) timed out after \(timeoutSeconds) seconds."
+            ),
+            estimatedInitialPrompt: options.estimatedInitialPrompt
+        )
+    }
+
+    private static func cancellationResult(
+        evalCase: TextToSQLEvalCase,
+        options: TextToSQLEvalRunOptions,
+        latencyMs: Int
+    ) -> TextToSQLEvalResult {
+        TextToSQLEvalResult(
+            caseID: evalCase.id,
+            backend: options.backend,
+            model: options.model,
+            repeatIndex: options.repeatIndex,
+            status: .generationFailure,
+            metrics: TextToSQLEvalMetrics(
+                backendAvailable: true,
+                transportSuccess: true,
+                structuredResponseParsed: false,
+                decisionMatches: false,
+                latencyMs: latencyMs,
+                estimatedInitialPromptCharacters: options.estimatedInitialPromptCharacters
+            ),
+            diagnostics: TextToSQLEvalDiagnostics(
+                errorMessage: "Eval case \(evalCase.id) was cancelled."
+            ),
+            estimatedInitialPrompt: options.estimatedInitialPrompt
+        )
     }
 
     private static func failureResult(

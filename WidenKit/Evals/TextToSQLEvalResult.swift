@@ -13,6 +13,7 @@ public enum TextToSQLEvalCaseStatus: String, Codable, CaseIterable, Equatable, S
     case wrongSchemaObjects
     case contextWindowFailure
     case generationFailure
+    case evalTimeout
     case transportFailure
     case parseFailure
     case backendUnavailable

@@ -277,4 +277,25 @@ struct OpenRouterSQLGeneratorTests {
             #expect(message.contains("context length"))
         }
     }
+
+    @Test func taskCancelledURLSessionCancellationThrowsCancellationError() async {
+        let transport = StubTransport([.failure(URLError(.cancelled))])
+        let task = Task {
+            try await makeGenerator(transport).generateSQL(
+                question: "show users",
+                schema: makeSchema(),
+                config: SQLGenerationConfig()
+            )
+        }
+        task.cancel()
+
+        do {
+            _ = try await task.value
+            Issue.record("expected CancellationError")
+        } catch is CancellationError {
+            return
+        } catch {
+            Issue.record("expected CancellationError, got \(error)")
+        }
+    }
 }

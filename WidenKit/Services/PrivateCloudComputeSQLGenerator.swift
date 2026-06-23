@@ -109,6 +109,8 @@
                         stopReason: result.needsClarification ? "clarification" : "success"
                     ))
                 return result
+            } catch is CancellationError {
+                throw CancellationError()
             } catch {
                 await GenerationLog.shared.append(
                     prompt: prompt,
@@ -126,6 +128,9 @@
         }
 
         private static func map(_ error: any Error) -> any Error {
+            if error is CancellationError {
+                return CancellationError()
+            }
             if let generationError = error as? LanguageModelSession.GenerationError {
                 return FoundationModelsSQLGenerator.map(generationError)
             }

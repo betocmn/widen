@@ -125,6 +125,9 @@ public final class OpenRouterSQLGenerator: SQLGenerator, Sendable {
         do {
             (data, response) = try await transport.send(request)
         } catch let error as URLError {
+            if error.code == .cancelled, Task.isCancelled {
+                throw CancellationError()
+            }
             throw Self.map(error)
         }
 

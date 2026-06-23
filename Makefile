@@ -22,6 +22,9 @@ endif
 ifdef REPEAT
 EVAL_ARGS += --repeat $(REPEAT)
 endif
+ifdef CASE_TIMEOUT_SECONDS
+EVAL_ARGS += --case-timeout-seconds $(CASE_TIMEOUT_SECONDS)
+endif
 ifdef OUTPUT
 EVAL_ARGS += --output $(OUTPUT)
 endif
