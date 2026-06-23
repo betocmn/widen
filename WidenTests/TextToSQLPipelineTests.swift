@@ -314,7 +314,7 @@ struct TextToSQLPipelineTests {
         #expect(generator.contexts.count == 2)
     }
 
-    @Test func repeatedRepairReturnsTypedNoProgressFailure() async throws {
+    @Test func repeatedSafetyRepairReturnsSafetyFailure() async throws {
         let sql = "SELECT AVG(COUNT(*) OVER ()) FROM public.users"
         let generator = ScriptedGenerator([
             .success(generation(sql: sql)),
@@ -328,7 +328,7 @@ struct TextToSQLPipelineTests {
             return
         }
         #expect(failure.stage == .validationRepair)
-        #expect(failure.category == .repeatedNoProgressRepair)
+        #expect(failure.category == .safetyValidation)
         #expect(generator.contexts.count == 2)
     }
 

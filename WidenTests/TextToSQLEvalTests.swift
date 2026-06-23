@@ -124,6 +124,45 @@ struct TextToSQLEvalTests {
         #expect(result.metrics.modelCallCount == 2)
     }
 
+    @Test func repeatedNoProgressFailureCountsAsSchemaInvalid() async {
+        let evalCase = TextToSQLEvalCase(
+            id: "commerce.ambiguous-id",
+            schemaFixture: "commerce",
+            question: "List customer order ids",
+            expected: TextToSQLEvalExpectation(
+                decision: .sql,
+                requiredTables: ["public.customers", "public.orders"]
+            )
+        )
+        let generator = StaticGenerator(
+            result: SQLGenerationResult(
+                sql: """
+                    SELECT id
+                    FROM public.customers
+                    JOIN public.orders ON customers.id = orders.customer_id
+                    LIMIT 100
+                    """,
+                explanation: "Uses an ambiguous id column.",
+                assumptions: [],
+                referencedTables: [],
+                confidence: 0.7,
+                riskLevel: .medium,
+                needsClarification: false,
+                clarificationQuestion: nil
+            )
+        )
+
+        let result = await TextToSQLEvalCaseRunner.run(
+            evalCase: evalCase,
+            schema: makeCommerceSchema(),
+            generator: generator,
+            options: TextToSQLEvalRunOptions(backend: .local)
+        )
+
+        #expect(result.status == .wrongSchemaObjects)
+        #expect(result.metrics.schemaValid == false)
+    }
+
     @Test func scoresClarificationAsPassed() async {
         let evalCase = TextToSQLEvalCase(
             id: "commerce.best-customers",

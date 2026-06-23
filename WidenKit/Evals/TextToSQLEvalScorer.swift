@@ -138,7 +138,10 @@ public enum TextToSQLEvalCaseRunner {
                 structuredResponseParsed: structuredResponseParsed(for: failure.category),
                 decisionMatches: false,
                 safetyValid: failure.category == .safetyValidation ? false : nil,
-                schemaValid: failure.category == .schemaValidation ? false : nil,
+                schemaValid: (
+                    failure.category == .schemaValidation
+                        || failure.category == .repeatedNoProgressRepair
+                ) ? false : nil,
                 latencyMs: latencyMs,
                 modelCallCount: trace.modelCalls == 0 ? nil : trace.modelCalls,
                 estimatedInitialPromptCharacters: options.estimatedInitialPromptCharacters

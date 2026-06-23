@@ -750,7 +750,7 @@ public struct TextToSQLPipeline: TextToSQLRunning {
     ) -> TextToSQLFailureCategory {
         switch reason {
         case .repeatedFingerprint, .forbiddenIdentifier:
-            if candidateHasUnsafeSafetyIssue(evaluation) {
+            if candidateFailsSafety(evaluation) {
                 .safetyValidation
             } else {
                 .repeatedNoProgressRepair
@@ -758,7 +758,7 @@ public struct TextToSQLPipeline: TextToSQLRunning {
         case .unsafeWrite:
             .safetyValidation
         case .validationFailure:
-            if candidateHasUnsafeSafetyIssue(evaluation) {
+            if candidateFailsSafety(evaluation) {
                 .safetyValidation
             } else {
                 .schemaValidation
@@ -768,11 +768,9 @@ public struct TextToSQLPipeline: TextToSQLRunning {
         }
     }
 
-    private func candidateHasUnsafeSafetyIssue(_ evaluation: SQLRepairCandidateEvaluation) -> Bool {
+    private func candidateFailsSafety(_ evaluation: SQLRepairCandidateEvaluation) -> Bool {
         guard let sql = evaluation.sql else { return false }
-        return SQLSafetyValidator.validate(sql).safetyIssueKinds.contains {
-            $0.isUnsafeExecutionRisk
-        }
+        return !SQLSafetyValidator.validate(sql).isValid
     }
 
     private func repairFailure(
