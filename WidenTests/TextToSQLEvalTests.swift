@@ -607,6 +607,10 @@ struct TextToSQLEvalTests {
         #expect(timeoutResult.metrics.latencyMs >= 0)
         #expect(timeoutResult.metrics.transportSuccess)
         #expect(timeoutResult.diagnostics.errorMessage?.contains("commerce.recent-orders") == true)
+        let deadline = Date().addingTimeInterval(1)
+        while !hangingGenerator.wasCancelled, Date() < deadline {
+            try? await Task.sleep(nanoseconds: 1_000_000)
+        }
         #expect(hangingGenerator.wasCancelled)
 
         let nextResult = await TextToSQLEvalCaseRunner.run(
