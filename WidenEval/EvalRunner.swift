@@ -82,13 +82,12 @@ struct EvalRunner {
         let suite = try JSONDecoder().decode(TextToSQLEvalSuite.self, from: suiteData)
         try TextToSQLEvalSuiteValidator.validate(suite: suite, suiteURL: suiteURL)
         let selectedCases = try filteredCases(suite.cases)
-        let schemaDirectory = suiteURL
+        let evalDirectory = suiteURL
             .deletingLastPathComponent()
             .deletingLastPathComponent()
+        let schemaDirectory = evalDirectory
             .appendingPathComponent("schemas", isDirectory: true)
-        let repositoryRoot = suiteURL
-            .deletingLastPathComponent()
-            .deletingLastPathComponent()
+        let repositoryRoot = evalDirectory.deletingLastPathComponent()
         let schemas = try loadSchemas(
             for: Set(selectedCases.map(\.schemaFixture)),
             schemaDirectory: schemaDirectory
