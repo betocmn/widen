@@ -364,7 +364,7 @@ public struct TextToSQLPipeline: TextToSQLRunning {
 
         let firstError = AppError.validationFailed(validation.combined.errors).localizedDescription
         let validationIssueIDs = validation.safety.errors.map {
-            "safety:\(SQLTextFingerprint($0).value)"
+            redactedIssueID(prefix: "safety", value: $0)
         } + validation.schema.issues.map(\.traceID)
         record(
             TextToSQLPipelineEvent(
@@ -674,7 +674,9 @@ public struct TextToSQLPipeline: TextToSQLRunning {
             outcome: safety.isValid ? .success : .failure,
             since: safetyStart,
             failureCategory: safety.isValid ? nil : .safetyValidation,
-            validationIssueIDs: safety.errors.map { "safety:\(SQLTextFingerprint($0).value)" }
+            validationIssueIDs: safety.errors.map {
+                redactedIssueID(prefix: "safety", value: $0)
+            }
         )
 
         let schemaStart = Date()
@@ -900,4 +902,11 @@ private extension TextToSQLDecision {
 
 private func elapsedMilliseconds(since date: Date) -> Int {
     Int(Date().timeIntervalSince(date) * 1_000)
+}
+
+private func redactedIssueID(prefix: String, value: String) -> String {
+    let digest = SHA256.hash(data: Data(value.utf8))
+        .map { String(format: "%02x", $0) }
+        .joined()
+    return "\(prefix):\(digest.prefix(16))"
 }

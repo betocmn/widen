@@ -375,6 +375,31 @@ struct TextToSQLPipelineTests {
         #expect(collected == result.events)
     }
 
+    @Test func safetyValidationTraceIssueIDsAreRedacted() async throws {
+        let unsafeSQL = "DROP TABLE public.users"
+        let generator = ScriptedGenerator([
+            .success(generation(sql: unsafeSQL)),
+            .failure(SQLGenerationFailure.generation("No repair available.")),
+        ])
+
+        let result = try await run(generator)
+
+        guard case .failed = result.finalDecision else {
+            Issue.record("expected failure decision")
+            return
+        }
+        let issueIDs = result.trace.stages
+            .filter { $0.stage == .safetyValidation && $0.outcome == .failure }
+            .flatMap(\.validationIssueIDs)
+        #expect(!issueIDs.isEmpty)
+        #expect(issueIDs.allSatisfy { $0.hasPrefix("safety:") })
+
+        let joinedIssueIDs = issueIDs.joined(separator: " ")
+        #expect(!joinedIssueIDs.localizedCaseInsensitiveContains("drop"))
+        #expect(!joinedIssueIDs.localizedCaseInsensitiveContains("public.users"))
+        #expect(!joinedIssueIDs.contains(unsafeSQL))
+    }
+
     @Test(arguments: [
         (SQLGenerationFailure.backendUnavailable("No model."), TextToSQLFailureCategory.backendUnavailable),
         (SQLGenerationFailure.transport("Network failed."), TextToSQLFailureCategory.transport),
