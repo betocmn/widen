@@ -242,16 +242,17 @@ public final class OpenRouterSQLGenerator: SQLGenerator, Sendable {
         else {
             throw parseFailure
         }
+        let needsClarification = generated.needsClarification ?? false
         let sql = generated.sql.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard !sql.isEmpty else { throw parseFailure }
+        guard needsClarification || !sql.isEmpty else { throw parseFailure }
         return SQLGenerationResult(
-            sql: sql,
+            sql: needsClarification ? "" : sql,
             explanation: generated.explanation ?? "",
             assumptions: generated.assumptions ?? [],
             referencedTables: generated.referencedTables ?? [],
             confidence: min(max(generated.confidence ?? 0.5, 0), 1),
             riskLevel: SQLRiskLevel(rawValue: (generated.riskLevel ?? "").lowercased()) ?? .medium,
-            needsClarification: generated.needsClarification ?? false,
+            needsClarification: needsClarification,
             clarificationQuestion: generated.clarificationQuestion
         )
     }

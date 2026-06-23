@@ -141,6 +141,27 @@ struct OpenRouterSQLGeneratorTests {
         #expect(result.riskLevel == .low)
     }
 
+    @Test func decodesClarificationWithEmptySQL() async throws {
+        let clarification = """
+            {"sql": "", "explanation": "The requested metric is undefined.", \
+            "assumptions": [], "referencedTables": [], "confidence": 0.2, \
+            "riskLevel": "medium", "needsClarification": true, \
+            "clarificationQuestion": "What metric defines best customers?"}
+            """
+        let transport = StubTransport([
+            .success((try completion(content: clarification), response(status: 200)))
+        ])
+        let result = try await makeGenerator(transport).generateSQL(
+            question: "Who are our best customers?",
+            schema: makeSchema(),
+            config: SQLGenerationConfig()
+        )
+
+        #expect(result.sql.isEmpty)
+        #expect(result.needsClarification)
+        #expect(result.clarificationQuestion == "What metric defines best customers?")
+    }
+
     @Test func rejectedKeyBecomesModelUnavailable() async throws {
         let transport = StubTransport([
             .success((Data("{}".utf8), response(status: 401)))
