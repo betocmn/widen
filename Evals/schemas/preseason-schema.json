@@ -1,0 +1,162 @@
+{
+  "schemas": [
+    { "name": "public" }
+  ],
+  "tables": [
+    {
+      "schema": "public",
+      "name": "preseason_tool",
+      "type": "BASE TABLE",
+      "columns": [
+        { "tableSchema": "public", "tableName": "preseason_tool", "name": "id", "dataType": "uuid", "isNullable": false, "ordinalPosition": 1 },
+        { "tableSchema": "public", "tableName": "preseason_tool", "name": "name", "dataType": "character varying", "isNullable": false, "ordinalPosition": 2 },
+        { "tableSchema": "public", "tableName": "preseason_tool", "name": "slug", "dataType": "character varying", "isNullable": false, "ordinalPosition": 3 },
+        { "tableSchema": "public", "tableName": "preseason_tool", "name": "is_verified", "dataType": "boolean", "isNullable": false, "ordinalPosition": 4 },
+        { "tableSchema": "public", "tableName": "preseason_tool", "name": "createdAt", "dataType": "timestamp with time zone", "isNullable": false, "ordinalPosition": 5 }
+      ]
+    },
+    {
+      "schema": "public",
+      "name": "preseason_category",
+      "type": "BASE TABLE",
+      "columns": [
+        { "tableSchema": "public", "tableName": "preseason_category", "name": "id", "dataType": "uuid", "isNullable": false, "ordinalPosition": 1 },
+        { "tableSchema": "public", "tableName": "preseason_category", "name": "name", "dataType": "character varying", "isNullable": false, "ordinalPosition": 2 }
+      ]
+    },
+    {
+      "schema": "public",
+      "name": "preseason_benchmark_run",
+      "type": "BASE TABLE",
+      "columns": [
+        { "tableSchema": "public", "tableName": "preseason_benchmark_run", "name": "id", "dataType": "uuid", "isNullable": false, "ordinalPosition": 1 },
+        {
+          "tableSchema": "public",
+          "tableName": "preseason_benchmark_run",
+          "name": "status",
+          "dataType": "text",
+          "isNullable": false,
+          "ordinalPosition": 2,
+          "valueConstraints": [
+            { "kind": "check", "values": ["scheduled", "running", "succeeded", "failed"], "expression": "CHECK (status IN ('scheduled', 'running', 'succeeded', 'failed'))" }
+          ]
+        },
+        { "tableSchema": "public", "tableName": "preseason_benchmark_run", "name": "scheduled_for", "dataType": "timestamp with time zone", "isNullable": true, "ordinalPosition": 3 },
+        { "tableSchema": "public", "tableName": "preseason_benchmark_run", "name": "createdAt", "dataType": "timestamp with time zone", "isNullable": false, "ordinalPosition": 4 }
+      ]
+    },
+    {
+      "schema": "public",
+      "name": "preseason_match_config",
+      "type": "BASE TABLE",
+      "columns": [
+        { "tableSchema": "public", "tableName": "preseason_match_config", "name": "id", "dataType": "uuid", "isNullable": false, "ordinalPosition": 1 },
+        { "tableSchema": "public", "tableName": "preseason_match_config", "name": "tool_a_id", "dataType": "uuid", "isNullable": false, "ordinalPosition": 2 },
+        { "tableSchema": "public", "tableName": "preseason_match_config", "name": "tool_b_id", "dataType": "uuid", "isNullable": false, "ordinalPosition": 3 },
+        { "tableSchema": "public", "tableName": "preseason_match_config", "name": "category_id", "dataType": "uuid", "isNullable": false, "ordinalPosition": 4 },
+        { "tableSchema": "public", "tableName": "preseason_match_config", "name": "active", "dataType": "boolean", "isNullable": false, "ordinalPosition": 5 },
+        { "tableSchema": "public", "tableName": "preseason_match_config", "name": "createdAt", "dataType": "timestamp with time zone", "isNullable": false, "ordinalPosition": 6 }
+      ]
+    },
+    {
+      "schema": "public",
+      "name": "preseason_match_evaluation",
+      "type": "BASE TABLE",
+      "columns": [
+        { "tableSchema": "public", "tableName": "preseason_match_evaluation", "name": "id", "dataType": "uuid", "isNullable": false, "ordinalPosition": 1 },
+        { "tableSchema": "public", "tableName": "preseason_match_evaluation", "name": "match_config_id", "dataType": "uuid", "isNullable": false, "ordinalPosition": 2 },
+        { "tableSchema": "public", "tableName": "preseason_match_evaluation", "name": "benchmark_run_id", "dataType": "uuid", "isNullable": false, "ordinalPosition": 3 },
+        { "tableSchema": "public", "tableName": "preseason_match_evaluation", "name": "tool_a_id", "dataType": "uuid", "isNullable": false, "ordinalPosition": 4 },
+        { "tableSchema": "public", "tableName": "preseason_match_evaluation", "name": "tool_b_id", "dataType": "uuid", "isNullable": false, "ordinalPosition": 5 },
+        { "tableSchema": "public", "tableName": "preseason_match_evaluation", "name": "winner_id", "dataType": "uuid", "isNullable": true, "ordinalPosition": 6 },
+        {
+          "tableSchema": "public",
+          "tableName": "preseason_match_evaluation",
+          "name": "winner_decision",
+          "dataType": "user-defined",
+          "isNullable": true,
+          "ordinalPosition": 7,
+          "valueConstraints": [
+            { "kind": "enum_values", "values": ["tool_a", "tool_b", "tie"] }
+          ]
+        },
+        { "tableSchema": "public", "tableName": "preseason_match_evaluation", "name": "createdAt", "dataType": "timestamp with time zone", "isNullable": false, "ordinalPosition": 8 }
+      ]
+    }
+  ],
+  "foreignKeys": [
+    {
+      "constraintName": "preseason_match_config_tool_a_id_fkey",
+      "sourceSchema": "public",
+      "sourceTable": "preseason_match_config",
+      "sourceColumn": "tool_a_id",
+      "targetSchema": "public",
+      "targetTable": "preseason_tool",
+      "targetColumn": "id"
+    },
+    {
+      "constraintName": "preseason_match_config_tool_b_id_fkey",
+      "sourceSchema": "public",
+      "sourceTable": "preseason_match_config",
+      "sourceColumn": "tool_b_id",
+      "targetSchema": "public",
+      "targetTable": "preseason_tool",
+      "targetColumn": "id"
+    },
+    {
+      "constraintName": "preseason_match_config_category_id_fkey",
+      "sourceSchema": "public",
+      "sourceTable": "preseason_match_config",
+      "sourceColumn": "category_id",
+      "targetSchema": "public",
+      "targetTable": "preseason_category",
+      "targetColumn": "id"
+    },
+    {
+      "constraintName": "preseason_match_evaluation_config_id_fkey",
+      "sourceSchema": "public",
+      "sourceTable": "preseason_match_evaluation",
+      "sourceColumn": "match_config_id",
+      "targetSchema": "public",
+      "targetTable": "preseason_match_config",
+      "targetColumn": "id"
+    },
+    {
+      "constraintName": "preseason_match_evaluation_run_id_fkey",
+      "sourceSchema": "public",
+      "sourceTable": "preseason_match_evaluation",
+      "sourceColumn": "benchmark_run_id",
+      "targetSchema": "public",
+      "targetTable": "preseason_benchmark_run",
+      "targetColumn": "id"
+    },
+    {
+      "constraintName": "preseason_match_evaluation_winner_id_fkey",
+      "sourceSchema": "public",
+      "sourceTable": "preseason_match_evaluation",
+      "sourceColumn": "winner_id",
+      "targetSchema": "public",
+      "targetTable": "preseason_tool",
+      "targetColumn": "id"
+    },
+    {
+      "constraintName": "preseason_match_evaluation_tool_a_id_fkey",
+      "sourceSchema": "public",
+      "sourceTable": "preseason_match_evaluation",
+      "sourceColumn": "tool_a_id",
+      "targetSchema": "public",
+      "targetTable": "preseason_tool",
+      "targetColumn": "id"
+    },
+    {
+      "constraintName": "preseason_match_evaluation_tool_b_id_fkey",
+      "sourceSchema": "public",
+      "sourceTable": "preseason_match_evaluation",
+      "sourceColumn": "tool_b_id",
+      "targetSchema": "public",
+      "targetTable": "preseason_tool",
+      "targetColumn": "id"
+    }
+  ],
+  "loadedAt": 0
+}

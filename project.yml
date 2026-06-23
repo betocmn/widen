@@ -94,6 +94,17 @@ targets:
         Release:
           ENABLE_HARDENED_RUNTIME: YES
 
+  WidenEval:
+    type: tool
+    platform: macOS
+    sources: [WidenEval]
+    dependencies:
+      - target: WidenKit
+    settings:
+      base:
+        PRODUCT_BUNDLE_IDENTIFIER: "$(BUNDLE_ID_PREFIX).WidenEval"
+        LD_RUNPATH_SEARCH_PATHS: "$(inherited) @executable_path @loader_path @executable_path/../Frameworks @loader_path/../Frameworks"
+
   WidenTests:
     type: bundle.unit-test
     platform: macOS
@@ -117,3 +128,10 @@ schemes:
       gatherCoverageData: false
       targets:
         - WidenTests
+
+  WidenEval:
+    build:
+      targets:
+        WidenEval: all
+    run:
+      config: Debug

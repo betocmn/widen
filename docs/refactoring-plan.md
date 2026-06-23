@@ -51,7 +51,7 @@ PR 7 + PR 8 + PR 11 + eval evidence
 
 ---
 
-# PR 1 — Add a headless text-to-SQL eval harness
+# PR 1 ✅ — Add a headless text-to-SQL eval harness
 
 Suggested title:
 
@@ -276,7 +276,7 @@ per-case output and diagnostics
 
 ---
 
-# Optional PR 1B — Promptfoo adapter
+# Optional PR 1B — Promptfoo adapter — Skipped
 
 **Can run in parallel after PR 1. Not required.**
 

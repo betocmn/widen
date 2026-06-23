@@ -9,10 +9,27 @@ DEVELOPER_DIR ?= /Applications/Xcode-26.app/Contents/Developer
 export DEVELOPER_DIR
 
 XCODEBUILD := xcodebuild -project Widen.xcodeproj -scheme Widen -configuration Debug -derivedDataPath build
+EVAL_XCODEBUILD := xcodebuild -project Widen.xcodeproj -scheme WidenEval -configuration Debug -derivedDataPath build
 
 APP := build/Build/Products/Debug/Widen.app
+EVAL := build/Build/Products/Debug/WidenEval
+MODEL ?= openai/gpt-5.5
+BACKEND ?= local
+EVAL_ARGS := --suite Evals/suites/text-to-sql-v1.json
+ifdef CASE
+EVAL_ARGS += --case $(CASE)
+endif
+ifdef REPEAT
+EVAL_ARGS += --repeat $(REPEAT)
+endif
+ifdef OUTPUT
+EVAL_ARGS += --output $(OUTPUT)
+endif
+ifdef FAIL_UNDER
+EVAL_ARGS += --fail-under $(FAIL_UNDER)
+endif
 
-.PHONY: project build test test-db test-fm setup run run-conductor release release-mac xcode clean
+.PHONY: project build test test-db test-fm eval-build eval-local eval-cloud eval-all eval-case setup run run-conductor release release-mac xcode clean
 
 ## Regenerate Widen.xcodeproj from project.yml
 project:
@@ -41,6 +58,30 @@ test-db:
 test-fm:
 	$(XCODEBUILD) test
 	TEST_RUNNER_WIDEN_FM_TEST=1 $(XCODEBUILD) test -only-testing:WidenTests/FoundationModelsSmokeTests
+
+## Build the native text-to-SQL eval runner
+eval-build:
+	$(EVAL_XCODEBUILD) build
+
+## Run the text-to-SQL eval suite against local Foundation Models
+eval-local: eval-build
+	$(EVAL) --backend local $(EVAL_ARGS)
+
+## Run the text-to-SQL eval suite against OpenRouter
+eval-cloud: eval-build
+	@set -a; if [ -f .env.eval.local ]; then . ./.env.eval.local; fi; set +a; \
+	$(EVAL) --backend cloud --model "$(MODEL)" $(EVAL_ARGS)
+
+## Run the text-to-SQL eval suite against local and cloud backends
+eval-all: eval-build
+	@set -a; if [ -f .env.eval.local ]; then . ./.env.eval.local; fi; set +a; \
+	$(EVAL) --backend both --model "$(MODEL)" $(EVAL_ARGS)
+
+## Run one eval case. Example: make eval-case CASE=preseason.top-wins-defined BACKEND=cloud
+eval-case: eval-build
+	@test -n "$(CASE)" || (echo "error: CASE is required" >&2; exit 1)
+	@set -a; if [ -f .env.eval.local ]; then . ./.env.eval.local; fi; set +a; \
+	$(EVAL) --backend "$(BACKEND)" --model "$(MODEL)" $(EVAL_ARGS)
 
 ## Build and launch the app
 run: build

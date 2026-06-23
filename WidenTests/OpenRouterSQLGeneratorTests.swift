@@ -141,6 +141,53 @@ struct OpenRouterSQLGeneratorTests {
         #expect(result.riskLevel == .low)
     }
 
+    @Test func decodesClarificationWithEmptySQL() async throws {
+        let clarification = """
+            {"sql": "", "explanation": "The requested metric is undefined.", \
+            "assumptions": [], "referencedTables": [], "confidence": 0.2, \
+            "riskLevel": "medium", "needsClarification": true, \
+            "clarificationQuestion": "What metric defines best customers?"}
+            """
+        let transport = StubTransport([
+            .success((try completion(content: clarification), response(status: 200)))
+        ])
+        let result = try await makeGenerator(transport).generateSQL(
+            question: "Who are our best customers?",
+            schema: makeSchema(),
+            config: SQLGenerationConfig()
+        )
+
+        #expect(result.sql.isEmpty)
+        #expect(result.needsClarification)
+        #expect(result.clarificationQuestion == "What metric defines best customers?")
+    }
+
+    @Test func emptySQLClarificationRequiresQuestion() async throws {
+        let clarification = """
+            {"sql": "", "explanation": "The requested metric is undefined.", \
+            "assumptions": [], "referencedTables": [], "confidence": 0.2, \
+            "riskLevel": "medium", "needsClarification": true, \
+            "clarificationQuestion": "   "}
+            """
+        let transport = StubTransport([
+            .success((try completion(content: clarification), response(status: 200)))
+        ])
+
+        do {
+            _ = try await makeGenerator(transport).generateSQL(
+                question: "Who are our best customers?",
+                schema: makeSchema(),
+                config: SQLGenerationConfig()
+            )
+            Issue.record("expected an error")
+        } catch let error as AppError {
+            guard case .modelGenerationFailed = error else {
+                Issue.record("expected modelGenerationFailed, got \(error)")
+                return
+            }
+        }
+    }
+
     @Test func rejectedKeyBecomesModelUnavailable() async throws {
         let transport = StubTransport([
             .success((Data("{}".utf8), response(status: 401)))
@@ -173,6 +220,7 @@ struct OpenRouterSQLGeneratorTests {
             question: "show users", schema: makeSchema(), config: SQLGenerationConfig())
 
         #expect(result.sql == "SELECT id FROM public.users LIMIT 100")
+        #expect(result.generationCallCount == 2)
         #expect(transport.requests.count == 2)
         let retryBody = try JSONSerialization.jsonObject(
             with: #require(transport.requests[1].httpBody)) as? [String: Any]

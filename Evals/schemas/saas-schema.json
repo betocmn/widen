@@ -1,0 +1,103 @@
+{
+  "schemas": [
+    { "name": "public" }
+  ],
+  "tables": [
+    {
+      "schema": "public",
+      "name": "organization",
+      "type": "BASE TABLE",
+      "columns": [
+        { "tableSchema": "public", "tableName": "organization", "name": "id", "dataType": "integer", "isNullable": false, "ordinalPosition": 1 },
+        { "tableSchema": "public", "tableName": "organization", "name": "name", "dataType": "text", "isNullable": false, "ordinalPosition": 2 },
+        { "tableSchema": "public", "tableName": "organization", "name": "seats_purchased", "dataType": "integer", "isNullable": false, "ordinalPosition": 3 },
+        { "tableSchema": "public", "tableName": "organization", "name": "created_at", "dataType": "timestamp with time zone", "isNullable": false, "ordinalPosition": 4 }
+      ]
+    },
+    {
+      "schema": "public",
+      "name": "app_user",
+      "type": "BASE TABLE",
+      "columns": [
+        { "tableSchema": "public", "tableName": "app_user", "name": "id", "dataType": "integer", "isNullable": false, "ordinalPosition": 1 },
+        { "tableSchema": "public", "tableName": "app_user", "name": "email", "dataType": "text", "isNullable": false, "ordinalPosition": 2 },
+        { "tableSchema": "public", "tableName": "app_user", "name": "last_seen_at", "dataType": "timestamp with time zone", "isNullable": true, "ordinalPosition": 3 },
+        { "tableSchema": "public", "tableName": "app_user", "name": "created_at", "dataType": "timestamp with time zone", "isNullable": false, "ordinalPosition": 4 }
+      ]
+    },
+    {
+      "schema": "public",
+      "name": "organization_membership",
+      "type": "BASE TABLE",
+      "columns": [
+        { "tableSchema": "public", "tableName": "organization_membership", "name": "id", "dataType": "integer", "isNullable": false, "ordinalPosition": 1 },
+        { "tableSchema": "public", "tableName": "organization_membership", "name": "organization_id", "dataType": "integer", "isNullable": false, "ordinalPosition": 2 },
+        { "tableSchema": "public", "tableName": "organization_membership", "name": "user_id", "dataType": "integer", "isNullable": false, "ordinalPosition": 3 },
+        {
+          "tableSchema": "public",
+          "tableName": "organization_membership",
+          "name": "status",
+          "dataType": "text",
+          "isNullable": false,
+          "ordinalPosition": 4,
+          "valueConstraints": [
+            { "kind": "check", "values": ["active", "inactive"], "expression": "CHECK (status IN ('active', 'inactive'))" }
+          ]
+        },
+        { "tableSchema": "public", "tableName": "organization_membership", "name": "created_at", "dataType": "timestamp with time zone", "isNullable": false, "ordinalPosition": 5 }
+      ]
+    },
+    {
+      "schema": "public",
+      "name": "subscription",
+      "type": "BASE TABLE",
+      "columns": [
+        { "tableSchema": "public", "tableName": "subscription", "name": "id", "dataType": "integer", "isNullable": false, "ordinalPosition": 1 },
+        { "tableSchema": "public", "tableName": "subscription", "name": "organization_id", "dataType": "integer", "isNullable": false, "ordinalPosition": 2 },
+        {
+          "tableSchema": "public",
+          "tableName": "subscription",
+          "name": "status",
+          "dataType": "text",
+          "isNullable": false,
+          "ordinalPosition": 3,
+          "valueConstraints": [
+            { "kind": "check", "values": ["active", "trialing", "past_due", "canceled"], "expression": "CHECK (status IN ('active', 'trialing', 'past_due', 'canceled'))" }
+          ]
+        },
+        { "tableSchema": "public", "tableName": "subscription", "name": "expires_at", "dataType": "date", "isNullable": false, "ordinalPosition": 4 },
+        { "tableSchema": "public", "tableName": "subscription", "name": "created_at", "dataType": "timestamp with time zone", "isNullable": false, "ordinalPosition": 5 }
+      ]
+    }
+  ],
+  "foreignKeys": [
+    {
+      "constraintName": "organization_membership_organization_id_fkey",
+      "sourceSchema": "public",
+      "sourceTable": "organization_membership",
+      "sourceColumn": "organization_id",
+      "targetSchema": "public",
+      "targetTable": "organization",
+      "targetColumn": "id"
+    },
+    {
+      "constraintName": "organization_membership_user_id_fkey",
+      "sourceSchema": "public",
+      "sourceTable": "organization_membership",
+      "sourceColumn": "user_id",
+      "targetSchema": "public",
+      "targetTable": "app_user",
+      "targetColumn": "id"
+    },
+    {
+      "constraintName": "subscription_organization_id_fkey",
+      "sourceSchema": "public",
+      "sourceTable": "subscription",
+      "sourceColumn": "organization_id",
+      "targetSchema": "public",
+      "targetTable": "organization",
+      "targetColumn": "id"
+    }
+  ],
+  "loadedAt": 0
+}

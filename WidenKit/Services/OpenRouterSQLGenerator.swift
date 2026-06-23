@@ -45,8 +45,10 @@ public final class OpenRouterSQLGenerator: SQLGenerator, Sendable {
         let prompt = bundle.prompt
         let started = Date()
         do {
-            var result = try await respond(instructions: instructions, prompt: prompt)
-            result.generationCallCount = max(1, context.modelCallCount)
+            let attempt = try await respond(instructions: instructions, prompt: prompt)
+            let callCount = max(1, context.modelCallCount) + max(0, attempt.requestCount - 1)
+            var result = attempt.result
+            result.generationCallCount = callCount
             await GenerationLog.shared.append(
                 prompt: prompt,
                 outcome: result.logDescription,
@@ -55,7 +57,7 @@ public final class OpenRouterSQLGenerator: SQLGenerator, Sendable {
                     phase: context.mode,
                     package: bundle.schemaPackage,
                     context: context,
-                    callCount: max(1, context.modelCallCount),
+                    callCount: callCount,
                     stopReason: result.needsClarification ? "clarification" : "success"
                 ))
             return result
@@ -75,15 +77,29 @@ public final class OpenRouterSQLGenerator: SQLGenerator, Sendable {
         }
     }
 
-    private func respond(instructions: String, prompt: String) async throws -> SQLGenerationResult {
+    private struct OpenRouterAttempt {
+        var result: SQLGenerationResult
+        var requestCount: Int
+    }
+
+    private func respond(instructions: String, prompt: String) async throws -> OpenRouterAttempt {
         do {
-            return try await requestOnce(
-                instructions: instructions, prompt: prompt, includeResponseFormat: true)
+            return OpenRouterAttempt(
+                result: try await requestOnce(
+                    instructions: instructions,
+                    prompt: prompt,
+                    includeResponseFormat: true
+                ),
+                requestCount: 1
+            )
         } catch is ResponseFormatUnsupported {
             // Some models reject response_format; the JSON paragraph in the
             // system message carries the schema on its own.
-            return try await requestOnce(
-                instructions: instructions, prompt: prompt, includeResponseFormat: false)
+            return OpenRouterAttempt(
+                result: try await requestOnce(
+                    instructions: instructions, prompt: prompt, includeResponseFormat: false),
+                requestCount: 2
+            )
         }
     }
 
@@ -242,17 +258,23 @@ public final class OpenRouterSQLGenerator: SQLGenerator, Sendable {
         else {
             throw parseFailure
         }
+        let needsClarification = generated.needsClarification ?? false
         let sql = generated.sql.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard !sql.isEmpty else { throw parseFailure }
+        let clarificationQuestion = generated.clarificationQuestion?
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+        guard needsClarification || !sql.isEmpty else { throw parseFailure }
+        guard !needsClarification || clarificationQuestion?.isEmpty == false else {
+            throw parseFailure
+        }
         return SQLGenerationResult(
-            sql: sql,
+            sql: needsClarification ? "" : sql,
             explanation: generated.explanation ?? "",
             assumptions: generated.assumptions ?? [],
             referencedTables: generated.referencedTables ?? [],
             confidence: min(max(generated.confidence ?? 0.5, 0), 1),
             riskLevel: SQLRiskLevel(rawValue: (generated.riskLevel ?? "").lowercased()) ?? .medium,
-            needsClarification: generated.needsClarification ?? false,
-            clarificationQuestion: generated.clarificationQuestion
+            needsClarification: needsClarification,
+            clarificationQuestion: clarificationQuestion
         )
     }
 

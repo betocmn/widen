@@ -1,0 +1,81 @@
+{
+  "schemas": [
+    { "name": "public" }
+  ],
+  "tables": [
+    {
+      "schema": "public",
+      "name": "support_agent",
+      "type": "BASE TABLE",
+      "columns": [
+        { "tableSchema": "public", "tableName": "support_agent", "name": "id", "dataType": "integer", "isNullable": false, "ordinalPosition": 1 },
+        { "tableSchema": "public", "tableName": "support_agent", "name": "name", "dataType": "text", "isNullable": false, "ordinalPosition": 2 },
+        { "tableSchema": "public", "tableName": "support_agent", "name": "email", "dataType": "text", "isNullable": false, "ordinalPosition": 3 }
+      ]
+    },
+    {
+      "schema": "public",
+      "name": "support_ticket",
+      "type": "BASE TABLE",
+      "columns": [
+        { "tableSchema": "public", "tableName": "support_ticket", "name": "id", "dataType": "integer", "isNullable": false, "ordinalPosition": 1 },
+        { "tableSchema": "public", "tableName": "support_ticket", "name": "assignee_id", "dataType": "integer", "isNullable": true, "ordinalPosition": 2 },
+        {
+          "tableSchema": "public",
+          "tableName": "support_ticket",
+          "name": "status",
+          "dataType": "text",
+          "isNullable": false,
+          "ordinalPosition": 3,
+          "valueConstraints": [
+            { "kind": "check", "values": ["open", "pending", "resolved", "closed"], "expression": "CHECK (status IN ('open', 'pending', 'resolved', 'closed'))" }
+          ]
+        },
+        { "tableSchema": "public", "tableName": "support_ticket", "name": "created_at", "dataType": "timestamp with time zone", "isNullable": false, "ordinalPosition": 4 },
+        { "tableSchema": "public", "tableName": "support_ticket", "name": "first_response_at", "dataType": "timestamp with time zone", "isNullable": true, "ordinalPosition": 5 }
+      ]
+    },
+    {
+      "schema": "public",
+      "name": "feedback_cluster",
+      "type": "BASE TABLE",
+      "columns": [
+        { "tableSchema": "public", "tableName": "feedback_cluster", "name": "id", "dataType": "integer", "isNullable": false, "ordinalPosition": 1 },
+        { "tableSchema": "public", "tableName": "feedback_cluster", "name": "name", "dataType": "text", "isNullable": false, "ordinalPosition": 2 },
+        { "tableSchema": "public", "tableName": "feedback_cluster", "name": "priority", "dataType": "integer", "isNullable": true, "ordinalPosition": 3 }
+      ]
+    },
+    {
+      "schema": "public",
+      "name": "feedback_item",
+      "type": "BASE TABLE",
+      "columns": [
+        { "tableSchema": "public", "tableName": "feedback_item", "name": "id", "dataType": "integer", "isNullable": false, "ordinalPosition": 1 },
+        { "tableSchema": "public", "tableName": "feedback_item", "name": "cluster_id", "dataType": "integer", "isNullable": true, "ordinalPosition": 2 },
+        { "tableSchema": "public", "tableName": "feedback_item", "name": "body", "dataType": "text", "isNullable": false, "ordinalPosition": 3 },
+        { "tableSchema": "public", "tableName": "feedback_item", "name": "created_at", "dataType": "timestamp with time zone", "isNullable": false, "ordinalPosition": 4 }
+      ]
+    }
+  ],
+  "foreignKeys": [
+    {
+      "constraintName": "support_ticket_assignee_id_fkey",
+      "sourceSchema": "public",
+      "sourceTable": "support_ticket",
+      "sourceColumn": "assignee_id",
+      "targetSchema": "public",
+      "targetTable": "support_agent",
+      "targetColumn": "id"
+    },
+    {
+      "constraintName": "feedback_item_cluster_id_fkey",
+      "sourceSchema": "public",
+      "sourceTable": "feedback_item",
+      "sourceColumn": "cluster_id",
+      "targetSchema": "public",
+      "targetTable": "feedback_cluster",
+      "targetColumn": "id"
+    }
+  ],
+  "loadedAt": 0
+}

@@ -107,16 +107,22 @@ public actor GenerationLog {
     public static let shared = GenerationLog()
 
     private let fileURL: URL
+    private var isEnabled: Bool
 
     /// - Parameter directory: override for tests; defaults to
     ///   `~/Library/Application Support/Widen`.
-    public init(directory: URL? = nil) {
+    public init(directory: URL? = nil, isEnabled: Bool = true) {
         let base =
             directory
             ?? FileManager.default
                 .urls(for: .applicationSupportDirectory, in: .userDomainMask)[0]
                 .appendingPathComponent("Widen", isDirectory: true)
         self.fileURL = base.appendingPathComponent("generation.log")
+        self.isEnabled = isEnabled
+    }
+
+    public func setEnabled(_ isEnabled: Bool) {
+        self.isEnabled = isEnabled
     }
 
     public func append(
@@ -125,6 +131,7 @@ public actor GenerationLog {
         durationMs: Int,
         telemetry: PromptTelemetry? = nil
     ) {
+        guard isEnabled else { return }
         let stamp = ISO8601DateFormatter().string(from: Date())
         let telemetryText = telemetry.map {
             """
