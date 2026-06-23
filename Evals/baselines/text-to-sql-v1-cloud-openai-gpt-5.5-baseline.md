@@ -8,9 +8,9 @@
 | --- | --- |
 | Suite | text-to-sql-v1 v1 |
 | Evaluation mode | static-shape |
-| Commit | 0cf4b89935d387594693e4b86d6d77419649c187 |
-| Started | 2026-06-23T03:07:52Z |
-| Finished | 2026-06-23T03:07:52Z |
+| Commit | 8c6fc129ceb0686ac3ee8c9e966d82bf70ce3a31 |
+| Started | 2026-06-23T03:32:31Z |
+| Finished | 2026-06-23T03:32:31Z |
 | Backend | cloud |
 | Model | openai/gpt-5.5 |
 | OS | Version 26.5.1 (Build 25F80) |
@@ -53,8 +53,8 @@ These deterministic hashes establish baseline compatibility for the suite, score
 | Average required-table coverage | - (0 SQL results evaluated) |
 | Average required-column coverage | - (0 SQL results evaluated) |
 | Total model calls | - |
-| Avg estimated initial prompt characters | 2001 |
-| Max estimated initial prompt characters | 5164 |
+| Avg estimated initial prompt characters | - |
+| Max estimated initial prompt characters | - |
 | Token usage | unavailable |
 | Estimated cloud cost | unavailable |
 

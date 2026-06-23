@@ -8,9 +8,9 @@
 | --- | --- |
 | Suite | text-to-sql-v1 v1 |
 | Evaluation mode | static-shape |
-| Commit | 0cf4b89935d387594693e4b86d6d77419649c187 |
-| Started | 2026-06-23T03:01:47Z |
-| Finished | 2026-06-23T03:07:33Z |
+| Commit | 8c6fc129ceb0686ac3ee8c9e966d82bf70ce3a31 |
+| Started | 2026-06-23T03:26:45Z |
+| Finished | 2026-06-23T03:32:17Z |
 | Backend | local |
 | Model | - |
 | OS | Version 26.5.1 (Build 25F80) |
@@ -62,11 +62,11 @@ These deterministic hashes establish baseline compatibility for the suite, score
 
 | Metric | Milliseconds |
 | --- | ---: |
-| Min | 3412 |
-| Average | 5764.8 |
-| P50 | 5273 |
-| P95 | 8031 |
-| Max | 8719 |
+| Min | 3226 |
+| Average | 5531.2 |
+| P50 | 5036 |
+| P95 | 7798 |
+| Max | 8328 |
 
 ## Status Counts
 
