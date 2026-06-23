@@ -68,6 +68,8 @@ struct TextToSQLEvalTests {
         }
     }
 
+    private struct UntypedGeneratorFailure: Error {}
+
     @Test func scoresValidSQLShapeAsPassed() async {
         let evalCase = TextToSQLEvalCase(
             id: "commerce.customer-order-ids",
@@ -539,7 +541,28 @@ struct TextToSQLEvalTests {
         #expect(result.metrics.transportSuccess == false)
     }
 
-    @Test func untypedFailureDefaultsToTransportFailure() async {
+    @Test func untypedGeneratorFailureBecomesGenerationFailure() async {
+        let evalCase = TextToSQLEvalCase(
+            id: "commerce.recent-orders",
+            schemaFixture: "commerce",
+            question: "Show the 10 most recent orders",
+            expected: TextToSQLEvalExpectation(decision: .sql)
+        )
+
+        let result = await TextToSQLEvalCaseRunner.run(
+            evalCase: evalCase,
+            schema: makeCommerceSchema(),
+            generator: ThrowingGenerator(error: UntypedGeneratorFailure()),
+            options: TextToSQLEvalRunOptions(backend: .cloud, model: "test/model")
+        )
+
+        #expect(result.status == .generationFailure)
+        #expect(result.metrics.backendAvailable == true)
+        #expect(result.metrics.transportSuccess == true)
+        #expect(result.metrics.structuredResponseParsed == false)
+    }
+
+    @Test func cancellationFailureIsNotTransportFailure() async {
         let evalCase = TextToSQLEvalCase(
             id: "commerce.recent-orders",
             schemaFixture: "commerce",
@@ -554,10 +577,10 @@ struct TextToSQLEvalTests {
             options: TextToSQLEvalRunOptions(backend: .cloud, model: "test/model")
         )
 
-        #expect(result.status == .transportFailure)
+        #expect(result.status == .generationFailure)
         #expect(result.metrics.backendAvailable == true)
-        #expect(result.metrics.transportSuccess == false)
-        #expect(result.metrics.structuredResponseParsed == false)
+        #expect(result.metrics.transportSuccess == true)
+        #expect(result.diagnostics.errorMessage?.contains("cancelled") == true)
     }
 
     @Test func caseTimeoutCancelsHangingGeneratorAndAllowsNextCase() async {

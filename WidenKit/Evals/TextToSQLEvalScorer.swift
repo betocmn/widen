@@ -263,10 +263,9 @@ public enum TextToSQLEvalCaseRunner {
                 )
             }
         } catch is CancellationError {
-            return failureResult(
+            return cancellationResult(
                 evalCase: evalCase,
                 options: options,
-                error: CancellationError(),
                 latencyMs: elapsedMilliseconds(since: started)
             )
         } catch {
