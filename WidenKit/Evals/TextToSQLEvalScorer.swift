@@ -75,8 +75,10 @@ public enum TextToSQLEvalCaseRunner {
             let shouldCancelPipeline: Bool
             let shouldCancelTimeout: Bool
             lock.lock()
-            self.pipelineTask = pipelineTask
-            self.timeoutTask = timeoutTask
+            if !finished {
+                self.pipelineTask = pipelineTask
+                self.timeoutTask = timeoutTask
+            }
             shouldCancelPipeline = cancelPipelineWhenSet
             shouldCancelTimeout = cancelTimeoutWhenSet
             lock.unlock()
@@ -104,6 +106,8 @@ public enum TextToSQLEvalCaseRunner {
             self.continuation = nil
             pipelineTask = self.pipelineTask
             timeoutTask = self.timeoutTask
+            self.pipelineTask = nil
+            self.timeoutTask = nil
             if cancelPipeline, pipelineTask == nil {
                 cancelPipelineWhenSet = true
             }
