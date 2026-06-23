@@ -5,9 +5,9 @@
 | Field | Value |
 | --- | --- |
 | Suite | text-to-sql-v1 v1 |
-| Commit | b0a47690dccf244ffab7d40104087e8f633e6026 |
-| Started | 2026-06-22T21:25:41Z |
-| Finished | 2026-06-22T21:27:29Z |
+| Commit | 629b3b2aa12a451312ec9bcbbcf9fa419e440ab0 |
+| Started | 2026-06-23T00:41:20Z |
+| Finished | 2026-06-23T00:43:28Z |
 | Backend | cloud |
 | Model | openai/gpt-5.5 |
 | OS | Version 26.5.1 (Build 25F80) |
@@ -29,18 +29,18 @@
 | Metric | Value |
 | --- | ---: |
 | Results | 20 |
-| Passed | 6 |
-| Pass rate | 30.0% |
+| Passed | 9 |
+| Pass rate | 45.0% |
 | Backend available | 20 |
 | Transport success | 20 |
-| Structured response parsed | 17 |
-| Decision matches | 6 |
+| Structured response parsed | 20 |
+| Decision matches | 9 |
 | Safety valid | 5 |
 | Schema valid | 5 |
 | Forbidden binding violations | 0 |
 | Avg required-table coverage | 45.0% |
 | Avg required-column coverage | 45.0% |
-| Total model calls | 17 |
+| Total model calls | 20 |
 | Avg prompt size | 1715 |
 | Max prompt size | 3564 |
 | Token usage | unavailable |
@@ -50,23 +50,23 @@
 
 | Metric | Milliseconds |
 | --- | ---: |
-| Min | 3469 |
-| Average | 5370.9 |
-| P50 | 5421 |
-| P95 | 7702 |
-| Max | 9155 |
+| Min | 2334 |
+| Average | 6420.0 |
+| P50 | 6291 |
+| P95 | 9068 |
+| Max | 10466 |
 
 ## Status Counts
 
 | Status | Count |
 | --- | ---: |
-| passed | 6 |
+| passed | 9 |
 | semanticReviewRequired | 0 |
 | wrongDecision | 11 |
 | invalidSQL | 0 |
 | wrongSchemaObjects | 0 |
 | transportFailure | 0 |
-| parseFailure | 3 |
+| parseFailure | 0 |
 | backendUnavailable | 0 |
 
 ## Per Case
@@ -74,7 +74,7 @@
 | Case | Backend | Repeat | Status | Diagnostics |
 | --- | --- | ---: | --- | --- |
 | commerce.average-order-value-country | cloud | 1 | wrongDecision | - |
-| commerce.best-customers | cloud | 1 | parseFailure | SQL generation failed: The cloud model returned an unparseable response. Try again or pick a different model in Settings › LLM. |
+| commerce.best-customers | cloud | 1 | passed | - |
 | commerce.customer-paid-revenue | cloud | 1 | wrongDecision | - |
 | commerce.customers-without-orders | cloud | 1 | wrongDecision | - |
 | commerce.recent-orders | cloud | 1 | passed | - |
@@ -85,12 +85,12 @@
 | preseason.verified-tools | cloud | 1 | passed | - |
 | saas.active-users-by-org | cloud | 1 | passed | - |
 | saas.expiring-subscriptions | cloud | 1 | wrongDecision | - |
-| saas.healthy-accounts | cloud | 1 | parseFailure | SQL generation failed: The cloud model returned an unparseable response. Try again or pick a different model in Settings › LLM. |
+| saas.healthy-accounts | cloud | 1 | passed | - |
 | saas.overallocated-seats | cloud | 1 | wrongDecision | - |
 | saas.users-without-membership | cloud | 1 | wrongDecision | - |
 | support.average-first-response | cloud | 1 | wrongDecision | - |
 | support.frequent-feedback-cluster | cloud | 1 | wrongDecision | - |
-| support.important-cluster | cloud | 1 | parseFailure | SQL generation failed: The cloud model returned an unparseable response. Try again or pick a different model in Settings › LLM. |
+| support.important-cluster | cloud | 1 | passed | - |
 | support.unclustered-feedback | cloud | 1 | wrongDecision | - |
 | support.unresolved-by-assignee | cloud | 1 | wrongDecision | - |
 
