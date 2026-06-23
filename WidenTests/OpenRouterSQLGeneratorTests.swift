@@ -256,4 +256,25 @@ struct OpenRouterSQLGeneratorTests {
             #expect(error.errorDescription?.contains("model is overloaded") == true)
         }
     }
+
+    @Test func serverContextLengthErrorBecomesContextWindowFailure() async throws {
+        let body = Data(
+            "{\"error\": {\"message\": \"This request exceeds the model context length.\"}}".utf8
+        )
+        let transport = StubTransport([
+            .success((body, response(status: 400)))
+        ])
+
+        do {
+            _ = try await makeGenerator(transport).generateSQL(
+                question: "show users", schema: makeSchema(), config: SQLGenerationConfig())
+            Issue.record("expected an error")
+        } catch let error as SQLGenerationFailure {
+            guard case .contextWindow(let message) = error else {
+                Issue.record("expected contextWindow, got \(error)")
+                return
+            }
+            #expect(message.contains("context length"))
+        }
+    }
 }

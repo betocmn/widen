@@ -147,6 +147,9 @@ public final class OpenRouterSQLGenerator: SQLGenerator, Sendable {
             let detail =
                 Self.serverErrorMessage(from: data)
                 ?? "OpenRouter returned status \(response.statusCode)."
+            if Self.isContextWindowMessage(detail) {
+                throw SQLGenerationFailure.contextWindow(detail)
+            }
             throw SQLGenerationFailure.generation(detail)
         }
     }
@@ -301,6 +304,17 @@ public final class OpenRouterSQLGenerator: SQLGenerator, Sendable {
             let message = body.error?.message, !message.isEmpty
         else { return nil }
         return message
+    }
+
+    private static func isContextWindowMessage(_ message: String) -> Bool {
+        let lower = message.lowercased()
+        return lower.contains("context window")
+            || lower.contains("context length")
+            || lower.contains("maximum context")
+            || lower.contains("context_length")
+            || lower.contains("prompt is too long")
+            || lower.contains("too many tokens")
+            || lower.contains("token limit")
     }
 
     private static func map(_ error: URLError) -> SQLGenerationFailure {

@@ -379,6 +379,27 @@ struct TextToSQLEvalTests {
         #expect(result.metrics.transportSuccess == false)
     }
 
+    @Test func untypedFailureDefaultsToTransportFailure() async {
+        let evalCase = TextToSQLEvalCase(
+            id: "commerce.recent-orders",
+            schemaFixture: "commerce",
+            question: "Show the 10 most recent orders",
+            expected: TextToSQLEvalExpectation(decision: .sql)
+        )
+
+        let result = await TextToSQLEvalCaseRunner.run(
+            evalCase: evalCase,
+            schema: makeCommerceSchema(),
+            generator: ThrowingGenerator(error: CancellationError()),
+            options: TextToSQLEvalRunOptions(backend: .cloud, model: "test/model")
+        )
+
+        #expect(result.status == .transportFailure)
+        #expect(result.metrics.backendAvailable == true)
+        #expect(result.metrics.transportSuccess == false)
+        #expect(result.metrics.structuredResponseParsed == false)
+    }
+
     @Test func parseFailureKeepsTransportSuccessSeparate() async {
         let evalCase = TextToSQLEvalCase(
             id: "commerce.recent-orders",

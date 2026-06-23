@@ -93,9 +93,11 @@ public enum TextToSQLEvalCaseRunner {
     ) -> TextToSQLEvalResult {
         let typed = SQLGenerationFailure.typed(error)
         let status = typed.map(status(for:)) ?? .transportFailure
-        let backendAvailable = typed?.pipelineCategory != .backendUnavailable
-        let transportSuccess = typed?.pipelineCategory != .transport
-            && typed?.pipelineCategory != .backendUnavailable
+        let backendAvailable = typed.map { $0.pipelineCategory != .backendUnavailable } ?? true
+        let transportSuccess = typed.map {
+            $0.pipelineCategory != .transport
+                && $0.pipelineCategory != .backendUnavailable
+        } ?? false
         let structuredParsed = false
         return TextToSQLEvalResult(
             caseID: evalCase.id,

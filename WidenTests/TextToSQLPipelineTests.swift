@@ -288,6 +288,32 @@ struct TextToSQLPipelineTests {
         #expect(generator.contexts[1].mode == .repair)
     }
 
+    @Test func validationRepairHonorsDisabledGroundingClarification() async throws {
+        let generator = ScriptedGenerator([
+            .success(generation(sql: "SELECT missing FROM public.users")),
+            .success(
+                generation(sql: "SELECT id FROM public.users WHERE status = 'active' LIMIT 100")
+            ),
+        ])
+
+        let result = try await TextToSQLPipeline(generator: generator).run(
+            TextToSQLRequest(
+                question: "show active users",
+                schema: makeStatusSchema(),
+                config: SQLGenerationConfig(defaultRowLimit: 100),
+                allowGroundingClarification: false
+            )
+        )
+
+        guard case .sql(let generation) = result.finalDecision else {
+            Issue.record("expected repaired SQL decision")
+            return
+        }
+        #expect(generation.sql == "SELECT id FROM public.users WHERE status = 'active' LIMIT 100")
+        #expect(!generation.needsClarification)
+        #expect(generator.contexts.count == 2)
+    }
+
     @Test func repeatedRepairReturnsTypedNoProgressFailure() async throws {
         let sql = "SELECT AVG(COUNT(*) OVER ()) FROM public.users"
         let generator = ScriptedGenerator([
@@ -352,10 +378,31 @@ struct TextToSQLPipelineTests {
             Issue.record("expected failure decision")
             return
         }
-        #expect(failure.category == .schemaValidation)
+        #expect(failure.category == .safetyValidation)
         #expect(result.events.contains {
             $0.kind == .validationRepairRejected
-                && $0.failureCategory == .schemaValidation
+                && $0.failureCategory == .safetyValidation
+        })
+    }
+
+    @Test func unsafeValidationRepairReturnsSafetyFailure() async throws {
+        let unsafeSQL = "SELECT id FROM public.users; DROP TABLE public.users"
+        let generator = ScriptedGenerator([
+            .success(generation(sql: "SELECT missing FROM public.users", generationCallCount: 2)),
+            .success(generation(sql: unsafeSQL)),
+        ])
+
+        let result = try await run(generator)
+
+        guard case .failed(let failure) = result.finalDecision else {
+            Issue.record("expected failure decision")
+            return
+        }
+        #expect(failure.stage == .validationRepair)
+        #expect(failure.category == .safetyValidation)
+        #expect(result.events.contains {
+            $0.kind == .validationRepairRejected
+                && $0.failureCategory == .safetyValidation
         })
     }
 

@@ -482,7 +482,7 @@ public struct TextToSQLPipeline: TextToSQLRunning {
                     schema: request.schema,
                     databaseContext: request.config.databaseContext,
                     confirmedSemanticBindings: context.confirmedSemanticBindings,
-                    allowGroundingClarification: true
+                    allowGroundingClarification: request.allowGroundingClarification
                 )
                 trace.append(
                     .validationRepair,
@@ -551,14 +551,14 @@ public struct TextToSQLPipeline: TextToSQLRunning {
                 return RepairRun(decision: .clarification(generation))
 
             case .rejected(let reason):
+                let category = failureCategory(for: reason, evaluation: evaluation)
                 record(
                     TextToSQLPipelineEvent(
                         kind: .validationRepairRejected,
                         stage: .validationRepair,
                         title: "\(repairLabel) was rejected.",
                         summary: "Validation repair candidate was rejected.",
-                        failureCategory: reason.isZeroProgressRepair
-                            ? .repeatedNoProgressRepair : .schemaValidation
+                        failureCategory: category
                     ),
                     request: request,
                     events: &events
@@ -596,8 +596,6 @@ public struct TextToSQLPipeline: TextToSQLRunning {
                 if evaluation.allowsReconstruction, coordinator.canRequestAnotherModelCall {
                     continue
                 }
-                let category: TextToSQLFailureCategory =
-                    reason.isZeroProgressRepair ? .repeatedNoProgressRepair : .schemaValidation
                 let failure = repairFailure(attempts: coordinator.attempts, category: category)
                 return RepairRun(decision: .failed(failure), failureCategory: failure.category)
 
@@ -712,6 +710,26 @@ public struct TextToSQLPipeline: TextToSQLRunning {
             category: .modelGeneration,
             message: error.localizedDescription
         )
+    }
+
+    private func failureCategory(
+        for reason: SQLRepairCandidateRejectionReason,
+        evaluation: SQLRepairCandidateEvaluation
+    ) -> TextToSQLFailureCategory {
+        switch reason {
+        case .repeatedFingerprint, .forbiddenIdentifier:
+            .repeatedNoProgressRepair
+        case .unsafeWrite:
+            .safetyValidation
+        case .validationFailure:
+            if let sql = evaluation.sql, !SQLSafetyValidator.validate(sql).isValid {
+                .safetyValidation
+            } else {
+                .schemaValidation
+            }
+        case .emptySQL:
+            .modelGeneration
+        }
     }
 
     private func repairFailure(
