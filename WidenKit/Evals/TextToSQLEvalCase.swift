@@ -40,6 +40,7 @@ public struct TextToSQLEvalExpectation: Codable, Equatable, Sendable {
     public var requiredColumnBindings: [String]
     public var forbiddenColumnBindings: [String]
     public var requiredOperations: [TextToSQLEvalOperation]
+    public var clarificationMustMentionAny: [String]
     public var goldenSQL: String?
 
     public init(
@@ -48,6 +49,7 @@ public struct TextToSQLEvalExpectation: Codable, Equatable, Sendable {
         requiredColumnBindings: [String] = [],
         forbiddenColumnBindings: [String] = [],
         requiredOperations: [TextToSQLEvalOperation] = [],
+        clarificationMustMentionAny: [String] = [],
         goldenSQL: String? = nil
     ) {
         self.decision = decision
@@ -55,6 +57,7 @@ public struct TextToSQLEvalExpectation: Codable, Equatable, Sendable {
         self.requiredColumnBindings = requiredColumnBindings
         self.forbiddenColumnBindings = forbiddenColumnBindings
         self.requiredOperations = requiredOperations
+        self.clarificationMustMentionAny = clarificationMustMentionAny
         self.goldenSQL = goldenSQL
     }
 
@@ -64,6 +67,7 @@ public struct TextToSQLEvalExpectation: Codable, Equatable, Sendable {
         case requiredColumnBindings
         case forbiddenColumnBindings
         case requiredOperations
+        case clarificationMustMentionAny
         case goldenSQL
     }
 
@@ -77,6 +81,8 @@ public struct TextToSQLEvalExpectation: Codable, Equatable, Sendable {
             try container.decodeIfPresent([String].self, forKey: .forbiddenColumnBindings) ?? []
         requiredOperations =
             try container.decodeIfPresent([TextToSQLEvalOperation].self, forKey: .requiredOperations) ?? []
+        clarificationMustMentionAny =
+            try container.decodeIfPresent([String].self, forKey: .clarificationMustMentionAny) ?? []
         goldenSQL = try container.decodeIfPresent(String.self, forKey: .goldenSQL)
     }
 }

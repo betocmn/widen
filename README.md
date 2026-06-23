@@ -267,6 +267,17 @@ Keyboard: **Enter** in the composer submits (Option+Enter for a newline);
 **Cmd+Enter** runs the active SQL; **Cmd+N** starts a new session; **Cmd+R**
 refreshes the active database's schema; **Cmd+,** opens Settings.
 
+## Text-to-SQL evals
+
+`WidenEval` provides a native static-shape evaluation suite for generated SQL
+under [Evals](Evals). A static-shape pass verifies the decision, SQL safety,
+schema references, and configured structural expectations. It does not
+establish result-set or semantic correctness.
+
+The committed baselines record deterministic hashes for the suite, scorer
+source, and schema fixtures so future runs can detect compatibility drift.
+Result-set equivalence belongs to a later seeded-Postgres eval.
+
 ## Development notes and caveats
 
 - **Ad-hoc code signing.** Debug builds are signed "to run locally". After a

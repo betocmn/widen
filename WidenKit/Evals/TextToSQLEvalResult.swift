@@ -11,6 +11,8 @@ public enum TextToSQLEvalCaseStatus: String, Codable, CaseIterable, Equatable, S
     case wrongDecision
     case invalidSQL
     case wrongSchemaObjects
+    case contextWindowFailure
+    case generationFailure
     case transportFailure
     case parseFailure
     case backendUnavailable
@@ -23,13 +25,13 @@ public struct TextToSQLEvalMetrics: Codable, Equatable, Sendable {
     public var decisionMatches: Bool
     public var safetyValid: Bool?
     public var schemaValid: Bool?
-    public var requiredTableCoverage: Double
-    public var requiredColumnBindingCoverage: Double
+    public var requiredTableCoverage: Double?
+    public var requiredColumnBindingCoverage: Double?
     public var forbiddenBindingViolations: [String]
     public var clarificationQuality: Bool?
     public var latencyMs: Int
     public var modelCallCount: Int?
-    public var promptSize: Int?
+    public var estimatedInitialPromptCharacters: Int?
     public var tokenUsage: Int?
     public var estimatedCloudCostUSD: Double?
 
@@ -40,13 +42,13 @@ public struct TextToSQLEvalMetrics: Codable, Equatable, Sendable {
         decisionMatches: Bool,
         safetyValid: Bool? = nil,
         schemaValid: Bool? = nil,
-        requiredTableCoverage: Double = 1,
-        requiredColumnBindingCoverage: Double = 1,
+        requiredTableCoverage: Double? = nil,
+        requiredColumnBindingCoverage: Double? = nil,
         forbiddenBindingViolations: [String] = [],
         clarificationQuality: Bool? = nil,
         latencyMs: Int,
         modelCallCount: Int? = nil,
-        promptSize: Int? = nil,
+        estimatedInitialPromptCharacters: Int? = nil,
         tokenUsage: Int? = nil,
         estimatedCloudCostUSD: Double? = nil
     ) {
@@ -62,7 +64,7 @@ public struct TextToSQLEvalMetrics: Codable, Equatable, Sendable {
         self.clarificationQuality = clarificationQuality
         self.latencyMs = latencyMs
         self.modelCallCount = modelCallCount
-        self.promptSize = promptSize
+        self.estimatedInitialPromptCharacters = estimatedInitialPromptCharacters
         self.tokenUsage = tokenUsage
         self.estimatedCloudCostUSD = estimatedCloudCostUSD
     }
@@ -105,7 +107,7 @@ public struct TextToSQLEvalResult: Codable, Equatable, Sendable {
     public var clarificationQuestion: String?
     public var referencedTables: [String]
     public var referencedColumnBindings: [String]
-    public var recordedPrompt: String?
+    public var estimatedInitialPrompt: String?
 
     public init(
         caseID: String,
@@ -119,7 +121,7 @@ public struct TextToSQLEvalResult: Codable, Equatable, Sendable {
         clarificationQuestion: String? = nil,
         referencedTables: [String] = [],
         referencedColumnBindings: [String] = [],
-        recordedPrompt: String? = nil
+        estimatedInitialPrompt: String? = nil
     ) {
         self.caseID = caseID
         self.backend = backend
@@ -132,6 +134,6 @@ public struct TextToSQLEvalResult: Codable, Equatable, Sendable {
         self.clarificationQuestion = clarificationQuestion
         self.referencedTables = referencedTables
         self.referencedColumnBindings = referencedColumnBindings
-        self.recordedPrompt = recordedPrompt
+        self.estimatedInitialPrompt = estimatedInitialPrompt
     }
 }

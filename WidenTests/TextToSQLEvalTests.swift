@@ -74,8 +74,8 @@ struct TextToSQLEvalTests {
         #expect(result.status == .passed)
         #expect(result.metrics.safetyValid == true)
         #expect(result.metrics.schemaValid == true)
-        #expect(result.metrics.requiredTableCoverage == 1)
-        #expect(result.metrics.requiredColumnBindingCoverage == 1)
+        #expect(result.metrics.requiredTableCoverage == .some(1.0))
+        #expect(result.metrics.requiredColumnBindingCoverage == .some(1.0))
     }
 
     @Test func scoresClarificationAsPassed() async {
@@ -83,7 +83,10 @@ struct TextToSQLEvalTests {
             id: "commerce.best-customers",
             schemaFixture: "commerce",
             question: "Who are our best customers?",
-            expected: TextToSQLEvalExpectation(decision: .clarify)
+            expected: TextToSQLEvalExpectation(
+                decision: .clarify,
+                clarificationMustMentionAny: ["metric", "revenue", "spend", "orders", "best"]
+            )
         )
         let generator = StaticGenerator(
             result: SQLGenerationResult(
@@ -114,7 +117,10 @@ struct TextToSQLEvalTests {
             id: "commerce.best-customers",
             schemaFixture: "commerce",
             question: "Who are our best customers?",
-            expected: TextToSQLEvalExpectation(decision: .clarify)
+            expected: TextToSQLEvalExpectation(
+                decision: .clarify,
+                clarificationMustMentionAny: ["metric", "revenue", "spend", "orders", "best"]
+            )
         )
         let generator = StaticGenerator(
             result: SQLGenerationResult(
@@ -138,6 +144,40 @@ struct TextToSQLEvalTests {
 
         #expect(result.status == .passed)
         #expect(result.metrics.clarificationQuality == true)
+    }
+
+    @Test func genericClarificationQuestionFailsQualityScoring() async {
+        let evalCase = TextToSQLEvalCase(
+            id: "commerce.best-customers",
+            schemaFixture: "commerce",
+            question: "Who are our best customers?",
+            expected: TextToSQLEvalExpectation(
+                decision: .clarify,
+                clarificationMustMentionAny: ["metric", "revenue", "spend", "orders", "best"]
+            )
+        )
+        let generator = StaticGenerator(
+            result: SQLGenerationResult(
+                sql: "",
+                explanation: "Needs a definition.",
+                assumptions: [],
+                referencedTables: [],
+                confidence: 0.2,
+                riskLevel: .medium,
+                needsClarification: true,
+                clarificationQuestion: "What do you mean?"
+            )
+        )
+
+        let result = await TextToSQLEvalCaseRunner.run(
+            evalCase: evalCase,
+            schema: makeCommerceSchema(),
+            generator: generator,
+            options: TextToSQLEvalRunOptions(backend: .cloud, model: "test/model")
+        )
+
+        #expect(result.status == .wrongDecision)
+        #expect(result.metrics.clarificationQuality == false)
     }
 
     @Test func evalRunnerKeepsInitialSQLWhenGroundingWouldAskClarification() async {
@@ -218,9 +258,11 @@ struct TextToSQLEvalTests {
         )
 
         #expect(result.status == .wrongSchemaObjects)
+        #expect(result.metrics.forbiddenBindingViolations.isEmpty)
         #expect(
-            result.metrics.forbiddenBindingViolations
-                == ["public.preseason_match_evaluation.tool_a_id"])
+            result.diagnostics.schemaErrors.contains {
+                $0.contains("tool_a_id is not on public.preseason_match_evaluation")
+            })
     }
 
     @Test func detectsFormattedJoinAndOrderingOperations() async {
@@ -358,8 +400,8 @@ struct TextToSQLEvalTests {
         #expect(result.metrics.backendAvailable == true)
         #expect(result.metrics.transportSuccess == true)
         #expect(result.metrics.structuredResponseParsed == false)
-        #expect(result.metrics.requiredTableCoverage == 0)
-        #expect(result.metrics.requiredColumnBindingCoverage == 0)
+        #expect(result.metrics.requiredTableCoverage == nil)
+        #expect(result.metrics.requiredColumnBindingCoverage == nil)
     }
 
     @Test func localStructuredDecodeFailureCountsAsParseFailure() async {
@@ -384,6 +426,51 @@ struct TextToSQLEvalTests {
         #expect(result.status == .parseFailure)
         #expect(result.metrics.transportSuccess)
         #expect(result.metrics.structuredResponseParsed == false)
+    }
+
+    @Test func contextWindowFailureIsNotTransportFailure() async {
+        let evalCase = TextToSQLEvalCase(
+            id: "commerce.recent-orders",
+            schemaFixture: "commerce",
+            question: "Show the 10 most recent orders",
+            expected: TextToSQLEvalExpectation(decision: .sql)
+        )
+
+        let result = await TextToSQLEvalCaseRunner.run(
+            evalCase: evalCase,
+            schema: makeCommerceSchema(),
+            generator: ThrowingGenerator(
+                error: .modelGenerationFailed(
+                    "The schema and question exceed the local model's context window."
+                )
+            ),
+            options: TextToSQLEvalRunOptions(backend: .local)
+        )
+
+        #expect(result.status == .contextWindowFailure)
+        #expect(result.metrics.backendAvailable == true)
+        #expect(result.metrics.transportSuccess == true)
+    }
+
+    @Test func modelGenerationFailureIsNotAlwaysTransportFailure() async {
+        let evalCase = TextToSQLEvalCase(
+            id: "commerce.recent-orders",
+            schemaFixture: "commerce",
+            question: "Show the 10 most recent orders",
+            expected: TextToSQLEvalExpectation(decision: .sql)
+        )
+
+        let result = await TextToSQLEvalCaseRunner.run(
+            evalCase: evalCase,
+            schema: makeCommerceSchema(),
+            generator: ThrowingGenerator(
+                error: .modelGenerationFailed("The local model declined to answer.")
+            ),
+            options: TextToSQLEvalRunOptions(backend: .local)
+        )
+
+        #expect(result.status == .generationFailure)
+        #expect(result.metrics.transportSuccess == true)
     }
 
     @Test func wrongSQLDecisionDoesNotInflateShapeCoverage() {
@@ -417,8 +504,8 @@ struct TextToSQLEvalTests {
         )
 
         #expect(result.status == .wrongDecision)
-        #expect(result.metrics.requiredTableCoverage == 0)
-        #expect(result.metrics.requiredColumnBindingCoverage == 0)
+        #expect(result.metrics.requiredTableCoverage == nil)
+        #expect(result.metrics.requiredColumnBindingCoverage == nil)
     }
 
     @Test func notNullDoesNotSatisfyAbsenceFilter() {
@@ -510,9 +597,9 @@ struct TextToSQLEvalTests {
         #expect(result.diagnostics.missingOperations == [.nullFilter])
     }
 
-    @Test func starProjectionFlagsForbiddenColumns() {
+    @Test func starProjectionDoesNotFlagHallucinatedForbiddenColumns() {
         let evalCase = TextToSQLEvalCase(
-            id: "preseason.forbidden-star",
+            id: "preseason.hallucinated-forbidden-star",
             schemaFixture: "preseason",
             question: "List evaluation wins",
             expected: TextToSQLEvalExpectation(
@@ -550,13 +637,62 @@ struct TextToSQLEvalTests {
                 latencyMs: 12
             )
 
-            #expect(result.status == .wrongSchemaObjects)
-            #expect(
-                result.metrics.forbiddenBindingViolations == [
-                    "public.preseason_match_evaluation.tool_a_id",
-                    "public.preseason_match_evaluation.tool_b_id",
-                ])
+            #expect(result.status == .passed)
+            #expect(result.metrics.forbiddenBindingViolations.isEmpty)
         }
+    }
+
+    @Test func starProjectionFlagsExistingForbiddenColumns() {
+        let evalCase = TextToSQLEvalCase(
+            id: "preseason.forbidden-batch-star",
+            schemaFixture: "preseason",
+            question: "List evaluation batches",
+            expected: TextToSQLEvalExpectation(
+                decision: .sql,
+                requiredTables: ["public.preseason_match_batch"],
+                forbiddenColumnBindings: [
+                    "public.preseason_match_batch.tool_a_id",
+                    "public.preseason_match_batch.tool_b_id",
+                ],
+                requiredOperations: [.limit]
+            )
+        )
+        let generation = SQLGenerationResult(
+            sql: "SELECT * FROM public.preseason_match_batch LIMIT 100",
+            explanation: "Lists batch rows.",
+            assumptions: [],
+            referencedTables: [],
+            confidence: 0.7,
+            riskLevel: .medium,
+            needsClarification: false,
+            clarificationQuestion: nil
+        )
+
+        let result = TextToSQLEvalScorer.score(
+            evalCase: evalCase,
+            schema: makePreseasonSchema(),
+            generation: generation,
+            options: TextToSQLEvalRunOptions(backend: .local),
+            latencyMs: 12
+        )
+
+        #expect(result.status == .wrongSchemaObjects)
+        #expect(
+            result.metrics.forbiddenBindingViolations == [
+                "public.preseason_match_batch.tool_a_id",
+                "public.preseason_match_batch.tool_b_id",
+            ])
+    }
+
+    @Test func validatesActualTextToSQLV1Suite() throws {
+        let root = URL(fileURLWithPath: #filePath)
+            .deletingLastPathComponent()
+            .deletingLastPathComponent()
+        let suiteURL = root.appendingPathComponent("Evals/suites/text-to-sql-v1.json")
+        let suiteData = try Data(contentsOf: suiteURL)
+        let suite = try JSONDecoder().decode(TextToSQLEvalSuite.self, from: suiteData)
+
+        try TextToSQLEvalSuiteValidator.validate(suite: suite, suiteURL: suiteURL)
     }
 
     private func makeCommerceSchema() -> DatabaseSchema {
@@ -599,12 +735,29 @@ struct TextToSQLEvalTests {
                     schema: "public", name: "preseason_match_evaluation", type: .baseTable,
                     columns: [
                         column("preseason_match_evaluation", "id", ordinal: 1),
-                        column("preseason_match_evaluation", "tool_a_id", ordinal: 2),
-                        column("preseason_match_evaluation", "tool_b_id", ordinal: 3),
-                        column("preseason_match_evaluation", "winner_id", ordinal: 4),
+                        column("preseason_match_evaluation", "batch_id", ordinal: 2),
+                        column("preseason_match_evaluation", "winner_id", ordinal: 3),
+                        column("preseason_match_evaluation", "createdAt", type: "timestamp with time zone", ordinal: 4),
+                    ]),
+                TableInfo(
+                    schema: "public", name: "preseason_match_batch", type: .baseTable,
+                    columns: [
+                        column("preseason_match_batch", "id", ordinal: 1),
+                        column("preseason_match_batch", "tool_a_id", ordinal: 2),
+                        column("preseason_match_batch", "tool_b_id", ordinal: 3),
                     ])
             ],
-            foreignKeys: []
+            foreignKeys: [
+                ForeignKeyInfo(
+                    constraintName: "preseason_match_evaluation_batch_id_fkey",
+                    sourceSchema: "public",
+                    sourceTable: "preseason_match_evaluation",
+                    sourceColumn: "batch_id",
+                    targetSchema: "public",
+                    targetTable: "preseason_match_batch",
+                    targetColumn: "id"
+                )
+            ]
         )
     }
 

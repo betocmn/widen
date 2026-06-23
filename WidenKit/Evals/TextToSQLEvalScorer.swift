@@ -5,23 +5,23 @@ public struct TextToSQLEvalRunOptions: Equatable, Sendable {
     public var model: String?
     public var repeatIndex: Int
     public var defaultRowLimit: Int
-    public var promptSize: Int?
-    public var recordedPrompt: String?
+    public var estimatedInitialPromptCharacters: Int?
+    public var estimatedInitialPrompt: String?
 
     public init(
         backend: TextToSQLEvalBackend,
         model: String? = nil,
         repeatIndex: Int = 1,
         defaultRowLimit: Int = 100,
-        promptSize: Int? = nil,
-        recordedPrompt: String? = nil
+        estimatedInitialPromptCharacters: Int? = nil,
+        estimatedInitialPrompt: String? = nil
     ) {
         self.backend = backend
         self.model = model
         self.repeatIndex = repeatIndex
         self.defaultRowLimit = defaultRowLimit
-        self.promptSize = promptSize
-        self.recordedPrompt = recordedPrompt
+        self.estimatedInitialPromptCharacters = estimatedInitialPromptCharacters
+        self.estimatedInitialPrompt = estimatedInitialPrompt
     }
 }
 
@@ -75,6 +75,26 @@ public enum TextToSQLEvalCaseRunner {
             || lower.contains("decoded")
     }
 
+    private static func isContextWindowFailureMessage(_ message: String) -> Bool {
+        let lower = message.lowercased()
+        return lower.contains("context window")
+            || lower.contains("exceed")
+            || lower.contains("too large")
+            || lower.contains("narrower schema context")
+    }
+
+    private static func isTransportFailureMessage(_ message: String) -> Bool {
+        let lower = message.lowercased()
+        return lower.contains("timed out")
+            || lower.contains("timeout")
+            || lower.contains("no internet")
+            || lower.contains("network")
+            || lower.contains("connection")
+            || lower.contains("cannot connect")
+            || lower.contains("dns")
+            || lower.contains("host")
+    }
+
     private static func elapsedMilliseconds(since date: Date) -> Int {
         Int(Date().timeIntervalSince(date) * 1_000)
     }
@@ -97,8 +117,25 @@ public enum TextToSQLEvalCaseRunner {
                 transportSuccess = false
                 structuredParsed = false
             case .modelGenerationFailed(let message)
+                where isContextWindowFailureMessage(message):
+                status = .contextWindowFailure
+                backendAvailable = true
+                transportSuccess = true
+                structuredParsed = false
+            case .modelGenerationFailed(let message)
                 where isStructuredParseFailureMessage(message):
                 status = .parseFailure
+                backendAvailable = true
+                transportSuccess = true
+                structuredParsed = false
+            case .modelGenerationFailed(let message)
+                where isTransportFailureMessage(message):
+                status = .transportFailure
+                backendAvailable = true
+                transportSuccess = false
+                structuredParsed = false
+            case .modelGenerationFailed:
+                status = .generationFailure
                 backendAvailable = true
                 transportSuccess = true
                 structuredParsed = false
@@ -114,8 +151,6 @@ public enum TextToSQLEvalCaseRunner {
             transportSuccess = false
             structuredParsed = false
         }
-        let coverage = evalCase.expected.decision == .sql ? 0.0 : 1.0
-
         return TextToSQLEvalResult(
             caseID: evalCase.id,
             backend: options.backend,
@@ -127,13 +162,11 @@ public enum TextToSQLEvalCaseRunner {
                 transportSuccess: transportSuccess,
                 structuredResponseParsed: structuredParsed,
                 decisionMatches: false,
-                requiredTableCoverage: coverage,
-                requiredColumnBindingCoverage: coverage,
                 latencyMs: latencyMs,
-                promptSize: options.promptSize
+                estimatedInitialPromptCharacters: options.estimatedInitialPromptCharacters
             ),
             diagnostics: TextToSQLEvalDiagnostics(errorMessage: error.localizedDescription),
-            recordedPrompt: options.recordedPrompt
+            estimatedInitialPrompt: options.estimatedInitialPrompt
         )
     }
 }
@@ -152,7 +185,10 @@ public enum TextToSQLEvalScorer {
         let decisionMatches = actualDecision == expected.decision
 
         if expected.decision == .clarify {
-            let quality = clarificationQuality(generation.clarificationQuestion)
+            let quality = clarificationQuality(
+                generation.clarificationQuestion,
+                mustMentionAny: expected.clarificationMustMentionAny
+            )
             let status: TextToSQLEvalCaseStatus = decisionMatches && quality ? .passed : .wrongDecision
             return TextToSQLEvalResult(
                 caseID: evalCase.id,
@@ -168,13 +204,13 @@ public enum TextToSQLEvalScorer {
                     clarificationQuality: quality,
                     latencyMs: latencyMs,
                     modelCallCount: generation.generationCallCount,
-                    promptSize: options.promptSize
+                    estimatedInitialPromptCharacters: options.estimatedInitialPromptCharacters
                 ),
                 diagnostics: TextToSQLEvalDiagnostics(),
                 generatedSQL: generation.sql.nilIfBlank,
                 clarificationQuestion: generation.clarificationQuestion,
                 referencedTables: generation.referencedTables,
-                recordedPrompt: options.recordedPrompt
+                estimatedInitialPrompt: options.estimatedInitialPrompt
             )
         }
 
@@ -190,17 +226,18 @@ public enum TextToSQLEvalScorer {
                     transportSuccess: true,
                     structuredResponseParsed: true,
                     decisionMatches: false,
-                    requiredTableCoverage: 0,
-                    requiredColumnBindingCoverage: 0,
-                    clarificationQuality: clarificationQuality(generation.clarificationQuestion),
+                    clarificationQuality: clarificationQuality(
+                        generation.clarificationQuestion,
+                        mustMentionAny: expected.clarificationMustMentionAny
+                    ),
                     latencyMs: latencyMs,
                     modelCallCount: generation.generationCallCount,
-                    promptSize: options.promptSize
+                    estimatedInitialPromptCharacters: options.estimatedInitialPromptCharacters
                 ),
                 generatedSQL: generation.sql.nilIfBlank,
                 clarificationQuestion: generation.clarificationQuestion,
                 referencedTables: generation.referencedTables,
-                recordedPrompt: options.recordedPrompt
+                estimatedInitialPrompt: options.estimatedInitialPrompt
             )
         }
 
@@ -219,16 +256,14 @@ public enum TextToSQLEvalScorer {
                     decisionMatches: true,
                     safetyValid: false,
                     schemaValid: nil,
-                    requiredTableCoverage: 0,
-                    requiredColumnBindingCoverage: 0,
                     latencyMs: latencyMs,
                     modelCallCount: generation.generationCallCount,
-                    promptSize: options.promptSize
+                    estimatedInitialPromptCharacters: options.estimatedInitialPromptCharacters
                 ),
                 diagnostics: TextToSQLEvalDiagnostics(safetyErrors: safety.errors),
                 generatedSQL: generation.sql.nilIfBlank,
                 referencedTables: generation.referencedTables,
-                recordedPrompt: options.recordedPrompt
+                estimatedInitialPrompt: options.estimatedInitialPrompt
             )
         }
 
@@ -293,7 +328,7 @@ public enum TextToSQLEvalScorer {
                 forbiddenBindingViolations: forbiddenBindingViolations,
                 latencyMs: latencyMs,
                 modelCallCount: generation.generationCallCount,
-                promptSize: options.promptSize
+                estimatedInitialPromptCharacters: options.estimatedInitialPromptCharacters
             ),
             diagnostics: TextToSQLEvalDiagnostics(
                 missingTables: missingTables,
@@ -305,7 +340,7 @@ public enum TextToSQLEvalScorer {
             clarificationQuestion: generation.clarificationQuestion,
             referencedTables: schemaValidation.referencedTables,
             referencedColumnBindings: referencedColumnBindings,
-            recordedPrompt: options.recordedPrompt
+            estimatedInitialPrompt: options.estimatedInitialPrompt
         )
     }
 
@@ -314,17 +349,26 @@ public enum TextToSQLEvalScorer {
         return Double(total - missing) / Double(total)
     }
 
-    private static func clarificationQuality(_ value: String?) -> Bool {
+    private static func clarificationQuality(
+        _ value: String?,
+        mustMentionAny configuredConcepts: [String]
+    ) -> Bool {
         guard let text = value?.trimmingCharacters(in: .whitespacesAndNewlines),
             !text.isEmpty
         else { return false }
-        let lower = text.lowercased()
-        return lower.contains("?")
-            || lower.contains("define")
-            || lower.contains("which")
-            || lower.contains("what")
-            || lower.contains("clarif")
-            || lower.contains("specify")
+        let candidateTokens = Set(normalizedTokens(in: text))
+        guard !candidateTokens.isEmpty else { return false }
+        return configuredConcepts.contains { concept in
+            let conceptTokens = normalizedTokens(in: concept)
+            return !conceptTokens.isEmpty && conceptTokens.contains { candidateTokens.contains($0) }
+        }
+    }
+
+    private static func normalizedTokens(in value: String) -> [String] {
+        value
+            .lowercased()
+            .split { !$0.isLetter && !$0.isNumber }
+            .map(String.init)
     }
 
     private static func detectedOperations(in sql: String) -> Set<TextToSQLEvalOperation> {

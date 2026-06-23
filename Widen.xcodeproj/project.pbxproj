@@ -16,6 +16,7 @@
 		0560EC58BEE91D9F98F5AC32 /* AppearancePreference.swift in Sources */ = {isa = PBXBuildFile; fileRef = A5EB4C4ABF5F9444F28736EF /* AppearancePreference.swift */; };
 		05E75B10D5A5DAECC48EF104 /* PostgresIntegrationTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 526F33B4A497093D4F7A3300 /* PostgresIntegrationTests.swift */; };
 		05ED5874919CE0B450F2A9B1 /* SQLSchemaValidatorTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 06721973667845637FA3171A /* SQLSchemaValidatorTests.swift */; };
+		08091AC908CA486CD8A75313 /* TextToSQLEvalSuiteValidator.swift in Sources */ = {isa = PBXBuildFile; fileRef = DD4520846DFE48A8B4810C60 /* TextToSQLEvalSuiteValidator.swift */; };
 		090D0AA08F031227E6C2A327 /* WidenKit.framework in Embed Frameworks */ = {isa = PBXBuildFile; fileRef = A287B7ABA46C2CE732510671 /* WidenKit.framework */; settings = {ATTRIBUTES = (CodeSignOnCopy, RemoveHeadersOnCopy, ); }; };
 		094449A6D12D44D491D1D497 /* Assets.xcassets in Resources */ = {isa = PBXBuildFile; fileRef = E271C5B65AC35B837AD0BD6C /* Assets.xcassets */; };
 		0F8468DE980881943E60D699 /* DatabaseGroupRow.swift in Sources */ = {isa = PBXBuildFile; fileRef = D4B2FAB6EB4D61BFACA27F79 /* DatabaseGroupRow.swift */; };
@@ -275,6 +276,7 @@
 		D596ED882EACD5C0367DF8B6 /* DatabaseConnectionConfig.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = DatabaseConnectionConfig.swift; sourceTree = "<group>"; };
 		D7D4F66164E5E8028A9EA325 /* SQLSafetyValidatorTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SQLSafetyValidatorTests.swift; sourceTree = "<group>"; };
 		DA1AA29704A0DF0B0D92E56E /* SessionStore.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SessionStore.swift; sourceTree = "<group>"; };
+		DD4520846DFE48A8B4810C60 /* TextToSQLEvalSuiteValidator.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = TextToSQLEvalSuiteValidator.swift; sourceTree = "<group>"; };
 		E15C23EAA90F2205B06AA400 /* GeneralSettingsView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = GeneralSettingsView.swift; sourceTree = "<group>"; };
 		E271C5B65AC35B837AD0BD6C /* Assets.xcassets */ = {isa = PBXFileReference; lastKnownFileType = folder.assetcatalog; path = Assets.xcassets; sourceTree = "<group>"; };
 		E30DD57D665A0DD504E34557 /* UnavailableSQLGenerator.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = UnavailableSQLGenerator.swift; sourceTree = "<group>"; };
@@ -522,6 +524,7 @@
 				E903408702D25710023292DD /* TextToSQLEvalCase.swift */,
 				688197FE6DA2DA95414DE6A6 /* TextToSQLEvalResult.swift */,
 				ABB8F5E4D5E030CC18DE28F1 /* TextToSQLEvalScorer.swift */,
+				DD4520846DFE48A8B4810C60 /* TextToSQLEvalSuiteValidator.swift */,
 			);
 			path = Evals;
 			sourceTree = "<group>";
@@ -857,6 +860,7 @@
 				A2B58F4E2A5F65DBE09F9DC1 /* TextToSQLEvalCase.swift in Sources */,
 				283DEAF170B5FAEDE7AA6FA9 /* TextToSQLEvalResult.swift in Sources */,
 				F1CBD133E8BABCEB6C7ED13C /* TextToSQLEvalScorer.swift in Sources */,
+				08091AC908CA486CD8A75313 /* TextToSQLEvalSuiteValidator.swift in Sources */,
 				8236925524FBC8516122BF7C /* UnavailableSQLGenerator.swift in Sources */,
 				EE1924EF18C4616FB2D046BB /* UpdaterControlling.swift in Sources */,
 			);

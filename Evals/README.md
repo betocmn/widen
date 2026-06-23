@@ -4,6 +4,14 @@
 pipeline. It uses the same generator protocol and deterministic validators as
 the app, then writes per-run artifacts under `.eval-results/`.
 
+**Evaluation scope:** A static-shape pass verifies the decision, SQL safety,
+schema references, and configured structural expectations. It does not
+establish result-set or semantic correctness.
+
+The runner does not execute generated SQL or compare result sets. Committed
+baselines record deterministic hashes for the suite file, scorer source, and
+schema fixtures to establish baseline compatibility.
+
 ## Commands
 
 ```sh
@@ -36,7 +44,10 @@ variable. Do not commit API keys, prompts, or raw model output.
 ```
 
 Prompt recording defaults to off. When it is off, the eval process also
-disables Widen's append-only generation log for that process.
+disables Widen's append-only generation log for that process. Reported
+`estimatedInitialPromptCharacters` and optional `estimatedInitialPrompt`
+values are eval-runner estimates, not the exact model prompt after discovery,
+truncation, or retry behavior.
 
 ## Artifacts
 
@@ -50,5 +61,5 @@ Each run writes:
 ```
 
 `.eval-results/` is ignored by git. Committed baseline summaries must be
-sanitized and should not include raw prompts, raw model responses, credentials,
-or private schema data.
+sanitized and should not include estimated prompts, raw model responses,
+credentials, or private schema data.
