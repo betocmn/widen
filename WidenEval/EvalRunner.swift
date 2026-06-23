@@ -11,12 +11,14 @@ struct EvalRun {
     var manifest: EvalRunManifest
     var results: [TextToSQLEvalResult]
     var summary: EvalRunSummary
+    var backendSummaries: [TextToSQLEvalBackend: EvalRunSummary]
 }
 
 struct EvalRunManifest: Codable {
     var suiteName: String
     var suiteVersion: String
     var suitePath: String
+    var evaluationMode: String
     var commitSHA: String
     var startedAt: String
     var finishedAt: String
@@ -26,7 +28,20 @@ struct EvalRunManifest: Codable {
     var architecture: String
     var caseCount: Int
     var repeatCount: Int
+    var suiteFileHash: String
+    var scorerVersion: String
+    var scorerSourceHash: String
     var schemaFixtureHashes: [String: String]
+}
+
+struct EvalCountSummary: Codable {
+    var count: Int
+    var denominator: Int
+}
+
+struct EvalAverageSummary: Codable {
+    var average: Double?
+    var denominator: Int
 }
 
 struct EvalRunSummary: Codable {
@@ -34,19 +49,19 @@ struct EvalRunSummary: Codable {
     var passed: Int
     var passRate: Double
     var statusCounts: [String: Int]
-    var backendAvailable: Int
-    var transportSuccess: Int
-    var structuredResponseParsed: Int
-    var decisionMatches: Int
-    var safetyValid: Int
-    var schemaValid: Int
+    var backendAvailable: EvalCountSummary
+    var transportSuccess: EvalCountSummary
+    var structuredResponseParsed: EvalCountSummary
+    var decisionMatches: EvalCountSummary
+    var safetyValid: EvalCountSummary
+    var schemaValid: EvalCountSummary
     var forbiddenBindingViolationCount: Int
-    var averageRequiredTableCoverage: Double
-    var averageRequiredColumnBindingCoverage: Double
+    var requiredTableCoverage: EvalAverageSummary
+    var requiredColumnBindingCoverage: EvalAverageSummary
     var latency: LatencySummary
     var totalModelCalls: Int?
-    var averagePromptSize: Double?
-    var maxPromptSize: Int?
+    var averageEstimatedInitialPromptCharacters: Double?
+    var maxEstimatedInitialPromptCharacters: Int?
 }
 
 struct LatencySummary: Codable {
@@ -65,6 +80,7 @@ struct EvalRunner {
         let suiteURL = URL(fileURLWithPath: options.suitePath)
         let suiteData = try Data(contentsOf: suiteURL)
         let suite = try JSONDecoder().decode(TextToSQLEvalSuite.self, from: suiteData)
+        try TextToSQLEvalSuiteValidator.validate(suite: suite, suiteURL: suiteURL)
         let selectedCases = try filteredCases(suite.cases)
         let schemaDirectory = suiteURL
             .deletingLastPathComponent()
@@ -89,8 +105,8 @@ struct EvalRunner {
                         backend: backend,
                         model: backend == .cloud ? options.model : nil,
                         repeatIndex: repeatIndex,
-                        promptSize: prompt.count,
-                        recordedPrompt: options.recordPrompts ? prompt : nil
+                        estimatedInitialPromptCharacters: prompt.count,
+                        estimatedInitialPrompt: options.recordPrompts ? prompt : nil
                     )
                     if let unavailable {
                         results.append(
@@ -117,10 +133,16 @@ struct EvalRunner {
 
         let finishedAt = ISO8601DateFormatter().string(from: Date())
         let summary = summarize(results)
+        let backendSummaries = Dictionary(
+            uniqueKeysWithValues: options.backendMode.backends.map { backend in
+                (backend, summarize(results.filter { $0.backend == backend }))
+            }
+        )
         let manifest = EvalRunManifest(
             suiteName: suite.name,
             suiteVersion: suite.version,
             suitePath: suiteURL.path,
+            evaluationMode: "static-shape",
             commitSHA: Self.commitSHA(),
             startedAt: startedAt,
             finishedAt: finishedAt,
@@ -130,9 +152,17 @@ struct EvalRunner {
             architecture: Self.architecture(),
             caseCount: selectedCases.count,
             repeatCount: options.repeatCount,
+            suiteFileHash: Self.sha256(suiteData),
+            scorerVersion: "static-shape-v1",
+            scorerSourceHash: Self.sourceHash(relativePath: "WidenKit/Evals/TextToSQLEvalScorer.swift"),
             schemaFixtureHashes: schemas.mapValues(\.sha256)
         )
-        return EvalRun(manifest: manifest, results: results, summary: summary)
+        return EvalRun(
+            manifest: manifest,
+            results: results,
+            summary: summary,
+            backendSummaries: backendSummaries
+        )
     }
 
     private func filteredCases(_ cases: [TextToSQLEvalCase]) throws -> [TextToSQLEvalCase] {
@@ -203,7 +233,6 @@ struct EvalRunner {
         message: String,
         options: TextToSQLEvalRunOptions
     ) -> TextToSQLEvalResult {
-        let coverage = evalCase.expected.decision == .sql ? 0.0 : 1.0
         return TextToSQLEvalResult(
             caseID: evalCase.id,
             backend: backend,
@@ -215,13 +244,11 @@ struct EvalRunner {
                 transportSuccess: false,
                 structuredResponseParsed: false,
                 decisionMatches: false,
-                requiredTableCoverage: coverage,
-                requiredColumnBindingCoverage: coverage,
                 latencyMs: 0,
-                promptSize: options.promptSize
+                estimatedInitialPromptCharacters: options.estimatedInitialPromptCharacters
             ),
             diagnostics: TextToSQLEvalDiagnostics(errorMessage: message),
-            recordedPrompt: options.recordedPrompt
+            estimatedInitialPrompt: options.estimatedInitialPrompt
         )
     }
 
@@ -232,39 +259,67 @@ struct EvalRunner {
         let passed = statusCounts[TextToSQLEvalCaseStatus.passed.rawValue, default: 0]
         let latencies = results.map(\.metrics.latencyMs).sorted()
         let modelCalls = results.compactMap(\.metrics.modelCallCount)
-        let promptSizes = results.compactMap(\.metrics.promptSize)
+        let promptSizes = results.compactMap(\.metrics.estimatedInitialPromptCharacters)
+        let backendAvailableValues = results.map(\.metrics.backendAvailable)
+        let transportEvaluated = results.filter(\.metrics.backendAvailable)
+        let structuredEvaluated = results.filter(\.metrics.transportSuccess)
+        let decisionEvaluated = results.filter(\.metrics.structuredResponseParsed)
+        let safetyValues = results.compactMap(\.metrics.safetyValid)
+        let schemaValues = results.compactMap(\.metrics.schemaValid)
+        let tableCoverageValues = results.compactMap(\.metrics.requiredTableCoverage)
+        let columnCoverageValues = results.compactMap(\.metrics.requiredColumnBindingCoverage)
 
         return EvalRunSummary(
             totalResults: results.count,
             passed: passed,
             passRate: results.isEmpty ? 0 : Double(passed) / Double(results.count),
             statusCounts: statusCounts,
-            backendAvailable: results.filter(\.metrics.backendAvailable).count,
-            transportSuccess: results.filter(\.metrics.transportSuccess).count,
-            structuredResponseParsed: results.filter(\.metrics.structuredResponseParsed).count,
-            decisionMatches: results.filter(\.metrics.decisionMatches).count,
-            safetyValid: results.filter { $0.metrics.safetyValid == true }.count,
-            schemaValid: results.filter { $0.metrics.schemaValid == true }.count,
+            backendAvailable: EvalCountSummary(
+                count: backendAvailableValues.filter { $0 }.count,
+                denominator: backendAvailableValues.count
+            ),
+            transportSuccess: EvalCountSummary(
+                count: transportEvaluated.filter(\.metrics.transportSuccess).count,
+                denominator: transportEvaluated.count
+            ),
+            structuredResponseParsed: EvalCountSummary(
+                count: structuredEvaluated.filter(\.metrics.structuredResponseParsed).count,
+                denominator: structuredEvaluated.count
+            ),
+            decisionMatches: EvalCountSummary(
+                count: decisionEvaluated.filter(\.metrics.decisionMatches).count,
+                denominator: decisionEvaluated.count
+            ),
+            safetyValid: EvalCountSummary(
+                count: safetyValues.filter { $0 }.count,
+                denominator: safetyValues.count
+            ),
+            schemaValid: EvalCountSummary(
+                count: schemaValues.filter { $0 }.count,
+                denominator: schemaValues.count
+            ),
             forbiddenBindingViolationCount: results.reduce(0) {
                 $0 + $1.metrics.forbiddenBindingViolations.count
             },
-            averageRequiredTableCoverage: average(
-                results.map(\.metrics.requiredTableCoverage)
+            requiredTableCoverage: EvalAverageSummary(
+                average: average(tableCoverageValues),
+                denominator: tableCoverageValues.count
             ),
-            averageRequiredColumnBindingCoverage: average(
-                results.map(\.metrics.requiredColumnBindingCoverage)
+            requiredColumnBindingCoverage: EvalAverageSummary(
+                average: average(columnCoverageValues),
+                denominator: columnCoverageValues.count
             ),
             latency: latencySummary(latencies),
             totalModelCalls: modelCalls.isEmpty ? nil : modelCalls.reduce(0, +),
-            averagePromptSize: promptSizes.isEmpty
+            averageEstimatedInitialPromptCharacters: promptSizes.isEmpty
                 ? nil
                 : Double(promptSizes.reduce(0, +)) / Double(promptSizes.count),
-            maxPromptSize: promptSizes.max()
+            maxEstimatedInitialPromptCharacters: promptSizes.max()
         )
     }
 
-    private func average(_ values: [Double]) -> Double {
-        guard !values.isEmpty else { return 0 }
+    private func average(_ values: [Double]) -> Double? {
+        guard !values.isEmpty else { return nil }
         return values.reduce(0, +) / Double(values.count)
     }
 
@@ -292,6 +347,13 @@ struct EvalRunner {
 
     private static func sha256(_ data: Data) -> String {
         SHA256.hash(data: data).map { String(format: "%02x", $0) }.joined()
+    }
+
+    private static func sourceHash(relativePath: String) -> String {
+        guard let data = try? Data(contentsOf: URL(fileURLWithPath: relativePath)) else {
+            return "unknown"
+        }
+        return sha256(data)
     }
 
     private static func openRouterAPIKey() -> String? {

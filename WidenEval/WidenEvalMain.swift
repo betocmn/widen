@@ -27,10 +27,17 @@ enum WidenEvalMain {
 
             if let failUnder = options.failUnder {
                 let threshold = failUnder / 100
-                if run.summary.passRate < threshold {
-                    let formatted = String(format: "%.1f", run.summary.passRate * 100)
+                var failedBackends: [String] = []
+                for backend in options.backendMode.backends {
+                    guard let summary = run.backendSummaries[backend] else { continue }
+                    if summary.passRate < threshold {
+                        let formatted = String(format: "%.1f", summary.passRate * 100)
+                        failedBackends.append("\(backend.rawValue): \(formatted)%")
+                    }
+                }
+                if !failedBackends.isEmpty {
                     fputs(
-                        "Eval pass rate \(formatted)% is below fail-under \(failUnder)%\n",
+                        "Static-shape pass rate below fail-under \(failUnder)% for \(failedBackends.joined(separator: ", "))\n",
                         stderr
                     )
                     exit(1)
