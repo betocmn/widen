@@ -369,6 +369,8 @@ struct TextToSQLPipelineTests {
         }
         #expect(failure.category == .schemaValidation)
         #expect(failure.message.contains("still failed validation"))
+        #expect(failure.message.contains("I did not show the rejected SQL"))
+        #expect(!failure.message.contains("rejected SQL and repair attempts are shown above"))
     }
 
     @Test func repairGeneratorFailureReturnsFailedDecision() async throws {
