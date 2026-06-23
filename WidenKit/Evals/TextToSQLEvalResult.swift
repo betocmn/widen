@@ -8,6 +8,8 @@ public enum TextToSQLEvalBackend: String, Codable, CaseIterable, Equatable, Send
 public enum TextToSQLEvalCaseStatus: String, Codable, CaseIterable, Equatable, Sendable {
     case passed
     case semanticReviewRequired
+    case semanticEnvironmentUnavailable
+    case fixtureInvalid
     case wrongDecision
     case invalidSQL
     case wrongSchemaObjects
@@ -17,6 +19,16 @@ public enum TextToSQLEvalCaseStatus: String, Codable, CaseIterable, Equatable, S
     case transportFailure
     case parseFailure
     case backendUnavailable
+}
+
+public enum TextToSQLSemanticStatus: String, Codable, CaseIterable, Equatable, Sendable {
+    case passed
+    case resultMismatch
+    case candidateExecutionFailure
+    case goldenFixtureFailure
+    case semanticEnvironmentUnavailable
+    case fixtureInvalid
+    case notApplicable
 }
 
 public struct TextToSQLEvalMetrics: Codable, Equatable, Sendable {
@@ -35,6 +47,18 @@ public struct TextToSQLEvalMetrics: Codable, Equatable, Sendable {
     public var estimatedInitialPromptCharacters: Int?
     public var tokenUsage: Int?
     public var estimatedCloudCostUSD: Double?
+    public var semanticExecutionAttempted: Bool?
+    public var goldenExecutionSucceeded: Bool?
+    public var candidateExecutionSucceeded: Bool?
+    public var resultEquivalent: Bool?
+    public var semanticStatus: TextToSQLSemanticStatus?
+    public var goldenRowCount: Int?
+    public var candidateRowCount: Int?
+    public var comparisonMode: TextToSQLResultComparisonMode?
+    public var executionLatencyMs: Int?
+    public var goldenResultDigest: String?
+    public var candidateResultDigest: String?
+    public var semanticMismatchCategory: String?
 
     public init(
         backendAvailable: Bool,
@@ -51,7 +75,19 @@ public struct TextToSQLEvalMetrics: Codable, Equatable, Sendable {
         modelCallCount: Int? = nil,
         estimatedInitialPromptCharacters: Int? = nil,
         tokenUsage: Int? = nil,
-        estimatedCloudCostUSD: Double? = nil
+        estimatedCloudCostUSD: Double? = nil,
+        semanticExecutionAttempted: Bool? = nil,
+        goldenExecutionSucceeded: Bool? = nil,
+        candidateExecutionSucceeded: Bool? = nil,
+        resultEquivalent: Bool? = nil,
+        semanticStatus: TextToSQLSemanticStatus? = nil,
+        goldenRowCount: Int? = nil,
+        candidateRowCount: Int? = nil,
+        comparisonMode: TextToSQLResultComparisonMode? = nil,
+        executionLatencyMs: Int? = nil,
+        goldenResultDigest: String? = nil,
+        candidateResultDigest: String? = nil,
+        semanticMismatchCategory: String? = nil
     ) {
         self.backendAvailable = backendAvailable
         self.transportSuccess = transportSuccess
@@ -68,6 +104,18 @@ public struct TextToSQLEvalMetrics: Codable, Equatable, Sendable {
         self.estimatedInitialPromptCharacters = estimatedInitialPromptCharacters
         self.tokenUsage = tokenUsage
         self.estimatedCloudCostUSD = estimatedCloudCostUSD
+        self.semanticExecutionAttempted = semanticExecutionAttempted
+        self.goldenExecutionSucceeded = goldenExecutionSucceeded
+        self.candidateExecutionSucceeded = candidateExecutionSucceeded
+        self.resultEquivalent = resultEquivalent
+        self.semanticStatus = semanticStatus
+        self.goldenRowCount = goldenRowCount
+        self.candidateRowCount = candidateRowCount
+        self.comparisonMode = comparisonMode
+        self.executionLatencyMs = executionLatencyMs
+        self.goldenResultDigest = goldenResultDigest
+        self.candidateResultDigest = candidateResultDigest
+        self.semanticMismatchCategory = semanticMismatchCategory
     }
 }
 

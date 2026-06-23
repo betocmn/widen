@@ -32,7 +32,7 @@ ifdef FAIL_UNDER
 EVAL_ARGS += --fail-under $(FAIL_UNDER)
 endif
 
-.PHONY: project build test test-db test-fm eval-build eval-local eval-cloud eval-all eval-case setup run run-conductor release release-mac xcode clean
+.PHONY: project build test test-db test-fm eval-build eval-local eval-cloud eval-all eval-case eval-db-local eval-db-cloud eval-db-case setup run run-conductor release release-mac xcode clean
 
 ## Regenerate Widen.xcodeproj from project.yml
 project:
@@ -55,7 +55,7 @@ test:
 ## needs a local PostgreSQL whose role can CREATE DATABASE — no manual seeding.
 test-db:
 	env -u WIDEN_TEST_DB -u TEST_RUNNER_WIDEN_TEST_DB $(XCODEBUILD) test
-	TEST_RUNNER_WIDEN_TEST_DB=$${WIDEN_TEST_DB:-1} $(XCODEBUILD) test -only-testing:WidenTests/PostgresIntegrationTests -only-testing:WidenTests/QueryExecutionIntegrationTests
+	TEST_RUNNER_WIDEN_TEST_DB=$${WIDEN_TEST_DB:-1} $(XCODEBUILD) test -only-testing:WidenTests/PostgresIntegrationTests -only-testing:WidenTests/QueryExecutionIntegrationTests -only-testing:WidenTests/TextToSQLSemanticDatabaseIntegrationTests
 
 ## Run unit + Foundation Models smoke tests (requires Apple Intelligence enabled)
 test-fm:
@@ -85,6 +85,21 @@ eval-case: eval-build
 	@test -n "$(CASE)" || (echo "error: CASE is required" >&2; exit 1)
 	@set -a; if [ -f .env.eval.local ]; then . ./.env.eval.local; fi; set +a; \
 	$(EVAL) --backend "$(BACKEND)" --model "$(MODEL)" $(EVAL_ARGS)
+
+## Run the text-to-SQL eval suite with seeded Postgres semantic grading locally
+eval-db-local: eval-build
+	$(EVAL) --backend local --semantic-db $(EVAL_ARGS)
+
+## Run the text-to-SQL eval suite with seeded Postgres semantic grading through OpenRouter
+eval-db-cloud: eval-build
+	@set -a; if [ -f .env.eval.local ]; then . ./.env.eval.local; fi; set +a; \
+	$(EVAL) --backend cloud --model "$(MODEL)" --semantic-db $(EVAL_ARGS)
+
+## Run one seeded Postgres semantic eval case
+eval-db-case: eval-build
+	@test -n "$(CASE)" || (echo "error: CASE is required" >&2; exit 1)
+	@set -a; if [ -f .env.eval.local ]; then . ./.env.eval.local; fi; set +a; \
+	$(EVAL) --backend "$(BACKEND)" --model "$(MODEL)" --semantic-db $(EVAL_ARGS)
 
 ## Build and launch the app
 run: build

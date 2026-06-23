@@ -50,6 +50,13 @@ struct EvalRunSummary: Codable {
     var passed: Int
     var passRate: Double
     var statusCounts: [String: Int]
+    var semanticPassed: Int?
+    var semanticPassRate: Double?
+    var semanticStatusCounts: [String: Int]?
+    var semanticExecutionAttempted: EvalCountSummary?
+    var resultEquivalent: EvalCountSummary?
+    var goldenExecutionSucceeded: EvalCountSummary?
+    var candidateExecutionSucceeded: EvalCountSummary?
     var backendAvailable: EvalCountSummary
     var transportSuccess: EvalCountSummary
     var structuredResponseParsed: EvalCountSummary
@@ -94,45 +101,77 @@ struct EvalRunner {
             schemaDirectory: schemaDirectory
         )
         var results: [TextToSQLEvalResult] = []
+        var semanticPreparation: SemanticPreparation?
+        if options.semanticDatabase {
+            let databaseDirectory = evalDirectory.appendingPathComponent("databases", isDirectory: true)
+            semanticPreparation = await prepareSemanticDatabases(
+                cases: selectedCases,
+                schemas: schemas.mapValues(\.schema),
+                databaseDirectory: databaseDirectory
+            )
+        }
 
-        for backend in options.backendMode.backends {
-            let unavailable = backendUnavailableReason(for: backend)
-            let generator = unavailable == nil ? makeGenerator(for: backend) : nil
-            for evalCase in selectedCases {
-                guard let schema = schemas[evalCase.schemaFixture]?.schema else {
-                    throw EvalRunnerError.missingSchemaFixture(evalCase.schemaFixture)
-                }
-                for repeatIndex in 1...options.repeatCount {
-                    if let unavailable {
-                        results.append(
-                            backendUnavailableResult(
-                                evalCase: evalCase,
+        do {
+            for backend in options.backendMode.backends {
+                let unavailable = backendUnavailableReason(for: backend)
+                let generator = unavailable == nil ? makeGenerator(for: backend) : nil
+                for evalCase in selectedCases {
+                    guard let schema = schemas[evalCase.schemaFixture]?.schema else {
+                        throw EvalRunnerError.missingSchemaFixture(evalCase.schemaFixture)
+                    }
+                    for repeatIndex in 1...options.repeatCount {
+                        if let semanticPreparation,
+                            let semanticSkip = semanticPreparation.skipResult(
+                                for: evalCase,
                                 backend: backend,
-                                message: unavailable,
+                                model: backend == .cloud ? options.model : nil,
                                 repeatIndex: repeatIndex
                             )
-                        )
-                    } else if let generator {
-                        let prompt = promptText(for: backend, evalCase: evalCase, schema: schema)
-                        let runOptions = TextToSQLEvalRunOptions(
-                            backend: backend,
-                            model: backend == .cloud ? options.model : nil,
-                            repeatIndex: repeatIndex,
-                            estimatedInitialPromptCharacters: prompt.count,
-                            estimatedInitialPrompt: options.recordPrompts ? prompt : nil,
-                            caseTimeoutSeconds: options.caseTimeoutSeconds
-                        )
-                        print("Running \(evalCase.id) [\(backend.rawValue)] repeat \(repeatIndex)")
-                        let result = await TextToSQLEvalCaseRunner.run(
-                            evalCase: evalCase,
-                            schema: schema,
-                            generator: generator,
-                            options: runOptions
-                        )
-                        results.append(result)
+                        {
+                            results.append(semanticSkip)
+                        } else if let unavailable {
+                            results.append(
+                                backendUnavailableResult(
+                                    evalCase: evalCase,
+                                    backend: backend,
+                                    message: unavailable,
+                                    repeatIndex: repeatIndex
+                                )
+                            )
+                        } else if let generator {
+                            let prompt = promptText(for: backend, evalCase: evalCase, schema: schema)
+                            let runOptions = TextToSQLEvalRunOptions(
+                                backend: backend,
+                                model: backend == .cloud ? options.model : nil,
+                                repeatIndex: repeatIndex,
+                                estimatedInitialPromptCharacters: prompt.count,
+                                estimatedInitialPrompt: options.recordPrompts ? prompt : nil,
+                                caseTimeoutSeconds: options.caseTimeoutSeconds
+                            )
+                            print("Running \(evalCase.id) [\(backend.rawValue)] repeat \(repeatIndex)")
+                            let staticResult = await TextToSQLEvalCaseRunner.run(
+                                evalCase: evalCase,
+                                schema: schema,
+                                generator: generator,
+                                options: runOptions
+                            )
+                            if let semanticPreparation {
+                                let semanticResult = await semanticPreparation.annotate(
+                                    staticResult,
+                                    evalCase: evalCase
+                                )
+                                results.append(semanticResult)
+                            } else {
+                                results.append(staticResult)
+                            }
+                        }
                     }
                 }
             }
+            await semanticPreparation?.cleanup()
+        } catch {
+            await semanticPreparation?.cleanup()
+            throw error
         }
 
         let finishedAt = ISO8601DateFormatter().string(from: Date())
@@ -146,7 +185,9 @@ struct EvalRunner {
             suiteName: suite.name,
             suiteVersion: suite.version,
             suitePath: suiteURL.path,
-            evaluationMode: "production-pipeline-static-shape",
+            evaluationMode: options.semanticDatabase
+                ? "production-pipeline-static-shape-plus-seeded-postgres-semantic"
+                : "production-pipeline-static-shape",
             commitSHA: Self.commitSHA(),
             startedAt: startedAt,
             finishedAt: finishedAt,
@@ -161,8 +202,12 @@ struct EvalRunner {
             scorerVersion: "production-pipeline-static-shape-v1",
             scorerSourceHash: Self.sourceHash(
                 relativePaths: [
+                    "WidenKit/Evals/TextToSQLEvalCase.swift",
                     "WidenKit/Evals/TextToSQLEvalScorer.swift",
                     "WidenKit/Evals/TextToSQLEvalResult.swift",
+                    "WidenKit/Evals/TextToSQLSemanticComparator.swift",
+                    "WidenKit/Evals/TextToSQLSemanticDatabase.swift",
+                    "WidenEval/EvalRunner.swift",
                     "WidenKit/Services/TextToSQLPipeline.swift",
                     "WidenKit/Services/SQLGenerationFailure.swift",
                     "WidenKit/Services/GeneratedSQLRepairSupport.swift",
@@ -177,6 +222,253 @@ struct EvalRunner {
             summary: summary,
             backendSummaries: backendSummaries
         )
+    }
+
+    private struct SemanticFixtureIssue: Sendable {
+        var status: TextToSQLEvalCaseStatus
+        var semanticStatus: TextToSQLSemanticStatus
+        var message: String
+    }
+
+    private final class SemanticPreparation: @unchecked Sendable {
+        private let provisioner: TextToSQLSemanticDatabaseProvisioner
+        private let server: TextToSQLSemanticDatabaseServer
+        private let executor: TextToSQLSemanticExecutor
+        private let databases: [String: TextToSQLSemanticProvisionedDatabase]
+        private let fixtureIssues: [String: SemanticFixtureIssue]
+        private let globalIssue: SemanticFixtureIssue?
+
+        init(
+            provisioner: TextToSQLSemanticDatabaseProvisioner,
+            server: TextToSQLSemanticDatabaseServer,
+            executor: TextToSQLSemanticExecutor,
+            databases: [String: TextToSQLSemanticProvisionedDatabase],
+            fixtureIssues: [String: SemanticFixtureIssue],
+            globalIssue: SemanticFixtureIssue?
+        ) {
+            self.provisioner = provisioner
+            self.server = server
+            self.executor = executor
+            self.databases = databases
+            self.fixtureIssues = fixtureIssues
+            self.globalIssue = globalIssue
+        }
+
+        func cleanup() async {
+            for database in databases.values {
+                await provisioner.drop(database)
+            }
+        }
+
+        func skipResult(
+            for evalCase: TextToSQLEvalCase,
+            backend: TextToSQLEvalBackend,
+            model: String?,
+            repeatIndex: Int
+        ) -> TextToSQLEvalResult? {
+            let issue = globalIssue ?? fixtureIssues[evalCase.schemaFixture]
+            guard let issue else { return nil }
+            return TextToSQLEvalResult(
+                caseID: evalCase.id,
+                backend: backend,
+                model: model,
+                repeatIndex: repeatIndex,
+                status: issue.status,
+                metrics: TextToSQLEvalMetrics(
+                    backendAvailable: true,
+                    transportSuccess: false,
+                    structuredResponseParsed: false,
+                    decisionMatches: false,
+                    latencyMs: 0,
+                    semanticExecutionAttempted: false,
+                    goldenExecutionSucceeded: false,
+                    candidateExecutionSucceeded: false,
+                    resultEquivalent: false,
+                    semanticStatus: issue.semanticStatus
+                ),
+                diagnostics: TextToSQLEvalDiagnostics(errorMessage: issue.message)
+            )
+        }
+
+        func annotate(
+            _ result: TextToSQLEvalResult,
+            evalCase: TextToSQLEvalCase
+        ) async -> TextToSQLEvalResult {
+            guard evalCase.expected.decision == .sql,
+                let goldenSQL = evalCase.expected.goldenSQL?.trimmingCharacters(
+                    in: .whitespacesAndNewlines
+                ),
+                !goldenSQL.isEmpty,
+                let semantic = evalCase.expected.semantic,
+                let candidateSQL = result.generatedSQL?.trimmingCharacters(
+                    in: .whitespacesAndNewlines
+                ),
+                !candidateSQL.isEmpty,
+                result.metrics.safetyValid == true,
+                result.metrics.schemaValid == true,
+                let database = databases[evalCase.schemaFixture]
+            else {
+                return result.withSemantic(
+                    status: .notApplicable,
+                    attempted: false,
+                    comparisonMode: evalCase.expected.semantic?.comparisonMode
+                )
+            }
+
+            do {
+                let output = try await executor.executePair(
+                    goldenSQL: goldenSQL,
+                    candidateSQL: candidateSQL,
+                    expectation: semantic,
+                    config: database.config,
+                    password: server.password
+                )
+                return result.withSemantic(output: output, comparisonMode: semantic.comparisonMode)
+            } catch {
+                return result.withSemantic(
+                    status: .semanticEnvironmentUnavailable,
+                    attempted: false,
+                    comparisonMode: semantic.comparisonMode,
+                    message: "PostgreSQL semantic execution failed: \(error.localizedDescription)"
+                )
+            }
+        }
+    }
+
+    private func prepareSemanticDatabases(
+        cases: [TextToSQLEvalCase],
+        schemas: [String: DatabaseSchema],
+        databaseDirectory: URL
+    ) async -> SemanticPreparation {
+        let server = TextToSQLSemanticDatabaseServer.fromEnvironment(ProcessInfo.processInfo.environment)
+        let provisioner = TextToSQLSemanticDatabaseProvisioner(server: server)
+        let executor = TextToSQLSemanticExecutor()
+        var databases: [String: TextToSQLSemanticProvisionedDatabase] = [:]
+        var fixtureIssues: [String: SemanticFixtureIssue] = [:]
+        let casesByFixture = Dictionary(grouping: cases, by: \.schemaFixture)
+
+        for fixture in casesByFixture.keys.sorted() {
+            guard let schema = schemas[fixture] else {
+                fixtureIssues[fixture] = SemanticFixtureIssue(
+                    status: .fixtureInvalid,
+                    semanticStatus: .fixtureInvalid,
+                    message: "Missing schema fixture \(fixture)."
+                )
+                continue
+            }
+            let setupURL = databaseDirectory
+                .appendingPathComponent(fixture, isDirectory: true)
+                .appendingPathComponent("setup.json")
+            do {
+                let database = try await provisioner.provision(
+                    fixture: fixture,
+                    setupURL: setupURL,
+                    expectedSchema: schema
+                )
+                try await validateSemanticFixture(
+                    fixture: fixture,
+                    cases: casesByFixture[fixture] ?? [],
+                    database: database,
+                    server: server,
+                    executor: executor
+                )
+                databases[fixture] = database
+            } catch let error as TextToSQLSemanticDatabaseError {
+                switch error {
+                case .environmentUnavailable(let message):
+                    let globalIssue = SemanticFixtureIssue(
+                        status: .semanticEnvironmentUnavailable,
+                        semanticStatus: .semanticEnvironmentUnavailable,
+                        message: message
+                    )
+                    return SemanticPreparation(
+                        provisioner: provisioner,
+                        server: server,
+                        executor: executor,
+                        databases: databases,
+                        fixtureIssues: fixtureIssues,
+                        globalIssue: globalIssue
+                    )
+                case .fixtureInvalid(let message), .setupInvalid(let message):
+                    fixtureIssues[fixture] = SemanticFixtureIssue(
+                        status: .fixtureInvalid,
+                        semanticStatus: .fixtureInvalid,
+                        message: message
+                    )
+                }
+            } catch {
+                fixtureIssues[fixture] = SemanticFixtureIssue(
+                    status: .fixtureInvalid,
+                    semanticStatus: .fixtureInvalid,
+                    message: "Fixture \(fixture) semantic preflight failed: \(error.localizedDescription)"
+                )
+            }
+        }
+
+        return SemanticPreparation(
+            provisioner: provisioner,
+            server: server,
+            executor: executor,
+            databases: databases,
+            fixtureIssues: fixtureIssues,
+            globalIssue: nil
+        )
+    }
+
+    private func validateSemanticFixture(
+        fixture: String,
+        cases: [TextToSQLEvalCase],
+        database: TextToSQLSemanticProvisionedDatabase,
+        server: TextToSQLSemanticDatabaseServer,
+        executor: TextToSQLSemanticExecutor
+    ) async throws {
+        for evalCase in cases where evalCase.expected.decision == .sql {
+            guard let goldenSQL = evalCase.expected.goldenSQL,
+                let semantic = evalCase.expected.semantic
+            else {
+                throw TextToSQLSemanticDatabaseError.fixtureInvalid(
+                    "Fixture \(fixture) case \(evalCase.id) is missing semantic SQL metadata."
+                )
+            }
+
+            let goldenOutput = try await executor.executePair(
+                goldenSQL: goldenSQL,
+                candidateSQL: goldenSQL,
+                expectation: semantic,
+                config: database.config,
+                password: server.password
+            )
+            guard goldenOutput.goldenExecutionSucceeded,
+                goldenOutput.candidateExecutionSucceeded,
+                goldenOutput.comparison?.equivalent == true
+            else {
+                throw TextToSQLSemanticDatabaseError.fixtureInvalid(
+                    "Fixture \(fixture) case \(evalCase.id) golden SQL failed semantic preflight."
+                )
+            }
+
+            for negative in semantic.negativeControls {
+                var negativeExpectation = semantic
+                if let mode = negative.comparisonMode {
+                    negativeExpectation.comparisonMode = mode
+                }
+                let output = try await executor.executePair(
+                    goldenSQL: goldenSQL,
+                    candidateSQL: negative.sql,
+                    expectation: negativeExpectation,
+                    config: database.config,
+                    password: server.password
+                )
+                guard output.goldenExecutionSucceeded,
+                    output.candidateExecutionSucceeded,
+                    output.comparison?.equivalent == false
+                else {
+                    throw TextToSQLSemanticDatabaseError.fixtureInvalid(
+                        "Fixture \(fixture) case \(evalCase.id) negative control \(negative.id) did not fail result equivalence."
+                    )
+                }
+            }
+        }
     }
 
     private func filteredCases(_ cases: [TextToSQLEvalCase]) throws -> [TextToSQLEvalCase] {
@@ -280,12 +572,51 @@ struct EvalRunner {
         let schemaValues = results.compactMap(\.metrics.schemaValid)
         let tableCoverageValues = results.compactMap(\.metrics.requiredTableCoverage)
         let columnCoverageValues = results.compactMap(\.metrics.requiredColumnBindingCoverage)
+        let semanticResults = results.filter { $0.metrics.semanticStatus != nil }
+        let semanticStatusCounts = semanticResults.reduce(into: [String: Int]()) { counts, result in
+            guard let status = result.metrics.semanticStatus else { return }
+            counts[status.rawValue, default: 0] += 1
+        }
+        let semanticPassed = semanticResults.filter(semanticPasses).count
+        let semanticAttempted = semanticResults.compactMap(\.metrics.semanticExecutionAttempted)
+        let semanticEquivalent = semanticResults.compactMap(\.metrics.resultEquivalent)
+        let semanticGoldenSucceeded = semanticResults.compactMap(\.metrics.goldenExecutionSucceeded)
+        let semanticCandidateSucceeded = semanticResults.compactMap(\.metrics.candidateExecutionSucceeded)
 
         return EvalRunSummary(
             totalResults: results.count,
             passed: passed,
             passRate: results.isEmpty ? 0 : Double(passed) / Double(results.count),
             statusCounts: statusCounts,
+            semanticPassed: semanticResults.isEmpty ? nil : semanticPassed,
+            semanticPassRate: semanticResults.isEmpty
+                ? nil
+                : Double(semanticPassed) / Double(semanticResults.count),
+            semanticStatusCounts: semanticResults.isEmpty ? nil : semanticStatusCounts,
+            semanticExecutionAttempted: semanticResults.isEmpty
+                ? nil
+                : EvalCountSummary(
+                    count: semanticAttempted.filter { $0 }.count,
+                    denominator: semanticAttempted.count
+                ),
+            resultEquivalent: semanticResults.isEmpty
+                ? nil
+                : EvalCountSummary(
+                    count: semanticEquivalent.filter { $0 }.count,
+                    denominator: semanticEquivalent.count
+                ),
+            goldenExecutionSucceeded: semanticResults.isEmpty
+                ? nil
+                : EvalCountSummary(
+                    count: semanticGoldenSucceeded.filter { $0 }.count,
+                    denominator: semanticGoldenSucceeded.count
+                ),
+            candidateExecutionSucceeded: semanticResults.isEmpty
+                ? nil
+                : EvalCountSummary(
+                    count: semanticCandidateSucceeded.filter { $0 }.count,
+                    denominator: semanticCandidateSucceeded.count
+                ),
             backendAvailable: EvalCountSummary(
                 count: backendAvailableValues.filter { $0 }.count,
                 denominator: backendAvailableValues.count
@@ -328,6 +659,17 @@ struct EvalRunner {
                 : Double(promptEstimateValues.reduce(0, +)) / Double(promptEstimateValues.count),
             maxEstimatedInitialPromptCharacters: promptEstimateValues.max()
         )
+    }
+
+    private func semanticPasses(_ result: TextToSQLEvalResult) -> Bool {
+        switch result.metrics.semanticStatus {
+        case .passed:
+            true
+        case .notApplicable:
+            result.status == .passed
+        default:
+            false
+        }
     }
 
     private func average(_ values: [Double]) -> Double? {
@@ -421,5 +763,102 @@ enum EvalRunnerError: LocalizedError {
         case .missingSchemaFixture(let fixture):
             "No schema fixture loaded for \(fixture)."
         }
+    }
+}
+
+private extension TextToSQLEvalResult {
+    func withSemantic(
+        output: TextToSQLSemanticExecutionOutput,
+        comparisonMode: TextToSQLResultComparisonMode
+    ) -> TextToSQLEvalResult {
+        if let goldenError = output.goldenError {
+            return withSemantic(
+                status: .goldenFixtureFailure,
+                attempted: true,
+                goldenSucceeded: false,
+                candidateSucceeded: false,
+                equivalent: false,
+                comparisonMode: comparisonMode,
+                executionLatencyMs: output.latencyMs,
+                message: goldenError
+            )
+        }
+        if let candidateError = output.candidateError {
+            return withSemantic(
+                status: .candidateExecutionFailure,
+                attempted: true,
+                goldenSucceeded: true,
+                candidateSucceeded: false,
+                equivalent: false,
+                goldenRowCount: output.goldenResult?.rows.count,
+                comparisonMode: comparisonMode,
+                executionLatencyMs: output.latencyMs,
+                goldenDigest: output.goldenResult.map {
+                    TextToSQLSemanticComparator.digest(for: $0, mode: comparisonMode)
+                },
+                message: candidateError
+            )
+        }
+        let comparison = output.comparison
+        return withSemantic(
+            status: comparison?.equivalent == true ? .passed : .resultMismatch,
+            attempted: true,
+            goldenSucceeded: true,
+            candidateSucceeded: true,
+            equivalent: comparison?.equivalent ?? false,
+            goldenRowCount: comparison?.goldenRowCount,
+            candidateRowCount: comparison?.candidateRowCount,
+            comparisonMode: comparisonMode,
+            executionLatencyMs: output.latencyMs,
+            goldenDigest: comparison?.goldenDigest,
+            candidateDigest: comparison?.candidateDigest,
+            mismatchCategory: comparison?.mismatchCategory
+        )
+    }
+
+    func withSemantic(
+        status: TextToSQLSemanticStatus,
+        attempted: Bool,
+        goldenSucceeded: Bool? = nil,
+        candidateSucceeded: Bool? = nil,
+        equivalent: Bool? = nil,
+        goldenRowCount: Int? = nil,
+        candidateRowCount: Int? = nil,
+        comparisonMode: TextToSQLResultComparisonMode?,
+        executionLatencyMs: Int? = nil,
+        goldenDigest: String? = nil,
+        candidateDigest: String? = nil,
+        mismatchCategory: String? = nil,
+        message: String? = nil
+    ) -> TextToSQLEvalResult {
+        var copy = self
+        copy.metrics.semanticExecutionAttempted = attempted
+        copy.metrics.goldenExecutionSucceeded = goldenSucceeded
+        copy.metrics.candidateExecutionSucceeded = candidateSucceeded
+        copy.metrics.resultEquivalent = equivalent
+        copy.metrics.semanticStatus = status
+        copy.metrics.goldenRowCount = goldenRowCount
+        copy.metrics.candidateRowCount = candidateRowCount
+        copy.metrics.comparisonMode = comparisonMode
+        copy.metrics.executionLatencyMs = executionLatencyMs
+        copy.metrics.goldenResultDigest = goldenDigest
+        copy.metrics.candidateResultDigest = candidateDigest
+        copy.metrics.semanticMismatchCategory = mismatchCategory
+        if let message {
+            let existing = copy.diagnostics.errorMessage
+            copy.diagnostics.errorMessage = [existing, message]
+                .compactMap { $0?.trimmingCharacters(in: .whitespacesAndNewlines) }
+                .filter { !$0.isEmpty }
+                .joined(separator: " ")
+                .nilIfBlank
+        }
+        return copy
+    }
+}
+
+private extension String {
+    var nilIfBlank: String? {
+        let trimmed = trimmingCharacters(in: .whitespacesAndNewlines)
+        return trimmed.isEmpty ? nil : trimmed
     }
 }

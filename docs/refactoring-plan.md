@@ -405,7 +405,7 @@ run.
 
 ---
 
-# PR 3 — Add seeded PostgreSQL semantic evaluation
+# PR 3 ✅ — Add seeded PostgreSQL semantic evaluation
 
 Suggested title:
 

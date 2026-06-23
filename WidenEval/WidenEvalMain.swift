@@ -77,6 +77,7 @@ struct EvalCLIOptions {
     var outputDirectory: String = ".eval-results"
     var recordPrompts = false
     var failUnder: Double?
+    var semanticDatabase = false
     var showHelp = false
 
     static let helpText = """
@@ -92,6 +93,7 @@ struct EvalCLIOptions {
           --output <directory>
           --record-prompts
           --fail-under <percentage>
+          --semantic-db
           --help
         """
 
@@ -142,6 +144,8 @@ struct EvalCLIOptions {
                     throw EvalCLIError.invalidValue(argument, value)
                 }
                 options.failUnder = failUnder
+            case "--semantic-db":
+                options.semanticDatabase = true
             case "--help", "-h":
                 options.showHelp = true
             default:
