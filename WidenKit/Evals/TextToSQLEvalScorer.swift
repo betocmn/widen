@@ -196,6 +196,9 @@ public enum TextToSQLEvalScorer {
         let actualDecision: TextToSQLEvalDecision =
             generation.needsClarification ? .clarify : .sql
         let decisionMatches = actualDecision == expected.decision
+        let modelCallCount = trace?.modelCalls == 0
+            ? generation.generationCallCount
+            : (trace?.modelCalls ?? generation.generationCallCount)
 
         if expected.decision == .clarify {
             let quality = clarificationQuality(
@@ -216,7 +219,7 @@ public enum TextToSQLEvalScorer {
                     decisionMatches: decisionMatches,
                     clarificationQuality: quality,
                     latencyMs: latencyMs,
-                    modelCallCount: generation.generationCallCount,
+                    modelCallCount: modelCallCount,
                     estimatedInitialPromptCharacters: options.estimatedInitialPromptCharacters
                 ),
                 diagnostics: TextToSQLEvalDiagnostics(),
@@ -245,7 +248,7 @@ public enum TextToSQLEvalScorer {
                         mustMentionAny: expected.clarificationMustMentionAny
                     ),
                     latencyMs: latencyMs,
-                    modelCallCount: generation.generationCallCount,
+                    modelCallCount: modelCallCount,
                     estimatedInitialPromptCharacters: options.estimatedInitialPromptCharacters
                 ),
                 generatedSQL: generation.sql.nilIfBlank,
@@ -272,7 +275,7 @@ public enum TextToSQLEvalScorer {
                     safetyValid: false,
                     schemaValid: nil,
                     latencyMs: latencyMs,
-                    modelCallCount: generation.generationCallCount,
+                    modelCallCount: modelCallCount,
                     estimatedInitialPromptCharacters: options.estimatedInitialPromptCharacters
                 ),
                 diagnostics: TextToSQLEvalDiagnostics(safetyErrors: safety.errors),
@@ -343,7 +346,7 @@ public enum TextToSQLEvalScorer {
                 requiredColumnBindingCoverage: columnCoverage,
                 forbiddenBindingViolations: forbiddenBindingViolations,
                 latencyMs: latencyMs,
-                modelCallCount: generation.generationCallCount,
+                modelCallCount: modelCallCount,
                 estimatedInitialPromptCharacters: options.estimatedInitialPromptCharacters
             ),
             diagnostics: TextToSQLEvalDiagnostics(

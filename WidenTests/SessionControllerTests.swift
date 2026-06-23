@@ -1298,6 +1298,8 @@ struct SessionControllerTests {
         #expect(activityText.contains("Generated SQL failed local validation."))
         #expect(activityText.contains("Focused repair passed validation."))
         #expect(activityText.contains("Validation repair produced locally valid SQL."))
+        #expect(activityText.contains("Details:\nValidation repair produced locally valid SQL."))
+        #expect(!activityText.contains("Error:\nValidation repair produced locally valid SQL."))
         #expect(!activityText.contains(badGeneration.sql))
         #expect(!activityText.contains(fixedGeneration.sql))
     }

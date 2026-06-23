@@ -78,6 +78,52 @@ struct TextToSQLEvalTests {
         #expect(result.metrics.requiredColumnBindingCoverage == .some(1.0))
     }
 
+    @Test func successfulScoringUsesPipelineTraceModelCalls() async {
+        let evalCase = TextToSQLEvalCase(
+            id: "commerce.customer-order-ids",
+            schemaFixture: "commerce",
+            question: "List customers and their order ids",
+            expected: TextToSQLEvalExpectation(
+                decision: .sql,
+                requiredTables: ["public.customers", "public.orders"],
+                requiredColumnBindings: [
+                    "public.customers.id",
+                    "public.orders.customer_id",
+                ],
+                requiredOperations: [.join, .limit]
+            )
+        )
+        let generation = SQLGenerationResult(
+            sql: """
+                SELECT c.id, c.email
+                FROM public.customers AS c
+                JOIN public.orders AS o ON o.customer_id = c.id
+                ORDER BY c.id
+                LIMIT 100
+                """,
+            explanation: "Lists customers without orders.",
+            assumptions: [],
+            referencedTables: [],
+            confidence: 0.9,
+            riskLevel: .low,
+            needsClarification: false,
+            clarificationQuestion: nil,
+            generationCallCount: nil
+        )
+
+        let result = TextToSQLEvalScorer.score(
+            evalCase: evalCase,
+            schema: makeCommerceSchema(),
+            generation: generation,
+            options: TextToSQLEvalRunOptions(backend: .local),
+            latencyMs: 12,
+            trace: TextToSQLTrace(stages: [], modelCalls: 2, elapsedMs: 12)
+        )
+
+        #expect(result.status == .passed)
+        #expect(result.metrics.modelCallCount == 2)
+    }
+
     @Test func scoresClarificationAsPassed() async {
         let evalCase = TextToSQLEvalCase(
             id: "commerce.best-customers",

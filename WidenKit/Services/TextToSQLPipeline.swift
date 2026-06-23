@@ -366,12 +366,17 @@ public struct TextToSQLPipeline: TextToSQLRunning {
         let validationIssueIDs = validation.safety.errors.map {
             redactedIssueID(prefix: "safety", value: $0)
         } + validation.schema.issues.map(\.traceID)
-        record(
+        let validationEventStage: TextToSQLStage =
+            validation.safety.isValid ? .schemaValidation : .safetyValidation
+        let validationFailureCategory: TextToSQLFailureCategory =
+            validation.safety.isValid ? .schemaValidation : .safetyValidation
+        await record(
             TextToSQLPipelineEvent(
                 kind: .validationFailed,
-                stage: .schemaValidation,
+                stage: validationEventStage,
                 title: "Generated SQL failed validation.",
                 summary: "Generated SQL failed local validation.",
+                failureCategory: validationFailureCategory,
                 validationIssueIDs: validationIssueIDs
             ),
             request: request,
@@ -441,7 +446,7 @@ public struct TextToSQLPipeline: TextToSQLRunning {
             let attemptNumber = repairMode == .repair ? 1 : 2
             let repairContext = coordinator.repairContext(for: repairMode)
             let repairLabel = repairMode.activityLabel
-            record(
+            await record(
                 TextToSQLPipelineEvent(
                     kind: .validationRepairStarted,
                     stage: .validationRepair,
@@ -495,7 +500,7 @@ public struct TextToSQLPipeline: TextToSQLRunning {
                 throw CancellationError()
             } catch {
                 let failure = generationFailure(error, stage: .validationRepair)
-                record(
+                await record(
                     TextToSQLPipelineEvent(
                         kind: .validationRepairGenerationFailed,
                         stage: .validationRepair,
@@ -547,7 +552,7 @@ public struct TextToSQLPipeline: TextToSQLRunning {
                     since: stageStart,
                     modelCallCount: generation.generationCallCount
                 )
-                record(
+                await record(
                     TextToSQLPipelineEvent(
                         kind: .validationRepairNeedsClarification,
                         stage: .validationRepair,
@@ -568,7 +573,7 @@ public struct TextToSQLPipeline: TextToSQLRunning {
                     modelCallCount: generation.generationCallCount,
                     failureCategory: category
                 )
-                record(
+                await record(
                     TextToSQLPipelineEvent(
                         kind: .validationRepairRejected,
                         stage: .validationRepair,
@@ -631,7 +636,7 @@ public struct TextToSQLPipeline: TextToSQLRunning {
                     modelCallCount: generation.generationCallCount,
                     failureCategory: failure.category
                 )
-                record(
+                await record(
                     TextToSQLPipelineEvent(
                         kind: .validationRepairMissingSQL,
                         stage: .validationRepair,
@@ -651,7 +656,7 @@ public struct TextToSQLPipeline: TextToSQLRunning {
                 since: stageStart,
                 modelCallCount: generation.generationCallCount
             )
-            record(
+            await record(
                 TextToSQLPipelineEvent(
                     kind: .validationRepairPassedValidation,
                     stage: .validationRepair,
@@ -681,12 +686,10 @@ public struct TextToSQLPipeline: TextToSQLRunning {
         _ event: TextToSQLPipelineEvent,
         request: TextToSQLRequest,
         events: inout [TextToSQLPipelineEvent]
-    ) {
+    ) async {
         events.append(event)
         guard let sink = request.eventSink else { return }
-        Task {
-            await sink(event)
-        }
+        await sink(event)
     }
 
     private func validate(

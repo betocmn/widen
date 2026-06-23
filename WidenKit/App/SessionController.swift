@@ -400,9 +400,11 @@ public final class SessionController: Identifiable {
                 )
             )
             for event in run.events {
+                let summaryIsError = event.failureCategory != nil
                 appendActivity(
                     event.title,
-                    error: event.summary,
+                    detail: summaryIsError ? nil : event.summary,
+                    error: summaryIsError ? event.summary : nil,
                     appState: appState
                 )
             }
@@ -995,12 +997,16 @@ public final class SessionController: Identifiable {
     private func appendActivity(
         _ title: String,
         sql: String? = nil,
+        detail: String? = nil,
         error: String? = nil,
         appState: AppState? = nil
     ) {
         var sections = [title]
         if let sql = sql?.trimmingCharacters(in: .whitespacesAndNewlines), !sql.isEmpty {
             sections.append("SQL:\n\(sql)")
+        }
+        if let detail = detail?.trimmingCharacters(in: .whitespacesAndNewlines), !detail.isEmpty {
+            sections.append("Details:\n\(detail)")
         }
         if let error = error?.trimmingCharacters(in: .whitespacesAndNewlines), !error.isEmpty {
             sections.append("Error:\n\(error)")

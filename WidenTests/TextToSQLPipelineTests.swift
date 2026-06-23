@@ -476,13 +476,7 @@ struct TextToSQLPipelineTests {
         #expect(!eventText.contains(badSQL))
         #expect(!eventText.contains(fixedSQL))
 
-        var collected: [TextToSQLPipelineEvent] = []
-        for _ in 0..<20 {
-            collected = await collector.all()
-            if collected.count == result.events.count { break }
-            try await Task.sleep(for: .milliseconds(10))
-        }
-        #expect(collected == result.events)
+        #expect(await collector.all() == result.events)
     }
 
     @Test func safetyValidationTraceIssueIDsAreRedacted() async throws {
@@ -498,6 +492,11 @@ struct TextToSQLPipelineTests {
             Issue.record("expected failure decision")
             return
         }
+        #expect(result.events.contains {
+            $0.kind == .validationFailed
+                && $0.stage == .safetyValidation
+                && $0.failureCategory == .safetyValidation
+        })
         let issueIDs = result.trace.stages
             .filter { $0.stage == .safetyValidation && $0.outcome == .failure }
             .flatMap(\.validationIssueIDs)
