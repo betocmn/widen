@@ -30,7 +30,7 @@ struct OpenRouterSQLGeneratorTests {
     private struct CancellationAwareTransport: HTTPTransport {
         func send(_ request: URLRequest) async throws -> (Data, HTTPURLResponse) {
             while !Task.isCancelled {
-                try await Task.sleep(nanoseconds: 1_000_000)
+                try? await Task.sleep(nanoseconds: 1_000_000)
             }
             throw URLError(.cancelled)
         }
