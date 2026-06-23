@@ -1933,6 +1933,50 @@ struct SessionControllerTests {
         #expect(controller.chatVM.messages.last?.generation?.needsClarification == true)
     }
 
+    @Test func evalRunnerMatchesSessionControllerGroundingDecision() async {
+        let connectionID = UUID()
+        let (state, dir) = makeState(connectionID: connectionID, connected: true)
+        defer { try? FileManager.default.removeItem(at: dir) }
+        let schema = makeUsersUnconstrainedStatusSchema()
+        state.schemas[connectionID] = schema
+        let scriptedGeneration = makeGeneration(
+            sql: "SELECT id FROM public.users WHERE status = 'active' LIMIT 100",
+            explanation: "Lists active users."
+        )
+        let sessionGenerator = RecordingRepairGenerator(results: [scriptedGeneration])
+        state.sqlGeneratorOverride = sessionGenerator
+        let controller = makeController(connectionID: connectionID)
+        controller.chatVM.input = "show active users"
+
+        await controller.submit(appState: state)
+
+        let evalCase = TextToSQLEvalCase(
+            id: "users.active",
+            schemaFixture: "users",
+            question: "show active users",
+            expected: TextToSQLEvalExpectation(
+                decision: .clarify,
+                clarificationMustMentionAny: ["active", "status"]
+            )
+        )
+        let evalResult = await TextToSQLEvalCaseRunner.run(
+            evalCase: evalCase,
+            schema: schema,
+            generator: RecordingRepairGenerator(results: [scriptedGeneration]),
+            options: TextToSQLEvalRunOptions(backend: .local)
+        )
+
+        #expect(sessionGenerator.contexts.count == 1)
+        #expect(controller.queryVM.sqlText.isEmpty)
+        #expect(conversationRoles(controller.chatVM.messages) == [.user, .assistant])
+        #expect(controller.chatVM.messages.last?.generation?.needsClarification == true)
+        #expect(controller.chatVM.messages.last?.pendingClarification?.concept.term == "active")
+        #expect(evalResult.status == .passed)
+        #expect(evalResult.metrics.decisionMatches)
+        #expect(evalResult.generatedSQL == nil)
+        #expect(evalResult.clarificationQuestion?.localizedCaseInsensitiveContains("active") == true)
+    }
+
     @Test func generatedRunRepairRunsGroundingBeforeExecutingRepairedSQL() async {
         let connectionID = UUID()
         let (state, dir) = makeState(connectionID: connectionID, connected: true)

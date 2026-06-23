@@ -27,6 +27,15 @@ struct OpenRouterSQLGeneratorTests {
         }
     }
 
+    private struct CancellationAwareTransport: HTTPTransport {
+        func send(_ request: URLRequest) async throws -> (Data, HTTPURLResponse) {
+            while !Task.isCancelled {
+                try? await Task.sleep(nanoseconds: 1_000_000)
+            }
+            throw URLError(.cancelled)
+        }
+    }
+
     private static let endpoint = URL(string: "https://openrouter.ai/api/v1/chat/completions")!
 
     private func response(status: Int) -> HTTPURLResponse {
@@ -41,7 +50,7 @@ struct OpenRouterSQLGeneratorTests {
         ])
     }
 
-    private func makeGenerator(_ transport: StubTransport) -> OpenRouterSQLGenerator {
+    private func makeGenerator(_ transport: any HTTPTransport) -> OpenRouterSQLGenerator {
         OpenRouterSQLGenerator(
             apiKey: "test-key",
             model: "anthropic/claude-sonnet-4.6",
@@ -275,6 +284,26 @@ struct OpenRouterSQLGeneratorTests {
                 return
             }
             #expect(message.contains("context length"))
+        }
+    }
+
+    @Test func taskCancelledURLSessionCancellationThrowsCancellationError() async {
+        let task = Task {
+            try await makeGenerator(CancellationAwareTransport()).generateSQL(
+                question: "show users",
+                schema: makeSchema(),
+                config: SQLGenerationConfig()
+            )
+        }
+        task.cancel()
+
+        do {
+            _ = try await task.value
+            Issue.record("expected CancellationError")
+        } catch is CancellationError {
+            return
+        } catch {
+            Issue.record("expected CancellationError, got \(error)")
         }
     }
 }

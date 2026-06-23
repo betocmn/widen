@@ -276,6 +276,12 @@ establish result-set or semantic correctness.
 
 The committed baselines record deterministic hashes for the suite, scorer
 source, and schema fixtures so future runs can detect compatibility drift.
+Each case defaults to a 120-second eval-only timeout and reports `evalTimeout`
+instead of transport failure when the timeout cancels the pipeline. Baselines
+from older evaluation modes are stale; regenerate cloud baselines only with a
+real `WIDEN_EVAL_OPENROUTER_API_KEY`, never from an all-unavailable run.
+Foundation Models cancellation is cooperative, so timed-out model work may
+continue in process until the framework returns.
 Result-set equivalence belongs to a later seeded-Postgres eval.
 
 ## Development notes and caveats

@@ -31,6 +31,45 @@ struct TextToSQLEvalTests {
         }
     }
 
+    private final class HangingGenerator: SQLGenerator, @unchecked Sendable {
+        private let lock = NSLock()
+        private var cancellationObserved = false
+
+        var wasCancelled: Bool {
+            lock.withLock { cancellationObserved }
+        }
+
+        func generateSQL(
+            question: String,
+            schema: DatabaseSchema,
+            context: SQLGenerationContext,
+            config: SQLGenerationConfig
+        ) async throws -> SQLGenerationResult {
+            do {
+                try await Task.sleep(nanoseconds: 60_000_000_000)
+            } catch is CancellationError {
+                lock.withLock { cancellationObserved = true }
+                throw CancellationError()
+            }
+            throw SQLGenerationFailure.generation("Hanging generator unexpectedly completed.")
+        }
+    }
+
+    private struct BlockingGenerator: SQLGenerator {
+        func generateSQL(
+            question: String,
+            schema: DatabaseSchema,
+            context: SQLGenerationContext,
+            config: SQLGenerationConfig
+        ) async throws -> SQLGenerationResult {
+            let deadline = Date().addingTimeInterval(0.3)
+            while Date() < deadline {}
+            throw SQLGenerationFailure.generation("Blocking generator unexpectedly completed.")
+        }
+    }
+
+    private struct UntypedGeneratorFailure: Error {}
+
     @Test func scoresValidSQLShapeAsPassed() async {
         let evalCase = TextToSQLEvalCase(
             id: "commerce.customer-order-ids",
@@ -265,7 +304,42 @@ struct TextToSQLEvalTests {
         #expect(result.metrics.clarificationQuality == false)
     }
 
-    @Test func evalRunnerKeepsInitialSQLWhenGroundingWouldAskClarification() async {
+    @Test func evalRunnerUsesProductionGroundingByDefault() async {
+        let evalCase = TextToSQLEvalCase(
+            id: "commerce.active-customers",
+            schemaFixture: "commerce",
+            question: "Show active customers",
+            expected: TextToSQLEvalExpectation(
+                decision: .clarify,
+                clarificationMustMentionAny: ["active", "status"]
+            )
+        )
+        let generator = StaticGenerator(
+            result: SQLGenerationResult(
+                sql: "SELECT id FROM public.customers WHERE status = 'active' LIMIT 100",
+                explanation: "Lists active customers.",
+                assumptions: [],
+                referencedTables: [],
+                confidence: 0.8,
+                riskLevel: .medium,
+                needsClarification: false,
+                clarificationQuestion: nil
+            )
+        )
+
+        let result = await TextToSQLEvalCaseRunner.run(
+            evalCase: evalCase,
+            schema: makeCommerceSchema(),
+            generator: generator,
+            options: TextToSQLEvalRunOptions(backend: .local)
+        )
+
+        #expect(result.status == .passed)
+        #expect(result.metrics.decisionMatches)
+        #expect(result.clarificationQuestion?.localizedCaseInsensitiveContains("active") == true)
+    }
+
+    @Test func testOnlyNoGroundingOptionKeepsInitialSQL() async {
         let evalCase = TextToSQLEvalCase(
             id: "commerce.active-customers",
             schemaFixture: "commerce",
@@ -297,7 +371,10 @@ struct TextToSQLEvalTests {
             evalCase: evalCase,
             schema: makeCommerceSchema(),
             generator: generator,
-            options: TextToSQLEvalRunOptions(backend: .local)
+            options: TextToSQLEvalRunOptions(
+                backend: .local,
+                testOnlyDisableGroundingClarification: true
+            )
         )
 
         #expect(result.status == .passed)
@@ -464,7 +541,28 @@ struct TextToSQLEvalTests {
         #expect(result.metrics.transportSuccess == false)
     }
 
-    @Test func untypedFailureDefaultsToTransportFailure() async {
+    @Test func untypedGeneratorFailureBecomesGenerationFailure() async {
+        let evalCase = TextToSQLEvalCase(
+            id: "commerce.recent-orders",
+            schemaFixture: "commerce",
+            question: "Show the 10 most recent orders",
+            expected: TextToSQLEvalExpectation(decision: .sql)
+        )
+
+        let result = await TextToSQLEvalCaseRunner.run(
+            evalCase: evalCase,
+            schema: makeCommerceSchema(),
+            generator: ThrowingGenerator(error: UntypedGeneratorFailure()),
+            options: TextToSQLEvalRunOptions(backend: .cloud, model: "test/model")
+        )
+
+        #expect(result.status == .generationFailure)
+        #expect(result.metrics.backendAvailable == true)
+        #expect(result.metrics.transportSuccess == true)
+        #expect(result.metrics.structuredResponseParsed == false)
+    }
+
+    @Test func cancellationFailureIsNotTransportFailure() async {
         let evalCase = TextToSQLEvalCase(
             id: "commerce.recent-orders",
             schemaFixture: "commerce",
@@ -479,10 +577,149 @@ struct TextToSQLEvalTests {
             options: TextToSQLEvalRunOptions(backend: .cloud, model: "test/model")
         )
 
-        #expect(result.status == .transportFailure)
+        #expect(result.status == .generationFailure)
         #expect(result.metrics.backendAvailable == true)
-        #expect(result.metrics.transportSuccess == false)
-        #expect(result.metrics.structuredResponseParsed == false)
+        #expect(result.metrics.transportSuccess == true)
+        #expect(result.diagnostics.errorMessage?.contains("cancelled") == true)
+    }
+
+    @Test func caseTimeoutCancelsHangingGeneratorAndAllowsNextCase() async {
+        let evalCase = TextToSQLEvalCase(
+            id: "commerce.recent-orders",
+            schemaFixture: "commerce",
+            question: "Show the 10 most recent orders",
+            expected: TextToSQLEvalExpectation(decision: .sql)
+        )
+        let hangingGenerator = HangingGenerator()
+
+        let timeoutResult = await TextToSQLEvalCaseRunner.run(
+            evalCase: evalCase,
+            schema: makeCommerceSchema(),
+            generator: hangingGenerator,
+            options: TextToSQLEvalRunOptions(
+                backend: .local,
+                caseTimeoutSeconds: 0.01
+            )
+        )
+
+        #expect(timeoutResult.status == .evalTimeout)
+        #expect(timeoutResult.caseID == "commerce.recent-orders")
+        #expect(timeoutResult.metrics.latencyMs >= 0)
+        #expect(timeoutResult.metrics.transportSuccess)
+        #expect(timeoutResult.diagnostics.errorMessage?.contains("commerce.recent-orders") == true)
+        let deadline = Date().addingTimeInterval(1)
+        while !hangingGenerator.wasCancelled, Date() < deadline {
+            try? await Task.sleep(nanoseconds: 1_000_000)
+        }
+        #expect(hangingGenerator.wasCancelled)
+
+        let nextResult = await TextToSQLEvalCaseRunner.run(
+            evalCase: evalCase,
+            schema: makeCommerceSchema(),
+            generator: StaticGenerator(
+                result: SQLGenerationResult(
+                    sql: "SELECT id FROM public.orders LIMIT 10",
+                    explanation: "Lists orders.",
+                    assumptions: [],
+                    referencedTables: [],
+                    confidence: 0.9,
+                    riskLevel: .low,
+                    needsClarification: false,
+                    clarificationQuestion: nil
+                )
+            ),
+            options: TextToSQLEvalRunOptions(backend: .local)
+        )
+
+        #expect(nextResult.status == .passed)
+    }
+
+    @Test func parentCancellationCancelsTimedCasePromptly() async {
+        let evalCase = TextToSQLEvalCase(
+            id: "commerce.recent-orders",
+            schemaFixture: "commerce",
+            question: "Show the 10 most recent orders",
+            expected: TextToSQLEvalExpectation(decision: .sql)
+        )
+        let hangingGenerator = HangingGenerator()
+        let task = Task {
+            await TextToSQLEvalCaseRunner.run(
+                evalCase: evalCase,
+                schema: makeCommerceSchema(),
+                generator: hangingGenerator,
+                options: TextToSQLEvalRunOptions(
+                    backend: .local,
+                    caseTimeoutSeconds: 60
+                )
+            )
+        }
+
+        task.cancel()
+        let result = await task.value
+        let deadline = Date().addingTimeInterval(1)
+        while !hangingGenerator.wasCancelled, Date() < deadline {
+            try? await Task.sleep(nanoseconds: 1_000_000)
+        }
+
+        #expect(result.status == .generationFailure)
+        #expect(result.diagnostics.errorMessage?.contains("cancelled") == true)
+        #expect(hangingGenerator.wasCancelled)
+    }
+
+    @Test func caseTimeoutDoesNotWaitForNonCooperativeGenerator() async {
+        let evalCase = TextToSQLEvalCase(
+            id: "commerce.recent-orders",
+            schemaFixture: "commerce",
+            question: "Show the 10 most recent orders",
+            expected: TextToSQLEvalExpectation(decision: .sql)
+        )
+        let started = Date()
+
+        let timeoutResult = await TextToSQLEvalCaseRunner.run(
+            evalCase: evalCase,
+            schema: makeCommerceSchema(),
+            generator: BlockingGenerator(),
+            options: TextToSQLEvalRunOptions(
+                backend: .local,
+                caseTimeoutSeconds: 0.01
+            )
+        )
+
+        let elapsed = Date().timeIntervalSince(started)
+        #expect(timeoutResult.status == .evalTimeout)
+        #expect(elapsed < 0.2)
+    }
+
+    @Test func largeCaseTimeoutDoesNotOverflowNanoseconds() async {
+        let evalCase = TextToSQLEvalCase(
+            id: "commerce.recent-orders",
+            schemaFixture: "commerce",
+            question: "Show the 10 most recent orders",
+            expected: TextToSQLEvalExpectation(decision: .sql)
+        )
+
+        let result = await TextToSQLEvalCaseRunner.run(
+            evalCase: evalCase,
+            schema: makeCommerceSchema(),
+            generator: StaticGenerator(
+                result: SQLGenerationResult(
+                    sql: "SELECT id FROM public.orders LIMIT 10",
+                    explanation: "Lists orders.",
+                    assumptions: [],
+                    referencedTables: [],
+                    confidence: 0.9,
+                    riskLevel: .low,
+                    needsClarification: false,
+                    clarificationQuestion: nil
+                )
+            ),
+            options: TextToSQLEvalRunOptions(
+                backend: .local,
+                caseTimeoutSeconds: .greatestFiniteMagnitude
+            )
+        )
+
+        #expect(result.status == .passed)
     }
 
     @Test func parseFailureKeepsTransportSuccessSeparate() async {

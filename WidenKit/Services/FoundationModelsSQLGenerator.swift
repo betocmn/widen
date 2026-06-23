@@ -188,6 +188,7 @@
                 inputScale: inputScale,
                 allowDiscovery: allowDiscovery
             )
+            try Task.checkCancellation()
             if generationContext.modelCallCount == 0 {
                 generationContext.modelCallCount = 1
             }
@@ -357,6 +358,8 @@
                 guard !searchResults.isEmpty else { return copy }
                 copy.schemaSearchQueries = queries + searchResults.map(\.qualifiedName)
                 return copy
+            } catch is CancellationError {
+                throw CancellationError()
             } catch {
                 var copy = context
                 copy.modelCallCount = max(1, context.modelCallCount) + 1

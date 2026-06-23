@@ -74,6 +74,7 @@ enum EvalReporter {
             "| Architecture | \(tableCell(run.manifest.architecture)) |",
             "| Cases | \(run.manifest.caseCount) |",
             "| Repeats | \(run.manifest.repeatCount) |",
+            "| Case timeout | \(run.manifest.caseTimeoutSeconds) seconds |",
             "",
             "## Baseline Compatibility Hashes",
             "",

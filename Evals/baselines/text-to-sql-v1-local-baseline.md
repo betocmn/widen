@@ -1,5 +1,10 @@
 # Text-to-SQL Eval Baseline
 
+> Stale baseline: this file predates `production-pipeline-static-shape` eval
+> mode and must not be treated as current. Regenerate with
+> `make eval-local REPEAT=3` when a real local Foundation Models run is
+> available on the machine.
+
 **Evaluation scope:** A static-shape pass verifies the decision, SQL safety, schema references, and configured structural expectations. It does not establish result-set or semantic correctness.
 
 ## Run

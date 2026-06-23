@@ -7,6 +7,8 @@ public struct TextToSQLEvalRunOptions: Equatable, Sendable {
     public var defaultRowLimit: Int
     public var estimatedInitialPromptCharacters: Int?
     public var estimatedInitialPrompt: String?
+    public var testOnlyDisableGroundingClarification: Bool
+    public var caseTimeoutSeconds: Double?
 
     public init(
         backend: TextToSQLEvalBackend,
@@ -14,7 +16,9 @@ public struct TextToSQLEvalRunOptions: Equatable, Sendable {
         repeatIndex: Int = 1,
         defaultRowLimit: Int = 100,
         estimatedInitialPromptCharacters: Int? = nil,
-        estimatedInitialPrompt: String? = nil
+        estimatedInitialPrompt: String? = nil,
+        testOnlyDisableGroundingClarification: Bool = false,
+        caseTimeoutSeconds: Double? = nil
     ) {
         self.backend = backend
         self.model = model
@@ -22,17 +26,211 @@ public struct TextToSQLEvalRunOptions: Equatable, Sendable {
         self.defaultRowLimit = defaultRowLimit
         self.estimatedInitialPromptCharacters = estimatedInitialPromptCharacters
         self.estimatedInitialPrompt = estimatedInitialPrompt
+        self.testOnlyDisableGroundingClarification = testOnlyDisableGroundingClarification
+        self.caseTimeoutSeconds = caseTimeoutSeconds
     }
 }
 
 public enum TextToSQLEvalCaseRunner {
+    private final class TimeoutCancellation: @unchecked Sendable {
+        private let lock = NSLock()
+        private var handler: (@Sendable () -> Void)?
+        private var wasCancelled = false
+
+        func set(_ handler: @escaping @Sendable () -> Void) {
+            let shouldCancel: Bool
+            lock.lock()
+            self.handler = handler
+            shouldCancel = wasCancelled
+            lock.unlock()
+
+            if shouldCancel { handler() }
+        }
+
+        func cancel() {
+            let handler: (@Sendable () -> Void)?
+            lock.lock()
+            wasCancelled = true
+            handler = self.handler
+            lock.unlock()
+
+            handler?()
+        }
+    }
+
+    private final class TimeoutRace: @unchecked Sendable {
+        private let lock = NSLock()
+        private var finished = false
+        private var continuation: CheckedContinuation<TextToSQLEvalResult, Never>?
+        private var pipelineTask: Task<Void, Never>?
+        private var timeoutTask: Task<Void, Never>?
+        private var cancelPipelineWhenSet = false
+        private var cancelTimeoutWhenSet = false
+
+        init(continuation: CheckedContinuation<TextToSQLEvalResult, Never>) {
+            self.continuation = continuation
+        }
+
+        func setTasks(pipelineTask: Task<Void, Never>, timeoutTask: Task<Void, Never>) {
+            let shouldCancelPipeline: Bool
+            let shouldCancelTimeout: Bool
+            lock.lock()
+            if !finished {
+                self.pipelineTask = pipelineTask
+                self.timeoutTask = timeoutTask
+            }
+            shouldCancelPipeline = cancelPipelineWhenSet
+            shouldCancelTimeout = cancelTimeoutWhenSet
+            lock.unlock()
+
+            if shouldCancelPipeline { pipelineTask.cancel() }
+            if shouldCancelTimeout { timeoutTask.cancel() }
+        }
+
+        func finish(
+            _ result: TextToSQLEvalResult,
+            cancelPipeline: Bool,
+            cancelTimeout: Bool
+        ) {
+            let continuation: CheckedContinuation<TextToSQLEvalResult, Never>?
+            let pipelineTask: Task<Void, Never>?
+            let timeoutTask: Task<Void, Never>?
+
+            lock.lock()
+            guard !finished else {
+                lock.unlock()
+                return
+            }
+            finished = true
+            continuation = self.continuation
+            self.continuation = nil
+            pipelineTask = self.pipelineTask
+            timeoutTask = self.timeoutTask
+            self.pipelineTask = nil
+            self.timeoutTask = nil
+            if cancelPipeline, pipelineTask == nil {
+                cancelPipelineWhenSet = true
+            }
+            if cancelTimeout, timeoutTask == nil {
+                cancelTimeoutWhenSet = true
+            }
+            lock.unlock()
+
+            if cancelPipeline { pipelineTask?.cancel() }
+            if cancelTimeout { timeoutTask?.cancel() }
+            continuation?.resume(returning: result)
+        }
+    }
+
     public static func run(
         evalCase: TextToSQLEvalCase,
         schema: DatabaseSchema,
         generator: any SQLGenerator,
         options: TextToSQLEvalRunOptions
     ) async -> TextToSQLEvalResult {
+        guard let caseTimeoutSeconds = options.caseTimeoutSeconds else {
+            return await runPipeline(
+                evalCase: evalCase,
+                schema: schema,
+                generator: generator,
+                options: options,
+                started: Date()
+            )
+        }
+        return await runWithTimeout(
+            evalCase: evalCase,
+            schema: schema,
+            generator: generator,
+            options: options,
+            timeoutSeconds: caseTimeoutSeconds
+        )
+    }
+
+    private static func runWithTimeout(
+        evalCase: TextToSQLEvalCase,
+        schema: DatabaseSchema,
+        generator: any SQLGenerator,
+        options: TextToSQLEvalRunOptions,
+        timeoutSeconds: Double
+    ) async -> TextToSQLEvalResult {
         let started = Date()
+        let timeoutDuration = timeoutDuration(for: timeoutSeconds)
+        let cancellation = TimeoutCancellation()
+        return await withTaskCancellationHandler {
+            await withCheckedContinuation { continuation in
+                let race = TimeoutRace(continuation: continuation)
+                let pipelineTask = Task {
+                    let result = await runPipeline(
+                        evalCase: evalCase,
+                        schema: schema,
+                        generator: generator,
+                        options: options,
+                        started: started
+                    )
+                    race.finish(result, cancelPipeline: false, cancelTimeout: true)
+                }
+                let timeoutTask = Task {
+                    do {
+                        try await Task.sleep(nanoseconds: timeoutDuration.nanoseconds)
+                    } catch {
+                        race.finish(
+                            cancellationResult(
+                                evalCase: evalCase,
+                                options: options,
+                                latencyMs: elapsedMilliseconds(since: started)
+                            ),
+                            cancelPipeline: true,
+                            cancelTimeout: false
+                        )
+                        return
+                    }
+                    race.finish(
+                        timeoutResult(
+                            evalCase: evalCase,
+                            options: options,
+                            timeoutSeconds: timeoutDuration.seconds,
+                            latencyMs: elapsedMilliseconds(since: started)
+                        ),
+                        cancelPipeline: true,
+                        cancelTimeout: false
+                    )
+                }
+                race.setTasks(pipelineTask: pipelineTask, timeoutTask: timeoutTask)
+                cancellation.set {
+                    race.finish(
+                        cancellationResult(
+                            evalCase: evalCase,
+                            options: options,
+                            latencyMs: elapsedMilliseconds(since: started)
+                        ),
+                        cancelPipeline: true,
+                        cancelTimeout: true
+                    )
+                }
+            }
+        } onCancel: {
+            cancellation.cancel()
+        }
+    }
+
+    private static func timeoutDuration(for timeoutSeconds: Double) -> (
+        seconds: Double, nanoseconds: UInt64
+    ) {
+        let seconds = timeoutSeconds.isFinite && timeoutSeconds > 0 ? timeoutSeconds : 120
+        let nanoseconds = seconds * 1_000_000_000
+        guard nanoseconds < Double(UInt64.max) else {
+            return (seconds, UInt64.max)
+        }
+        return (seconds, UInt64(max(1.0, nanoseconds)))
+    }
+
+    private static func runPipeline(
+        evalCase: TextToSQLEvalCase,
+        schema: DatabaseSchema,
+        generator: any SQLGenerator,
+        options: TextToSQLEvalRunOptions,
+        started: Date
+    ) async -> TextToSQLEvalResult {
         do {
             let run = try await TextToSQLPipeline(generator: generator).run(
                 TextToSQLRequest(
@@ -42,7 +240,7 @@ public enum TextToSQLEvalCaseRunner {
                         defaultRowLimit: options.defaultRowLimit,
                         databaseContext: evalCase.databaseContext ?? ""
                     ),
-                    allowGroundingClarification: false
+                    allowGroundingClarification: !options.testOnlyDisableGroundingClarification
                 )
             )
             switch run.finalDecision {
@@ -65,10 +263,9 @@ public enum TextToSQLEvalCaseRunner {
                 )
             }
         } catch is CancellationError {
-            return failureResult(
+            return cancellationResult(
                 evalCase: evalCase,
                 options: options,
-                error: CancellationError(),
                 latencyMs: elapsedMilliseconds(since: started)
             )
         } catch {
@@ -83,6 +280,60 @@ public enum TextToSQLEvalCaseRunner {
 
     private static func elapsedMilliseconds(since date: Date) -> Int {
         Int(Date().timeIntervalSince(date) * 1_000)
+    }
+
+    private static func timeoutResult(
+        evalCase: TextToSQLEvalCase,
+        options: TextToSQLEvalRunOptions,
+        timeoutSeconds: Double,
+        latencyMs: Int
+    ) -> TextToSQLEvalResult {
+        TextToSQLEvalResult(
+            caseID: evalCase.id,
+            backend: options.backend,
+            model: options.model,
+            repeatIndex: options.repeatIndex,
+            status: .evalTimeout,
+            metrics: TextToSQLEvalMetrics(
+                backendAvailable: true,
+                transportSuccess: true,
+                structuredResponseParsed: false,
+                decisionMatches: false,
+                latencyMs: latencyMs,
+                estimatedInitialPromptCharacters: options.estimatedInitialPromptCharacters
+            ),
+            diagnostics: TextToSQLEvalDiagnostics(
+                errorMessage:
+                    "Eval case \(evalCase.id) timed out after \(timeoutSeconds) seconds."
+            ),
+            estimatedInitialPrompt: options.estimatedInitialPrompt
+        )
+    }
+
+    private static func cancellationResult(
+        evalCase: TextToSQLEvalCase,
+        options: TextToSQLEvalRunOptions,
+        latencyMs: Int
+    ) -> TextToSQLEvalResult {
+        TextToSQLEvalResult(
+            caseID: evalCase.id,
+            backend: options.backend,
+            model: options.model,
+            repeatIndex: options.repeatIndex,
+            status: .generationFailure,
+            metrics: TextToSQLEvalMetrics(
+                backendAvailable: true,
+                transportSuccess: true,
+                structuredResponseParsed: false,
+                decisionMatches: false,
+                latencyMs: latencyMs,
+                estimatedInitialPromptCharacters: options.estimatedInitialPromptCharacters
+            ),
+            diagnostics: TextToSQLEvalDiagnostics(
+                errorMessage: "Eval case \(evalCase.id) was cancelled."
+            ),
+            estimatedInitialPrompt: options.estimatedInitialPrompt
+        )
     }
 
     private static func failureResult(

@@ -73,6 +73,7 @@ struct EvalCLIOptions {
     var suitePath: String = "Evals/suites/text-to-sql-v1.json"
     var caseID: String?
     var repeatCount: Int = 1
+    var caseTimeoutSeconds: Double = 120
     var outputDirectory: String = ".eval-results"
     var recordPrompts = false
     var failUnder: Double?
@@ -87,6 +88,7 @@ struct EvalCLIOptions {
           --suite <path>
           --case <case-id>
           --repeat <n>
+          --case-timeout-seconds <n>
           --output <directory>
           --record-prompts
           --fail-under <percentage>
@@ -124,6 +126,12 @@ struct EvalCLIOptions {
                     throw EvalCLIError.invalidValue(argument, value)
                 }
                 options.repeatCount = repeatCount
+            case "--case-timeout-seconds":
+                let value = try nextValue(after: argument)
+                guard let timeout = Double(value), timeout.isFinite, timeout > 0 else {
+                    throw EvalCLIError.invalidValue(argument, value)
+                }
+                options.caseTimeoutSeconds = timeout
             case "--output":
                 options.outputDirectory = try nextValue(after: argument)
             case "--record-prompts":
