@@ -26,6 +26,7 @@ public enum TextToSQLSemanticStatus: String, Codable, CaseIterable, Equatable, S
     case resultMismatch
     case candidateExecutionFailure
     case goldenFixtureFailure
+    case resultLimitExceeded
     case semanticEnvironmentUnavailable
     case fixtureInvalid
     case notApplicable
@@ -48,9 +49,11 @@ public struct TextToSQLEvalMetrics: Codable, Equatable, Sendable {
     public var tokenUsage: Int?
     public var estimatedCloudCostUSD: Double?
     public var semanticExecutionAttempted: Bool?
+    public var semanticEnvironmentAvailable: Bool?
     public var goldenExecutionSucceeded: Bool?
     public var candidateExecutionSucceeded: Bool?
     public var resultEquivalent: Bool?
+    public var endToEndPassed: Bool?
     public var semanticStatus: TextToSQLSemanticStatus?
     public var goldenRowCount: Int?
     public var candidateRowCount: Int?
@@ -77,9 +80,11 @@ public struct TextToSQLEvalMetrics: Codable, Equatable, Sendable {
         tokenUsage: Int? = nil,
         estimatedCloudCostUSD: Double? = nil,
         semanticExecutionAttempted: Bool? = nil,
+        semanticEnvironmentAvailable: Bool? = nil,
         goldenExecutionSucceeded: Bool? = nil,
         candidateExecutionSucceeded: Bool? = nil,
         resultEquivalent: Bool? = nil,
+        endToEndPassed: Bool? = nil,
         semanticStatus: TextToSQLSemanticStatus? = nil,
         goldenRowCount: Int? = nil,
         candidateRowCount: Int? = nil,
@@ -105,9 +110,11 @@ public struct TextToSQLEvalMetrics: Codable, Equatable, Sendable {
         self.tokenUsage = tokenUsage
         self.estimatedCloudCostUSD = estimatedCloudCostUSD
         self.semanticExecutionAttempted = semanticExecutionAttempted
+        self.semanticEnvironmentAvailable = semanticEnvironmentAvailable
         self.goldenExecutionSucceeded = goldenExecutionSucceeded
         self.candidateExecutionSucceeded = candidateExecutionSucceeded
         self.resultEquivalent = resultEquivalent
+        self.endToEndPassed = endToEndPassed
         self.semanticStatus = semanticStatus
         self.goldenRowCount = goldenRowCount
         self.candidateRowCount = candidateRowCount

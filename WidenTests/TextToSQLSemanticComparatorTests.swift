@@ -100,7 +100,7 @@ struct TextToSQLSemanticComparatorTests {
         )
 
         #expect(!comparison.equivalent)
-        #expect(comparison.mismatchCategory == "unexpectedExtraColumns")
+        #expect(comparison.mismatchCategory == "ambiguousCandidateColumn")
     }
 
     @Test func normalizesUUIDCasingJSONKeyOrderDatesAndIntervals() {
@@ -111,7 +111,7 @@ struct TextToSQLSemanticComparatorTests {
                 .uuid("d2710e16-eb07-4fd6-a87e-b1be41c9bd3d"),
                 .json(TextToSQLSemanticValue.canonicalJSON("{\"b\":2,\"a\":1}")!),
                 .date("2026-06-23"),
-                .interval(TextToSQLSemanticValue.normalizedInterval("1 day   02:00:00")),
+                .interval(months: 1, days: 2, microseconds: 3),
             ]]
         )
         let candidate = TextToSQLSemanticQueryResult(
@@ -120,7 +120,7 @@ struct TextToSQLSemanticComparatorTests {
                 .string("D2710E16-EB07-4FD6-A87E-B1BE41C9BD3D"),
                 .json(TextToSQLSemanticValue.canonicalJSON("{\"a\":1,\"b\":2}")!),
                 .date("2026-06-23"),
-                .interval(TextToSQLSemanticValue.normalizedInterval("1 DAY 02:00:00")),
+                .interval(months: 1, days: 2, microseconds: 3),
             ]]
         )
 
@@ -133,6 +133,42 @@ struct TextToSQLSemanticComparatorTests {
         #expect(comparison.equivalent)
         #expect(comparison.goldenDigest.count == 64)
         #expect(comparison.candidateDigest.count == 64)
+    }
+
+    @Test func timestampWithTimezoneDoesNotEqualLocalTimestamp() {
+        let expectation = TextToSQLSemanticExpectation(comparisonMode: .ordered)
+        let golden = TextToSQLSemanticQueryResult(
+            columns: ["created_at"],
+            rows: [[.timestampWithTimeZone("2026-06-23T10:00:00.000000Z")]]
+        )
+        let candidate = TextToSQLSemanticQueryResult(
+            columns: ["created_at"],
+            rows: [[.timestampWithoutTimeZone("2026-06-23 10:00:00.000000")]]
+        )
+
+        let comparison = TextToSQLSemanticComparator.compare(
+            golden: golden,
+            candidate: candidate,
+            expectation: expectation
+        )
+
+        #expect(!comparison.equivalent)
+        #expect(comparison.mismatchCategory == "orderedRowMismatch")
+    }
+
+    @Test func unsupportedTypesFailComparisonExplicitly() {
+        let expectation = TextToSQLSemanticExpectation(comparisonMode: .ordered)
+        let golden = TextToSQLSemanticQueryResult(columns: ["value"], rows: [[.unsupported("POINT")]])
+        let candidate = TextToSQLSemanticQueryResult(columns: ["value"], rows: [[.unsupported("POINT")]])
+
+        let comparison = TextToSQLSemanticComparator.compare(
+            golden: golden,
+            candidate: candidate,
+            expectation: expectation
+        )
+
+        #expect(!comparison.equivalent)
+        #expect(comparison.mismatchCategory == "comparatorUnsupportedType")
     }
 
     private func result(columns: [String], rows: [[Int]]) -> TextToSQLSemanticQueryResult {

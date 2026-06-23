@@ -109,6 +109,7 @@ enum EvalReporter {
 
         lines += statusCountSection(title: "Status Counts", summary: run.summary)
         lines += semanticStatusCountSection(title: "Semantic Status Counts", summary: run.summary)
+        lines += staticSemanticCrossTabSection(title: "Static/Semantic Cross-Tab", summary: run.summary)
         if run.backendSummaries.count > 1 {
             for backend in sortedBackends(run.backendSummaries.keys) {
                 guard let summary = run.backendSummaries[backend] else { continue }
@@ -118,6 +119,10 @@ enum EvalReporter {
                 )
                 lines += semanticStatusCountSection(
                     title: "\(backend.rawValue.capitalized) Semantic Status Counts",
+                    summary: summary
+                )
+                lines += staticSemanticCrossTabSection(
+                    title: "\(backend.rawValue.capitalized) Static/Semantic Cross-Tab",
                     summary: summary
                 )
             }
@@ -175,6 +180,10 @@ enum EvalReporter {
             "| Static-shape pass rate | \(percent(summary.passRate)) |",
             "| Semantic end-to-end passed | \(summary.semanticPassed.map(String.init) ?? "-") |",
             "| Semantic end-to-end pass rate | \(summary.semanticPassRate.map(percent) ?? "-") |",
+            "| SQL semantic pass rate | \(summary.sqlSemanticPass.map { count($0) } ?? "-") |",
+            "| Clarification decision pass rate | \(summary.clarificationDecisionPass.map { count($0) } ?? "-") |",
+            "| Overall end-to-end pass rate | \(summary.endToEndPass.map { count($0) } ?? "-")\(summary.endToEndPassRate.map { " (\(percent($0)))" } ?? "") |",
+            "| Semantic environment available | \(summary.semanticEnvironmentAvailable.map { count($0) } ?? "-") |",
             "| Semantic execution attempted | \(summary.semanticExecutionAttempted.map { count($0) } ?? "-") |",
             "| Semantic result equivalent | \(summary.resultEquivalent.map { count($0) } ?? "-") |",
             "| Golden execution succeeded | \(summary.goldenExecutionSucceeded.map { count($0) } ?? "-") |",
@@ -233,6 +242,24 @@ enum EvalReporter {
             lines.append("| \(status.rawValue) | \(counts[status.rawValue, default: 0]) |")
         }
         return lines
+    }
+
+    private static func staticSemanticCrossTabSection(
+        title: String,
+        summary: EvalRunSummary
+    ) -> [String] {
+        guard let crossTab = summary.staticSemanticCrossTab else { return [] }
+        return [
+            "",
+            "## \(title)",
+            "",
+            "| Category | Count |",
+            "| --- | ---: |",
+            "| static pass / semantic pass | \(crossTab.staticPassSemanticPass) |",
+            "| static pass / semantic fail | \(crossTab.staticPassSemanticFail) |",
+            "| static fail / semantic pass | \(crossTab.staticFailSemanticPass) |",
+            "| static fail / semantic fail | \(crossTab.staticFailSemanticFail) |",
+        ]
     }
 
     private static func repeatStabilitySections(results: [TextToSQLEvalResult]) -> [String] {
@@ -383,8 +410,14 @@ enum EvalReporter {
         if let attempted = result.metrics.semanticExecutionAttempted {
             parts.append("attempted: \(attempted)")
         }
+        if let environmentAvailable = result.metrics.semanticEnvironmentAvailable {
+            parts.append("env: \(environmentAvailable)")
+        }
         if let equivalent = result.metrics.resultEquivalent {
             parts.append("equivalent: \(equivalent)")
+        }
+        if let endToEnd = result.metrics.endToEndPassed {
+            parts.append("end-to-end: \(endToEnd)")
         }
         if let mode = result.metrics.comparisonMode {
             parts.append("mode: \(mode.rawValue)")

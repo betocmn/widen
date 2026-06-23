@@ -518,8 +518,7 @@ struct TextToSQLSemanticDatabaseIntegrationTests {
                         goldenSQL: goldenSQL,
                         candidateSQL: goldenSQL,
                         expectation: semantic,
-                        config: database.config,
-                        password: server.password
+                        database: database
                     )
                     #expect(golden.goldenExecutionSucceeded)
                     #expect(golden.candidateExecutionSucceeded)
@@ -534,8 +533,7 @@ struct TextToSQLSemanticDatabaseIntegrationTests {
                             goldenSQL: goldenSQL,
                             candidateSQL: negative.sql,
                             expectation: expectation,
-                            config: database.config,
-                            password: server.password
+                            database: database
                         )
                         #expect(
                             output.goldenExecutionSucceeded,
@@ -611,8 +609,7 @@ struct TextToSQLSemanticDatabaseIntegrationTests {
                 goldenSQL: "SELECT COUNT(*) AS count FROM public.customers",
                 candidateSQL: "INSERT INTO public.customers (id, email, name, country, created_at) VALUES (99, 'write@example.test', 'Write', 'US', NOW()) RETURNING id",
                 expectation: expectation,
-                config: database.config,
-                password: server.password
+                database: database
             )
             #expect(output.goldenExecutionSucceeded)
             #expect(output.candidateError != nil)
@@ -621,10 +618,110 @@ struct TextToSQLSemanticDatabaseIntegrationTests {
                 goldenSQL: "SELECT COUNT(*) AS count FROM public.customers",
                 candidateSQL: "SELECT COUNT(*) AS count FROM public.customers",
                 expectation: expectation,
-                config: database.config,
-                password: server.password
+                database: database
             )
             #expect(check.comparison?.equivalent == true)
+            await provisioner.drop(database)
+        } catch {
+            await provisioner.drop(database)
+            throw error
+        }
+    }
+
+    @Test func resultLimitExceededClosesComparisonConnection() async throws {
+        let root = repositoryRoot()
+        let schema = try loadSchema(
+            "commerce",
+            from: root.appendingPathComponent("Evals/schemas", isDirectory: true)
+        )
+        let server = semanticServer()
+        let provisioner = TextToSQLSemanticDatabaseProvisioner(server: server)
+        let database = try await provisioner.provision(
+            fixture: "commerce-caps",
+            setupURL: root
+                .appendingPathComponent("Evals/databases/commerce", isDirectory: true)
+                .appendingPathComponent("setup.json"),
+            expectedSchema: schema
+        )
+        do {
+            let cappedExecutor = TextToSQLSemanticExecutor(rowLimit: 1)
+            let expectation = TextToSQLSemanticExpectation(comparisonMode: .ordered)
+            let capped = try await cappedExecutor.executePair(
+                goldenSQL: "SELECT id FROM public.customers ORDER BY id",
+                candidateSQL: "SELECT id FROM public.customers ORDER BY id",
+                expectation: expectation,
+                database: database
+            )
+            #expect(capped.resultLimitExceeded)
+            #expect(capped.goldenError != nil)
+
+            let normalExecutor = TextToSQLSemanticExecutor()
+            let normal = try await normalExecutor.executePair(
+                goldenSQL: "SELECT COUNT(*) AS count FROM public.customers",
+                candidateSQL: "SELECT COUNT(*) AS count FROM public.customers",
+                expectation: TextToSQLSemanticExpectation(comparisonMode: .scalar),
+                database: database
+            )
+            #expect(normal.comparison?.equivalent == true)
+            await provisioner.drop(database)
+        } catch {
+            await provisioner.drop(database)
+            throw error
+        }
+    }
+
+    @Test func semanticExecutionUsesRestrictedRole() async throws {
+        let root = repositoryRoot()
+        let schema = try loadSchema(
+            "commerce",
+            from: root.appendingPathComponent("Evals/schemas", isDirectory: true)
+        )
+        let server = semanticServer()
+        let provisioner = TextToSQLSemanticDatabaseProvisioner(server: server)
+        let database = try await provisioner.provision(
+            fixture: "commerce-restricted",
+            setupURL: root
+                .appendingPathComponent("Evals/databases/commerce", isDirectory: true)
+                .appendingPathComponent("setup.json"),
+            expectedSchema: schema
+        )
+        let executor = TextToSQLSemanticExecutor()
+        do {
+            let expectation = TextToSQLSemanticExpectation(
+                comparisonMode: .ordered,
+                requiredColumns: [
+                    TextToSQLSemanticColumnExpectation(canonicalName: "current_user"),
+                    TextToSQLSemanticColumnExpectation(canonicalName: "rolsuper"),
+                    TextToSQLSemanticColumnExpectation(canonicalName: "rolcreatedb"),
+                    TextToSQLSemanticColumnExpectation(canonicalName: "rolcreaterole"),
+                    TextToSQLSemanticColumnExpectation(canonicalName: "can_create_schema"),
+                    TextToSQLSemanticColumnExpectation(canonicalName: "can_temp"),
+                ]
+            )
+            let sql = """
+            SELECT current_user,
+                   r.rolsuper,
+                   r.rolcreatedb,
+                   r.rolcreaterole,
+                   has_schema_privilege(current_user, 'public', 'CREATE') AS can_create_schema,
+                   has_database_privilege(current_user, current_database(), 'TEMP') AS can_temp
+            FROM pg_catalog.pg_roles r
+            WHERE r.rolname = current_user
+            """
+            let output = try await executor.executePair(
+                goldenSQL: """
+                SELECT '\(database.restrictedRoleName)'::text AS current_user,
+                       false AS rolsuper,
+                       false AS rolcreatedb,
+                       false AS rolcreaterole,
+                       false AS can_create_schema,
+                       false AS can_temp
+                """,
+                candidateSQL: sql,
+                expectation: expectation,
+                database: database
+            )
+            #expect(output.comparison?.equivalent == true)
             await provisioner.drop(database)
         } catch {
             await provisioner.drop(database)

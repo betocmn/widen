@@ -41,13 +41,13 @@ public struct TextToSQLSemanticDatabaseServer: Equatable, Sendable {
         )
     }
 
-    public func config(database: String) -> DatabaseConnectionConfig {
+    public func config(database: String, username overrideUsername: String? = nil) -> DatabaseConnectionConfig {
         DatabaseConnectionConfig(
             name: "Widen Eval \(database)",
             host: host,
             port: port,
             database: database,
-            username: username,
+            username: overrideUsername ?? username,
             sslMode: sslMode,
             defaultRowLimit: 1_000,
             statementTimeoutSeconds: 5
@@ -58,12 +58,28 @@ public struct TextToSQLSemanticDatabaseServer: Equatable, Sendable {
 public struct TextToSQLSemanticProvisionedDatabase: Equatable, Sendable {
     public var fixture: String
     public var databaseName: String
+    public var provisioningConfig: DatabaseConnectionConfig
     public var config: DatabaseConnectionConfig
+    public var executionPassword: String
+    public var restrictedRoleName: String
+    public var fixtureSchemas: [String]
 
-    public init(fixture: String, databaseName: String, config: DatabaseConnectionConfig) {
+    public init(
+        fixture: String,
+        databaseName: String,
+        provisioningConfig: DatabaseConnectionConfig,
+        config: DatabaseConnectionConfig,
+        executionPassword: String,
+        restrictedRoleName: String,
+        fixtureSchemas: [String]
+    ) {
         self.fixture = fixture
         self.databaseName = databaseName
+        self.provisioningConfig = provisioningConfig
         self.config = config
+        self.executionPassword = executionPassword
+        self.restrictedRoleName = restrictedRoleName
+        self.fixtureSchemas = fixtureSchemas
     }
 }
 
@@ -71,11 +87,12 @@ public enum TextToSQLSemanticDatabaseError: LocalizedError, Equatable, Sendable 
     case environmentUnavailable(String)
     case setupInvalid(String)
     case fixtureInvalid(String)
+    case resultLimitExceeded(String)
 
     public var errorDescription: String? {
         switch self {
         case .environmentUnavailable(let message), .setupInvalid(let message),
-            .fixtureInvalid(let message):
+            .fixtureInvalid(let message), .resultLimitExceeded(let message):
             message
         }
     }
@@ -96,6 +113,9 @@ public final class TextToSQLSemanticDatabaseProvisioner: Sendable {
         expectedSchema: DatabaseSchema
     ) async throws -> TextToSQLSemanticProvisionedDatabase {
         let databaseName = Self.databaseName(for: fixture)
+        let restrictedRoleName = Self.roleName()
+        let executionPassword = Self.rolePassword()
+        let fixtureSchemas = Self.fixtureSchemas(from: expectedSchema)
         do {
             try await runStatements(
                 ["CREATE DATABASE \(Self.quotedIdentifier(databaseName))"],
@@ -110,12 +130,20 @@ public final class TextToSQLSemanticDatabaseProvisioner: Sendable {
         let provisioned = TextToSQLSemanticProvisionedDatabase(
             fixture: fixture,
             databaseName: databaseName,
-            config: server.config(database: databaseName)
+            provisioningConfig: server.config(database: databaseName),
+            config: server.config(
+                database: databaseName,
+                username: restrictedRoleName
+            ),
+            executionPassword: executionPassword,
+            restrictedRoleName: restrictedRoleName,
+            fixtureSchemas: fixtureSchemas
         )
         do {
             let statements = try loadSetupStatements(setupURL)
             try await runStatements(statements, database: databaseName)
             try await validateSchema(expectedSchema, provisioned: provisioned)
+            try await configureRestrictedExecution(provisioned)
             return provisioned
         } catch let error as TextToSQLSemanticDatabaseError {
             await drop(provisioned)
@@ -133,6 +161,35 @@ public final class TextToSQLSemanticDatabaseProvisioner: Sendable {
             ["DROP DATABASE IF EXISTS \(Self.quotedIdentifier(provisioned.databaseName)) WITH (FORCE)"],
             database: server.maintenanceDatabase
         )
+        try? await runStatements(
+            ["DROP ROLE IF EXISTS \(Self.quotedIdentifier(provisioned.restrictedRoleName))"],
+            database: server.maintenanceDatabase
+        )
+    }
+
+    public func serverVersion() async throws -> String {
+        let configuration = try PostgresService.makeConnectionConfiguration(
+            server.config(database: server.maintenanceDatabase),
+            password: server.password
+        )
+        let connection = try await PostgresConnection.connect(
+            on: PostgresConnection.defaultEventLoopGroup.any(),
+            configuration: configuration,
+            id: 1,
+            logger: logger
+        )
+        do {
+            let rows = try await connection.query("SHOW server_version", logger: logger)
+            var version = "unknown"
+            for try await row in rows {
+                version = try row.first?.decode(String.self) ?? "unknown"
+            }
+            try await connection.close()
+            return version
+        } catch {
+            try? await connection.close()
+            throw error
+        }
     }
 
     private func loadSetupStatements(_ setupURL: URL) throws -> [String] {
@@ -154,7 +211,7 @@ public final class TextToSQLSemanticDatabaseProvisioner: Sendable {
         provisioned: TextToSQLSemanticProvisionedDatabase
     ) async throws {
         let service = PostgresService()
-        try await service.connect(config: provisioned.config, password: server.password)
+        try await service.connect(config: provisioned.provisioningConfig, password: server.password)
         do {
             let actual = try await SchemaIntrospectionService().loadSchema(using: service)
             await service.disconnect()
@@ -170,6 +227,32 @@ public final class TextToSQLSemanticDatabaseProvisioner: Sendable {
             await service.disconnect()
             throw error
         }
+    }
+
+    private func configureRestrictedExecution(
+        _ provisioned: TextToSQLSemanticProvisionedDatabase
+    ) async throws {
+        let database = Self.quotedIdentifier(provisioned.databaseName)
+        let role = Self.quotedIdentifier(provisioned.restrictedRoleName)
+        let password = Self.quotedLiteral(provisioned.executionPassword)
+        try await runStatements(
+            [
+                "REVOKE CREATE, TEMPORARY ON DATABASE \(database) FROM PUBLIC",
+                "CREATE ROLE \(role) LOGIN PASSWORD \(password) NOSUPERUSER NOCREATEDB NOCREATEROLE NOINHERIT",
+                "GRANT CONNECT ON DATABASE \(database) TO \(role)",
+            ],
+            database: server.maintenanceDatabase
+        )
+
+        let schemaStatements = provisioned.fixtureSchemas.flatMap { schema -> [String] in
+            let quotedSchema = Self.quotedIdentifier(schema)
+            return [
+                "REVOKE CREATE ON SCHEMA \(quotedSchema) FROM PUBLIC",
+                "GRANT USAGE ON SCHEMA \(quotedSchema) TO \(role)",
+                "GRANT SELECT ON ALL TABLES IN SCHEMA \(quotedSchema) TO \(role)",
+            ]
+        }
+        try await runStatements(schemaStatements, database: provisioned.databaseName)
     }
 
     private func runStatements(_ statements: [String], database: String) async throws {
@@ -206,8 +289,28 @@ public final class TextToSQLSemanticDatabaseProvisioner: Sendable {
         return "widen_eval_\(String(safeFixture))_\(suffix)"
     }
 
+    private static func roleName() -> String {
+        let suffix = UUID().uuidString.replacingOccurrences(of: "-", with: "")
+            .prefix(16)
+            .lowercased()
+        return "widen_eval_ro_\(suffix)"
+    }
+
+    private static func rolePassword() -> String {
+        "widen_eval_\(UUID().uuidString)_\(UUID().uuidString)"
+    }
+
+    private static func fixtureSchemas(from schema: DatabaseSchema) -> [String] {
+        let names = Set(schema.schemas.map(\.name) + schema.tables.map(\.schema))
+        return names.sorted()
+    }
+
     private static func quotedIdentifier(_ value: String) -> String {
         "\"\(value.replacingOccurrences(of: "\"", with: "\"\""))\""
+    }
+
+    private static func quotedLiteral(_ value: String) -> String {
+        "'\(value.replacingOccurrences(of: "'", with: "''"))'"
     }
 }
 
@@ -217,6 +320,7 @@ public struct TextToSQLSemanticExecutionOutput: Equatable, Sendable {
     public var comparison: TextToSQLSemanticComparisonResult?
     public var goldenError: String?
     public var candidateError: String?
+    public var resultLimitExceeded: Bool
     public var latencyMs: Int
 
     public var goldenExecutionSucceeded: Bool { goldenResult != nil && goldenError == nil }
@@ -228,6 +332,7 @@ public struct TextToSQLSemanticExecutionOutput: Equatable, Sendable {
         comparison: TextToSQLSemanticComparisonResult? = nil,
         goldenError: String? = nil,
         candidateError: String? = nil,
+        resultLimitExceeded: Bool = false,
         latencyMs: Int
     ) {
         self.goldenResult = goldenResult
@@ -235,6 +340,7 @@ public struct TextToSQLSemanticExecutionOutput: Equatable, Sendable {
         self.comparison = comparison
         self.goldenError = goldenError
         self.candidateError = candidateError
+        self.resultLimitExceeded = resultLimitExceeded
         self.latencyMs = latencyMs
     }
 }
@@ -245,31 +351,36 @@ public struct TextToSQLSemanticExecutor: Sendable {
     public var maxCellBytes: Int
     public var statementTimeoutMs: Int
     public var lockTimeoutMs: Int
+    public var idleInTransactionTimeoutMs: Int
 
     public init(
         rowLimit: Int = 1_000,
         cellLimit: Int = 50_000,
         maxCellBytes: Int = 64 * 1_024,
         statementTimeoutMs: Int = 5_000,
-        lockTimeoutMs: Int = 2_000
+        lockTimeoutMs: Int = 2_000,
+        idleInTransactionTimeoutMs: Int = 5_000
     ) {
         self.rowLimit = rowLimit
         self.cellLimit = cellLimit
         self.maxCellBytes = maxCellBytes
         self.statementTimeoutMs = statementTimeoutMs
         self.lockTimeoutMs = lockTimeoutMs
+        self.idleInTransactionTimeoutMs = idleInTransactionTimeoutMs
     }
 
     public func executePair(
         goldenSQL: String,
         candidateSQL: String,
         expectation: TextToSQLSemanticExpectation,
-        config: DatabaseConnectionConfig,
-        password: String?
+        database: TextToSQLSemanticProvisionedDatabase
     ) async throws -> TextToSQLSemanticExecutionOutput {
         let logger = PostgresService.makeLogger(label: "widen.eval.executor")
         let started = ContinuousClock.now
-        let configuration = try PostgresService.makeConnectionConfiguration(config, password: password)
+        let configuration = try PostgresService.makeConnectionConfiguration(
+            database.config,
+            password: database.executionPassword
+        )
         let connection = try await PostgresConnection.connect(
             on: PostgresConnection.defaultEventLoopGroup.any(),
             configuration: configuration,
@@ -277,25 +388,20 @@ public struct TextToSQLSemanticExecutor: Sendable {
             logger: logger
         )
         do {
-            try await connection.query("BEGIN READ ONLY", logger: logger)
-            try await connection.query("SET LOCAL TIME ZONE 'UTC'", logger: logger)
-            try await connection.query(
-                PostgresQuery(unsafeSQL: "SET LOCAL statement_timeout = \(statementTimeoutMs)"),
-                logger: logger
-            )
-            try await connection.query(
-                PostgresQuery(unsafeSQL: "SET LOCAL lock_timeout = \(lockTimeoutMs)"),
-                logger: logger
+            try await beginComparisonTransaction(
+                connection: connection,
+                logger: logger,
+                schemas: database.fixtureSchemas
             )
 
             let golden: TextToSQLSemanticQueryResult
             do {
                 golden = try await execute(goldenSQL, connection: connection, logger: logger)
             } catch {
-                try? await connection.query("ROLLBACK", logger: logger)
-                try? await connection.close()
+                await rollbackAndClose(connection, logger: logger)
                 return TextToSQLSemanticExecutionOutput(
                     goldenError: error.localizedDescription,
+                    resultLimitExceeded: isResultLimitExceeded(error),
                     latencyMs: elapsedMilliseconds(since: started)
                 )
             }
@@ -304,11 +410,11 @@ public struct TextToSQLSemanticExecutor: Sendable {
             do {
                 candidate = try await execute(candidateSQL, connection: connection, logger: logger)
             } catch {
-                try? await connection.query("ROLLBACK", logger: logger)
-                try? await connection.close()
+                await rollbackAndClose(connection, logger: logger)
                 return TextToSQLSemanticExecutionOutput(
                     goldenResult: golden,
                     candidateError: error.localizedDescription,
+                    resultLimitExceeded: isResultLimitExceeded(error),
                     latencyMs: elapsedMilliseconds(since: started)
                 )
             }
@@ -327,10 +433,61 @@ public struct TextToSQLSemanticExecutor: Sendable {
                 latencyMs: elapsedMilliseconds(since: started)
             )
         } catch {
-            try? await connection.query("ROLLBACK", logger: logger)
-            try? await connection.close()
+            await rollbackAndClose(connection, logger: logger)
             throw error
         }
+    }
+
+    public var settings: [String: String] {
+        [
+            "transaction": "BEGIN ISOLATION LEVEL REPEATABLE READ READ ONLY",
+            "timezone": "UTC",
+            "dateStyle": "ISO, YMD",
+            "intervalStyle": "iso_8601",
+            "statementTimeoutMs": String(statementTimeoutMs),
+            "lockTimeoutMs": String(lockTimeoutMs),
+            "idleInTransactionSessionTimeoutMs": String(idleInTransactionTimeoutMs),
+            "rowLimit": String(rowLimit),
+            "cellLimit": String(cellLimit),
+            "maxCellBytes": String(maxCellBytes),
+            "searchPathPrefix": "pg_catalog",
+        ]
+    }
+
+    private func beginComparisonTransaction(
+        connection: PostgresConnection,
+        logger: Logger,
+        schemas: [String]
+    ) async throws {
+        try await connection.query("BEGIN ISOLATION LEVEL REPEATABLE READ READ ONLY", logger: logger)
+        try await connection.query("SET LOCAL timezone = 'UTC'", logger: logger)
+        try await connection.query("SET LOCAL DateStyle = 'ISO, YMD'", logger: logger)
+        try await connection.query("SET LOCAL IntervalStyle = 'iso_8601'", logger: logger)
+        try await connection.query(
+            PostgresQuery(unsafeSQL: "SET LOCAL statement_timeout = '\(statementTimeoutMs)ms'"),
+            logger: logger
+        )
+        try await connection.query(
+            PostgresQuery(unsafeSQL: "SET LOCAL lock_timeout = '\(lockTimeoutMs)ms'"),
+            logger: logger
+        )
+        try await connection.query(
+            PostgresQuery(
+                unsafeSQL: "SET LOCAL idle_in_transaction_session_timeout = '\(idleInTransactionTimeoutMs)ms'"
+            ),
+            logger: logger
+        )
+
+        let searchPath = (["pg_catalog"] + schemas).map(Self.quotedIdentifier).joined(separator: ", ")
+        try await connection.query(
+            PostgresQuery(unsafeSQL: "SET LOCAL search_path = \(searchPath)"),
+            logger: logger
+        )
+    }
+
+    private func rollbackAndClose(_ connection: PostgresConnection, logger: Logger) async {
+        _ = try? await connection.query("ROLLBACK", logger: logger)
+        try? await connection.close()
     }
 
     private func execute(
@@ -340,12 +497,13 @@ public struct TextToSQLSemanticExecutor: Sendable {
     ) async throws -> TextToSQLSemanticQueryResult {
         let stream = try await connection.query(PostgresQuery(unsafeSQL: sql), logger: logger)
         let columns = stream.columns.map(\.name)
+        let columnTypes = stream.columns.map { $0.dataType.description }
         var rows: [[TextToSQLSemanticValue]] = []
         var cellCount = 0
 
         for try await row in stream {
             guard rows.count < rowLimit else {
-                throw TextToSQLSemanticDatabaseError.fixtureInvalid(
+                throw TextToSQLSemanticDatabaseError.resultLimitExceeded(
                     "Semantic result exceeded strict row cap of \(rowLimit)."
                 )
             }
@@ -353,12 +511,12 @@ public struct TextToSQLSemanticExecutor: Sendable {
             for cell in row {
                 cellCount += 1
                 guard cellCount <= cellLimit else {
-                    throw TextToSQLSemanticDatabaseError.fixtureInvalid(
+                    throw TextToSQLSemanticDatabaseError.resultLimitExceeded(
                         "Semantic result exceeded strict cell cap of \(cellLimit)."
                     )
                 }
                 if let bytes = cell.bytes, bytes.readableBytes > maxCellBytes {
-                    throw TextToSQLSemanticDatabaseError.fixtureInvalid(
+                    throw TextToSQLSemanticDatabaseError.resultLimitExceeded(
                         "Semantic result cell exceeded strict byte cap of \(maxCellBytes)."
                     )
                 }
@@ -367,11 +525,16 @@ public struct TextToSQLSemanticExecutor: Sendable {
             rows.append(values)
         }
 
-        return TextToSQLSemanticQueryResult(columns: columns, rows: rows)
+        return TextToSQLSemanticQueryResult(columns: columns, columnTypes: columnTypes, rows: rows)
     }
 
     private func elapsedMilliseconds(since start: ContinuousClock.Instant) -> Int {
         Int(start.duration(to: .now) / .milliseconds(1))
+    }
+
+    private func isResultLimitExceeded(_ error: Error) -> Bool {
+        if case TextToSQLSemanticDatabaseError.resultLimitExceeded = error { return true }
+        return false
     }
 
     private static func value(for cell: PostgresCell) -> TextToSQLSemanticValue {
@@ -396,21 +559,62 @@ public struct TextToSQLSemanticExecutor: Sendable {
                 return .uuid(try cell.decode(UUID.self).uuidString.lowercased())
             case .date:
                 return .date(dateOnlyFormatter.string(from: try cell.decode(Date.self)))
-            case .timestamp, .timestamptz:
-                return .timestamp(timestampFormatter.string(from: try cell.decode(Date.self)))
+            case .timestamp:
+                return .timestampWithoutTimeZone(try localTimestampString(for: cell))
+            case .timestamptz:
+                return .timestampWithTimeZone(timestampFormatter.string(from: try cell.decode(Date.self)))
             case .json, .jsonb:
                 let raw = try cell.decode(String.self)
                 return .json(TextToSQLSemanticValue.canonicalJSON(raw) ?? raw)
             case .interval:
-                return .interval(TextToSQLSemanticValue.normalizedInterval(try cell.decode(String.self)))
+                return try intervalValue(for: cell)
             case .bytea:
                 return .bytes(PostgresCellFormatter.string(for: cell) ?? "")
+            case .text, .varchar, .bpchar, .name, .char, .unknown:
+                return .string(try cell.decode(String.self))
             default:
-                return TextToSQLSemanticValue.canonicalJSONOrString(try cell.decode(String.self))
+                return .unsupported(cell.dataType.description)
             }
         } catch {
-            return .string(PostgresCellFormatter.string(for: cell) ?? "")
+            return .unsupported("\(cell.dataType.description):decodeFailure")
         }
+    }
+
+    private static func intervalValue(for cell: PostgresCell) throws -> TextToSQLSemanticValue {
+        guard var bytes = cell.bytes,
+            let microseconds = bytes.readInteger(as: Int64.self),
+            let days = bytes.readInteger(as: Int32.self),
+            let months = bytes.readInteger(as: Int32.self)
+        else {
+            return .unsupported("INTERVAL:decodeFailure")
+        }
+        return .interval(months: months, days: days, microseconds: microseconds)
+    }
+
+    private static func localTimestampString(for cell: PostgresCell) throws -> String {
+        guard var bytes = cell.bytes, let microseconds = bytes.readInteger(as: Int64.self) else {
+            return "invalid"
+        }
+        return timestampString(postgresMicroseconds: microseconds, includeTimeZone: false)
+    }
+
+    private static func timestampString(
+        postgresMicroseconds: Int64,
+        includeTimeZone: Bool
+    ) -> String {
+        let seconds = postgresMicroseconds / 1_000_000
+        let micros = abs(postgresMicroseconds % 1_000_000)
+        let date = Date(
+            timeInterval: Double(seconds),
+            since: Date(timeIntervalSince1970: 946_684_800)
+        )
+        let base = localTimestampFormatter.string(from: date)
+        let suffix = String(format: ".%06d", micros)
+        return includeTimeZone ? "\(base)\(suffix)Z" : "\(base)\(suffix)"
+    }
+
+    private static func quotedIdentifier(_ value: String) -> String {
+        "\"\(value.replacingOccurrences(of: "\"", with: "\"\""))\""
     }
 
     nonisolated(unsafe) private static let dateOnlyFormatter: DateFormatter = {
@@ -425,6 +629,14 @@ public struct TextToSQLSemanticExecutor: Sendable {
         let formatter = ISO8601DateFormatter()
         formatter.formatOptions = [.withInternetDateTime, .withFractionalSeconds]
         formatter.timeZone = TimeZone(identifier: "UTC")
+        return formatter
+    }()
+
+    nonisolated(unsafe) private static let localTimestampFormatter: DateFormatter = {
+        let formatter = DateFormatter()
+        formatter.dateFormat = "yyyy-MM-dd HH:mm:ss"
+        formatter.timeZone = TimeZone(identifier: "UTC")
+        formatter.locale = Locale(identifier: "en_US_POSIX")
         return formatter
     }()
 }

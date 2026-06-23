@@ -12,12 +12,12 @@ Postgres DB evals additionally execute safe, schema-valid SQL decisions against
 synthetic throwaway databases and compare result bags. Static and semantic
 outcomes are reported separately.
 
-The runner does not execute generated SQL or compare result sets. Committed
-baselines record deterministic hashes for the suite file, pipeline/scorer
-sources, and schema fixtures to establish baseline compatibility. Baseline
-changes after PR 2 can reflect the move from generator-only evaluation to the
-full production pipeline, including canonicalization, local validation, and
-validation-only repair.
+Static eval commands do not execute generated SQL or compare result sets. DB
+eval commands provision synthetic PostgreSQL fixtures, run only eligible final
+SQL decisions, and keep clarification or failed decisions out of SQL execution.
+Committed baselines record deterministic hashes for the suite file,
+pipeline/scorer sources, schema fixtures, setup fixtures, and semantic
+comparison metadata to establish baseline compatibility.
 
 ## Commands
 
@@ -76,11 +76,17 @@ fixture. Override with `WIDEN_EVAL_DB_HOST`, `WIDEN_EVAL_DB_PORT`,
 `WIDEN_EVAL_DB_USER`, `WIDEN_EVAL_DB_PASSWORD`,
 `WIDEN_EVAL_DB_MAINTENANCE_DB`, and `WIDEN_EVAL_DB_SSLMODE`.
 
-The semantic executor uses one pinned connection, starts a read-only
-transaction, sets UTC timezone, applies statement and lock timeouts, executes
-golden SQL before candidate SQL, rolls back, and never rewrites either query.
-A missing local PostgreSQL server is reported as
-`semanticEnvironmentUnavailable`, not as a model backend or transport failure.
+The provisioning user creates and drops databases only. Semantic execution uses
+a unique restricted login role per fixture database with CONNECT, schema USAGE,
+and SELECT grants only; CREATE, TEMP, SUPERUSER, CREATEDB, CREATEROLE, and write
+privileges are not granted. Each golden/candidate comparison opens a fresh
+restricted connection, begins `REPEATABLE READ READ ONLY`, sets UTC timezone,
+deterministic date/interval styles, statement/lock/idle timeouts, and a
+`pg_catalog` plus fixture-schema search path, executes golden SQL before
+candidate SQL, rolls back, and never rewrites either query. Strict row, cell,
+and cell-size caps fail the case and close the comparison connection. A missing
+local PostgreSQL server is reported as `semanticEnvironmentUnavailable`, not as
+a model backend or transport failure.
 
 ## Artifacts
 
@@ -103,6 +109,8 @@ local baselines after pipeline/scorer changes. Regenerate cloud baselines only
 with a real `WIDEN_EVAL_OPENROUTER_API_KEY`; do not replace a cloud baseline
 with an all-`backendUnavailable` run.
 
-Semantic reports contain row counts, comparison status, stable result digests,
-and concise mismatch categories. They do not include raw result rows. Detailed
-synthetic diffs, if added later, must stay under `.eval-results/`.
+Semantic reports contain row counts, comparison status, end-to-end status,
+SQL semantic pass rate, clarification pass rate, semantic environment
+availability, static/semantic cross-tabs, stable result digests, and concise
+mismatch categories. They do not include raw result rows. Detailed synthetic
+diffs, if added later, must stay under `.eval-results/`.
