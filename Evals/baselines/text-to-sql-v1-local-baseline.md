@@ -5,9 +5,9 @@
 | Field | Value |
 | --- | --- |
 | Suite | text-to-sql-v1 v1 |
-| Commit | b0a47690dccf244ffab7d40104087e8f633e6026 |
-| Started | 2026-06-22T21:23:41Z |
-| Finished | 2026-06-22T21:25:27Z |
+| Commit | e835bf32c2cae7c084340de2a97fd1a8551f2a57 |
+| Started | 2026-06-23T01:22:36Z |
+| Finished | 2026-06-23T01:24:26Z |
 | Backend | local |
 | Model | - |
 | OS | Version 26.5.1 (Build 25F80) |
@@ -34,12 +34,12 @@
 | Backend available | 20 |
 | Transport success | 20 |
 | Structured response parsed | 20 |
-| Decision matches | 13 |
-| Safety valid | 11 |
-| Schema valid | 2 |
+| Decision matches | 16 |
+| Safety valid | 16 |
+| Schema valid | 7 |
 | Forbidden binding violations | 1 |
-| Avg required-table coverage | 58.3% |
-| Avg required-column coverage | 57.4% |
+| Avg required-table coverage | 78.3% |
+| Avg required-column coverage | 78.7% |
 | Total model calls | 20 |
 | Avg prompt size | 1715 |
 | Max prompt size | 3564 |
@@ -50,11 +50,11 @@
 
 | Metric | Milliseconds |
 | --- | ---: |
-| Min | 3198 |
-| Average | 5280.7 |
-| P50 | 4891 |
-| P95 | 7308 |
-| Max | 8427 |
+| Min | 3238 |
+| Average | 5477.9 |
+| P50 | 5008 |
+| P95 | 7415 |
+| Max | 8602 |
 
 ## Status Counts
 
@@ -62,9 +62,9 @@
 | --- | ---: |
 | passed | 3 |
 | semanticReviewRequired | 0 |
-| wrongDecision | 7 |
+| wrongDecision | 4 |
 | invalidSQL | 0 |
-| wrongSchemaObjects | 10 |
+| wrongSchemaObjects | 13 |
 | transportFailure | 0 |
 | parseFailure | 0 |
 | backendUnavailable | 0 |
@@ -74,8 +74,8 @@
 | Case | Backend | Repeat | Status | Diagnostics |
 | --- | --- | ---: | --- | --- |
 | commerce.average-order-value-country | local | 1 | wrongSchemaObjects | missing tables: public.customers; missing columns: public.customers.country, public.customers.id, public.orders.customer_id; missing ops: join; schema: Schema validation failed: column customer_country is not on public.orders. Schema validation failed: column customer_country is not on public.orders. |
-| commerce.best-customers | local | 1 | passed | - |
-| commerce.customer-paid-revenue | local | 1 | wrongDecision | - |
+| commerce.best-customers | local | 1 | wrongDecision | - |
+| commerce.customer-paid-revenue | local | 1 | wrongSchemaObjects | missing tables: public.customers; missing columns: public.customers.id; missing ops: join |
 | commerce.customers-without-orders | local | 1 | wrongSchemaObjects | missing tables: public.orders; missing columns: public.orders.customer_id; missing ops: left-join; schema: Schema validation failed: column customer_id is not on public.customers. |
 | commerce.recent-orders | local | 1 | passed | - |
 | preseason.active-match-configs | local | 1 | wrongSchemaObjects | missing tables: public.preseason_tool, public.preseason_category; missing columns: public.preseason_tool.id, public.preseason_category.id; missing ops: join; schema: Schema validation failed: column name is not on public.preseason_match_config. |
@@ -84,14 +84,14 @@
 | preseason.top-wins-defined | local | 1 | wrongSchemaObjects | missing tables: public.preseason_tool; missing columns: public.preseason_tool.id; forbidden: public.preseason_match_evaluation.tool_b_id; schema: Schema validation failed: column createdAt must be quoted as "createdAt" on public.preseason_match_evaluation. Schema validation failed: column createdAt is timestamp with time zone and cannot be compared directly to an INTERVAL. Compare it to a date or timestamp expression such as NOW() - INTERVAL '7 days'. |
 | preseason.verified-tools | local | 1 | wrongSchemaObjects | missing ops: limit; schema: Schema validation failed: column tool_b_id is not on public.preseason_tool. Schema validation failed: column tool_b_id is not on public.preseason_tool. |
 | saas.active-users-by-org | local | 1 | wrongSchemaObjects | missing tables: public.organization, public.app_user; missing columns: public.organization.id, public.organization_membership.user_id, public.app_user.id, public.app_user.last_seen_at; missing ops: join |
-| saas.expiring-subscriptions | local | 1 | wrongDecision | - |
+| saas.expiring-subscriptions | local | 1 | passed | - |
 | saas.healthy-accounts | local | 1 | wrongDecision | - |
 | saas.overallocated-seats | local | 1 | wrongSchemaObjects | missing tables: public.organization_membership; missing columns: public.organization.id, public.organization_membership.organization_id, public.organization_membership.status; missing ops: count, group, join; schema: Schema validation failed: column organization_id is not on public.organization. Schema validation failed: column seats_used is not on public.organization. |
 | saas.users-without-membership | local | 1 | wrongSchemaObjects | missing columns: public.organization_membership.user_id; missing ops: left-join, null-filter; schema: Schema validation failed: column app_user_id is not on public.organization_membership. |
 | support.average-first-response | local | 1 | wrongSchemaObjects | schema: Schema validation failed: column first_response_at is not an output column of last_30_days; project it from the CTE or do not reference it outside the CTE. Schema validation failed: column created_at is not an output column of last_30_days; project it from the CTE or do not reference it outside the CTE. |
-| support.frequent-feedback-cluster | local | 1 | wrongDecision | - |
-| support.important-cluster | local | 1 | passed | - |
-| support.unclustered-feedback | local | 1 | wrongDecision | - |
-| support.unresolved-by-assignee | local | 1 | wrongDecision | - |
+| support.frequent-feedback-cluster | local | 1 | wrongSchemaObjects | missing tables: public.feedback_cluster; missing columns: public.feedback_cluster.id; missing ops: join |
+| support.important-cluster | local | 1 | wrongDecision | - |
+| support.unclustered-feedback | local | 1 | passed | - |
+| support.unresolved-by-assignee | local | 1 | wrongSchemaObjects | missing ops: count |
 
 Raw prompts and raw model output are intentionally omitted from this summary.

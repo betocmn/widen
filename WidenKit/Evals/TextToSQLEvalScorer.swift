@@ -47,7 +47,8 @@ public enum TextToSQLEvalCaseRunner {
                 generated,
                 question: evalCase.question,
                 schema: schema,
-                databaseContext: evalCase.databaseContext ?? ""
+                databaseContext: evalCase.databaseContext ?? "",
+                allowGroundingClarification: false
             )
             return TextToSQLEvalScorer.score(
                 evalCase: evalCase,
@@ -64,6 +65,14 @@ public enum TextToSQLEvalCaseRunner {
                 latencyMs: elapsedMilliseconds(since: started)
             )
         }
+    }
+
+    private static func isStructuredParseFailureMessage(_ message: String) -> Bool {
+        let lower = message.lowercased()
+        return lower.contains("unparseable")
+            || lower.contains("structured")
+            || lower.contains("decoding")
+            || lower.contains("decoded")
     }
 
     private static func elapsedMilliseconds(since date: Date) -> Int {
@@ -88,7 +97,7 @@ public enum TextToSQLEvalCaseRunner {
                 transportSuccess = false
                 structuredParsed = false
             case .modelGenerationFailed(let message)
-                where message.localizedCaseInsensitiveContains("unparseable"):
+                where isStructuredParseFailureMessage(message):
                 status = .parseFailure
                 backendAvailable = true
                 transportSuccess = true
@@ -337,7 +346,7 @@ public enum TextToSQLEvalScorer {
         if matches(#"\bnot\s+exists\b"#, in: lower) {
             result.insert(.notExists)
         }
-        if matches(#"\bis\s+(not\s+)?null\b"#, in: lower) {
+        if matches(#"\bis\s+null\b"#, in: lower) {
             result.insert(.nullFilter)
         }
         if matches(#"\border\s+by\b"#, in: lower), matches(#"\bdesc\b"#, in: lower) {
@@ -370,8 +379,15 @@ public enum TextToSQLEvalScorer {
         }
         var bindings: [String] = []
 
-        for column in analysis.columns where column.name != "*" {
-            if let qualifier = column.qualifier,
+        for column in analysis.columns {
+            if column.name == "*" {
+                appendStarBindings(
+                    qualifier: column.qualifier,
+                    relationAliases: relationAliases,
+                    referencedTables: referencedTableInfos,
+                    into: &bindings
+                )
+            } else if let qualifier = column.qualifier,
                 let table = relationAliases[normalizeBinding(qualifier)]
             {
                 appendBinding(for: column, table: table, into: &bindings)
@@ -388,9 +404,32 @@ public enum TextToSQLEvalScorer {
                 }
             }
         }
+        if containsUnqualifiedSelectStar(sql) {
+            for table in referencedTableInfos {
+                appendAllBindings(for: table, into: &bindings)
+            }
+        }
 
         var seen = Set<String>()
         return bindings.filter { seen.insert(normalizeBinding($0)).inserted }.sorted()
+    }
+
+    private static func appendStarBindings(
+        qualifier: String?,
+        relationAliases: [String: TableInfo],
+        referencedTables: [TableInfo],
+        into bindings: inout [String]
+    ) {
+        if let qualifier,
+            let table = relationAliases[normalizeBinding(qualifier)]
+        {
+            appendAllBindings(for: table, into: &bindings)
+            return
+        }
+
+        for table in referencedTables {
+            appendAllBindings(for: table, into: &bindings)
+        }
     }
 
     private static func relationAliasMap(
@@ -437,6 +476,16 @@ public enum TextToSQLEvalScorer {
             columnMatches(column.name, isQuoted: column.isQuoted, actualName: $0.name)
         }) else { return }
         bindings.append("\(table.qualifiedName).\(actual.name)")
+    }
+
+    private static func appendAllBindings(for table: TableInfo, into bindings: inout [String]) {
+        for column in table.columns {
+            bindings.append("\(table.qualifiedName).\(column.name)")
+        }
+    }
+
+    private static func containsUnqualifiedSelectStar(_ sql: String) -> Bool {
+        matches(#"(?is)\bselect\s+(distinct\s+)?\*\s+\bfrom\b"#, in: sql)
     }
 
     private static func columnNamed(
