@@ -220,8 +220,8 @@ public struct TextToSQLPipeline: TextToSQLRunning {
         var events: [TextToSQLPipelineEvent] = []
 
         let generated: SQLGenerationResult
+        let modelGenerationStart = Date()
         do {
-            let stageStart = Date()
             generated = try await generator.generateSQL(
                 question: request.question,
                 schema: request.schema,
@@ -231,14 +231,14 @@ public struct TextToSQLPipeline: TextToSQLRunning {
             trace.append(
                 .modelGeneration,
                 outcome: .success,
-                since: stageStart,
+                since: modelGenerationStart,
                 modelCallCount: generated.generationCallCount
             )
         } catch is CancellationError {
             trace.append(
                 .modelGeneration,
                 outcome: .failure,
-                since: started,
+                since: modelGenerationStart,
                 failureCategory: .cancellation
             )
             throw CancellationError()
@@ -247,7 +247,7 @@ public struct TextToSQLPipeline: TextToSQLRunning {
             trace.append(
                 .modelGeneration,
                 outcome: .failure,
-                since: started,
+                since: modelGenerationStart,
                 failureCategory: failure.category
             )
             return finished(
@@ -468,8 +468,8 @@ public struct TextToSQLPipeline: TextToSQLRunning {
             )
 
             let generation: SQLGenerationResult
+            let stageStart = Date()
             do {
-                let stageStart = Date()
                 let generated = try await generator.generateSQL(
                     question: repairQuestionContext.question,
                     schema: request.schema,
@@ -494,7 +494,7 @@ public struct TextToSQLPipeline: TextToSQLRunning {
                 trace.append(
                     .validationRepair,
                     outcome: .failure,
-                    since: Date(),
+                    since: stageStart,
                     failureCategory: .cancellation
                 )
                 throw CancellationError()
@@ -514,7 +514,7 @@ public struct TextToSQLPipeline: TextToSQLRunning {
                 trace.append(
                     .validationRepair,
                     outcome: .failure,
-                    since: Date(),
+                    since: stageStart,
                     failureCategory: failure.category
                 )
                 return RepairRun(decision: .failed(failure), failureCategory: failure.category)

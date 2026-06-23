@@ -36,6 +36,34 @@ struct TextToSQLPipelineTests {
         }
     }
 
+    private final class DelayedRepairFailureGenerator: SQLGenerator, @unchecked Sendable {
+        private let lock = NSLock()
+        private var callCount = 0
+        private let firstResult: SQLGenerationResult
+        private(set) var contexts: [SQLGenerationContext] = []
+
+        init(firstResult: SQLGenerationResult) {
+            self.firstResult = firstResult
+        }
+
+        func generateSQL(
+            question: String,
+            schema: DatabaseSchema,
+            context: SQLGenerationContext,
+            config: SQLGenerationConfig
+        ) async throws -> SQLGenerationResult {
+            let call = lock.withLock {
+                contexts.append(context)
+                callCount += 1
+                return callCount
+            }
+            guard call > 1 else { return firstResult }
+
+            try await Task.sleep(for: .milliseconds(25))
+            throw SQLGenerationFailure.transport("Timed out.")
+        }
+    }
+
     private actor EventCollector {
         private var events: [TextToSQLPipelineEvent] = []
 
@@ -448,6 +476,30 @@ struct TextToSQLPipelineTests {
 
         #expect(result.trace.modelCalls == 2)
         #expect(generator.contexts[1].modelCallCount == 2)
+    }
+
+    @Test func repairFailureTraceKeepsGeneratorElapsedTime() async throws {
+        let generator = DelayedRepairFailureGenerator(
+            firstResult: generation(sql: "SELECT missing FROM public.users")
+        )
+
+        let result = try await TextToSQLPipeline(generator: generator).run(
+            TextToSQLRequest(
+                question: "show users",
+                schema: makeSchema(),
+                config: SQLGenerationConfig(defaultRowLimit: 100)
+            )
+        )
+
+        guard case .failed(let failure) = result.finalDecision else {
+            Issue.record("expected failure decision")
+            return
+        }
+        #expect(failure.category == .transport)
+        let repairFailureStage = result.trace.stages.last {
+            $0.stage == .validationRepair && $0.outcome == .failure
+        }
+        #expect((repairFailureStage?.elapsedMs ?? 0) >= 10)
     }
 
     @Test func evalRunnerScoresFinalPipelineResult() async throws {
