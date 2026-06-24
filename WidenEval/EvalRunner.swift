@@ -110,12 +110,22 @@ struct EvalRunner {
         let suiteURL = URL(fileURLWithPath: options.suitePath).standardizedFileURL
         let suiteData = try Data(contentsOf: suiteURL)
         let suite = try JSONDecoder().decode(TextToSQLEvalSuite.self, from: suiteData)
+        let selectedCases = try filteredCases(suite.cases)
         try TextToSQLEvalSuiteValidator.validate(
             suite: suite,
-            suiteURL: suiteURL,
-            requireSemanticExpectations: options.semanticDatabase
+            suiteURL: suiteURL
         )
-        let selectedCases = try filteredCases(suite.cases)
+        if options.semanticDatabase {
+            try TextToSQLEvalSuiteValidator.validate(
+                suite: TextToSQLEvalSuite(
+                    name: suite.name,
+                    version: suite.version,
+                    cases: selectedCases
+                ),
+                suiteURL: suiteURL,
+                requireSemanticExpectations: true
+            )
+        }
         let evalDirectory = suiteURL
             .deletingLastPathComponent()
             .deletingLastPathComponent()
@@ -680,7 +690,7 @@ struct EvalRunner {
                 decisionMatches: false,
                 latencyMs: 0,
                 semanticExecutionAttempted: semanticDatabase ? false : nil,
-                semanticEnvironmentAvailable: semanticDatabase ? true : nil,
+                semanticEnvironmentAvailable: nil,
                 endToEndPassed: semanticDatabase ? false : nil,
                 semanticStatus: semanticDatabase ? .notApplicable : nil
             ),
@@ -1071,7 +1081,7 @@ private extension TextToSQLEvalResult {
         return withSemantic(
             status: comparison?.equivalent == true ? .passed : .resultMismatch,
             attempted: true,
-            endToEndPassed: comparison?.equivalent == true,
+            endToEndPassed: self.status == .passed && comparison?.equivalent == true,
             goldenSucceeded: true,
             candidateSucceeded: true,
             equivalent: comparison?.equivalent ?? false,
@@ -1103,7 +1113,10 @@ private extension TextToSQLEvalResult {
     ) -> TextToSQLEvalResult {
         var copy = self
         copy.metrics.semanticExecutionAttempted = attempted
-        copy.metrics.semanticEnvironmentAvailable = status != .semanticEnvironmentUnavailable
+        copy.metrics.semanticEnvironmentAvailable = semanticEnvironmentAvailable(
+            status: status,
+            attempted: attempted
+        )
         copy.metrics.goldenExecutionSucceeded = goldenSucceeded
         copy.metrics.candidateExecutionSucceeded = candidateSucceeded
         copy.metrics.resultEquivalent = equivalent
@@ -1125,6 +1138,14 @@ private extension TextToSQLEvalResult {
                 .nilIfBlank
         }
         return copy
+    }
+
+    private func semanticEnvironmentAvailable(
+        status: TextToSQLSemanticStatus,
+        attempted: Bool
+    ) -> Bool? {
+        if status == .notApplicable && !attempted { return nil }
+        return status != .semanticEnvironmentUnavailable
     }
 }
 

@@ -373,17 +373,51 @@ public enum TextToSQLSemanticComparator {
             return nil
         case .unordered, .projectedColumns:
             guard golden.rows.count == candidate.rows.count else { return "rowCountMismatch" }
-            var remaining = candidate.rows
-            for goldenRow in golden.rows {
-                guard let matchIndex = remaining.firstIndex(where: {
-                    rowsEquivalent(goldenRow, $0, tolerance: tolerance)
-                }) else {
-                    return "rowBagMismatch"
-                }
-                remaining.remove(at: matchIndex)
-            }
-            return remaining.isEmpty ? nil : "rowBagMismatch"
+            return rowBagsEquivalent(
+                goldenRows: golden.rows,
+                candidateRows: candidate.rows,
+                tolerance: tolerance
+            ) ? nil : "rowBagMismatch"
         }
+    }
+
+    private static func rowBagsEquivalent(
+        goldenRows: [[TextToSQLSemanticValue]],
+        candidateRows: [[TextToSQLSemanticValue]],
+        tolerance: Double
+    ) -> Bool {
+        let adjacency = goldenRows.map { goldenRow in
+            candidateRows.indices.filter { candidateIndex in
+                rowsEquivalent(goldenRow, candidateRows[candidateIndex], tolerance: tolerance)
+            }
+        }
+        guard adjacency.allSatisfy({ !$0.isEmpty }) else { return false }
+
+        let goldenOrder = adjacency.indices.sorted {
+            adjacency[$0].count == adjacency[$1].count
+                ? $0 < $1
+                : adjacency[$0].count < adjacency[$1].count
+        }
+        var matchedGoldenByCandidate = Array(repeating: -1, count: candidateRows.count)
+
+        func assign(_ goldenIndex: Int, seenCandidates: inout [Bool]) -> Bool {
+            for candidateIndex in adjacency[goldenIndex] {
+                guard !seenCandidates[candidateIndex] else { continue }
+                seenCandidates[candidateIndex] = true
+                let previousGoldenIndex = matchedGoldenByCandidate[candidateIndex]
+                if previousGoldenIndex == -1 || assign(previousGoldenIndex, seenCandidates: &seenCandidates) {
+                    matchedGoldenByCandidate[candidateIndex] = goldenIndex
+                    return true
+                }
+            }
+            return false
+        }
+
+        for goldenIndex in goldenOrder {
+            var seenCandidates = Array(repeating: false, count: candidateRows.count)
+            guard assign(goldenIndex, seenCandidates: &seenCandidates) else { return false }
+        }
+        return true
     }
 
     private static func rowsEquivalent(

@@ -42,6 +42,29 @@ struct TextToSQLSemanticComparatorTests {
         #expect(comparison.mismatchCategory == "orderedRowMismatch")
     }
 
+    @Test func unorderedComparisonUsesNonGreedyToleranceMatching() {
+        let expectation = TextToSQLSemanticExpectation(
+            comparisonMode: .unordered,
+            floatTolerance: 1
+        )
+        let golden = TextToSQLSemanticQueryResult(
+            columns: ["value"],
+            rows: [[.float(0)], [.float(2)]]
+        )
+        let candidate = TextToSQLSemanticQueryResult(
+            columns: ["value"],
+            rows: [[.float(1)], [.float(0)]]
+        )
+
+        let comparison = TextToSQLSemanticComparator.compare(
+            golden: golden,
+            candidate: candidate,
+            expectation: expectation
+        )
+
+        #expect(comparison.equivalent)
+    }
+
     @Test func scalarComparisonUsesFloatTolerance() {
         let expectation = TextToSQLSemanticExpectation(
             comparisonMode: .scalar,
