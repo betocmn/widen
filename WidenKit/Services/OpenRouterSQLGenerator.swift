@@ -502,6 +502,7 @@ actor OpenRouterModelCatalogService {
     }
 
     func invalidate(apiKey: String? = nil, modelID: String? = nil) {
+        loadDiskCacheIfNeeded()
         if let apiKey {
             let key = Self.apiKeyFingerprint(apiKey)
             if modelID == nil {
