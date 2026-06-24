@@ -268,6 +268,37 @@ struct OpenRouterSQLGeneratorTests {
         #expect(invalidated == nil)
     }
 
+    @Test func invalidatingModelMarksCatalogStaleForAuthenticatedRefresh() async throws {
+        let transport = StubTransport([
+            .success((
+                catalogResponse(id: Self.modelID),
+                response(url: Self.apiBase.appendingPathComponent("models/user"), status: 200)
+            )),
+            .success((
+                catalogResponse(id: Self.modelID, parameters: ["max_tokens"]),
+                response(url: Self.apiBase.appendingPathComponent("models/user"), status: 200)
+            )),
+        ])
+        let service = catalogService(transport: transport, ttl: 60)
+        let cached = await service.metadata(
+            apiKey: "secret-key",
+            modelID: Self.modelID,
+            allowStaleFallback: false
+        )
+        #expect(cached?.capabilities.supportsStructuredOutputs == true)
+
+        await service.invalidate(apiKey: "secret-key", modelID: Self.modelID)
+        let refreshed = await service.metadata(
+            apiKey: "secret-key",
+            modelID: Self.modelID,
+            allowStaleFallback: false
+        )
+
+        #expect(refreshed?.capabilities.supportsStructuredOutputs == false)
+        #expect(refreshed?.capabilities.supportsMaxTokens == true)
+        #expect(transport.requests.map { $0.url?.path } == ["/api/v1/models/user", "/api/v1/models/user"])
+    }
+
     @Test func requestBuilderKeepsPromptModeTokenCapWhenCapabilitiesUnknown() throws {
         let built = try OpenRouterRequestBuilder(endpoint: Self.chatEndpoint).build(
             apiKey: "test-key",
@@ -642,7 +673,9 @@ struct OpenRouterSQLGeneratorTests {
             ("content_policy_violation", 400, nil, .contentPolicy),
             ("refusal", 400, nil, .refusal),
             (nil, 204, nil, .serverFailure),
+            (nil, 413, "context length exceeded", .contextWindow),
             (nil, 413, nil, .invalidRequest),
+            (nil, 422, "token limit exceeded", .contextWindow),
             (nil, 422, nil, .invalidRequest),
             (nil, 500, nil, .serverFailure),
             (nil, nil, nil, .serverFailure),
@@ -709,6 +742,24 @@ struct OpenRouterSQLGeneratorTests {
         #expect(result.backendMetadata?.requestCount == 3)
         #expect(result.backendMetadata?.retryCount == 2)
         #expect(transport.requests.filter { $0.url?.path == "/api/v1/chat/completions" }.count == 3)
+    }
+
+    @Test func retriesServerFailuresAndCountsAttempts() async throws {
+        let transport = StubTransport([
+            .success((catalogResponse(), response(url: Self.apiBase.appendingPathComponent("models/user"), status: 200))),
+            .success((errorResponse(errorType: "server"), response(url: Self.chatEndpoint, status: 500, headers: ["Retry-After": "0"]))),
+            .success((chatResponse(content: goodContent), response(url: Self.chatEndpoint, status: 200))),
+        ])
+        let result = try await makeGenerator(transport: transport).generateSQL(
+            question: "show users",
+            schema: makeSchema(),
+            config: SQLGenerationConfig()
+        )
+
+        #expect(result.generationCallCount == 2)
+        #expect(result.backendMetadata?.requestCount == 2)
+        #expect(result.backendMetadata?.retryCount == 1)
+        #expect(transport.requests.filter { $0.url?.path == "/api/v1/chat/completions" }.count == 2)
     }
 
     @Test func retryCapStopsAfterThreeHTTPAttempts() async throws {
@@ -794,6 +845,37 @@ struct OpenRouterSQLGeneratorTests {
         #expect(!combined.contains("Database context"))
         #expect(!combined.contains("SQL history"))
         #expect(!combined.contains("public.users"))
+    }
+
+    @Test func connectivityMarksSingleLookupModelAvailableAfterSuccessfulTest() async throws {
+        let model = "custom/model"
+        let transport = StubTransport([
+            .success((catalogResponse(id: "openai/other"), response(url: Self.apiBase.appendingPathComponent("models/user"), status: 200))),
+            .success((catalogResponse(id: "openai/other"), response(url: Self.apiBase.appendingPathComponent("models/user"), status: 200))),
+            .success((singleModelResponse(id: model), response(url: Self.apiBase.appendingPathComponent("model/custom/model"), status: 200))),
+            .success((chatResponse(content: goodContent), response(url: Self.chatEndpoint, status: 200))),
+        ])
+        let service = catalogService(transport: transport)
+
+        let result = await OpenRouterConnectivityCheck(
+            apiKey: "test-key",
+            model: model,
+            catalogService: service,
+            transport: transport,
+            requestBuilder: OpenRouterRequestBuilder(endpoint: Self.chatEndpoint)
+        ).run()
+
+        #expect(result.error == nil)
+        #expect(result.selectedModelAvailable)
+        #expect(result.capabilities.supportsMaxTokens)
+        #expect(
+            transport.requests.map { $0.url?.path } == [
+                "/api/v1/models/user",
+                "/api/v1/models/user",
+                "/api/v1/model/custom/model",
+                "/api/v1/chat/completions",
+            ]
+        )
     }
 
     private func makeGenerator(transport: StubTransport, model: String = Self.modelID) -> OpenRouterSQLGenerator {

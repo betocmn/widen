@@ -280,6 +280,9 @@ public struct OpenRouterFailure: Error, LocalizedError, Equatable, Sendable {
         case 408:
             return .timeout
         case 413, 422:
+            if let message, OpenRouterResponseParser.isContextWindowMessage(message) {
+                return .contextWindow
+            }
             return .invalidRequest
         case 429:
             return .rateLimited
@@ -551,6 +554,7 @@ actor OpenRouterModelCatalogService {
                 cached.models.removeAll {
                     $0.requestedID == modelID || $0.id == modelID || $0.canonicalModelID == modelID
                 }
+                cached.fetchedAt = Date(timeIntervalSince1970: 0)
                 memoryCache[key] = cached
             }
         } else {
@@ -940,12 +944,11 @@ struct OpenRouterRetryPolicy: Sendable {
     private func isRetryable(_ category: OpenRouterFailure.Category) -> Bool {
         switch category {
         case .rateLimited, .providerOverloaded, .providerUnavailable, .timeout, .networkTransport,
-            .noContent:
+            .serverFailure, .noContent:
             true
         case .authentication, .paymentRequired, .permissionDenied, .guardrailBlocked,
             .modelNotFound, .invalidRequest, .unsupportedFeature, .contextWindow,
-            .maxTokensExceeded, .contentPolicy, .refusal, .malformedStructuredResponse,
-            .serverFailure:
+            .maxTokensExceeded, .contentPolicy, .refusal, .malformedStructuredResponse:
             false
         }
     }
@@ -1561,7 +1564,7 @@ struct OpenRouterConnectivityCheck: Sendable {
             let parsed = try await generator.testTinyCompletion(capabilities: capabilities)
             return Result(
                 keyAccepted: true,
-                selectedModelAvailable: selected != nil,
+                selectedModelAvailable: true,
                 capabilities: capabilities,
                 returnedModelID: parsed.returnedModelID,
                 providerName: parsed.providerName,

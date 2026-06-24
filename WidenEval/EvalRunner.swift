@@ -220,11 +220,21 @@ struct EvalRunner {
                 (backend, summarize(results.filter { $0.backend == backend }, casesByID: casesByID))
             }
         )
+        let isOpenRouterSmoke = suite.name.hasPrefix("openrouter-smoke")
+        let scorerSourcePaths = [
+            "WidenKit/Evals/TextToSQLEvalCase.swift",
+            "WidenKit/Evals/TextToSQLEvalScorer.swift",
+            "WidenKit/Evals/TextToSQLEvalResult.swift",
+            "WidenEval/EvalRunner.swift",
+            "WidenKit/Services/TextToSQLPipeline.swift",
+            "WidenKit/Services/SQLGenerationFailure.swift",
+            "WidenKit/Services/GeneratedSQLRepairSupport.swift",
+        ] + (isOpenRouterSmoke ? ["WidenKit/Services/OpenRouterSQLGenerator.swift"] : [])
         let manifest = EvalRunManifest(
             suiteName: suite.name,
             suiteVersion: suite.version,
             suitePath: suiteURL.path,
-            evaluationMode: suite.name.hasPrefix("openrouter-smoke")
+            evaluationMode: isOpenRouterSmoke
                 ? "openrouter-transport-smoke"
                 : options.semanticDatabase
                 ? "production-pipeline-static-shape-plus-seeded-postgres-semantic"
@@ -240,19 +250,11 @@ struct EvalRunner {
             repeatCount: options.repeatCount,
             caseTimeoutSeconds: options.caseTimeoutSeconds,
             suiteFileHash: Self.sha256(suiteData),
-            scorerVersion: suite.name.hasPrefix("openrouter-smoke")
+            scorerVersion: isOpenRouterSmoke
                 ? "openrouter-transport-smoke-v1"
                 : "production-pipeline-static-shape-v1",
             scorerSourceHash: Self.sourceHash(
-                relativePaths: [
-                    "WidenKit/Evals/TextToSQLEvalCase.swift",
-                    "WidenKit/Evals/TextToSQLEvalScorer.swift",
-                    "WidenKit/Evals/TextToSQLEvalResult.swift",
-                    "WidenEval/EvalRunner.swift",
-                    "WidenKit/Services/TextToSQLPipeline.swift",
-                    "WidenKit/Services/SQLGenerationFailure.swift",
-                    "WidenKit/Services/GeneratedSQLRepairSupport.swift",
-                ],
+                relativePaths: scorerSourcePaths,
                 relativeTo: repositoryRoot
             ),
             schemaFixtureHashes: schemas.mapValues(\.sha256),
