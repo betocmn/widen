@@ -30,14 +30,20 @@ enum WidenEvalMain {
                 var failedBackends: [String] = []
                 for backend in options.backendMode.backends {
                     guard let summary = run.backendSummaries[backend] else { continue }
-                    if summary.passRate < threshold {
-                        let formatted = String(format: "%.1f", summary.passRate * 100)
+                    let passRate = options.semanticDatabase
+                        ? summary.endToEndPassRate ?? 0
+                        : summary.passRate
+                    if passRate < threshold {
+                        let formatted = String(format: "%.1f", passRate * 100)
                         failedBackends.append("\(backend.rawValue): \(formatted)%")
                     }
                 }
                 if !failedBackends.isEmpty {
+                    let label = options.semanticDatabase
+                        ? "Semantic end-to-end pass rate"
+                        : "Static-shape pass rate"
                     fputs(
-                        "Static-shape pass rate below fail-under \(failUnder)% for \(failedBackends.joined(separator: ", "))\n",
+                        "\(label) below fail-under \(failUnder)% for \(failedBackends.joined(separator: ", "))\n",
                         stderr
                     )
                     exit(1)

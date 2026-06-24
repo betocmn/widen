@@ -110,7 +110,11 @@ struct EvalRunner {
         let suiteURL = URL(fileURLWithPath: options.suitePath).standardizedFileURL
         let suiteData = try Data(contentsOf: suiteURL)
         let suite = try JSONDecoder().decode(TextToSQLEvalSuite.self, from: suiteData)
-        try TextToSQLEvalSuiteValidator.validate(suite: suite, suiteURL: suiteURL)
+        try TextToSQLEvalSuiteValidator.validate(
+            suite: suite,
+            suiteURL: suiteURL,
+            requireSemanticExpectations: options.semanticDatabase
+        )
         let selectedCases = try filteredCases(suite.cases)
         let evalDirectory = suiteURL
             .deletingLastPathComponent()
@@ -142,16 +146,7 @@ struct EvalRunner {
                         throw EvalRunnerError.missingSchemaFixture(evalCase.schemaFixture)
                     }
                     for repeatIndex in 1...options.repeatCount {
-                        if let semanticPreparation,
-                            let semanticSkip = semanticPreparation.skipResult(
-                                for: evalCase,
-                                backend: backend,
-                                model: backend == .cloud ? options.model : nil,
-                                repeatIndex: repeatIndex
-                            )
-                        {
-                            results.append(semanticSkip)
-                        } else if let unavailable {
+                        if let unavailable {
                             results.append(
                                 backendUnavailableResult(
                                     evalCase: evalCase,
@@ -160,6 +155,15 @@ struct EvalRunner {
                                     repeatIndex: repeatIndex
                                 )
                             )
+                        } else if let semanticPreparation,
+                            let semanticSkip = semanticPreparation.skipResult(
+                                for: evalCase,
+                                backend: backend,
+                                model: backend == .cloud ? options.model : nil,
+                                repeatIndex: repeatIndex
+                            )
+                        {
+                            results.append(semanticSkip)
                         } else if let generator {
                             let prompt = promptText(for: backend, evalCase: evalCase, schema: schema)
                             let runOptions = TextToSQLEvalRunOptions(

@@ -1040,6 +1040,47 @@ struct TextToSQLEvalTests {
         try TextToSQLEvalSuiteValidator.validate(suite: suite, suiteURL: suiteURL)
     }
 
+    @Test func staticSuiteValidationAllowsSQLCasesWithoutSemanticMetadata() throws {
+        let schemaDirectory = FileManager.default.temporaryDirectory
+            .appendingPathComponent("widen-validator-\(UUID().uuidString)", isDirectory: true)
+        try FileManager.default.createDirectory(at: schemaDirectory, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: schemaDirectory) }
+
+        try JSONEncoder().encode(makeCommerceSchema())
+            .write(to: schemaDirectory.appendingPathComponent("commerce-schema.json"))
+
+        let suite = TextToSQLEvalSuite(
+            name: "Static only",
+            version: "1",
+            cases: [
+                TextToSQLEvalCase(
+                    id: "commerce.static-only",
+                    schemaFixture: "commerce",
+                    question: "List customer ids",
+                    expected: TextToSQLEvalExpectation(
+                        decision: .sql,
+                        requiredTables: ["public.customers"],
+                        requiredColumnBindings: ["public.customers.id"],
+                        requiredOperations: [.limit],
+                        goldenSQL: "SELECT c.id FROM public.customers AS c ORDER BY c.id LIMIT 100"
+                    )
+                )
+            ]
+        )
+
+        try TextToSQLEvalSuiteValidator.validate(
+            suite: suite,
+            schemaDirectory: schemaDirectory
+        )
+        #expect(throws: TextToSQLEvalSuiteValidationError.self) {
+            try TextToSQLEvalSuiteValidator.validate(
+                suite: suite,
+                schemaDirectory: schemaDirectory,
+                requireSemanticExpectations: true
+            )
+        }
+    }
+
     private func makeCommerceSchema() -> DatabaseSchema {
         DatabaseSchema(
             schemas: [SchemaInfo(name: "public")],

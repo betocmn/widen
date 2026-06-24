@@ -88,6 +88,7 @@ eval-case: eval-build
 
 ## Run the text-to-SQL eval suite with seeded Postgres semantic grading locally
 eval-db-local: eval-build
+	@set -a; if [ -f .env.eval.local ]; then . ./.env.eval.local; fi; set +a; \
 	$(EVAL) --backend local --semantic-db $(EVAL_ARGS)
 
 ## Run the text-to-SQL eval suite with seeded Postgres semantic grading through OpenRouter

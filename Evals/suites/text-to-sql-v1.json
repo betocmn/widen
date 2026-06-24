@@ -435,7 +435,7 @@
     {
       "id": "saas.active-users-by-org",
       "schemaFixture": "saas",
-      "question": "Active users by organization in the week ending 2026-06-24 12:00 UTC",
+      "question": "Active users by organization in the week ending 2026-06-24 12:00 UTC, ordered by active user count descending and organization id ascending for ties",
       "databaseContext": "An active user is a user with at least one active organization membership and last_seen_at on or after 2026-06-17 12:00 UTC.",
       "expected": {
         "decision": "sql",
@@ -458,7 +458,7 @@
           "join",
           "relative-time-filter"
         ],
-        "goldenSQL": "SELECT o.id, o.name, COUNT(DISTINCT u.id) AS active_user_count FROM public.organization AS o JOIN public.organization_membership AS m ON m.organization_id = o.id JOIN public.app_user AS u ON u.id = m.user_id WHERE m.status = 'active' AND u.last_seen_at >= CAST('2026-06-24 12:00:00+00' AS TIMESTAMPTZ) - INTERVAL '7 days' GROUP BY o.id, o.name ORDER BY active_user_count DESC",
+        "goldenSQL": "SELECT o.id, o.name, COUNT(DISTINCT u.id) AS active_user_count FROM public.organization AS o JOIN public.organization_membership AS m ON m.organization_id = o.id JOIN public.app_user AS u ON u.id = m.user_id WHERE m.status = 'active' AND u.last_seen_at >= CAST('2026-06-24 12:00:00+00' AS TIMESTAMPTZ) - INTERVAL '7 days' GROUP BY o.id, o.name ORDER BY active_user_count DESC, o.id ASC",
         "semantic": {
           "comparisonMode": "ordered",
           "requiredColumns": [
@@ -479,7 +479,7 @@
           "negativeControls": [
             {
               "id": "missing-active-membership-filter",
-              "sql": "SELECT o.id, o.name, COUNT(DISTINCT u.id) AS active_user_count FROM public.organization AS o JOIN public.organization_membership AS m ON m.organization_id = o.id JOIN public.app_user AS u ON u.id = m.user_id WHERE u.last_seen_at >= CAST('2026-06-24 12:00:00+00' AS TIMESTAMPTZ) - INTERVAL '7 days' GROUP BY o.id, o.name ORDER BY active_user_count DESC"
+              "sql": "SELECT o.id, o.name, COUNT(DISTINCT u.id) AS active_user_count FROM public.organization AS o JOIN public.organization_membership AS m ON m.organization_id = o.id JOIN public.app_user AS u ON u.id = m.user_id WHERE u.last_seen_at >= CAST('2026-06-24 12:00:00+00' AS TIMESTAMPTZ) - INTERVAL '7 days' GROUP BY o.id, o.name ORDER BY active_user_count DESC, o.id ASC"
             }
           ]
         }

@@ -729,6 +729,40 @@ struct TextToSQLSemanticDatabaseIntegrationTests {
         }
     }
 
+    @Test func timestamptzResultsPreserveMicroseconds() async throws {
+        let root = repositoryRoot()
+        let schema = try loadSchema(
+            "commerce",
+            from: root.appendingPathComponent("Evals/schemas", isDirectory: true)
+        )
+        let server = semanticServer()
+        let provisioner = TextToSQLSemanticDatabaseProvisioner(server: server)
+        let database = try await provisioner.provision(
+            fixture: "commerce-timestamptz",
+            setupURL: root
+                .appendingPathComponent("Evals/databases/commerce", isDirectory: true)
+                .appendingPathComponent("setup.json"),
+            expectedSchema: schema
+        )
+        let executor = TextToSQLSemanticExecutor()
+        do {
+            let output = try await executor.executePair(
+                goldenSQL: "SELECT TIMESTAMPTZ '2026-06-24 12:00:00.123456+00' AS created_at",
+                candidateSQL: "SELECT TIMESTAMPTZ '2026-06-24 12:00:00.123457+00' AS created_at",
+                expectation: TextToSQLSemanticExpectation(comparisonMode: .ordered),
+                database: database
+            )
+
+            #expect(output.goldenResult?.rows == [[.timestampWithTimeZone("2026-06-24T12:00:00.123456Z")]])
+            #expect(output.candidateResult?.rows == [[.timestampWithTimeZone("2026-06-24T12:00:00.123457Z")]])
+            #expect(output.comparison?.equivalent == false)
+            await provisioner.drop(database)
+        } catch {
+            await provisioner.drop(database)
+            throw error
+        }
+    }
+
     private func repositoryRoot() -> URL {
         URL(fileURLWithPath: #filePath)
             .deletingLastPathComponent()

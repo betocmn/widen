@@ -16,18 +16,24 @@ public enum TextToSQLEvalSuiteValidationError: LocalizedError, Equatable, Sendab
 public enum TextToSQLEvalSuiteValidator {
     public static func validate(
         suite: TextToSQLEvalSuite,
-        suiteURL: URL
+        suiteURL: URL,
+        requireSemanticExpectations: Bool = false
     ) throws {
         let schemaDirectory = suiteURL
             .deletingLastPathComponent()
             .deletingLastPathComponent()
             .appendingPathComponent("schemas", isDirectory: true)
-        try validate(suite: suite, schemaDirectory: schemaDirectory)
+        try validate(
+            suite: suite,
+            schemaDirectory: schemaDirectory,
+            requireSemanticExpectations: requireSemanticExpectations
+        )
     }
 
     public static func validate(
         suite: TextToSQLEvalSuite,
-        schemaDirectory: URL
+        schemaDirectory: URL,
+        requireSemanticExpectations: Bool = false
     ) throws {
         var issues: [String] = []
         validateCaseIDs(suite.cases, issues: &issues)
@@ -40,7 +46,12 @@ public enum TextToSQLEvalSuiteValidator {
 
         for evalCase in suite.cases {
             guard let schema = schemas[evalCase.schemaFixture] else { continue }
-            validateExpectations(evalCase, schema: schema, issues: &issues)
+            validateExpectations(
+                evalCase,
+                schema: schema,
+                requireSemanticExpectations: requireSemanticExpectations,
+                issues: &issues
+            )
         }
 
         if !issues.isEmpty {
@@ -95,6 +106,7 @@ public enum TextToSQLEvalSuiteValidator {
     private static func validateExpectations(
         _ evalCase: TextToSQLEvalCase,
         schema: DatabaseSchema,
+        requireSemanticExpectations: Bool,
         issues: inout [String]
     ) {
         let expected = evalCase.expected
@@ -104,7 +116,12 @@ public enum TextToSQLEvalSuiteValidator {
         case .clarify:
             validateClarificationCase(evalCase, issues: &issues)
         case .sql:
-            validateSQLCase(evalCase, schema: schema, issues: &issues)
+            validateSQLCase(
+                evalCase,
+                schema: schema,
+                requireSemanticExpectations: requireSemanticExpectations,
+                issues: &issues
+            )
         }
     }
 
@@ -139,6 +156,7 @@ public enum TextToSQLEvalSuiteValidator {
     private static func validateSQLCase(
         _ evalCase: TextToSQLEvalCase,
         schema: DatabaseSchema,
+        requireSemanticExpectations: Bool,
         issues: inout [String]
     ) {
         let expected = evalCase.expected
@@ -157,14 +175,6 @@ public enum TextToSQLEvalSuiteValidator {
             issues.append("\(evalCase.id) is a SQL case but has no goldenSQL.")
             return
         }
-        guard let semantic = expected.semantic else {
-            issues.append("\(evalCase.id) is a SQL case but has no semantic expectation.")
-            return
-        }
-        if semantic.floatTolerance < 0 || !semantic.floatTolerance.isFinite {
-            issues.append("\(evalCase.id) has an invalid semantic floatTolerance.")
-        }
-        validateSemanticColumns(evalCase, semantic: semantic, issues: &issues)
 
         let safety = SQLSafetyValidator.validate(goldenSQL)
         if !safety.isValid {
@@ -179,7 +189,16 @@ public enum TextToSQLEvalSuiteValidator {
                 "\(evalCase.id) goldenSQL is not schema-valid: \(schemaValidation.errors.joined(separator: " "))"
             )
         }
-        validateNegativeControls(evalCase, semantic: semantic, schema: schema, issues: &issues)
+
+        if let semantic = expected.semantic {
+            if semantic.floatTolerance < 0 || !semantic.floatTolerance.isFinite {
+                issues.append("\(evalCase.id) has an invalid semantic floatTolerance.")
+            }
+            validateSemanticColumns(evalCase, semantic: semantic, issues: &issues)
+            validateNegativeControls(evalCase, semantic: semantic, schema: schema, issues: &issues)
+        } else if requireSemanticExpectations {
+            issues.append("\(evalCase.id) is a SQL case but has no semantic expectation.")
+        }
 
         let result = TextToSQLEvalScorer.score(
             evalCase: evalCase,

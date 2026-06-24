@@ -562,7 +562,7 @@ public struct TextToSQLSemanticExecutor: Sendable {
             case .timestamp:
                 return .timestampWithoutTimeZone(try localTimestampString(for: cell))
             case .timestamptz:
-                return .timestampWithTimeZone(timestampFormatter.string(from: try cell.decode(Date.self)))
+                return .timestampWithTimeZone(try timestampWithTimeZoneString(for: cell))
             case .json, .jsonb:
                 let raw = try cell.decode(String.self)
                 return .json(TextToSQLSemanticValue.canonicalJSON(raw) ?? raw)
@@ -598,19 +598,34 @@ public struct TextToSQLSemanticExecutor: Sendable {
         return timestampString(postgresMicroseconds: microseconds, includeTimeZone: false)
     }
 
+    private static func timestampWithTimeZoneString(for cell: PostgresCell) throws -> String {
+        guard var bytes = cell.bytes, let microseconds = bytes.readInteger(as: Int64.self) else {
+            return "invalid"
+        }
+        return timestampString(postgresMicroseconds: microseconds, includeTimeZone: true)
+    }
+
     private static func timestampString(
         postgresMicroseconds: Int64,
         includeTimeZone: Bool
     ) -> String {
-        let seconds = postgresMicroseconds / 1_000_000
-        let micros = abs(postgresMicroseconds % 1_000_000)
+        let seconds = floorDividing(postgresMicroseconds, by: 1_000_000)
+        let micros = postgresMicroseconds - seconds * 1_000_000
         let date = Date(
             timeInterval: Double(seconds),
             since: Date(timeIntervalSince1970: 946_684_800)
         )
-        let base = localTimestampFormatter.string(from: date)
-        let suffix = String(format: ".%06d", micros)
+        let base = includeTimeZone
+            ? timestampWithTimeZoneFormatter.string(from: date)
+            : localTimestampFormatter.string(from: date)
+        let suffix = String(format: ".%06d", Int(micros))
         return includeTimeZone ? "\(base)\(suffix)Z" : "\(base)\(suffix)"
+    }
+
+    private static func floorDividing(_ value: Int64, by divisor: Int64) -> Int64 {
+        let quotient = value / divisor
+        let remainder = value % divisor
+        return remainder < 0 ? quotient - 1 : quotient
     }
 
     private static func quotedIdentifier(_ value: String) -> String {
@@ -625,16 +640,17 @@ public struct TextToSQLSemanticExecutor: Sendable {
         return formatter
     }()
 
-    nonisolated(unsafe) private static let timestampFormatter: ISO8601DateFormatter = {
-        let formatter = ISO8601DateFormatter()
-        formatter.formatOptions = [.withInternetDateTime, .withFractionalSeconds]
-        formatter.timeZone = TimeZone(identifier: "UTC")
-        return formatter
-    }()
-
     nonisolated(unsafe) private static let localTimestampFormatter: DateFormatter = {
         let formatter = DateFormatter()
         formatter.dateFormat = "yyyy-MM-dd HH:mm:ss"
+        formatter.timeZone = TimeZone(identifier: "UTC")
+        formatter.locale = Locale(identifier: "en_US_POSIX")
+        return formatter
+    }()
+
+    nonisolated(unsafe) private static let timestampWithTimeZoneFormatter: DateFormatter = {
+        let formatter = DateFormatter()
+        formatter.dateFormat = "yyyy-MM-dd'T'HH:mm:ss"
         formatter.timeZone = TimeZone(identifier: "UTC")
         formatter.locale = Locale(identifier: "en_US_POSIX")
         return formatter
