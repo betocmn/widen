@@ -48,6 +48,11 @@ public struct TextToSQLEvalMetrics: Codable, Equatable, Sendable {
     public var estimatedInitialPromptCharacters: Int?
     public var tokenUsage: Int?
     public var estimatedCloudCostUSD: Double?
+    public var openRouterStructuredOutputMode: String?
+    public var openRouterRetryCount: Int?
+    public var openRouterRequestedModelID: String?
+    public var openRouterReturnedModelID: String?
+    public var openRouterProviderName: String?
     public var semanticExecutionAttempted: Bool?
     public var semanticEnvironmentAvailable: Bool?
     public var goldenExecutionSucceeded: Bool?
@@ -79,6 +84,11 @@ public struct TextToSQLEvalMetrics: Codable, Equatable, Sendable {
         estimatedInitialPromptCharacters: Int? = nil,
         tokenUsage: Int? = nil,
         estimatedCloudCostUSD: Double? = nil,
+        openRouterStructuredOutputMode: String? = nil,
+        openRouterRetryCount: Int? = nil,
+        openRouterRequestedModelID: String? = nil,
+        openRouterReturnedModelID: String? = nil,
+        openRouterProviderName: String? = nil,
         semanticExecutionAttempted: Bool? = nil,
         semanticEnvironmentAvailable: Bool? = nil,
         goldenExecutionSucceeded: Bool? = nil,
@@ -109,6 +119,11 @@ public struct TextToSQLEvalMetrics: Codable, Equatable, Sendable {
         self.estimatedInitialPromptCharacters = estimatedInitialPromptCharacters
         self.tokenUsage = tokenUsage
         self.estimatedCloudCostUSD = estimatedCloudCostUSD
+        self.openRouterStructuredOutputMode = openRouterStructuredOutputMode
+        self.openRouterRetryCount = openRouterRetryCount
+        self.openRouterRequestedModelID = openRouterRequestedModelID
+        self.openRouterReturnedModelID = openRouterReturnedModelID
+        self.openRouterProviderName = openRouterProviderName
         self.semanticExecutionAttempted = semanticExecutionAttempted
         self.semanticEnvironmentAvailable = semanticEnvironmentAvailable
         self.goldenExecutionSucceeded = goldenExecutionSucceeded
@@ -133,6 +148,18 @@ public struct TextToSQLEvalDiagnostics: Codable, Equatable, Sendable {
     public var safetyErrors: [String]
     public var schemaErrors: [String]
     public var errorMessage: String?
+    public var openRouterFailureCategory: String?
+    public var openRouterHTTPStatus: Int?
+    public var openRouterErrorType: String?
+    public var openRouterProviderCode: String?
+    public var openRouterCompletionID: String?
+    public var openRouterRequestID: String?
+    public var openRouterRequestedModelID: String?
+    public var openRouterReturnedModelID: String?
+    public var openRouterProviderName: String?
+    public var openRouterRetryAfterSeconds: Double?
+    public var openRouterSuggestedWaitSeconds: Double?
+    public var openRouterAttemptCount: Int?
 
     public init(
         missingTables: [String] = [],
@@ -140,7 +167,8 @@ public struct TextToSQLEvalDiagnostics: Codable, Equatable, Sendable {
         missingOperations: [TextToSQLEvalOperation] = [],
         safetyErrors: [String] = [],
         schemaErrors: [String] = [],
-        errorMessage: String? = nil
+        errorMessage: String? = nil,
+        openRouterFailure: OpenRouterFailureDiagnostic? = nil
     ) {
         self.missingTables = missingTables
         self.missingColumnBindings = missingColumnBindings
@@ -148,6 +176,18 @@ public struct TextToSQLEvalDiagnostics: Codable, Equatable, Sendable {
         self.safetyErrors = safetyErrors
         self.schemaErrors = schemaErrors
         self.errorMessage = errorMessage
+        self.openRouterFailureCategory = openRouterFailure?.category.rawValue
+        self.openRouterHTTPStatus = openRouterFailure?.httpStatus
+        self.openRouterErrorType = openRouterFailure?.openRouterErrorType
+        self.openRouterProviderCode = openRouterFailure?.providerCode
+        self.openRouterCompletionID = openRouterFailure?.completionID
+        self.openRouterRequestID = openRouterFailure?.requestID
+        self.openRouterRequestedModelID = openRouterFailure?.requestedModelID
+        self.openRouterReturnedModelID = openRouterFailure?.returnedModelID
+        self.openRouterProviderName = openRouterFailure?.providerName
+        self.openRouterRetryAfterSeconds = openRouterFailure?.retryAfterSeconds
+        self.openRouterSuggestedWaitSeconds = openRouterFailure?.suggestedWaitSeconds
+        self.openRouterAttemptCount = openRouterFailure?.attemptCount
     }
 }
 

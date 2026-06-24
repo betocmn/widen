@@ -108,6 +108,7 @@ enum EvalReporter {
         }
 
         lines += statusCountSection(title: "Status Counts", summary: run.summary)
+        lines += openRouterSection(results: run.results)
         lines += semanticStatusCountSection(title: "Semantic Status Counts", summary: run.summary)
         lines += staticSemanticCrossTabSection(title: "Static/Semantic Cross-Tab", summary: run.summary)
         if run.backendSummaries.count > 1 {
@@ -155,6 +156,10 @@ enum EvalReporter {
     }
 
     private static func evaluationScope(for run: EvalRun) -> String {
+        if run.manifest.evaluationMode == "openrouter-transport-smoke" {
+            return "**Evaluation scope:** The smoke run invokes the shared production text-to-SQL pipeline only to exercise OpenRouter transport, request-mode selection, structured-response parsing, retry accounting, and safe provider diagnostics. It does not establish SQL semantic accuracy."
+        }
+
         if run.manifest.evaluationMode.contains("seeded-postgres-semantic") {
             return "**Evaluation scope:** The eval invokes the shared production text-to-SQL pipeline through local validation and validation-only repair, keeps the static-shape score, then independently executes eligible final SQL decisions against seeded PostgreSQL fixtures for semantic result-set grading."
         }
@@ -168,6 +173,9 @@ enum EvalReporter {
             .map { String(format: "%.0f", $0) } ?? "-"
         let maxPromptSize = summary.maxEstimatedInitialPromptCharacters.map(String.init) ?? "-"
         let modelCalls = summary.totalModelCalls.map(String.init) ?? "-"
+        let tokenUsage = summary.totalTokenUsage.map(String.init) ?? "-"
+        let cloudCost = summary.estimatedCloudCostUSD
+            .map { String(format: "$%.6f", $0) } ?? "-"
 
         return [
             "",
@@ -200,8 +208,8 @@ enum EvalReporter {
             "| Total model calls | \(modelCalls) |",
             "| Avg estimated initial prompt characters | \(averagePromptSize) |",
             "| Max estimated initial prompt characters | \(maxPromptSize) |",
-            "| Token usage | unavailable |",
-            "| Estimated cloud cost | unavailable |",
+            "| Token usage | \(tokenUsage) |",
+            "| Estimated cloud cost | \(cloudCost) |",
             "",
             "### Latency",
             "",
@@ -226,6 +234,83 @@ enum EvalReporter {
         for status in TextToSQLEvalCaseStatus.allCases {
             lines.append("| \(status.rawValue) | \(summary.statusCounts[status.rawValue, default: 0]) |")
         }
+        return lines
+    }
+
+    private static func openRouterSection(results: [TextToSQLEvalResult]) -> [String] {
+        let openRouterResults = results.filter { result in
+            result.backend == .cloud
+                && (
+                    result.metrics.openRouterStructuredOutputMode != nil
+                        || result.metrics.openRouterRetryCount != nil
+                        || result.metrics.openRouterRequestedModelID != nil
+                        || result.diagnostics.openRouterFailureCategory != nil
+                )
+        }
+        guard !openRouterResults.isEmpty else { return [] }
+
+        let retries = openRouterResults.compactMap(\.metrics.openRouterRetryCount)
+        let retryTotal = retries.reduce(0, +)
+        let retryAverage = retries.isEmpty ? "-" : String(format: "%.2f", Double(retryTotal) / Double(retries.count))
+        let tokenUsage = openRouterResults.compactMap(\.metrics.tokenUsage).reduce(0, +)
+        let cost = openRouterResults.compactMap(\.metrics.estimatedCloudCostUSD).reduce(0, +)
+        let failureCounts = counts(openRouterResults.compactMap(\.diagnostics.openRouterFailureCategory))
+        let modeCounts = counts(openRouterResults.compactMap(\.metrics.openRouterStructuredOutputMode))
+        let returnedModelCounts = counts(
+            openRouterResults.compactMap {
+                $0.metrics.openRouterReturnedModelID ?? $0.diagnostics.openRouterReturnedModelID
+            }
+        )
+        let providerCounts = counts(
+            openRouterResults.compactMap {
+                $0.metrics.openRouterProviderName ?? $0.diagnostics.openRouterProviderName
+            }
+        )
+
+        var lines = [
+            "",
+            "## OpenRouter Transport",
+            "",
+            "| Metric | Value |",
+            "| --- | --- |",
+            "| HTTP success | \(count(EvalCountSummary(count: openRouterResults.filter(\.metrics.transportSuccess).count, denominator: openRouterResults.count))) |",
+            "| Structured parse success | \(count(EvalCountSummary(count: openRouterResults.filter(\.metrics.structuredResponseParsed).count, denominator: openRouterResults.count))) |",
+            "| Typed provider failures | \(failureCounts.values.reduce(0, +)) |",
+            "| Retry total | \(retryTotal) |",
+            "| Retry average | \(retryAverage) |",
+            "| Token usage | \(tokenUsage == 0 ? "-" : String(tokenUsage)) |",
+            "| Estimated cloud cost | \(cost == 0 ? "-" : String(format: "$%.6f", cost)) |",
+            "",
+            "### OpenRouter Output Modes",
+            "",
+            "| Mode | Count |",
+            "| --- | ---: |",
+        ]
+        lines += tableRows(modeCounts)
+        lines += [
+            "",
+            "### OpenRouter Failures",
+            "",
+            "| Category | Count |",
+            "| --- | ---: |",
+        ]
+        lines += tableRows(failureCounts)
+        lines += [
+            "",
+            "### OpenRouter Returned Models",
+            "",
+            "| Model | Count |",
+            "| --- | ---: |",
+        ]
+        lines += tableRows(returnedModelCounts)
+        lines += [
+            "",
+            "### OpenRouter Providers",
+            "",
+            "| Provider | Count |",
+            "| --- | ---: |",
+        ]
+        lines += tableRows(providerCounts)
         return lines
     }
 
@@ -354,6 +439,19 @@ enum EvalReporter {
         "\(metric.count)/\(metric.denominator)\(suffix)"
     }
 
+    private static func counts(_ values: [String]) -> [String: Int] {
+        values.reduce(into: [:]) { result, value in
+            result[value, default: 0] += 1
+        }
+    }
+
+    private static func tableRows(_ counts: [String: Int]) -> [String] {
+        if counts.isEmpty { return ["| - | 0 |"] }
+        return counts.keys.sorted().map { key in
+            "| \(tableCell(key)) | \(counts[key, default: 0]) |"
+        }
+    }
+
     private static func average(_ metric: EvalAverageSummary, suffix: String = "") -> String {
         guard let average = metric.average else {
             return "- (0\(suffix))"
@@ -400,6 +498,25 @@ enum EvalReporter {
         }
         if let error = result.diagnostics.errorMessage {
             parts.append(error)
+        }
+        if let category = result.diagnostics.openRouterFailureCategory {
+            parts.append("openrouter: \(category)")
+        }
+        if let mode = result.metrics.openRouterStructuredOutputMode {
+            parts.append("mode: \(mode)")
+        }
+        if let retries = result.metrics.openRouterRetryCount {
+            parts.append("retries: \(retries)")
+        }
+        if let returnedModel = result.metrics.openRouterReturnedModelID
+            ?? result.diagnostics.openRouterReturnedModelID
+        {
+            parts.append("returned: \(returnedModel)")
+        }
+        if let provider = result.metrics.openRouterProviderName
+            ?? result.diagnostics.openRouterProviderName
+        {
+            parts.append("provider: \(provider)")
         }
         return parts.isEmpty ? "-" : tableCell(parts.joined(separator: "; "))
     }

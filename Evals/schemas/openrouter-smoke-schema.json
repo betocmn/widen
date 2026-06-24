@@ -1,0 +1,51 @@
+{
+  "schemas": [
+    { "name": "public" }
+  ],
+  "tables": [
+    {
+      "schema": "public",
+      "name": "users",
+      "type": "BASE TABLE",
+      "columns": [
+        { "tableSchema": "public", "tableName": "users", "name": "id", "dataType": "integer", "isNullable": false, "ordinalPosition": 1 },
+        { "tableSchema": "public", "tableName": "users", "name": "email", "dataType": "text", "isNullable": false, "ordinalPosition": 2 },
+        { "tableSchema": "public", "tableName": "users", "name": "created_at", "dataType": "timestamp with time zone", "isNullable": false, "ordinalPosition": 3 }
+      ]
+    },
+    {
+      "schema": "public",
+      "name": "orders",
+      "type": "BASE TABLE",
+      "columns": [
+        { "tableSchema": "public", "tableName": "orders", "name": "id", "dataType": "integer", "isNullable": false, "ordinalPosition": 1 },
+        { "tableSchema": "public", "tableName": "orders", "name": "user_id", "dataType": "integer", "isNullable": false, "ordinalPosition": 2 },
+        { "tableSchema": "public", "tableName": "orders", "name": "status", "dataType": "text", "isNullable": false, "ordinalPosition": 3 },
+        { "tableSchema": "public", "tableName": "orders", "name": "total_cents", "dataType": "integer", "isNullable": false, "ordinalPosition": 4 },
+        { "tableSchema": "public", "tableName": "orders", "name": "created_at", "dataType": "timestamp with time zone", "isNullable": false, "ordinalPosition": 5 }
+      ]
+    },
+    {
+      "schema": "public",
+      "name": "UserEvents",
+      "type": "BASE TABLE",
+      "columns": [
+        { "tableSchema": "public", "tableName": "UserEvents", "name": "id", "dataType": "integer", "isNullable": false, "ordinalPosition": 1 },
+        { "tableSchema": "public", "tableName": "UserEvents", "name": "userID", "dataType": "integer", "isNullable": false, "ordinalPosition": 2 },
+        { "tableSchema": "public", "tableName": "UserEvents", "name": "eventType", "dataType": "text", "isNullable": false, "ordinalPosition": 3 }
+      ]
+    }
+  ],
+  "foreignKeys": [
+    {
+      "constraintName": "orders_user_id_fkey",
+      "sourceSchema": "public",
+      "sourceTable": "orders",
+      "sourceColumn": "user_id",
+      "targetSchema": "public",
+      "targetTable": "users",
+      "targetColumn": "id"
+    }
+  ],
+  "loadedAt": 0
+}

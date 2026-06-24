@@ -349,6 +349,12 @@ public enum TextToSQLEvalCaseRunner {
             $0.pipelineCategory != .transport
                 && $0.pipelineCategory != .backendUnavailable
         } ?? false
+        let openRouterDiagnostic: OpenRouterFailureDiagnostic?
+        if let typed, case .openRouter(let failure) = typed {
+            openRouterDiagnostic = failure.diagnostic
+        } else {
+            openRouterDiagnostic = nil
+        }
         let structuredParsed = false
         return TextToSQLEvalResult(
             caseID: evalCase.id,
@@ -362,9 +368,17 @@ public enum TextToSQLEvalCaseRunner {
                 structuredResponseParsed: structuredParsed,
                 decisionMatches: false,
                 latencyMs: latencyMs,
-                estimatedInitialPromptCharacters: options.estimatedInitialPromptCharacters
+                modelCallCount: openRouterDiagnostic?.attemptCount,
+                estimatedInitialPromptCharacters: options.estimatedInitialPromptCharacters,
+                openRouterRetryCount: openRouterDiagnostic.map { max(0, $0.attemptCount - 1) },
+                openRouterRequestedModelID: openRouterDiagnostic?.requestedModelID,
+                openRouterReturnedModelID: openRouterDiagnostic?.returnedModelID,
+                openRouterProviderName: openRouterDiagnostic?.providerName
             ),
-            diagnostics: TextToSQLEvalDiagnostics(errorMessage: error.localizedDescription),
+            diagnostics: TextToSQLEvalDiagnostics(
+                errorMessage: error.localizedDescription,
+                openRouterFailure: openRouterDiagnostic
+            ),
             estimatedInitialPrompt: options.estimatedInitialPrompt
         )
     }
@@ -394,10 +408,19 @@ public enum TextToSQLEvalCaseRunner {
                         || failure.category == .repeatedNoProgressRepair
                 ) ? false : nil,
                 latencyMs: latencyMs,
-                modelCallCount: trace.modelCalls == 0 ? nil : trace.modelCalls,
-                estimatedInitialPromptCharacters: options.estimatedInitialPromptCharacters
+                modelCallCount: trace.modelCalls == 0
+                    ? failure.openRouterFailure?.attemptCount
+                    : trace.modelCalls,
+                estimatedInitialPromptCharacters: options.estimatedInitialPromptCharacters,
+                openRouterRetryCount: failure.openRouterFailure.map { max(0, $0.attemptCount - 1) },
+                openRouterRequestedModelID: failure.openRouterFailure?.requestedModelID,
+                openRouterReturnedModelID: failure.openRouterFailure?.returnedModelID,
+                openRouterProviderName: failure.openRouterFailure?.providerName
             ),
-            diagnostics: TextToSQLEvalDiagnostics(errorMessage: failure.localizedDescription),
+            diagnostics: TextToSQLEvalDiagnostics(
+                errorMessage: failure.localizedDescription,
+                openRouterFailure: failure.openRouterFailure
+            ),
             estimatedInitialPrompt: options.estimatedInitialPrompt,
             trace: trace
         )
@@ -453,6 +476,7 @@ public enum TextToSQLEvalScorer {
         let modelCallCount = trace?.modelCalls == 0
             ? generation.generationCallCount
             : (trace?.modelCalls ?? generation.generationCallCount)
+        let backendMetadata = generation.backendMetadata
 
         if expected.decision == .clarify {
             let quality = clarificationQuality(
@@ -474,7 +498,14 @@ public enum TextToSQLEvalScorer {
                     clarificationQuality: quality,
                     latencyMs: latencyMs,
                     modelCallCount: modelCallCount,
-                    estimatedInitialPromptCharacters: options.estimatedInitialPromptCharacters
+                    estimatedInitialPromptCharacters: options.estimatedInitialPromptCharacters,
+                    tokenUsage: backendMetadata?.totalTokens,
+                    estimatedCloudCostUSD: backendMetadata?.costUSD,
+                    openRouterStructuredOutputMode: backendMetadata?.structuredOutputMode.rawValue,
+                    openRouterRetryCount: backendMetadata?.retryCount,
+                    openRouterRequestedModelID: backendMetadata?.requestedModelID,
+                    openRouterReturnedModelID: backendMetadata?.returnedModelID,
+                    openRouterProviderName: backendMetadata?.providerName
                 ),
                 diagnostics: TextToSQLEvalDiagnostics(),
                 generatedSQL: generation.sql.nilIfBlank,
@@ -503,7 +534,14 @@ public enum TextToSQLEvalScorer {
                     ),
                     latencyMs: latencyMs,
                     modelCallCount: modelCallCount,
-                    estimatedInitialPromptCharacters: options.estimatedInitialPromptCharacters
+                    estimatedInitialPromptCharacters: options.estimatedInitialPromptCharacters,
+                    tokenUsage: backendMetadata?.totalTokens,
+                    estimatedCloudCostUSD: backendMetadata?.costUSD,
+                    openRouterStructuredOutputMode: backendMetadata?.structuredOutputMode.rawValue,
+                    openRouterRetryCount: backendMetadata?.retryCount,
+                    openRouterRequestedModelID: backendMetadata?.requestedModelID,
+                    openRouterReturnedModelID: backendMetadata?.returnedModelID,
+                    openRouterProviderName: backendMetadata?.providerName
                 ),
                 generatedSQL: generation.sql.nilIfBlank,
                 clarificationQuestion: generation.clarificationQuestion,
@@ -530,7 +568,14 @@ public enum TextToSQLEvalScorer {
                     schemaValid: nil,
                     latencyMs: latencyMs,
                     modelCallCount: modelCallCount,
-                    estimatedInitialPromptCharacters: options.estimatedInitialPromptCharacters
+                    estimatedInitialPromptCharacters: options.estimatedInitialPromptCharacters,
+                    tokenUsage: backendMetadata?.totalTokens,
+                    estimatedCloudCostUSD: backendMetadata?.costUSD,
+                    openRouterStructuredOutputMode: backendMetadata?.structuredOutputMode.rawValue,
+                    openRouterRetryCount: backendMetadata?.retryCount,
+                    openRouterRequestedModelID: backendMetadata?.requestedModelID,
+                    openRouterReturnedModelID: backendMetadata?.returnedModelID,
+                    openRouterProviderName: backendMetadata?.providerName
                 ),
                 diagnostics: TextToSQLEvalDiagnostics(safetyErrors: safety.errors),
                 generatedSQL: generation.sql.nilIfBlank,
@@ -601,7 +646,14 @@ public enum TextToSQLEvalScorer {
                 forbiddenBindingViolations: forbiddenBindingViolations,
                 latencyMs: latencyMs,
                 modelCallCount: modelCallCount,
-                estimatedInitialPromptCharacters: options.estimatedInitialPromptCharacters
+                estimatedInitialPromptCharacters: options.estimatedInitialPromptCharacters,
+                tokenUsage: backendMetadata?.totalTokens,
+                estimatedCloudCostUSD: backendMetadata?.costUSD,
+                openRouterStructuredOutputMode: backendMetadata?.structuredOutputMode.rawValue,
+                openRouterRetryCount: backendMetadata?.retryCount,
+                openRouterRequestedModelID: backendMetadata?.requestedModelID,
+                openRouterReturnedModelID: backendMetadata?.returnedModelID,
+                openRouterProviderName: backendMetadata?.providerName
             ),
             diagnostics: TextToSQLEvalDiagnostics(
                 missingTables: missingTables,

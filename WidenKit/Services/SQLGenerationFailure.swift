@@ -9,6 +9,7 @@ public enum SQLGenerationFailure: Error, LocalizedError, Equatable, Sendable {
     case contextWindow(String)
     case structuredResponseParsing(String)
     case generation(String)
+    case openRouter(OpenRouterFailure)
 
     public var errorDescription: String? {
         switch self {
@@ -19,6 +20,8 @@ public enum SQLGenerationFailure: Error, LocalizedError, Equatable, Sendable {
             .structuredResponseParsing(let detail),
             .generation(let detail):
             "SQL generation failed: \(detail)"
+        case .openRouter(let failure):
+            failure.localizedDescription
         }
     }
 
@@ -30,6 +33,8 @@ public enum SQLGenerationFailure: Error, LocalizedError, Equatable, Sendable {
             .structuredResponseParsing(let detail),
             .generation(let detail):
             detail
+        case .openRouter(let failure):
+            failure.message
         }
     }
 
@@ -45,12 +50,17 @@ public enum SQLGenerationFailure: Error, LocalizedError, Equatable, Sendable {
             .structuredResponseParsing
         case .generation:
             .modelGeneration
+        case .openRouter(let failure):
+            failure.pipelineCategory
         }
     }
 
     public static func typed(_ error: any Error) -> SQLGenerationFailure? {
         if let failure = error as? SQLGenerationFailure {
             return failure
+        }
+        if let failure = error as? OpenRouterFailure {
+            return .openRouter(failure)
         }
         if let appError = error as? AppError {
             switch appError {

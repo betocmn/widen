@@ -108,17 +108,20 @@ public struct TextToSQLPipelineFailure: Error, LocalizedError, Codable, Equatabl
     public var category: TextToSQLFailureCategory
     public var message: String
     public var validationIssueIDs: [String]
+    public var openRouterFailure: OpenRouterFailureDiagnostic?
 
     public init(
         stage: TextToSQLStage,
         category: TextToSQLFailureCategory,
         message: String,
-        validationIssueIDs: [String] = []
+        validationIssueIDs: [String] = [],
+        openRouterFailure: OpenRouterFailureDiagnostic? = nil
     ) {
         self.stage = stage
         self.category = category
         self.message = message
         self.validationIssueIDs = validationIssueIDs
+        self.openRouterFailure = openRouterFailure
     }
 
     public var errorDescription: String? { message }
@@ -731,10 +734,17 @@ public struct TextToSQLPipeline: TextToSQLRunning {
         stage: TextToSQLStage
     ) -> TextToSQLPipelineFailure {
         if let failure = SQLGenerationFailure.typed(error) {
+            let openRouterDiagnostic: OpenRouterFailureDiagnostic?
+            if case .openRouter(let openRouterFailure) = failure {
+                openRouterDiagnostic = openRouterFailure.diagnostic
+            } else {
+                openRouterDiagnostic = nil
+            }
             return TextToSQLPipelineFailure(
                 stage: stage,
                 category: failure.pipelineCategory,
-                message: failure.localizedDescription
+                message: failure.localizedDescription,
+                openRouterFailure: openRouterDiagnostic
             )
         }
         return TextToSQLPipelineFailure(

@@ -88,6 +88,8 @@ struct EvalRunSummary: Codable {
     var requiredColumnBindingCoverage: EvalAverageSummary
     var latency: LatencySummary
     var totalModelCalls: Int?
+    var totalTokenUsage: Int?
+    var estimatedCloudCostUSD: Double?
     var averageEstimatedInitialPromptCharacters: Double?
     var maxEstimatedInitialPromptCharacters: Int?
 }
@@ -222,7 +224,9 @@ struct EvalRunner {
             suiteName: suite.name,
             suiteVersion: suite.version,
             suitePath: suiteURL.path,
-            evaluationMode: options.semanticDatabase
+            evaluationMode: suite.name.hasPrefix("openrouter-smoke")
+                ? "openrouter-transport-smoke"
+                : options.semanticDatabase
                 ? "production-pipeline-static-shape-plus-seeded-postgres-semantic"
                 : "production-pipeline-static-shape",
             commitSHA: Self.commitSHA(),
@@ -236,7 +240,9 @@ struct EvalRunner {
             repeatCount: options.repeatCount,
             caseTimeoutSeconds: options.caseTimeoutSeconds,
             suiteFileHash: Self.sha256(suiteData),
-            scorerVersion: "production-pipeline-static-shape-v1",
+            scorerVersion: suite.name.hasPrefix("openrouter-smoke")
+                ? "openrouter-transport-smoke-v1"
+                : "production-pipeline-static-shape-v1",
             scorerSourceHash: Self.sourceHash(
                 relativePaths: [
                     "WidenKit/Evals/TextToSQLEvalCase.swift",
@@ -706,6 +712,8 @@ struct EvalRunner {
         let passed = statusCounts[TextToSQLEvalCaseStatus.passed.rawValue, default: 0]
         let latencies = results.map(\.metrics.latencyMs).sorted()
         let modelCalls = results.compactMap(\.metrics.modelCallCount)
+        let tokenUsage = results.compactMap(\.metrics.tokenUsage)
+        let cloudCosts = results.compactMap(\.metrics.estimatedCloudCostUSD)
         let promptEstimateValues = results.compactMap(\.metrics.estimatedInitialPromptCharacters)
         let backendAvailableValues = results.map(\.metrics.backendAvailable)
         let transportEvaluated = results.filter(transportAttempted)
@@ -835,6 +843,8 @@ struct EvalRunner {
             ),
             latency: latencySummary(latencies),
             totalModelCalls: modelCalls.isEmpty ? nil : modelCalls.reduce(0, +),
+            totalTokenUsage: tokenUsage.isEmpty ? nil : tokenUsage.reduce(0, +),
+            estimatedCloudCostUSD: cloudCosts.isEmpty ? nil : cloudCosts.reduce(0, +),
             averageEstimatedInitialPromptCharacters: promptEstimateValues.isEmpty
                 ? nil
                 : Double(promptEstimateValues.reduce(0, +)) / Double(promptEstimateValues.count),
