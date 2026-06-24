@@ -23,19 +23,34 @@ struct LocalSchemaSearchIndex: Codable, Sendable {
     ) -> LocalSchemaSearchIndex {
         let started = ContinuousClock.now
         var documents: [SchemaSearchDocument] = []
-        let relationships = snapshot.schema.effectiveForeignKeyConstraints
+        let tables = snapshot.schemaSearchTables
+        let relationships = snapshot.schemaSearchRelationships
         let relationshipsByTable = Dictionary(grouping: relationships.flatMap { relationship in
             [
-                (key: "\(relationship.sourceSchema).\(relationship.sourceTable)", value: relationship),
-                (key: "\(relationship.targetSchema).\(relationship.targetTable)", value: relationship),
+                (
+                    key: SchemaObjectID.table(
+                        schema: relationship.sourceSchema,
+                        name: relationship.sourceTable
+                    ).stableString,
+                    value: relationship
+                ),
+                (
+                    key: SchemaObjectID.table(
+                        schema: relationship.targetSchema,
+                        name: relationship.targetTable
+                    ).stableString,
+                    value: relationship
+                ),
             ]
         }, by: \.key).mapValues { $0.map(\.value) }
 
-        for table in snapshot.schema.tables.sorted(by: tableSort) {
+        for table in tables.sorted(by: tableSort) {
             documents.append(
                 SchemaSearchDocument(
                     table: table,
-                    relationships: relationshipsByTable[table.qualifiedName] ?? []
+                    relationships: relationshipsByTable[
+                        SchemaObjectID.table(schema: table.schema, name: table.name).stableString
+                    ] ?? []
                 )
             )
         }
@@ -286,6 +301,36 @@ extension DatabaseSchema {
                 return $0.sourceTable < $1.sourceTable
             }
             return $0.sourceSchema < $1.sourceSchema
+        }
+    }
+}
+
+extension SchemaSearchSnapshot {
+    var schemaSearchTables: [TableInfo] {
+        let selected = Set(selectedSchemas)
+        guard !selected.isEmpty else { return schema.tables }
+        return schema.tables.filter { selected.contains($0.schema) }
+    }
+
+    var schemaSearchTableIDs: Set<String> {
+        Set(schemaSearchTables.map {
+            SchemaObjectID.table(schema: $0.schema, name: $0.name).stableString
+        })
+    }
+
+    var schemaSearchRelationships: [SchemaForeignKeyConstraintInfo] {
+        let tableIDs = schemaSearchTableIDs
+        return schema.effectiveForeignKeyConstraints.filter { relationship in
+            let source = SchemaObjectID.table(
+                schema: relationship.sourceSchema,
+                name: relationship.sourceTable
+            )
+            let target = SchemaObjectID.table(
+                schema: relationship.targetSchema,
+                name: relationship.targetTable
+            )
+            return tableIDs.contains(source.stableString)
+                && tableIDs.contains(target.stableString)
         }
     }
 }

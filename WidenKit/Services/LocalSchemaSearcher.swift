@@ -122,13 +122,18 @@ public struct LocalSchemaSearcher: SchemaSearching {
         in snapshot: SchemaSearchSnapshot
     ) -> [SchemaObjectDescription] {
         let tablesByID = Dictionary(
-            uniqueKeysWithValues: snapshot.schema.tables.map {
+            uniqueKeysWithValues: snapshot.schemaSearchTables.map {
                 (SchemaObjectID.table(schema: $0.schema, name: $0.name).stableString, $0)
             }
         )
+        let selectedSchemas = Set(snapshot.selectedSchemas)
+        let relationships = snapshot.schemaSearchRelationships
         return objectIDs.compactMap { objectID in
             switch objectID.kind {
             case .schema:
+                guard selectedSchemas.isEmpty || selectedSchemas.contains(objectID.schema) else {
+                    return nil
+                }
                 return SchemaObjectDescription(
                     objectID: objectID,
                     kind: .schema,
@@ -144,7 +149,7 @@ public struct LocalSchemaSearcher: SchemaSearching {
                     comment: table.comment,
                     columns: table.columns.map(\.name),
                     keyConstraints: table.keyConstraints,
-                    foreignKeyConstraints: snapshot.schema.effectiveForeignKeyConstraints.filter {
+                    foreignKeyConstraints: relationships.filter {
                         ($0.sourceSchema == table.schema && $0.sourceTable == table.name)
                             || ($0.targetSchema == table.schema && $0.targetTable == table.name)
                     }
@@ -186,7 +191,7 @@ public struct LocalSchemaSearcher: SchemaSearching {
             case .foreignKeyConstraint:
                 guard let tableName = objectID.table,
                     let constraintName = objectID.constraintName,
-                    let relationship = snapshot.schema.effectiveForeignKeyConstraints.first(where: {
+                    let relationship = relationships.first(where: {
                         $0.sourceSchema == objectID.schema
                             && $0.sourceTable == tableName
                             && $0.constraintName == constraintName
@@ -218,7 +223,7 @@ public struct LocalSchemaSearcher: SchemaSearching {
         let hopLimit = min(max(maxHops, 0), 3)
         guard hopLimit > 0 else { return [] }
 
-        let adjacency = joinAdjacency(relationships: snapshot.schema.effectiveForeignKeyConstraints)
+        let adjacency = joinAdjacency(relationships: snapshot.schemaSearchRelationships)
         struct QueueEntry {
             var tableID: SchemaObjectID
             var path: [SchemaJoinPathEdge]

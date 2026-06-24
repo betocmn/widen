@@ -327,19 +327,51 @@ struct SchemaSearchIndexTests {
             schemas: [SchemaInfo(name: "public"), SchemaInfo(name: "auth")],
             tables: [
                 table(schema: "public", name: "users", columns: ["id", "email"]),
+                table(schema: "public", name: "sessions", columns: ["id", "auth_user_id"]),
                 table(schema: "auth", name: "users", columns: ["id", "provider"]),
+            ],
+            foreignKeyConstraints: [
+                SchemaForeignKeyConstraintInfo(
+                    constraintName: "sessions_auth_user_fkey",
+                    sourceSchema: "public",
+                    sourceTable: "sessions",
+                    targetSchema: "auth",
+                    targetTable: "users",
+                    columnPairs: [
+                        SchemaForeignKeyColumnPair(
+                            sourceColumn: "auth_user_id",
+                            targetColumn: "id",
+                            ordinalPosition: 1
+                        )
+                    ]
+                )
             ]
         )
-        let publicOnly = DatabaseSchema(
-            schemas: [SchemaInfo(name: "public")],
-            tables: full.tables.filter { $0.schema == "public" }
-        )
-        let response = makeSearcher(schema: publicOnly, selectedSchemas: ["public"]).search(
+        let searcher = makeSearcher(schema: full, selectedSchemas: ["public"])
+        let snapshot = snapshot(full, selectedSchemas: ["public"])
+        let response = searcher.search(
             SchemaSearchRequest(query: "auth users"),
-            in: snapshot(publicOnly, selectedSchemas: ["public"])
+            in: snapshot
+        )
+        let descriptions = searcher.describe(
+            objectIDs: [
+                .schema("auth"),
+                .table(schema: "auth", name: "users"),
+                .table(schema: "public", name: "users"),
+            ],
+            in: snapshot
+        )
+        let paths = searcher.findJoinPaths(
+            from: .table(schema: "public", name: "sessions"),
+            to: .table(schema: "auth", name: "users"),
+            maxHops: 1,
+            in: snapshot
         )
 
         #expect(!response.hits.contains { $0.tableObjectID.schema == "auth" })
+        #expect(!descriptions.contains { $0.schema == "auth" })
+        #expect(descriptions.contains { $0.objectID == .table(schema: "public", name: "users") })
+        #expect(paths.isEmpty)
     }
 
     @Test func databaseContextIsQueryTimeBoostOnly() throws {
