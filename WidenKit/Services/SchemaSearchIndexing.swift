@@ -1,7 +1,7 @@
 import Foundation
 
 struct LocalSchemaSearchIndex: Codable, Sendable {
-    static let formatVersion = 1
+    static let formatVersion = 2
     static let scorerVersion = "schema-search-bm25-v1"
 
     var formatVersion: Int

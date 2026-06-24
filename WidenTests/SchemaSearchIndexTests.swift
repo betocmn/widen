@@ -12,9 +12,12 @@ struct SchemaSearchIndexTests {
         let authUsers = SchemaObjectID.table(schema: "auth", name: "users")
         let mixed = SchemaObjectID.table(schema: "public", name: "UserEvents")
         let lower = SchemaObjectID.table(schema: "public", name: "userevents")
+        let delimiterInSchema = SchemaObjectID.table(schema: "public|audit", name: "events")
+        let delimiterInTable = SchemaObjectID.table(schema: "public", name: "audit|events")
 
         #expect(publicUsers != authUsers)
         #expect(mixed != lower)
+        #expect(delimiterInSchema.stableString != delimiterInTable.stableString)
         #expect(mixed.stableString.contains("UserEvents"))
     }
 
@@ -405,7 +408,10 @@ struct SchemaSearchIndexTests {
         _ = try await store.searcher(for: snapshot(schema))
 
         var text = try String(contentsOf: file, encoding: .utf8)
-        text = text.replacingOccurrences(of: #""formatVersion":1"#, with: #""formatVersion":999"#)
+        text = text.replacingOccurrences(
+            of: #""formatVersion":\#(LocalSchemaSearchIndex.formatVersion)"#,
+            with: #""formatVersion":999"#
+        )
         try text.write(to: file, atomically: true, encoding: .utf8)
         let versionStore = SchemaSearchIndexStore(directory: directory)
         let rebuilt = try await versionStore.searcher(for: snapshot(schema))
