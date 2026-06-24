@@ -179,11 +179,14 @@ public actor SchemaSearchIndexStore {
         let temporaryURL = directory.appendingPathComponent("\(key.cacheID).tmp-\(UUID().uuidString)")
         let fileManager = FileManager.default
         do {
-            try data.write(to: temporaryURL)
-            try fileManager.setAttributes(
-                [.posixPermissions: NSNumber(value: Int16(0o600))],
-                ofItemAtPath: temporaryURL.path
+            let created = fileManager.createFile(
+                atPath: temporaryURL.path,
+                contents: data,
+                attributes: [.posixPermissions: NSNumber(value: Int16(0o600))]
             )
+            guard created else {
+                throw CocoaError(.fileWriteUnknown)
+            }
             if fileManager.fileExists(atPath: url.path) {
                 _ = try fileManager.replaceItemAt(
                     url,

@@ -456,6 +456,37 @@ struct SchemaSearchIndexTests {
         #expect(files.count == 1)
     }
 
+    @Test func cacheFilesUseRestrictivePermissions() async throws {
+        let directory = tempDirectory()
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let schema = DatabaseSchema(
+            schemas: [SchemaInfo(name: "public")],
+            tables: [table(schema: "public", name: "orders", columns: ["id"])]
+        )
+        let store = SchemaSearchIndexStore(directory: directory)
+
+        _ = try await store.searcher(for: snapshot(schema))
+
+        let file = try #require(
+            FileManager.default.contentsOfDirectory(
+                at: directory,
+                includingPropertiesForKeys: nil
+            )
+            .first { $0.pathExtension == "json" }
+        )
+        let directoryPermissions = try #require(
+            FileManager.default.attributesOfItem(atPath: directory.path)[.posixPermissions]
+                as? NSNumber
+        )
+        let filePermissions = try #require(
+            FileManager.default.attributesOfItem(atPath: file.path)[.posixPermissions]
+                as? NSNumber
+        )
+
+        #expect(directoryPermissions.intValue & 0o777 == 0o700)
+        #expect(filePermissions.intValue & 0o777 == 0o600)
+    }
+
     @Test func indexVersionAndCorruptedCacheRebuild() async throws {
         let directory = tempDirectory()
         defer { try? FileManager.default.removeItem(at: directory) }
