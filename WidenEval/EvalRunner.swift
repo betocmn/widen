@@ -319,6 +319,7 @@ struct EvalRunner {
             model: String?,
             repeatIndex: Int
         ) -> TextToSQLEvalResult? {
+            guard evalCase.expected.decision == .sql else { return nil }
             let issue = globalIssue ?? fixtureIssues[evalCase.schemaFixture] ?? caseIssues[evalCase.id]
             guard let issue else { return nil }
             return TextToSQLEvalResult(
@@ -695,7 +696,7 @@ struct EvalRunner {
         let modelCalls = results.compactMap(\.metrics.modelCallCount)
         let promptEstimateValues = results.compactMap(\.metrics.estimatedInitialPromptCharacters)
         let backendAvailableValues = results.map(\.metrics.backendAvailable)
-        let transportEvaluated = results.filter(\.metrics.backendAvailable)
+        let transportEvaluated = results.filter(transportAttempted)
         let structuredEvaluated = results.filter(\.metrics.transportSuccess)
         let decisionEvaluated = results.filter(\.metrics.structuredResponseParsed)
         let safetyValues = results.compactMap(\.metrics.safetyValid)
@@ -838,6 +839,14 @@ struct EvalRunner {
         default:
             false
         }
+    }
+
+    private func transportAttempted(_ result: TextToSQLEvalResult) -> Bool {
+        guard result.metrics.backendAvailable else { return false }
+        let isSemanticPreflightSkip = result.metrics.semanticStatus != nil
+            && result.metrics.semanticExecutionAttempted == false
+            && (result.status == .fixtureInvalid || result.status == .semanticEnvironmentUnavailable)
+        return !isSemanticPreflightSkip
     }
 
     private func staticSemanticCrossTab(

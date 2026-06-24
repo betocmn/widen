@@ -118,7 +118,7 @@ public final class TextToSQLSemanticDatabaseProvisioner: Sendable {
         let fixtureSchemas = Self.fixtureSchemas(from: expectedSchema)
         do {
             try await runStatements(
-                ["CREATE DATABASE \(Self.quotedIdentifier(databaseName))"],
+                ["CREATE DATABASE \(Self.quotedIdentifier(databaseName)) TEMPLATE template0"],
                 database: server.maintenanceDatabase
             )
         } catch {

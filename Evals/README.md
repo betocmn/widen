@@ -72,8 +72,9 @@ truncation, or retry behavior.
 Seeded DB evals use a local PostgreSQL server only for synthetic fixtures. By
 default they connect to `localhost:5432` as the current macOS user and use the
 `postgres` maintenance database to create one throwaway database per schema
-fixture. Override with `WIDEN_EVAL_DB_HOST`, `WIDEN_EVAL_DB_PORT`,
-`WIDEN_EVAL_DB_USER`, `WIDEN_EVAL_DB_PASSWORD`,
+fixture from PostgreSQL's empty `template0`. Override with
+`WIDEN_EVAL_DB_HOST`, `WIDEN_EVAL_DB_PORT`, `WIDEN_EVAL_DB_USER`,
+`WIDEN_EVAL_DB_PASSWORD`,
 `WIDEN_EVAL_DB_MAINTENANCE_DB`, and `WIDEN_EVAL_DB_SSLMODE`.
 
 The provisioning user creates and drops databases only. Semantic execution uses

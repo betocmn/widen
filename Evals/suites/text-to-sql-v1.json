@@ -69,7 +69,7 @@
           "group",
           "join"
         ],
-        "goldenSQL": "SELECT c.id, c.email, SUM(o.total_cents) AS paid_revenue_cents FROM public.customers AS c JOIN public.orders AS o ON o.customer_id = c.id WHERE o.status = 'paid' GROUP BY c.id, c.email ORDER BY paid_revenue_cents DESC",
+        "goldenSQL": "SELECT c.id, c.email, SUM(o.total_cents) AS paid_revenue_cents FROM public.customers AS c JOIN public.orders AS o ON o.customer_id = c.id WHERE o.status = 'paid' GROUP BY c.id, c.email ORDER BY paid_revenue_cents DESC, c.id ASC",
         "semantic": {
           "comparisonMode": "ordered",
           "requiredColumns": [
@@ -93,7 +93,7 @@
           "negativeControls": [
             {
               "id": "missing-paid-status-filter",
-              "sql": "SELECT c.id, c.email, SUM(o.total_cents) AS paid_revenue_cents FROM public.customers AS c JOIN public.orders AS o ON o.customer_id = c.id GROUP BY c.id, c.email ORDER BY paid_revenue_cents DESC"
+              "sql": "SELECT c.id, c.email, SUM(o.total_cents) AS paid_revenue_cents FROM public.customers AS c JOIN public.orders AS o ON o.customer_id = c.id GROUP BY c.id, c.email ORDER BY paid_revenue_cents DESC, c.id ASC"
             }
           ]
         }
@@ -271,7 +271,7 @@
           "group",
           "join"
         ],
-        "goldenSQL": "SELECT a.id, a.name, COUNT(*) AS unresolved_ticket_count FROM public.support_ticket AS t JOIN public.support_agent AS a ON a.id = t.assignee_id WHERE t.status NOT IN ('resolved', 'closed') GROUP BY a.id, a.name ORDER BY unresolved_ticket_count DESC",
+        "goldenSQL": "SELECT a.id, a.name, COUNT(*) AS unresolved_ticket_count FROM public.support_ticket AS t JOIN public.support_agent AS a ON a.id = t.assignee_id WHERE t.status NOT IN ('resolved', 'closed') GROUP BY a.id, a.name ORDER BY unresolved_ticket_count DESC, a.id ASC",
         "semantic": {
           "comparisonMode": "ordered",
           "requiredColumns": [
@@ -292,7 +292,7 @@
           "negativeControls": [
             {
               "id": "missing-business-status-filter",
-              "sql": "SELECT a.id, a.name, COUNT(*) AS unresolved_ticket_count FROM public.support_ticket AS t JOIN public.support_agent AS a ON a.id = t.assignee_id GROUP BY a.id, a.name ORDER BY unresolved_ticket_count DESC"
+              "sql": "SELECT a.id, a.name, COUNT(*) AS unresolved_ticket_count FROM public.support_ticket AS t JOIN public.support_agent AS a ON a.id = t.assignee_id GROUP BY a.id, a.name ORDER BY unresolved_ticket_count DESC, a.id ASC"
             }
           ]
         }
