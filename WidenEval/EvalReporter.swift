@@ -57,7 +57,7 @@ enum EvalReporter {
         var lines: [String] = [
             "# Text-to-SQL Eval Baseline",
             "",
-            "**Evaluation scope:** The eval invokes the shared production text-to-SQL pipeline through local validation and validation-only repair, then applies a static-shape score to the final decision. It does not establish result-set or semantic correctness.",
+            evaluationScope(for: run),
             "",
             "## Run",
             "",
@@ -108,11 +108,21 @@ enum EvalReporter {
         }
 
         lines += statusCountSection(title: "Status Counts", summary: run.summary)
+        lines += semanticStatusCountSection(title: "Semantic Status Counts", summary: run.summary)
+        lines += staticSemanticCrossTabSection(title: "Static/Semantic Cross-Tab", summary: run.summary)
         if run.backendSummaries.count > 1 {
             for backend in sortedBackends(run.backendSummaries.keys) {
                 guard let summary = run.backendSummaries[backend] else { continue }
                 lines += statusCountSection(
                     title: "\(backend.rawValue.capitalized) Status Counts",
+                    summary: summary
+                )
+                lines += semanticStatusCountSection(
+                    title: "\(backend.rawValue.capitalized) Semantic Status Counts",
+                    summary: summary
+                )
+                lines += staticSemanticCrossTabSection(
+                    title: "\(backend.rawValue.capitalized) Static/Semantic Cross-Tab",
                     summary: summary
                 )
             }
@@ -126,12 +136,12 @@ enum EvalReporter {
             "",
             "## Per Case",
             "",
-            "| Case | Backend | Repeat | Status | Diagnostics |",
-            "| --- | --- | ---: | --- | --- |",
+            "| Case | Backend | Repeat | Static Status | Semantic Status | Semantic Result | Diagnostics |",
+            "| --- | --- | ---: | --- | --- | --- | --- |",
         ]
         for result in run.results.sorted(by: resultSort) {
             lines.append(
-                "| \(tableCell(result.caseID)) | \(tableCell(result.backend.rawValue)) | \(result.repeatIndex) | \(tableCell(result.status.rawValue)) | \(diagnosticsSummary(result)) |"
+                "| \(tableCell(result.caseID)) | \(tableCell(result.backend.rawValue)) | \(result.repeatIndex) | \(tableCell(result.status.rawValue)) | \(tableCell(result.metrics.semanticStatus?.rawValue ?? "-")) | \(semanticSummary(result)) | \(diagnosticsSummary(result)) |"
             )
         }
 
@@ -142,6 +152,14 @@ enum EvalReporter {
             "",
         ]
         return lines.joined(separator: "\n")
+    }
+
+    private static func evaluationScope(for run: EvalRun) -> String {
+        if run.manifest.evaluationMode.contains("seeded-postgres-semantic") {
+            return "**Evaluation scope:** The eval invokes the shared production text-to-SQL pipeline through local validation and validation-only repair, keeps the static-shape score, then independently executes eligible final SQL decisions against seeded PostgreSQL fixtures for semantic result-set grading."
+        }
+
+        return "**Evaluation scope:** The eval invokes the shared production text-to-SQL pipeline through local validation and validation-only repair, then applies a static-shape score to the final decision. It does not establish result-set or semantic correctness."
     }
 
     private static func summarySection(title: String, summary: EvalRunSummary) -> [String] {
@@ -160,6 +178,16 @@ enum EvalReporter {
             "| Results | \(summary.totalResults) |",
             "| Passed | \(summary.passed) |",
             "| Static-shape pass rate | \(percent(summary.passRate)) |",
+            "| Semantic end-to-end passed | \(summary.semanticPassed.map(String.init) ?? "-") |",
+            "| Semantic end-to-end pass rate | \(summary.semanticPassRate.map(percent) ?? "-") |",
+            "| SQL semantic pass rate | \(summary.sqlSemanticPass.map { count($0) } ?? "-") |",
+            "| Clarification decision pass rate | \(summary.clarificationDecisionPass.map { count($0) } ?? "-") |",
+            "| Overall end-to-end pass rate | \(summary.endToEndPass.map { count($0) } ?? "-")\(summary.endToEndPassRate.map { " (\(percent($0)))" } ?? "") |",
+            "| Semantic environment available | \(summary.semanticEnvironmentAvailable.map { count($0) } ?? "-") |",
+            "| Semantic execution attempted | \(summary.semanticExecutionAttempted.map { count($0) } ?? "-") |",
+            "| Semantic result equivalent | \(summary.resultEquivalent.map { count($0) } ?? "-") |",
+            "| Golden execution succeeded | \(summary.goldenExecutionSucceeded.map { count($0) } ?? "-") |",
+            "| Candidate execution succeeded | \(summary.candidateExecutionSucceeded.map { count($0) } ?? "-") |",
             "| Backend available | \(count(summary.backendAvailable)) |",
             "| Transport success | \(count(summary.transportSuccess, suffix: " evaluated")) |",
             "| Structured response parsed | \(count(summary.structuredResponseParsed, suffix: " evaluated")) |",
@@ -199,6 +227,39 @@ enum EvalReporter {
             lines.append("| \(status.rawValue) | \(summary.statusCounts[status.rawValue, default: 0]) |")
         }
         return lines
+    }
+
+    private static func semanticStatusCountSection(title: String, summary: EvalRunSummary) -> [String] {
+        guard let counts = summary.semanticStatusCounts else { return [] }
+        var lines = [
+            "",
+            "## \(title)",
+            "",
+            "| Semantic Status | Count |",
+            "| --- | ---: |",
+        ]
+        for status in TextToSQLSemanticStatus.allCases {
+            lines.append("| \(status.rawValue) | \(counts[status.rawValue, default: 0]) |")
+        }
+        return lines
+    }
+
+    private static func staticSemanticCrossTabSection(
+        title: String,
+        summary: EvalRunSummary
+    ) -> [String] {
+        guard let crossTab = summary.staticSemanticCrossTab else { return [] }
+        return [
+            "",
+            "## \(title)",
+            "",
+            "| Category | Count |",
+            "| --- | ---: |",
+            "| static pass / semantic pass | \(crossTab.staticPassSemanticPass) |",
+            "| static pass / semantic fail | \(crossTab.staticPassSemanticFail) |",
+            "| static fail / semantic pass | \(crossTab.staticFailSemanticPass) |",
+            "| static fail / semantic fail | \(crossTab.staticFailSemanticFail) |",
+        ]
     }
 
     private static func repeatStabilitySections(results: [TextToSQLEvalResult]) -> [String] {
@@ -339,6 +400,45 @@ enum EvalReporter {
         }
         if let error = result.diagnostics.errorMessage {
             parts.append(error)
+        }
+        return parts.isEmpty ? "-" : tableCell(parts.joined(separator: "; "))
+    }
+
+    private static func semanticSummary(_ result: TextToSQLEvalResult) -> String {
+        guard result.metrics.semanticStatus != nil else { return "-" }
+        var parts: [String] = []
+        if let attempted = result.metrics.semanticExecutionAttempted {
+            parts.append("attempted: \(attempted)")
+        }
+        if let environmentAvailable = result.metrics.semanticEnvironmentAvailable {
+            parts.append("env: \(environmentAvailable)")
+        }
+        if let equivalent = result.metrics.resultEquivalent {
+            parts.append("equivalent: \(equivalent)")
+        }
+        if let endToEnd = result.metrics.endToEndPassed {
+            parts.append("end-to-end: \(endToEnd)")
+        }
+        if let mode = result.metrics.comparisonMode {
+            parts.append("mode: \(mode.rawValue)")
+        }
+        if let golden = result.metrics.goldenRowCount {
+            parts.append("golden rows: \(golden)")
+        }
+        if let candidate = result.metrics.candidateRowCount {
+            parts.append("candidate rows: \(candidate)")
+        }
+        if let latency = result.metrics.executionLatencyMs {
+            parts.append("semantic ms: \(latency)")
+        }
+        if let mismatch = result.metrics.semanticMismatchCategory {
+            parts.append("mismatch: \(mismatch)")
+        }
+        if let digest = result.metrics.goldenResultDigest {
+            parts.append("golden digest: \(String(digest.prefix(12)))")
+        }
+        if let digest = result.metrics.candidateResultDigest {
+            parts.append("candidate digest: \(String(digest.prefix(12)))")
         }
         return parts.isEmpty ? "-" : tableCell(parts.joined(separator: "; "))
     }

@@ -16,18 +16,24 @@ public enum TextToSQLEvalSuiteValidationError: LocalizedError, Equatable, Sendab
 public enum TextToSQLEvalSuiteValidator {
     public static func validate(
         suite: TextToSQLEvalSuite,
-        suiteURL: URL
+        suiteURL: URL,
+        requireSemanticExpectations: Bool = false
     ) throws {
         let schemaDirectory = suiteURL
             .deletingLastPathComponent()
             .deletingLastPathComponent()
             .appendingPathComponent("schemas", isDirectory: true)
-        try validate(suite: suite, schemaDirectory: schemaDirectory)
+        try validate(
+            suite: suite,
+            schemaDirectory: schemaDirectory,
+            requireSemanticExpectations: requireSemanticExpectations
+        )
     }
 
     public static func validate(
         suite: TextToSQLEvalSuite,
-        schemaDirectory: URL
+        schemaDirectory: URL,
+        requireSemanticExpectations: Bool = false
     ) throws {
         var issues: [String] = []
         validateCaseIDs(suite.cases, issues: &issues)
@@ -40,7 +46,12 @@ public enum TextToSQLEvalSuiteValidator {
 
         for evalCase in suite.cases {
             guard let schema = schemas[evalCase.schemaFixture] else { continue }
-            validateExpectations(evalCase, schema: schema, issues: &issues)
+            validateExpectations(
+                evalCase,
+                schema: schema,
+                requireSemanticExpectations: requireSemanticExpectations,
+                issues: &issues
+            )
         }
 
         if !issues.isEmpty {
@@ -95,6 +106,7 @@ public enum TextToSQLEvalSuiteValidator {
     private static func validateExpectations(
         _ evalCase: TextToSQLEvalCase,
         schema: DatabaseSchema,
+        requireSemanticExpectations: Bool,
         issues: inout [String]
     ) {
         let expected = evalCase.expected
@@ -104,7 +116,12 @@ public enum TextToSQLEvalSuiteValidator {
         case .clarify:
             validateClarificationCase(evalCase, issues: &issues)
         case .sql:
-            validateSQLCase(evalCase, schema: schema, issues: &issues)
+            validateSQLCase(
+                evalCase,
+                schema: schema,
+                requireSemanticExpectations: requireSemanticExpectations,
+                issues: &issues
+            )
         }
     }
 
@@ -131,11 +148,15 @@ public enum TextToSQLEvalSuiteValidator {
         if expected.clarificationMustMentionAny.isEmpty {
             issues.append("\(evalCase.id) is a clarification case but has no clarification concepts.")
         }
+        if expected.semantic != nil {
+            issues.append("\(evalCase.id) is a clarification case but has semantic expectations.")
+        }
     }
 
     private static func validateSQLCase(
         _ evalCase: TextToSQLEvalCase,
         schema: DatabaseSchema,
+        requireSemanticExpectations: Bool,
         issues: inout [String]
     ) {
         let expected = evalCase.expected
@@ -167,6 +188,16 @@ public enum TextToSQLEvalSuiteValidator {
             issues.append(
                 "\(evalCase.id) goldenSQL is not schema-valid: \(schemaValidation.errors.joined(separator: " "))"
             )
+        }
+
+        if let semantic = expected.semantic {
+            if semantic.floatTolerance < 0 || !semantic.floatTolerance.isFinite {
+                issues.append("\(evalCase.id) has an invalid semantic floatTolerance.")
+            }
+            validateSemanticColumns(evalCase, semantic: semantic, issues: &issues)
+            validateNegativeControls(evalCase, semantic: semantic, schema: schema, issues: &issues)
+        } else if requireSemanticExpectations {
+            issues.append("\(evalCase.id) is a SQL case but has no semantic expectation.")
         }
 
         let result = TextToSQLEvalScorer.score(
@@ -205,6 +236,63 @@ public enum TextToSQLEvalSuiteValidator {
             issues.append(
                 "\(evalCase.id) goldenSQL does not score as passed: \(result.status.rawValue)\(diagnostics.isEmpty ? "" : " (\(diagnostics))")"
             )
+        }
+    }
+
+    private static func validateSemanticColumns(
+        _ evalCase: TextToSQLEvalCase,
+        semantic: TextToSQLSemanticExpectation,
+        issues: inout [String]
+    ) {
+        var seen = Set<String>()
+        for column in semantic.requiredColumns {
+            let canonical = column.canonicalName.trimmingCharacters(in: .whitespacesAndNewlines)
+            if canonical.isEmpty {
+                issues.append("\(evalCase.id) has an empty semantic required column.")
+            }
+            if !seen.insert(normalizedIdentifier(canonical)).inserted {
+                issues.append("\(evalCase.id) has duplicate semantic required column \(canonical).")
+            }
+            let aliases = column.aliases.map {
+                $0.trimmingCharacters(in: .whitespacesAndNewlines)
+            }
+            if aliases.contains(where: \.isEmpty) {
+                issues.append("\(evalCase.id) has an empty semantic column alias.")
+            }
+        }
+    }
+
+    private static func validateNegativeControls(
+        _ evalCase: TextToSQLEvalCase,
+        semantic: TextToSQLSemanticExpectation,
+        schema: DatabaseSchema,
+        issues: inout [String]
+    ) {
+        var seen = Set<String>()
+        for control in semantic.negativeControls {
+            let id = control.id.trimmingCharacters(in: .whitespacesAndNewlines)
+            if id.isEmpty {
+                issues.append("\(evalCase.id) has a semantic negative control with an empty id.")
+            } else if !seen.insert(id).inserted {
+                issues.append("\(evalCase.id) has duplicate semantic negative control \(id).")
+            }
+            let sql = control.sql.trimmingCharacters(in: .whitespacesAndNewlines)
+            if sql.isEmpty {
+                issues.append("\(evalCase.id) negative control \(id) has empty SQL.")
+                continue
+            }
+            let safety = SQLSafetyValidator.validate(sql)
+            if !safety.isValid {
+                issues.append(
+                    "\(evalCase.id) negative control \(id) is not safety-valid: \(safety.errors.joined(separator: " "))"
+                )
+            }
+            let schemaValidation = SQLSchemaValidator.validate(sql: sql, against: schema)
+            if schemaValidation.hasDefiniteErrors {
+                issues.append(
+                    "\(evalCase.id) negative control \(id) is not schema-valid: \(schemaValidation.errors.joined(separator: " "))"
+                )
+            }
         }
     }
 

@@ -7,15 +7,17 @@ validation-only repair, then writes per-run artifacts under `.eval-results/`.
 
 **Evaluation scope:** The production pipeline produces the final SQL,
 clarification, or typed failure. A static-shape pass then verifies the decision,
-SQL safety, schema references, and configured structural expectations. It does
-not establish result-set or semantic correctness.
+SQL safety, schema references, and configured structural expectations. Seeded
+Postgres DB evals additionally execute safe, schema-valid SQL decisions against
+synthetic throwaway databases and compare result bags. Static and semantic
+outcomes are reported separately.
 
-The runner does not execute generated SQL or compare result sets. Committed
-baselines record deterministic hashes for the suite file, pipeline/scorer
-sources, and schema fixtures to establish baseline compatibility. Baseline
-changes after PR 2 can reflect the move from generator-only evaluation to the
-full production pipeline, including canonicalization, local validation, and
-validation-only repair.
+Static eval commands do not execute generated SQL or compare result sets. DB
+eval commands provision synthetic PostgreSQL fixtures, run only eligible final
+SQL decisions, and keep clarification or failed decisions out of SQL execution.
+Committed baselines record deterministic hashes for the suite file,
+pipeline/scorer sources, schema fixtures, setup fixtures, and semantic
+comparison metadata to establish baseline compatibility.
 
 ## Commands
 
@@ -24,6 +26,9 @@ make eval-local
 make eval-cloud MODEL=openai/gpt-5.5
 make eval-all MODEL=openai/gpt-5.5
 make eval-case CASE=preseason.top-wins-defined BACKEND=local
+make eval-db-local
+make eval-db-cloud MODEL=openai/gpt-5.5
+make eval-db-case CASE=preseason.top-wins-defined BACKEND=local
 ```
 
 Cloud mode reads the OpenRouter key only from:
@@ -64,6 +69,26 @@ disables Widen's append-only generation log for that process. Reported
 values are eval-runner estimates, not the exact model prompt after discovery,
 truncation, or retry behavior.
 
+Seeded DB evals use a local PostgreSQL server only for synthetic fixtures. By
+default they connect to `localhost:5432` as the current macOS user and use the
+`postgres` maintenance database to create one throwaway database per schema
+fixture from PostgreSQL's empty `template0`. Override with
+`WIDEN_EVAL_DB_HOST`, `WIDEN_EVAL_DB_PORT`, `WIDEN_EVAL_DB_USER`,
+`WIDEN_EVAL_DB_PASSWORD`,
+`WIDEN_EVAL_DB_MAINTENANCE_DB`, and `WIDEN_EVAL_DB_SSLMODE`.
+
+The provisioning user creates and drops databases only; no cluster roles are
+created, so `CREATEDB` is sufficient for local seeded evals. Semantic execution
+reuses that user against each throwaway fixture database after revoking public
+CREATE/TEMP privileges. Each golden/candidate comparison opens a fresh
+connection, begins `REPEATABLE READ READ ONLY`, sets UTC timezone,
+deterministic date/interval styles, statement/lock/idle timeouts, and a
+`pg_catalog` plus fixture-schema search path, executes golden SQL before
+candidate SQL, rolls back, and never rewrites either query. Strict row, cell,
+and cell-size caps fail the case and close the comparison connection. A missing
+local PostgreSQL server is reported as `semanticEnvironmentUnavailable`, not as
+a model backend or transport failure.
+
 ## Artifacts
 
 Each run writes:
@@ -84,3 +109,9 @@ predate the shared production pipeline and must be treated as stale. Regenerate
 local baselines after pipeline/scorer changes. Regenerate cloud baselines only
 with a real `WIDEN_EVAL_OPENROUTER_API_KEY`; do not replace a cloud baseline
 with an all-`backendUnavailable` run.
+
+Semantic reports contain row counts, comparison status, end-to-end status,
+SQL semantic pass rate, clarification pass rate, semantic environment
+availability, static/semantic cross-tabs, stable result digests, and concise
+mismatch categories. They do not include raw result rows. Detailed synthetic
+diffs, if added later, must stay under `.eval-results/`.

@@ -8,10 +8,44 @@
       "question": "Show the 10 most recent orders",
       "expected": {
         "decision": "sql",
-        "requiredTables": ["public.orders"],
-        "requiredColumnBindings": ["public.orders.created_at"],
-        "requiredOperations": ["descending-order", "limit"],
-        "goldenSQL": "SELECT id, customer_id, status, total_cents, created_at FROM public.orders ORDER BY created_at DESC LIMIT 10"
+        "requiredTables": [
+          "public.orders"
+        ],
+        "requiredColumnBindings": [
+          "public.orders.created_at"
+        ],
+        "requiredOperations": [
+          "descending-order",
+          "limit"
+        ],
+        "goldenSQL": "SELECT id, customer_id, status, total_cents, created_at FROM public.orders ORDER BY created_at DESC LIMIT 10",
+        "semantic": {
+          "comparisonMode": "ordered",
+          "allowExtraCandidateColumns": true,
+          "requiredColumns": [
+            {
+              "canonicalName": "id"
+            },
+            {
+              "canonicalName": "customer_id"
+            },
+            {
+              "canonicalName": "status"
+            },
+            {
+              "canonicalName": "total_cents"
+            },
+            {
+              "canonicalName": "created_at"
+            }
+          ],
+          "negativeControls": [
+            {
+              "id": "oldest-first",
+              "sql": "SELECT id, customer_id, status, total_cents, created_at FROM public.orders ORDER BY created_at ASC LIMIT 10"
+            }
+          ]
+        }
       }
     },
     {
@@ -20,15 +54,49 @@
       "question": "Show total paid revenue per customer",
       "expected": {
         "decision": "sql",
-        "requiredTables": ["public.customers", "public.orders"],
+        "requiredTables": [
+          "public.customers",
+          "public.orders"
+        ],
         "requiredColumnBindings": [
           "public.customers.id",
           "public.orders.customer_id",
           "public.orders.total_cents",
           "public.orders.status"
         ],
-        "requiredOperations": ["sum", "group", "join"],
-        "goldenSQL": "SELECT c.id, c.email, SUM(o.total_cents) AS paid_revenue_cents FROM public.customers AS c JOIN public.orders AS o ON o.customer_id = c.id WHERE o.status = 'paid' GROUP BY c.id, c.email ORDER BY paid_revenue_cents DESC"
+        "requiredOperations": [
+          "sum",
+          "group",
+          "join"
+        ],
+        "goldenSQL": "SELECT c.id, c.email, SUM(o.total_cents) AS paid_revenue_cents FROM public.customers AS c JOIN public.orders AS o ON o.customer_id = c.id WHERE o.status = 'paid' GROUP BY c.id, c.email ORDER BY paid_revenue_cents DESC, c.id ASC",
+        "semantic": {
+          "comparisonMode": "unordered",
+          "requiredColumns": [
+            {
+              "canonicalName": "id"
+            },
+            {
+              "canonicalName": "email"
+            },
+            {
+              "canonicalName": "paid_revenue_cents",
+              "aliases": [
+                "revenue_cents",
+                "revenue",
+                "total_revenue",
+                "paid_revenue",
+                "total_paid_revenue"
+              ]
+            }
+          ],
+          "negativeControls": [
+            {
+              "id": "missing-paid-status-filter",
+              "sql": "SELECT c.id, c.email, SUM(o.total_cents) AS paid_revenue_cents FROM public.customers AS c JOIN public.orders AS o ON o.customer_id = c.id GROUP BY c.id, c.email ORDER BY paid_revenue_cents DESC, c.id ASC"
+            }
+          ]
+        }
       }
     },
     {
@@ -37,7 +105,10 @@
       "question": "Average paid order value by customer country",
       "expected": {
         "decision": "sql",
-        "requiredTables": ["public.customers", "public.orders"],
+        "requiredTables": [
+          "public.customers",
+          "public.orders"
+        ],
         "requiredColumnBindings": [
           "public.customers.country",
           "public.customers.id",
@@ -45,8 +116,36 @@
           "public.orders.total_cents",
           "public.orders.status"
         ],
-        "requiredOperations": ["average", "group", "join"],
-        "goldenSQL": "SELECT c.country, AVG(o.total_cents) AS average_paid_order_value_cents FROM public.customers AS c JOIN public.orders AS o ON o.customer_id = c.id WHERE o.status = 'paid' GROUP BY c.country ORDER BY average_paid_order_value_cents DESC"
+        "requiredOperations": [
+          "average",
+          "group",
+          "join"
+        ],
+        "goldenSQL": "SELECT c.country, AVG(o.total_cents) AS average_paid_order_value_cents FROM public.customers AS c JOIN public.orders AS o ON o.customer_id = c.id WHERE o.status = 'paid' GROUP BY c.country ORDER BY average_paid_order_value_cents DESC",
+        "semantic": {
+          "comparisonMode": "ordered",
+          "floatTolerance": 0.000001,
+          "requiredColumns": [
+            {
+              "canonicalName": "country"
+            },
+            {
+              "canonicalName": "average_paid_order_value_cents",
+              "aliases": [
+                "average_order_value_cents",
+                "avg_order_value",
+                "average_order_value",
+                "avg_paid_order_value"
+              ]
+            }
+          ],
+          "negativeControls": [
+            {
+              "id": "missing-paid-status-filter",
+              "sql": "SELECT c.country, AVG(o.total_cents) AS average_paid_order_value_cents FROM public.customers AS c JOIN public.orders AS o ON o.customer_id = c.id GROUP BY c.country ORDER BY average_paid_order_value_cents DESC"
+            }
+          ]
+        }
       }
     },
     {
@@ -55,13 +154,39 @@
       "question": "Which customers have never placed an order?",
       "expected": {
         "decision": "sql",
-        "requiredTables": ["public.customers", "public.orders"],
+        "requiredTables": [
+          "public.customers",
+          "public.orders"
+        ],
         "requiredColumnBindings": [
           "public.customers.id",
           "public.orders.customer_id"
         ],
-        "requiredOperations": ["left-join", "null-filter"],
-        "goldenSQL": "SELECT c.id, c.email, c.name FROM public.customers AS c LEFT JOIN public.orders AS o ON o.customer_id = c.id WHERE o.id IS NULL ORDER BY c.id"
+        "requiredOperations": [
+          "left-join",
+          "null-filter"
+        ],
+        "goldenSQL": "SELECT c.id, c.email, c.name FROM public.customers AS c LEFT JOIN public.orders AS o ON o.customer_id = c.id WHERE o.id IS NULL ORDER BY c.id",
+        "semantic": {
+          "comparisonMode": "ordered",
+          "requiredColumns": [
+            {
+              "canonicalName": "id"
+            },
+            {
+              "canonicalName": "email"
+            },
+            {
+              "canonicalName": "name"
+            }
+          ],
+          "negativeControls": [
+            {
+              "id": "opposite-null-filter",
+              "sql": "SELECT c.id, c.email, c.name FROM public.customers AS c LEFT JOIN public.orders AS o ON o.customer_id = c.id WHERE o.id IS NOT NULL ORDER BY c.id"
+            }
+          ]
+        }
       }
     },
     {
@@ -70,7 +195,13 @@
       "question": "Who are our best customers?",
       "expected": {
         "decision": "clarify",
-        "clarificationMustMentionAny": ["metric", "revenue", "spend", "orders", "best"]
+        "clarificationMustMentionAny": [
+          "metric",
+          "revenue",
+          "spend",
+          "orders",
+          "best"
+        ]
       }
     },
     {
@@ -79,13 +210,45 @@
       "question": "What is the most frequent feedback cluster?",
       "expected": {
         "decision": "sql",
-        "requiredTables": ["public.feedback_item", "public.feedback_cluster"],
+        "requiredTables": [
+          "public.feedback_item",
+          "public.feedback_cluster"
+        ],
         "requiredColumnBindings": [
           "public.feedback_item.cluster_id",
           "public.feedback_cluster.id"
         ],
-        "requiredOperations": ["count", "group", "join", "descending-order", "limit"],
-        "goldenSQL": "SELECT c.id, c.name, COUNT(*) AS feedback_count FROM public.feedback_cluster AS c JOIN public.feedback_item AS f ON f.cluster_id = c.id GROUP BY c.id, c.name ORDER BY feedback_count DESC LIMIT 1"
+        "requiredOperations": [
+          "count",
+          "group",
+          "join",
+          "descending-order",
+          "limit"
+        ],
+        "goldenSQL": "SELECT c.id, c.name, COUNT(*) AS feedback_count FROM public.feedback_cluster AS c JOIN public.feedback_item AS f ON f.cluster_id = c.id GROUP BY c.id, c.name ORDER BY feedback_count DESC LIMIT 1",
+        "semantic": {
+          "comparisonMode": "ordered",
+          "requiredColumns": [
+            {
+              "canonicalName": "id"
+            },
+            {
+              "canonicalName": "name"
+            },
+            {
+              "canonicalName": "feedback_count",
+              "aliases": [
+                "count"
+              ]
+            }
+          ],
+          "negativeControls": [
+            {
+              "id": "least-frequent-cluster",
+              "sql": "SELECT c.id, c.name, COUNT(*) AS feedback_count FROM public.feedback_cluster AS c JOIN public.feedback_item AS f ON f.cluster_id = c.id GROUP BY c.id, c.name ORDER BY feedback_count ASC LIMIT 1"
+            }
+          ]
+        }
       }
     },
     {
@@ -94,29 +257,83 @@
       "question": "Count unresolved tickets by assignee",
       "expected": {
         "decision": "sql",
-        "requiredTables": ["public.support_ticket", "public.support_agent"],
+        "requiredTables": [
+          "public.support_ticket",
+          "public.support_agent"
+        ],
         "requiredColumnBindings": [
           "public.support_ticket.assignee_id",
           "public.support_ticket.status",
           "public.support_agent.id"
         ],
-        "requiredOperations": ["count", "group", "join"],
-        "goldenSQL": "SELECT a.id, a.name, COUNT(*) AS unresolved_ticket_count FROM public.support_ticket AS t JOIN public.support_agent AS a ON a.id = t.assignee_id WHERE t.status NOT IN ('resolved', 'closed') GROUP BY a.id, a.name ORDER BY unresolved_ticket_count DESC"
+        "requiredOperations": [
+          "count",
+          "group",
+          "join"
+        ],
+        "goldenSQL": "SELECT a.id, a.name, COUNT(*) AS unresolved_ticket_count FROM public.support_ticket AS t JOIN public.support_agent AS a ON a.id = t.assignee_id WHERE t.status NOT IN ('resolved', 'closed') GROUP BY a.id, a.name ORDER BY unresolved_ticket_count DESC, a.id ASC",
+        "semantic": {
+          "comparisonMode": "ordered",
+          "requiredColumns": [
+            {
+              "canonicalName": "id"
+            },
+            {
+              "canonicalName": "name"
+            },
+            {
+              "canonicalName": "unresolved_ticket_count",
+              "aliases": [
+                "ticket_count",
+                "count"
+              ]
+            }
+          ],
+          "negativeControls": [
+            {
+              "id": "missing-business-status-filter",
+              "sql": "SELECT a.id, a.name, COUNT(*) AS unresolved_ticket_count FROM public.support_ticket AS t JOIN public.support_agent AS a ON a.id = t.assignee_id GROUP BY a.id, a.name ORDER BY unresolved_ticket_count DESC, a.id ASC"
+            }
+          ]
+        }
       }
     },
     {
       "id": "support.average-first-response",
       "schemaFixture": "support",
-      "question": "Average first-response time over the last 30 days",
+      "question": "Average first-response time over the 30 days ending 2026-06-24 12:00 UTC",
       "expected": {
         "decision": "sql",
-        "requiredTables": ["public.support_ticket"],
+        "requiredTables": [
+          "public.support_ticket"
+        ],
         "requiredColumnBindings": [
           "public.support_ticket.created_at",
           "public.support_ticket.first_response_at"
         ],
-        "requiredOperations": ["average", "relative-time-filter"],
-        "goldenSQL": "SELECT AVG(first_response_at - created_at) AS average_first_response_time FROM public.support_ticket WHERE created_at >= NOW() - INTERVAL '30 days' AND first_response_at IS NOT NULL"
+        "requiredOperations": [
+          "average",
+          "relative-time-filter"
+        ],
+        "goldenSQL": "SELECT AVG(first_response_at - created_at) AS average_first_response_time FROM public.support_ticket WHERE created_at >= CAST('2026-06-24 12:00:00+00' AS TIMESTAMPTZ) - INTERVAL '30 days' AND first_response_at IS NOT NULL",
+        "semantic": {
+          "comparisonMode": "scalar",
+          "requiredColumns": [
+            {
+              "canonicalName": "average_first_response_time",
+              "aliases": [
+                "avg_first_response_time",
+                "average_response_time"
+              ]
+            }
+          ],
+          "negativeControls": [
+            {
+              "id": "wrong-date-column",
+              "sql": "SELECT AVG(first_response_at - created_at) AS average_first_response_time FROM public.support_ticket WHERE first_response_at >= CAST('2026-06-24 12:00:00+00' AS TIMESTAMPTZ) - INTERVAL '30 days' AND first_response_at IS NOT NULL"
+            }
+          ]
+        }
       }
     },
     {
@@ -125,10 +342,37 @@
       "question": "Show feedback items without a cluster",
       "expected": {
         "decision": "sql",
-        "requiredTables": ["public.feedback_item"],
-        "requiredColumnBindings": ["public.feedback_item.cluster_id"],
-        "requiredOperations": ["null-filter", "limit"],
-        "goldenSQL": "SELECT id, body, created_at FROM public.feedback_item WHERE cluster_id IS NULL ORDER BY created_at DESC LIMIT 100"
+        "requiredTables": [
+          "public.feedback_item"
+        ],
+        "requiredColumnBindings": [
+          "public.feedback_item.cluster_id"
+        ],
+        "requiredOperations": [
+          "null-filter",
+          "limit"
+        ],
+        "goldenSQL": "SELECT id, body, created_at FROM public.feedback_item WHERE cluster_id IS NULL ORDER BY created_at DESC LIMIT 100",
+        "semantic": {
+          "comparisonMode": "ordered",
+          "requiredColumns": [
+            {
+              "canonicalName": "id"
+            },
+            {
+              "canonicalName": "body"
+            },
+            {
+              "canonicalName": "created_at"
+            }
+          ],
+          "negativeControls": [
+            {
+              "id": "opposite-null-filter",
+              "sql": "SELECT id, body, created_at FROM public.feedback_item WHERE cluster_id IS NOT NULL ORDER BY created_at DESC LIMIT 100"
+            }
+          ]
+        }
       }
     },
     {
@@ -137,29 +381,62 @@
       "question": "What is our most important feedback cluster?",
       "expected": {
         "decision": "clarify",
-        "clarificationMustMentionAny": ["important", "priority", "impact", "frequency"]
+        "clarificationMustMentionAny": [
+          "important",
+          "priority",
+          "impact",
+          "frequency"
+        ]
       }
     },
     {
       "id": "saas.expiring-subscriptions",
       "schemaFixture": "saas",
-      "question": "Subscriptions expiring in the next 30 days",
+      "question": "Subscriptions expiring in the 30 days starting 2026-06-24",
       "expected": {
         "decision": "sql",
-        "requiredTables": ["public.subscription"],
+        "requiredTables": [
+          "public.subscription"
+        ],
         "requiredColumnBindings": [
           "public.subscription.expires_at",
           "public.subscription.status"
         ],
-        "requiredOperations": ["relative-time-filter", "limit"],
-        "goldenSQL": "SELECT id, organization_id, status, expires_at FROM public.subscription WHERE status = 'active' AND expires_at >= CURRENT_DATE AND expires_at < CURRENT_DATE + INTERVAL '30 days' ORDER BY expires_at ASC LIMIT 100"
+        "requiredOperations": [
+          "relative-time-filter",
+          "limit"
+        ],
+        "goldenSQL": "SELECT id, organization_id, status, expires_at FROM public.subscription WHERE status = 'active' AND expires_at >= DATE '2026-06-24' AND expires_at < DATE '2026-06-24' + INTERVAL '30 days' ORDER BY expires_at ASC LIMIT 100",
+        "semantic": {
+          "comparisonMode": "ordered",
+          "requiredColumns": [
+            {
+              "canonicalName": "id"
+            },
+            {
+              "canonicalName": "organization_id"
+            },
+            {
+              "canonicalName": "status"
+            },
+            {
+              "canonicalName": "expires_at"
+            }
+          ],
+          "negativeControls": [
+            {
+              "id": "missing-active-status-filter",
+              "sql": "SELECT id, organization_id, status, expires_at FROM public.subscription WHERE expires_at >= DATE '2026-06-24' AND expires_at < DATE '2026-06-24' + INTERVAL '30 days' ORDER BY expires_at ASC LIMIT 100"
+            }
+          ]
+        }
       }
     },
     {
       "id": "saas.active-users-by-org",
       "schemaFixture": "saas",
-      "question": "Active users by organization in the last week",
-      "databaseContext": "An active user is a user with at least one active organization membership and last_seen_at in the last 7 days.",
+      "question": "Active users by organization in the week ending 2026-06-24 12:00 UTC, ordered by active user count descending and organization id ascending for ties",
+      "databaseContext": "An active user is a user with at least one active organization membership and last_seen_at on or after 2026-06-17 12:00 UTC.",
       "expected": {
         "decision": "sql",
         "requiredTables": [
@@ -175,8 +452,37 @@
           "public.app_user.id",
           "public.app_user.last_seen_at"
         ],
-        "requiredOperations": ["count", "group", "join", "relative-time-filter"],
-        "goldenSQL": "SELECT o.id, o.name, COUNT(DISTINCT u.id) AS active_user_count FROM public.organization AS o JOIN public.organization_membership AS m ON m.organization_id = o.id JOIN public.app_user AS u ON u.id = m.user_id WHERE m.status = 'active' AND u.last_seen_at >= NOW() - INTERVAL '7 days' GROUP BY o.id, o.name ORDER BY active_user_count DESC"
+        "requiredOperations": [
+          "count",
+          "group",
+          "join",
+          "relative-time-filter"
+        ],
+        "goldenSQL": "SELECT o.id, o.name, COUNT(DISTINCT u.id) AS active_user_count FROM public.organization AS o JOIN public.organization_membership AS m ON m.organization_id = o.id JOIN public.app_user AS u ON u.id = m.user_id WHERE m.status = 'active' AND u.last_seen_at >= CAST('2026-06-24 12:00:00+00' AS TIMESTAMPTZ) - INTERVAL '7 days' GROUP BY o.id, o.name ORDER BY active_user_count DESC, o.id ASC",
+        "semantic": {
+          "comparisonMode": "ordered",
+          "requiredColumns": [
+            {
+              "canonicalName": "id"
+            },
+            {
+              "canonicalName": "name"
+            },
+            {
+              "canonicalName": "active_user_count",
+              "aliases": [
+                "user_count",
+                "count"
+              ]
+            }
+          ],
+          "negativeControls": [
+            {
+              "id": "missing-active-membership-filter",
+              "sql": "SELECT o.id, o.name, COUNT(DISTINCT u.id) AS active_user_count FROM public.organization AS o JOIN public.organization_membership AS m ON m.organization_id = o.id JOIN public.app_user AS u ON u.id = m.user_id WHERE u.last_seen_at >= CAST('2026-06-24 12:00:00+00' AS TIMESTAMPTZ) - INTERVAL '7 days' GROUP BY o.id, o.name ORDER BY active_user_count DESC, o.id ASC"
+            }
+          ]
+        }
       }
     },
     {
@@ -186,15 +492,48 @@
       "databaseContext": "Seat usage is the count of active organization memberships.",
       "expected": {
         "decision": "sql",
-        "requiredTables": ["public.organization", "public.organization_membership"],
+        "requiredTables": [
+          "public.organization",
+          "public.organization_membership"
+        ],
         "requiredColumnBindings": [
           "public.organization.id",
           "public.organization.seats_purchased",
           "public.organization_membership.organization_id",
           "public.organization_membership.status"
         ],
-        "requiredOperations": ["count", "group", "join"],
-        "goldenSQL": "SELECT o.id, o.name, o.seats_purchased, COUNT(m.id) AS used_seats FROM public.organization AS o JOIN public.organization_membership AS m ON m.organization_id = o.id WHERE m.status = 'active' GROUP BY o.id, o.name, o.seats_purchased HAVING COUNT(m.id) > o.seats_purchased ORDER BY used_seats DESC"
+        "requiredOperations": [
+          "count",
+          "group",
+          "join"
+        ],
+        "goldenSQL": "SELECT o.id, o.name, o.seats_purchased, COUNT(m.id) AS used_seats FROM public.organization AS o JOIN public.organization_membership AS m ON m.organization_id = o.id WHERE m.status = 'active' GROUP BY o.id, o.name, o.seats_purchased HAVING COUNT(m.id) > o.seats_purchased ORDER BY used_seats DESC",
+        "semantic": {
+          "comparisonMode": "ordered",
+          "requiredColumns": [
+            {
+              "canonicalName": "id"
+            },
+            {
+              "canonicalName": "name"
+            },
+            {
+              "canonicalName": "seats_purchased"
+            },
+            {
+              "canonicalName": "used_seats",
+              "aliases": [
+                "seat_count"
+              ]
+            }
+          ],
+          "negativeControls": [
+            {
+              "id": "missing-active-status-filter",
+              "sql": "SELECT o.id, o.name, o.seats_purchased, COUNT(m.id) AS used_seats FROM public.organization AS o JOIN public.organization_membership AS m ON m.organization_id = o.id GROUP BY o.id, o.name, o.seats_purchased HAVING COUNT(m.id) > o.seats_purchased ORDER BY used_seats DESC"
+            }
+          ]
+        }
       }
     },
     {
@@ -203,14 +542,37 @@
       "question": "Users without an active organization membership",
       "expected": {
         "decision": "sql",
-        "requiredTables": ["public.app_user", "public.organization_membership"],
+        "requiredTables": [
+          "public.app_user",
+          "public.organization_membership"
+        ],
         "requiredColumnBindings": [
           "public.app_user.id",
           "public.organization_membership.user_id",
           "public.organization_membership.status"
         ],
-        "requiredOperations": ["left-join", "null-filter"],
-        "goldenSQL": "SELECT u.id, u.email FROM public.app_user AS u LEFT JOIN public.organization_membership AS m ON m.user_id = u.id AND m.status = 'active' WHERE m.id IS NULL ORDER BY u.id LIMIT 100"
+        "requiredOperations": [
+          "left-join",
+          "null-filter"
+        ],
+        "goldenSQL": "SELECT u.id, u.email FROM public.app_user AS u LEFT JOIN public.organization_membership AS m ON m.user_id = u.id AND m.status = 'active' WHERE m.id IS NULL ORDER BY u.id LIMIT 100",
+        "semantic": {
+          "comparisonMode": "ordered",
+          "requiredColumns": [
+            {
+              "canonicalName": "id"
+            },
+            {
+              "canonicalName": "email"
+            }
+          ],
+          "negativeControls": [
+            {
+              "id": "opposite-null-filter",
+              "sql": "SELECT u.id, u.email FROM public.app_user AS u LEFT JOIN public.organization_membership AS m ON m.user_id = u.id AND m.status = 'active' WHERE m.id IS NOT NULL ORDER BY u.id LIMIT 100"
+            }
+          ]
+        }
       }
     },
     {
@@ -219,7 +581,12 @@
       "question": "Which accounts are healthy?",
       "expected": {
         "decision": "clarify",
-        "clarificationMustMentionAny": ["healthy", "health", "status", "usage"]
+        "clarificationMustMentionAny": [
+          "healthy",
+          "health",
+          "status",
+          "usage"
+        ]
       }
     },
     {
@@ -228,10 +595,36 @@
       "question": "List verified tools",
       "expected": {
         "decision": "sql",
-        "requiredTables": ["public.preseason_tool"],
-        "requiredColumnBindings": ["public.preseason_tool.is_verified"],
-        "requiredOperations": ["limit"],
-        "goldenSQL": "SELECT id, name, slug FROM public.preseason_tool WHERE is_verified = TRUE ORDER BY name ASC LIMIT 100"
+        "requiredTables": [
+          "public.preseason_tool"
+        ],
+        "requiredColumnBindings": [
+          "public.preseason_tool.is_verified"
+        ],
+        "requiredOperations": [
+          "limit"
+        ],
+        "goldenSQL": "SELECT id, name, slug FROM public.preseason_tool WHERE is_verified = TRUE ORDER BY name ASC LIMIT 100",
+        "semantic": {
+          "comparisonMode": "ordered",
+          "requiredColumns": [
+            {
+              "canonicalName": "id"
+            },
+            {
+              "canonicalName": "name"
+            },
+            {
+              "canonicalName": "slug"
+            }
+          ],
+          "negativeControls": [
+            {
+              "id": "opposite-boolean-filter",
+              "sql": "SELECT id, name, slug FROM public.preseason_tool WHERE is_verified = FALSE ORDER BY name ASC LIMIT 100"
+            }
+          ]
+        }
       }
     },
     {
@@ -240,14 +633,21 @@
       "question": "Tools with the most wins in the last two weeks",
       "expected": {
         "decision": "clarify",
-        "clarificationMustMentionAny": ["win", "winner", "status", "decision", "date", "time"]
+        "clarificationMustMentionAny": [
+          "win",
+          "winner",
+          "status",
+          "decision",
+          "date",
+          "time"
+        ]
       }
     },
     {
       "id": "preseason.top-wins-defined",
       "schemaFixture": "preseason",
-      "question": "Which tools have the most wins in the last two weeks?",
-      "databaseContext": "Each evaluation with a non-null winner_id records one win. Use the evaluation createdAt timestamp.",
+      "question": "Which tools have the most wins in the two weeks ending 2026-06-24 12:00 UTC?",
+      "databaseContext": "Each evaluation with a non-null winner_id records one win. Use the evaluation createdAt timestamp and treat the evaluation anchor as 2026-06-24 12:00 UTC.",
       "expected": {
         "decision": "sql",
         "requiredTables": [
@@ -269,7 +669,31 @@
           "descending-order",
           "relative-time-filter"
         ],
-        "goldenSQL": "SELECT t.id, t.name, COUNT(e.winner_id) AS wins FROM public.preseason_match_evaluation AS e JOIN public.preseason_tool AS t ON t.id = e.winner_id WHERE e.winner_id IS NOT NULL AND e.\"createdAt\" >= NOW() - INTERVAL '14 days' GROUP BY t.id, t.name ORDER BY wins DESC LIMIT 100"
+        "goldenSQL": "SELECT t.id, t.name, COUNT(e.winner_id) AS wins FROM public.preseason_match_evaluation AS e JOIN public.preseason_tool AS t ON t.id = e.winner_id WHERE e.winner_id IS NOT NULL AND e.\"createdAt\" >= CAST('2026-06-24 12:00:00+00' AS TIMESTAMPTZ) - INTERVAL '14 days' GROUP BY t.id, t.name ORDER BY wins DESC LIMIT 100",
+        "semantic": {
+          "comparisonMode": "ordered",
+          "requiredColumns": [
+            {
+              "canonicalName": "id"
+            },
+            {
+              "canonicalName": "name"
+            },
+            {
+              "canonicalName": "wins",
+              "aliases": [
+                "win_count",
+                "winner_count"
+              ]
+            }
+          ],
+          "negativeControls": [
+            {
+              "id": "participant-count-instead-of-winner-count",
+              "sql": "SELECT t.id, t.name, COUNT(*) AS wins FROM public.preseason_match_evaluation AS e JOIN public.preseason_match_batch AS b ON b.id = e.batch_id JOIN public.preseason_tool AS t ON t.id IN (b.tool_a_id, b.tool_b_id) WHERE e.\"createdAt\" >= CAST('2026-06-24 12:00:00+00' AS TIMESTAMPTZ) - INTERVAL '14 days' GROUP BY t.id, t.name ORDER BY wins DESC LIMIT 100"
+            }
+          ]
+        }
       }
     },
     {
@@ -278,13 +702,41 @@
       "question": "Show the latest failed benchmark runs",
       "expected": {
         "decision": "sql",
-        "requiredTables": ["public.preseason_benchmark_run"],
+        "requiredTables": [
+          "public.preseason_benchmark_run"
+        ],
         "requiredColumnBindings": [
           "public.preseason_benchmark_run.status",
           "public.preseason_benchmark_run.createdAt"
         ],
-        "requiredOperations": ["descending-order", "limit"],
-        "goldenSQL": "SELECT id, status, \"createdAt\", scheduled_for FROM public.preseason_benchmark_run WHERE status = 'failed' ORDER BY \"createdAt\" DESC LIMIT 100"
+        "requiredOperations": [
+          "descending-order",
+          "limit"
+        ],
+        "goldenSQL": "SELECT id, status, \"createdAt\", scheduled_for FROM public.preseason_benchmark_run WHERE status = 'failed' ORDER BY \"createdAt\" DESC LIMIT 100",
+        "semantic": {
+          "comparisonMode": "ordered",
+          "requiredColumns": [
+            {
+              "canonicalName": "id"
+            },
+            {
+              "canonicalName": "status"
+            },
+            {
+              "canonicalName": "createdAt"
+            },
+            {
+              "canonicalName": "scheduled_for"
+            }
+          ],
+          "negativeControls": [
+            {
+              "id": "wrong-date-column",
+              "sql": "SELECT id, status, \"createdAt\", scheduled_for FROM public.preseason_benchmark_run WHERE status = 'failed' ORDER BY scheduled_for DESC LIMIT 100"
+            }
+          ]
+        }
       }
     },
     {
@@ -306,8 +758,34 @@
           "public.preseason_tool.id",
           "public.preseason_category.id"
         ],
-        "requiredOperations": ["join", "limit"],
-        "goldenSQL": "SELECT c.id, ta.name AS tool_a_name, tb.name AS tool_b_name, pc.name AS category_name FROM public.preseason_match_config AS c JOIN public.preseason_tool AS ta ON ta.id = c.tool_a_id JOIN public.preseason_tool AS tb ON tb.id = c.tool_b_id JOIN public.preseason_category AS pc ON pc.id = c.category_id WHERE c.is_active = TRUE ORDER BY c.\"createdAt\" DESC LIMIT 100"
+        "requiredOperations": [
+          "join",
+          "limit"
+        ],
+        "goldenSQL": "SELECT c.id, ta.name AS tool_a_name, tb.name AS tool_b_name, pc.name AS category_name FROM public.preseason_match_config AS c JOIN public.preseason_tool AS ta ON ta.id = c.tool_a_id JOIN public.preseason_tool AS tb ON tb.id = c.tool_b_id JOIN public.preseason_category AS pc ON pc.id = c.category_id WHERE c.is_active = TRUE ORDER BY c.\"createdAt\" DESC LIMIT 100",
+        "semantic": {
+          "comparisonMode": "ordered",
+          "requiredColumns": [
+            {
+              "canonicalName": "id"
+            },
+            {
+              "canonicalName": "tool_a_name"
+            },
+            {
+              "canonicalName": "tool_b_name"
+            },
+            {
+              "canonicalName": "category_name"
+            }
+          ],
+          "negativeControls": [
+            {
+              "id": "duplicate-multiplication-from-batch-join",
+              "sql": "SELECT c.id, ta.name AS tool_a_name, tb.name AS tool_b_name, pc.name AS category_name FROM public.preseason_match_config AS c JOIN public.preseason_match_batch AS b ON b.config_id = c.id JOIN public.preseason_tool AS ta ON ta.id = c.tool_a_id JOIN public.preseason_tool AS tb ON tb.id = c.tool_b_id JOIN public.preseason_category AS pc ON pc.id = c.category_id WHERE c.is_active = TRUE ORDER BY c.\"createdAt\" DESC LIMIT 100"
+            }
+          ]
+        }
       }
     }
   ]

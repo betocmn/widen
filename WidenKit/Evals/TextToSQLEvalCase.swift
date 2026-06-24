@@ -42,6 +42,7 @@ public struct TextToSQLEvalExpectation: Codable, Equatable, Sendable {
     public var requiredOperations: [TextToSQLEvalOperation]
     public var clarificationMustMentionAny: [String]
     public var goldenSQL: String?
+    public var semantic: TextToSQLSemanticExpectation?
 
     public init(
         decision: TextToSQLEvalDecision,
@@ -50,7 +51,8 @@ public struct TextToSQLEvalExpectation: Codable, Equatable, Sendable {
         forbiddenColumnBindings: [String] = [],
         requiredOperations: [TextToSQLEvalOperation] = [],
         clarificationMustMentionAny: [String] = [],
-        goldenSQL: String? = nil
+        goldenSQL: String? = nil,
+        semantic: TextToSQLSemanticExpectation? = nil
     ) {
         self.decision = decision
         self.requiredTables = requiredTables
@@ -59,6 +61,7 @@ public struct TextToSQLEvalExpectation: Codable, Equatable, Sendable {
         self.requiredOperations = requiredOperations
         self.clarificationMustMentionAny = clarificationMustMentionAny
         self.goldenSQL = goldenSQL
+        self.semantic = semantic
     }
 
     private enum CodingKeys: String, CodingKey {
@@ -69,6 +72,7 @@ public struct TextToSQLEvalExpectation: Codable, Equatable, Sendable {
         case requiredOperations
         case clarificationMustMentionAny
         case goldenSQL
+        case semantic
     }
 
     public init(from decoder: any Decoder) throws {
@@ -84,6 +88,7 @@ public struct TextToSQLEvalExpectation: Codable, Equatable, Sendable {
         clarificationMustMentionAny =
             try container.decodeIfPresent([String].self, forKey: .clarificationMustMentionAny) ?? []
         goldenSQL = try container.decodeIfPresent(String.self, forKey: .goldenSQL)
+        semantic = try container.decodeIfPresent(TextToSQLSemanticExpectation.self, forKey: .semantic)
     }
 }
 
@@ -104,4 +109,100 @@ public enum TextToSQLEvalOperation: String, Codable, CaseIterable, Equatable, Se
     case nullFilter = "null-filter"
     case relativeTimeFilter = "relative-time-filter"
     case sum
+}
+
+public enum TextToSQLResultComparisonMode: String, Codable, CaseIterable, Equatable, Sendable {
+    case ordered
+    case unordered
+    case scalar
+    case projectedColumns
+}
+
+public struct TextToSQLSemanticColumnExpectation: Codable, Equatable, Sendable {
+    public var canonicalName: String
+    public var aliases: [String]
+
+    public init(canonicalName: String, aliases: [String] = []) {
+        self.canonicalName = canonicalName
+        self.aliases = aliases
+    }
+
+    private enum CodingKeys: String, CodingKey {
+        case canonicalName
+        case aliases
+    }
+
+    public init(from decoder: any Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        canonicalName = try container.decode(String.self, forKey: .canonicalName)
+        aliases = try container.decodeIfPresent([String].self, forKey: .aliases) ?? []
+    }
+}
+
+public struct TextToSQLSemanticNegativeControl: Codable, Equatable, Sendable {
+    public var id: String
+    public var sql: String
+    public var comparisonMode: TextToSQLResultComparisonMode?
+
+    public init(
+        id: String,
+        sql: String,
+        comparisonMode: TextToSQLResultComparisonMode? = nil
+    ) {
+        self.id = id
+        self.sql = sql
+        self.comparisonMode = comparisonMode
+    }
+}
+
+public struct TextToSQLSemanticExpectation: Codable, Equatable, Sendable {
+    public var comparisonMode: TextToSQLResultComparisonMode
+    public var requiredColumns: [TextToSQLSemanticColumnExpectation]
+    public var allowExtraCandidateColumns: Bool
+    public var floatTolerance: Double
+    public var negativeControls: [TextToSQLSemanticNegativeControl]
+
+    public init(
+        comparisonMode: TextToSQLResultComparisonMode,
+        requiredColumns: [TextToSQLSemanticColumnExpectation] = [],
+        allowExtraCandidateColumns: Bool = false,
+        floatTolerance: Double = 0,
+        negativeControls: [TextToSQLSemanticNegativeControl] = []
+    ) {
+        self.comparisonMode = comparisonMode
+        self.requiredColumns = requiredColumns
+        self.allowExtraCandidateColumns = allowExtraCandidateColumns
+        self.floatTolerance = floatTolerance
+        self.negativeControls = negativeControls
+    }
+
+    private enum CodingKeys: String, CodingKey {
+        case comparisonMode
+        case requiredColumns
+        case allowExtraCandidateColumns
+        case floatTolerance
+        case negativeControls
+    }
+
+    public init(from decoder: any Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        comparisonMode = try container.decode(
+            TextToSQLResultComparisonMode.self,
+            forKey: .comparisonMode
+        )
+        requiredColumns =
+            try container.decodeIfPresent(
+                [TextToSQLSemanticColumnExpectation].self,
+                forKey: .requiredColumns
+            ) ?? []
+        allowExtraCandidateColumns =
+            try container.decodeIfPresent(Bool.self, forKey: .allowExtraCandidateColumns) ?? false
+        floatTolerance =
+            try container.decodeIfPresent(Double.self, forKey: .floatTolerance) ?? 0
+        negativeControls =
+            try container.decodeIfPresent(
+                [TextToSQLSemanticNegativeControl].self,
+                forKey: .negativeControls
+            ) ?? []
+    }
 }

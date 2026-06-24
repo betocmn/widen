@@ -481,3 +481,291 @@ struct QueryExecutionIntegrationTests {
         }
     }
 }
+
+@Suite("Semantic eval database integration", .enabled(if: integrationEnabled), .serialized)
+struct TextToSQLSemanticDatabaseIntegrationTests {
+    @Test func fixturesMatchSchemaAndNegativeControlsFailEquivalence() async throws {
+        let root = repositoryRoot()
+        let suiteURL = root.appendingPathComponent("Evals/suites/text-to-sql-v1.json")
+        let suiteData = try Data(contentsOf: suiteURL)
+        let suite = try JSONDecoder().decode(TextToSQLEvalSuite.self, from: suiteData)
+        let schemaDirectory = root.appendingPathComponent("Evals/schemas", isDirectory: true)
+        let databaseDirectory = root.appendingPathComponent("Evals/databases", isDirectory: true)
+        let server = semanticServer()
+        let provisioner = TextToSQLSemanticDatabaseProvisioner(server: server)
+        let executor = TextToSQLSemanticExecutor()
+        var provisioned: [TextToSQLSemanticProvisionedDatabase] = []
+
+        do {
+            let fixtures = Set(suite.cases.map(\.schemaFixture))
+            for fixture in fixtures.sorted() {
+                let schema = try loadSchema(fixture, from: schemaDirectory)
+                let database = try await provisioner.provision(
+                    fixture: fixture,
+                    setupURL: databaseDirectory
+                        .appendingPathComponent(fixture, isDirectory: true)
+                        .appendingPathComponent("setup.json"),
+                    expectedSchema: schema
+                )
+                provisioned.append(database)
+
+                for evalCase in suite.cases
+                    where evalCase.schemaFixture == fixture && evalCase.expected.decision == .sql
+                {
+                    let goldenSQL = try #require(evalCase.expected.goldenSQL)
+                    let semantic = try #require(evalCase.expected.semantic)
+                    let golden = try await executor.executePair(
+                        goldenSQL: goldenSQL,
+                        candidateSQL: goldenSQL,
+                        expectation: semantic,
+                        database: database
+                    )
+                    #expect(golden.goldenExecutionSucceeded)
+                    #expect(golden.candidateExecutionSucceeded)
+                    #expect(golden.comparison?.equivalent == true)
+
+                    for negative in semantic.negativeControls {
+                        var expectation = semantic
+                        if let mode = negative.comparisonMode {
+                            expectation.comparisonMode = mode
+                        }
+                        let output = try await executor.executePair(
+                            goldenSQL: goldenSQL,
+                            candidateSQL: negative.sql,
+                            expectation: expectation,
+                            database: database
+                        )
+                        #expect(
+                            output.goldenExecutionSucceeded,
+                            "golden failed for \(evalCase.id): \(output.goldenError ?? "-")"
+                        )
+                        #expect(
+                            output.candidateExecutionSucceeded,
+                            "negative failed to execute for \(evalCase.id).\(negative.id): \(output.candidateError ?? "-")"
+                        )
+                        #expect(
+                            output.comparison?.equivalent == false,
+                            "negative control unexpectedly matched \(evalCase.id).\(negative.id)"
+                        )
+                    }
+                }
+            }
+            for database in provisioned {
+                await provisioner.drop(database)
+            }
+        } catch {
+            for database in provisioned {
+                await provisioner.drop(database)
+            }
+            throw error
+        }
+    }
+
+    @Test func schemaDriftIsDetectedBeforeModelExecution() async throws {
+        let root = repositoryRoot()
+        let schema = try loadSchema(
+            "commerce",
+            from: root.appendingPathComponent("Evals/schemas", isDirectory: true)
+        )
+        let tempDirectory = FileManager.default.temporaryDirectory
+            .appendingPathComponent("widen-drift-\(UUID().uuidString)", isDirectory: true)
+        try FileManager.default.createDirectory(at: tempDirectory, withIntermediateDirectories: true)
+        let setupURL = tempDirectory.appendingPathComponent("setup.json")
+        let statements = [
+            "CREATE TABLE public.customers (id INTEGER PRIMARY KEY, email TEXT NOT NULL, name TEXT, country TEXT, created_at TIMESTAMPTZ NOT NULL)",
+            "CREATE TABLE public.orders (id INTEGER PRIMARY KEY, customer_id INTEGER NOT NULL REFERENCES public.customers(id), status TEXT NOT NULL, total_cents INTEGER NOT NULL, created_at TIMESTAMPTZ NOT NULL)",
+        ]
+        try JSONEncoder().encode(statements).write(to: setupURL)
+
+        let provisioner = TextToSQLSemanticDatabaseProvisioner(server: semanticServer())
+        await #expect(throws: TextToSQLSemanticDatabaseError.self) {
+            _ = try await provisioner.provision(
+                fixture: "commerce-drift",
+                setupURL: setupURL,
+                expectedSchema: schema
+            )
+        }
+    }
+
+    @Test func candidateRunsInsideReadOnlyTransaction() async throws {
+        let root = repositoryRoot()
+        let schema = try loadSchema(
+            "commerce",
+            from: root.appendingPathComponent("Evals/schemas", isDirectory: true)
+        )
+        let server = semanticServer()
+        let provisioner = TextToSQLSemanticDatabaseProvisioner(server: server)
+        let database = try await provisioner.provision(
+            fixture: "commerce-readonly",
+            setupURL: root
+                .appendingPathComponent("Evals/databases/commerce", isDirectory: true)
+                .appendingPathComponent("setup.json"),
+            expectedSchema: schema
+        )
+        let executor = TextToSQLSemanticExecutor()
+        do {
+            let expectation = TextToSQLSemanticExpectation(comparisonMode: .scalar)
+            let output = try await executor.executePair(
+                goldenSQL: "SELECT COUNT(*) AS count FROM public.customers",
+                candidateSQL: "INSERT INTO public.customers (id, email, name, country, created_at) VALUES (99, 'write@example.test', 'Write', 'US', NOW()) RETURNING id",
+                expectation: expectation,
+                database: database
+            )
+            #expect(output.goldenExecutionSucceeded)
+            #expect(output.candidateError != nil)
+
+            let check = try await executor.executePair(
+                goldenSQL: "SELECT COUNT(*) AS count FROM public.customers",
+                candidateSQL: "SELECT COUNT(*) AS count FROM public.customers",
+                expectation: expectation,
+                database: database
+            )
+            #expect(check.comparison?.equivalent == true)
+            await provisioner.drop(database)
+        } catch {
+            await provisioner.drop(database)
+            throw error
+        }
+    }
+
+    @Test func resultLimitExceededClosesComparisonConnection() async throws {
+        let root = repositoryRoot()
+        let schema = try loadSchema(
+            "commerce",
+            from: root.appendingPathComponent("Evals/schemas", isDirectory: true)
+        )
+        let server = semanticServer()
+        let provisioner = TextToSQLSemanticDatabaseProvisioner(server: server)
+        let database = try await provisioner.provision(
+            fixture: "commerce-caps",
+            setupURL: root
+                .appendingPathComponent("Evals/databases/commerce", isDirectory: true)
+                .appendingPathComponent("setup.json"),
+            expectedSchema: schema
+        )
+        do {
+            let cappedExecutor = TextToSQLSemanticExecutor(rowLimit: 1)
+            let expectation = TextToSQLSemanticExpectation(comparisonMode: .ordered)
+            let capped = try await cappedExecutor.executePair(
+                goldenSQL: "SELECT id FROM public.customers ORDER BY id",
+                candidateSQL: "SELECT id FROM public.customers ORDER BY id",
+                expectation: expectation,
+                database: database
+            )
+            #expect(capped.resultLimitExceeded)
+            #expect(capped.goldenError != nil)
+
+            let normalExecutor = TextToSQLSemanticExecutor()
+            let normal = try await normalExecutor.executePair(
+                goldenSQL: "SELECT COUNT(*) AS count FROM public.customers",
+                candidateSQL: "SELECT COUNT(*) AS count FROM public.customers",
+                expectation: TextToSQLSemanticExpectation(comparisonMode: .scalar),
+                database: database
+            )
+            #expect(normal.comparison?.equivalent == true)
+            await provisioner.drop(database)
+        } catch {
+            await provisioner.drop(database)
+            throw error
+        }
+    }
+
+    @Test func semanticExecutionUsesProvisioningUserWithoutClusterRole() async throws {
+        let root = repositoryRoot()
+        let schema = try loadSchema(
+            "commerce",
+            from: root.appendingPathComponent("Evals/schemas", isDirectory: true)
+        )
+        let server = semanticServer()
+        let provisioner = TextToSQLSemanticDatabaseProvisioner(server: server)
+        let database = try await provisioner.provision(
+            fixture: "commerce-restricted",
+            setupURL: root
+                .appendingPathComponent("Evals/databases/commerce", isDirectory: true)
+                .appendingPathComponent("setup.json"),
+            expectedSchema: schema
+        )
+        let executor = TextToSQLSemanticExecutor()
+        do {
+            #expect(database.config.username == server.username)
+            #expect(database.executionUsername == server.username)
+
+            let expectation = TextToSQLSemanticExpectation(
+                comparisonMode: .ordered,
+                requiredColumns: [
+                    TextToSQLSemanticColumnExpectation(canonicalName: "current_user"),
+                ]
+            )
+            let sql = """
+            SELECT current_user
+            """
+            let output = try await executor.executePair(
+                goldenSQL: """
+                SELECT '\(server.username)'::text AS current_user
+                """,
+                candidateSQL: sql,
+                expectation: expectation,
+                database: database
+            )
+            #expect(output.comparison?.equivalent == true)
+            await provisioner.drop(database)
+        } catch {
+            await provisioner.drop(database)
+            throw error
+        }
+    }
+
+    @Test func timestamptzResultsPreserveMicroseconds() async throws {
+        let root = repositoryRoot()
+        let schema = try loadSchema(
+            "commerce",
+            from: root.appendingPathComponent("Evals/schemas", isDirectory: true)
+        )
+        let server = semanticServer()
+        let provisioner = TextToSQLSemanticDatabaseProvisioner(server: server)
+        let database = try await provisioner.provision(
+            fixture: "commerce-timestamptz",
+            setupURL: root
+                .appendingPathComponent("Evals/databases/commerce", isDirectory: true)
+                .appendingPathComponent("setup.json"),
+            expectedSchema: schema
+        )
+        let executor = TextToSQLSemanticExecutor()
+        do {
+            let output = try await executor.executePair(
+                goldenSQL: "SELECT TIMESTAMPTZ '2026-06-24 12:00:00.123456+00' AS created_at",
+                candidateSQL: "SELECT TIMESTAMPTZ '2026-06-24 12:00:00.123457+00' AS created_at",
+                expectation: TextToSQLSemanticExpectation(comparisonMode: .ordered),
+                database: database
+            )
+
+            #expect(output.goldenResult?.rows == [[.timestampWithTimeZone("2026-06-24T12:00:00.123456Z")]])
+            #expect(output.candidateResult?.rows == [[.timestampWithTimeZone("2026-06-24T12:00:00.123457Z")]])
+            #expect(output.comparison?.equivalent == false)
+            await provisioner.drop(database)
+        } catch {
+            await provisioner.drop(database)
+            throw error
+        }
+    }
+
+    private func repositoryRoot() -> URL {
+        URL(fileURLWithPath: #filePath)
+            .deletingLastPathComponent()
+            .deletingLastPathComponent()
+    }
+
+    private func semanticServer() -> TextToSQLSemanticDatabaseServer {
+        TextToSQLSemanticDatabaseServer(
+            host: IntegrationServer.host,
+            port: IntegrationServer.port,
+            username: IntegrationServer.username,
+            maintenanceDatabase: IntegrationServer.maintenanceDatabase
+        )
+    }
+
+    private func loadSchema(_ fixture: String, from directory: URL) throws -> DatabaseSchema {
+        let data = try Data(contentsOf: directory.appendingPathComponent("\(fixture)-schema.json"))
+        return try JSONDecoder().decode(DatabaseSchema.self, from: data)
+    }
+}
