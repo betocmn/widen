@@ -33,15 +33,16 @@ public struct LocalSchemaSearcher: SchemaSearching {
         let directCandidates = index.documents.compactMap { document -> CandidateScore? in
             let lexical = lexicalScore(document: document, queryTokens: lexicalTokens)
             let exact = exactIdentifierScore(document: document, query: request.query)
-            guard lexical.score > 0 || exact.score > 0 else { return nil }
+            let tableToken = exactTableTokenScore(document: document, queryTokens: lexicalTokens)
+            guard lexical.score > 0 || exact.score > 0 || tableToken.score > 0 else { return nil }
             return CandidateScore(
                 document: document,
                 lexicalBM25Score: lexical.score,
-                exactMatchScore: exact.score,
+                exactMatchScore: exact.score + tableToken.score,
                 contextBoost: 0,
                 graphBoost: 0,
                 exactMatchQuality: exact.quality,
-                matchedFields: lexical.matchedFields + exact.matchedFields,
+                matchedFields: lexical.matchedFields + exact.matchedFields + tableToken.matchedFields,
                 matchedQueryTokens: lexical.matchedQueryTokens
             )
         }
@@ -70,10 +71,12 @@ public struct LocalSchemaSearcher: SchemaSearching {
 
         let rankedCandidates = candidatesByID.values.map { candidate in
             var candidate = candidate
-            candidate.contextBoost = contextBoost(
+            let context = contextScore(
                 document: candidate.document,
                 contextTokens: contextTokens
             )
+            candidate.contextBoost = context.score
+            candidate.matchedFields += context.matchedFields
             return candidate
         }
         .filter { $0.totalScore > 0 }
@@ -350,7 +353,7 @@ public struct LocalSchemaSearcher: SchemaSearching {
         let idf = log((Double(corpusSize - documentFrequency) + 0.5) / (Double(documentFrequency) + 0.5) + 1)
         let weightedTermFrequency = min(
             fieldCounts.reduce(0.0) { partial, entry in
-                partial + min(entry.value, 3) * entry.key.weight
+                partial + min(entry.value, termFrequencyCap(for: entry.key)) * entry.key.weight
             },
             18
         )
@@ -422,18 +425,6 @@ public struct LocalSchemaSearcher: SchemaSearching {
             }
         }
 
-        for term in document.terms where term.field == .columnName {
-            guard lowercasedQuery.contains(term.term) else { continue }
-            score += term.term.count <= 2 ? 0.5 : 2.5
-            matchedFields.append(
-                SchemaSearchMatchedField(
-                    field: .columnName,
-                    term: term.term,
-                    objectID: term.objectID
-                )
-            )
-        }
-
         return ExactIdentifierScore(
             score: score,
             quality: quality,
@@ -441,20 +432,84 @@ public struct LocalSchemaSearcher: SchemaSearching {
         )
     }
 
-    private func contextBoost(
+    private func exactTableTokenScore(
+        document: SchemaSearchDocument,
+        queryTokens: [String]
+    ) -> ExactIdentifierScore {
+        guard !queryTokens.isEmpty else {
+            return ExactIdentifierScore(score: 0, quality: 0, matchedFields: [])
+        }
+        let queryTokenSet = Set(queryTokens)
+        var score = 0.0
+        var matchedFields: [SchemaSearchMatchedField] = []
+        for term in document.terms {
+            guard queryTokenSet.contains(term.term) else { continue }
+            switch term.field {
+            case .exactTableQualified:
+                score += 0.55
+                matchedFields.append(
+                    SchemaSearchMatchedField(
+                        field: term.field,
+                        term: term.term,
+                        objectID: term.objectID
+                    )
+                )
+            case .exactTableUnqualified:
+                score += 0.9
+                matchedFields.append(
+                    SchemaSearchMatchedField(
+                        field: term.field,
+                        term: term.term,
+                        objectID: term.objectID
+                    )
+                )
+            default:
+                continue
+            }
+        }
+        return ExactIdentifierScore(
+            score: min(score, 2.4),
+            quality: 0,
+            matchedFields: matchedFields
+        )
+    }
+
+    private func contextScore(
         document: SchemaSearchDocument,
         contextTokens: [String]
-    ) -> Double {
-        guard !contextTokens.isEmpty else { return 0 }
-        let counts = document.termCounts()
-        let score = contextTokens.reduce(0.0) { partial, token in
-            guard let fieldCounts = counts[token] else { return partial }
-            let weighted = fieldCounts.reduce(0.0) { sum, entry in
-                sum + min(entry.value, 2) * min(entry.key.weight, 5)
-            }
-            return partial + weighted * 0.14
+    ) -> ContextScore {
+        guard !contextTokens.isEmpty else {
+            return ContextScore(score: 0, matchedFields: [])
         }
-        return min(score, 4)
+        let counts = document.termCounts()
+        var total = 0.0
+        var matchedFields: [SchemaSearchMatchedField] = []
+        let corpusSize = max(index.documents.count, 1)
+
+        for token in contextTokens where token.count >= 3 {
+            guard counts[token] != nil else { continue }
+            let documentFrequency = max(index.documentFrequency[token, default: 1], 1)
+            let rarity = max(0.12, log((Double(corpusSize) + 1) / (Double(documentFrequency) + 1)))
+            var tokenScore = 0.0
+            for origin in document.origins(for: token) {
+                let fieldWeight = contextFieldWeight(origin.field)
+                guard fieldWeight > 0 else { continue }
+                tokenScore += fieldWeight
+                matchedFields.append(
+                    SchemaSearchMatchedField(
+                        field: origin.field,
+                        term: token,
+                        objectID: origin.objectID
+                    )
+                )
+            }
+            total += min(tokenScore, 3.2) * rarity * 0.72
+        }
+
+        return ContextScore(
+            score: min(total, 6),
+            matchedFields: matchedFields
+        )
     }
 
     private func boundedGraphBoosts(from anchors: [CandidateScore]) -> [String: Double] {
@@ -554,6 +609,11 @@ private struct ExactIdentifierScore {
     var matchedFields: [SchemaSearchMatchedField]
 }
 
+private struct ContextScore {
+    var score: Double
+    var matchedFields: [SchemaSearchMatchedField]
+}
+
 private struct CandidateScore {
     var document: SchemaSearchDocument
     var lexicalBM25Score: Double
@@ -577,6 +637,46 @@ private func candidateSort(_ lhs: CandidateScore, _ rhs: CandidateScore) -> Bool
         return lhs.exactMatchQuality > rhs.exactMatchQuality
     }
     return lhs.totalScore > rhs.totalScore
+}
+
+private func contextFieldWeight(_ field: SchemaSearchField) -> Double {
+    switch field {
+    case .columnName:
+        return 1.25
+    case .exactTableQualified:
+        return 1.15
+    case .exactTableUnqualified:
+        return 1.05
+    case .tableComment, .columnComment:
+        return 0.85
+    case .keyColumn, .valueConstraint:
+        return 0.65
+    case .constraintName:
+        return 0.22
+    case .connectedColumnPair:
+        return 0.3
+    case .connectedTableName:
+        return 0.04
+    case .dataType, .schemaName, .foreignKeyNeighbor:
+        return 0.03
+    }
+}
+
+private func termFrequencyCap(for field: SchemaSearchField) -> Double {
+    switch field {
+    case .exactTableQualified, .exactTableUnqualified:
+        return 1
+    case .columnName:
+        return 1.15
+    case .tableComment, .columnComment:
+        return 2
+    case .keyColumn, .valueConstraint:
+        return 1.5
+    case .constraintName, .connectedTableName, .connectedColumnPair:
+        return 1
+    case .dataType, .schemaName, .foreignKeyNeighbor:
+        return 1
+    }
 }
 
 private func uniqueOrdered<T: Hashable>(_ values: [T]) -> [T] {

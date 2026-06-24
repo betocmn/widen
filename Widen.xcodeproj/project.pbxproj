@@ -124,6 +124,7 @@
 		CC901A90F31FB81E58DCBAC9 /* FoundationModelsSmokeTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = C776863B980AE74374EED3DD /* FoundationModelsSmokeTests.swift */; };
 		CF1D375841475129A65AB0D2 /* LocalSchemaSearcher.swift in Sources */ = {isa = PBXBuildFile; fileRef = 41E28C012A1267FF30C359AF /* LocalSchemaSearcher.swift */; };
 		D3A1485BB1D9396614D1445C /* ComposerView.swift in Sources */ = {isa = PBXBuildFile; fileRef = B5703BAB8838F625973C3D22 /* ComposerView.swift */; };
+		D850B472F9BCBA124D861E31 /* SchemaRetrievalEvalReporter.swift in Sources */ = {isa = PBXBuildFile; fileRef = 330D5CD67E7CEF3761551BEE /* SchemaRetrievalEvalReporter.swift */; };
 		DE0A58308400EE1367A39D5A /* FoundationModelsSQLGenerator.swift in Sources */ = {isa = PBXBuildFile; fileRef = 238DB6D552B7AF2D295338FD /* FoundationModelsSQLGenerator.swift */; };
 		DEAE4DFF1E0C2D5E424359A4 /* ConnectionAutofillTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = CAC68C7878E76EC8576EE1DC /* ConnectionAutofillTests.swift */; };
 		DF579B887E407DE86D520359 /* SchemaViewModel.swift in Sources */ = {isa = PBXBuildFile; fileRef = 09FE1736941871937B17D50F /* SchemaViewModel.swift */; };
@@ -140,6 +141,7 @@
 		F1AE22FF7318F9F13E01CF11 /* WidenKit.framework in Frameworks */ = {isa = PBXBuildFile; fileRef = A287B7ABA46C2CE732510671 /* WidenKit.framework */; };
 		F1CBD133E8BABCEB6C7ED13C /* TextToSQLEvalScorer.swift in Sources */ = {isa = PBXBuildFile; fileRef = ABB8F5E4D5E030CC18DE28F1 /* TextToSQLEvalScorer.swift */; };
 		F56A4AE65EBEE8EA32929E7F /* ErrorBannerView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 980EE95F99B9CDF2F26BBC47 /* ErrorBannerView.swift */; };
+		FE664EFA51B14F7423A72B0F /* SchemaRetrievalEvalRunner.swift in Sources */ = {isa = PBXBuildFile; fileRef = 2C2E13AEF2DB414DDA43FC3D /* SchemaRetrievalEvalRunner.swift */; };
 /* End PBXBuildFile section */
 
 /* Begin PBXContainerItemProxy section */
@@ -212,7 +214,9 @@
 		25C6B47E5418CF6D55AE34FD /* WidenKitTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = WidenKitTests.swift; sourceTree = "<group>"; };
 		2AAE8B9C71FDC5AF3BE1734C /* SchemaSearchIndexStore.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SchemaSearchIndexStore.swift; sourceTree = "<group>"; };
 		2B82C454D2705BD1520A0263 /* TableInfo.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = TableInfo.swift; sourceTree = "<group>"; };
+		2C2E13AEF2DB414DDA43FC3D /* SchemaRetrievalEvalRunner.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SchemaRetrievalEvalRunner.swift; sourceTree = "<group>"; };
 		2DAAF8DAFFED5A966828C8C4 /* SQLGenerationResult.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SQLGenerationResult.swift; sourceTree = "<group>"; };
+		330D5CD67E7CEF3761551BEE /* SchemaRetrievalEvalReporter.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SchemaRetrievalEvalReporter.swift; sourceTree = "<group>"; };
 		352C4B3A2C622CAEC8466E27 /* SQLPromptBuilderTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SQLPromptBuilderTests.swift; sourceTree = "<group>"; };
 		380C5B84E053C4AF68EC7A81 /* TextToSQLPipelineTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = TextToSQLPipelineTests.swift; sourceTree = "<group>"; };
 		3A76279AE12FC6943909F765 /* SQLReferenceAnalyzer.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SQLReferenceAnalyzer.swift; sourceTree = "<group>"; };
@@ -589,6 +593,8 @@
 			children = (
 				D40A9749F424B9CF0479C8B1 /* EvalReporter.swift */,
 				1AB216C91F5F87604B3323BC /* EvalRunner.swift */,
+				330D5CD67E7CEF3761551BEE /* SchemaRetrievalEvalReporter.swift */,
+				2C2E13AEF2DB414DDA43FC3D /* SchemaRetrievalEvalRunner.swift */,
 				FBE2B999F82D93E601D7C399 /* WidenEvalMain.swift */,
 			);
 			path = WidenEval;
@@ -818,6 +824,8 @@
 			files = (
 				6B55FB7C9A55173E1BBB34F5 /* EvalReporter.swift in Sources */,
 				7B1DFD78FA16437332A3E123 /* EvalRunner.swift in Sources */,
+				D850B472F9BCBA124D861E31 /* SchemaRetrievalEvalReporter.swift in Sources */,
+				FE664EFA51B14F7423A72B0F /* SchemaRetrievalEvalRunner.swift in Sources */,
 				F0A95707CEA173350D1027C7 /* WidenEvalMain.swift in Sources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;

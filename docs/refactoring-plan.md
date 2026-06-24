@@ -534,7 +534,7 @@ Run each three times.
 
 ---
 
-# PR 5 — Add a local schema retrieval index
+# PR 5 ✅ — Add a local schema retrieval index
 
 Suggested title:
 
@@ -627,6 +627,16 @@ Primary entity in top 3: ≥ 85% of cases
 ```
 
 These are retrieval metrics only; no SQL model call occurs.
+
+Completed with `make eval-retrieval` on 2026-06-24:
+
+```text
+Index required-table Recall@5: 100.0%
+Index primary-table MRR: 0.925
+Index required join-path recall: 100.0%
+Wrong-schema collisions: 0
+Forbidden distractor violations: 0
+```
 
 ---
 

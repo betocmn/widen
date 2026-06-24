@@ -29,6 +29,9 @@ make eval-case CASE=preseason.top-wins-defined BACKEND=local
 make eval-db-local
 make eval-db-cloud MODEL=openai/gpt-5.5
 make eval-db-case CASE=preseason.top-wins-defined BACKEND=local
+make eval-retrieval
+make eval-retrieval RETRIEVER=index
+make eval-retrieval-case CASE=preseason.top-wins-defined RETRIEVER=both
 ```
 
 Cloud mode reads the OpenRouter key only from:
@@ -52,6 +55,8 @@ variable. Do not commit API keys, prompts, or raw model output.
 --output <directory>
 --record-prompts
 --fail-under <percentage>
+--semantic-db
+--retriever legacy|index|both
 ```
 
 Each case has a default 120-second timeout, covering schema discovery,
@@ -115,3 +120,29 @@ SQL semantic pass rate, clarification pass rate, semantic environment
 availability, static/semantic cross-tabs, stable result digests, and concise
 mismatch categories. They do not include raw result rows. Detailed synthetic
 diffs, if added later, must stay under `.eval-results/`.
+
+## Schema Retrieval Evals
+
+`Evals/suites/schema-retrieval-v1.json` evaluates deterministic schema
+retrieval only. It does not call Foundation Models, OpenRouter, SQL generation,
+repair, validation, or PostgreSQL.
+
+`--retriever legacy|index|both` compares the existing `SchemaRelevanceRanker`
+and the local schema index against the same query inputs. Each case declares
+its expected primary table, required tables, optional acceptable alternatives,
+required join-path endpoints, optional required matched columns, and optional
+forbidden top-K distractors. Retrieval expectations are explicit in the suite;
+they are not derived from golden SQL during the run.
+
+Retrieval reports include required-table Recall@3/5/8,
+all-required-tables-present@3/5/8, primary-table reciprocal rank, mean
+reciprocal rank, required join-path recall, wrong-schema collision count,
+no-result or low-signal count, index build duration, serialized index size,
+query latency p50/p95, and score explanations for misses.
+
+The local index is persisted under
+`~/Library/Application Support/Widen/schema-indexes/`. It contains schema
+metadata only: exact table and column names, comments, types, constraints,
+enum/check values, and grouped FK edges. It does not contain database row data,
+credentials, database context, user questions, prompts, model output, or
+generated SQL, and PR 5 does not send indexed content over the network.

@@ -114,7 +114,7 @@ public actor SchemaSearchIndexStore {
         )
         index.buildDurationMs = schemaSearchMilliseconds(started.duration(to: .now))
         try Task.checkCancellation()
-        try writeIndex(index, key: key, directory: directory)
+        index = try writeIndex(index, key: key, directory: directory)
         try pruneStaleIndexes(in: directory, keeping: retentionLimit)
         return LocalSchemaSearcher(index: index)
     }
@@ -156,7 +156,7 @@ public actor SchemaSearchIndexStore {
         _ index: LocalSchemaSearchIndex,
         key: SchemaSearchIndexCacheKey,
         directory: URL
-    ) throws {
+    ) throws -> LocalSchemaSearchIndex {
         let encoder = JSONEncoder()
         encoder.outputFormatting = [.sortedKeys]
         var index = index
@@ -179,6 +179,7 @@ public actor SchemaSearchIndexStore {
             [.posixPermissions: NSNumber(value: Int16(0o600))],
             ofItemAtPath: url.path
         )
+        return index
     }
 
     private static func pruneStaleIndexes(in directory: URL, keeping limit: Int) throws {

@@ -577,7 +577,7 @@ private struct EvalRunFile: Codable {
 }
 
 extension DateFormatter {
-    fileprivate static let evalTimestamp: DateFormatter = {
+    static let evalTimestamp: DateFormatter = {
         let formatter = DateFormatter()
         formatter.dateFormat = "yyyyMMdd-HHmmss-SSS"
         formatter.locale = Locale(identifier: "en_US_POSIX")
