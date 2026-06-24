@@ -365,6 +365,23 @@ struct OpenRouterSQLGeneratorTests {
             #expect(failure.category == .providerUnavailable)
             #expect(failure.diagnostic.providerCode == "overloaded")
         }
+
+        try expectFailure(.providerOverloaded) {
+            try parser.parse(
+                data: chatResponse(
+                    content: nil,
+                    choiceError: [
+                        "message":
+                            "The system is currently experiencing high demand and cannot process your request during peak load.",
+                    ]
+                ),
+                response: response(url: Self.chatEndpoint, status: 200),
+                requestedModelID: Self.modelID,
+                mode: .strictJSONSchema,
+                requestCount: 1,
+                retryCount: 0
+            )
+        }
     }
 
     @Test func everyTypedFailureCategoryIsReachable() {
@@ -381,6 +398,12 @@ struct OpenRouterSQLGeneratorTests {
             ("rate_limit_exceeded", 429, nil, .rateLimited),
             ("provider_overloaded", 503, nil, .providerOverloaded),
             ("provider_unavailable", 502, nil, .providerUnavailable),
+            (
+                nil,
+                200,
+                "High demand during peak load; consider Provisioned Throughput.",
+                .providerOverloaded
+            ),
             ("timeout", 408, nil, .timeout),
             ("content_policy_violation", 400, nil, .contentPolicy),
             ("refusal", 400, nil, .refusal),

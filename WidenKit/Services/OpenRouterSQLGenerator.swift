@@ -248,6 +248,10 @@ public struct OpenRouterFailure: Error, LocalizedError, Equatable, Sendable {
             break
         }
 
+        if let message, OpenRouterResponseParser.isProviderOverloadMessage(message) {
+            return .providerOverloaded
+        }
+
         switch httpStatus {
         case 400:
             if let message, OpenRouterResponseParser.isContextWindowMessage(message) {
@@ -1318,6 +1322,16 @@ struct OpenRouterResponseParser: Sendable {
             || lower.contains("structured output")
             || lower.contains("unsupported parameter")
             || lower.contains("not supported")
+    }
+
+    static func isProviderOverloadMessage(_ message: String) -> Bool {
+        let lower = message.lowercased()
+        return lower.contains("high demand")
+            || lower.contains("peak load")
+            || lower.contains("provider overloaded")
+            || lower.contains("temporarily overloaded")
+            || lower.contains("capacity")
+            || lower.contains("provisioned throughput")
     }
 
     private static func safeMessage(_ value: String) -> String {
