@@ -44,6 +44,39 @@ struct OpenRouterSQLGeneratorTests {
         }
     }
 
+    private final class DelayedTransport: HTTPTransport, @unchecked Sendable {
+        private let lock = NSLock()
+        private let result: (Data, HTTPURLResponse)
+        private var continuation: CheckedContinuation<(Data, HTTPURLResponse), Error>?
+        private var recorded: [URLRequest] = []
+
+        init(result: (Data, HTTPURLResponse)) {
+            self.result = result
+        }
+
+        var requests: [URLRequest] {
+            lock.withLock { recorded }
+        }
+
+        func send(_ request: URLRequest) async throws -> (Data, HTTPURLResponse) {
+            lock.withLock { recorded.append(request) }
+            return try await withCheckedThrowingContinuation { continuation in
+                lock.withLock {
+                    self.continuation = continuation
+                }
+            }
+        }
+
+        func complete() {
+            let continuation = lock.withLock {
+                let continuation = self.continuation
+                self.continuation = nil
+                return continuation
+            }
+            continuation?.resume(returning: result)
+        }
+    }
+
     private static let chatEndpoint = URL(string: "https://openrouter.test/api/v1/chat/completions")!
     private static let apiBase = URL(string: "https://openrouter.test/api/v1")!
     private static let modelID = "openai/gpt-5.5"
@@ -127,6 +160,35 @@ struct OpenRouterSQLGeneratorTests {
         let cacheText = try String(contentsOf: cacheURL, encoding: .utf8)
         #expect(!cacheText.contains("secret-key"))
         #expect(cacheText.contains(OpenRouterModelCatalogService.apiKeyFingerprint("secret-key")))
+    }
+
+    @Test func cancellingOneCatalogWaiterDoesNotCancelSharedRefresh() async throws {
+        let transport = DelayedTransport(
+            result: (
+                catalogResponse(),
+                response(url: Self.apiBase.appendingPathComponent("models/user"), status: 200)
+            )
+        )
+        let service = catalogService(transport: transport)
+        let first = Task {
+            try await service.availableModels(apiKey: "secret-key", forceRefresh: true)
+        }
+        while transport.requests.isEmpty {
+            try await Task.sleep(nanoseconds: 1_000_000)
+        }
+        let second = Task {
+            try await service.availableModels(apiKey: "secret-key", forceRefresh: true)
+        }
+        try await Task.sleep(nanoseconds: 10_000_000)
+
+        first.cancel()
+        try await Task.sleep(nanoseconds: 10_000_000)
+        transport.complete()
+
+        await expectCancellation(first)
+        let models = try await second.value
+        #expect(models.first?.id == Self.modelID)
+        #expect(transport.requests.count == 1)
     }
 
     @Test func requestBuilderOmitsUnsupportedParameters() throws {
@@ -248,6 +310,26 @@ struct OpenRouterSQLGeneratorTests {
         #expect(stringResult.metadata.costUSD == 0.00012)
         #expect(stringResult.metadata.serviceTier == "standard")
         #expect(partsResult.result.sql == "SELECT id FROM public.users LIMIT 100")
+    }
+
+    @Test func malformedHTTP200EnvelopeIsStructuredResponseFailure() throws {
+        let parser = OpenRouterResponseParser()
+
+        do {
+            _ = try parser.parse(
+                data: Data("not json".utf8),
+                response: response(url: Self.chatEndpoint, status: 200),
+                requestedModelID: Self.modelID,
+                mode: .strictJSONSchema,
+                requestCount: 1,
+                retryCount: 0
+            )
+            Issue.record("expected malformed envelope failure")
+        } catch let failure as OpenRouterFailure {
+            #expect(failure.category == .malformedStructuredResponse)
+            #expect(failure.diagnostic.httpStatus == 200)
+            #expect(failure.diagnostic.requestedModelID == Self.modelID)
+        }
     }
 
     @Test func parserAcceptsFencedJSONOnlyInPromptMode() throws {
@@ -580,6 +662,14 @@ struct OpenRouterSQLGeneratorTests {
     }
 
     private func catalogService(
+        transport: DelayedTransport,
+        cacheURL: URL? = nil,
+        ttl: TimeInterval = 60
+    ) -> OpenRouterModelCatalogService {
+        catalogService(transport: transport as any HTTPTransport, cacheURL: cacheURL, ttl: ttl)
+    }
+
+    private func catalogService(
         transport: any HTTPTransport,
         cacheURL: URL? = nil,
         ttl: TimeInterval = 60
@@ -753,7 +843,7 @@ struct OpenRouterSQLGeneratorTests {
         }
     }
 
-    private func expectCancellation(_ task: Task<SQLGenerationResult, Error>) async {
+    private func expectCancellation<Value>(_ task: Task<Value, Error>) async {
         do {
             _ = try await task.value
             Issue.record("expected CancellationError")

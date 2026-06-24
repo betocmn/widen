@@ -353,6 +353,19 @@ private enum JSONValue: Decodable, Equatable, Sendable {
     }
 }
 
+private final class OpenRouterRefreshWaiterState: @unchecked Sendable {
+    private let lock = NSLock()
+    private var released = false
+
+    func releaseOnce() -> Bool {
+        lock.withLock {
+            guard !released else { return false }
+            released = true
+            return true
+        }
+    }
+}
+
 actor OpenRouterModelCatalogService {
     static let shared = OpenRouterModelCatalogService()
 
@@ -448,6 +461,7 @@ actor OpenRouterModelCatalogService {
     private let staleRetention: TimeInterval
     private var memoryCache: [String: CachedCatalog] = [:]
     private var refreshTasks: [String: Task<CachedCatalog, Error>] = [:]
+    private var refreshWaiterCounts: [String: Int] = [:]
 
     init(
         transport: any HTTPTransport = URLSessionTransport(),
@@ -528,7 +542,9 @@ actor OpenRouterModelCatalogService {
             return cached
         }
         if let task = refreshTasks[key] {
-            return try await refreshValue(task)
+            let value = try await refreshValue(task, key: key)
+            try Task.checkCancellation()
+            return value
         }
         let task = Task<CachedCatalog, Error> {
             let fetched = try await fetchCatalog(apiKey: apiKey)
@@ -537,11 +553,16 @@ actor OpenRouterModelCatalogService {
         }
         refreshTasks[key] = task
         do {
-            let value = try await refreshValue(task)
-            refreshTasks[key] = nil
+            let value = try await refreshValue(task, key: key)
+            try Task.checkCancellation()
+            if refreshTasks[key] == task {
+                refreshTasks[key] = nil
+            }
             return value
         } catch {
-            refreshTasks[key] = nil
+            if refreshTasks[key] == task {
+                refreshTasks[key] = nil
+            }
             if error is CancellationError || Task.isCancelled {
                 throw CancellationError()
             }
@@ -552,11 +573,44 @@ actor OpenRouterModelCatalogService {
         }
     }
 
-    private func refreshValue(_ task: Task<CachedCatalog, Error>) async throws -> CachedCatalog {
-        try await withTaskCancellationHandler {
+    private func refreshValue(
+        _ task: Task<CachedCatalog, Error>,
+        key: String
+    ) async throws -> CachedCatalog {
+        refreshWaiterCounts[key, default: 0] += 1
+        let waiterState = OpenRouterRefreshWaiterState()
+        defer {
+            if waiterState.releaseOnce() {
+                releaseRefreshWaiter(key: key, task: task, cancelIfUnused: false)
+            }
+        }
+        return try await withTaskCancellationHandler {
             try await task.value
         } onCancel: {
-            task.cancel()
+            Task { [waiterState] in
+                if waiterState.releaseOnce() {
+                    await releaseRefreshWaiter(key: key, task: task, cancelIfUnused: true)
+                }
+            }
+        }
+    }
+
+    private func releaseRefreshWaiter(
+        key: String,
+        task: Task<CachedCatalog, Error>,
+        cancelIfUnused: Bool
+    ) {
+        let remaining = max(0, (refreshWaiterCounts[key] ?? 1) - 1)
+        if remaining == 0 {
+            refreshWaiterCounts[key] = nil
+            if cancelIfUnused {
+                task.cancel()
+                if refreshTasks[key] == task {
+                    refreshTasks[key] = nil
+                }
+            }
+        } else {
+            refreshWaiterCounts[key] = remaining
         }
     }
 
@@ -1001,10 +1055,22 @@ struct OpenRouterResponseParser: Sendable {
                 attemptCount: requestCount
             )
         }
-        let completion = try JSONDecoder().decode(ChatResponse.self, from: data)
         let requestID = response.value(forHTTPHeaderField: "X-Request-Id")
             ?? response.value(forHTTPHeaderField: "X-Request-ID")
             ?? response.value(forHTTPHeaderField: "X-Generation-Id")
+        let completion: ChatResponse
+        do {
+            completion = try JSONDecoder().decode(ChatResponse.self, from: data)
+        } catch {
+            throw OpenRouterFailure(
+                category: .malformedStructuredResponse,
+                message: "OpenRouter returned a malformed response envelope.",
+                httpStatus: response.statusCode,
+                requestID: requestID,
+                requestedModelID: requestedModelID,
+                attemptCount: requestCount
+            )
+        }
         if let topError = completion.error {
             throw Self.failure(
                 apiError: topError,

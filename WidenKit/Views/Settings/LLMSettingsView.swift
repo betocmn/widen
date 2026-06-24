@@ -69,8 +69,13 @@ struct LLMSettingsView: View {
         .formStyle(.grouped)
         .onAppear(perform: load)
         .onChange(of: appState.openRouterModelID) { _, _ in
-            isCustomModel = !OpenRouterCatalog.curated.contains { $0.id == appState.openRouterModelID }
-            refreshOpenRouterCatalog(force: true)
+            modelTestResult = nil
+            if isKnownModelID(appState.openRouterModelID) {
+                isCustomModel = false
+                refreshOpenRouterCatalog(force: true)
+            } else {
+                isCustomModel = true
+            }
         }
     }
 
@@ -207,6 +212,16 @@ struct LLMSettingsView: View {
     }
 
     private static let customTag = "custom"
+
+    private func isKnownModelID(
+        _ id: String,
+        in catalog: [OpenRouterModelMetadata]? = nil
+    ) -> Bool {
+        OpenRouterCatalog.curated.contains { $0.id == id }
+            || (catalog ?? catalogModels).contains {
+                ($0.id == id || $0.requestedID == id) && $0.isAvailableToAPIKey
+            }
+    }
 
     private var modelPickerRows: [OpenRouterModelPickerRow] {
         var rowsByID: [String: OpenRouterModelPickerRow] = [:]
@@ -346,7 +361,7 @@ struct LLMSettingsView: View {
         let stored = appState.loadOpenRouterAPIKey() ?? ""
         apiKeyDraft = stored
         hasStoredKey = !stored.isEmpty
-        isCustomModel = !OpenRouterCatalog.curated.contains { $0.id == appState.openRouterModelID }
+        isCustomModel = !isKnownModelID(appState.openRouterModelID)
         refreshOpenRouterCatalog(force: false)
     }
 
@@ -398,6 +413,7 @@ struct LLMSettingsView: View {
                 if models.contains(where: { $0.id == selectedModel || $0.requestedID == selectedModel }) {
                     await MainActor.run {
                         catalogModels = models
+                        isCustomModel = !isKnownModelID(selectedModel, in: models)
                         catalogMessage = "Authenticated model catalog loaded."
                         catalogMessageIsWarning = models.contains { $0.capabilitySource == .staleCache }
                         isLoadingCatalog = false
@@ -409,6 +425,7 @@ struct LLMSettingsView: View {
                 ) {
                     await MainActor.run {
                         catalogModels = models + [custom]
+                        isCustomModel = !isKnownModelID(selectedModel, in: models + [custom])
                         catalogMessage = "Authenticated model catalog loaded; selected model came from single-model lookup."
                         catalogMessageIsWarning = custom.capabilitySource == .staleCache
                         isLoadingCatalog = false
@@ -416,6 +433,7 @@ struct LLMSettingsView: View {
                 } else {
                     await MainActor.run {
                         catalogModels = models
+                        isCustomModel = !isKnownModelID(selectedModel, in: models)
                         catalogMessage = "Authenticated catalog loaded, but the selected model was not visible."
                         catalogMessageIsWarning = true
                         isLoadingCatalog = false
