@@ -149,6 +149,7 @@ struct SchemaRetrievalEvalResult: Codable {
     var rankedTables: [String]
     var requiredTableRanks: [String: Int]
     var missingRequiredTables: [String]
+    var hasPrimaryTableExpectation: Bool
     var primaryTableRank: Int?
     var primaryReciprocalRank: Double?
     var allRequiredPresentAt3: Bool
@@ -440,6 +441,7 @@ struct SchemaRetrievalEvalRunner {
             rankedTables: Array(rankedTables.prefix(20)),
             requiredTableRanks: requiredRanks,
             missingRequiredTables: required.filter { requiredRanks[$0] == nil },
+            hasPrimaryTableExpectation: evalCase.retrieval.primaryTable != nil,
             primaryTableRank: primaryRank,
             primaryReciprocalRank: primaryRank.map { 1 / Double($0) },
             allRequiredPresentAt3: all(required, presentIn: rankedTables, at: 3),
@@ -474,7 +476,7 @@ struct SchemaRetrievalEvalRunner {
         let requiredCases = results.filter {
             !$0.requiredTableRanks.isEmpty || !$0.missingRequiredTables.isEmpty
         }
-        let primaryResults = results.filter { $0.primaryTableRank != nil }
+        let primaryResults = results.filter(\.hasPrimaryTableExpectation)
         let joinResults = results.flatMap(\.requiredJoinPathResults)
         let latencies = results.map(\.queryLatencyMs).sorted()
         return SchemaRetrievalSummary(
@@ -487,7 +489,7 @@ struct SchemaRetrievalEvalRunner {
             allRequiredTablesPresentAt5: rate(requiredCases.map(\.allRequiredPresentAt5)),
             allRequiredTablesPresentAt8: rate(requiredCases.map(\.allRequiredPresentAt8)),
             primaryTableTop3: rate(primaryResults.map { ($0.primaryTableRank ?? Int.max) <= 3 }),
-            primaryTableMRR: average(results.compactMap(\.primaryReciprocalRank)),
+            primaryTableMRR: average(primaryResults.map { $0.primaryReciprocalRank ?? 0 }),
             requiredJoinPathRecall: joinResults.isEmpty
                 ? 1
                 : Double(joinResults.filter(\.recovered).count) / Double(joinResults.count),
@@ -542,11 +544,12 @@ struct SchemaRetrievalEvalRunner {
         var count = 0
         for table in expected {
             let parts = table.split(separator: ".")
-            guard parts.count == 2, let expectedRank = rankedTables.firstIndex(of: table) else {
+            guard parts.count == 2 else {
                 continue
             }
             let tableName = String(parts[1])
-            let collisions = rankedTables.prefix(expectedRank).filter {
+            let collisionSearchLimit = rankedTables.firstIndex(of: table) ?? min(rankedTables.count, 8)
+            let collisions = rankedTables.prefix(collisionSearchLimit).filter {
                 $0.hasSuffix(".\(tableName)") && $0 != table
             }
             count += collisions.count
