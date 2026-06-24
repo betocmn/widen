@@ -301,7 +301,7 @@
     {
       "id": "support.average-first-response",
       "schemaFixture": "support",
-      "question": "Average first-response time over the last 30 days",
+      "question": "Average first-response time over the 30 days ending 2026-06-24 12:00 UTC",
       "expected": {
         "decision": "sql",
         "requiredTables": [
@@ -315,7 +315,7 @@
           "average",
           "relative-time-filter"
         ],
-        "goldenSQL": "SELECT AVG(first_response_at - created_at) AS average_first_response_time FROM public.support_ticket WHERE created_at >= NOW() - INTERVAL '30 days' AND first_response_at IS NOT NULL",
+        "goldenSQL": "SELECT AVG(first_response_at - created_at) AS average_first_response_time FROM public.support_ticket WHERE created_at >= CAST('2026-06-24 12:00:00+00' AS TIMESTAMPTZ) - INTERVAL '30 days' AND first_response_at IS NOT NULL",
         "semantic": {
           "comparisonMode": "scalar",
           "requiredColumns": [
@@ -330,7 +330,7 @@
           "negativeControls": [
             {
               "id": "wrong-date-column",
-              "sql": "SELECT AVG(first_response_at - created_at) AS average_first_response_time FROM public.support_ticket WHERE first_response_at >= NOW() - INTERVAL '30 days' AND first_response_at IS NOT NULL"
+              "sql": "SELECT AVG(first_response_at - created_at) AS average_first_response_time FROM public.support_ticket WHERE first_response_at >= CAST('2026-06-24 12:00:00+00' AS TIMESTAMPTZ) - INTERVAL '30 days' AND first_response_at IS NOT NULL"
             }
           ]
         }
@@ -392,7 +392,7 @@
     {
       "id": "saas.expiring-subscriptions",
       "schemaFixture": "saas",
-      "question": "Subscriptions expiring in the next 30 days",
+      "question": "Subscriptions expiring in the 30 days starting 2026-06-24",
       "expected": {
         "decision": "sql",
         "requiredTables": [
@@ -406,7 +406,7 @@
           "relative-time-filter",
           "limit"
         ],
-        "goldenSQL": "SELECT id, organization_id, status, expires_at FROM public.subscription WHERE status = 'active' AND expires_at >= CURRENT_DATE AND expires_at < CURRENT_DATE + INTERVAL '30 days' ORDER BY expires_at ASC LIMIT 100",
+        "goldenSQL": "SELECT id, organization_id, status, expires_at FROM public.subscription WHERE status = 'active' AND expires_at >= DATE '2026-06-24' AND expires_at < DATE '2026-06-24' + INTERVAL '30 days' ORDER BY expires_at ASC LIMIT 100",
         "semantic": {
           "comparisonMode": "ordered",
           "requiredColumns": [
@@ -426,7 +426,7 @@
           "negativeControls": [
             {
               "id": "missing-active-status-filter",
-              "sql": "SELECT id, organization_id, status, expires_at FROM public.subscription WHERE expires_at >= CURRENT_DATE AND expires_at < CURRENT_DATE + INTERVAL '30 days' ORDER BY expires_at ASC LIMIT 100"
+              "sql": "SELECT id, organization_id, status, expires_at FROM public.subscription WHERE expires_at >= DATE '2026-06-24' AND expires_at < DATE '2026-06-24' + INTERVAL '30 days' ORDER BY expires_at ASC LIMIT 100"
             }
           ]
         }
@@ -435,8 +435,8 @@
     {
       "id": "saas.active-users-by-org",
       "schemaFixture": "saas",
-      "question": "Active users by organization in the last week",
-      "databaseContext": "An active user is a user with at least one active organization membership and last_seen_at in the last 7 days.",
+      "question": "Active users by organization in the week ending 2026-06-24 12:00 UTC",
+      "databaseContext": "An active user is a user with at least one active organization membership and last_seen_at on or after 2026-06-17 12:00 UTC.",
       "expected": {
         "decision": "sql",
         "requiredTables": [
@@ -458,7 +458,7 @@
           "join",
           "relative-time-filter"
         ],
-        "goldenSQL": "SELECT o.id, o.name, COUNT(DISTINCT u.id) AS active_user_count FROM public.organization AS o JOIN public.organization_membership AS m ON m.organization_id = o.id JOIN public.app_user AS u ON u.id = m.user_id WHERE m.status = 'active' AND u.last_seen_at >= NOW() - INTERVAL '7 days' GROUP BY o.id, o.name ORDER BY active_user_count DESC",
+        "goldenSQL": "SELECT o.id, o.name, COUNT(DISTINCT u.id) AS active_user_count FROM public.organization AS o JOIN public.organization_membership AS m ON m.organization_id = o.id JOIN public.app_user AS u ON u.id = m.user_id WHERE m.status = 'active' AND u.last_seen_at >= CAST('2026-06-24 12:00:00+00' AS TIMESTAMPTZ) - INTERVAL '7 days' GROUP BY o.id, o.name ORDER BY active_user_count DESC",
         "semantic": {
           "comparisonMode": "ordered",
           "requiredColumns": [
@@ -479,7 +479,7 @@
           "negativeControls": [
             {
               "id": "missing-active-membership-filter",
-              "sql": "SELECT o.id, o.name, COUNT(DISTINCT u.id) AS active_user_count FROM public.organization AS o JOIN public.organization_membership AS m ON m.organization_id = o.id JOIN public.app_user AS u ON u.id = m.user_id WHERE u.last_seen_at >= NOW() - INTERVAL '7 days' GROUP BY o.id, o.name ORDER BY active_user_count DESC"
+              "sql": "SELECT o.id, o.name, COUNT(DISTINCT u.id) AS active_user_count FROM public.organization AS o JOIN public.organization_membership AS m ON m.organization_id = o.id JOIN public.app_user AS u ON u.id = m.user_id WHERE u.last_seen_at >= CAST('2026-06-24 12:00:00+00' AS TIMESTAMPTZ) - INTERVAL '7 days' GROUP BY o.id, o.name ORDER BY active_user_count DESC"
             }
           ]
         }
@@ -646,8 +646,8 @@
     {
       "id": "preseason.top-wins-defined",
       "schemaFixture": "preseason",
-      "question": "Which tools have the most wins in the last two weeks?",
-      "databaseContext": "Each evaluation with a non-null winner_id records one win. Use the evaluation createdAt timestamp.",
+      "question": "Which tools have the most wins in the two weeks ending 2026-06-24 12:00 UTC?",
+      "databaseContext": "Each evaluation with a non-null winner_id records one win. Use the evaluation createdAt timestamp and treat the evaluation anchor as 2026-06-24 12:00 UTC.",
       "expected": {
         "decision": "sql",
         "requiredTables": [
@@ -669,7 +669,7 @@
           "descending-order",
           "relative-time-filter"
         ],
-        "goldenSQL": "SELECT t.id, t.name, COUNT(e.winner_id) AS wins FROM public.preseason_match_evaluation AS e JOIN public.preseason_tool AS t ON t.id = e.winner_id WHERE e.winner_id IS NOT NULL AND e.\"createdAt\" >= NOW() - INTERVAL '14 days' GROUP BY t.id, t.name ORDER BY wins DESC LIMIT 100",
+        "goldenSQL": "SELECT t.id, t.name, COUNT(e.winner_id) AS wins FROM public.preseason_match_evaluation AS e JOIN public.preseason_tool AS t ON t.id = e.winner_id WHERE e.winner_id IS NOT NULL AND e.\"createdAt\" >= CAST('2026-06-24 12:00:00+00' AS TIMESTAMPTZ) - INTERVAL '14 days' GROUP BY t.id, t.name ORDER BY wins DESC LIMIT 100",
         "semantic": {
           "comparisonMode": "ordered",
           "requiredColumns": [
@@ -690,7 +690,7 @@
           "negativeControls": [
             {
               "id": "participant-count-instead-of-winner-count",
-              "sql": "SELECT t.id, t.name, COUNT(*) AS wins FROM public.preseason_match_evaluation AS e JOIN public.preseason_match_batch AS b ON b.id = e.batch_id JOIN public.preseason_tool AS t ON t.id IN (b.tool_a_id, b.tool_b_id) WHERE e.\"createdAt\" >= NOW() - INTERVAL '14 days' GROUP BY t.id, t.name ORDER BY wins DESC LIMIT 100"
+              "sql": "SELECT t.id, t.name, COUNT(*) AS wins FROM public.preseason_match_evaluation AS e JOIN public.preseason_match_batch AS b ON b.id = e.batch_id JOIN public.preseason_tool AS t ON t.id IN (b.tool_a_id, b.tool_b_id) WHERE e.\"createdAt\" >= CAST('2026-06-24 12:00:00+00' AS TIMESTAMPTZ) - INTERVAL '14 days' GROUP BY t.id, t.name ORDER BY wins DESC LIMIT 100"
             }
           ]
         }
