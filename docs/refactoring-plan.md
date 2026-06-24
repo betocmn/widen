@@ -473,7 +473,7 @@ The historical queries often executed plausible-looking but semantically wrong l
 
 ---
 
-# PR 4 — Harden OpenRouter independently
+# PR 4 ✅ — Harden OpenRouter independently
 
 Suggested title:
 
