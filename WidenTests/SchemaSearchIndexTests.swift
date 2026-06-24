@@ -1,0 +1,610 @@
+import Foundation
+import Testing
+
+@testable import WidenKit
+
+@Suite("SchemaSearchIndex")
+struct SchemaSearchIndexTests {
+    private let connectionID = UUID(uuidString: "11111111-1111-1111-1111-111111111111")!
+
+    @Test func objectIDsPreserveCaseAndDistinguishSchemas() {
+        let publicUsers = SchemaObjectID.table(schema: "public", name: "users")
+        let authUsers = SchemaObjectID.table(schema: "auth", name: "users")
+        let mixed = SchemaObjectID.table(schema: "public", name: "UserEvents")
+        let lower = SchemaObjectID.table(schema: "public", name: "userevents")
+
+        #expect(publicUsers != authUsers)
+        #expect(mixed != lower)
+        #expect(mixed.stableString.contains("UserEvents"))
+    }
+
+    @Test func exactSchemaQualifiedQueryBeatsSameNamedOtherSchema() throws {
+        let schema = DatabaseSchema(
+            schemas: [SchemaInfo(name: "public"), SchemaInfo(name: "auth")],
+            tables: [
+                table(schema: "public", name: "users", columns: ["id", "email"]),
+                table(schema: "auth", name: "users", columns: ["id", "provider"]),
+            ]
+        )
+        let searcher = makeSearcher(schema: schema, selectedSchemas: ["auth", "public"])
+
+        let response = searcher.search(
+            SchemaSearchRequest(query: "auth.users", limit: 2),
+            in: snapshot(schema, selectedSchemas: ["auth", "public"])
+        )
+
+        #expect(response.hits.first?.tableObjectID == .table(schema: "auth", name: "users"))
+        #expect(response.exactIdentifierMatch)
+    }
+
+    @Test func quotedMixedCaseAndLowercaseTablesRemainDistinct() throws {
+        let schema = DatabaseSchema(
+            schemas: [SchemaInfo(name: "public")],
+            tables: [
+                table(schema: "public", name: "UserEvents", columns: ["id", "eventName"]),
+                table(schema: "public", name: "userevents", columns: ["id", "event_name"]),
+            ]
+        )
+        let searcher = makeSearcher(schema: schema)
+        let mixed = searcher.search(
+            SchemaSearchRequest(query: #"public."UserEvents""#),
+            in: snapshot(schema)
+        )
+        let lower = searcher.search(
+            SchemaSearchRequest(query: "public.userevents"),
+            in: snapshot(schema)
+        )
+
+        #expect(mixed.hits.first?.tableObjectID == .table(schema: "public", name: "UserEvents"))
+        #expect(lower.hits.first?.tableObjectID == .table(schema: "public", name: "userevents"))
+    }
+
+    @Test func unqualifiedDuplicateTableNameIsAmbiguous() throws {
+        let schema = DatabaseSchema(
+            schemas: [SchemaInfo(name: "public"), SchemaInfo(name: "auth")],
+            tables: [
+                table(schema: "public", name: "users", columns: ["id", "email"]),
+                table(schema: "auth", name: "users", columns: ["id", "provider"]),
+            ]
+        )
+        let searcher = makeSearcher(schema: schema, selectedSchemas: ["auth", "public"])
+
+        let response = searcher.search(
+            SchemaSearchRequest(query: "users", limit: 2),
+            in: snapshot(schema, selectedSchemas: ["auth", "public"])
+        )
+
+        #expect(response.hits.count == 2)
+        #expect(!response.exactIdentifierMatch)
+    }
+
+    @Test func bm25CorpusStatisticsUseDocumentFrequency() {
+        let schema = DatabaseSchema(
+            schemas: [SchemaInfo(name: "public")],
+            tables: [
+                table(schema: "public", name: "invoices", columns: ["id", "invoice_total"]),
+                table(schema: "public", name: "tickets", columns: ["id", "status"]),
+            ]
+        )
+        let index = LocalSchemaSearchIndex.build(
+            snapshot: snapshot(schema),
+            fingerprint: "test"
+        )
+
+        #expect(index.documentFrequency["invoice"] == 1)
+        #expect(index.documentFrequency["id"] == 2)
+    }
+
+    @Test func exactNameBoostOutranksLexicalColumnMatch() throws {
+        let schema = DatabaseSchema(
+            schemas: [SchemaInfo(name: "public")],
+            tables: [
+                table(schema: "public", name: "orders", columns: ["id"]),
+                table(schema: "public", name: "order_items", columns: ["id", "orders_count"]),
+            ]
+        )
+        let searcher = makeSearcher(schema: schema)
+
+        let response = searcher.search(
+            SchemaSearchRequest(query: "public.orders"),
+            in: snapshot(schema)
+        )
+
+        let first = try #require(response.hits.first)
+        #expect(first.tableObjectID == .table(schema: "public", name: "orders"))
+        #expect(first.exactMatchScore > first.lexicalBM25Score)
+    }
+
+    @Test func tableAndColumnCommentsAreSearchable() throws {
+        let schema = DatabaseSchema(
+            schemas: [SchemaInfo(name: "public")],
+            tables: [
+                TableInfo(
+                    schema: "public",
+                    name: "payments",
+                    type: .baseTable,
+                    comment: "Revenue ledger for settled customer charges",
+                    columns: [
+                        ColumnInfo(
+                            tableSchema: "public",
+                            tableName: "payments",
+                            name: "amount_cents",
+                            comment: "Booked revenue amount",
+                            dataType: "integer",
+                            isNullable: false,
+                            ordinalPosition: 1
+                        )
+                    ]
+                ),
+                table(schema: "public", name: "tickets", columns: ["id", "status"]),
+            ]
+        )
+        let response = makeSearcher(schema: schema).search(
+            SchemaSearchRequest(query: "booked revenue"),
+            in: snapshot(schema)
+        )
+
+        let first = try #require(response.hits.first)
+        #expect(first.tableObjectID == .table(schema: "public", name: "payments"))
+        #expect(first.matchedFields.contains { $0.field == .tableComment || $0.field == .columnComment })
+    }
+
+    @Test func enumAndCheckValuesAreSearchable() throws {
+        let schema = DatabaseSchema(
+            schemas: [SchemaInfo(name: "public")],
+            tables: [
+                TableInfo(
+                    schema: "public",
+                    name: "benchmark_runs",
+                    type: .baseTable,
+                    columns: [
+                        ColumnInfo(
+                            tableSchema: "public",
+                            tableName: "benchmark_runs",
+                            name: "status",
+                            dataType: "text",
+                            isNullable: false,
+                            ordinalPosition: 1,
+                            valueConstraints: [
+                                ColumnValueConstraint(
+                                    kind: .check,
+                                    values: ["scheduled", "running", "failed"],
+                                    expression: "CHECK (status IN ('scheduled', 'running', 'failed'))",
+                                    constraintName: "benchmark_runs_status_check"
+                                )
+                            ]
+                        )
+                    ]
+                ),
+                table(schema: "public", name: "tools", columns: ["id", "name"]),
+            ]
+        )
+
+        let response = makeSearcher(schema: schema).search(
+            SchemaSearchRequest(query: "failed runs"),
+            in: snapshot(schema)
+        )
+
+        #expect(response.hits.first?.tableObjectID == .table(schema: "public", name: "benchmark_runs"))
+    }
+
+    @Test func longTablesDoNotWinFromColumnCountAlone() throws {
+        let noisyColumns = (1...180).map { "generic_status_\($0)" }
+        let schema = DatabaseSchema(
+            schemas: [SchemaInfo(name: "public")],
+            tables: [
+                table(schema: "public", name: "wide_noise", columns: noisyColumns),
+                table(schema: "public", name: "revenue_summary", columns: ["id", "revenue_total"]),
+            ]
+        )
+
+        let response = makeSearcher(schema: schema).search(
+            SchemaSearchRequest(query: "revenue"),
+            in: snapshot(schema)
+        )
+
+        #expect(response.hits.first?.tableObjectID == .table(schema: "public", name: "revenue_summary"))
+    }
+
+    @Test func prefixMatchScoresBelowExactIdentifierMatch() throws {
+        let schema = DatabaseSchema(
+            schemas: [SchemaInfo(name: "public")],
+            tables: [
+                table(schema: "public", name: "match_evaluations", columns: ["id", "winner_id"]),
+            ]
+        )
+        let searcher = makeSearcher(schema: schema)
+        let prefix = searcher.search(SchemaSearchRequest(query: "win"), in: snapshot(schema))
+        let exact = searcher.search(SchemaSearchRequest(query: "winner"), in: snapshot(schema))
+
+        #expect((exact.hits.first?.totalScore ?? 0) > (prefix.hits.first?.totalScore ?? 0))
+    }
+
+    @Test func shortTokenFuzzyMatchingIsDisabled() {
+        #expect(SchemaSearchTokenizer.similarity(queryToken: "id", indexedToken: "if") == 0)
+        #expect(SchemaSearchTokenizer.similarity(queryToken: "at", indexedToken: "ad") == 0)
+    }
+
+    @Test func deterministicTieOrderingUsesQualifiedName() {
+        let schema = DatabaseSchema(
+            schemas: [SchemaInfo(name: "public")],
+            tables: [
+                table(schema: "public", name: "beta", columns: ["status"]),
+                table(schema: "public", name: "alpha", columns: ["status"]),
+            ]
+        )
+        let response = makeSearcher(schema: schema).search(
+            SchemaSearchRequest(query: "status", limit: 2),
+            in: snapshot(schema)
+        )
+
+        #expect(response.hits.map(\.tableObjectID) == [
+            .table(schema: "public", name: "alpha"),
+            .table(schema: "public", name: "beta"),
+        ])
+    }
+
+    @Test func groupedCompositeForeignKeysPreserveOrderedPairsInPaths() throws {
+        let schema = relationshipSchema()
+        let searcher = makeSearcher(schema: schema)
+        let paths = searcher.findJoinPaths(
+            from: .table(schema: "public", name: "accounts"),
+            to: .table(schema: "public", name: "account_events"),
+            maxHops: 1,
+            in: snapshot(schema)
+        )
+
+        let edge = try #require(paths.first?.edges.first)
+        #expect(edge.traversalDirection == .reverse)
+        #expect(edge.columnPairs == [
+            SchemaForeignKeyColumnPair(
+                sourceColumn: "tenant_id",
+                targetColumn: "tenant_id",
+                ordinalPosition: 1
+            ),
+            SchemaForeignKeyColumnPair(
+                sourceColumn: "external_id",
+                targetColumn: "external_id",
+                ordinalPosition: 2
+            ),
+        ])
+    }
+
+    @Test func joinPathsAreShortestCycleSafeAndHopCapped() {
+        let schema = graphSchema()
+        let searcher = makeSearcher(schema: schema)
+        let paths = searcher.findJoinPaths(
+            from: .table(schema: "public", name: "a"),
+            to: .table(schema: "public", name: "d"),
+            maxHops: 3,
+            in: snapshot(schema)
+        )
+        let capped = searcher.findJoinPaths(
+            from: .table(schema: "public", name: "a"),
+            to: .table(schema: "public", name: "d"),
+            maxHops: 1,
+            in: snapshot(schema)
+        )
+
+        #expect(paths.first?.hopCount == 2)
+        #expect(paths.allSatisfy { Set($0.edges.map(\.fromTableID)).count == $0.edges.count })
+        #expect(capped.isEmpty)
+        #expect(paths.count <= 8)
+    }
+
+    @Test func selectedSchemaIsolationUsesOnlySuppliedSnapshot() {
+        let full = DatabaseSchema(
+            schemas: [SchemaInfo(name: "public"), SchemaInfo(name: "auth")],
+            tables: [
+                table(schema: "public", name: "users", columns: ["id", "email"]),
+                table(schema: "auth", name: "users", columns: ["id", "provider"]),
+            ]
+        )
+        let publicOnly = DatabaseSchema(
+            schemas: [SchemaInfo(name: "public")],
+            tables: full.tables.filter { $0.schema == "public" }
+        )
+        let response = makeSearcher(schema: publicOnly, selectedSchemas: ["public"]).search(
+            SchemaSearchRequest(query: "auth users"),
+            in: snapshot(publicOnly, selectedSchemas: ["public"])
+        )
+
+        #expect(!response.hits.contains { $0.tableObjectID.schema == "auth" })
+    }
+
+    @Test func databaseContextIsQueryTimeBoostOnly() throws {
+        let schema = DatabaseSchema(
+            schemas: [SchemaInfo(name: "public")],
+            tables: [
+                table(schema: "public", name: "match_evaluations", columns: ["id", "winner_id"]),
+                table(schema: "public", name: "match_batches", columns: ["id", "completed_evaluations"]),
+            ]
+        )
+        let searcher = makeSearcher(schema: schema)
+        let withoutContext = searcher.search(
+            SchemaSearchRequest(query: "match records", limit: 2),
+            in: snapshot(schema)
+        )
+        let withContext = searcher.search(
+            SchemaSearchRequest(
+                query: "match records",
+                databaseContext: "winner_id records a win"
+            ),
+            in: snapshot(schema)
+        )
+        let evalID = SchemaObjectID.table(schema: "public", name: "match_evaluations")
+        let withoutScore = withoutContext.hits.first { $0.tableObjectID == evalID }?.totalScore ?? 0
+        let withHit = try #require(withContext.hits.first { $0.tableObjectID == evalID })
+
+        #expect(withHit.contextBoost > 0)
+        #expect(withHit.totalScore > withoutScore)
+    }
+
+    @Test func diskCacheHitAndFingerprintInvalidation() async throws {
+        let directory = tempDirectory()
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let schema = DatabaseSchema(
+            schemas: [SchemaInfo(name: "public")],
+            tables: [table(schema: "public", name: "orders", columns: ["id"])]
+        )
+        let firstStore = SchemaSearchIndexStore(directory: directory)
+        _ = try await firstStore.searcher(for: snapshot(schema))
+
+        let secondStore = SchemaSearchIndexStore(directory: directory)
+        let cached = try await secondStore.searcher(for: snapshot(schema))
+        let cachedResponse = cached.search(SchemaSearchRequest(query: "orders"), in: snapshot(schema))
+        #expect(cachedResponse.indexSerializedSizeBytes != nil)
+
+        let changed = DatabaseSchema(
+            schemas: [SchemaInfo(name: "public")],
+            tables: [table(schema: "public", name: "orders", columns: ["id", "status"])]
+        )
+        _ = try await secondStore.searcher(for: snapshot(changed))
+        let files = try FileManager.default.contentsOfDirectory(atPath: directory.path)
+            .filter { $0.hasSuffix(".json") }
+        #expect(files.count == 2)
+    }
+
+    @Test func indexVersionAndCorruptedCacheRebuild() async throws {
+        let directory = tempDirectory()
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let schema = DatabaseSchema(
+            schemas: [SchemaInfo(name: "public")],
+            tables: [table(schema: "public", name: "orders", columns: ["id"])]
+        )
+        let key = try SchemaSearchIndexStore.cacheKey(for: snapshot(schema))
+        let file = directory.appendingPathComponent("\(key.cacheID).json")
+        let store = SchemaSearchIndexStore(directory: directory)
+        _ = try await store.searcher(for: snapshot(schema))
+
+        var text = try String(contentsOf: file, encoding: .utf8)
+        text = text.replacingOccurrences(of: #""formatVersion":1"#, with: #""formatVersion":999"#)
+        try text.write(to: file, atomically: true, encoding: .utf8)
+        let versionStore = SchemaSearchIndexStore(directory: directory)
+        let rebuilt = try await versionStore.searcher(for: snapshot(schema))
+        #expect(rebuilt.search(SchemaSearchRequest(query: "orders"), in: snapshot(schema)).hits.count == 1)
+
+        try Data("not json".utf8).write(to: file)
+        let corruptStore = SchemaSearchIndexStore(directory: directory)
+        let recovered = try await corruptStore.searcher(for: snapshot(schema))
+        #expect(recovered.search(SchemaSearchRequest(query: "orders"), in: snapshot(schema)).hits.count == 1)
+    }
+
+    @Test func concurrentBuildsDeduplicateAndCancellationStopsBuild() async throws {
+        let directory = tempDirectory()
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let schema = DatabaseSchema(
+            schemas: [SchemaInfo(name: "public")],
+            tables: [table(schema: "public", name: "orders", columns: ["id"])]
+        )
+        let store = SchemaSearchIndexStore(directory: directory, buildDelayNanoseconds: 50_000_000)
+        async let first = store.searcher(for: snapshot(schema))
+        async let second = store.searcher(for: snapshot(schema))
+        _ = try await [first, second]
+        let files = try FileManager.default.contentsOfDirectory(atPath: directory.path)
+            .filter { $0.hasSuffix(".json") }
+        #expect(files.count == 1)
+
+        let cancelDirectory = tempDirectory()
+        defer { try? FileManager.default.removeItem(at: cancelDirectory) }
+        let cancelStore = SchemaSearchIndexStore(
+            directory: cancelDirectory,
+            buildDelayNanoseconds: 500_000_000
+        )
+        let task = Task {
+            try await cancelStore.searcher(for: snapshot(schema))
+        }
+        task.cancel()
+        await #expect(throws: CancellationError.self) {
+            _ = try await task.value
+        }
+    }
+
+    @Test func persistedIndexDoesNotContainQueryContextSQLOrCredentials() async throws {
+        let directory = tempDirectory()
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let schema = DatabaseSchema(
+            schemas: [SchemaInfo(name: "public")],
+            tables: [table(schema: "public", name: "orders", columns: ["id", "status"])]
+        )
+        let store = SchemaSearchIndexStore(directory: directory)
+        let searcher = try await store.searcher(for: snapshot(schema))
+        _ = searcher.search(
+            SchemaSearchRequest(
+                query: "how many orders",
+                databaseContext: "secret business context",
+                semanticBindingTerms: ["SELECT * FROM orders", "password=hunter2"]
+            ),
+            in: snapshot(schema)
+        )
+
+        let file = try #require(
+            FileManager.default.contentsOfDirectory(
+                at: directory,
+                includingPropertiesForKeys: nil
+            ).first { $0.pathExtension == "json" }
+        )
+        let text = try String(contentsOf: file, encoding: .utf8)
+
+        #expect(!text.contains("how many orders"))
+        #expect(!text.contains("secret business context"))
+        #expect(!text.contains("SELECT * FROM orders"))
+        #expect(!text.contains("hunter2"))
+    }
+
+    private func makeSearcher(
+        schema: DatabaseSchema,
+        selectedSchemas: [String] = ["public"]
+    ) -> LocalSchemaSearcher {
+        LocalSchemaSearcher(
+            index: LocalSchemaSearchIndex.build(
+                snapshot: snapshot(schema, selectedSchemas: selectedSchemas),
+                fingerprint: "test"
+            )
+        )
+    }
+
+    private func snapshot(
+        _ schema: DatabaseSchema,
+        selectedSchemas: [String] = ["public"]
+    ) -> SchemaSearchSnapshot {
+        SchemaSearchSnapshot(
+            connectionID: connectionID,
+            selectedSchemas: selectedSchemas,
+            schema: schema
+        )
+    }
+
+    private func table(
+        schema: String,
+        name: String,
+        columns: [String],
+        comment: String? = nil
+    ) -> TableInfo {
+        TableInfo(
+            schema: schema,
+            name: name,
+            type: .baseTable,
+            comment: comment,
+            columns: columns.enumerated().map { offset, name in
+                ColumnInfo(
+                    tableSchema: schema,
+                    tableName: name == "" ? "" : name.replacingOccurrences(of: " ", with: "_"),
+                    name: name,
+                    dataType: "text",
+                    isNullable: true,
+                    ordinalPosition: offset + 1
+                )
+            }.map {
+                ColumnInfo(
+                    tableSchema: schema,
+                    tableName: name,
+                    name: $0.name,
+                    dataType: $0.dataType,
+                    isNullable: $0.isNullable,
+                    ordinalPosition: $0.ordinalPosition
+                )
+            }
+        )
+    }
+
+    private func relationshipSchema() -> DatabaseSchema {
+        DatabaseSchema(
+            schemas: [SchemaInfo(name: "public")],
+            tables: [
+                TableInfo(
+                    schema: "public",
+                    name: "accounts",
+                    type: .baseTable,
+                    columns: [
+                        column(table: "accounts", name: "tenant_id", ordinal: 1),
+                        column(table: "accounts", name: "external_id", ordinal: 2),
+                    ],
+                    keyConstraints: [
+                        SchemaKeyConstraintInfo(
+                            constraintName: "accounts_tenant_external_key",
+                            schema: "public",
+                            table: "accounts",
+                            kind: .unique,
+                            columns: ["tenant_id", "external_id"]
+                        )
+                    ]
+                ),
+                table(schema: "public", name: "account_events", columns: ["tenant_id", "external_id"]),
+            ],
+            foreignKeyConstraints: [
+                SchemaForeignKeyConstraintInfo(
+                    constraintName: "account_events_account_fkey",
+                    sourceSchema: "public",
+                    sourceTable: "account_events",
+                    targetSchema: "public",
+                    targetTable: "accounts",
+                    columnPairs: [
+                        SchemaForeignKeyColumnPair(
+                            sourceColumn: "tenant_id",
+                            targetColumn: "tenant_id",
+                            ordinalPosition: 1
+                        ),
+                        SchemaForeignKeyColumnPair(
+                            sourceColumn: "external_id",
+                            targetColumn: "external_id",
+                            ordinalPosition: 2
+                        ),
+                    ]
+                )
+            ]
+        )
+    }
+
+    private func graphSchema() -> DatabaseSchema {
+        let tables = ["a", "b", "c", "d"].map {
+            table(schema: "public", name: $0, columns: ["id", "\($0)_id"])
+        }
+        return DatabaseSchema(
+            schemas: [SchemaInfo(name: "public")],
+            tables: tables,
+            foreignKeyConstraints: [
+                fk("a_b", from: "a", to: "b"),
+                fk("b_d", from: "b", to: "d"),
+                fk("a_c", from: "a", to: "c"),
+                fk("c_d", from: "c", to: "d"),
+                fk("c_a_cycle", from: "c", to: "a"),
+            ]
+        )
+    }
+
+    private func fk(_ name: String, from source: String, to target: String)
+        -> SchemaForeignKeyConstraintInfo
+    {
+        SchemaForeignKeyConstraintInfo(
+            constraintName: name,
+            sourceSchema: "public",
+            sourceTable: source,
+            targetSchema: "public",
+            targetTable: target,
+            columnPairs: [
+                SchemaForeignKeyColumnPair(
+                    sourceColumn: "\(target)_id",
+                    targetColumn: "id",
+                    ordinalPosition: 1
+                )
+            ]
+        )
+    }
+
+    private func column(table: String, name: String, ordinal: Int) -> ColumnInfo {
+        ColumnInfo(
+            tableSchema: "public",
+            tableName: table,
+            name: name,
+            dataType: "integer",
+            isNullable: false,
+            ordinalPosition: ordinal
+        )
+    }
+
+    private func tempDirectory() -> URL {
+        FileManager.default.temporaryDirectory
+            .appendingPathComponent("widen-schema-search-\(UUID().uuidString)", isDirectory: true)
+    }
+}
