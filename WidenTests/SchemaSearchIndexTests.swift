@@ -427,6 +427,35 @@ struct SchemaSearchIndexTests {
         #expect(files.count == 2)
     }
 
+    @Test func selectedSchemaCacheKeyIgnoresUnselectedMetadata() async throws {
+        let directory = tempDirectory()
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let schema = DatabaseSchema(
+            schemas: [SchemaInfo(name: "public"), SchemaInfo(name: "auth")],
+            tables: [
+                table(schema: "public", name: "orders", columns: ["id"]),
+                table(schema: "auth", name: "users", columns: ["id"]),
+            ]
+        )
+        let changedUnselectedSchema = DatabaseSchema(
+            schemas: [SchemaInfo(name: "public"), SchemaInfo(name: "auth")],
+            tables: [
+                table(schema: "public", name: "orders", columns: ["id"]),
+                table(schema: "auth", name: "users", columns: ["id", "provider"]),
+            ]
+        )
+        let store = SchemaSearchIndexStore(directory: directory)
+
+        _ = try await store.searcher(for: snapshot(schema, selectedSchemas: ["public"]))
+        _ = try await store.searcher(
+            for: snapshot(changedUnselectedSchema, selectedSchemas: ["public"])
+        )
+
+        let files = try FileManager.default.contentsOfDirectory(atPath: directory.path)
+            .filter { $0.hasSuffix(".json") }
+        #expect(files.count == 1)
+    }
+
     @Test func indexVersionAndCorruptedCacheRebuild() async throws {
         let directory = tempDirectory()
         defer { try? FileManager.default.removeItem(at: directory) }

@@ -86,11 +86,19 @@ public actor SchemaSearchIndexStore {
         SchemaSearchIndexCacheKey(
             connectionID: snapshot.connectionID,
             selectedSchemas: snapshot.selectedSchemas.sorted(),
-            schemaFingerprint: try schemaFingerprint(for: snapshot.schema),
+            schemaFingerprint: try schemaFingerprint(for: snapshot),
             indexFormatVersion: LocalSchemaSearchIndex.formatVersion,
             tokenizerVersion: SchemaSearchTokenizer.version,
             scorerVersion: LocalSchemaSearchIndex.scorerVersion
         )
+    }
+
+    private static func schemaFingerprint(for snapshot: SchemaSearchSnapshot) throws -> String {
+        let payload = SchemaSearchFingerprintPayload(snapshot: snapshot)
+        let encoder = JSONEncoder()
+        encoder.outputFormatting = [.sortedKeys]
+        let data = try encoder.encode(payload)
+        return sha256(data)
     }
 
     private static func loadOrBuildSearcher(
@@ -268,6 +276,22 @@ private struct SchemaSearchFingerprintPayload: Codable {
         }
         .map(Table.init(table:))
         self.foreignKeyConstraints = schema.effectiveForeignKeyConstraints
+    }
+
+    init(snapshot: SchemaSearchSnapshot) {
+        let selected = Set(snapshot.selectedSchemas)
+        self.schemas = snapshot.schema.schemas.map(\.name).filter {
+            selected.isEmpty || selected.contains($0)
+        }
+        .sorted()
+        self.tables = snapshot.schemaSearchTables.sorted {
+            if $0.schema == $1.schema {
+                return $0.name < $1.name
+            }
+            return $0.schema < $1.schema
+        }
+        .map(Table.init(table:))
+        self.foreignKeyConstraints = snapshot.schemaSearchRelationships
     }
 
     struct Table: Codable {
