@@ -5,11 +5,12 @@
     {
       "id": "openrouter.simple-select",
       "schemaFixture": "openrouter-smoke",
-      "question": "List user IDs and email addresses.",
+      "question": "Write a SQL query that selects public.users.id and public.users.email from public.users.",
       "expected": {
         "decision": "sql",
         "requiredTables": ["public.users"],
-        "requiredColumnBindings": ["public.users.id", "public.users.email"]
+        "requiredColumnBindings": ["public.users.id", "public.users.email"],
+        "goldenSQL": "SELECT id, email FROM public.users"
       }
     },
     {
@@ -20,7 +21,8 @@
         "decision": "sql",
         "requiredTables": ["public.orders"],
         "requiredColumnBindings": ["public.orders.status"],
-        "requiredOperations": ["count", "group"]
+        "requiredOperations": ["count", "group"],
+        "goldenSQL": "SELECT status, COUNT(*) AS order_count FROM public.orders GROUP BY status"
       }
     },
     {
@@ -35,17 +37,18 @@
     {
       "id": "openrouter.mixed-case-quoted-identifier",
       "schemaFixture": "openrouter-smoke",
-      "question": "List eventType values from the mixed-case UserEvents table.",
+      "question": "Write a SQL query that selects public.\"UserEvents\".\"eventType\" from public.\"UserEvents\".",
       "expected": {
         "decision": "sql",
         "requiredTables": ["public.UserEvents"],
-        "requiredColumnBindings": ["public.UserEvents.eventType"]
+        "requiredColumnBindings": ["public.UserEvents.eventType"],
+        "goldenSQL": "SELECT \"eventType\" FROM public.\"UserEvents\""
       }
     },
     {
       "id": "openrouter.two-table-join",
       "schemaFixture": "openrouter-smoke",
-      "question": "Show each user's email with their order IDs.",
+      "question": "Return public.users.email and public.orders.id where public.orders.user_id equals public.users.id.",
       "expected": {
         "decision": "sql",
         "requiredTables": ["public.users", "public.orders"],
@@ -55,7 +58,8 @@
           "public.orders.user_id",
           "public.orders.id"
         ],
-        "requiredOperations": ["join"]
+        "requiredOperations": ["join"],
+        "goldenSQL": "SELECT u.email, o.id FROM public.users AS u JOIN public.orders AS o ON o.user_id = u.id"
       }
     }
   ]
