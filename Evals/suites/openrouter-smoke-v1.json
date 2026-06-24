@@ -1,0 +1,66 @@
+{
+  "name": "openrouter-smoke-v1",
+  "version": "1",
+  "cases": [
+    {
+      "id": "openrouter.simple-select",
+      "schemaFixture": "openrouter-smoke",
+      "question": "Write a SQL query that selects public.users.id and public.users.email from public.users.",
+      "expected": {
+        "decision": "sql",
+        "requiredTables": ["public.users"],
+        "requiredColumnBindings": ["public.users.id", "public.users.email"],
+        "goldenSQL": "SELECT id, email FROM public.users"
+      }
+    },
+    {
+      "id": "openrouter.simple-aggregate",
+      "schemaFixture": "openrouter-smoke",
+      "question": "Count orders by status.",
+      "expected": {
+        "decision": "sql",
+        "requiredTables": ["public.orders"],
+        "requiredColumnBindings": ["public.orders.status"],
+        "requiredOperations": ["count", "group"],
+        "goldenSQL": "SELECT status, COUNT(*) AS order_count FROM public.orders GROUP BY status"
+      }
+    },
+    {
+      "id": "openrouter.clarification",
+      "schemaFixture": "openrouter-smoke",
+      "question": "Show performance.",
+      "expected": {
+        "decision": "clarify",
+        "clarificationMustMentionAny": ["metric", "measure", "performance", "which"]
+      }
+    },
+    {
+      "id": "openrouter.mixed-case-quoted-identifier",
+      "schemaFixture": "openrouter-smoke",
+      "question": "Write a SQL query that selects public.\"UserEvents\".\"eventType\" from public.\"UserEvents\".",
+      "expected": {
+        "decision": "sql",
+        "requiredTables": ["public.UserEvents"],
+        "requiredColumnBindings": ["public.UserEvents.eventType"],
+        "goldenSQL": "SELECT \"eventType\" FROM public.\"UserEvents\""
+      }
+    },
+    {
+      "id": "openrouter.two-table-join",
+      "schemaFixture": "openrouter-smoke",
+      "question": "Return public.users.email and public.orders.id where public.orders.user_id equals public.users.id.",
+      "expected": {
+        "decision": "sql",
+        "requiredTables": ["public.users", "public.orders"],
+        "requiredColumnBindings": [
+          "public.users.email",
+          "public.users.id",
+          "public.orders.user_id",
+          "public.orders.id"
+        ],
+        "requiredOperations": ["join"],
+        "goldenSQL": "SELECT u.email, o.id FROM public.users AS u JOIN public.orders AS o ON o.user_id = u.id"
+      }
+    }
+  ]
+}

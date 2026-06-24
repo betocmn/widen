@@ -123,6 +123,7 @@ public struct SQLGenerationResult: Codable, Equatable, Sendable {
     public var clarificationOptions: [ClarificationOption]
     public var pendingClarificationID: UUID?
     public var pendingClarification: PendingClarification?
+    public var backendMetadata: OpenRouterGenerationMetadata?
 
     private enum CodingKeys: String, CodingKey {
         case sql
@@ -139,6 +140,7 @@ public struct SQLGenerationResult: Codable, Equatable, Sendable {
         case clarificationOptions
         case pendingClarificationID
         case pendingClarification
+        case backendMetadata
     }
 
     public init(
@@ -155,7 +157,8 @@ public struct SQLGenerationResult: Codable, Equatable, Sendable {
         groundingConcepts: [SQLGroundingConcept] = [],
         clarificationOptions: [ClarificationOption] = [],
         pendingClarificationID: UUID? = nil,
-        pendingClarification: PendingClarification? = nil
+        pendingClarification: PendingClarification? = nil,
+        backendMetadata: OpenRouterGenerationMetadata? = nil
     ) {
         self.sql = sql
         self.explanation = explanation
@@ -171,6 +174,7 @@ public struct SQLGenerationResult: Codable, Equatable, Sendable {
         self.clarificationOptions = clarificationOptions
         self.pendingClarificationID = pendingClarificationID
         self.pendingClarification = pendingClarification
+        self.backendMetadata = backendMetadata
     }
 
     public init(from decoder: any Decoder) throws {
@@ -210,6 +214,10 @@ public struct SQLGenerationResult: Codable, Equatable, Sendable {
             PendingClarification.self,
             forKey: .pendingClarification
         )
+        backendMetadata = try container.decodeIfPresent(
+            OpenRouterGenerationMetadata.self,
+            forKey: .backendMetadata
+        )
     }
 
     public func encode(to encoder: any Encoder) throws {
@@ -232,6 +240,7 @@ public struct SQLGenerationResult: Codable, Equatable, Sendable {
         }
         try container.encodeIfPresent(pendingClarificationID, forKey: .pendingClarificationID)
         try container.encodeIfPresent(pendingClarification, forKey: .pendingClarification)
+        try container.encodeIfPresent(backendMetadata, forKey: .backendMetadata)
     }
 }
 

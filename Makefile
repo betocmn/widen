@@ -32,7 +32,7 @@ ifdef FAIL_UNDER
 EVAL_ARGS += --fail-under $(FAIL_UNDER)
 endif
 
-.PHONY: project build test test-db test-fm eval-build eval-local eval-cloud eval-all eval-case eval-db-local eval-db-cloud eval-db-case setup run run-conductor release release-mac xcode clean
+.PHONY: project build test test-db test-fm eval-build eval-local eval-cloud eval-all eval-case eval-db-local eval-db-cloud eval-db-case eval-openrouter-smoke setup run run-conductor release release-mac xcode clean
 
 ## Regenerate Widen.xcodeproj from project.yml
 project:
@@ -74,6 +74,11 @@ eval-local: eval-build
 eval-cloud: eval-build
 	@set -a; if [ -f .env.eval.local ]; then . ./.env.eval.local; fi; set +a; \
 	$(EVAL) --backend cloud --model "$(MODEL)" $(EVAL_ARGS)
+
+## Run a tiny OpenRouter transport and structured-response smoke suite
+eval-openrouter-smoke: eval-build
+	@set -a; if [ -f .env.eval.local ]; then . ./.env.eval.local; fi; set +a; \
+	$(EVAL) --backend cloud --model "$(MODEL)" --suite Evals/suites/openrouter-smoke-v1.json $(filter-out --suite Evals/suites/text-to-sql-v1.json,$(EVAL_ARGS))
 
 ## Run the text-to-SQL eval suite against local and cloud backends
 eval-all: eval-build
