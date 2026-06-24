@@ -59,6 +59,7 @@
 		57567D4146FBF59355F6ACF1 /* UpdaterModel.swift in Sources */ = {isa = PBXBuildFile; fileRef = 6D63609C7CFC8D581AD812BA /* UpdaterModel.swift */; };
 		5F0369487E4251C38AC4C383 /* FoundationModelsConnectionParser.swift in Sources */ = {isa = PBXBuildFile; fileRef = 870B967DD1A236C762771BCD /* FoundationModelsConnectionParser.swift */; };
 		603D1C66B3804DB8772F9B9C /* ChatViewModel.swift in Sources */ = {isa = PBXBuildFile; fileRef = 45FEB67F1A613C00B3549BE5 /* ChatViewModel.swift */; };
+		63E94B7C891FAF2D5C96E30D /* SchemaConstraintInfo.swift in Sources */ = {isa = PBXBuildFile; fileRef = 6B191044F9692EA4C4249A89 /* SchemaConstraintInfo.swift */; };
 		677AC815A764B633F9F22D26 /* GenerationLog.swift in Sources */ = {isa = PBXBuildFile; fileRef = B594613B4437F5693FC5294D /* GenerationLog.swift */; };
 		6A5DB748205AD6A08CB83BAE /* SQLSafetyValidatorTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = D7D4F66164E5E8028A9EA325 /* SQLSafetyValidatorTests.swift */; };
 		6B55FB7C9A55173E1BBB34F5 /* EvalReporter.swift in Sources */ = {isa = PBXBuildFile; fileRef = D40A9749F424B9CF0479C8B1 /* EvalReporter.swift */; };
@@ -228,6 +229,7 @@
 		6399B3911003C49C8E5A23BB /* FoundationModelsTitleGenerator.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = FoundationModelsTitleGenerator.swift; sourceTree = "<group>"; };
 		6765AEA72CE58BC6D644FE4C /* SchemaStoreTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SchemaStoreTests.swift; sourceTree = "<group>"; };
 		688197FE6DA2DA95414DE6A6 /* TextToSQLEvalResult.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = TextToSQLEvalResult.swift; sourceTree = "<group>"; };
+		6B191044F9692EA4C4249A89 /* SchemaConstraintInfo.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SchemaConstraintInfo.swift; sourceTree = "<group>"; };
 		6BA8E6CFAEE004F6DB3C4D6B /* SQLPromptBuilder.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SQLPromptBuilder.swift; sourceTree = "<group>"; };
 		6D63609C7CFC8D581AD812BA /* UpdaterModel.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = UpdaterModel.swift; sourceTree = "<group>"; };
 		6D97D661282C7D49C7D9844A /* PrivateCloudComputeSQLGenerator.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PrivateCloudComputeSQLGenerator.swift; sourceTree = "<group>"; };
@@ -599,6 +601,7 @@
 				C9706E30965E3905E64B2FA9 /* ParsedConnectionDetails.swift */,
 				62528AEFE710F6485BD8680B /* QueryResult.swift */,
 				0B7BA9550419C079DAB74703 /* QuerySession.swift */,
+				6B191044F9692EA4C4249A89 /* SchemaConstraintInfo.swift */,
 				2DAAF8DAFFED5A966828C8C4 /* SQLGenerationResult.swift */,
 				2B82C454D2705BD1520A0263 /* TableInfo.swift */,
 			);
@@ -867,6 +870,7 @@
 				344BEFD5BC2ABA6B9DE4371C /* SQLSafetyValidator.swift in Sources */,
 				A4619CBD00076D2F2CCA24D8 /* SQLSchemaValidator.swift in Sources */,
 				1D500705EAC9A667A2702299 /* SchemaBrowserView.swift in Sources */,
+				63E94B7C891FAF2D5C96E30D /* SchemaConstraintInfo.swift in Sources */,
 				007C9F8E77AC349F7372CC9B /* SchemaIndex.swift in Sources */,
 				9289CD3666919AC9B9DD88AD /* SchemaInspectorView.swift in Sources */,
 				B84A31F77577FA4DBD88D7D3 /* SchemaIntrospectionService.swift in Sources */,

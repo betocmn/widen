@@ -29,6 +29,7 @@ public struct ColumnInfo: Identifiable, Codable, Equatable, Hashable, Sendable {
     public var tableSchema: String
     public var tableName: String
     public var name: String
+    public var comment: String?
     public var dataType: String
     public var udtSchema: String?
     public var udtName: String?
@@ -40,6 +41,7 @@ public struct ColumnInfo: Identifiable, Codable, Equatable, Hashable, Sendable {
         tableSchema: String,
         tableName: String,
         name: String,
+        comment: String? = nil,
         dataType: String,
         udtSchema: String? = nil,
         udtName: String? = nil,
@@ -50,11 +52,42 @@ public struct ColumnInfo: Identifiable, Codable, Equatable, Hashable, Sendable {
         self.tableSchema = tableSchema
         self.tableName = tableName
         self.name = name
+        self.comment = comment
         self.dataType = dataType
         self.udtSchema = udtSchema
         self.udtName = udtName
         self.isNullable = isNullable
         self.ordinalPosition = ordinalPosition
         self.valueConstraints = valueConstraints
+    }
+
+    private enum CodingKeys: String, CodingKey {
+        case tableSchema
+        case tableName
+        case name
+        case comment
+        case dataType
+        case udtSchema
+        case udtName
+        case isNullable
+        case ordinalPosition
+        case valueConstraints
+    }
+
+    public init(from decoder: any Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        tableSchema = try container.decode(String.self, forKey: .tableSchema)
+        tableName = try container.decode(String.self, forKey: .tableName)
+        name = try container.decode(String.self, forKey: .name)
+        comment = try container.decodeIfPresent(String.self, forKey: .comment)
+        dataType = try container.decode(String.self, forKey: .dataType)
+        udtSchema = try container.decodeIfPresent(String.self, forKey: .udtSchema)
+        udtName = try container.decodeIfPresent(String.self, forKey: .udtName)
+        isNullable = try container.decode(Bool.self, forKey: .isNullable)
+        ordinalPosition = try container.decode(Int.self, forKey: .ordinalPosition)
+        valueConstraints = try container.decodeIfPresent(
+            [ColumnValueConstraint].self,
+            forKey: .valueConstraints
+        )
     }
 }

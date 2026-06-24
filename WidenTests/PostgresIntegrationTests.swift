@@ -273,6 +273,86 @@ struct PostgresIntegrationTests {
         }
     }
 
+    @Test func introspectsCommentsKeysAndCompositeForeignKeys() async throws {
+        try await withDatabase { config, service in
+            try await runStatements(
+                [
+                    """
+                    CREATE TABLE accounts (
+                      id INTEGER PRIMARY KEY,
+                      email TEXT UNIQUE,
+                      tenant_id INTEGER NOT NULL,
+                      external_id INTEGER NOT NULL,
+                      CONSTRAINT accounts_tenant_external_key UNIQUE (tenant_id, external_id)
+                    )
+                    """,
+                    """
+                    CREATE TABLE account_events (
+                      tenant_id INTEGER NOT NULL,
+                      external_id INTEGER NOT NULL,
+                      event_seq INTEGER NOT NULL,
+                      event_status TEXT NOT NULL,
+                      CONSTRAINT account_events_pkey PRIMARY KEY (tenant_id, external_id, event_seq),
+                      CONSTRAINT account_events_account_fkey
+                        FOREIGN KEY (tenant_id, external_id)
+                        REFERENCES accounts (tenant_id, external_id)
+                    )
+                    """,
+                    "COMMENT ON TABLE accounts IS 'Billing accounts owned by customers'",
+                    "COMMENT ON COLUMN accounts.email IS 'Contact email used for invoices'",
+                ],
+                on: config.database
+            )
+
+            let schema = try await SchemaIntrospectionService().loadSchema(using: service)
+            let accounts = try #require(
+                schema.tables.first { $0.schema == "public" && $0.name == "accounts" })
+            let events = try #require(
+                schema.tables.first { $0.schema == "public" && $0.name == "account_events" })
+
+            #expect(accounts.comment == "Billing accounts owned by customers")
+            #expect(accounts.columns.first { $0.name == "email" }?.comment == "Contact email used for invoices")
+            #expect(
+                accounts.keyConstraints.contains {
+                    $0.kind == .primaryKey && $0.columns == ["id"]
+                })
+            #expect(
+                accounts.keyConstraints.contains {
+                    $0.kind == .unique && $0.columns == ["email"]
+                })
+            #expect(
+                accounts.keyConstraints.contains {
+                    $0.kind == .unique && $0.columns == ["tenant_id", "external_id"]
+                })
+            #expect(
+                events.keyConstraints.contains {
+                    $0.kind == .primaryKey && $0.columns == ["tenant_id", "external_id", "event_seq"]
+                })
+
+            let groupedFK = try #require(
+                schema.foreignKeyConstraints.first {
+                    $0.constraintName == "account_events_account_fkey"
+                })
+            #expect(groupedFK.sourceSchema == "public")
+            #expect(groupedFK.sourceTable == "account_events")
+            #expect(groupedFK.targetSchema == "public")
+            #expect(groupedFK.targetTable == "accounts")
+            #expect(
+                groupedFK.columnPairs == [
+                    SchemaForeignKeyColumnPair(
+                        sourceColumn: "tenant_id",
+                        targetColumn: "tenant_id",
+                        ordinalPosition: 1
+                    ),
+                    SchemaForeignKeyColumnPair(
+                        sourceColumn: "external_id",
+                        targetColumn: "external_id",
+                        ordinalPosition: 2
+                    ),
+                ])
+        }
+    }
+
     @Test func queryWithoutConnectionThrowsNotConnected() async {
         let service = PostgresService()
         await #expect(throws: AppError.notConnected) {
