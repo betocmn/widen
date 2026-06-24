@@ -15,6 +15,7 @@ public enum OpenRouterStructuredOutputMode: String, Codable, Equatable, Sendable
 
 public struct OpenRouterModelCapabilities: Codable, Equatable, Sendable {
     public var supportsResponseFormat: Bool
+    public var supportsStructuredOutputs: Bool
     public var supportsTools: Bool
     public var supportsToolChoice: Bool
     public var supportsTemperature: Bool
@@ -29,6 +30,7 @@ public struct OpenRouterModelCapabilities: Codable, Equatable, Sendable {
     public static func conservative(fetchedAt: Date = Date()) -> OpenRouterModelCapabilities {
         OpenRouterModelCapabilities(
             supportsResponseFormat: false,
+            supportsStructuredOutputs: false,
             supportsTools: false,
             supportsToolChoice: false,
             supportsTemperature: false,
@@ -68,6 +70,7 @@ public struct OpenRouterModelMetadata: Codable, Identifiable, Equatable, Sendabl
         let parameters = Set(supportedParameters.map { $0.lowercased() })
         return OpenRouterModelCapabilities(
             supportsResponseFormat: parameters.contains("response_format"),
+            supportsStructuredOutputs: parameters.contains("structured_outputs"),
             supportsTools: parameters.contains("tools"),
             supportsToolChoice: parameters.contains("tool_choice"),
             supportsTemperature: parameters.contains("temperature"),
@@ -570,7 +573,7 @@ actor OpenRouterModelCatalogService {
             if error is CancellationError || Task.isCancelled {
                 throw CancellationError()
             }
-            if let stale = staleCatalog(apiKey: apiKey) {
+            if canServeStaleCatalog(after: error), let stale = staleCatalog(apiKey: apiKey) {
                 return staleCatalogWithSource(stale)
             }
             throw error
@@ -714,6 +717,25 @@ actor OpenRouterModelCatalogService {
         )
     }
 
+    private func canServeStaleCatalog(after error: any Error) -> Bool {
+        if let failure = error as? OpenRouterFailure {
+            switch failure.category {
+            case .rateLimited, .providerOverloaded, .providerUnavailable, .timeout,
+                .networkTransport, .serverFailure:
+                return true
+            case .authentication, .paymentRequired, .permissionDenied, .guardrailBlocked,
+                .modelNotFound, .invalidRequest, .unsupportedFeature, .contextWindow,
+                .maxTokensExceeded, .contentPolicy, .refusal, .noContent,
+                .malformedStructuredResponse:
+                return false
+            }
+        }
+        if let urlError = error as? URLError {
+            return urlError.code != .cancelled
+        }
+        return false
+    }
+
     private func isFresh(_ catalog: CachedCatalog) -> Bool {
         Date().timeIntervalSince(catalog.fetchedAt) <= ttl
     }
@@ -775,7 +797,7 @@ struct OpenRouterRequestBuilder: Sendable {
         capabilities: OpenRouterModelCapabilities
     ) throws -> BuiltRequest {
         let mode: OpenRouterStructuredOutputMode =
-            capabilities.supportsResponseFormat ? .strictJSONSchema : .promptOnlyJSON
+            capabilities.supportsStructuredOutputs ? .strictJSONSchema : .promptOnlyJSON
         var body: [String: Any] = [
             "model": model,
             "messages": [

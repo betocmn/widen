@@ -107,6 +107,7 @@ struct OpenRouterSQLGeneratorTests {
         #expect(model.expiration == "2027-01-01")
         #expect(model.isAvailableToAPIKey)
         #expect(model.capabilities.supportsResponseFormat)
+        #expect(model.capabilities.supportsStructuredOutputs)
         #expect(model.capabilities.supportsTools)
         #expect(model.capabilities.supportsToolChoice)
         #expect(model.capabilities.supportsTemperature)
@@ -160,6 +161,31 @@ struct OpenRouterSQLGeneratorTests {
         let cacheText = try String(contentsOf: cacheURL, encoding: .utf8)
         #expect(!cacheText.contains("secret-key"))
         #expect(cacheText.contains(OpenRouterModelCatalogService.apiKeyFingerprint("secret-key")))
+    }
+
+    @Test func authFailureDoesNotFallBackToStaleCatalog() async throws {
+        let cacheURL = temporaryCacheURL()
+        let primingTransport = StubTransport([
+            .success((catalogResponse(id: Self.modelID), response(url: Self.apiBase.appendingPathComponent("models/user"), status: 200)))
+        ])
+        let primingService = catalogService(transport: primingTransport, cacheURL: cacheURL, ttl: 60)
+        _ = try await primingService.availableModels(apiKey: "secret-key")
+
+        let authFailureTransport = StubTransport([
+            .success((
+                errorResponse(errorType: "invalid_api_key", message: "Invalid API key"),
+                response(url: Self.apiBase.appendingPathComponent("models/user"), status: 401)
+            ))
+        ])
+        let expiredService = catalogService(transport: authFailureTransport, cacheURL: cacheURL, ttl: -1)
+
+        do {
+            _ = try await expiredService.availableModels(apiKey: "secret-key")
+            Issue.record("expected authentication failure")
+        } catch let failure as OpenRouterFailure {
+            #expect(failure.category == .authentication)
+        }
+        #expect(authFailureTransport.requests.count == 1)
     }
 
     @Test func cancellingOneCatalogWaiterDoesNotCancelSharedRefresh() async throws {
@@ -236,6 +262,7 @@ struct OpenRouterSQLGeneratorTests {
     @Test func requestBuilderUsesStrictModeOnlyWhenAdvertised() throws {
         var capabilities = OpenRouterModelCapabilities.conservative()
         capabilities.supportsResponseFormat = true
+        capabilities.supportsStructuredOutputs = true
         capabilities.supportsTemperature = true
         capabilities.supportsMaxTokens = true
         capabilities.supportsMaxCompletionTokens = true
@@ -257,6 +284,26 @@ struct OpenRouterSQLGeneratorTests {
         #expect(body["temperature"] as? Int == 0)
         #expect(body["max_completion_tokens"] as? Int == 32)
         #expect(body["max_tokens"] == nil)
+    }
+
+    @Test func responseFormatWithoutStructuredOutputsUsesPromptMode() throws {
+        var capabilities = OpenRouterModelCapabilities.conservative()
+        capabilities.supportsResponseFormat = true
+        capabilities.supportsTemperature = true
+
+        let built = try OpenRouterRequestBuilder(endpoint: Self.chatEndpoint).build(
+            apiKey: "test-key",
+            model: Self.modelID,
+            instructions: "instructions",
+            prompt: "prompt",
+            capabilities: capabilities
+        )
+        let body = try jsonBody(built.request)
+
+        #expect(built.mode == .promptOnlyJSON)
+        #expect(body["response_format"] == nil)
+        #expect(body["provider"] == nil)
+        #expect(body["temperature"] as? Int == 0)
     }
 
     @Test func maxTokensFallbackIsUsedOnlyWhenAdvertised() throws {
@@ -647,7 +694,7 @@ struct OpenRouterSQLGeneratorTests {
 
     @Test func testModelPayloadContainsNoDatabaseContextOrSchema() throws {
         var capabilities = OpenRouterModelCapabilities.conservative()
-        capabilities.supportsResponseFormat = true
+        capabilities.supportsStructuredOutputs = true
         let request = try OpenRouterRequestBuilder(endpoint: Self.chatEndpoint).buildTinyJSONTest(
             apiKey: "test-key",
             model: Self.modelID,
@@ -732,7 +779,7 @@ struct OpenRouterSQLGeneratorTests {
     private func catalogResponse(
         id: String = modelID,
         parameters: [String] = [
-            "response_format", "tools", "tool_choice", "temperature", "seed",
+            "response_format", "structured_outputs", "tools", "tool_choice", "temperature", "seed",
             "max_completion_tokens", "max_tokens",
         ]
     ) -> Data {

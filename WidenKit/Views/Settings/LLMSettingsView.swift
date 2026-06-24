@@ -268,7 +268,7 @@ struct LLMSettingsView: View {
         if let metadata {
             VStack(alignment: .leading, spacing: 6) {
                 HStack(spacing: 6) {
-                    CapabilityBadge("Structured output", isEnabled: metadata.capabilities.supportsResponseFormat)
+                    CapabilityBadge("Structured output", isEnabled: metadata.capabilities.supportsStructuredOutputs)
                     CapabilityBadge("Tools", isEnabled: metadata.capabilities.supportsTools)
                     if let contextLength = metadata.contextLength {
                         Text("\(contextLength.formatted()) context")
@@ -326,7 +326,7 @@ struct LLMSettingsView: View {
                     )
                     statusRow(
                         "Structured output",
-                        modelTestResult.capabilities.supportsResponseFormat ? "supported" : "not advertised"
+                        modelTestResult.capabilities.supportsStructuredOutputs ? "supported" : "not advertised"
                     )
                     statusRow(
                         "Tools",
@@ -508,7 +508,7 @@ private struct OpenRouterModelPickerRow: Identifiable {
 
     var title: String {
         var badges: [String] = []
-        if capabilities?.supportsResponseFormat == true {
+        if capabilities?.supportsStructuredOutputs == true {
             badges.append("Structured output")
         }
         if capabilities?.supportsTools == true {
