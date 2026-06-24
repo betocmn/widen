@@ -206,10 +206,12 @@ public struct OpenRouterFailure: Error, LocalizedError, Equatable, Sendable {
     static func category(errorType: String?, httpStatus: Int?, message: String?) -> Category {
         let type = errorType?.lowercased()
         switch type {
-        case "authentication":
+        case "authentication", "invalid_api_key":
             return .authentication
-        case "payment_required":
+        case "payment_required", "insufficient_credits", "credits_exhausted":
             return .paymentRequired
+        case "model_not_found", "not_found":
+            return .modelNotFound
         case "permission_denied":
             if (message ?? "").localizedCaseInsensitiveContains("guardrail")
                 || (message ?? "").localizedCaseInsensitiveContains("blocked")
@@ -217,6 +219,8 @@ public struct OpenRouterFailure: Error, LocalizedError, Equatable, Sendable {
                 return .guardrailBlocked
             }
             return .permissionDenied
+        case "guardrail_blocked":
+            return .guardrailBlocked
         case "context_length_exceeded", "token_limit_exceeded", "string_too_long":
             return .contextWindow
         case "max_tokens_exceeded":
@@ -232,6 +236,8 @@ public struct OpenRouterFailure: Error, LocalizedError, Equatable, Sendable {
         case "content_policy_violation", "invalid_image", "image_too_large", "image_too_small",
             "unsupported_image_format":
             return .contentPolicy
+        case "refusal":
+            return .refusal
         case "invalid_request", "invalid_prompt":
             return .invalidRequest
         case "unsupported_parameter", "unsupported_feature":
@@ -507,6 +513,7 @@ actor OpenRouterModelCatalogService {
         } else {
             memoryCache.removeAll()
         }
+        writeDiskCache()
     }
 
     private func catalog(apiKey: String, forceRefresh: Bool) async throws -> CachedCatalog {
@@ -516,7 +523,7 @@ actor OpenRouterModelCatalogService {
             return cached
         }
         if let task = refreshTasks[key] {
-            return try await task.value
+            return try await refreshValue(task)
         }
         let task = Task<CachedCatalog, Error> {
             let fetched = try await fetchCatalog(apiKey: apiKey)
@@ -525,15 +532,26 @@ actor OpenRouterModelCatalogService {
         }
         refreshTasks[key] = task
         do {
-            let value = try await task.value
+            let value = try await refreshValue(task)
             refreshTasks[key] = nil
             return value
         } catch {
             refreshTasks[key] = nil
+            if error is CancellationError || Task.isCancelled {
+                throw CancellationError()
+            }
             if let stale = staleCatalog(apiKey: apiKey) {
                 return staleCatalogWithSource(stale)
             }
             throw error
+        }
+    }
+
+    private func refreshValue(_ task: Task<CachedCatalog, Error>) async throws -> CachedCatalog {
+        try await withTaskCancellationHandler {
+            try await task.value
+        } onCancel: {
+            task.cancel()
         }
     }
 
@@ -876,6 +894,21 @@ struct OpenRouterResponseParser: Sendable {
             case usage
             case error
             case openrouterMetadata = "openrouter_metadata"
+        }
+
+        init(from decoder: any Decoder) throws {
+            let container = try decoder.container(keyedBy: CodingKeys.self)
+            id = try container.decodeIfPresent(String.self, forKey: .id)
+            model = try container.decodeIfPresent(String.self, forKey: .model)
+            provider = try container.decodeIfPresent(String.self, forKey: .provider)
+            serviceTier = try container.decodeIfPresent(String.self, forKey: .serviceTier)
+            choices = try container.decodeIfPresent([Choice].self, forKey: .choices) ?? []
+            usage = try container.decodeIfPresent(Usage.self, forKey: .usage)
+            error = try container.decodeIfPresent(OpenRouterAPIErrorEnvelope.APIError.self, forKey: .error)
+            openrouterMetadata = try container.decodeIfPresent(
+                OpenRouterRouterMetadata.self,
+                forKey: .openrouterMetadata
+            )
         }
     }
 

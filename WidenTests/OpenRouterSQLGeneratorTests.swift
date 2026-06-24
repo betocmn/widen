@@ -3,7 +3,7 @@ import Testing
 
 @testable import WidenKit
 
-@Suite("OpenRouterSQLGenerator")
+@Suite("OpenRouter reliability")
 struct OpenRouterSQLGeneratorTests {
     private final class StubTransport: HTTPTransport, @unchecked Sendable {
         private let lock = NSLock()
@@ -11,7 +11,7 @@ struct OpenRouterSQLGeneratorTests {
         private var recorded: [URLRequest] = []
 
         init(_ results: [Result<(Data, HTTPURLResponse), Error>]) {
-            self.queue = results
+            queue = results
         }
 
         var requests: [URLRequest] {
@@ -27,35 +27,545 @@ struct OpenRouterSQLGeneratorTests {
         }
     }
 
-    private struct CancellationAwareTransport: HTTPTransport {
+    private final class CancellationAwareTransport: HTTPTransport, @unchecked Sendable {
+        private let lock = NSLock()
+        private var recorded: [URLRequest] = []
+
+        var requests: [URLRequest] {
+            lock.withLock { recorded }
+        }
+
         func send(_ request: URLRequest) async throws -> (Data, HTTPURLResponse) {
+            lock.withLock { recorded.append(request) }
             while !Task.isCancelled {
-                try? await Task.sleep(nanoseconds: 1_000_000)
+                try await Task.sleep(nanoseconds: 1_000_000)
             }
             throw URLError(.cancelled)
         }
     }
 
-    private static let endpoint = URL(string: "https://openrouter.ai/api/v1/chat/completions")!
+    private static let chatEndpoint = URL(string: "https://openrouter.test/api/v1/chat/completions")!
+    private static let apiBase = URL(string: "https://openrouter.test/api/v1")!
+    private static let modelID = "openai/gpt-5.5"
 
-    private func response(status: Int) -> HTTPURLResponse {
-        HTTPURLResponse(
-            url: Self.endpoint, statusCode: status, httpVersion: nil, headerFields: nil)!
-    }
+    private let goodContent = """
+        {"sql":"SELECT id FROM public.users LIMIT 100","explanation":"Lists user ids.","assumptions":["All users wanted"],"referencedTables":["public.users"],"confidence":0.9,"riskLevel":"low","needsClarification":false,"clarificationQuestion":null}
+        """
 
-    /// A chat-completions body whose message content is `content`.
-    private func completion(content: String) throws -> Data {
-        try JSONSerialization.data(withJSONObject: [
-            "choices": [["message": ["role": "assistant", "content": content]]]
+    @Test func catalogUsesAuthenticatedModelsUserAndDecodesCapabilities() async throws {
+        let transport = StubTransport([
+            .success((catalogResponse(), response(url: Self.apiBase.appendingPathComponent("models/user"), status: 200)))
         ])
+        let service = catalogService(transport: transport)
+
+        let models = try await service.availableModels(apiKey: "secret-key", forceRefresh: true)
+
+        #expect(transport.requests.first?.url?.path == "/api/v1/models/user")
+        #expect(transport.requests.first?.value(forHTTPHeaderField: "Authorization") == "Bearer secret-key")
+        let model = try #require(models.first)
+        #expect(model.requestedID == Self.modelID)
+        #expect(model.id == Self.modelID)
+        #expect(model.canonicalModelID == "openai/gpt-5.5")
+        #expect(model.displayName == "GPT-5.5")
+        #expect(model.contextLength == 128_000)
+        #expect(model.maximumCompletionTokens == 4096)
+        #expect(model.supportedParameters.contains("response_format"))
+        #expect(model.pricing?.prompt == "0.000001")
+        #expect(model.expiration == "2027-01-01")
+        #expect(model.isAvailableToAPIKey)
+        #expect(model.capabilities.supportsResponseFormat)
+        #expect(model.capabilities.supportsTools)
+        #expect(model.capabilities.supportsToolChoice)
+        #expect(model.capabilities.supportsTemperature)
+        #expect(model.capabilities.supportsSeed)
+        #expect(model.capabilities.supportsMaxCompletionTokens)
+        #expect(model.capabilities.contextLength == 128_000)
     }
 
-    private func makeGenerator(_ transport: any HTTPTransport) -> OpenRouterSQLGenerator {
+    @Test func customModelFallsBackToSingleModelLookup() async throws {
+        let transport = StubTransport([
+            .success((catalogResponse(id: "openai/other"), response(url: Self.apiBase.appendingPathComponent("models/user"), status: 200))),
+            .success((singleModelResponse(id: "custom/model"), response(url: Self.apiBase.appendingPathComponent("model/custom/model"), status: 200))),
+        ])
+        let service = catalogService(transport: transport)
+
+        let metadata = await service.metadata(apiKey: "secret-key", modelID: "custom/model", forceRefresh: true)
+
+        #expect(transport.requests.map { $0.url?.path } == ["/api/v1/models/user", "/api/v1/model/custom/model"])
+        #expect(metadata?.requestedID == "custom/model")
+        #expect(metadata?.isAvailableToAPIKey == false)
+        #expect(metadata?.capabilitySource == .singleModelLookup)
+    }
+
+    @Test func catalogCacheHitsExpiresFallsBackStaleAndInvalidates() async throws {
+        let cacheURL = temporaryCacheURL()
+        let transport = StubTransport([
+            .success((catalogResponse(id: Self.modelID), response(url: Self.apiBase.appendingPathComponent("models/user"), status: 200))),
+            .success((catalogResponse(id: "openai/second"), response(url: Self.apiBase.appendingPathComponent("models/user"), status: 200))),
+            .failure(URLError(.networkConnectionLost)),
+            .success((catalogResponse(id: Self.modelID), response(url: Self.apiBase.appendingPathComponent("models/user"), status: 200))),
+        ])
+        let service = catalogService(transport: transport, cacheURL: cacheURL, ttl: 60)
+
+        _ = try await service.availableModels(apiKey: "secret-key")
+        _ = try await service.availableModels(apiKey: "secret-key")
+        #expect(transport.requests.count == 1)
+
+        await service.invalidate(apiKey: "secret-key")
+        let refreshed = try await service.availableModels(apiKey: "secret-key")
+        #expect(refreshed.first?.id == "openai/second")
+        #expect(transport.requests.count == 2)
+
+        let expiring = catalogService(transport: transport, cacheURL: cacheURL, ttl: -1)
+        let stale = try await expiring.availableModels(apiKey: "secret-key")
+        #expect(stale.first?.capabilitySource == .staleCache)
+        #expect(transport.requests.count == 3)
+
+        _ = try await expiring.availableModels(apiKey: "another-key")
+        #expect(transport.requests.count == 4)
+
+        let cacheText = try String(contentsOf: cacheURL, encoding: .utf8)
+        #expect(!cacheText.contains("secret-key"))
+        #expect(cacheText.contains(OpenRouterModelCatalogService.apiKeyFingerprint("secret-key")))
+    }
+
+    @Test func requestBuilderOmitsUnsupportedParameters() throws {
+        let built = try OpenRouterRequestBuilder(endpoint: Self.chatEndpoint).build(
+            apiKey: "test-key",
+            model: Self.modelID,
+            instructions: "instructions",
+            prompt: "prompt",
+            capabilities: .conservative()
+        )
+        let body = try jsonBody(built.request)
+
+        #expect(built.mode == .promptOnlyJSON)
+        #expect(body["response_format"] == nil)
+        #expect(body["temperature"] == nil)
+        #expect(body["max_tokens"] == nil)
+        #expect(body["max_completion_tokens"] == nil)
+        #expect(body["provider"] == nil)
+        #expect(built.request.value(forHTTPHeaderField: "X-OpenRouter-Metadata") == "enabled")
+    }
+
+    @Test func requestBuilderUsesStrictModeOnlyWhenAdvertised() throws {
+        var capabilities = OpenRouterModelCapabilities.conservative()
+        capabilities.supportsResponseFormat = true
+        capabilities.supportsTemperature = true
+        capabilities.supportsMaxTokens = true
+        capabilities.supportsMaxCompletionTokens = true
+        capabilities.maximumCompletionTokens = 32
+
+        let built = try OpenRouterRequestBuilder(endpoint: Self.chatEndpoint).build(
+            apiKey: "test-key",
+            model: Self.modelID,
+            instructions: "instructions",
+            prompt: "prompt",
+            capabilities: capabilities
+        )
+        let body = try jsonBody(built.request)
+        let provider = body["provider"] as? [String: Any]
+
+        #expect(built.mode == .strictJSONSchema)
+        #expect(body["response_format"] != nil)
+        #expect(provider?["require_parameters"] as? Bool == true)
+        #expect(body["temperature"] as? Int == 0)
+        #expect(body["max_completion_tokens"] as? Int == 32)
+        #expect(body["max_tokens"] == nil)
+    }
+
+    @Test func maxTokensFallbackIsUsedOnlyWhenAdvertised() throws {
+        var capabilities = OpenRouterModelCapabilities.conservative()
+        capabilities.supportsMaxTokens = true
+        capabilities.maximumCompletionTokens = 16_000
+
+        let body = try jsonBody(
+            OpenRouterRequestBuilder(endpoint: Self.chatEndpoint).build(
+                apiKey: "test-key",
+                model: Self.modelID,
+                instructions: "instructions",
+                prompt: "prompt",
+                capabilities: capabilities
+            ).request
+        )
+
+        #expect(body["max_tokens"] as? Int == OpenRouterRequestBuilder.completionTokenBudget)
+        #expect(body["max_completion_tokens"] == nil)
+    }
+
+    @Test func noResponseFormatFallbackRequestIsIssued() async throws {
+        let transport = StubTransport([
+            .success((catalogResponse(), response(url: Self.apiBase.appendingPathComponent("models/user"), status: 200))),
+            .success((
+                errorResponse(errorType: "unsupported_parameter", message: "response_format is not supported"),
+                response(url: Self.chatEndpoint, status: 400)
+            )),
+        ])
+        let generator = makeGenerator(transport: transport)
+
+        do {
+            _ = try await generator.generateSQL(
+                question: "show users",
+                schema: makeSchema(),
+                config: SQLGenerationConfig()
+            )
+            Issue.record("expected unsupported feature")
+        } catch let failure as OpenRouterFailure {
+            #expect(failure.category == .unsupportedFeature)
+        }
+
+        #expect(transport.requests.map { $0.url?.path } == ["/api/v1/models/user", "/api/v1/chat/completions"])
+    }
+
+    @Test func parserHandlesStringAndContentParts() throws {
+        let parser = OpenRouterResponseParser()
+        let stringResult = try parser.parse(
+            data: chatResponse(content: goodContent),
+            response: response(url: Self.chatEndpoint, status: 200, headers: ["X-Request-Id": "req-1"]),
+            requestedModelID: Self.modelID,
+            mode: .strictJSONSchema,
+            requestCount: 1,
+            retryCount: 0
+        )
+        let partsResult = try parser.parse(
+            data: chatResponse(content: [["type": "text", "text": goodContent]]),
+            response: response(url: Self.chatEndpoint, status: 200),
+            requestedModelID: Self.modelID,
+            mode: .strictJSONSchema,
+            requestCount: 1,
+            retryCount: 0
+        )
+
+        #expect(stringResult.result.sql == "SELECT id FROM public.users LIMIT 100")
+        #expect(stringResult.metadata.requestID == "req-1")
+        #expect(stringResult.metadata.requestedModelID == Self.modelID)
+        #expect(stringResult.metadata.returnedModelID == "openai/gpt-5.5")
+        #expect(stringResult.metadata.providerName == "OpenAI")
+        #expect(stringResult.metadata.promptTokens == 11)
+        #expect(stringResult.metadata.completionTokens == 22)
+        #expect(stringResult.metadata.reasoningTokens == 3)
+        #expect(stringResult.metadata.totalTokens == 33)
+        #expect(stringResult.metadata.costUSD == 0.00012)
+        #expect(stringResult.metadata.serviceTier == "standard")
+        #expect(partsResult.result.sql == "SELECT id FROM public.users LIMIT 100")
+    }
+
+    @Test func parserAcceptsFencedJSONOnlyInPromptMode() throws {
+        let parser = OpenRouterResponseParser()
+        let fenced = "```json\n\(goodContent)\n```"
+        let promptResult = try parser.parse(
+            data: chatResponse(content: fenced),
+            response: response(url: Self.chatEndpoint, status: 200),
+            requestedModelID: Self.modelID,
+            mode: .promptOnlyJSON,
+            requestCount: 1,
+            retryCount: 0
+        )
+        #expect(promptResult.result.sql == "SELECT id FROM public.users LIMIT 100")
+
+        do {
+            _ = try parser.parse(
+                data: chatResponse(content: fenced),
+                response: response(url: Self.chatEndpoint, status: 200),
+                requestedModelID: Self.modelID,
+                mode: .strictJSONSchema,
+                requestCount: 1,
+                retryCount: 0
+            )
+            Issue.record("expected strict JSON parse failure")
+        } catch let failure as OpenRouterFailure {
+            #expect(failure.category == .malformedStructuredResponse)
+        }
+    }
+
+    @Test func parserClassifiesErrorAndFinishFormsBeforeContentParsing() throws {
+        let parser = OpenRouterResponseParser()
+
+        try expectFailure(.paymentRequired) {
+            try parser.parse(
+                data: topLevelErrorResponse(errorType: "insufficient_credits", providerCode: "credits"),
+                response: response(url: Self.chatEndpoint, status: 200),
+                requestedModelID: Self.modelID,
+                mode: .strictJSONSchema,
+                requestCount: 1,
+                retryCount: 0
+            )
+        }
+        try expectFailure(.providerUnavailable) {
+            try parser.parse(
+                data: chatResponse(content: nil, finishReason: "error"),
+                response: response(url: Self.chatEndpoint, status: 200),
+                requestedModelID: Self.modelID,
+                mode: .strictJSONSchema,
+                requestCount: 1,
+                retryCount: 0
+            )
+        }
+        try expectFailure(.maxTokensExceeded) {
+            try parser.parse(
+                data: chatResponse(content: goodContent, finishReason: "length"),
+                response: response(url: Self.chatEndpoint, status: 200),
+                requestedModelID: Self.modelID,
+                mode: .strictJSONSchema,
+                requestCount: 1,
+                retryCount: 0
+            )
+        }
+        try expectFailure(.contentPolicy) {
+            try parser.parse(
+                data: chatResponse(content: goodContent, finishReason: "content_filter"),
+                response: response(url: Self.chatEndpoint, status: 200),
+                requestedModelID: Self.modelID,
+                mode: .strictJSONSchema,
+                requestCount: 1,
+                retryCount: 0
+            )
+        }
+        try expectFailure(.refusal) {
+            try parser.parse(
+                data: chatResponse(content: goodContent, refusal: "No."),
+                response: response(url: Self.chatEndpoint, status: 200),
+                requestedModelID: Self.modelID,
+                mode: .strictJSONSchema,
+                requestCount: 1,
+                retryCount: 0
+            )
+        }
+        try expectFailure(.noContent) {
+            try parser.parse(
+                data: chatResponse(content: ""),
+                response: response(url: Self.chatEndpoint, status: 200),
+                requestedModelID: Self.modelID,
+                mode: .strictJSONSchema,
+                requestCount: 1,
+                retryCount: 0
+            )
+        }
+    }
+
+    @Test func choiceLevelErrorInsideHTTP200PreservesProviderCode() throws {
+        let parser = OpenRouterResponseParser()
+        do {
+            _ = try parser.parse(
+                data: chatResponse(
+                    content: nil,
+                    choiceError: [
+                        "message": "provider failed",
+                        "metadata": ["error_type": "provider_unavailable", "provider_code": "overloaded"],
+                    ]
+                ),
+                response: response(url: Self.chatEndpoint, status: 200),
+                requestedModelID: Self.modelID,
+                mode: .strictJSONSchema,
+                requestCount: 1,
+                retryCount: 0
+            )
+            Issue.record("expected provider error")
+        } catch let failure as OpenRouterFailure {
+            #expect(failure.category == .providerUnavailable)
+            #expect(failure.diagnostic.providerCode == "overloaded")
+        }
+    }
+
+    @Test func everyTypedFailureCategoryIsReachable() {
+        let cases: [(String?, Int?, String?, OpenRouterFailure.Category)] = [
+            ("invalid_api_key", 400, nil, .authentication),
+            ("insufficient_credits", 400, nil, .paymentRequired),
+            ("permission_denied", 403, nil, .permissionDenied),
+            ("guardrail_blocked", 403, nil, .guardrailBlocked),
+            ("model_not_found", 404, nil, .modelNotFound),
+            ("invalid_request", 400, nil, .invalidRequest),
+            ("unsupported_parameter", 400, nil, .unsupportedFeature),
+            ("context_length_exceeded", 400, nil, .contextWindow),
+            ("max_tokens_exceeded", 400, nil, .maxTokensExceeded),
+            ("rate_limit_exceeded", 429, nil, .rateLimited),
+            ("provider_overloaded", 503, nil, .providerOverloaded),
+            ("provider_unavailable", 502, nil, .providerUnavailable),
+            ("timeout", 408, nil, .timeout),
+            ("content_policy_violation", 400, nil, .contentPolicy),
+            ("refusal", 400, nil, .refusal),
+            (nil, 204, nil, .serverFailure),
+            (nil, 500, nil, .serverFailure),
+            (nil, nil, nil, .serverFailure),
+        ]
+        for (type, status, message, category) in cases {
+            #expect(
+                OpenRouterFailure.category(errorType: type, httpStatus: status, message: message)
+                    == category
+            )
+        }
+
+        #expect(
+            OpenRouterFailure(category: .noContent, message: "empty").category == .noContent
+        )
+        #expect(
+            OpenRouterFailure(category: .malformedStructuredResponse, message: "bad").category
+                == .malformedStructuredResponse
+        )
+        #expect(
+            OpenRouterFailure(category: .networkTransport, message: "offline").category
+                == .networkTransport
+        )
+    }
+
+    @Test func retryAfterSecondsHTTPDateAndCapAreHandled() {
+        let policy = OpenRouterRetryPolicy()
+        let seconds = policy.retryAfter(
+            from: response(url: Self.chatEndpoint, status: 429, headers: ["Retry-After": "3"])
+        )
+        let date = Date(timeIntervalSinceNow: 2)
+        let httpDate = Self.httpDateFormatter.string(from: date)
+        let dateDelay = policy.retryAfter(
+            from: response(url: Self.chatEndpoint, status: 429, headers: ["Retry-After": httpDate])
+        )
+        let capped = policy.retryDelay(
+            for: OpenRouterFailure(
+                category: .rateLimited,
+                message: "slow down",
+                retryAfterSeconds: 30
+            ),
+            attempt: 1,
+            noContentRetries: 0
+        )
+
+        #expect(seconds == 3)
+        #expect((dateDelay ?? 0) > 0)
+        #expect(capped == nil)
+    }
+
+    @Test func retriesTransientFailuresAndCountsEveryAttempt() async throws {
+        let transport = StubTransport([
+            .success((catalogResponse(), response(url: Self.apiBase.appendingPathComponent("models/user"), status: 200))),
+            .success((errorResponse(errorType: "provider_unavailable"), response(url: Self.chatEndpoint, status: 503, headers: ["Retry-After": "0"]))),
+            .success((errorResponse(errorType: "provider_unavailable"), response(url: Self.chatEndpoint, status: 503, headers: ["Retry-After": "0"]))),
+            .success((chatResponse(content: goodContent), response(url: Self.chatEndpoint, status: 200))),
+        ])
+        let result = try await makeGenerator(transport: transport).generateSQL(
+            question: "show users",
+            schema: makeSchema(),
+            config: SQLGenerationConfig()
+        )
+
+        #expect(result.generationCallCount == 3)
+        #expect(result.backendMetadata?.requestCount == 3)
+        #expect(result.backendMetadata?.retryCount == 2)
+        #expect(transport.requests.filter { $0.url?.path == "/api/v1/chat/completions" }.count == 3)
+    }
+
+    @Test func retryCapStopsAfterThreeHTTPAttempts() async throws {
+        let transport = StubTransport([
+            .success((catalogResponse(), response(url: Self.apiBase.appendingPathComponent("models/user"), status: 200))),
+            .success((errorResponse(errorType: "provider_unavailable"), response(url: Self.chatEndpoint, status: 503, headers: ["Retry-After": "0"]))),
+            .success((errorResponse(errorType: "provider_unavailable"), response(url: Self.chatEndpoint, status: 503, headers: ["Retry-After": "0"]))),
+            .success((errorResponse(errorType: "provider_unavailable"), response(url: Self.chatEndpoint, status: 503, headers: ["Retry-After": "0"]))),
+        ])
+
+        do {
+            _ = try await makeGenerator(transport: transport).generateSQL(
+                question: "show users",
+                schema: makeSchema(),
+                config: SQLGenerationConfig()
+            )
+            Issue.record("expected provider failure")
+        } catch let failure as OpenRouterFailure {
+            #expect(failure.category == .providerUnavailable)
+            #expect(failure.diagnostic.attemptCount == 3)
+        }
+        #expect(transport.requests.filter { $0.url?.path == "/api/v1/chat/completions" }.count == 3)
+    }
+
+    @Test func cancellationDuringRequestAndBackoffIsImmediate() async throws {
+        let requestTransport = CancellationAwareTransport()
+        let requestTask = Task {
+            try await makeGenerator(transport: requestTransport).generateSQL(
+                question: "show users",
+                schema: makeSchema(),
+                config: SQLGenerationConfig()
+            )
+        }
+        while requestTransport.requests.isEmpty {
+            try await Task.sleep(nanoseconds: 1_000_000)
+        }
+        requestTask.cancel()
+        await expectCancellation(requestTask)
+
+        let backoffTransport = StubTransport([
+            .success((catalogResponse(), response(url: Self.apiBase.appendingPathComponent("models/user"), status: 200))),
+            .success((errorResponse(errorType: "provider_unavailable"), response(url: Self.chatEndpoint, status: 503, headers: ["Retry-After": "10"]))),
+        ])
+        let backoffTask = Task {
+            try await makeGenerator(transport: backoffTransport).generateSQL(
+                question: "show users",
+                schema: makeSchema(),
+                config: SQLGenerationConfig()
+            )
+        }
+        while backoffTransport.requests.count < 2 {
+            try await Task.sleep(nanoseconds: 1_000_000)
+        }
+        backoffTask.cancel()
+        await expectCancellation(backoffTask)
+    }
+
+    @Test func sqlGenerationResultDecodesLegacyJSONWithoutBackendMetadata() throws {
+        let legacy = Data(
+            """
+            {"sql":"SELECT 1","explanation":"x","assumptions":[],"referencedTables":[],"confidence":0.5,"riskLevel":"low","needsClarification":false}
+            """.utf8
+        )
+        let decoded = try JSONDecoder().decode(SQLGenerationResult.self, from: legacy)
+        #expect(decoded.backendMetadata == nil)
+    }
+
+    @Test func testModelPayloadContainsNoDatabaseContextOrSchema() throws {
+        var capabilities = OpenRouterModelCapabilities.conservative()
+        capabilities.supportsResponseFormat = true
+        let request = try OpenRouterRequestBuilder(endpoint: Self.chatEndpoint).buildTinyJSONTest(
+            apiKey: "test-key",
+            model: Self.modelID,
+            capabilities: capabilities
+        ).request
+        let body = try jsonBody(request)
+        let messages = try #require(body["messages"] as? [[String: String]])
+        let combined = messages.compactMap { $0["content"] }.joined(separator: "\n")
+
+        #expect(combined.contains("{\"ok\": true}"))
+        #expect(!combined.contains("TABLE"))
+        #expect(!combined.contains("Database context"))
+        #expect(!combined.contains("SQL history"))
+        #expect(!combined.contains("public.users"))
+    }
+
+    private func makeGenerator(transport: StubTransport, model: String = Self.modelID) -> OpenRouterSQLGenerator {
         OpenRouterSQLGenerator(
             apiKey: "test-key",
-            model: "anthropic/claude-sonnet-4.6",
+            model: model,
             transport: transport,
-            endpoint: Self.endpoint
+            catalogService: catalogService(transport: transport),
+            requestBuilder: OpenRouterRequestBuilder(endpoint: Self.chatEndpoint)
+        )
+    }
+
+    private func makeGenerator(transport: CancellationAwareTransport) -> OpenRouterSQLGenerator {
+        OpenRouterSQLGenerator(
+            apiKey: "test-key",
+            model: Self.modelID,
+            transport: transport,
+            catalogService: catalogService(transport: transport),
+            requestBuilder: OpenRouterRequestBuilder(endpoint: Self.chatEndpoint)
+        )
+    }
+
+    private func catalogService(
+        transport: any HTTPTransport,
+        cacheURL: URL? = nil,
+        ttl: TimeInterval = 60
+    ) -> OpenRouterModelCatalogService {
+        OpenRouterModelCatalogService(
+            transport: transport,
+            baseURL: Self.apiBase,
+            cacheURL: cacheURL ?? temporaryCacheURL(),
+            ttl: ttl
         )
     }
 
@@ -64,239 +574,163 @@ struct OpenRouterSQLGeneratorTests {
             schemas: [SchemaInfo(name: "public")],
             tables: [
                 TableInfo(
-                    schema: "public", name: "users", type: .baseTable,
+                    schema: "public",
+                    name: "users",
+                    type: .baseTable,
                     columns: [
                         ColumnInfo(
-                            tableSchema: "public", tableName: "users", name: "id",
-                            dataType: "integer", isNullable: false, ordinalPosition: 1)
-                    ])
+                            tableSchema: "public",
+                            tableName: "users",
+                            name: "id",
+                            dataType: "integer",
+                            isNullable: false,
+                            ordinalPosition: 1
+                        )
+                    ]
+                )
+            ]
+        )
+    }
+
+    private func catalogResponse(
+        id: String = modelID,
+        parameters: [String] = [
+            "response_format", "tools", "tool_choice", "temperature", "seed",
+            "max_completion_tokens", "max_tokens",
+        ]
+    ) -> Data {
+        jsonData([
+            "data": [
+                modelObject(id: id, parameters: parameters),
             ],
-            foreignKeys: []
-        )
+        ])
     }
 
-    private let goodContent = """
-        {"sql": "SELECT id FROM public.users LIMIT 100", "explanation": "Lists user ids.", \
-        "assumptions": ["All users wanted"], "referencedTables": ["public.users"], \
-        "confidence": 0.9, "riskLevel": "low", "needsClarification": false, \
-        "clarificationQuestion": null}
-        """
-
-    @Test func sendsBearerTokenModelAndPrompt() async throws {
-        let transport = StubTransport([
-            .success((try completion(content: goodContent), response(status: 200)))
-        ])
-        _ = try await makeGenerator(transport).generateSQL(
-            question: "show users",
-            schema: makeSchema(),
-            config: SQLGenerationConfig(databaseContext: "Only active users count.")
-        )
-
-        let request = try #require(transport.requests.first)
-        #expect(request.value(forHTTPHeaderField: "Authorization") == "Bearer test-key")
-        let body = try JSONSerialization.jsonObject(
-            with: #require(request.httpBody)) as? [String: Any]
-        #expect(body?["model"] as? String == "anthropic/claude-sonnet-4.6")
-        #expect(body?["response_format"] != nil)
-        let messages = body?["messages"] as? [[String: String]]
-        #expect(messages?.count == 2)
-        #expect(messages?[0]["role"] == "system")
-        #expect(messages?[0]["content"]?.contains("JSON object") == true)
-        #expect(messages?[1]["content"]?.contains("TABLE \"public\".\"users\"") == true)
-        #expect(messages?[1]["content"]?.contains("Database context:\nOnly active users count.") == true)
-        #expect(messages?[1]["content"]?.contains("User question: show users") == true)
+    private func singleModelResponse(id: String) -> Data {
+        jsonData(["data": modelObject(id: id, parameters: ["max_tokens"])])
     }
 
-    @Test func decodesStructuredResponse() async throws {
-        let transport = StubTransport([
-            .success((try completion(content: goodContent), response(status: 200)))
-        ])
-        let result = try await makeGenerator(transport).generateSQL(
-            question: "show users", schema: makeSchema(), config: SQLGenerationConfig())
-
-        #expect(result.sql == "SELECT id FROM public.users LIMIT 100")
-        #expect(result.explanation == "Lists user ids.")
-        #expect(result.assumptions == ["All users wanted"])
-        #expect(result.referencedTables == ["public.users"])
-        #expect(result.confidence == 0.9)
-        #expect(result.riskLevel == .low)
-        #expect(result.needsClarification == false)
-        #expect(result.clarificationQuestion == nil)
+    private func modelObject(id: String, parameters: [String]) -> [String: Any] {
+        [
+            "id": id,
+            "canonical_slug": id,
+            "name": id == Self.modelID ? "GPT-5.5" : id,
+            "context_length": 128_000,
+            "top_provider": [
+                "context_length": 128_000,
+                "max_completion_tokens": 4096,
+            ],
+            "supported_parameters": parameters,
+            "pricing": [
+                "prompt": "0.000001",
+                "completion": "0.000002",
+                "request": "0",
+                "image": "0",
+            ],
+            "expiration_date": "2027-01-01",
+        ]
     }
 
-    @Test func parsesFencedJSONContent() async throws {
-        let fenced = "Here is the query:\n```json\n\(goodContent)\n```"
-        let transport = StubTransport([
-            .success((try completion(content: fenced), response(status: 200)))
+    private func chatResponse(
+        content: Any?,
+        finishReason: String = "stop",
+        refusal: String? = nil,
+        choiceError: [String: Any]? = nil
+    ) -> Data {
+        var message: [String: Any] = ["role": "assistant"]
+        if let content {
+            message["content"] = content
+        }
+        if let refusal {
+            message["refusal"] = refusal
+        }
+        var choice: [String: Any] = [
+            "index": 0,
+            "finish_reason": finishReason,
+            "native_finish_reason": finishReason,
+            "message": message,
+        ]
+        if let choiceError {
+            choice["error"] = choiceError
+        }
+        return jsonData([
+            "id": "cmpl-1",
+            "model": "openai/gpt-5.5",
+            "provider": "OpenAI",
+            "service_tier": "standard",
+            "choices": [choice],
+            "usage": [
+                "prompt_tokens": 11,
+                "completion_tokens": 22,
+                "total_tokens": 33,
+                "completion_tokens_details": ["reasoning_tokens": 3],
+                "cost": 0.00012,
+            ],
         ])
-        let result = try await makeGenerator(transport).generateSQL(
-            question: "show users", schema: makeSchema(), config: SQLGenerationConfig())
-        #expect(result.sql == "SELECT id FROM public.users LIMIT 100")
     }
 
-    @Test func normalizesRiskCaseAndConfidenceRange() async throws {
-        let sloppy = """
-            {"sql": "  SELECT 1  ", "explanation": "x", "assumptions": [], \
-            "referencedTables": [], "confidence": 1.7, "riskLevel": "LOW", \
-            "needsClarification": false, "clarificationQuestion": null}
-            """
-        let transport = StubTransport([
-            .success((try completion(content: sloppy), response(status: 200)))
+    private func topLevelErrorResponse(errorType: String, providerCode: String? = nil) -> Data {
+        var metadata: [String: Any] = ["error_type": errorType]
+        if let providerCode {
+            metadata["provider_code"] = providerCode
+        }
+        return jsonData([
+            "id": "cmpl-1",
+            "model": "openai/gpt-5.5",
+            "provider": "OpenAI",
+            "error": [
+                "message": "provider error",
+                "metadata": metadata,
+            ],
         ])
-        let result = try await makeGenerator(transport).generateSQL(
-            question: "one", schema: makeSchema(), config: SQLGenerationConfig())
-        #expect(result.sql == "SELECT 1")
-        #expect(result.confidence == 1)
-        #expect(result.riskLevel == .low)
     }
 
-    @Test func decodesClarificationWithEmptySQL() async throws {
-        let clarification = """
-            {"sql": "", "explanation": "The requested metric is undefined.", \
-            "assumptions": [], "referencedTables": [], "confidence": 0.2, \
-            "riskLevel": "medium", "needsClarification": true, \
-            "clarificationQuestion": "What metric defines best customers?"}
-            """
-        let transport = StubTransport([
-            .success((try completion(content: clarification), response(status: 200)))
+    private func errorResponse(errorType: String, message: String = "OpenRouter error") -> Data {
+        jsonData([
+            "error": [
+                "message": message,
+                "metadata": ["error_type": errorType, "provider_code": "provider-code"],
+            ],
         ])
-        let result = try await makeGenerator(transport).generateSQL(
-            question: "Who are our best customers?",
-            schema: makeSchema(),
-            config: SQLGenerationConfig()
-        )
-
-        #expect(result.sql.isEmpty)
-        #expect(result.needsClarification)
-        #expect(result.clarificationQuestion == "What metric defines best customers?")
     }
 
-    @Test func emptySQLClarificationRequiresQuestion() async throws {
-        let clarification = """
-            {"sql": "", "explanation": "The requested metric is undefined.", \
-            "assumptions": [], "referencedTables": [], "confidence": 0.2, \
-            "riskLevel": "medium", "needsClarification": true, \
-            "clarificationQuestion": "   "}
-            """
-        let transport = StubTransport([
-            .success((try completion(content: clarification), response(status: 200)))
-        ])
+    private func response(
+        url: URL,
+        status: Int,
+        headers: [String: String]? = nil
+    ) -> HTTPURLResponse {
+        HTTPURLResponse(url: url, statusCode: status, httpVersion: nil, headerFields: headers)!
+    }
 
+    private func jsonData(_ object: Any) -> Data {
+        try! JSONSerialization.data(withJSONObject: object)
+    }
+
+    private func jsonBody(_ request: URLRequest) throws -> [String: Any] {
+        let bodyData = try #require(request.httpBody)
+        let object = try JSONSerialization.jsonObject(with: bodyData)
+        return try #require(object as? [String: Any])
+    }
+
+    private func temporaryCacheURL() -> URL {
+        FileManager.default.temporaryDirectory
+            .appendingPathComponent(UUID().uuidString, isDirectory: true)
+            .appendingPathComponent("openrouter-cache.json")
+    }
+
+    private func expectFailure(
+        _ category: OpenRouterFailure.Category,
+        operation: () throws -> OpenRouterResponseParser.ParsedResult
+    ) throws {
         do {
-            _ = try await makeGenerator(transport).generateSQL(
-                question: "Who are our best customers?",
-                schema: makeSchema(),
-                config: SQLGenerationConfig()
-            )
-            Issue.record("expected an error")
-        } catch let error as SQLGenerationFailure {
-            guard case .structuredResponseParsing = error else {
-                Issue.record("expected structuredResponseParsing, got \(error)")
-                return
-            }
+            _ = try operation()
+            Issue.record("expected \(category)")
+        } catch let failure as OpenRouterFailure {
+            #expect(failure.category == category)
         }
     }
 
-    @Test func rejectedKeyBecomesModelUnavailable() async throws {
-        let transport = StubTransport([
-            .success((Data("{}".utf8), response(status: 401)))
-        ])
-        await #expect(throws: SQLGenerationFailure.self) {
-            _ = try await makeGenerator(transport).generateSQL(
-                question: "show users", schema: makeSchema(), config: SQLGenerationConfig())
-        }
-        do {
-            _ = try await makeGenerator(StubTransport([
-                .success((Data("{}".utf8), response(status: 401)))
-            ])).generateSQL(
-                question: "show users", schema: makeSchema(), config: SQLGenerationConfig())
-        } catch let error as SQLGenerationFailure {
-            guard case .backendUnavailable = error else {
-                Issue.record("expected backendUnavailable, got \(error)")
-                return
-            }
-        }
-    }
-
-    @Test func retriesWithoutResponseFormatWhenRejected() async throws {
-        let complaint = Data(
-            "{\"error\": {\"message\": \"response_format is not supported by this model\"}}".utf8)
-        let transport = StubTransport([
-            .success((complaint, response(status: 400))),
-            .success((try completion(content: goodContent), response(status: 200))),
-        ])
-        let result = try await makeGenerator(transport).generateSQL(
-            question: "show users", schema: makeSchema(), config: SQLGenerationConfig())
-
-        #expect(result.sql == "SELECT id FROM public.users LIMIT 100")
-        #expect(result.generationCallCount == 2)
-        #expect(transport.requests.count == 2)
-        let retryBody = try JSONSerialization.jsonObject(
-            with: #require(transport.requests[1].httpBody)) as? [String: Any]
-        #expect(retryBody?["response_format"] == nil)
-    }
-
-    @Test func unparseableContentFailsGeneration() async throws {
-        let transport = StubTransport([
-            .success((try completion(content: "I cannot help with that."), response(status: 200)))
-        ])
-        do {
-            _ = try await makeGenerator(transport).generateSQL(
-                question: "show users", schema: makeSchema(), config: SQLGenerationConfig())
-            Issue.record("expected an error")
-        } catch let error as SQLGenerationFailure {
-            guard case .structuredResponseParsing = error else {
-                Issue.record("expected structuredResponseParsing, got \(error)")
-                return
-            }
-        }
-    }
-
-    @Test func serverErrorMessageSurfacesInError() async throws {
-        let body = Data("{\"error\": {\"message\": \"model is overloaded\"}}".utf8)
-        let transport = StubTransport([
-            .success((body, response(status: 500)))
-        ])
-        do {
-            _ = try await makeGenerator(transport).generateSQL(
-                question: "show users", schema: makeSchema(), config: SQLGenerationConfig())
-            Issue.record("expected an error")
-        } catch let error as SQLGenerationFailure {
-            #expect(error.errorDescription?.contains("model is overloaded") == true)
-        }
-    }
-
-    @Test func serverContextLengthErrorBecomesContextWindowFailure() async throws {
-        let body = Data(
-            "{\"error\": {\"message\": \"This request exceeds the model context length.\"}}".utf8
-        )
-        let transport = StubTransport([
-            .success((body, response(status: 400)))
-        ])
-
-        do {
-            _ = try await makeGenerator(transport).generateSQL(
-                question: "show users", schema: makeSchema(), config: SQLGenerationConfig())
-            Issue.record("expected an error")
-        } catch let error as SQLGenerationFailure {
-            guard case .contextWindow(let message) = error else {
-                Issue.record("expected contextWindow, got \(error)")
-                return
-            }
-            #expect(message.contains("context length"))
-        }
-    }
-
-    @Test func taskCancelledURLSessionCancellationThrowsCancellationError() async {
-        let task = Task {
-            try await makeGenerator(CancellationAwareTransport()).generateSQL(
-                question: "show users",
-                schema: makeSchema(),
-                config: SQLGenerationConfig()
-            )
-        }
-        task.cancel()
-
+    private func expectCancellation(_ task: Task<SQLGenerationResult, Error>) async {
         do {
             _ = try await task.value
             Issue.record("expected CancellationError")
@@ -306,4 +740,12 @@ struct OpenRouterSQLGeneratorTests {
             Issue.record("expected CancellationError, got \(error)")
         }
     }
+
+    private static let httpDateFormatter: DateFormatter = {
+        let formatter = DateFormatter()
+        formatter.locale = Locale(identifier: "en_US_POSIX")
+        formatter.timeZone = TimeZone(secondsFromGMT: 0)
+        formatter.dateFormat = "EEE',' dd MMM yyyy HH':'mm':'ss z"
+        return formatter
+    }()
 }
