@@ -634,7 +634,8 @@ struct OpenRouterSQLGeneratorTests {
         let messages = try #require(body["messages"] as? [[String: String]])
         let combined = messages.compactMap { $0["content"] }.joined(separator: "\n")
 
-        #expect(combined.contains("{\"ok\": true}"))
+        #expect(combined.contains("SELECT 1"))
+        #expect(combined.contains("\"sql\""))
         #expect(!combined.contains("TABLE"))
         #expect(!combined.contains("Database context"))
         #expect(!combined.contains("SQL history"))

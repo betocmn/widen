@@ -812,9 +812,12 @@ struct OpenRouterRequestBuilder: Sendable {
             apiKey: apiKey,
             model: model,
             instructions: """
-                Respond with a single JSON object and nothing else, using exactly this schema: {"ok": true}
+                Respond with a single JSON object and nothing else, using exactly these keys:
+                {"sql": string, "explanation": string, "assumptions": [string], "referencedTables": [string], "confidence": number between 0 and 1, "riskLevel": "low" or "medium" or "high", "needsClarification": boolean, "clarificationQuestion": string or null}
                 """,
-            prompt: "Return {\"ok\": true}.",
+            prompt: """
+                Return a minimal connectivity response for SELECT 1.
+                """,
             capabilities: capabilities
         )
     }

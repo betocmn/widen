@@ -413,7 +413,7 @@ struct LLMSettingsView: View {
                 if models.contains(where: { $0.id == selectedModel || $0.requestedID == selectedModel }) {
                     await MainActor.run {
                         catalogModels = models
-                        isCustomModel = !isKnownModelID(selectedModel, in: models)
+                        isCustomModel = !isKnownModelID(appState.openRouterModelID, in: models)
                         catalogMessage = "Authenticated model catalog loaded."
                         catalogMessageIsWarning = models.contains { $0.capabilitySource == .staleCache }
                         isLoadingCatalog = false
@@ -425,17 +425,29 @@ struct LLMSettingsView: View {
                 ) {
                     await MainActor.run {
                         catalogModels = models + [custom]
-                        isCustomModel = !isKnownModelID(selectedModel, in: models + [custom])
-                        catalogMessage = "Authenticated model catalog loaded; selected model came from single-model lookup."
-                        catalogMessageIsWarning = custom.capabilitySource == .staleCache
+                        let currentModel = appState.openRouterModelID
+                        isCustomModel = !isKnownModelID(currentModel, in: models + [custom])
+                        if currentModel == selectedModel {
+                            catalogMessage = "Authenticated model catalog loaded; selected model came from single-model lookup."
+                            catalogMessageIsWarning = custom.capabilitySource == .staleCache
+                        } else {
+                            catalogMessage = "Authenticated model catalog loaded."
+                            catalogMessageIsWarning = models.contains { $0.capabilitySource == .staleCache }
+                        }
                         isLoadingCatalog = false
                     }
                 } else {
                     await MainActor.run {
                         catalogModels = models
-                        isCustomModel = !isKnownModelID(selectedModel, in: models)
-                        catalogMessage = "Authenticated catalog loaded, but the selected model was not visible."
-                        catalogMessageIsWarning = true
+                        let currentModel = appState.openRouterModelID
+                        isCustomModel = !isKnownModelID(currentModel, in: models)
+                        if currentModel == selectedModel {
+                            catalogMessage = "Authenticated catalog loaded, but the selected model was not visible."
+                            catalogMessageIsWarning = true
+                        } else {
+                            catalogMessage = "Authenticated model catalog loaded."
+                            catalogMessageIsWarning = models.contains { $0.capabilitySource == .staleCache }
+                        }
                         isLoadingCatalog = false
                     }
                 }
