@@ -1,7 +1,7 @@
 import Foundation
 
 enum SchemaSearchTokenizer {
-    static let version = "schema-search-tokenizer-v1"
+    static let version = "schema-search-tokenizer-v2"
 
     private static let stopwords: Set<String> = [
         "a", "an", "and", "are", "as", "at", "be", "by", "for", "from", "get", "give",
@@ -163,6 +163,19 @@ enum SchemaSearchTokenizer {
 
     private static func identifierForms(_ identifier: String) -> [String] {
         let quoted = quotedIdentifier(identifier)
-        return quoted == identifier ? [identifier] : [identifier, quoted]
+        if canReferenceUnquoted(identifier) {
+            return [identifier, quoted]
+        }
+        return [quoted]
+    }
+
+    static func canReferenceUnquoted(_ identifier: String) -> Bool {
+        guard let first = identifier.first,
+            first == "_" || (first >= "a" && first <= "z")
+        else { return false }
+
+        return identifier.dropFirst().allSatisfy {
+            $0 == "_" || $0 == "$" || ($0 >= "a" && $0 <= "z") || ($0 >= "0" && $0 <= "9")
+        }
     }
 }

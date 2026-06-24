@@ -106,9 +106,18 @@ struct SchemaSearchIndexTests {
             SchemaSearchRequest(query: "public.userevents"),
             in: snapshot(schema)
         )
+        let unquotedMixed = searcher.search(
+            SchemaSearchRequest(query: "public.UserEvents", limit: 2),
+            in: snapshot(schema)
+        )
 
         #expect(mixed.hits.first?.tableObjectID == .table(schema: "public", name: "UserEvents"))
         #expect(lower.hits.first?.tableObjectID == .table(schema: "public", name: "userevents"))
+        #expect(unquotedMixed.hits.first?.tableObjectID == .table(schema: "public", name: "userevents"))
+        let quotedOnlyHit = unquotedMixed.hits.first {
+            $0.tableObjectID == .table(schema: "public", name: "UserEvents")
+        }
+        #expect((quotedOnlyHit?.exactMatchScore ?? 0) == 0)
     }
 
     @Test func unqualifiedDuplicateTableNameIsAmbiguous() throws {

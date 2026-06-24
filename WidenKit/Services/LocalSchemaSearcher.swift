@@ -33,7 +33,11 @@ public struct LocalSchemaSearcher: SchemaSearching {
         let directCandidates = index.documents.compactMap { document -> CandidateScore? in
             let lexical = lexicalScore(document: document, queryTokens: lexicalTokens)
             let exact = exactIdentifierScore(document: document, query: request.query)
-            let tableToken = exactTableTokenScore(document: document, queryTokens: lexicalTokens)
+            let tableToken = exactTableTokenScore(
+                document: document,
+                queryTokens: lexicalTokens,
+                query: request.query
+            )
             guard lexical.score > 0 || exact.score > 0 || tableToken.score > 0 else { return nil }
             return CandidateScore(
                 document: document,
@@ -439,9 +443,16 @@ public struct LocalSchemaSearcher: SchemaSearching {
 
     private func exactTableTokenScore(
         document: SchemaSearchDocument,
-        queryTokens: [String]
+        queryTokens: [String],
+        query: String
     ) -> ExactIdentifierScore {
         guard !queryTokens.isEmpty else {
+            return ExactIdentifierScore(score: 0, quality: 0, matchedFields: [])
+        }
+        if isUnquotedIdentifierLikeQuery(query),
+            (!SchemaSearchTokenizer.canReferenceUnquoted(document.schema)
+                || !SchemaSearchTokenizer.canReferenceUnquoted(document.tableName))
+        {
             return ExactIdentifierScore(score: 0, quality: 0, matchedFields: [])
         }
         let queryTokenSet = Set(queryTokens)
@@ -477,6 +488,18 @@ public struct LocalSchemaSearcher: SchemaSearching {
             quality: 0,
             matchedFields: matchedFields
         )
+    }
+
+    private func isUnquotedIdentifierLikeQuery(_ query: String) -> Bool {
+        let trimmed = query.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmed.isEmpty,
+            !trimmed.contains("\""),
+            !trimmed.contains("'")
+        else { return false }
+
+        return trimmed.allSatisfy {
+            $0 == "." || $0 == "_" || $0 == "$" || $0.isLetter || $0.isNumber
+        }
     }
 
     private func contextScore(

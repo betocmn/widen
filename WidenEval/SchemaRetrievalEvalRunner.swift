@@ -197,6 +197,7 @@ struct SchemaRetrievalSummary: Codable {
     var alternativeGroupPresentAt8: Double
     var noResultExpectationPassRate: Double
     var requiredJoinPathRecall: Double
+    var missingRequiredColumnMatchCount: Int
     var wrongSchemaCollisionCount: Int
     var noResultOrLowSignalCount: Int
     var forbiddenDistractorViolationCount: Int
@@ -329,11 +330,12 @@ struct SchemaRetrievalEvalRunner {
         )
         .filter { $0.score > 0 }
         let rankedTables = ranked.map(\.table.qualifiedName)
+        let rankedTableIDs = ranked.map { SchemaObjectID.table(schema: $0.table.schema, name: $0.table.name) }
         let latency = schemaRetrievalMilliseconds(started.duration(to: .now))
         return result(
             evalCase: evalCase,
             retriever: .legacy,
-            rankedTables: rankedTables,
+            rankedTables: rankedTableIDs,
             hitDetails: [:],
             joinPathResults: evalCase.retrieval.requiredJoinPaths.map {
                 SchemaRetrievalJoinPathResult(
@@ -368,9 +370,8 @@ struct SchemaRetrievalEvalRunner {
             ),
             in: snapshot
         )
-        let rankedTables = response.hits.map(\.tableObjectID.description)
         let hitDetails = Dictionary(uniqueKeysWithValues: response.hits.map {
-            ($0.tableObjectID.description, $0)
+            ($0.tableObjectID.stableString, $0)
         })
         let joinResults = evalCase.retrieval.requiredJoinPaths.map { expected in
             let paths: [SchemaJoinPath]
@@ -397,7 +398,7 @@ struct SchemaRetrievalEvalRunner {
         return result(
             evalCase: evalCase,
             retriever: .index,
-            rankedTables: rankedTables,
+            rankedTables: response.hits.map(\.tableObjectID),
             hitDetails: hitDetails,
             joinPathResults: joinResults,
             noResultOrLowSignal: response.noStrongMatch,
@@ -415,7 +416,7 @@ struct SchemaRetrievalEvalRunner {
     private func result(
         evalCase: SchemaRetrievalEvalCase,
         retriever: SchemaRetrievalRunnerKind,
-        rankedTables: [String],
+        rankedTables: [SchemaObjectID],
         hitDetails: [String: SchemaSearchHit],
         joinPathResults: [SchemaRetrievalJoinPathResult],
         noResultOrLowSignal: Bool,
@@ -424,9 +425,8 @@ struct SchemaRetrievalEvalRunner {
         indexSerializedSizeBytes: Int?,
         scoreExplanations: [String]
     ) -> SchemaRetrievalEvalResult {
-        let ranks = Dictionary(uniqueKeysWithValues: rankedTables.enumerated().map {
-            ($0.element, $0.offset + 1)
-        })
+        let rankedTableDescriptions = rankedTables.map(\.description)
+        let ranks = tableRanksByDescription(rankedTables)
         let required = evalCase.retrieval.requiredTables
         let requiredRanks = Dictionary(uniqueKeysWithValues: required.compactMap { table in
             ranks[table].map { rank in (table, rank) }
@@ -434,13 +434,13 @@ struct SchemaRetrievalEvalRunner {
         let alternativeGroups = evalCase.retrieval.acceptableAlternativeTableGroups
         let hasAlternativeGroups = !alternativeGroups.isEmpty
         let alternativeAt3 = hasAlternativeGroups
-            ? any(alternativeGroups, presentIn: rankedTables, at: 3)
+            ? any(alternativeGroups, presentIn: rankedTableDescriptions, at: 3)
             : nil
         let alternativeAt5 = hasAlternativeGroups
-            ? any(alternativeGroups, presentIn: rankedTables, at: 5)
+            ? any(alternativeGroups, presentIn: rankedTableDescriptions, at: 5)
             : nil
         let alternativeAt8 = hasAlternativeGroups
-            ? any(alternativeGroups, presentIn: rankedTables, at: 8)
+            ? any(alternativeGroups, presentIn: rankedTableDescriptions, at: 8)
             : nil
         let noResultExpectationPassed = expectsNoResult(evalCase.retrieval)
             ? noResultOrLowSignal
@@ -456,14 +456,14 @@ struct SchemaRetrievalEvalRunner {
             return rank <= forbidden.topK
         }
         let collisionCount = wrongSchemaCollisionCount(
-            rankedTables: rankedTables,
+            rankedTables: rankedTableDescriptions,
             requiredTables: required,
             primaryTable: evalCase.retrieval.primaryTable
         )
         return SchemaRetrievalEvalResult(
             caseID: evalCase.id,
             retriever: retriever,
-            rankedTables: Array(rankedTables.prefix(20)),
+            rankedTables: Array(rankedTableDescriptions.prefix(20)),
             requiredTableRanks: requiredRanks,
             missingRequiredTables: required.filter { requiredRanks[$0] == nil },
             hasAlternativeTableGroupExpectation: hasAlternativeGroups,
@@ -476,9 +476,9 @@ struct SchemaRetrievalEvalRunner {
             hasPrimaryTableExpectation: evalCase.retrieval.primaryTable != nil,
             primaryTableRank: primaryRank,
             primaryReciprocalRank: primaryRank.map { 1 / Double($0) },
-            allRequiredPresentAt3: all(required, presentIn: rankedTables, at: 3),
-            allRequiredPresentAt5: all(required, presentIn: rankedTables, at: 5),
-            allRequiredPresentAt8: all(required, presentIn: rankedTables, at: 8),
+            allRequiredPresentAt3: all(required, presentIn: rankedTableDescriptions, at: 3),
+            allRequiredPresentAt5: all(required, presentIn: rankedTableDescriptions, at: 5),
+            allRequiredPresentAt8: all(required, presentIn: rankedTableDescriptions, at: 8),
             requiredJoinPathResults: joinPathResults,
             missingRequiredColumnMatches: missingColumnMatches,
             forbiddenDistractorViolations: violations,
@@ -531,13 +531,16 @@ struct SchemaRetrievalEvalRunner {
             requiredJoinPathRecall: joinResults.isEmpty
                 ? 1
                 : Double(joinResults.filter(\.recovered).count) / Double(joinResults.count),
+            missingRequiredColumnMatchCount: results.reduce(0) {
+                $0 + $1.missingRequiredColumnMatches.count
+            },
             wrongSchemaCollisionCount: results.reduce(0) { $0 + $1.wrongSchemaCollisionCount },
             noResultOrLowSignalCount: results.filter(\.noResultOrLowSignal).count,
             forbiddenDistractorViolationCount: results.reduce(0) {
                 $0 + $1.forbiddenDistractorViolations.count
             },
-            indexBuildDurationMs: sum(results.compactMap(\.indexBuildDurationMs)),
-            indexSerializedSizeBytes: sum(results.compactMap(\.indexSerializedSizeBytes)),
+            indexBuildDurationMs: maxValue(results.compactMap(\.indexBuildDurationMs)),
+            indexSerializedSizeBytes: maxValue(results.compactMap(\.indexSerializedSizeBytes)),
             queryLatency: latencySummary(latencies)
         )
     }
@@ -564,6 +567,12 @@ struct SchemaRetrievalEvalRunner {
         }
         if index.requiredJoinPathRecall < 0.90 {
             messages.append("required join path recall below 90%")
+        }
+        if index.missingRequiredColumnMatchCount > 0 {
+            messages.append("required column matches missing")
+        }
+        if index.forbiddenDistractorViolationCount > 0 {
+            messages.append("forbidden distractor violations detected")
         }
         if index.wrongSchemaCollisionCount > 0 {
             messages.append("wrong-schema collisions detected")
@@ -599,6 +608,23 @@ struct SchemaRetrievalEvalRunner {
             count += collisions.count
         }
         return count
+    }
+
+    private func tableRanksByDescription(_ rankedTables: [SchemaObjectID]) -> [String: Int] {
+        var ranks: [String: Int] = [:]
+        var duplicateDescriptions = Set<String>()
+        for (offset, tableID) in rankedTables.enumerated() {
+            let description = tableID.description
+            if ranks[description] != nil {
+                duplicateDescriptions.insert(description)
+            } else {
+                ranks[description] = offset + 1
+            }
+        }
+        for description in duplicateDescriptions {
+            ranks[description] = nil
+        }
+        return ranks
     }
 
     private func all(_ required: [String], presentIn rankedTables: [String], at limit: Int) -> Bool {
@@ -652,8 +678,8 @@ struct SchemaRetrievalEvalRunner {
         return values.reduce(0, +) / Double(values.count)
     }
 
-    private func sum(_ values: [Int]) -> Int? {
-        values.isEmpty ? nil : values.reduce(0, +)
+    private func maxValue(_ values: [Int]) -> Int? {
+        values.max()
     }
 
     private func latencySummary(_ latencies: [Int]) -> LatencySummary {
