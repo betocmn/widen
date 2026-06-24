@@ -191,6 +191,29 @@ struct OpenRouterSQLGeneratorTests {
         #expect(transport.requests.count == 1)
     }
 
+    @Test func cancelledMetadataLookupDoesNotReturnStaleCache() async throws {
+        let cacheURL = temporaryCacheURL()
+        let primingTransport = StubTransport([
+            .success((catalogResponse(), response(url: Self.apiBase.appendingPathComponent("models/user"), status: 200)))
+        ])
+        let primingService = catalogService(transport: primingTransport, cacheURL: cacheURL)
+        _ = try await primingService.availableModels(apiKey: "secret-key")
+
+        let transport = CancellationAwareTransport()
+        let service = catalogService(transport: transport, cacheURL: cacheURL)
+        let lookup = Task {
+            await service.metadata(apiKey: "secret-key", modelID: Self.modelID, forceRefresh: true)
+        }
+        while transport.requests.isEmpty {
+            try await Task.sleep(nanoseconds: 1_000_000)
+        }
+
+        lookup.cancel()
+
+        let metadata = await lookup.value
+        #expect(metadata == nil)
+    }
+
     @Test func requestBuilderOmitsUnsupportedParameters() throws {
         let built = try OpenRouterRequestBuilder(endpoint: Self.chatEndpoint).build(
             apiKey: "test-key",

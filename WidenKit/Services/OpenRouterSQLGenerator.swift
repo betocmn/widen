@@ -504,9 +504,13 @@ actor OpenRouterModelCatalogService {
                 return single
             }
             return nil
+        } catch is CancellationError {
+            return nil
         } catch {
             guard allowStaleFallback else { return nil }
-            return staleCatalog(apiKey: apiKey).flatMap { Self.find(modelID, in: $0.models) }
+            return staleCatalog(apiKey: apiKey)
+                .map(staleCatalogWithSource)
+                .flatMap { Self.find(modelID, in: $0.models) }
         }
     }
 
