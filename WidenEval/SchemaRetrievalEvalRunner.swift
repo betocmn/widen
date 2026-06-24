@@ -899,34 +899,37 @@ extension SchemaRetrievalEvalRunner {
             ),
         ]
 
+        let foreignKeyConstraints = [
+            fk("order_products_order_fkey", from: "order_products", "order_id", to: "orders", "id"),
+            fk("order_products_product_fkey", from: "order_products", "product_id", to: "products", "id"),
+            SchemaForeignKeyConstraintInfo(
+                constraintName: "account_events_account_fkey",
+                sourceSchema: "public",
+                sourceTable: "account_events",
+                targetSchema: "public",
+                targetTable: "accounts",
+                columnPairs: [
+                    SchemaForeignKeyColumnPair(
+                        sourceColumn: "tenant_id",
+                        targetColumn: "tenant_id",
+                        ordinalPosition: 1
+                    ),
+                    SchemaForeignKeyColumnPair(
+                        sourceColumn: "external_id",
+                        targetColumn: "external_id",
+                        ordinalPosition: 2
+                    ),
+                ]
+            ),
+            fk("tool_matches_winner_fkey", from: "tool_matches", "winner_tool_id", to: "tools", "id"),
+            fk("tool_matches_loser_fkey", from: "tool_matches", "loser_tool_id", to: "tools", "id"),
+        ]
+
         return DatabaseSchema(
             schemas: [SchemaInfo(name: "auth"), SchemaInfo(name: "noise"), SchemaInfo(name: "public")],
             tables: tables,
-            foreignKeyConstraints: [
-                fk("order_products_order_fkey", from: "order_products", "order_id", to: "orders", "id"),
-                fk("order_products_product_fkey", from: "order_products", "product_id", to: "products", "id"),
-                SchemaForeignKeyConstraintInfo(
-                    constraintName: "account_events_account_fkey",
-                    sourceSchema: "public",
-                    sourceTable: "account_events",
-                    targetSchema: "public",
-                    targetTable: "accounts",
-                    columnPairs: [
-                        SchemaForeignKeyColumnPair(
-                            sourceColumn: "tenant_id",
-                            targetColumn: "tenant_id",
-                            ordinalPosition: 1
-                        ),
-                        SchemaForeignKeyColumnPair(
-                            sourceColumn: "external_id",
-                            targetColumn: "external_id",
-                            ordinalPosition: 2
-                        ),
-                    ]
-                ),
-                fk("tool_matches_winner_fkey", from: "tool_matches", "winner_tool_id", to: "tools", "id"),
-                fk("tool_matches_loser_fkey", from: "tool_matches", "loser_tool_id", to: "tools", "id"),
-            ]
+            foreignKeys: foreignKeyConstraints.flatMap { legacyForeignKeys(from: $0) },
+            foreignKeyConstraints: foreignKeyConstraints
         )
     }
 
@@ -969,6 +972,23 @@ extension SchemaRetrievalEvalRunner {
                 )
             ]
         )
+    }
+
+    private static func legacyForeignKeys(
+        from constraint: SchemaForeignKeyConstraintInfo
+    ) -> [ForeignKeyInfo] {
+        constraint.columnPairs.map { pair in
+            ForeignKeyInfo(
+                constraintName: constraint.constraintName,
+                sourceSchema: constraint.sourceSchema,
+                sourceTable: constraint.sourceTable,
+                sourceColumn: pair.sourceColumn,
+                targetSchema: constraint.targetSchema,
+                targetTable: constraint.targetTable,
+                targetColumn: pair.targetColumn,
+                ordinalPosition: pair.ordinalPosition
+            )
+        }
     }
 }
 

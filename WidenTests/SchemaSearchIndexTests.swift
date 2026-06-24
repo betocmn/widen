@@ -424,6 +424,27 @@ struct SchemaSearchIndexTests {
         #expect(withHit.totalScore > withoutScore)
     }
 
+    @Test func semanticBindingTermsContributeToStrongMatchCoverage() throws {
+        let schema = DatabaseSchema(
+            schemas: [SchemaInfo(name: "public")],
+            tables: [
+                table(schema: "public", name: "orders", columns: ["id", "total_cents"]),
+                table(schema: "public", name: "invoices", columns: ["id", "invoice_number"]),
+            ]
+        )
+        let response = makeSearcher(schema: schema).search(
+            SchemaSearchRequest(
+                query: "thing",
+                semanticBindingTerms: ["orders total_cents"]
+            ),
+            in: snapshot(schema)
+        )
+
+        #expect(response.hits.first?.tableObjectID == .table(schema: "public", name: "orders"))
+        #expect(response.queryTokenCoverage >= 0.25)
+        #expect(!response.noStrongMatch)
+    }
+
     @Test func diskCacheHitAndFingerprintInvalidation() async throws {
         let directory = tempDirectory()
         defer { try? FileManager.default.removeItem(at: directory) }

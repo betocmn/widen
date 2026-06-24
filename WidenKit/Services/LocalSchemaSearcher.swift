@@ -101,7 +101,7 @@ public struct LocalSchemaSearcher: SchemaSearching {
         let secondScore = rankedCandidates.dropFirst().first?.totalScore
         let elapsed = schemaSearchMilliseconds(started.duration(to: .now))
         let coverage = queryCoverage(
-            queryTokens: queryTokens,
+            queryTokens: lexicalTokens,
             candidates: Array(rankedCandidates.prefix(max(request.limit, 3)))
         )
         let exactMatch = rankedCandidates.contains { $0.exactMatchQuality > 0 }
