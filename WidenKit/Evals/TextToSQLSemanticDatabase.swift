@@ -60,8 +60,8 @@ public struct TextToSQLSemanticProvisionedDatabase: Equatable, Sendable {
     public var databaseName: String
     public var provisioningConfig: DatabaseConnectionConfig
     public var config: DatabaseConnectionConfig
-    public var executionPassword: String
-    public var restrictedRoleName: String
+    public var executionPassword: String?
+    public var executionUsername: String
     public var fixtureSchemas: [String]
 
     public init(
@@ -69,8 +69,8 @@ public struct TextToSQLSemanticProvisionedDatabase: Equatable, Sendable {
         databaseName: String,
         provisioningConfig: DatabaseConnectionConfig,
         config: DatabaseConnectionConfig,
-        executionPassword: String,
-        restrictedRoleName: String,
+        executionPassword: String?,
+        executionUsername: String,
         fixtureSchemas: [String]
     ) {
         self.fixture = fixture
@@ -78,7 +78,7 @@ public struct TextToSQLSemanticProvisionedDatabase: Equatable, Sendable {
         self.provisioningConfig = provisioningConfig
         self.config = config
         self.executionPassword = executionPassword
-        self.restrictedRoleName = restrictedRoleName
+        self.executionUsername = executionUsername
         self.fixtureSchemas = fixtureSchemas
     }
 }
@@ -113,8 +113,6 @@ public final class TextToSQLSemanticDatabaseProvisioner: Sendable {
         expectedSchema: DatabaseSchema
     ) async throws -> TextToSQLSemanticProvisionedDatabase {
         let databaseName = Self.databaseName(for: fixture)
-        let restrictedRoleName = Self.roleName()
-        let executionPassword = Self.rolePassword()
         let fixtureSchemas = Self.fixtureSchemas(from: expectedSchema)
         do {
             try await runStatements(
@@ -133,10 +131,10 @@ public final class TextToSQLSemanticDatabaseProvisioner: Sendable {
             provisioningConfig: server.config(database: databaseName),
             config: server.config(
                 database: databaseName,
-                username: restrictedRoleName
+                username: server.username
             ),
-            executionPassword: executionPassword,
-            restrictedRoleName: restrictedRoleName,
+            executionPassword: server.password,
+            executionUsername: server.username,
             fixtureSchemas: fixtureSchemas
         )
         do {
@@ -159,10 +157,6 @@ public final class TextToSQLSemanticDatabaseProvisioner: Sendable {
     public func drop(_ provisioned: TextToSQLSemanticProvisionedDatabase) async {
         try? await runStatements(
             ["DROP DATABASE IF EXISTS \(Self.quotedIdentifier(provisioned.databaseName)) WITH (FORCE)"],
-            database: server.maintenanceDatabase
-        )
-        try? await runStatements(
-            ["DROP ROLE IF EXISTS \(Self.quotedIdentifier(provisioned.restrictedRoleName))"],
             database: server.maintenanceDatabase
         )
     }
@@ -233,12 +227,10 @@ public final class TextToSQLSemanticDatabaseProvisioner: Sendable {
         _ provisioned: TextToSQLSemanticProvisionedDatabase
     ) async throws {
         let database = Self.quotedIdentifier(provisioned.databaseName)
-        let role = Self.quotedIdentifier(provisioned.restrictedRoleName)
-        let password = Self.quotedLiteral(provisioned.executionPassword)
+        let role = Self.quotedIdentifier(provisioned.config.username)
         try await runStatements(
             [
                 "REVOKE CREATE, TEMPORARY ON DATABASE \(database) FROM PUBLIC",
-                "CREATE ROLE \(role) LOGIN PASSWORD \(password) NOSUPERUSER NOCREATEDB NOCREATEROLE NOINHERIT",
                 "GRANT CONNECT ON DATABASE \(database) TO \(role)",
             ],
             database: server.maintenanceDatabase
@@ -289,17 +281,6 @@ public final class TextToSQLSemanticDatabaseProvisioner: Sendable {
         return "widen_eval_\(String(safeFixture))_\(suffix)"
     }
 
-    private static func roleName() -> String {
-        let suffix = UUID().uuidString.replacingOccurrences(of: "-", with: "")
-            .prefix(16)
-            .lowercased()
-        return "widen_eval_ro_\(suffix)"
-    }
-
-    private static func rolePassword() -> String {
-        "widen_eval_\(UUID().uuidString)_\(UUID().uuidString)"
-    }
-
     private static func fixtureSchemas(from schema: DatabaseSchema) -> [String] {
         let names = Set(schema.schemas.map(\.name) + schema.tables.map(\.schema))
         return names.sorted()
@@ -307,10 +288,6 @@ public final class TextToSQLSemanticDatabaseProvisioner: Sendable {
 
     private static func quotedIdentifier(_ value: String) -> String {
         "\"\(value.replacingOccurrences(of: "\"", with: "\"\""))\""
-    }
-
-    private static func quotedLiteral(_ value: String) -> String {
-        "'\(value.replacingOccurrences(of: "'", with: "''"))'"
     }
 }
 

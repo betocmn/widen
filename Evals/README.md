@@ -77,11 +77,11 @@ fixture from PostgreSQL's empty `template0`. Override with
 `WIDEN_EVAL_DB_PASSWORD`,
 `WIDEN_EVAL_DB_MAINTENANCE_DB`, and `WIDEN_EVAL_DB_SSLMODE`.
 
-The provisioning user creates and drops databases only. Semantic execution uses
-a unique restricted login role per fixture database with CONNECT, schema USAGE,
-and SELECT grants only; CREATE, TEMP, SUPERUSER, CREATEDB, CREATEROLE, and write
-privileges are not granted. Each golden/candidate comparison opens a fresh
-restricted connection, begins `REPEATABLE READ READ ONLY`, sets UTC timezone,
+The provisioning user creates and drops databases only; no cluster roles are
+created, so `CREATEDB` is sufficient for local seeded evals. Semantic execution
+reuses that user against each throwaway fixture database after revoking public
+CREATE/TEMP privileges. Each golden/candidate comparison opens a fresh
+connection, begins `REPEATABLE READ READ ONLY`, sets UTC timezone,
 deterministic date/interval styles, statement/lock/idle timeouts, and a
 `pg_catalog` plus fixture-schema search path, executes golden SQL before
 candidate SQL, rolls back, and never rewrites either query. Strict row, cell,

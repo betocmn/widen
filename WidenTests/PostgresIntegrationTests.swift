@@ -670,7 +670,7 @@ struct TextToSQLSemanticDatabaseIntegrationTests {
         }
     }
 
-    @Test func semanticExecutionUsesRestrictedRole() async throws {
+    @Test func semanticExecutionUsesProvisioningUserWithoutClusterRole() async throws {
         let root = repositoryRoot()
         let schema = try loadSchema(
             "commerce",
@@ -687,35 +687,21 @@ struct TextToSQLSemanticDatabaseIntegrationTests {
         )
         let executor = TextToSQLSemanticExecutor()
         do {
+            #expect(database.config.username == server.username)
+            #expect(database.executionUsername == server.username)
+
             let expectation = TextToSQLSemanticExpectation(
                 comparisonMode: .ordered,
                 requiredColumns: [
                     TextToSQLSemanticColumnExpectation(canonicalName: "current_user"),
-                    TextToSQLSemanticColumnExpectation(canonicalName: "rolsuper"),
-                    TextToSQLSemanticColumnExpectation(canonicalName: "rolcreatedb"),
-                    TextToSQLSemanticColumnExpectation(canonicalName: "rolcreaterole"),
-                    TextToSQLSemanticColumnExpectation(canonicalName: "can_create_schema"),
-                    TextToSQLSemanticColumnExpectation(canonicalName: "can_temp"),
                 ]
             )
             let sql = """
-            SELECT current_user,
-                   r.rolsuper,
-                   r.rolcreatedb,
-                   r.rolcreaterole,
-                   has_schema_privilege(current_user, 'public', 'CREATE') AS can_create_schema,
-                   has_database_privilege(current_user, current_database(), 'TEMP') AS can_temp
-            FROM pg_catalog.pg_roles r
-            WHERE r.rolname = current_user
+            SELECT current_user
             """
             let output = try await executor.executePair(
                 goldenSQL: """
-                SELECT '\(database.restrictedRoleName)'::text AS current_user,
-                       false AS rolsuper,
-                       false AS rolcreatedb,
-                       false AS rolcreaterole,
-                       false AS can_create_schema,
-                       false AS can_temp
+                SELECT '\(server.username)'::text AS current_user
                 """,
                 candidateSQL: sql,
                 expectation: expectation,

@@ -106,6 +106,38 @@ struct TextToSQLSemanticComparatorTests {
         #expect(comparison.equivalent)
     }
 
+    @Test func projectedColumnsIgnoreDuplicateUnneededExtrasWhenAllowed() {
+        let expectation = TextToSQLSemanticExpectation(
+            comparisonMode: .projectedColumns,
+            requiredColumns: [
+                TextToSQLSemanticColumnExpectation(canonicalName: "id"),
+                TextToSQLSemanticColumnExpectation(canonicalName: "email"),
+            ],
+            allowExtraCandidateColumns: true
+        )
+        let golden = TextToSQLSemanticQueryResult(
+            columns: ["id", "email"],
+            rows: [[.number(1), .string("alice@example.test")]]
+        )
+        let candidate = TextToSQLSemanticQueryResult(
+            columns: ["id", "email", "ignored", "ignored"],
+            rows: [[
+                .number(1),
+                .string("alice@example.test"),
+                .string("extra-a"),
+                .string("extra-b"),
+            ]]
+        )
+
+        let comparison = TextToSQLSemanticComparator.compare(
+            golden: golden,
+            candidate: candidate,
+            expectation: expectation
+        )
+
+        #expect(comparison.equivalent)
+    }
+
     @Test func projectedColumnsFailOnAmbiguousRequiredColumn() {
         let expectation = TextToSQLSemanticExpectation(
             comparisonMode: .projectedColumns,

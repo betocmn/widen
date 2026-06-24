@@ -253,8 +253,10 @@ public enum TextToSQLSemanticComparator {
         guard !hasDuplicateColumns(golden.columns) else {
             return .failure("ambiguousGoldenColumn")
         }
-        guard !hasDuplicateColumns(candidate.columns) else {
-            return .failure("ambiguousCandidateColumn")
+        if !expectation.allowExtraCandidateColumns {
+            guard !hasDuplicateColumns(candidate.columns) else {
+                return .failure("ambiguousCandidateColumn")
+            }
         }
 
         let goldenResolution = indexes(

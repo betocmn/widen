@@ -242,8 +242,6 @@ struct EvalRunner {
                     "WidenKit/Evals/TextToSQLEvalCase.swift",
                     "WidenKit/Evals/TextToSQLEvalScorer.swift",
                     "WidenKit/Evals/TextToSQLEvalResult.swift",
-                    "WidenKit/Evals/TextToSQLSemanticComparator.swift",
-                    "WidenKit/Evals/TextToSQLSemanticDatabase.swift",
                     "WidenEval/EvalRunner.swift",
                     "WidenKit/Services/TextToSQLPipeline.swift",
                     "WidenKit/Services/SQLGenerationFailure.swift",
@@ -722,7 +720,6 @@ struct EvalRunner {
             guard let status = result.metrics.semanticStatus else { return }
             counts[status.rawValue, default: 0] += 1
         }
-        let semanticPassed = semanticResults.filter(semanticPasses).count
         let sqlSemanticEvaluated = semanticResults.filter {
             casesByID[$0.caseID]?.expected.decision == .sql
                 && $0.metrics.semanticExecutionAttempted == true
@@ -731,6 +728,7 @@ struct EvalRunner {
             casesByID[$0.caseID]?.expected.decision == .clarify
         }
         let endToEndValues = semanticResults.compactMap(\.metrics.endToEndPassed)
+        let semanticPassed = endToEndValues.filter { $0 }.count
         let semanticEnvironmentValues = semanticResults.compactMap(\.metrics.semanticEnvironmentAvailable)
         let semanticAttempted = semanticResults.compactMap(\.metrics.semanticExecutionAttempted)
         let semanticEquivalent = semanticResults.compactMap(\.metrics.resultEquivalent)
@@ -744,9 +742,9 @@ struct EvalRunner {
             passRate: results.isEmpty ? 0 : Double(passed) / Double(results.count),
             statusCounts: statusCounts,
             semanticPassed: semanticResults.isEmpty ? nil : semanticPassed,
-            semanticPassRate: semanticResults.isEmpty
+            semanticPassRate: semanticResults.isEmpty || endToEndValues.isEmpty
                 ? nil
-                : Double(semanticPassed) / Double(semanticResults.count),
+                : Double(semanticPassed) / Double(endToEndValues.count),
             semanticStatusCounts: semanticResults.isEmpty ? nil : semanticStatusCounts,
             sqlSemanticPass: semanticResults.isEmpty
                 ? nil
@@ -842,17 +840,6 @@ struct EvalRunner {
                 : Double(promptEstimateValues.reduce(0, +)) / Double(promptEstimateValues.count),
             maxEstimatedInitialPromptCharacters: promptEstimateValues.max()
         )
-    }
-
-    private func semanticPasses(_ result: TextToSQLEvalResult) -> Bool {
-        switch result.metrics.semanticStatus {
-        case .passed:
-            true
-        case .notApplicable:
-            result.status == .passed
-        default:
-            false
-        }
     }
 
     private func transportAttempted(_ result: TextToSQLEvalResult) -> Bool {

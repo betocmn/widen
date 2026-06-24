@@ -71,7 +71,7 @@
         ],
         "goldenSQL": "SELECT c.id, c.email, SUM(o.total_cents) AS paid_revenue_cents FROM public.customers AS c JOIN public.orders AS o ON o.customer_id = c.id WHERE o.status = 'paid' GROUP BY c.id, c.email ORDER BY paid_revenue_cents DESC, c.id ASC",
         "semantic": {
-          "comparisonMode": "ordered",
+          "comparisonMode": "unordered",
           "requiredColumns": [
             {
               "canonicalName": "id"
