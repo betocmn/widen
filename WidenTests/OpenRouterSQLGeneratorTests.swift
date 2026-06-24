@@ -240,7 +240,35 @@ struct OpenRouterSQLGeneratorTests {
         #expect(metadata == nil)
     }
 
-    @Test func requestBuilderOmitsUnsupportedParameters() throws {
+    @Test func invalidatingCanonicalModelIDRemovesCachedCapabilities() async throws {
+        let transport = StubTransport([
+            .success((
+                catalogResponse(id: "provider/alias", canonicalID: Self.modelID),
+                response(url: Self.apiBase.appendingPathComponent("models/user"), status: 200)
+            ))
+        ])
+        let service = catalogService(transport: transport)
+        _ = try await service.availableModels(apiKey: "secret-key")
+
+        let cached = await service.metadata(
+            apiKey: "secret-key",
+            modelID: Self.modelID,
+            allowStaleFallback: false
+        )
+        #expect(cached?.id == "provider/alias")
+        #expect(cached?.canonicalModelID == Self.modelID)
+
+        await service.invalidate(apiKey: "secret-key", modelID: Self.modelID)
+        let invalidated = await service.metadata(
+            apiKey: "secret-key",
+            modelID: Self.modelID,
+            allowStaleFallback: false
+        )
+
+        #expect(invalidated == nil)
+    }
+
+    @Test func requestBuilderKeepsPromptModeTokenCapWhenCapabilitiesUnknown() throws {
         let built = try OpenRouterRequestBuilder(endpoint: Self.chatEndpoint).build(
             apiKey: "test-key",
             model: Self.modelID,
@@ -253,7 +281,7 @@ struct OpenRouterSQLGeneratorTests {
         #expect(built.mode == .promptOnlyJSON)
         #expect(body["response_format"] == nil)
         #expect(body["temperature"] == nil)
-        #expect(body["max_tokens"] == nil)
+        #expect(body["max_tokens"] as? Int == OpenRouterRequestBuilder.completionTokenBudget)
         #expect(body["max_completion_tokens"] == nil)
         #expect(body["provider"] == nil)
         #expect(built.request.value(forHTTPHeaderField: "X-OpenRouter-Metadata") == "enabled")
@@ -286,6 +314,25 @@ struct OpenRouterSQLGeneratorTests {
         #expect(body["max_tokens"] == nil)
     }
 
+    @Test func strictSchemaOmitsUnadvertisedTokenCaps() throws {
+        var capabilities = OpenRouterModelCapabilities.conservative()
+        capabilities.supportsStructuredOutputs = true
+
+        let built = try OpenRouterRequestBuilder(endpoint: Self.chatEndpoint).build(
+            apiKey: "test-key",
+            model: Self.modelID,
+            instructions: "instructions",
+            prompt: "prompt",
+            capabilities: capabilities
+        )
+        let body = try jsonBody(built.request)
+
+        #expect(built.mode == .strictJSONSchema)
+        #expect(body["provider"] != nil)
+        #expect(body["max_tokens"] == nil)
+        #expect(body["max_completion_tokens"] == nil)
+    }
+
     @Test func responseFormatWithoutStructuredOutputsUsesPromptMode() throws {
         var capabilities = OpenRouterModelCapabilities.conservative()
         capabilities.supportsResponseFormat = true
@@ -304,6 +351,7 @@ struct OpenRouterSQLGeneratorTests {
         #expect(body["response_format"] == nil)
         #expect(body["provider"] == nil)
         #expect(body["temperature"] as? Int == 0)
+        #expect(body["max_tokens"] as? Int == OpenRouterRequestBuilder.completionTokenBudget)
     }
 
     @Test func maxTokensFallbackIsUsedOnlyWhenAdvertised() throws {
@@ -579,6 +627,7 @@ struct OpenRouterSQLGeneratorTests {
             ("invalid_request", 400, nil, .invalidRequest),
             ("unsupported_parameter", 400, nil, .unsupportedFeature),
             ("context_length_exceeded", 400, nil, .contextWindow),
+            ("token_limit_exceeded", 400, nil, .maxTokensExceeded),
             ("max_tokens_exceeded", 400, nil, .maxTokensExceeded),
             ("rate_limit_exceeded", 429, nil, .rateLimited),
             ("provider_overloaded", 503, nil, .providerOverloaded),
@@ -593,6 +642,8 @@ struct OpenRouterSQLGeneratorTests {
             ("content_policy_violation", 400, nil, .contentPolicy),
             ("refusal", 400, nil, .refusal),
             (nil, 204, nil, .serverFailure),
+            (nil, 413, nil, .invalidRequest),
+            (nil, 422, nil, .invalidRequest),
             (nil, 500, nil, .serverFailure),
             (nil, nil, nil, .serverFailure),
         ]
@@ -811,6 +862,7 @@ struct OpenRouterSQLGeneratorTests {
 
     private func catalogResponse(
         id: String = modelID,
+        canonicalID: String? = nil,
         parameters: [String] = [
             "response_format", "structured_outputs", "tools", "tool_choice", "temperature", "seed",
             "max_completion_tokens", "max_tokens",
@@ -818,7 +870,7 @@ struct OpenRouterSQLGeneratorTests {
     ) -> Data {
         jsonData([
             "data": [
-                modelObject(id: id, parameters: parameters),
+                modelObject(id: id, canonicalID: canonicalID, parameters: parameters),
             ],
         ])
     }
@@ -827,10 +879,10 @@ struct OpenRouterSQLGeneratorTests {
         jsonData(["data": modelObject(id: id, parameters: ["max_tokens"])])
     }
 
-    private func modelObject(id: String, parameters: [String]) -> [String: Any] {
+    private func modelObject(id: String, canonicalID: String? = nil, parameters: [String]) -> [String: Any] {
         [
             "id": id,
-            "canonical_slug": id,
+            "canonical_slug": canonicalID ?? id,
             "name": id == Self.modelID ? "GPT-5.5" : id,
             "context_length": 128_000,
             "top_provider": [

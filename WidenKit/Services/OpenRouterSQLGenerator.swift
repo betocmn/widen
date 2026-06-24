@@ -224,9 +224,9 @@ public struct OpenRouterFailure: Error, LocalizedError, Equatable, Sendable {
             return .permissionDenied
         case "guardrail_blocked":
             return .guardrailBlocked
-        case "context_length_exceeded", "token_limit_exceeded", "string_too_long":
+        case "context_length_exceeded", "string_too_long":
             return .contextWindow
-        case "max_tokens_exceeded":
+        case "max_tokens_exceeded", "token_limit_exceeded":
             return .maxTokensExceeded
         case "rate_limit_exceeded":
             return .rateLimited
@@ -279,6 +279,8 @@ public struct OpenRouterFailure: Error, LocalizedError, Equatable, Sendable {
             return .modelNotFound
         case 408:
             return .timeout
+        case 413, 422:
+            return .invalidRequest
         case 429:
             return .rateLimited
         case 502:
@@ -546,7 +548,9 @@ actor OpenRouterModelCatalogService {
             if modelID == nil {
                 memoryCache.removeValue(forKey: key)
             } else if var cached = memoryCache[key] {
-                cached.models.removeAll { $0.requestedID == modelID || $0.id == modelID }
+                cached.models.removeAll {
+                    $0.requestedID == modelID || $0.id == modelID || $0.canonicalModelID == modelID
+                }
                 memoryCache[key] = cached
             }
         } else {
@@ -700,7 +704,12 @@ actor OpenRouterModelCatalogService {
     private func merge(_ metadata: OpenRouterModelMetadata, apiKey: String) {
         let key = Self.apiKeyFingerprint(apiKey)
         var cached = memoryCache[key] ?? CachedCatalog(fetchedAt: Date(), models: [])
-        cached.models.removeAll { $0.requestedID == metadata.requestedID || $0.id == metadata.id }
+        let matchingIDs = Set([metadata.requestedID, metadata.id, metadata.canonicalModelID].compactMap { $0 })
+        cached.models.removeAll {
+            matchingIDs.contains($0.requestedID)
+                || matchingIDs.contains($0.id)
+                || $0.canonicalModelID.map(matchingIDs.contains) == true
+        }
         cached.models.append(metadata)
         memoryCache[key] = cached
         writeDiskCache()
@@ -826,6 +835,8 @@ struct OpenRouterRequestBuilder: Sendable {
             body["max_completion_tokens"] = cappedCompletionTokens(capabilities)
         } else if capabilities.supportsMaxTokens {
             body["max_tokens"] = cappedCompletionTokens(capabilities)
+        } else if mode == .promptOnlyJSON {
+            body["max_tokens"] = Self.completionTokenBudget
         }
         if mode == .strictJSONSchema {
             body["response_format"] = Self.responseFormat()
