@@ -37,6 +37,33 @@ struct SchemaSearchIndexTests {
         #expect(response.exactIdentifierMatch)
     }
 
+    @Test func exactIdentifierBoostRequiresIdentifierBoundaries() throws {
+        let schema = DatabaseSchema(
+            schemas: [SchemaInfo(name: "public")],
+            tables: [
+                table(schema: "public", name: "users", columns: ["id", "email"]),
+                table(schema: "public", name: "users_archive", columns: ["id", "email"]),
+            ]
+        )
+        let searcher = makeSearcher(schema: schema)
+
+        let response = searcher.search(
+            SchemaSearchRequest(query: "public.users_archive", limit: 2),
+            in: snapshot(schema)
+        )
+
+        let archiveHit = response.hits.first {
+            $0.tableObjectID == .table(schema: "public", name: "users_archive")
+        }
+        let usersHit = response.hits.first {
+            $0.tableObjectID == .table(schema: "public", name: "users")
+        }
+
+        #expect(response.hits.first?.tableObjectID == .table(schema: "public", name: "users_archive"))
+        #expect((archiveHit?.exactMatchScore ?? 0) > 30)
+        #expect((usersHit?.exactMatchScore ?? 0) < 5)
+    }
+
     @Test func quotedMixedCaseAndLowercaseTablesRemainDistinct() throws {
         let schema = DatabaseSchema(
             schemas: [SchemaInfo(name: "public")],

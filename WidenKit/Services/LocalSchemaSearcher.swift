@@ -374,7 +374,7 @@ public struct LocalSchemaSearcher: SchemaSearching {
         var matchedFields: [SchemaSearchMatchedField] = []
 
         for alias in document.exactAliases {
-            guard query.contains(alias) else { continue }
+            guard containsIdentifierAlias(query, alias: alias, caseSensitive: true) else { continue }
             let qualified = alias.contains(".")
             if qualified {
                 score += 30
@@ -400,7 +400,7 @@ public struct LocalSchemaSearcher: SchemaSearching {
         }
 
         for alias in document.lowercasedAliases {
-            guard lowercasedQuery.contains(alias) else { continue }
+            guard containsIdentifierAlias(lowercasedQuery, alias: alias, caseSensitive: true) else { continue }
             let qualified = alias.contains(".")
             if qualified {
                 score += 18
@@ -724,6 +724,56 @@ private func queryCoverage(queryTokens: [String], candidates: [CandidateScore]) 
 
 private func rounded(_ value: Double) -> Double {
     (value * 10_000).rounded() / 10_000
+}
+
+private func containsIdentifierAlias(
+    _ query: String,
+    alias: String,
+    caseSensitive: Bool
+) -> Bool {
+    let searchableQuery = caseSensitive ? query : query.lowercased()
+    let searchableAlias = caseSensitive ? alias : alias.lowercased()
+    guard !searchableAlias.isEmpty else { return false }
+
+    var searchStart = searchableQuery.startIndex
+    while searchStart < searchableQuery.endIndex,
+        let range = searchableQuery.range(
+            of: searchableAlias,
+            range: searchStart..<searchableQuery.endIndex
+        )
+    {
+        if hasIdentifierAliasBoundaries(in: searchableQuery, range: range) {
+            return true
+        }
+        searchStart = range.upperBound
+    }
+    return false
+}
+
+private func hasIdentifierAliasBoundaries(
+    in text: String,
+    range: Range<String.Index>
+) -> Bool {
+    let prefixAllowed: Bool
+    if range.lowerBound == text.startIndex {
+        prefixAllowed = true
+    } else {
+        let previous = text[text.index(before: range.lowerBound)]
+        prefixAllowed = !isIdentifierBody(previous) && previous != "."
+    }
+
+    let suffixAllowed: Bool
+    if range.upperBound == text.endIndex {
+        suffixAllowed = true
+    } else {
+        suffixAllowed = !isIdentifierBody(text[range.upperBound])
+    }
+
+    return prefixAllowed && suffixAllowed
+}
+
+private func isIdentifierBody(_ character: Character) -> Bool {
+    character == "_" || character.isLetter || character.isNumber
 }
 
 private func pathSortKey(_ path: SchemaJoinPath) -> String {
