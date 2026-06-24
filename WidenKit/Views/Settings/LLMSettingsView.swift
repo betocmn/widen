@@ -357,6 +357,11 @@ struct LLMSettingsView: View {
         }
     }
 
+    private func requestStillMatches(apiKey key: String) -> Bool {
+        let currentKey = apiKeyDraft.trimmingCharacters(in: .whitespacesAndNewlines)
+        return hasStoredKey && !currentKey.isEmpty && currentKey == key
+    }
+
     private func load() {
         let stored = appState.loadOpenRouterAPIKey() ?? ""
         apiKeyDraft = stored
@@ -386,6 +391,8 @@ struct LLMSettingsView: View {
             hasStoredKey = false
             catalogModels = []
             catalogMessage = nil
+            isLoadingCatalog = false
+            isTestingModel = false
             modelTestResult = nil
             Task {
                 await OpenRouterModelCatalogService.shared.invalidate()
@@ -412,6 +419,7 @@ struct LLMSettingsView: View {
                 )
                 if models.contains(where: { $0.id == selectedModel || $0.requestedID == selectedModel }) {
                     await MainActor.run {
+                        guard requestStillMatches(apiKey: key) else { return }
                         catalogModels = models
                         isCustomModel = !isKnownModelID(appState.openRouterModelID, in: models)
                         catalogMessage = "Authenticated model catalog loaded."
@@ -424,13 +432,16 @@ struct LLMSettingsView: View {
                     forceRefresh: force
                 ) {
                     await MainActor.run {
-                        catalogModels = models + [custom]
+                        guard requestStillMatches(apiKey: key) else { return }
                         let currentModel = appState.openRouterModelID
-                        isCustomModel = !isKnownModelID(currentModel, in: models + [custom])
                         if currentModel == selectedModel {
+                            catalogModels = models + [custom]
+                            isCustomModel = !isKnownModelID(currentModel, in: models + [custom])
                             catalogMessage = "Authenticated model catalog loaded; selected model came from single-model lookup."
                             catalogMessageIsWarning = custom.capabilitySource == .staleCache
                         } else {
+                            catalogModels = models
+                            isCustomModel = !isKnownModelID(currentModel, in: models)
                             catalogMessage = "Authenticated model catalog loaded."
                             catalogMessageIsWarning = models.contains { $0.capabilitySource == .staleCache }
                         }
@@ -438,6 +449,7 @@ struct LLMSettingsView: View {
                     }
                 } else {
                     await MainActor.run {
+                        guard requestStillMatches(apiKey: key) else { return }
                         catalogModels = models
                         let currentModel = appState.openRouterModelID
                         isCustomModel = !isKnownModelID(currentModel, in: models)
@@ -453,6 +465,7 @@ struct LLMSettingsView: View {
                 }
             } catch {
                 await MainActor.run {
+                    guard requestStillMatches(apiKey: key) else { return }
                     catalogMessage = "Could not refresh OpenRouter model catalog: \(error.localizedDescription)"
                     catalogMessageIsWarning = true
                     isLoadingCatalog = false
@@ -474,6 +487,10 @@ struct LLMSettingsView: View {
             await OpenRouterModelCatalogService.shared.invalidate(apiKey: key, modelID: model)
             let result = await OpenRouterConnectivityCheck(apiKey: key, model: model).run()
             await MainActor.run {
+                guard requestStillMatches(apiKey: key), appState.openRouterModelID == model else {
+                    isTestingModel = false
+                    return
+                }
                 modelTestResult = OpenRouterModelTestResult(result)
                 isTestingModel = false
                 refreshOpenRouterCatalog(force: false)
