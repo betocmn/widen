@@ -67,6 +67,9 @@ public actor SchemaSearchIndexStore {
     }
 
     public func removeAllCachedSearchers() {
+        for task in inFlightBuilds.values {
+            task.cancel()
+        }
         memoryCache.removeAll()
         inFlightBuilds.removeAll()
     }
@@ -166,19 +169,31 @@ public actor SchemaSearchIndexStore {
 
         let url = fileURL(for: key, directory: directory)
         let temporaryURL = directory.appendingPathComponent("\(key.cacheID).tmp-\(UUID().uuidString)")
-        try data.write(to: temporaryURL, options: .atomic)
-        try FileManager.default.setAttributes(
-            [.posixPermissions: NSNumber(value: Int16(0o600))],
-            ofItemAtPath: temporaryURL.path
-        )
-        if FileManager.default.fileExists(atPath: url.path) {
-            try FileManager.default.removeItem(at: url)
+        let fileManager = FileManager.default
+        do {
+            try data.write(to: temporaryURL)
+            try fileManager.setAttributes(
+                [.posixPermissions: NSNumber(value: Int16(0o600))],
+                ofItemAtPath: temporaryURL.path
+            )
+            if fileManager.fileExists(atPath: url.path) {
+                _ = try fileManager.replaceItemAt(
+                    url,
+                    withItemAt: temporaryURL,
+                    backupItemName: nil,
+                    options: []
+                )
+            } else {
+                try fileManager.moveItem(at: temporaryURL, to: url)
+            }
+            try fileManager.setAttributes(
+                [.posixPermissions: NSNumber(value: Int16(0o600))],
+                ofItemAtPath: url.path
+            )
+        } catch {
+            try? fileManager.removeItem(at: temporaryURL)
+            throw error
         }
-        try FileManager.default.moveItem(at: temporaryURL, to: url)
-        try FileManager.default.setAttributes(
-            [.posixPermissions: NSNumber(value: Int16(0o600))],
-            ofItemAtPath: url.path
-        )
         return index
     }
 

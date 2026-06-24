@@ -420,6 +420,32 @@ struct SchemaSearchIndexTests {
         }
     }
 
+    @Test func clearingCacheCancelsInFlightBuilds() async throws {
+        let directory = tempDirectory()
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let schema = DatabaseSchema(
+            schemas: [SchemaInfo(name: "public")],
+            tables: [table(schema: "public", name: "orders", columns: ["id"])]
+        )
+        let store = SchemaSearchIndexStore(
+            directory: directory,
+            buildDelayNanoseconds: 500_000_000
+        )
+
+        let task = Task {
+            try await store.searcher(for: snapshot(schema))
+        }
+        try await Task.sleep(nanoseconds: 30_000_000)
+        await store.removeAllCachedSearchers()
+
+        await #expect(throws: CancellationError.self) {
+            _ = try await task.value
+        }
+        let files = (try? FileManager.default.contentsOfDirectory(atPath: directory.path)
+            .filter { $0.hasSuffix(".json") }) ?? []
+        #expect(files.isEmpty)
+    }
+
     @Test func persistedIndexDoesNotContainQueryContextSQLOrCredentials() async throws {
         let directory = tempDirectory()
         defer { try? FileManager.default.removeItem(at: directory) }
