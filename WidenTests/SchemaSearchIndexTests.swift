@@ -89,6 +89,33 @@ struct SchemaSearchIndexTests {
         #expect((usersHit?.exactMatchScore ?? 0) < 5)
     }
 
+    @Test func exactIdentifierBoostTreatsDollarAsIdentifierBody() throws {
+        let schema = DatabaseSchema(
+            schemas: [SchemaInfo(name: "public")],
+            tables: [
+                table(schema: "public", name: "users", columns: ["id", "email"]),
+                table(schema: "public", name: "users$archive", columns: ["id", "email"]),
+            ]
+        )
+        let searcher = makeSearcher(schema: schema)
+
+        let response = searcher.search(
+            SchemaSearchRequest(query: "users$archive", limit: 2),
+            in: snapshot(schema)
+        )
+
+        let archiveHit = response.hits.first {
+            $0.tableObjectID == .table(schema: "public", name: "users$archive")
+        }
+        let usersHit = response.hits.first {
+            $0.tableObjectID == .table(schema: "public", name: "users")
+        }
+
+        #expect(response.hits.first?.tableObjectID == .table(schema: "public", name: "users$archive"))
+        #expect((archiveHit?.exactMatchScore ?? 0) > 12)
+        #expect((usersHit?.exactMatchScore ?? 0) < 5)
+    }
+
     @Test func quotedMixedCaseAndLowercaseTablesRemainDistinct() throws {
         let schema = DatabaseSchema(
             schemas: [SchemaInfo(name: "public")],
@@ -110,14 +137,41 @@ struct SchemaSearchIndexTests {
             SchemaSearchRequest(query: "public.UserEvents", limit: 2),
             in: snapshot(schema)
         )
+        let unqualifiedLower = searcher.search(
+            SchemaSearchRequest(query: "userevents", limit: 2),
+            in: snapshot(schema)
+        )
 
         #expect(mixed.hits.first?.tableObjectID == .table(schema: "public", name: "UserEvents"))
         #expect(lower.hits.first?.tableObjectID == .table(schema: "public", name: "userevents"))
         #expect(unquotedMixed.hits.first?.tableObjectID == .table(schema: "public", name: "userevents"))
+        #expect(unqualifiedLower.hits.first?.tableObjectID == .table(schema: "public", name: "userevents"))
+        #expect(unqualifiedLower.exactIdentifierMatch)
         let quotedOnlyHit = unquotedMixed.hits.first {
             $0.tableObjectID == .table(schema: "public", name: "UserEvents")
         }
         #expect((quotedOnlyHit?.exactMatchScore ?? 0) == 0)
+    }
+
+    @Test func quotedIdentifierCaseMismatchDoesNotLowercaseExactMatch() throws {
+        let schema = DatabaseSchema(
+            schemas: [SchemaInfo(name: "public")],
+            tables: [
+                table(schema: "public", name: "UserEvents", columns: ["id", "eventName"]),
+            ]
+        )
+        let searcher = makeSearcher(schema: schema)
+
+        let response = searcher.search(
+            SchemaSearchRequest(query: #"public."userevents""#),
+            in: snapshot(schema)
+        )
+        let hit = response.hits.first {
+            $0.tableObjectID == .table(schema: "public", name: "UserEvents")
+        }
+
+        #expect(!response.exactIdentifierMatch)
+        #expect((hit?.exactMatchScore ?? 0) == 0)
     }
 
     @Test func unqualifiedDuplicateTableNameIsAmbiguous() throws {
@@ -353,6 +407,44 @@ struct SchemaSearchIndexTests {
         #expect(paths.count <= 8)
     }
 
+    @Test func selfReferentialForeignKeyReturnsJoinPath() throws {
+        let schema = DatabaseSchema(
+            schemas: [SchemaInfo(name: "public")],
+            tables: [
+                table(schema: "public", name: "employees", columns: ["id", "manager_id"]),
+            ],
+            foreignKeyConstraints: [
+                SchemaForeignKeyConstraintInfo(
+                    constraintName: "employees_manager_id_fkey",
+                    sourceSchema: "public",
+                    sourceTable: "employees",
+                    targetSchema: "public",
+                    targetTable: "employees",
+                    columnPairs: [
+                        SchemaForeignKeyColumnPair(
+                            sourceColumn: "manager_id",
+                            targetColumn: "id",
+                            ordinalPosition: 1
+                        )
+                    ]
+                )
+            ]
+        )
+        let searcher = makeSearcher(schema: schema)
+
+        let paths = searcher.findJoinPaths(
+            from: .table(schema: "public", name: "employees"),
+            to: .table(schema: "public", name: "employees"),
+            maxHops: 1,
+            in: snapshot(schema)
+        )
+
+        #expect(paths.contains { path in
+            path.hopCount == 1
+                && path.edges.first?.constraintName == "employees_manager_id_fkey"
+        })
+    }
+
     @Test func selectedSchemaIsolationUsesOnlySuppliedSnapshot() {
         let full = DatabaseSchema(
             schemas: [SchemaInfo(name: "public"), SchemaInfo(name: "auth")],
@@ -403,6 +495,27 @@ struct SchemaSearchIndexTests {
         #expect(!descriptions.contains { $0.schema == "auth" })
         #expect(descriptions.contains { $0.objectID == .table(schema: "public", name: "users") })
         #expect(paths.isEmpty)
+    }
+
+    @Test func describeSkipsMissingSchemaInAllSchemaSnapshot() {
+        let schema = DatabaseSchema(
+            schemas: [SchemaInfo(name: "public")],
+            tables: [
+                table(schema: "public", name: "users", columns: ["id", "email"]),
+            ]
+        )
+        let searcher = makeSearcher(schema: schema, selectedSchemas: [])
+
+        let descriptions = searcher.describe(
+            objectIDs: [
+                .schema("public"),
+                .schema("missing"),
+            ],
+            in: snapshot(schema, selectedSchemas: [])
+        )
+
+        #expect(descriptions.contains { $0.objectID == .schema("public") })
+        #expect(!descriptions.contains { $0.objectID == .schema("missing") })
     }
 
     @Test func databaseContextIsQueryTimeBoostOnly() throws {

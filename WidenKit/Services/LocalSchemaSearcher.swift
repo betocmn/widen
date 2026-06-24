@@ -11,7 +11,9 @@ public struct LocalSchemaSearcher: SchemaSearching {
             uniqueKeysWithValues: index.documents.map { ($0.tableID.stableString, $0) }
         )
         let nameCounts = index.documents.reduce(into: [String: Int]()) { counts, document in
-            counts[document.tableName.lowercased(), default: 0] += 1
+            for alias in document.exactAliases where isUnquotedUnqualifiedAlias(alias) {
+                counts[alias.lowercased(), default: 0] += 1
+            }
         }
         self.duplicateUnqualifiedNames = Set(
             nameCounts.compactMap { $0.value > 1 ? $0.key : nil }
@@ -130,12 +132,16 @@ public struct LocalSchemaSearcher: SchemaSearching {
                 (SchemaObjectID.table(schema: $0.schema, name: $0.name).stableString, $0)
             }
         )
+        let availableSchemas = Set(snapshot.schema.schemas.map(\.name))
+            .union(snapshot.schemaSearchTables.map(\.schema))
         let selectedSchemas = Set(snapshot.selectedSchemas)
         let relationships = snapshot.schemaSearchRelationships
         return objectIDs.compactMap { objectID in
             switch objectID.kind {
             case .schema:
-                guard selectedSchemas.isEmpty || selectedSchemas.contains(objectID.schema) else {
+                guard availableSchemas.contains(objectID.schema),
+                    selectedSchemas.isEmpty || selectedSchemas.contains(objectID.schema)
+                else {
                     return nil
                 }
                 return SchemaObjectDescription(
@@ -220,14 +226,22 @@ public struct LocalSchemaSearcher: SchemaSearching {
         in snapshot: SchemaSearchSnapshot
     ) -> [SchemaJoinPath] {
         guard let source = tableID(for: from),
-            let target = tableID(for: to),
-            source != target
+            let target = tableID(for: to)
         else { return [] }
 
         let hopLimit = min(max(maxHops, 0), 3)
         guard hopLimit > 0 else { return [] }
 
         let adjacency = joinAdjacency(relationships: snapshot.schemaSearchRelationships)
+        if source == target {
+            let paths = (adjacency[source.stableString] ?? [])
+                .filter { $0.toTableID == target }
+                .map { SchemaJoinPath(edges: [$0]) }
+            return Array(paths.sorted {
+                pathSortKey($0) < pathSortKey($1)
+            }.prefix(8))
+        }
+
         struct QueueEntry {
             var tableID: SchemaObjectID
             var path: [SchemaJoinPathEdge]
@@ -408,7 +422,7 @@ public struct LocalSchemaSearcher: SchemaSearching {
             }
         }
 
-        for alias in document.lowercasedAliases {
+        for alias in document.lowercasedAliases where !containsQuotedIdentifier(alias) {
             guard containsIdentifierAlias(lowercasedQuery, alias: alias, caseSensitive: true) else { continue }
             let qualified = alias.contains(".")
             if qualified {
@@ -447,6 +461,9 @@ public struct LocalSchemaSearcher: SchemaSearching {
         query: String
     ) -> ExactIdentifierScore {
         guard !queryTokens.isEmpty else {
+            return ExactIdentifierScore(score: 0, quality: 0, matchedFields: [])
+        }
+        if containsQuotedIdentifier(query) {
             return ExactIdentifierScore(score: 0, quality: 0, matchedFields: [])
         }
         if isUnquotedIdentifierLikeQuery(query),
@@ -778,6 +795,16 @@ private func containsIdentifierAlias(
     return false
 }
 
+private func isUnquotedUnqualifiedAlias(_ alias: String) -> Bool {
+    !alias.contains(".")
+        && !containsQuotedIdentifier(alias)
+        && SchemaSearchTokenizer.canReferenceUnquoted(alias)
+}
+
+private func containsQuotedIdentifier(_ alias: String) -> Bool {
+    alias.contains("\"")
+}
+
 private func hasIdentifierAliasBoundaries(
     in text: String,
     range: Range<String.Index>
@@ -801,7 +828,7 @@ private func hasIdentifierAliasBoundaries(
 }
 
 private func isIdentifierBody(_ character: Character) -> Bool {
-    character == "_" || character.isLetter || character.isNumber
+    character == "_" || character == "$" || character.isLetter || character.isNumber
 }
 
 private func pathSortKey(_ path: SchemaJoinPath) -> String {
