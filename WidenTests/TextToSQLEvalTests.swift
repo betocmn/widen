@@ -31,6 +31,36 @@ struct TextToSQLEvalTests {
         }
     }
 
+    private struct RepairRetryFailureGenerator: SQLGenerator {
+        func generateSQL(
+            question: String,
+            schema: DatabaseSchema,
+            context: SQLGenerationContext,
+            config: SQLGenerationConfig
+        ) async throws -> SQLGenerationResult {
+            if context.mode == .initial {
+                return SQLGenerationResult(
+                    sql: "SELECT missing_column FROM public.orders LIMIT 10",
+                    explanation: "Intentionally references a missing column.",
+                    assumptions: [],
+                    referencedTables: [],
+                    confidence: 0.5,
+                    riskLevel: .medium,
+                    needsClarification: false,
+                    clarificationQuestion: nil,
+                    generationCallCount: 1
+                )
+            }
+            throw OpenRouterFailure(
+                category: .rateLimited,
+                message: "Rate limit exceeded.",
+                httpStatus: 429,
+                requestedModelID: "test/model",
+                attemptCount: 3
+            )
+        }
+    }
+
     private final class HangingGenerator: SQLGenerator, @unchecked Sendable {
         private let lock = NSLock()
         private var cancellationObserved = false
@@ -816,6 +846,27 @@ struct TextToSQLEvalTests {
 
         #expect(result.status == .generationFailure)
         #expect(result.metrics.transportSuccess == true)
+    }
+
+    @Test func repairOpenRouterFailureCountsRetryAttempts() async {
+        let evalCase = TextToSQLEvalCase(
+            id: "commerce.recent-orders",
+            schemaFixture: "commerce",
+            question: "Show the 10 most recent orders",
+            expected: TextToSQLEvalExpectation(decision: .sql)
+        )
+
+        let result = await TextToSQLEvalCaseRunner.run(
+            evalCase: evalCase,
+            schema: makeCommerceSchema(),
+            generator: RepairRetryFailureGenerator(),
+            options: TextToSQLEvalRunOptions(backend: .cloud, model: "test/model")
+        )
+
+        #expect(result.status == .transportFailure)
+        #expect(result.metrics.modelCallCount == 4)
+        #expect(result.metrics.openRouterRetryCount == 2)
+        #expect(result.diagnostics.openRouterAttemptCount == 3)
     }
 
     @Test func wrongSQLDecisionDoesNotInflateShapeCoverage() {

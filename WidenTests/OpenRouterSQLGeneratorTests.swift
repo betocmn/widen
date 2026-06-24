@@ -405,6 +405,7 @@ struct OpenRouterSQLGeneratorTests {
     @Test func parserAcceptsFencedJSONOnlyInPromptMode() throws {
         let parser = OpenRouterResponseParser()
         let fenced = "```json\n\(goodContent)\n```"
+        let proseWrapped = "Here is the query:\n\(fenced)\nDone."
         let promptResult = try parser.parse(
             data: chatResponse(content: fenced),
             response: response(url: Self.chatEndpoint, status: 200),
@@ -414,6 +415,15 @@ struct OpenRouterSQLGeneratorTests {
             retryCount: 0
         )
         #expect(promptResult.result.sql == "SELECT id FROM public.users LIMIT 100")
+        let proseResult = try parser.parse(
+            data: chatResponse(content: proseWrapped),
+            response: response(url: Self.chatEndpoint, status: 200),
+            requestedModelID: Self.modelID,
+            mode: .promptOnlyJSON,
+            requestCount: 1,
+            retryCount: 0
+        )
+        #expect(proseResult.result.sql == "SELECT id FROM public.users LIMIT 100")
 
         do {
             _ = try parser.parse(
@@ -427,6 +437,29 @@ struct OpenRouterSQLGeneratorTests {
             Issue.record("expected strict JSON parse failure")
         } catch let failure as OpenRouterFailure {
             #expect(failure.category == .malformedStructuredResponse)
+        }
+    }
+
+    @Test func http200ErrorEnvelopeUsesBodyCodeForCategory() throws {
+        let parser = OpenRouterResponseParser()
+
+        do {
+            _ = try parser.parse(
+                data: topLevelErrorResponse(
+                    code: 429,
+                    message: "Rate limit exceeded"
+                ),
+                response: response(url: Self.chatEndpoint, status: 200),
+                requestedModelID: Self.modelID,
+                mode: .strictJSONSchema,
+                requestCount: 2,
+                retryCount: 1
+            )
+            Issue.record("expected rate limit failure")
+        } catch let failure as OpenRouterFailure {
+            #expect(failure.category == .rateLimited)
+            #expect(failure.diagnostic.httpStatus == 429)
+            #expect(failure.diagnostic.attemptCount == 2)
         }
     }
 
@@ -853,19 +886,33 @@ struct OpenRouterSQLGeneratorTests {
         ])
     }
 
-    private func topLevelErrorResponse(errorType: String, providerCode: String? = nil) -> Data {
-        var metadata: [String: Any] = ["error_type": errorType]
+    private func topLevelErrorResponse(
+        code: Int? = nil,
+        message: String = "provider error",
+        errorType: String? = nil,
+        providerCode: String? = nil
+    ) -> Data {
+        var metadata: [String: Any] = [:]
+        if let errorType {
+            metadata["error_type"] = errorType
+        }
         if let providerCode {
             metadata["provider_code"] = providerCode
+        }
+        var error: [String: Any] = [
+            "message": message,
+        ]
+        if let code {
+            error["code"] = code
+        }
+        if !metadata.isEmpty {
+            error["metadata"] = metadata
         }
         return jsonData([
             "id": "cmpl-1",
             "model": "openai/gpt-5.5",
             "provider": "OpenAI",
-            "error": [
-                "message": "provider error",
-                "metadata": metadata,
-            ],
+            "error": error,
         ])
     }
 

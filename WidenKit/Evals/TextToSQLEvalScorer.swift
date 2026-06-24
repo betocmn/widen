@@ -408,9 +408,10 @@ public enum TextToSQLEvalCaseRunner {
                         || failure.category == .repeatedNoProgressRepair
                 ) ? false : nil,
                 latencyMs: latencyMs,
-                modelCallCount: trace.modelCalls == 0
-                    ? failure.openRouterFailure?.attemptCount
-                    : trace.modelCalls,
+                modelCallCount: failureModelCallCount(
+                    trace: trace,
+                    openRouterFailure: failure.openRouterFailure
+                ),
                 estimatedInitialPromptCharacters: options.estimatedInitialPromptCharacters,
                 openRouterRetryCount: failure.openRouterFailure.map { max(0, $0.attemptCount - 1) },
                 openRouterRequestedModelID: failure.openRouterFailure?.requestedModelID,
@@ -424,6 +425,17 @@ public enum TextToSQLEvalCaseRunner {
             estimatedInitialPrompt: options.estimatedInitialPrompt,
             trace: trace
         )
+    }
+
+    private static func failureModelCallCount(
+        trace: TextToSQLTrace,
+        openRouterFailure: OpenRouterFailureDiagnostic?
+    ) -> Int? {
+        guard let attemptCount = openRouterFailure?.attemptCount else {
+            return trace.modelCalls == 0 ? nil : trace.modelCalls
+        }
+        guard trace.modelCalls > 0 else { return attemptCount }
+        return trace.modelCalls + max(0, attemptCount - 1)
     }
 
     private static func status(for failure: SQLGenerationFailure) -> TextToSQLEvalCaseStatus {

@@ -310,6 +310,19 @@ private struct OpenRouterAPIErrorEnvelope: Decodable {
         let code: JSONValue?
         let message: String?
         let metadata: Metadata?
+
+        var httpStatusCode: Int? {
+            switch code {
+            case .int(let value):
+                value
+            case .double(let value) where value.rounded() == value:
+                Int(value)
+            case .string(let value):
+                Int(value)
+            default:
+                nil
+            }
+        }
     }
 
     let id: String?
@@ -1321,9 +1334,10 @@ struct OpenRouterResponseParser: Sendable {
         if let envelope = try? JSONDecoder().decode(OpenRouterAPIErrorEnvelope.self, from: data),
             let apiError = envelope.error
         {
+            let effectiveHTTPStatus = apiError.httpStatusCode ?? response.statusCode
             var failure = self.failure(
                 apiError: apiError,
-                httpStatus: response.statusCode,
+                httpStatus: effectiveHTTPStatus,
                 completionID: envelope.id,
                 requestID: requestID,
                 requestedModelID: requestedModelID ?? envelope.openrouterMetadata?.requested,
@@ -1361,14 +1375,15 @@ struct OpenRouterResponseParser: Sendable {
         attemptCount: Int
     ) -> OpenRouterFailure {
         let message = apiError.message ?? "OpenRouter returned an error."
+        let effectiveHTTPStatus = apiError.httpStatusCode ?? httpStatus
         return OpenRouterFailure(
             category: OpenRouterFailure.category(
                 errorType: apiError.metadata?.errorType,
-                httpStatus: httpStatus,
+                httpStatus: effectiveHTTPStatus,
                 message: message
             ),
             message: safeMessage(message),
-            httpStatus: httpStatus,
+            httpStatus: effectiveHTTPStatus,
             openRouterErrorType: apiError.metadata?.errorType,
             providerCode: apiError.metadata?.providerCode,
             completionID: completionID,
@@ -1385,16 +1400,42 @@ struct OpenRouterResponseParser: Sendable {
         if trimmed.hasPrefix("{"), trimmed.hasSuffix("}") {
             return Data(trimmed.utf8)
         }
-        if trimmed.hasPrefix("```") {
-            let lines = trimmed.components(separatedBy: .newlines)
-            guard lines.count >= 3,
-                lines.first?.hasPrefix("```") == true,
-                lines.last?.trimmingCharacters(in: .whitespacesAndNewlines) == "```"
-            else { return nil }
-            let body = lines.dropFirst().dropLast().joined(separator: "\n")
-                .trimmingCharacters(in: .whitespacesAndNewlines)
-            guard body.hasPrefix("{"), body.hasSuffix("}") else { return nil }
-            return Data(body.utf8)
+        if let fenced = fencedJSONObjectData(from: trimmed) {
+            return fenced
+        }
+        if let start = trimmed.firstIndex(of: "{"),
+            let end = trimmed.lastIndex(of: "}"),
+            start < end
+        {
+            return Data(trimmed[start...end].utf8)
+        }
+        return nil
+    }
+
+    private static func fencedJSONObjectData(from content: String) -> Data? {
+        let lines = content.components(separatedBy: .newlines)
+        var index = lines.startIndex
+        while index < lines.endIndex {
+            let line = lines[index].trimmingCharacters(in: .whitespacesAndNewlines)
+            guard line.hasPrefix("```") else {
+                index = lines.index(after: index)
+                continue
+            }
+
+            var closing = lines.index(after: index)
+            while closing < lines.endIndex {
+                if lines[closing].trimmingCharacters(in: .whitespacesAndNewlines) == "```" {
+                    let body = lines[lines.index(after: index)..<closing]
+                        .joined(separator: "\n")
+                        .trimmingCharacters(in: .whitespacesAndNewlines)
+                    if body.hasPrefix("{"), body.hasSuffix("}") {
+                        return Data(body.utf8)
+                    }
+                    break
+                }
+                closing = lines.index(after: closing)
+            }
+            index = closing < lines.endIndex ? lines.index(after: closing) : lines.endIndex
         }
         return nil
     }

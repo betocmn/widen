@@ -11,6 +11,7 @@ struct LLMSettingsView: View {
     @State private var catalogModels: [OpenRouterModelMetadata] = []
     @State private var catalogMessage: String?
     @State private var catalogMessageIsWarning = false
+    @State private var catalogRefreshID = UUID()
     @State private var isLoadingCatalog = false
     @State private var isTestingModel = false
     @State private var modelTestResult: OpenRouterModelTestResult?
@@ -362,6 +363,15 @@ struct LLMSettingsView: View {
         return hasStoredKey && !currentKey.isEmpty && currentKey == key
     }
 
+    private func catalogRefreshStillCurrent(apiKey key: String, refreshID: UUID) -> Bool {
+        guard catalogRefreshID == refreshID else { return false }
+        guard requestStillMatches(apiKey: key) else {
+            isLoadingCatalog = false
+            return false
+        }
+        return true
+    }
+
     private func load() {
         let stored = appState.loadOpenRouterAPIKey() ?? ""
         apiKeyDraft = stored
@@ -389,6 +399,7 @@ struct LLMSettingsView: View {
         if appState.setOpenRouterAPIKey("") {
             apiKeyDraft = ""
             hasStoredKey = false
+            catalogRefreshID = UUID()
             catalogModels = []
             catalogMessage = nil
             isLoadingCatalog = false
@@ -405,10 +416,14 @@ struct LLMSettingsView: View {
             let key = appState.loadOpenRouterAPIKey()?.trimmingCharacters(in: .whitespacesAndNewlines),
             !key.isEmpty
         else {
+            catalogRefreshID = UUID()
             catalogModels = []
             catalogMessage = nil
+            isLoadingCatalog = false
             return
         }
+        let refreshID = UUID()
+        catalogRefreshID = refreshID
         isLoadingCatalog = true
         let selectedModel = appState.openRouterModelID
         Task {
@@ -419,7 +434,7 @@ struct LLMSettingsView: View {
                 )
                 if models.contains(where: { $0.id == selectedModel || $0.requestedID == selectedModel }) {
                     await MainActor.run {
-                        guard requestStillMatches(apiKey: key) else { return }
+                        guard catalogRefreshStillCurrent(apiKey: key, refreshID: refreshID) else { return }
                         catalogModels = models
                         isCustomModel = !isKnownModelID(appState.openRouterModelID, in: models)
                         catalogMessage = "Authenticated model catalog loaded."
@@ -432,7 +447,7 @@ struct LLMSettingsView: View {
                     forceRefresh: force
                 ) {
                     await MainActor.run {
-                        guard requestStillMatches(apiKey: key) else { return }
+                        guard catalogRefreshStillCurrent(apiKey: key, refreshID: refreshID) else { return }
                         let currentModel = appState.openRouterModelID
                         if currentModel == selectedModel {
                             catalogModels = models + [custom]
@@ -449,7 +464,7 @@ struct LLMSettingsView: View {
                     }
                 } else {
                     await MainActor.run {
-                        guard requestStillMatches(apiKey: key) else { return }
+                        guard catalogRefreshStillCurrent(apiKey: key, refreshID: refreshID) else { return }
                         catalogModels = models
                         let currentModel = appState.openRouterModelID
                         isCustomModel = !isKnownModelID(currentModel, in: models)
@@ -465,7 +480,7 @@ struct LLMSettingsView: View {
                 }
             } catch {
                 await MainActor.run {
-                    guard requestStillMatches(apiKey: key) else { return }
+                    guard catalogRefreshStillCurrent(apiKey: key, refreshID: refreshID) else { return }
                     catalogMessage = "Could not refresh OpenRouter model catalog: \(error.localizedDescription)"
                     catalogMessageIsWarning = true
                     isLoadingCatalog = false
