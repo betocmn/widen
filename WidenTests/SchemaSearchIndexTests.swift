@@ -40,6 +40,28 @@ struct SchemaSearchIndexTests {
         #expect(response.exactIdentifierMatch)
     }
 
+    @Test func quotedSchemaQualifiedQueryMatchesSimpleTableName() throws {
+        let schema = DatabaseSchema(
+            schemas: [SchemaInfo(name: "Sales"), SchemaInfo(name: "public")],
+            tables: [
+                table(schema: "Sales", name: "orders", columns: ["id", "total_cents"]),
+                table(schema: "public", name: "orders", columns: ["id"]),
+            ]
+        )
+        let selectedSchemas = ["Sales", "public"]
+        let searcher = makeSearcher(schema: schema, selectedSchemas: selectedSchemas)
+
+        let response = searcher.search(
+            SchemaSearchRequest(query: #""Sales".orders"#, limit: 2),
+            in: snapshot(schema, selectedSchemas: selectedSchemas)
+        )
+
+        let first = try #require(response.hits.first)
+        #expect(first.tableObjectID == .table(schema: "Sales", name: "orders"))
+        #expect(response.exactIdentifierMatch)
+        #expect(first.exactMatchScore > 0)
+    }
+
     @Test func exactIdentifierBoostRequiresIdentifierBoundaries() throws {
         let schema = DatabaseSchema(
             schemas: [SchemaInfo(name: "public")],
@@ -515,7 +537,7 @@ struct SchemaSearchIndexTests {
         #expect(recovered.search(SchemaSearchRequest(query: "orders"), in: snapshot(schema)).hits.count == 1)
     }
 
-    @Test func concurrentBuildsDeduplicateAndCancellationStopsBuild() async throws {
+    @Test func concurrentBuildsDeduplicateAndCancelledCallerThrows() async throws {
         let directory = tempDirectory()
         defer { try? FileManager.default.removeItem(at: directory) }
         let schema = DatabaseSchema(
@@ -543,6 +565,34 @@ struct SchemaSearchIndexTests {
         await #expect(throws: CancellationError.self) {
             _ = try await task.value
         }
+    }
+
+    @Test func cancellingOneAwaiterDoesNotCancelSharedBuild() async throws {
+        let directory = tempDirectory()
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let schema = DatabaseSchema(
+            schemas: [SchemaInfo(name: "public")],
+            tables: [table(schema: "public", name: "orders", columns: ["id"])]
+        )
+        let store = SchemaSearchIndexStore(directory: directory, buildDelayNanoseconds: 80_000_000)
+        let first = Task {
+            try await store.searcher(for: snapshot(schema))
+        }
+        try await Task.sleep(nanoseconds: 10_000_000)
+        let second = Task {
+            try await store.searcher(for: snapshot(schema))
+        }
+
+        first.cancel()
+
+        await #expect(throws: CancellationError.self) {
+            _ = try await first.value
+        }
+        let searcher = try await second.value
+        #expect(searcher.search(SchemaSearchRequest(query: "orders"), in: snapshot(schema)).hits.count == 1)
+        let files = try FileManager.default.contentsOfDirectory(atPath: directory.path)
+            .filter { $0.hasSuffix(".json") }
+        #expect(files.count == 1)
     }
 
     @Test func clearingCacheCancelsInFlightBuilds() async throws {

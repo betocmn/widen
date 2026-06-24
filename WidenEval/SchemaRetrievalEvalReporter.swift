@@ -71,12 +71,12 @@ enum SchemaRetrievalEvalReporter {
         lines += [
             "## Miss Diagnostics",
             "",
-            "| Case | Retriever | Missing Required | Missing Columns | Forbidden Distractors | Top Results |",
-            "| --- | --- | --- | --- | --- | --- |",
+            "| Case | Retriever | Missing Required | Missing Alternatives | Missing Columns | Forbidden Distractors | No-result | Top Results |",
+            "| --- | --- | --- | --- | --- | --- | --- | --- |",
         ]
         for result in run.results.sorted(by: resultSort) where isMiss(result) {
             lines.append(
-                "| \(tableCell(result.caseID)) | \(tableCell(result.retriever.rawValue)) | \(tableCell(result.missingRequiredTables.joined(separator: ", "))) | \(tableCell(result.missingRequiredColumnMatches.joined(separator: ", "))) | \(tableCell(result.forbiddenDistractorViolations.map(\.table).joined(separator: ", "))) | \(tableCell(result.rankedTables.prefix(8).joined(separator: ", "))) |"
+                "| \(tableCell(result.caseID)) | \(tableCell(result.retriever.rawValue)) | \(tableCell(result.missingRequiredTables.joined(separator: ", "))) | \(tableCell(alternativeGroups(result.missingAlternativeTableGroups))) | \(tableCell(result.missingRequiredColumnMatches.joined(separator: ", "))) | \(tableCell(result.forbiddenDistractorViolations.map(\.table).joined(separator: ", "))) | \(tableCell(noResultStatus(result))) | \(tableCell(result.rankedTables.prefix(8).joined(separator: ", "))) |"
             )
         }
 
@@ -98,6 +98,10 @@ enum SchemaRetrievalEvalReporter {
             "| All required tables present@8 | \(percent(summary.allRequiredTablesPresentAt8)) |",
             "| Primary table top@3 | \(percent(summary.primaryTableTop3)) |",
             "| Primary table MRR | \(String(format: "%.3f", summary.primaryTableMRR)) |",
+            "| Alternative group present@3 | \(percent(summary.alternativeGroupPresentAt3)) |",
+            "| Alternative group present@5 | \(percent(summary.alternativeGroupPresentAt5)) |",
+            "| Alternative group present@8 | \(percent(summary.alternativeGroupPresentAt8)) |",
+            "| No-result expectation pass rate | \(percent(summary.noResultExpectationPassRate)) |",
             "| Required join-path recall | \(percent(summary.requiredJoinPathRecall)) |",
             "| Wrong-schema collisions | \(summary.wrongSchemaCollisionCount) |",
             "| No-result/low-signal count | \(summary.noResultOrLowSignalCount) |",
@@ -112,8 +116,10 @@ enum SchemaRetrievalEvalReporter {
 
     private static func isMiss(_ result: SchemaRetrievalEvalResult) -> Bool {
         !result.missingRequiredTables.isEmpty
+            || !result.missingAlternativeTableGroups.isEmpty
             || !result.missingRequiredColumnMatches.isEmpty
             || !result.forbiddenDistractorViolations.isEmpty
+            || result.noResultExpectationPassed == false
             || result.requiredJoinPathResults.contains { !$0.recovered }
     }
 
@@ -131,6 +137,14 @@ enum SchemaRetrievalEvalReporter {
         value
             .replacingOccurrences(of: "|", with: "\\|")
             .replacingOccurrences(of: "\n", with: " ")
+    }
+
+    private static func alternativeGroups(_ groups: [[String]]) -> String {
+        groups.map { $0.joined(separator: " + ") }.joined(separator: " OR ")
+    }
+
+    private static func noResultStatus(_ result: SchemaRetrievalEvalResult) -> String {
+        result.noResultExpectationPassed == false ? "failed" : ""
     }
 
     private static func percent(_ value: Double) -> String {

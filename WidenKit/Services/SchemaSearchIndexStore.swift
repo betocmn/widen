@@ -1,6 +1,15 @@
 import CryptoKit
 import Foundation
 
+private final class InFlightSchemaIndexBuild: @unchecked Sendable {
+    let id = UUID()
+    let task: Task<LocalSchemaSearcher, Error>
+
+    init(task: Task<LocalSchemaSearcher, Error>) {
+        self.task = task
+    }
+}
+
 public actor SchemaSearchIndexStore {
     public static let defaultDirectory: URL = {
         let base = FileManager.default.urls(
@@ -16,7 +25,7 @@ public actor SchemaSearchIndexStore {
     private let retentionLimit: Int
     private let buildDelayNanoseconds: UInt64
     private var memoryCache: [String: LocalSchemaSearcher] = [:]
-    private var inFlightBuilds: [String: Task<LocalSchemaSearcher, Error>] = [:]
+    private var inFlightBuilds: [String: InFlightSchemaIndexBuild] = [:]
 
     public init(
         directory: URL = SchemaSearchIndexStore.defaultDirectory,
@@ -29,13 +38,15 @@ public actor SchemaSearchIndexStore {
     }
 
     public func searcher(for snapshot: SchemaSearchSnapshot) async throws -> LocalSchemaSearcher {
+        try Task.checkCancellation()
         let key = try Self.cacheKey(for: snapshot)
         let cacheID = key.cacheID
         if let cached = memoryCache[cacheID] {
+            try Task.checkCancellation()
             return cached
         }
-        if let task = inFlightBuilds[cacheID] {
-            return try await task.value
+        if let build = inFlightBuilds[cacheID] {
+            return try await finishBuild(build, cacheID: cacheID)
         }
 
         let directory = directory
@@ -50,28 +61,35 @@ public actor SchemaSearchIndexStore {
                 buildDelayNanoseconds: delay
             )
         }
-        inFlightBuilds[cacheID] = task
-        do {
-            let searcher = try await withTaskCancellationHandler {
-                try await task.value
-            } onCancel: {
-                task.cancel()
-            }
-            memoryCache[cacheID] = searcher
-            inFlightBuilds[cacheID] = nil
-            return searcher
-        } catch {
-            inFlightBuilds[cacheID] = nil
-            throw error
-        }
+        let build = InFlightSchemaIndexBuild(task: task)
+        inFlightBuilds[cacheID] = build
+        return try await finishBuild(build, cacheID: cacheID)
     }
 
     public func removeAllCachedSearchers() {
-        for task in inFlightBuilds.values {
-            task.cancel()
+        for build in inFlightBuilds.values {
+            build.task.cancel()
         }
         memoryCache.removeAll()
         inFlightBuilds.removeAll()
+    }
+
+    private func finishBuild(
+        _ build: InFlightSchemaIndexBuild,
+        cacheID: String
+    ) async throws -> LocalSchemaSearcher {
+        do {
+            let searcher = try await build.task.value
+            memoryCache[cacheID] = searcher
+            inFlightBuilds[cacheID] = nil
+            try Task.checkCancellation()
+            return searcher
+        } catch {
+            if inFlightBuilds[cacheID]?.id == build.id {
+                inFlightBuilds[cacheID] = nil
+            }
+            throw error
+        }
     }
 
     public static func schemaFingerprint(for schema: DatabaseSchema) throws -> String {

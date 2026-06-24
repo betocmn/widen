@@ -149,6 +149,13 @@ struct SchemaRetrievalEvalResult: Codable {
     var rankedTables: [String]
     var requiredTableRanks: [String: Int]
     var missingRequiredTables: [String]
+    var hasAlternativeTableGroupExpectation: Bool
+    var bestAlternativeTableGroup: [String]?
+    var alternativeGroupPresentAt3: Bool?
+    var alternativeGroupPresentAt5: Bool?
+    var alternativeGroupPresentAt8: Bool?
+    var missingAlternativeTableGroups: [[String]]
+    var noResultExpectationPassed: Bool?
     var hasPrimaryTableExpectation: Bool
     var primaryTableRank: Int?
     var primaryReciprocalRank: Double?
@@ -185,6 +192,10 @@ struct SchemaRetrievalSummary: Codable {
     var allRequiredTablesPresentAt8: Double
     var primaryTableTop3: Double
     var primaryTableMRR: Double
+    var alternativeGroupPresentAt3: Double
+    var alternativeGroupPresentAt5: Double
+    var alternativeGroupPresentAt8: Double
+    var noResultExpectationPassRate: Double
     var requiredJoinPathRecall: Double
     var wrongSchemaCollisionCount: Int
     var noResultOrLowSignalCount: Int
@@ -420,6 +431,20 @@ struct SchemaRetrievalEvalRunner {
         let requiredRanks = Dictionary(uniqueKeysWithValues: required.compactMap { table in
             ranks[table].map { rank in (table, rank) }
         })
+        let alternativeGroups = evalCase.retrieval.acceptableAlternativeTableGroups
+        let hasAlternativeGroups = !alternativeGroups.isEmpty
+        let alternativeAt3 = hasAlternativeGroups
+            ? any(alternativeGroups, presentIn: rankedTables, at: 3)
+            : nil
+        let alternativeAt5 = hasAlternativeGroups
+            ? any(alternativeGroups, presentIn: rankedTables, at: 5)
+            : nil
+        let alternativeAt8 = hasAlternativeGroups
+            ? any(alternativeGroups, presentIn: rankedTables, at: 8)
+            : nil
+        let noResultExpectationPassed = expectsNoResult(evalCase.retrieval)
+            ? noResultOrLowSignal
+            : nil
         let primaryRank = evalCase.retrieval.primaryTable.flatMap { ranks[$0] }
         let missingColumnMatches = evalCase.retrieval.requiredColumnMatches.filter { columnID in
             !hitDetails.values.contains { hit in
@@ -441,6 +466,13 @@ struct SchemaRetrievalEvalRunner {
             rankedTables: Array(rankedTables.prefix(20)),
             requiredTableRanks: requiredRanks,
             missingRequiredTables: required.filter { requiredRanks[$0] == nil },
+            hasAlternativeTableGroupExpectation: hasAlternativeGroups,
+            bestAlternativeTableGroup: bestAlternativeGroup(alternativeGroups, ranks: ranks),
+            alternativeGroupPresentAt3: alternativeAt3,
+            alternativeGroupPresentAt5: alternativeAt5,
+            alternativeGroupPresentAt8: alternativeAt8,
+            missingAlternativeTableGroups: alternativeAt8 == false ? alternativeGroups : [],
+            noResultExpectationPassed: noResultExpectationPassed,
             hasPrimaryTableExpectation: evalCase.retrieval.primaryTable != nil,
             primaryTableRank: primaryRank,
             primaryReciprocalRank: primaryRank.map { 1 / Double($0) },
@@ -476,6 +508,8 @@ struct SchemaRetrievalEvalRunner {
         let requiredCases = results.filter {
             !$0.requiredTableRanks.isEmpty || !$0.missingRequiredTables.isEmpty
         }
+        let alternativeCases = results.filter(\.hasAlternativeTableGroupExpectation)
+        let noResultCases = results.compactMap(\.noResultExpectationPassed)
         let primaryResults = results.filter(\.hasPrimaryTableExpectation)
         let joinResults = results.flatMap(\.requiredJoinPathResults)
         let latencies = results.map(\.queryLatencyMs).sorted()
@@ -490,6 +524,10 @@ struct SchemaRetrievalEvalRunner {
             allRequiredTablesPresentAt8: rate(requiredCases.map(\.allRequiredPresentAt8)),
             primaryTableTop3: rate(primaryResults.map { ($0.primaryTableRank ?? Int.max) <= 3 }),
             primaryTableMRR: average(primaryResults.map { $0.primaryReciprocalRank ?? 0 }),
+            alternativeGroupPresentAt3: rate(alternativeCases.compactMap(\.alternativeGroupPresentAt3)),
+            alternativeGroupPresentAt5: rate(alternativeCases.compactMap(\.alternativeGroupPresentAt5)),
+            alternativeGroupPresentAt8: rate(alternativeCases.compactMap(\.alternativeGroupPresentAt8)),
+            noResultExpectationPassRate: rate(noResultCases),
             requiredJoinPathRecall: joinResults.isEmpty
                 ? 1
                 : Double(joinResults.filter(\.recovered).count) / Double(joinResults.count),
@@ -517,6 +555,12 @@ struct SchemaRetrievalEvalRunner {
         }
         if index.primaryTableTop3 < 0.85 {
             messages.append("primary table top@3 below 85%")
+        }
+        if index.alternativeGroupPresentAt8 < 1 {
+            messages.append("acceptable alternative groups present@8 below 100%")
+        }
+        if index.noResultExpectationPassRate < 1 {
+            messages.append("no-result expectations failed")
         }
         if index.requiredJoinPathRecall < 0.90 {
             messages.append("required join path recall below 90%")
@@ -561,6 +605,41 @@ struct SchemaRetrievalEvalRunner {
         guard !required.isEmpty else { return true }
         let top = Set(rankedTables.prefix(limit))
         return required.allSatisfy { top.contains($0) }
+    }
+
+    private func any(_ groups: [[String]], presentIn rankedTables: [String], at limit: Int) -> Bool {
+        let top = Set(rankedTables.prefix(limit))
+        return groups.contains { group in
+            !group.isEmpty && group.allSatisfy { top.contains($0) }
+        }
+    }
+
+    private func bestAlternativeGroup(_ groups: [[String]], ranks: [String: Int]) -> [String]? {
+        groups.min { lhs, rhs in
+            let lhsMissing = lhs.filter { ranks[$0] == nil }.count
+            let rhsMissing = rhs.filter { ranks[$0] == nil }.count
+            if lhsMissing != rhsMissing {
+                return lhsMissing < rhsMissing
+            }
+            let lhsWorstRank = lhs.compactMap { ranks[$0] }.max() ?? Int.max
+            let rhsWorstRank = rhs.compactMap { ranks[$0] }.max() ?? Int.max
+            if lhsWorstRank != rhsWorstRank {
+                return lhsWorstRank < rhsWorstRank
+            }
+            if lhs.count != rhs.count {
+                return lhs.count < rhs.count
+            }
+            return lhs.joined(separator: "|") < rhs.joined(separator: "|")
+        }
+    }
+
+    private func expectsNoResult(_ expectation: SchemaRetrievalExpectation) -> Bool {
+        expectation.primaryTable == nil
+            && expectation.requiredTables.isEmpty
+            && expectation.acceptableAlternativeTableGroups.isEmpty
+            && expectation.requiredJoinPaths.isEmpty
+            && expectation.requiredColumnMatches.isEmpty
+            && expectation.forbiddenTopKDistractors.isEmpty
     }
 
     private func rate(_ values: [Bool]) -> Double {

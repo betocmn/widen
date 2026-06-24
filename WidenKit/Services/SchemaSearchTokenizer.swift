@@ -135,24 +135,34 @@ enum SchemaSearchTokenizer {
     }
 
     static func identifierAliases(schema: String, table: String) -> Set<String> {
-        [
-            "\(schema).\(table)",
-            "\(quotedIdentifier(schema)).\(quotedIdentifier(table))",
-            "\(schema).\(quotedIdentifier(table))",
-            table,
-            quotedIdentifier(table),
-        ]
+        var aliases = Set(identifierForms(table))
+        for schemaPart in identifierForms(schema) {
+            for tablePart in identifierForms(table) {
+                aliases.insert("\(schemaPart).\(tablePart)")
+            }
+        }
+        return aliases
     }
 
     static func identifierAliases(schema: String, table: String, column: String) -> Set<String> {
-        [
-            "\(schema).\(table).\(column)",
-            "\(quotedIdentifier(schema)).\(quotedIdentifier(table)).\(quotedIdentifier(column))",
-            "\(schema).\(quotedIdentifier(table)).\(quotedIdentifier(column))",
-            "\(table).\(column)",
-            "\(quotedIdentifier(table)).\(quotedIdentifier(column))",
-            column,
-            quotedIdentifier(column),
-        ]
+        var aliases = Set(identifierForms(column))
+        for tablePart in identifierForms(table) {
+            for columnPart in identifierForms(column) {
+                aliases.insert("\(tablePart).\(columnPart)")
+            }
+        }
+        for schemaPart in identifierForms(schema) {
+            for tablePart in identifierForms(table) {
+                for columnPart in identifierForms(column) {
+                    aliases.insert("\(schemaPart).\(tablePart).\(columnPart)")
+                }
+            }
+        }
+        return aliases
+    }
+
+    private static func identifierForms(_ identifier: String) -> [String] {
+        let quoted = quotedIdentifier(identifier)
+        return quoted == identifier ? [identifier] : [identifier, quoted]
     }
 }
