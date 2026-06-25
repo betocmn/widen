@@ -44,6 +44,15 @@ struct SchemaToolSessionTests {
         )
         #expect(extra.error?.code == .malformedArguments)
 
+        let multipleExtra = try await invoke(
+            session,
+            id: "multiple-extra",
+            tool: .searchSchema,
+            arguments: ["query": "users", "z_unexpected": true, "a_unexpected": true]
+        )
+        #expect(multipleExtra.error?.code == .malformedArguments)
+        #expect(multipleExtra.error?.argument == "a_unexpected")
+
         let outOfRange = try await invoke(
             session,
             id: "range",

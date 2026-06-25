@@ -914,7 +914,7 @@ private func validateKeys(
     _ arguments: [String: JSONValue],
     allowed: Set<String>
 ) -> SchemaToolError? {
-    for key in arguments.keys where !allowed.contains(key) {
+    for key in arguments.keys.sorted() where !allowed.contains(key) {
         return .init(
             code: .malformedArguments,
             message: "Unknown argument '\(key)'.",
