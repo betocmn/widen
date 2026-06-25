@@ -102,6 +102,16 @@ public struct OpenRouterGenerationMetadata: Codable, Equatable, Sendable {
     public var serviceTier: String?
     public var finishReason: String?
     public var nativeFinishReason: String?
+    public var agentSelectionReason: String?
+    public var agentLogicalTurnCount: Int?
+    public var agentHTTPAttemptCount: Int?
+    public var agentSchemaToolCallCount: Int?
+    public var agentTerminalOutcome: String?
+    public var agentFinishReasons: [String]?
+    public var agentCompletionIDs: [String]?
+    public var agentRequestIDs: [String]?
+    public var agentReturnedModelIDs: [String]?
+    public var agentProviderNames: [String]?
 }
 
 public struct OpenRouterFailureDiagnostic: Codable, Equatable, Sendable {
