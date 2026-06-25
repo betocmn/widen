@@ -746,7 +746,14 @@ struct EvalRunner {
         let toolsModeRequested = options.backendMode.backends.contains(.cloud)
             && options.cloudAgentMode == .tools
         let toolBudgetFailures = results.filter { result in
-            result.status == .generationFailure
+            let schemaToolCallCount = result.metrics.openRouterSchemaToolCallCount ?? 0
+            let repairStageFailed = result.trace?.stages.contains {
+                $0.stage == .validationRepair && $0.outcome == .failure
+            } == true
+            let budget = repairStageFailed
+                ? OpenRouterSchemaToolSQLAgentConfiguration.default.maximumRepairSchemaToolCalls
+                : SchemaToolPolicy.cloudAgent.maximumCallCount
+            return result.status == .generationFailure
                 && (
                     result.metrics.openRouterAgentSelectionReason == "tools"
                         || (
@@ -754,8 +761,7 @@ struct EvalRunner {
                                 && result.metrics.openRouterAgentSelectionReason == nil
                         )
                 )
-                && (result.metrics.openRouterSchemaToolCallCount ?? 0)
-                    >= SchemaToolPolicy.cloudAgent.maximumCallCount
+                && schemaToolCallCount >= budget
         }
         let promptEstimateValues = results.compactMap(\.metrics.estimatedInitialPromptCharacters)
         let backendAvailableValues = results.map(\.metrics.backendAvailable)

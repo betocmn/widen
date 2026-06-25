@@ -42,6 +42,7 @@ public struct OpenRouterSchemaToolAgentFailure: Error, LocalizedError, Equatable
         case modelTurnBudgetExhausted
         case terminalResultMissing
         case terminalResultMalformed
+        case safetyValidation
         case uninspectedSchemaObjects
         case staleSchemaSnapshot
         case cancellation
@@ -76,6 +77,8 @@ public struct OpenRouterSchemaToolAgentFailure: Error, LocalizedError, Equatable
         case .malformedToolCall, .mixedTerminalAndSchemaCalls, .terminalResultMissing,
             .terminalResultMalformed, .modelTurnBudgetExhausted:
             .structuredResponseParsing
+        case .safetyValidation:
+            .safetyValidation
         case .repeatedToolCallNoProgress, .uninspectedSchemaObjects:
             .schemaValidation
         case .schemaToolCallBudgetExhausted, .schemaToolByteBudgetExhausted:
@@ -359,6 +362,7 @@ public final class OpenRouterSchemaToolSQLAgent: SQLGenerator, Sendable {
                                 session: session
                             )
                         }
+                        try await checkStaleSnapshot(expected: initialFingerprint)
                         aggregate.terminalOutcome = "clarify"
                         return try await finalResult(
                             terminalResult,
@@ -368,6 +372,7 @@ public final class OpenRouterSchemaToolSQLAgent: SQLGenerator, Sendable {
                             session: session
                         )
                     case .sql:
+                        try await checkStaleSnapshot(expected: initialFingerprint)
                         let inspection = evidence.validate(sql: terminalResult.sql, schema: schema)
                         if !inspection.accepted {
                             if uninspectedSQLCorrections < 1 {
@@ -375,7 +380,7 @@ public final class OpenRouterSchemaToolSQLAgent: SQLGenerator, Sendable {
                                 messages.append(
                                     toolErrorResponse(
                                         call: terminal,
-                                        code: "uninspected_schema_objects",
+                                        code: inspection.errorCode,
                                         message: inspection.message
                                     )
                                 )
@@ -387,7 +392,7 @@ public final class OpenRouterSchemaToolSQLAgent: SQLGenerator, Sendable {
                                 continue
                             }
                             throw await agentFailure(
-                                .uninspectedSchemaObjects,
+                                inspection.category,
                                 inspection.message,
                                 session: session
                             )
@@ -656,7 +661,9 @@ public final class OpenRouterSchemaToolSQLAgent: SQLGenerator, Sendable {
         if !context.recentQuestions.isEmpty {
             sections.append("Recent questions:\n\(context.recentQuestions.suffix(3).joined(separator: "\n"))")
         }
-        if context.mode == .repair, let repair = context.repairContext {
+        if (context.mode == .repair || context.mode == .reconstructAfterFailedRepair),
+            let repair = context.repairContext
+        {
             var repairLines: [String] = []
             if let failedSQL = repair.failedSQL?.trimmingCharacters(in: .whitespacesAndNewlines),
                 !failedSQL.isEmpty
@@ -680,7 +687,8 @@ public final class OpenRouterSchemaToolSQLAgent: SQLGenerator, Sendable {
             if !repairLines.isEmpty {
                 sections.append("Repair facts:\n\(repairLines.joined(separator: "\n\n"))")
             }
-        } else if context.mode == .followUp,
+        }
+        if context.mode != .repair && context.mode != .reconstructAfterFailedRepair,
             let currentSQL = context.currentSQL?.trimmingCharacters(in: .whitespacesAndNewlines),
             !currentSQL.isEmpty
         {
@@ -871,6 +879,23 @@ public final class OpenRouterSchemaToolSQLAgent: SQLGenerator, Sendable {
 }
 
 private struct SchemaToolEvidenceLedger {
+    struct ValidationResult {
+        var accepted: Bool
+        var message: String
+        var category: OpenRouterSchemaToolAgentFailure.Category
+
+        var errorCode: String {
+            switch category {
+            case .safetyValidation:
+                "sql_safety_validation_failed"
+            case .uninspectedSchemaObjects:
+                "uninspected_schema_objects"
+            default:
+                "schema_tool_evidence_failed"
+            }
+        }
+    }
+
     private var schema: DatabaseSchema
     private(set) var hasSuccessfulSearch = false
     private var searchedTables = Set<String>()
@@ -900,22 +925,30 @@ private struct SchemaToolEvidenceLedger {
         }
     }
 
-    func validate(sql: String, schema: DatabaseSchema) -> (accepted: Bool, message: String) {
+    func validate(sql: String, schema: DatabaseSchema) -> ValidationResult {
         guard hasSuccessfulSearch else {
-            return (false, "search_schema must succeed before terminal SQL.")
+            return Self.rejected("search_schema must succeed before terminal SQL.")
         }
         let safety = SQLSafetyValidator.validate(sql)
         guard safety.isValid else {
-            return (false, "SQL safety validation failed: \(Self.issueSummary(safety.errors))")
+            return Self.rejected(
+                "SQL safety validation failed: \(Self.issueSummary(safety.errors))",
+                category: .safetyValidation
+            )
         }
         let schemaValidation = SQLSchemaValidator.validate(sql: sql, against: schema)
         guard !schemaValidation.hasDefiniteErrors else {
-            return (false, "Schema validation failed: \(Self.issueSummary(schemaValidation.errors))")
+            return Self.rejected("Schema validation failed: \(Self.issueSummary(schemaValidation.errors))")
         }
         let referencedTables = Set(schemaValidation.referencedTables)
         let inspectedTables = describedTables.union(joinPathTables)
         for table in referencedTables where !inspectedTables.contains(table) {
-            return (false, "\(table) was not described or exposed by an inspected join path.")
+            return Self.rejected("\(table) was not described or exposed by an inspected join path.")
+        }
+        if Self.containsUnqualifiedSelectStar(sql) {
+            for table in referencedTables where !fullyDescribedTables.contains(table) {
+                return Self.rejected("\(table).* requires a fully described table.")
+            }
         }
 
         let bindings = referencedColumnBindings(
@@ -926,7 +959,7 @@ private struct SchemaToolEvidenceLedger {
         for binding in bindings {
             if binding.column == "*" {
                 if !fullyDescribedTables.contains(binding.table) {
-                    return (false, "\(binding.table).* requires a fully described table.")
+                    return Self.rejected("\(binding.table).* requires a fully described table.")
                 }
                 continue
             }
@@ -935,10 +968,10 @@ private struct SchemaToolEvidenceLedger {
                 && !fullyDescribedTables.contains(binding.table)
                 && !inspectedConstraintColumns.contains(key)
             {
-                return (false, "\(key) was not exposed by schema tools.")
+                return Self.rejected("\(key) was not exposed by schema tools.")
             }
         }
-        return (true, "")
+        return ValidationResult(accepted: true, message: "", category: .uninspectedSchemaObjects)
     }
 
     private mutating func recordSearch(_ payload: JSONValue) {
@@ -1173,6 +1206,52 @@ private struct SchemaToolEvidenceLedger {
             aliases[lookupKey(value, quoted: false)] = table
         }
     }
+
+    private static func rejected(
+        _ message: String,
+        category: OpenRouterSchemaToolAgentFailure.Category = .uninspectedSchemaObjects
+    ) -> ValidationResult {
+        ValidationResult(accepted: false, message: message, category: category)
+    }
+
+    private static func containsUnqualifiedSelectStar(_ sql: String) -> Bool {
+        let tokens = SQLToken.tokenize(sql)
+        var depth = 0
+        var activeSelectDepths = Set<Int>()
+        for (index, token) in tokens.enumerated() {
+            if token.text == "(" {
+                depth += 1
+                continue
+            }
+            if token.text == ")" {
+                activeSelectDepths.remove(depth)
+                depth = max(0, depth - 1)
+                continue
+            }
+            if token.normalized == "select" {
+                activeSelectDepths.insert(depth)
+                continue
+            }
+            if activeSelectDepths.contains(depth),
+                selectListTerminators.contains(token.normalized)
+            {
+                activeSelectDepths.remove(depth)
+                continue
+            }
+            if activeSelectDepths.contains(depth),
+                token.text == "*",
+                (index == tokens.startIndex || tokens[index - 1].text != ".")
+            {
+                return true
+            }
+        }
+        return false
+    }
+
+    private static let selectListTerminators: Set<String> = [
+        "from", "where", "group", "having", "window", "order", "limit", "offset", "fetch",
+        "union", "intersect", "except",
+    ]
 
     private static func isUnquotedPostgresIdentifier(_ value: String) -> Bool {
         guard let first = value.first,

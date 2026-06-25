@@ -95,16 +95,18 @@ struct OpenRouterSchemaToolSQLAgentTests {
     private final class FingerprintSequence: @unchecked Sendable {
         private let lock = NSLock()
         private let initial: String
+        private let validCallCount: Int
         private var callCount = 0
 
-        init(initial: String) {
+        init(initial: String, validCallCount: Int = 2) {
             self.initial = initial
+            self.validCallCount = validCallCount
         }
 
         func current() -> String {
             lock.withLock {
                 callCount += 1
-                return callCount <= 2 ? initial : "stale-\(callCount)"
+                return callCount <= validCallCount ? initial : "stale-\(callCount)"
             }
         }
     }
@@ -419,6 +421,224 @@ struct OpenRouterSchemaToolSQLAgentTests {
             #expect(failure.schemaToolCalls.map(\.callID) == [
                 "search-users", "search-invoices", "find-no-path",
             ])
+        }
+    }
+
+    @Test func unsafeTerminalSQLFailsAsSafetyValidation() async throws {
+        let schema = Self.makeSchema()
+        let chatTransport = ScriptedTransport { request, index in
+            switch index {
+            case 1:
+                return Self.assistantToolCalls([
+                    Self.toolCall(id: "search-users", name: "search_schema", arguments: [
+                        "query": "users",
+                        "limit": 2,
+                    ]),
+                ])
+            case 2:
+                let tableID = try Self.tableHandle(named: #""public"."users""#, in: request)
+                return Self.assistantToolCalls([
+                    Self.toolCall(id: "describe-users", name: "describe_tables", arguments: [
+                        "table_ids": [tableID],
+                    ]),
+                ])
+            case 3:
+                return Self.assistantToolCalls([
+                    Self.terminalSQL(
+                        id: "unsafe-terminal",
+                        sql: "SELECT id FROM public.users; DROP TABLE public.users"
+                    ),
+                ])
+            case 4:
+                let text = try Self.requestBodyText(request)
+                #expect(text.contains("SQL safety validation failed"))
+                #expect(try Self.toolMessageIDs(in: request).contains("unsafe-terminal"))
+                return Self.assistantToolCalls([
+                    Self.terminalSQL(
+                        id: "unsafe-terminal-repeat",
+                        sql: "SELECT id FROM public.users; DROP TABLE public.users"
+                    ),
+                ])
+            default:
+                throw URLError(.badServerResponse)
+            }
+        }
+        let agent = makeAgent(schema: schema, chatTransport: chatTransport)
+
+        do {
+            _ = try await agent.generateSQL(
+                question: "List users",
+                schema: schema,
+                context: SQLGenerationContext(),
+                config: SQLGenerationConfig()
+            )
+            Issue.record("Expected safety validation failure")
+        } catch let failure as OpenRouterSchemaToolAgentFailure {
+            #expect(failure.category == .safetyValidation)
+            #expect(failure.pipelineCategory == .safetyValidation)
+        }
+    }
+
+    @Test func terminalSQLRechecksSchemaFreshnessBeforeReturning() async throws {
+        let schema = Self.makeSchema()
+        let snapshot = SchemaSearchSnapshot(
+            connectionID: Self.connectionID,
+            selectedSchemas: ["public"],
+            schema: schema
+        )
+        let fingerprint = try SchemaSearchIndexStore.cacheKey(for: snapshot).schemaFingerprint
+        let sequence = FingerprintSequence(initial: fingerprint, validCallCount: 5)
+        let chatTransport = ScriptedTransport { request, index in
+            switch index {
+            case 1:
+                return Self.assistantToolCalls([
+                    Self.toolCall(id: "search-before-terminal-stale", name: "search_schema", arguments: [
+                        "query": "users",
+                        "limit": 2,
+                    ]),
+                ])
+            case 2:
+                let tableID = try Self.tableHandle(named: #""public"."users""#, in: request)
+                return Self.assistantToolCalls([
+                    Self.toolCall(id: "describe-before-terminal-stale", name: "describe_tables", arguments: [
+                        "table_ids": [tableID],
+                    ]),
+                ])
+            case 3:
+                return Self.assistantToolCalls([
+                    Self.terminalSQL(id: "terminal-stale", sql: "SELECT id FROM public.users LIMIT 100"),
+                ])
+            default:
+                throw URLError(.badServerResponse)
+            }
+        }
+        let agent = makeAgent(
+            schema: schema,
+            chatTransport: chatTransport,
+            currentSchemaFingerprint: { sequence.current() }
+        )
+
+        do {
+            _ = try await agent.generateSQL(
+                question: "List users",
+                schema: schema,
+                context: SQLGenerationContext(),
+                config: SQLGenerationConfig()
+            )
+            Issue.record("Expected terminal stale snapshot failure")
+        } catch let failure as OpenRouterSchemaToolAgentFailure {
+            #expect(failure.category == .staleSchemaSnapshot)
+            #expect(failure.schemaToolCalls.map(\.callID) == [
+                "search-before-terminal-stale", "describe-before-terminal-stale",
+            ])
+        }
+    }
+
+    @Test func initialModeWithCurrentSQLIncludesFollowUpSQLInPrompt() async throws {
+        let schema = Self.makeSchema()
+        let chatTransport = ScriptedTransport { _, _ in
+            Self.lengthStoppedResponse()
+        }
+        let agent = makeAgent(schema: schema, chatTransport: chatTransport)
+
+        do {
+            _ = try await agent.generateSQL(
+                question: "Make it last month instead",
+                schema: schema,
+                context: SQLGenerationContext(
+                    recentQuestions: ["List users created this month"],
+                    currentSQL: "SELECT id FROM public.users WHERE created_at >= CURRENT_DATE"
+                ),
+                config: SQLGenerationConfig()
+            )
+            Issue.record("Expected provider failure")
+        } catch {
+            let body = try Self.requestBodyText(try #require(chatTransport.requests.first))
+            #expect(body.contains("Current SQL for follow-up"))
+            #expect(body.contains("SELECT id FROM public.users WHERE created_at >= CURRENT_DATE"))
+        }
+    }
+
+    @Test func reconstructionModeIncludesRepairFacts() async throws {
+        let schema = Self.makeSchema()
+        let chatTransport = ScriptedTransport { _, _ in
+            Self.lengthStoppedResponse()
+        }
+        let agent = makeAgent(schema: schema, chatTransport: chatTransport)
+
+        do {
+            _ = try await agent.generateSQL(
+                question: "List users",
+                schema: schema,
+                context: SQLGenerationContext(
+                    mode: .reconstructAfterFailedRepair,
+                    repairContext: SQLRepairContext(
+                        diagnostic: DatabaseDiagnostic(
+                            kind: .missingColumn,
+                            sqlState: "42703",
+                            message: "column users.full_name does not exist"
+                        ),
+                        repairConstraints: [
+                            .forbiddenIdentifier("public.users.full_name"),
+                        ]
+                    )
+                ),
+                config: SQLGenerationConfig()
+            )
+            Issue.record("Expected provider failure")
+        } catch {
+            let body = try Self.requestBodyText(try #require(chatTransport.requests.first))
+            #expect(body.contains("Repair facts"))
+            #expect(body.contains("column users.full_name does not exist"))
+            #expect(body.contains("forbiddenIdentifier: public.users.full_name"))
+        }
+    }
+
+    @Test func unqualifiedSelectStarRequiresFullyDescribedTable() async throws {
+        let schema = Self.makeWideSchema()
+        let chatTransport = ScriptedTransport { request, index in
+            switch index {
+            case 1:
+                return Self.assistantToolCalls([
+                    Self.toolCall(id: "search-wide", name: "search_schema", arguments: [
+                        "query": "wide_table",
+                        "limit": 2,
+                    ]),
+                ])
+            case 2:
+                let tableID = try Self.tableHandle(named: #""public"."wide_table""#, in: request)
+                return Self.assistantToolCalls([
+                    Self.toolCall(id: "describe-wide", name: "describe_tables", arguments: [
+                        "table_ids": [tableID],
+                    ]),
+                ])
+            case 3:
+                return Self.assistantToolCalls([
+                    Self.terminalSQL(id: "terminal-star", sql: "SELECT * FROM public.wide_table LIMIT 100"),
+                ])
+            case 4:
+                let text = try Self.requestBodyText(request)
+                #expect(text.contains("public.wide_table.* requires a fully described table"))
+                return Self.assistantToolCalls([
+                    Self.terminalSQL(id: "terminal-star-repeat", sql: "SELECT * FROM public.wide_table LIMIT 100"),
+                ])
+            default:
+                throw URLError(.badServerResponse)
+            }
+        }
+        let agent = makeAgent(schema: schema, chatTransport: chatTransport)
+
+        do {
+            _ = try await agent.generateSQL(
+                question: "Show wide table rows",
+                schema: schema,
+                context: SQLGenerationContext(),
+                config: SQLGenerationConfig()
+            )
+            Issue.record("Expected wildcard inspection failure")
+        } catch let failure as OpenRouterSchemaToolAgentFailure {
+            #expect(failure.category == .uninspectedSchemaObjects)
+            #expect(failure.schemaToolCalls.map(\.callID) == ["search-wide", "describe-wide"])
         }
     }
 
@@ -995,6 +1215,22 @@ struct OpenRouterSchemaToolSQLAgentTests {
                     columns: [
                         column("invoices", "id", type: "integer", ordinal: 1),
                     ]
+                ),
+            ]
+        )
+    }
+
+    private static func makeWideSchema() -> DatabaseSchema {
+        DatabaseSchema(
+            schemas: [SchemaInfo(name: "public")],
+            tables: [
+                TableInfo(
+                    schema: "public",
+                    name: "wide_table",
+                    type: .baseTable,
+                    columns: (1...40).map {
+                        column("wide_table", "column_\($0)", type: "text", ordinal: $0)
+                    }
                 ),
             ]
         )

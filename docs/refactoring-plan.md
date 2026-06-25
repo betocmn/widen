@@ -796,6 +796,7 @@ Implementation notes:
 * Added deterministic scripted OpenRouter tests for the happy path, multiple schema calls, terminal-before-search correction, mixed terminal/schema rejection, unsupported-tool-model legacy selection, prompt injection exclusion from the initial request, and pipeline trace merging.
 * Review follow-up fixes preserve provider tool-call response protocol during corrections, keep schema-tool traces on stale-schema and provider-failure agent failures, bound retry backoff by the agent wall-clock timeout, and gate terminal SQL on existing safety/schema validators before success.
 * Latest review follow-up fixes preserve quoted identifier case in evidence keys, avoid crediting endpoint tables from empty join-path results, keep initial and repair schema-tool traces separate, and count tools-mode budget failures even when generation failure metadata is partial.
+* Second review follow-up fixes classify unsafe terminal SQL as safety validation, recheck schema freshness before terminal returns, preserve follow-up current SQL and reconstruction repair facts, reject unqualified `SELECT *` unless the table was fully described, and count repair-mode tool-budget failures against the repair budget.
 
 Verification:
 
@@ -811,7 +812,7 @@ make eval-db-cloud-agent MODEL=openai/gpt-5.5 REPEAT=3
 Results:
 
 ```text
-make test: 702 tests in 42 suites passed.
+make test: 707 tests in 42 suites passed.
 make eval-build: WidenEval build succeeded.
 make eval-schema-tools: 10/10 cases passed; max response bytes 6111; truncated results 1; determinism failures 0.
 make eval-openrouter-smoke MODEL=openai/gpt-5.5 REPEAT=3: completed with backend/transport 15/15, structured parse 15/15, static-shape 9/15, estimated cost $0.181115. Summary: .eval-results/20260625-123540-793/summary.md.
