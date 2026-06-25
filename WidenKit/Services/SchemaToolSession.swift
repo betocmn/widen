@@ -186,7 +186,15 @@ public struct SchemaToolExecutor: Sendable {
             return .failure(.internalFailure("Failed to resolve table handles."))
         }
 
-        let focusValues = arguments["focus_column_ids"]?.arrayValue ?? []
+        let focusValues: [JSONValue]
+        if let value = arguments["focus_column_ids"] {
+            guard let arrayValue = value.arrayValue else {
+                return .failure(.typed("focus_column_ids must be an array.", argument: "focus_column_ids"))
+            }
+            focusValues = arrayValue
+        } else {
+            focusValues = []
+        }
         guard focusValues.count <= 16 else {
             return .failure(
                 .range("focus_column_ids may contain at most 16 handles.", argument: "focus_column_ids")

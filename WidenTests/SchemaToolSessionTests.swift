@@ -61,6 +61,15 @@ struct SchemaToolSessionTests {
         )
         #expect(outOfRange.error?.code == .argumentOutOfRange)
 
+        let users = try await requireHandle(session, .table(schema: "public", name: "users"))
+        let malformedFocusColumns = try await invoke(
+            session,
+            id: "malformed-focus-columns",
+            tool: .describeTables,
+            arguments: ["table_ids": handles(users), "focus_column_ids": "not-an-array"]
+        )
+        #expect(malformedFocusColumns.error?.code == .invalidArgumentType)
+
         let hugeNumber = try await invoke(
             session,
             id: "huge-number",
