@@ -223,6 +223,13 @@ public final class OpenRouterSchemaToolSQLAgent: SQLGenerator, Sendable {
                 ),
             ]
             let tools = await toolDefinitions(from: session)
+            guard configuration.maximumModelTurns > 0 else {
+                throw await agentFailure(
+                    .modelTurnBudgetExhausted,
+                    "The schema-tool agent exhausted its model-turn budget.",
+                    session: session
+                )
+            }
 
             for turn in 1...configuration.maximumModelTurns {
                 try Task.checkCancellation()
@@ -658,6 +665,7 @@ public final class OpenRouterSchemaToolSQLAgent: SQLGenerator, Sendable {
         var sections: [String] = [
             "Question:\n\(question.trimmingCharacters(in: .whitespacesAndNewlines))",
             "Selected schemas:\n\(selectedSchemas.isEmpty ? "(none)" : selectedSchemas.joined(separator: ", "))",
+            "Default row limit:\nFor read queries, include LIMIT \(config.defaultRowLimit) unless the result is naturally small.",
         ]
         let databaseContext = config.databaseContext.trimmingCharacters(in: .whitespacesAndNewlines)
         if !databaseContext.isEmpty {
@@ -1238,31 +1246,80 @@ private struct SchemaToolEvidenceLedger {
         let tokens = SQLToken.tokenize(sql)
         var depth = 0
         var activeSelectDepths = Set<Int>()
+        var selectItemStartDepths = Set<Int>()
+        var distinctOnEligibleDepths = Set<Int>()
+        var expectingDistinctOnExpressionDepths = Set<Int>()
         for (index, token) in tokens.enumerated() {
             if token.text == "(" {
+                if activeSelectDepths.contains(depth),
+                    selectItemStartDepths.contains(depth)
+                {
+                    if expectingDistinctOnExpressionDepths.remove(depth) != nil {
+                        // DISTINCT ON (...) is still before the first projected item.
+                    } else {
+                        selectItemStartDepths.remove(depth)
+                        distinctOnEligibleDepths.remove(depth)
+                    }
+                }
                 depth += 1
                 continue
             }
             if token.text == ")" {
                 activeSelectDepths.remove(depth)
+                selectItemStartDepths.remove(depth)
+                distinctOnEligibleDepths.remove(depth)
+                expectingDistinctOnExpressionDepths.remove(depth)
                 depth = max(0, depth - 1)
                 continue
             }
             if token.normalized == "select" {
                 activeSelectDepths.insert(depth)
+                selectItemStartDepths.insert(depth)
                 continue
             }
             if activeSelectDepths.contains(depth),
                 selectListTerminators.contains(token.normalized)
             {
                 activeSelectDepths.remove(depth)
+                selectItemStartDepths.remove(depth)
+                distinctOnEligibleDepths.remove(depth)
+                expectingDistinctOnExpressionDepths.remove(depth)
+                continue
+            }
+            if activeSelectDepths.contains(depth),
+                token.text == ","
+            {
+                selectItemStartDepths.insert(depth)
+                distinctOnEligibleDepths.remove(depth)
+                expectingDistinctOnExpressionDepths.remove(depth)
                 continue
             }
             if activeSelectDepths.contains(depth),
                 token.text == "*",
+                selectItemStartDepths.contains(depth),
                 (index == tokens.startIndex || tokens[index - 1].text != ".")
             {
                 return true
+            }
+            if activeSelectDepths.contains(depth),
+                selectItemStartDepths.contains(depth)
+            {
+                if token.normalized == "all" {
+                    continue
+                }
+                if token.normalized == "distinct" {
+                    distinctOnEligibleDepths.insert(depth)
+                    continue
+                }
+                if token.normalized == "on",
+                    distinctOnEligibleDepths.contains(depth)
+                {
+                    expectingDistinctOnExpressionDepths.insert(depth)
+                    continue
+                }
+                selectItemStartDepths.remove(depth)
+                distinctOnEligibleDepths.remove(depth)
+                expectingDistinctOnExpressionDepths.remove(depth)
             }
         }
         return false

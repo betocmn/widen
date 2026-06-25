@@ -559,6 +559,28 @@ struct OpenRouterSchemaToolSQLAgentTests {
         }
     }
 
+    @Test func promptIncludesConfiguredDefaultRowLimit() async throws {
+        let schema = Self.makeSchema()
+        let chatTransport = ScriptedTransport { _, _ in
+            Self.lengthStoppedResponse()
+        }
+        let agent = makeAgent(schema: schema, chatTransport: chatTransport)
+
+        do {
+            _ = try await agent.generateSQL(
+                question: "List users",
+                schema: schema,
+                context: SQLGenerationContext(),
+                config: SQLGenerationConfig(defaultRowLimit: 25)
+            )
+            Issue.record("Expected provider failure")
+        } catch {
+            let body = try Self.requestBodyText(try #require(chatTransport.requests.first))
+            #expect(body.contains("Default row limit"))
+            #expect(body.contains("LIMIT 25"))
+        }
+    }
+
     @Test func reconstructionModeIncludesRepairFacts() async throws {
         let schema = Self.makeSchema()
         let chatTransport = ScriptedTransport { _, _ in
@@ -640,6 +662,46 @@ struct OpenRouterSchemaToolSQLAgentTests {
             #expect(failure.category == .uninspectedSchemaObjects)
             #expect(failure.schemaToolCalls.map(\.callID) == ["search-wide", "describe-wide"])
         }
+    }
+
+    @Test func arithmeticMultiplicationDoesNotRequireFullyDescribedTable() async throws {
+        let schema = Self.makeWideSchema()
+        let sql = "SELECT column_1 * column_2 AS score FROM public.wide_table LIMIT 100"
+        let chatTransport = ScriptedTransport { request, index in
+            switch index {
+            case 1:
+                return Self.assistantToolCalls([
+                    Self.toolCall(id: "search-wide-multiply", name: "search_schema", arguments: [
+                        "query": "wide_table",
+                        "limit": 2,
+                    ]),
+                ])
+            case 2:
+                let tableID = try Self.tableHandle(named: #""public"."wide_table""#, in: request)
+                return Self.assistantToolCalls([
+                    Self.toolCall(id: "describe-wide-multiply", name: "describe_tables", arguments: [
+                        "table_ids": [tableID],
+                    ]),
+                ])
+            case 3:
+                return Self.assistantToolCalls([
+                    Self.terminalSQL(id: "terminal-multiply", sql: sql),
+                ])
+            default:
+                throw URLError(.badServerResponse)
+            }
+        }
+        let agent = makeAgent(schema: schema, chatTransport: chatTransport)
+
+        let result = try await agent.generateSQL(
+            question: "Calculate wide table scores",
+            schema: schema,
+            context: SQLGenerationContext(),
+            config: SQLGenerationConfig()
+        )
+
+        #expect(result.sql == sql)
+        #expect(result.schemaToolCalls.map(\.callID) == ["search-wide-multiply", "describe-wide-multiply"])
     }
 
     @Test func mixedSchemaAndTerminalCallsFailAfterSingleCorrection() async throws {
@@ -910,6 +972,40 @@ struct OpenRouterSchemaToolSQLAgentTests {
                 "search-over-repair-budget",
             ])
             #expect(failure.schemaToolCalls.last?.errorCode == .sessionBudgetExceeded)
+        }
+    }
+
+    @Test func zeroModelTurnBudgetReturnsTypedFailure() async throws {
+        let schema = Self.makeSchema()
+        let chatTransport = ScriptedTransport { _, _ in
+            Issue.record("Unexpected model request")
+            return Self.lengthStoppedResponse()
+        }
+        let agent = makeAgent(
+            schema: schema,
+            chatTransport: chatTransport,
+            configuration: OpenRouterSchemaToolSQLAgentConfiguration(
+                maximumSchemaToolCalls: 4,
+                maximumRepairSchemaToolCalls: 2,
+                maximumModelTurns: 0,
+                maximumMalformedTerminalCorrections: 1,
+                maximumRepeatedToolCorrections: 1,
+                maximumHTTPAttempts: 8,
+                wallClockTimeoutSeconds: 10
+            )
+        )
+
+        do {
+            _ = try await agent.generateSQL(
+                question: "List users",
+                schema: schema,
+                context: SQLGenerationContext(),
+                config: SQLGenerationConfig()
+            )
+            Issue.record("Expected model-turn budget failure")
+        } catch let failure as OpenRouterSchemaToolAgentFailure {
+            #expect(failure.category == .modelTurnBudgetExhausted)
+            #expect(chatTransport.requests.isEmpty)
         }
     }
 

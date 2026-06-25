@@ -798,6 +798,7 @@ Implementation notes:
 * Latest review follow-up fixes preserve quoted identifier case in evidence keys, avoid crediting endpoint tables from empty join-path results, keep initial and repair schema-tool traces separate, and count tools-mode budget failures even when generation failure metadata is partial.
 * Second review follow-up fixes classify unsafe terminal SQL as safety validation, recheck schema freshness before terminal returns, preserve follow-up current SQL and reconstruction repair facts, reject unqualified `SELECT *` unless the table was fully described, and count repair-mode tool-budget failures against the repair budget.
 * Third review follow-up fixes count only typed schema-tool budget errors, keep reconstruction attempts on the repair schema-tool budget, preserve aggregate agent metadata on failures, include agent-only failures in OpenRouter reporting, and preserve typed OpenRouter error envelopes in tool-chat responses.
+* Fourth review follow-up fixes unqualified `SELECT *` detection so arithmetic multiplication is not treated as wildcard projection, returns typed model-turn budget failures for zero-turn configurations, and includes the configured default row limit in the cloud tool-agent prompt.
 
 Verification:
 
@@ -813,7 +814,7 @@ make eval-db-cloud-agent MODEL=openai/gpt-5.5 REPEAT=3
 Results:
 
 ```text
-make test: 710 tests in 42 suites passed.
+make test: 713 tests in 42 suites passed.
 make eval-build: WidenEval build succeeded.
 make eval-schema-tools: 10/10 cases passed; max response bytes 6111; truncated results 1; determinism failures 0.
 make eval-openrouter-smoke MODEL=openai/gpt-5.5 REPEAT=3: completed with backend/transport 15/15, structured parse 15/15, static-shape 9/15, estimated cost $0.181115. Summary: .eval-results/20260625-123540-793/summary.md.
