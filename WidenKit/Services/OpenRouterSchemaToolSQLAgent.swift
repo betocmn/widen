@@ -381,7 +381,7 @@ public final class OpenRouterSchemaToolSQLAgent: SQLGenerator, Sendable {
                                 )
                                 messages.append(
                                     correction(
-                                        "Inspect the schema object before using it in SQL: \(inspection.message)."
+                                        "Use schema tools and validator feedback before returning SQL: \(inspection.message)."
                                     )
                                 )
                                 continue
@@ -904,7 +904,14 @@ private struct SchemaToolEvidenceLedger {
         guard hasSuccessfulSearch else {
             return (false, "search_schema must succeed before terminal SQL.")
         }
+        let safety = SQLSafetyValidator.validate(sql)
+        guard safety.isValid else {
+            return (false, "SQL safety validation failed: \(Self.issueSummary(safety.errors))")
+        }
         let schemaValidation = SQLSchemaValidator.validate(sql: sql, against: schema)
+        guard !schemaValidation.hasDefiniteErrors else {
+            return (false, "Schema validation failed: \(Self.issueSummary(schemaValidation.errors))")
+        }
         let referencedTables = Set(schemaValidation.referencedTables.map(Self.normalizedName))
         let inspectedTables = describedTables.union(joinPathTables)
         for table in referencedTables where !inspectedTables.contains(table) {
@@ -1161,6 +1168,11 @@ private struct SchemaToolEvidenceLedger {
 
     private static func lastSQLPathComponent(_ value: String) -> String? {
         sqlPathComponents(value).last?.lowercased()
+    }
+
+    private static func issueSummary(_ issues: [String]) -> String {
+        let summary = issues.prefix(3).joined(separator: " ")
+        return summary.isEmpty ? "The SQL did not pass validation." : summary
     }
 
     private static func sqlPathComponents(_ value: String) -> [String] {

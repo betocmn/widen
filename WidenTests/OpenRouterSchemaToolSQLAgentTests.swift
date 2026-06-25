@@ -256,6 +256,59 @@ struct OpenRouterSchemaToolSQLAgentTests {
         ])
     }
 
+    @Test func schemaInvalidTerminalSQLReceivesCorrectionBeforeSuccess() async throws {
+        let schema = Self.makeSchema()
+        let chatTransport = ScriptedTransport { request, index in
+            switch index {
+            case 1:
+                return Self.assistantToolCalls([
+                    Self.toolCall(id: "search-users", name: "search_schema", arguments: [
+                        "query": "users",
+                        "limit": 2,
+                    ]),
+                ])
+            case 2:
+                let tableID = try Self.tableHandle(named: #""public"."users""#, in: request)
+                return Self.assistantToolCalls([
+                    Self.toolCall(id: "describe-users", name: "describe_tables", arguments: [
+                        "table_ids": [tableID],
+                    ]),
+                ])
+            case 3:
+                return Self.assistantToolCalls([
+                    Self.terminalSQL(
+                        id: "terminal-invalid",
+                        sql: "SELECT missing_column FROM public.users LIMIT 100"
+                    ),
+                ])
+            case 4:
+                let text = try Self.requestBodyText(request)
+                #expect(text.contains("Schema validation failed"))
+                #expect(text.contains("missing_column"))
+                #expect(try Self.toolMessageIDs(in: request).contains("terminal-invalid"))
+                return Self.assistantToolCalls([
+                    Self.terminalSQL(
+                        id: "terminal-fixed",
+                        sql: "SELECT id FROM public.users LIMIT 100"
+                    ),
+                ])
+            default:
+                throw URLError(.badServerResponse)
+            }
+        }
+        let agent = makeAgent(schema: schema, chatTransport: chatTransport)
+
+        let result = try await agent.generateSQL(
+            question: "List users",
+            schema: schema,
+            context: SQLGenerationContext(),
+            config: SQLGenerationConfig()
+        )
+
+        #expect(result.sql == "SELECT id FROM public.users LIMIT 100")
+        #expect(result.schemaToolCalls.map { $0.callID } == ["search-users", "describe-users"])
+    }
+
     @Test func mixedSchemaAndTerminalCallsFailAfterSingleCorrection() async throws {
         let schema = Self.makeSchema()
         let chatTransport = ScriptedTransport { request, index in
