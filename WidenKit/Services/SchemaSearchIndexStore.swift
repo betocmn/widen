@@ -190,8 +190,10 @@ public actor SchemaSearchIndexStore {
         encoder.outputFormatting = [.sortedKeys]
         var index = index
         var data = try encoder.encode(SchemaSearchIndexEnvelope(key: key, index: index))
-        index.serializedSizeBytes = data.count
-        data = try encoder.encode(SchemaSearchIndexEnvelope(key: key, index: index))
+        while index.serializedSizeBytes != data.count {
+            index.serializedSizeBytes = data.count
+            data = try encoder.encode(SchemaSearchIndexEnvelope(key: key, index: index))
+        }
 
         let url = fileURL(for: key, directory: directory)
         let temporaryURL = directory.appendingPathComponent("\(key.cacheID).tmp-\(UUID().uuidString)")
@@ -205,20 +207,28 @@ public actor SchemaSearchIndexStore {
             guard created else {
                 throw CocoaError(.fileWriteUnknown)
             }
-            if fileManager.fileExists(atPath: url.path) {
-                _ = try fileManager.replaceItemAt(
-                    url,
-                    withItemAt: temporaryURL,
-                    backupItemName: nil,
-                    options: []
+            do {
+                if fileManager.fileExists(atPath: url.path) {
+                    _ = try fileManager.replaceItemAt(
+                        url,
+                        withItemAt: temporaryURL,
+                        backupItemName: nil,
+                        options: []
+                    )
+                } else {
+                    try fileManager.moveItem(at: temporaryURL, to: url)
+                }
+                try fileManager.setAttributes(
+                    [.posixPermissions: NSNumber(value: Int16(0o600))],
+                    ofItemAtPath: url.path
                 )
-            } else {
-                try fileManager.moveItem(at: temporaryURL, to: url)
+            } catch {
+                if let existing = try loadIndex(key: key, directory: directory) {
+                    try? fileManager.removeItem(at: temporaryURL)
+                    return existing
+                }
+                throw error
             }
-            try fileManager.setAttributes(
-                [.posixPermissions: NSNumber(value: Int16(0o600))],
-                ofItemAtPath: url.path
-            )
         } catch {
             try? fileManager.removeItem(at: temporaryURL)
             throw error
@@ -266,7 +276,7 @@ struct SchemaSearchIndexCacheKey: Codable, Equatable, Hashable, Sendable {
     var cacheID: String {
         let text = [
             connectionID.uuidString,
-            selectedSchemas.joined(separator: ","),
+            selectedSchemas.map { "\($0.utf8.count):\($0)" }.joined(separator: ""),
             schemaFingerprint,
             String(indexFormatVersion),
             tokenizerVersion,

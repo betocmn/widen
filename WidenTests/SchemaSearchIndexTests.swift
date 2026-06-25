@@ -574,13 +574,19 @@ struct SchemaSearchIndexTests {
             schemas: [SchemaInfo(name: "public")],
             tables: [table(schema: "public", name: "orders", columns: ["id"])]
         )
+        let schemaSnapshot = snapshot(schema)
+        let key = try SchemaSearchIndexStore.cacheKey(for: schemaSnapshot)
+        let file = directory.appendingPathComponent("\(key.cacheID).json")
         let firstStore = SchemaSearchIndexStore(directory: directory)
-        _ = try await firstStore.searcher(for: snapshot(schema))
+        let fresh = try await firstStore.searcher(for: schemaSnapshot)
+        let freshResponse = fresh.search(SchemaSearchRequest(query: "orders"), in: schemaSnapshot)
+        let freshData = try Data(contentsOf: file)
+        #expect(freshResponse.indexSerializedSizeBytes == freshData.count)
 
         let secondStore = SchemaSearchIndexStore(directory: directory)
-        let cached = try await secondStore.searcher(for: snapshot(schema))
-        let cachedResponse = cached.search(SchemaSearchRequest(query: "orders"), in: snapshot(schema))
-        #expect(cachedResponse.indexSerializedSizeBytes != nil)
+        let cached = try await secondStore.searcher(for: schemaSnapshot)
+        let cachedResponse = cached.search(SchemaSearchRequest(query: "orders"), in: schemaSnapshot)
+        #expect(cachedResponse.indexSerializedSizeBytes == freshData.count)
 
         let changed = DatabaseSchema(
             schemas: [SchemaInfo(name: "public")],
@@ -619,6 +625,34 @@ struct SchemaSearchIndexTests {
         let files = try FileManager.default.contentsOfDirectory(atPath: directory.path)
             .filter { $0.hasSuffix(".json") }
         #expect(files.count == 1)
+    }
+
+    @Test func selectedSchemaCacheKeyDisambiguatesDelimiterCharacters() throws {
+        let shared = (
+            connectionID: connectionID,
+            schemaFingerprint: "same-fingerprint",
+            indexFormatVersion: LocalSchemaSearchIndex.formatVersion,
+            tokenizerVersion: SchemaSearchTokenizer.version,
+            scorerVersion: LocalSchemaSearchIndex.scorerVersion
+        )
+        let first = SchemaSearchIndexCacheKey(
+            connectionID: shared.connectionID,
+            selectedSchemas: ["a,b", "c"],
+            schemaFingerprint: shared.schemaFingerprint,
+            indexFormatVersion: shared.indexFormatVersion,
+            tokenizerVersion: shared.tokenizerVersion,
+            scorerVersion: shared.scorerVersion
+        )
+        let second = SchemaSearchIndexCacheKey(
+            connectionID: shared.connectionID,
+            selectedSchemas: ["a", "b,c"],
+            schemaFingerprint: shared.schemaFingerprint,
+            indexFormatVersion: shared.indexFormatVersion,
+            tokenizerVersion: shared.tokenizerVersion,
+            scorerVersion: shared.scorerVersion
+        )
+
+        #expect(first.cacheID != second.cacheID)
     }
 
     @Test func cacheFilesUseRestrictivePermissions() async throws {
@@ -708,6 +742,33 @@ struct SchemaSearchIndexTests {
         await #expect(throws: CancellationError.self) {
             _ = try await task.value
         }
+    }
+
+    @Test func concurrentStoresTolerateFinalCacheWriteRace() async throws {
+        let directory = tempDirectory()
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let schema = DatabaseSchema(
+            schemas: [SchemaInfo(name: "public")],
+            tables: [table(schema: "public", name: "orders", columns: ["id"])]
+        )
+        let firstStore = SchemaSearchIndexStore(
+            directory: directory,
+            buildDelayNanoseconds: 50_000_000
+        )
+        let secondStore = SchemaSearchIndexStore(
+            directory: directory,
+            buildDelayNanoseconds: 50_000_000
+        )
+
+        async let first = firstStore.searcher(for: snapshot(schema))
+        async let second = secondStore.searcher(for: snapshot(schema))
+        let searchers = try await [first, second]
+        for searcher in searchers {
+            #expect(searcher.search(SchemaSearchRequest(query: "orders"), in: snapshot(schema)).hits.count == 1)
+        }
+        let files = try FileManager.default.contentsOfDirectory(atPath: directory.path)
+            .filter { $0.hasSuffix(".json") }
+        #expect(files.count == 1)
     }
 
     @Test func cancellingOneAwaiterDoesNotCancelSharedBuild() async throws {

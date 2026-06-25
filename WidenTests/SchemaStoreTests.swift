@@ -173,6 +173,41 @@ struct SchemaStoreTests {
         #expect(schema.foreignKeyConstraints.first?.columnPairs.first?.sourceColumn == "user_id")
     }
 
+    @Test func legacyCompositeForeignKeyRowsPreserveStoredOrder() throws {
+        let json = """
+            {
+              "schemas": [{"name": "public"}],
+              "tables": [],
+              "foreignKeys": [{
+                "constraintName": "child_parent_fkey",
+                "sourceSchema": "public",
+                "sourceTable": "child",
+                "sourceColumn": "z_child_id",
+                "targetSchema": "public",
+                "targetTable": "parent",
+                "targetColumn": "z_parent_id"
+              }, {
+                "constraintName": "child_parent_fkey",
+                "sourceSchema": "public",
+                "sourceTable": "child",
+                "sourceColumn": "a_child_id",
+                "targetSchema": "public",
+                "targetTable": "parent",
+                "targetColumn": "a_parent_id"
+              }],
+              "loadedAt": "2025-06-15T15:06:40Z"
+            }
+            """
+        let decoder = JSONDecoder()
+        decoder.dateDecodingStrategy = .iso8601
+
+        let schema = try decoder.decode(DatabaseSchema.self, from: Data(json.utf8))
+        let pairs = try #require(schema.foreignKeyConstraints.first?.columnPairs)
+
+        #expect(pairs.map(\.sourceColumn) == ["z_child_id", "a_child_id"])
+        #expect(pairs.map(\.ordinalPosition) == [1, 2])
+    }
+
     @Test func schemaMetadataRoundTripPreservesCommentsAndGroupedConstraints() throws {
         let schema = DatabaseSchema(
             schemas: [SchemaInfo(name: "public")],

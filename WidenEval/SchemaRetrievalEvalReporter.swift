@@ -71,12 +71,12 @@ enum SchemaRetrievalEvalReporter {
         lines += [
             "## Miss Diagnostics",
             "",
-            "| Case | Retriever | Missing Required | Missing Alternatives | Missing Columns | Forbidden Distractors | No-result | Top Results |",
-            "| --- | --- | --- | --- | --- | --- | --- | --- |",
+            "| Case | Retriever | Missing Required | Missing Alternatives | Missing Columns | Missing Join Paths | Forbidden Distractors | No-result | Top Results |",
+            "| --- | --- | --- | --- | --- | --- | --- | --- | --- |",
         ]
         for result in run.results.sorted(by: resultSort) where isMiss(result) {
             lines.append(
-                "| \(tableCell(result.caseID)) | \(tableCell(result.retriever.rawValue)) | \(tableCell(result.missingRequiredTables.joined(separator: ", "))) | \(tableCell(alternativeGroups(result.missingAlternativeTableGroups))) | \(tableCell(result.missingRequiredColumnMatches.joined(separator: ", "))) | \(tableCell(result.forbiddenDistractorViolations.map(\.table).joined(separator: ", "))) | \(tableCell(noResultStatus(result))) | \(tableCell(result.rankedTables.prefix(8).joined(separator: ", "))) |"
+                "| \(tableCell(result.caseID)) | \(tableCell(result.retriever.rawValue)) | \(tableCell(result.missingRequiredTables.joined(separator: ", "))) | \(tableCell(alternativeGroups(result.missingAlternativeTableGroups))) | \(tableCell(result.missingRequiredColumnMatches.joined(separator: ", "))) | \(tableCell(missingJoinPaths(result))) | \(tableCell(result.forbiddenDistractorViolations.map(\.table).joined(separator: ", "))) | \(tableCell(noResultStatus(result))) | \(tableCell(result.rankedTables.prefix(8).joined(separator: ", "))) |"
             )
         }
 
@@ -146,6 +146,13 @@ enum SchemaRetrievalEvalReporter {
 
     private static func noResultStatus(_ result: SchemaRetrievalEvalResult) -> String {
         result.noResultExpectationPassed == false ? "failed" : ""
+    }
+
+    private static func missingJoinPaths(_ result: SchemaRetrievalEvalResult) -> String {
+        result.requiredJoinPathResults
+            .filter { !$0.recovered }
+            .map { "\($0.from) -> \($0.to) <=\($0.maximumHops)" }
+            .joined(separator: ", ")
     }
 
     private static func percent(_ value: Double) -> String {

@@ -100,17 +100,19 @@ public struct DatabaseSchema: Codable, Equatable, Sendable {
         }
 
         return grouped.map { key, rows in
-            SchemaForeignKeyConstraintInfo(
+            let usesLegacyOrdinalDefaults = rows.count > 1
+                && rows.allSatisfy { $0.ordinalPosition == 1 }
+            return SchemaForeignKeyConstraintInfo(
                 constraintName: key.constraintName,
                 sourceSchema: key.sourceSchema,
                 sourceTable: key.sourceTable,
                 targetSchema: key.targetSchema,
                 targetTable: key.targetTable,
-                columnPairs: rows.map {
+                columnPairs: rows.enumerated().map { offset, row in
                     SchemaForeignKeyColumnPair(
-                        sourceColumn: $0.sourceColumn,
-                        targetColumn: $0.targetColumn,
-                        ordinalPosition: $0.ordinalPosition
+                        sourceColumn: row.sourceColumn,
+                        targetColumn: row.targetColumn,
+                        ordinalPosition: usesLegacyOrdinalDefaults ? offset + 1 : row.ordinalPosition
                     )
                 }
             )
