@@ -268,15 +268,41 @@ public final class OpenRouterSchemaToolSQLAgent: SQLGenerator, Sendable {
             }
             let mixesTerminalAndSchema = !terminalCalls.isEmpty && (knownSchemaCalls.count + unknownCalls.count) > 0
             if mixesTerminalAndSchema {
+                messages.append(OpenRouterToolChatMessage(role: .assistant, toolCalls: toolCalls))
                 if malformedTerminalCorrections < configuration.maximumMalformedTerminalCorrections {
                     malformedTerminalCorrections += 1
-                    messages.append(OpenRouterToolChatMessage(role: .assistant, toolCalls: toolCalls))
+                    appendToolErrorResponses(
+                        for: toolCalls,
+                        to: &messages,
+                        code: "mixed_terminal_schema_calls",
+                        message: "Do not mix schema tools with the terminal result tool."
+                    )
                     messages.append(correction("Do not mix schema tools with \(Self.terminalToolName) in the same turn."))
                     continue
                 }
                 throw await agentFailure(
                     .mixedTerminalAndSchemaCalls,
                     "The model mixed schema and terminal tool calls.",
+                    session: session
+                )
+            }
+
+            if terminalCalls.count > 1 {
+                messages.append(OpenRouterToolChatMessage(role: .assistant, toolCalls: toolCalls))
+                if malformedTerminalCorrections < configuration.maximumMalformedTerminalCorrections {
+                    malformedTerminalCorrections += 1
+                    appendToolErrorResponses(
+                        for: terminalCalls,
+                        to: &messages,
+                        code: "multiple_terminal_calls",
+                        message: "Call the terminal result tool exactly once."
+                    )
+                    messages.append(correction("Call \(Self.terminalToolName) exactly once."))
+                    continue
+                }
+                throw await agentFailure(
+                    .terminalResultMalformed,
+                    "The model called the terminal tool more than once.",
                     session: session
                 )
             }
@@ -290,6 +316,13 @@ public final class OpenRouterSchemaToolSQLAgent: SQLGenerator, Sendable {
                 } catch {
                     if malformedTerminalCorrections < configuration.maximumMalformedTerminalCorrections {
                         malformedTerminalCorrections += 1
+                        messages.append(
+                            toolErrorResponse(
+                                call: terminal,
+                                code: "malformed_terminal_arguments",
+                                message: "The terminal tool arguments were invalid."
+                            )
+                        )
                         messages.append(correction("The terminal tool arguments were invalid. Call \(Self.terminalToolName) with valid arguments."))
                         continue
                     }
@@ -301,6 +334,13 @@ public final class OpenRouterSchemaToolSQLAgent: SQLGenerator, Sendable {
                     guard evidence.hasSuccessfulSearch else {
                         if malformedTerminalCorrections < configuration.maximumMalformedTerminalCorrections {
                             malformedTerminalCorrections += 1
+                            messages.append(
+                                toolErrorResponse(
+                                    call: terminal,
+                                    code: "schema_search_required",
+                                    message: "Search the schema before asking for clarification."
+                                )
+                            )
                             messages.append(correction("Search the schema before asking a clarification question."))
                             continue
                         }
@@ -323,6 +363,13 @@ public final class OpenRouterSchemaToolSQLAgent: SQLGenerator, Sendable {
                     if !inspection.accepted {
                         if uninspectedSQLCorrections < 1 {
                             uninspectedSQLCorrections += 1
+                            messages.append(
+                                toolErrorResponse(
+                                    call: terminal,
+                                    code: "uninspected_schema_objects",
+                                    message: inspection.message
+                                )
+                            )
                             messages.append(
                                 correction(
                                     "Inspect the schema object before using it in SQL: \(inspection.message)."
@@ -654,6 +701,17 @@ public final class OpenRouterSchemaToolSQLAgent: SQLGenerator, Sendable {
             toolCallID: call.id,
             toolName: call.name
         )
+    }
+
+    private func appendToolErrorResponses(
+        for calls: [OpenRouterToolCall],
+        to messages: inout [OpenRouterToolChatMessage],
+        code: String,
+        message: String
+    ) {
+        messages.append(contentsOf: calls.map { call in
+            toolErrorResponse(call: call, code: code, message: message)
+        })
     }
 
     private func correction(_ text: String) -> OpenRouterToolChatMessage {

@@ -182,6 +182,7 @@ struct OpenRouterSchemaToolSQLAgentTests {
             case 2:
                 let text = try Self.requestBodyText(request)
                 #expect(text.contains("search_schema must succeed") || text.contains("Search the schema"))
+                #expect(try Self.toolMessageIDs(in: request).contains("too-soon"))
                 return Self.assistantToolCalls([
                     Self.toolCall(id: "search-after-correction", name: "search_schema", arguments: [
                         "query": "users",
@@ -220,13 +221,18 @@ struct OpenRouterSchemaToolSQLAgentTests {
 
     @Test func mixedSchemaAndTerminalCallsFailAfterSingleCorrection() async throws {
         let schema = Self.makeSchema()
-        let chatTransport = ScriptedTransport { _, _ in
-            Self.assistantToolCalls([
-                Self.toolCall(id: UUID().uuidString, name: "search_schema", arguments: [
+        let chatTransport = ScriptedTransport { request, index in
+            if index == 2 {
+                let toolMessageIDs = try Self.toolMessageIDs(in: request)
+                #expect(toolMessageIDs == ["search-mixed-1", "terminal-mixed-1"])
+            }
+            let suffix = index == 1 ? "1" : "2"
+            return Self.assistantToolCalls([
+                Self.toolCall(id: "search-mixed-\(suffix)", name: "search_schema", arguments: [
                     "query": "users",
                     "limit": 1,
                 ]),
-                Self.terminalSQL(id: UUID().uuidString, sql: "SELECT id FROM public.users LIMIT 100"),
+                Self.terminalSQL(id: "terminal-mixed-\(suffix)", sql: "SELECT id FROM public.users LIMIT 100"),
             ])
         }
         let agent = makeAgent(schema: schema, chatTransport: chatTransport)
@@ -241,6 +247,34 @@ struct OpenRouterSchemaToolSQLAgentTests {
             Issue.record("Expected mixed terminal/schema failure")
         } catch let failure as OpenRouterSchemaToolAgentFailure {
             #expect(failure.category == .mixedTerminalAndSchemaCalls)
+        }
+    }
+
+    @Test func multipleTerminalCallsReceiveToolErrorsThenFail() async throws {
+        let schema = Self.makeSchema()
+        let chatTransport = ScriptedTransport { request, index in
+            if index == 2 {
+                let toolMessageIDs = try Self.toolMessageIDs(in: request)
+                #expect(toolMessageIDs == ["terminal-a-1", "terminal-b-1"])
+            }
+            let suffix = index == 1 ? "1" : "2"
+            return Self.assistantToolCalls([
+                Self.terminalSQL(id: "terminal-a-\(suffix)", sql: "SELECT id FROM public.users LIMIT 100"),
+                Self.terminalSQL(id: "terminal-b-\(suffix)", sql: "SELECT name FROM public.users LIMIT 100"),
+            ])
+        }
+        let agent = makeAgent(schema: schema, chatTransport: chatTransport)
+
+        do {
+            _ = try await agent.generateSQL(
+                question: "List users",
+                schema: schema,
+                context: SQLGenerationContext(),
+                config: SQLGenerationConfig()
+            )
+            Issue.record("Expected multiple terminal failure")
+        } catch let failure as OpenRouterSchemaToolAgentFailure {
+            #expect(failure.category == .terminalResultMalformed)
         }
     }
 
@@ -428,14 +462,24 @@ struct OpenRouterSchemaToolSQLAgentTests {
         let messages = try #require(body["messages"] as? [[String: Any]])
         return try messages.compactMap { message -> SchemaToolResult? in
             guard message["role"] as? String == "tool",
-                let content = message["content"] as? String
+                let content = message["content"] as? String,
+                message["name"] as? String != OpenRouterSchemaToolSQLAgent.terminalToolName
             else {
                 return nil
             }
-            return try JSONDecoder().decode(
+            return try? JSONDecoder().decode(
                 SchemaToolResult.self,
                 from: Data(content.utf8)
             )
+        }
+    }
+
+    private static func toolMessageIDs(in request: URLRequest) throws -> [String] {
+        let body = try requestBody(request)
+        let messages = try #require(body["messages"] as? [[String: Any]])
+        return messages.compactMap { message in
+            guard message["role"] as? String == "tool" else { return nil }
+            return message["tool_call_id"] as? String
         }
     }
 
