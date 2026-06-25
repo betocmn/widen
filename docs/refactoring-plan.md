@@ -794,6 +794,7 @@ Implementation notes:
 * App construction now uses a connection-aware generator path so connection ID, selected schemas, schema fingerprint, schema-tool session factory, and search index store stay host-controlled.
 * Added `WidenEval --cloud-agent legacy|tools` plus `make eval-cloud-agent`, `make eval-db-cloud-agent`, and `make eval-cloud-agent-case`.
 * Added deterministic scripted OpenRouter tests for the happy path, multiple schema calls, terminal-before-search correction, mixed terminal/schema rejection, unsupported-tool-model legacy selection, prompt injection exclusion from the initial request, and pipeline trace merging.
+* Review follow-up fixes preserve provider tool-call response protocol during corrections and keep schema-tool traces on stale-schema and provider-failure agent failures.
 
 Verification:
 
@@ -809,7 +810,7 @@ make eval-db-cloud-agent MODEL=openai/gpt-5.5 REPEAT=3
 Results:
 
 ```text
-make test: 694 tests in 42 suites passed.
+make test: 697 tests in 42 suites passed.
 make eval-schema-tools: 10/10 cases passed; max response bytes 6111; truncated results 1; determinism failures 0.
 make eval-openrouter-smoke MODEL=openai/gpt-5.5 REPEAT=3: completed with backend/transport 15/15, structured parse 15/15, static-shape 9/15, estimated cost $0.181115. Summary: .eval-results/20260625-123540-793/summary.md.
 make eval-cloud-agent MODEL=openai/gpt-5.5 REPEAT=3: completed tools mode with backend 60/60, transport 60/60, static-shape 10/60, 221 schema-tool calls, 141 model calls, 123 agent HTTP attempts, estimated cost $1.353450. Summary: .eval-results/20260625-125522-075/summary.md.
