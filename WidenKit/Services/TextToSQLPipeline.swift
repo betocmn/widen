@@ -902,10 +902,7 @@ private struct TraceBuilder {
 
     mutating func mergeSchemaToolCalls(_ traces: [SchemaToolCallTrace]) {
         guard !traces.isEmpty else { return }
-        var seen = Set(schemaToolCalls.map { "\($0.callID)\u{1f}\($0.toolName)" })
-        for trace in traces where seen.insert("\(trace.callID)\u{1f}\(trace.toolName)").inserted {
-            schemaToolCalls.append(trace)
-        }
+        schemaToolCalls.append(contentsOf: traces)
     }
 
     private static func fingerprint(_ schema: DatabaseSchema) -> String {

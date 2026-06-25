@@ -743,9 +743,17 @@ struct EvalRunner {
         let schemaToolCalls = results.compactMap(\.metrics.openRouterSchemaToolCallCount)
         let agentModelTurns = results.compactMap(\.metrics.openRouterAgentLogicalTurnCount)
         let agentHTTPAttempts = results.compactMap(\.metrics.openRouterAgentHTTPAttemptCount)
+        let toolsModeRequested = options.backendMode.backends.contains(.cloud)
+            && options.cloudAgentMode == .tools
         let toolBudgetFailures = results.filter { result in
-            result.metrics.openRouterAgentSelectionReason == "tools"
-                && result.status == .generationFailure
+            result.status == .generationFailure
+                && (
+                    result.metrics.openRouterAgentSelectionReason == "tools"
+                        || (
+                            toolsModeRequested
+                                && result.metrics.openRouterAgentSelectionReason == nil
+                        )
+                )
                 && (result.metrics.openRouterSchemaToolCallCount ?? 0)
                     >= SchemaToolPolicy.cloudAgent.maximumCallCount
         }

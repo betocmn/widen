@@ -145,7 +145,8 @@ struct TextToSQLPipelineTests {
         explanation: String = "Generated SQL.",
         needsClarification: Bool = false,
         clarificationQuestion: String? = nil,
-        generationCallCount: Int? = nil
+        generationCallCount: Int? = nil,
+        schemaToolCalls: [SchemaToolCallTrace] = []
     ) -> SQLGenerationResult {
         SQLGenerationResult(
             sql: needsClarification ? "" : sql,
@@ -156,7 +157,8 @@ struct TextToSQLPipelineTests {
             riskLevel: needsClarification ? .medium : .low,
             needsClarification: needsClarification,
             clarificationQuestion: clarificationQuestion,
-            generationCallCount: generationCallCount
+            generationCallCount: generationCallCount,
+            schemaToolCalls: schemaToolCalls
         )
     }
 
@@ -167,6 +169,20 @@ struct TextToSQLPipelineTests {
                 schema: makeSchema(),
                 config: SQLGenerationConfig(defaultRowLimit: 100)
             )
+        )
+    }
+
+    private func schemaToolTrace(callID: String, toolName: String) -> SchemaToolCallTrace {
+        SchemaToolCallTrace(
+            callID: callID,
+            toolName: toolName,
+            outcome: .success,
+            latencyMs: 1,
+            returnedObjectCount: 1,
+            outputByteCount: 128,
+            truncated: false,
+            schemaFingerprintPrefix: "abcdef12",
+            cacheHit: true
         )
     }
 
@@ -557,6 +573,30 @@ struct TextToSQLPipelineTests {
 
         #expect(result.trace.modelCalls == 2)
         #expect(generator.contexts[1].modelCallCount == 2)
+    }
+
+    @Test func repairSchemaToolTracesPreserveRepeatedProviderCallIDs() async throws {
+        let initialTrace = schemaToolTrace(callID: "search", toolName: "search_schema")
+        let repairTrace = schemaToolTrace(callID: "search", toolName: "search_schema")
+        let generator = ScriptedGenerator([
+            .success(
+                generation(
+                    sql: "SELECT missing FROM public.users",
+                    schemaToolCalls: [initialTrace]
+                )
+            ),
+            .success(
+                generation(
+                    sql: "SELECT id FROM public.users LIMIT 100",
+                    schemaToolCalls: [repairTrace]
+                )
+            ),
+        ])
+
+        let result = try await run(generator)
+
+        #expect(result.trace.schemaToolCalls.map(\.callID) == ["search", "search"])
+        #expect(result.trace.schemaToolCalls.count == 2)
     }
 
     @Test func repairFailureTraceKeepsGeneratorElapsedTime() async throws {

@@ -309,6 +309,119 @@ struct OpenRouterSchemaToolSQLAgentTests {
         #expect(result.schemaToolCalls.map { $0.callID } == ["search-users", "describe-users"])
     }
 
+    @Test func caseVariantTableInspectionDoesNotAuthorizeLowercaseTable() async throws {
+        let schema = Self.makeCaseVariantSchema()
+        let chatTransport = ScriptedTransport { request, index in
+            switch index {
+            case 1:
+                return Self.assistantToolCalls([
+                    Self.toolCall(id: "search-mixed", name: "search_schema", arguments: [
+                        "query": #""UserEvents""#,
+                        "limit": 4,
+                    ]),
+                ])
+            case 2:
+                let tableID = try Self.tableHandle(named: #""public"."UserEvents""#, in: request)
+                return Self.assistantToolCalls([
+                    Self.toolCall(id: "describe-mixed", name: "describe_tables", arguments: [
+                        "table_ids": [tableID],
+                    ]),
+                ])
+            case 3:
+                return Self.assistantToolCalls([
+                    Self.terminalSQL(
+                        id: "terminal-lowercase",
+                        sql: "SELECT id FROM public.userevents LIMIT 100"
+                    ),
+                ])
+            case 4:
+                let text = try Self.requestBodyText(request)
+                #expect(text.contains("public.userevents was not described"))
+                #expect(try Self.toolMessageIDs(in: request).contains("terminal-lowercase"))
+                return Self.assistantToolCalls([
+                    Self.terminalSQL(
+                        id: "terminal-lowercase-repeat",
+                        sql: "SELECT id FROM public.userevents LIMIT 100"
+                    ),
+                ])
+            default:
+                throw URLError(.badServerResponse)
+            }
+        }
+        let agent = makeAgent(schema: schema, chatTransport: chatTransport)
+
+        do {
+            _ = try await agent.generateSQL(
+                question: "List user events",
+                schema: schema,
+                context: SQLGenerationContext(),
+                config: SQLGenerationConfig()
+            )
+            Issue.record("Expected uninspected lowercase table failure")
+        } catch let failure as OpenRouterSchemaToolAgentFailure {
+            #expect(failure.category == .uninspectedSchemaObjects)
+            #expect(failure.schemaToolCalls.map(\.callID) == ["search-mixed", "describe-mixed"])
+        }
+    }
+
+    @Test func noPathJoinResultDoesNotAuthorizeEndpointTables() async throws {
+        let schema = Self.makeNoPathSchema()
+        let chatTransport = ScriptedTransport { request, index in
+            switch index {
+            case 1:
+                return Self.assistantToolCalls([
+                    Self.toolCall(id: "search-users", name: "search_schema", arguments: [
+                        "query": "users",
+                        "limit": 2,
+                    ]),
+                    Self.toolCall(id: "search-invoices", name: "search_schema", arguments: [
+                        "query": "invoices",
+                        "limit": 2,
+                    ]),
+                ])
+            case 2:
+                let users = try Self.tableHandle(named: #""public"."users""#, in: request)
+                let invoices = try Self.tableHandle(named: #""public"."invoices""#, in: request)
+                return Self.assistantToolCalls([
+                    Self.toolCall(id: "find-no-path", name: "find_join_paths", arguments: [
+                        "from_table_id": users,
+                        "to_table_id": invoices,
+                        "max_hops": 2,
+                    ]),
+                ])
+            case 3:
+                return Self.assistantToolCalls([
+                    Self.terminalSQL(id: "terminal-invoices", sql: "SELECT id FROM public.invoices LIMIT 100"),
+                ])
+            case 4:
+                let text = try Self.requestBodyText(request)
+                #expect(text.contains("public.invoices was not described"))
+                #expect(try Self.toolMessageIDs(in: request).contains("terminal-invoices"))
+                return Self.assistantToolCalls([
+                    Self.terminalSQL(id: "terminal-invoices-repeat", sql: "SELECT id FROM public.invoices LIMIT 100"),
+                ])
+            default:
+                throw URLError(.badServerResponse)
+            }
+        }
+        let agent = makeAgent(schema: schema, chatTransport: chatTransport)
+
+        do {
+            _ = try await agent.generateSQL(
+                question: "List invoices for users",
+                schema: schema,
+                context: SQLGenerationContext(),
+                config: SQLGenerationConfig()
+            )
+            Issue.record("Expected no-path endpoint inspection failure")
+        } catch let failure as OpenRouterSchemaToolAgentFailure {
+            #expect(failure.category == .uninspectedSchemaObjects)
+            #expect(failure.schemaToolCalls.map(\.callID) == [
+                "search-users", "search-invoices", "find-no-path",
+            ])
+        }
+    }
+
     @Test func mixedSchemaAndTerminalCallsFailAfterSingleCorrection() async throws {
         let schema = Self.makeSchema()
         let chatTransport = ScriptedTransport { request, index in
@@ -831,6 +944,56 @@ struct OpenRouterSchemaToolSQLAgentTests {
                             targetColumn: "id",
                             ordinalPosition: 1
                         ),
+                    ]
+                ),
+            ]
+        )
+    }
+
+    private static func makeCaseVariantSchema() -> DatabaseSchema {
+        DatabaseSchema(
+            schemas: [SchemaInfo(name: "public")],
+            tables: [
+                TableInfo(
+                    schema: "public",
+                    name: "UserEvents",
+                    type: .baseTable,
+                    columns: [
+                        column("UserEvents", "id", type: "integer", ordinal: 1),
+                        column("UserEvents", "eventName", type: "text", ordinal: 2),
+                    ]
+                ),
+                TableInfo(
+                    schema: "public",
+                    name: "userevents",
+                    type: .baseTable,
+                    columns: [
+                        column("userevents", "id", type: "integer", ordinal: 1),
+                        column("userevents", "name", type: "text", ordinal: 2),
+                    ]
+                ),
+            ]
+        )
+    }
+
+    private static func makeNoPathSchema() -> DatabaseSchema {
+        DatabaseSchema(
+            schemas: [SchemaInfo(name: "public")],
+            tables: [
+                TableInfo(
+                    schema: "public",
+                    name: "users",
+                    type: .baseTable,
+                    columns: [
+                        column("users", "id", type: "integer", ordinal: 1),
+                    ]
+                ),
+                TableInfo(
+                    schema: "public",
+                    name: "invoices",
+                    type: .baseTable,
+                    columns: [
+                        column("invoices", "id", type: "integer", ordinal: 1),
                     ]
                 ),
             ]

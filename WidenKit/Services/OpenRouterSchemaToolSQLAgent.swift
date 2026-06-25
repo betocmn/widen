@@ -912,7 +912,7 @@ private struct SchemaToolEvidenceLedger {
         guard !schemaValidation.hasDefiniteErrors else {
             return (false, "Schema validation failed: \(Self.issueSummary(schemaValidation.errors))")
         }
-        let referencedTables = Set(schemaValidation.referencedTables.map(Self.normalizedName))
+        let referencedTables = Set(schemaValidation.referencedTables)
         let inspectedTables = describedTables.union(joinPathTables)
         for table in referencedTables where !inspectedTables.contains(table) {
             return (false, "\(table) was not described or exposed by an inspected join path.")
@@ -975,13 +975,7 @@ private struct SchemaToolEvidenceLedger {
     }
 
     private mutating func recordJoinPaths(_ payload: JSONValue) {
-        if let source = payload["source_table"]?.stringValue.flatMap(Self.normalizedSQLPath) {
-            joinPathTables.insert(source)
-        }
-        if let target = payload["target_table"]?.stringValue.flatMap(Self.normalizedSQLPath) {
-            joinPathTables.insert(target)
-        }
-        guard let paths = payload["paths"]?.arrayValue else { return }
+        guard let paths = payload["paths"]?.arrayValue, !paths.isEmpty else { return }
         for path in paths {
             guard let edges = path["edges"]?.arrayValue else { continue }
             for edge in edges {
@@ -1082,36 +1076,37 @@ private struct SchemaToolEvidenceLedger {
         referencedTables: [String],
         schema: DatabaseSchema
     ) -> [(table: String, column: String)] {
+        let referencedTableNames = Set(referencedTables)
         let referencedTableInfos = schema.tables.filter {
-            referencedTables.map(Self.normalizedName).contains(Self.normalizedName($0.qualifiedName))
+            referencedTableNames.contains($0.qualifiedName)
         }
         let aliases = relationAliasMap(analysis: analysis, schema: schema)
         var bindings: [(table: String, column: String)] = []
         for column in analysis.columns {
             if column.name == "*" {
                 if let qualifier = column.qualifier,
-                    let table = aliases[Self.normalizedName(qualifier)]
+                    let table = aliases[Self.lookupKey(qualifier, quoted: column.qualifierIsQuoted)]
                 {
-                    bindings.append((Self.normalizedName(table.qualifiedName), "*"))
+                    bindings.append((table.qualifiedName, "*"))
                 } else if column.qualifier == nil {
                     for table in referencedTableInfos {
-                        bindings.append((Self.normalizedName(table.qualifiedName), "*"))
+                        bindings.append((table.qualifiedName, "*"))
                     }
                 }
                 continue
             }
             if let qualifier = column.qualifier,
-                let table = aliases[Self.normalizedName(qualifier)]
+                let table = aliases[Self.lookupKey(qualifier, quoted: column.qualifierIsQuoted)],
+                let resolvedColumn = Self.columnName(in: table, matching: column)
             {
-                bindings.append((Self.normalizedName(table.qualifiedName), Self.normalizedIdentifier(column)))
+                bindings.append((table.qualifiedName, resolvedColumn))
             } else if column.qualifier == nil {
-                let matches = referencedTableInfos.filter {
-                    $0.columns.contains { candidate in
-                        column.isQuoted ? candidate.name == column.name : candidate.name.lowercased() == column.name.lowercased()
-                    }
+                let matches = referencedTableInfos.compactMap { table -> (TableInfo, String)? in
+                    guard let columnName = Self.columnName(in: table, matching: column) else { return nil }
+                    return (table, columnName)
                 }
-                if matches.count == 1, let table = matches.first {
-                    bindings.append((Self.normalizedName(table.qualifiedName), Self.normalizedIdentifier(column)))
+                if matches.count == 1, let match = matches.first {
+                    bindings.append((match.0.qualifiedName, match.1))
                 }
             }
         }
@@ -1126,10 +1121,15 @@ private struct SchemaToolEvidenceLedger {
         var aliases: [String: TableInfo] = [:]
         for relation in analysis.relations where !relation.isDerived {
             guard let table = table(for: relation, schema: schema) else { continue }
-            aliases[Self.normalizedName(table.name)] = table
-            aliases[Self.normalizedName(table.qualifiedName)] = table
+            Self.insertAlias(relation.name, quoted: relation.nameIsQuoted, table: table, into: &aliases)
+            Self.insertAlias(
+                relation.displayName,
+                quoted: relation.schemaIsQuoted || relation.nameIsQuoted,
+                table: table,
+                into: &aliases
+            )
             if let alias = relation.alias {
-                aliases[Self.normalizedName(alias)] = table
+                Self.insertAlias(alias, quoted: relation.aliasIsQuoted, table: table, into: &aliases)
             }
         }
         return aliases
@@ -1152,22 +1152,50 @@ private struct SchemaToolEvidenceLedger {
         quoted ? stored == referenced : stored.lowercased() == referenced.lowercased()
     }
 
-    private static func normalizedIdentifier(_ column: SQLColumnReference) -> String {
-        column.isQuoted ? column.name : column.name.lowercased()
+    private static func columnName(in table: TableInfo, matching column: SQLColumnReference) -> String? {
+        table.columns.first {
+            column.isQuoted ? $0.name == column.name : $0.name.lowercased() == column.name.lowercased()
+        }?.name
     }
 
-    private static func normalizedName(_ value: String) -> String {
-        value.lowercased()
+    private static func lookupKey(_ value: String, quoted: Bool) -> String {
+        quoted ? "q:\(value)" : "u:\(value.lowercased())"
+    }
+
+    private static func insertAlias(
+        _ value: String,
+        quoted: Bool,
+        table: TableInfo,
+        into aliases: inout [String: TableInfo]
+    ) {
+        aliases[lookupKey(value, quoted: quoted)] = table
+        if quoted, isUnquotedPostgresIdentifier(value) {
+            aliases[lookupKey(value, quoted: false)] = table
+        }
+    }
+
+    private static func isUnquotedPostgresIdentifier(_ value: String) -> Bool {
+        guard let first = value.first,
+            first == "_" || (first >= "a" && first <= "z")
+        else {
+            return false
+        }
+        return value.allSatisfy { character in
+            character == "_"
+                || character == "$"
+                || (character >= "a" && character <= "z")
+                || (character >= "0" && character <= "9")
+        }
     }
 
     private static func normalizedSQLPath(_ value: String) -> String? {
         let components = sqlPathComponents(value)
         guard components.count >= 2 else { return nil }
-        return components.joined(separator: ".").lowercased()
+        return components.joined(separator: ".")
     }
 
     private static func lastSQLPathComponent(_ value: String) -> String? {
-        sqlPathComponents(value).last?.lowercased()
+        sqlPathComponents(value).last
     }
 
     private static func issueSummary(_ issues: [String]) -> String {
