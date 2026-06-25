@@ -443,7 +443,7 @@ public enum TextToSQLEvalCaseRunner {
     ) -> Int? {
         if let agentAttemptCount = backendMetadata?.agentHTTPAttemptCount ?? backendMetadata?.requestCount {
             guard trace.modelCalls > 0 else { return agentAttemptCount }
-            return trace.modelCalls + agentAttemptCount
+            return trace.modelCalls + max(0, agentAttemptCount - 1)
         }
         guard let attemptCount = openRouterFailure?.attemptCount else {
             return trace.modelCalls == 0 ? nil : trace.modelCalls
@@ -1054,8 +1054,8 @@ private extension TextToSQLEvalMetrics {
         copy.openRouterAgentSelectionReason = metadata?.agentSelectionReason
         copy.openRouterAgentLogicalTurnCount = metadata?.agentLogicalTurnCount
         copy.openRouterAgentHTTPAttemptCount = metadata?.agentHTTPAttemptCount
-        copy.openRouterSchemaToolCallCount = metadata?.agentSchemaToolCallCount
-            ?? trace?.schemaToolCalls.nonEmptyCount
+        copy.openRouterSchemaToolCallCount = trace?.schemaToolCalls.nonEmptyCount
+            ?? metadata?.agentSchemaToolCallCount
         copy.openRouterAgentTerminalOutcome = metadata?.agentTerminalOutcome
         return copy
     }

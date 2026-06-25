@@ -181,7 +181,9 @@ public final class OpenRouterSchemaToolSQLAgent: SQLGenerator, Sendable {
             apiKey: apiKey,
             modelID: model
         )
-        guard capabilities.supportsTools else {
+        if !capabilities.supportsTools,
+            Self.canUseLegacyForKnownUnsupportedTools(capabilities)
+        {
             var result = try await legacyGenerator.generateSQL(
                 question: question,
                 schema: schema,
@@ -248,7 +250,7 @@ public final class OpenRouterSchemaToolSQLAgent: SQLGenerator, Sendable {
                 } catch is CancellationError {
                     throw CancellationError()
                 } catch let failure as OpenRouterFailure {
-                    if failure.category == .unsupportedFeature || failure.category == .invalidRequest {
+                    if failure.category == .unsupportedFeature {
                         await catalogService.invalidate(apiKey: apiKey, modelID: model)
                         throw await agentFailure(
                             .unsupportedTools,
@@ -610,7 +612,10 @@ public final class OpenRouterSchemaToolSQLAgent: SQLGenerator, Sendable {
                 needsClarification: false,
                 clarificationQuestion: nil,
                 generationSchemaName: schema.singleSchemaName,
-                generationCallCount: max(0, context.modelCallCount) + max(1, aggregate.httpAttemptCount),
+                generationCallCount: Self.cumulativeModelCallCount(
+                    contextModelCallCount: context.modelCallCount,
+                    httpAttemptCount: aggregate.httpAttemptCount
+                ),
                 backendMetadata: metadata,
                 schemaToolCalls: traces
             )
@@ -625,7 +630,10 @@ public final class OpenRouterSchemaToolSQLAgent: SQLGenerator, Sendable {
                 needsClarification: true,
                 clarificationQuestion: terminal.clarificationQuestion,
                 generationSchemaName: schema.singleSchemaName,
-                generationCallCount: max(0, context.modelCallCount) + max(1, aggregate.httpAttemptCount),
+                generationCallCount: Self.cumulativeModelCallCount(
+                    contextModelCallCount: context.modelCallCount,
+                    httpAttemptCount: aggregate.httpAttemptCount
+                ),
                 backendMetadata: metadata,
                 schemaToolCalls: traces
             )
@@ -654,6 +662,24 @@ public final class OpenRouterSchemaToolSQLAgent: SQLGenerator, Sendable {
     private func effectiveSelectedSchemas(_ schema: DatabaseSchema) -> [String] {
         if !selectedSchemas.isEmpty { return selectedSchemas }
         return schema.schemas.map(\.name).sorted()
+    }
+
+    private static func canUseLegacyForKnownUnsupportedTools(
+        _ capabilities: OpenRouterModelCapabilities
+    ) -> Bool {
+        switch capabilities.capabilitySource {
+        case .authenticatedCatalog, .singleModelLookup:
+            return true
+        case .staleCache, .conservativeDefault:
+            return false
+        }
+    }
+
+    private static func cumulativeModelCallCount(
+        contextModelCallCount: Int,
+        httpAttemptCount: Int
+    ) -> Int {
+        max(1, contextModelCallCount) + max(0, httpAttemptCount - 1)
     }
 
     private func userPrompt(

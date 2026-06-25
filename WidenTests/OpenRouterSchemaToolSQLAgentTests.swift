@@ -793,6 +793,59 @@ struct OpenRouterSchemaToolSQLAgentTests {
         #expect(legacy.callCount == 1)
     }
 
+    @Test func unknownToolCapabilitiesAttemptAgentInsteadOfLegacy() async throws {
+        let schema = Self.makeSchema()
+        let chatTransport = ScriptedTransport { request, index in
+            switch index {
+            case 1:
+                return Self.assistantToolCalls([
+                    Self.toolCall(id: "search-unknown-capabilities", name: "search_schema", arguments: [
+                        "query": "users",
+                        "limit": 2,
+                    ]),
+                ])
+            case 2:
+                let tableID = try Self.tableHandle(named: #""public"."users""#, in: request)
+                return Self.assistantToolCalls([
+                    Self.toolCall(id: "describe-unknown-capabilities", name: "describe_tables", arguments: [
+                        "table_ids": [tableID],
+                    ]),
+                ])
+            case 3:
+                return Self.assistantToolCalls([
+                    Self.terminalSQL(
+                        id: "terminal-unknown-capabilities",
+                        sql: "SELECT id FROM public.users LIMIT 100"
+                    ),
+                ])
+            default:
+                throw URLError(.badServerResponse)
+            }
+        }
+        let catalogTransport = ScriptedTransport { _, _ in
+            throw URLError(.cannotConnectToHost)
+        }
+        let legacy = LegacyGenerator()
+        let agent = makeAgent(
+            schema: schema,
+            chatTransport: chatTransport,
+            catalogTransport: catalogTransport,
+            legacyGenerator: legacy
+        )
+
+        let result = try await agent.generateSQL(
+            question: "List users",
+            schema: schema,
+            context: SQLGenerationContext(),
+            config: SQLGenerationConfig()
+        )
+
+        #expect(result.sql == "SELECT id FROM public.users LIMIT 100")
+        #expect(result.backendMetadata?.agentSelectionReason == "tools")
+        #expect(chatTransport.requests.count == 3)
+        #expect(legacy.callCount == 0)
+    }
+
     @Test func pipelineMergesSchemaToolTraces() async throws {
         let schema = Self.makeSchema()
         let chatTransport = ScriptedTransport { request, index in
@@ -1009,6 +1062,48 @@ struct OpenRouterSchemaToolSQLAgentTests {
         }
     }
 
+    @Test func repairGenerationCallCountDoesNotDoubleCountCurrentRequest() async throws {
+        let schema = Self.makeSchema()
+        let chatTransport = ScriptedTransport { request, index in
+            switch index {
+            case 1:
+                return Self.assistantToolCalls([
+                    Self.toolCall(id: "search-repair-count", name: "search_schema", arguments: [
+                        "query": "users",
+                        "limit": 2,
+                    ]),
+                ])
+            case 2:
+                let tableID = try Self.tableHandle(named: #""public"."users""#, in: request)
+                return Self.assistantToolCalls([
+                    Self.toolCall(id: "describe-repair-count", name: "describe_tables", arguments: [
+                        "table_ids": [tableID],
+                    ]),
+                ])
+            case 3:
+                return Self.assistantToolCalls([
+                    Self.terminalSQL(
+                        id: "terminal-repair-count",
+                        sql: "SELECT id FROM public.users LIMIT 100"
+                    ),
+                ])
+            default:
+                throw URLError(.badServerResponse)
+            }
+        }
+        let agent = makeAgent(schema: schema, chatTransport: chatTransport)
+
+        let result = try await agent.generateSQL(
+            question: "Repair query",
+            schema: schema,
+            context: SQLGenerationContext(mode: .repair, modelCallCount: 2),
+            config: SQLGenerationConfig()
+        )
+
+        #expect(result.generationCallCount == 4)
+        #expect(result.backendMetadata?.agentHTTPAttemptCount == 3)
+    }
+
     @Test func toolChatParserPreservesTypedOpenRouterErrorEnvelope() throws {
         let parser = OpenRouterToolChatParser()
         let data = Self.jsonData([
@@ -1049,6 +1144,38 @@ struct OpenRouterSchemaToolSQLAgentTests {
             #expect(failure.diagnostic.requestID == "req-typed-error")
             #expect(failure.diagnostic.returnedModelID == Self.modelID)
             #expect(failure.diagnostic.providerName == "OpenAI")
+        }
+    }
+
+    @Test func invalidRequestFailureIsNotReclassifiedAsUnsupportedTools() async throws {
+        let schema = Self.makeSchema()
+        let chatTransport = ScriptedTransport { _, _ in
+            Self.jsonData([
+                "id": "cmpl-invalid-request",
+                "model": Self.modelID,
+                "provider": "OpenAI",
+                "error": [
+                    "code": 400,
+                    "message": "Malformed request body.",
+                    "metadata": [
+                        "error_type": "invalid_request",
+                    ],
+                ],
+            ])
+        }
+        let agent = makeAgent(schema: schema, chatTransport: chatTransport)
+
+        do {
+            _ = try await agent.generateSQL(
+                question: "List users",
+                schema: schema,
+                context: SQLGenerationContext(),
+                config: SQLGenerationConfig()
+            )
+            Issue.record("Expected invalid request failure")
+        } catch let failure as OpenRouterSchemaToolAgentFailure {
+            #expect(failure.category == .openRouterRequestFailure)
+            #expect(failure.openRouterFailure?.category == .invalidRequest)
         }
     }
 
