@@ -15,17 +15,20 @@ public struct DatabaseSchema: Codable, Equatable, Sendable {
     public var schemas: [SchemaInfo]
     public var tables: [TableInfo]
     public var foreignKeys: [ForeignKeyInfo]
+    public var foreignKeyConstraints: [SchemaForeignKeyConstraintInfo]
     public var loadedAt: Date
 
     public init(
         schemas: [SchemaInfo] = [],
         tables: [TableInfo] = [],
         foreignKeys: [ForeignKeyInfo] = [],
+        foreignKeyConstraints: [SchemaForeignKeyConstraintInfo] = [],
         loadedAt: Date = Date()
     ) {
         self.schemas = schemas
         self.tables = tables
         self.foreignKeys = foreignKeys
+        self.foreignKeyConstraints = foreignKeyConstraints
         self.loadedAt = loadedAt
     }
 
@@ -39,6 +42,9 @@ public struct DatabaseSchema: Codable, Equatable, Sendable {
             foreignKeys: foreignKeys.filter {
                 $0.sourceSchema == name && $0.targetSchema == name
             },
+            foreignKeyConstraints: foreignKeyConstraints.filter {
+                $0.sourceSchema == name && $0.targetSchema == name
+            },
             loadedAt: loadedAt
         )
     }
@@ -50,5 +56,81 @@ public struct DatabaseSchema: Codable, Equatable, Sendable {
 
     public func containsSchema(named name: String) -> Bool {
         schemas.contains { $0.name == name } || tables.contains { $0.schema == name }
+    }
+
+    private enum CodingKeys: String, CodingKey {
+        case schemas
+        case tables
+        case foreignKeys
+        case foreignKeyConstraints
+        case loadedAt
+    }
+
+    public init(from decoder: any Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        schemas = try container.decodeIfPresent([SchemaInfo].self, forKey: .schemas) ?? []
+        tables = try container.decodeIfPresent([TableInfo].self, forKey: .tables) ?? []
+        foreignKeys = try container.decodeIfPresent([ForeignKeyInfo].self, forKey: .foreignKeys) ?? []
+        foreignKeyConstraints = try container.decodeIfPresent(
+            [SchemaForeignKeyConstraintInfo].self,
+            forKey: .foreignKeyConstraints
+        ) ?? DatabaseSchema.groupForeignKeys(foreignKeys)
+        loadedAt = try container.decodeIfPresent(Date.self, forKey: .loadedAt) ?? Date.distantPast
+    }
+
+    public static func groupForeignKeys(
+        _ foreignKeys: [ForeignKeyInfo]
+    ) -> [SchemaForeignKeyConstraintInfo] {
+        struct GroupKey: Hashable {
+            var constraintName: String
+            var sourceSchema: String
+            var sourceTable: String
+            var targetSchema: String
+            var targetTable: String
+        }
+
+        let grouped = Dictionary(grouping: foreignKeys) {
+            GroupKey(
+                constraintName: $0.constraintName,
+                sourceSchema: $0.sourceSchema,
+                sourceTable: $0.sourceTable,
+                targetSchema: $0.targetSchema,
+                targetTable: $0.targetTable
+            )
+        }
+
+        return grouped.map { key, rows in
+            let usesLegacyOrdinalDefaults = rows.count > 1
+                && rows.allSatisfy { $0.ordinalPosition == 1 }
+            return SchemaForeignKeyConstraintInfo(
+                constraintName: key.constraintName,
+                sourceSchema: key.sourceSchema,
+                sourceTable: key.sourceTable,
+                targetSchema: key.targetSchema,
+                targetTable: key.targetTable,
+                columnPairs: rows.enumerated().map { offset, row in
+                    SchemaForeignKeyColumnPair(
+                        sourceColumn: row.sourceColumn,
+                        targetColumn: row.targetColumn,
+                        ordinalPosition: usesLegacyOrdinalDefaults ? offset + 1 : row.ordinalPosition
+                    )
+                }
+            )
+        }
+        .sorted {
+            if $0.sourceSchema == $1.sourceSchema {
+                if $0.sourceTable == $1.sourceTable {
+                    if $0.constraintName == $1.constraintName {
+                        if $0.targetSchema == $1.targetSchema {
+                            return $0.targetTable < $1.targetTable
+                        }
+                        return $0.targetSchema < $1.targetSchema
+                    }
+                    return $0.constraintName < $1.constraintName
+                }
+                return $0.sourceTable < $1.sourceTable
+            }
+            return $0.sourceSchema < $1.sourceSchema
+        }
     }
 }

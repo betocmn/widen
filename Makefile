@@ -15,6 +15,7 @@ APP := build/Build/Products/Debug/Widen.app
 EVAL := build/Build/Products/Debug/WidenEval
 MODEL ?= openai/gpt-5.5
 BACKEND ?= local
+RETRIEVER ?= both
 EVAL_ARGS := --suite Evals/suites/text-to-sql-v1.json
 ifdef CASE
 EVAL_ARGS += --case $(CASE)
@@ -32,7 +33,7 @@ ifdef FAIL_UNDER
 EVAL_ARGS += --fail-under $(FAIL_UNDER)
 endif
 
-.PHONY: project build test test-db test-fm eval-build eval-local eval-cloud eval-all eval-case eval-db-local eval-db-cloud eval-db-case eval-openrouter-smoke setup run run-conductor release release-mac xcode clean
+.PHONY: project build test test-db test-fm eval-build eval-local eval-cloud eval-all eval-case eval-retrieval eval-retrieval-case eval-db-local eval-db-cloud eval-db-case eval-openrouter-smoke setup run run-conductor release release-mac xcode clean
 
 ## Regenerate Widen.xcodeproj from project.yml
 project:
@@ -90,6 +91,15 @@ eval-case: eval-build
 	@test -n "$(CASE)" || (echo "error: CASE is required" >&2; exit 1)
 	@set -a; if [ -f .env.eval.local ]; then . ./.env.eval.local; fi; set +a; \
 	$(EVAL) --backend "$(BACKEND)" --model "$(MODEL)" $(EVAL_ARGS)
+
+## Run deterministic schema retrieval evals with --retriever legacy|index|both
+eval-retrieval: eval-build
+	$(EVAL) --suite Evals/suites/schema-retrieval-v1.json --retriever "$(RETRIEVER)" $(filter-out --suite Evals/suites/text-to-sql-v1.json,$(EVAL_ARGS))
+
+## Run one schema retrieval eval case. Example: make eval-retrieval-case CASE=preseason.top-wins-defined RETRIEVER=index
+eval-retrieval-case: eval-build
+	@test -n "$(CASE)" || (echo "error: CASE is required" >&2; exit 1)
+	$(EVAL) --suite Evals/suites/schema-retrieval-v1.json --retriever "$(RETRIEVER)" $(filter-out --suite Evals/suites/text-to-sql-v1.json,$(EVAL_ARGS))
 
 ## Run the text-to-SQL eval suite with seeded Postgres semantic grading locally
 eval-db-local: eval-build

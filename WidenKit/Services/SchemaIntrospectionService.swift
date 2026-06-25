@@ -11,7 +11,8 @@ public struct SchemaIntrospectionService: Sendable {
                 TableRow(
                     schema: try row["table_schema"].decode(String.self),
                     name: try row["table_name"].decode(String.self),
-                    type: try row["table_type"].decode(String.self)
+                    type: try row["table_type"].decode(String.self),
+                    comment: try? row["table_comment"].decode(String.self)
                 )
             }
 
@@ -30,6 +31,19 @@ public struct SchemaIntrospectionService: Sendable {
                     columnName: try row["column_name"].decode(String.self),
                     constraintName: try row["constraint_name"].decode(String.self),
                     expression: try row["check_expression"].decode(String.self)
+                )
+            }
+
+            let keyRows = try await postgres.query(Self.keyConstraintsSQL) { row in
+                KeyConstraintRow(
+                    tableSchema: try row["table_schema"].decode(String.self),
+                    tableName: try row["table_name"].decode(String.self),
+                    constraintName: try row["constraint_name"].decode(String.self),
+                    kind: SchemaKeyConstraintKind(
+                        rawValue: try row["constraint_kind"].decode(String.self)
+                    ) ?? .unique,
+                    columnName: try row["column_name"].decode(String.self),
+                    ordinalPosition: Int(try row["ordinal_position"].decode(Int64.self))
                 )
             }
 
@@ -60,6 +74,7 @@ public struct SchemaIntrospectionService: Sendable {
                     tableSchema: tableSchema,
                     tableName: tableName,
                     name: name,
+                    comment: try? row["column_comment"].decode(String.self),
                     dataType: try row["data_type"].decode(String.self),
                     udtSchema: udtSchema,
                     udtName: udtName,
@@ -77,7 +92,8 @@ public struct SchemaIntrospectionService: Sendable {
                     sourceColumn: try row["column_name"].decode(String.self),
                     targetSchema: try row["foreign_table_schema"].decode(String.self),
                     targetTable: try row["foreign_table_name"].decode(String.self),
-                    targetColumn: try row["foreign_column_name"].decode(String.self)
+                    targetColumn: try row["foreign_column_name"].decode(String.self),
+                    ordinalPosition: Int(try row["ordinal_position"].decode(Int32.self))
                 )
             }
 
@@ -85,14 +101,18 @@ public struct SchemaIntrospectionService: Sendable {
             for column in columns {
                 columnsByTable["\(column.tableSchema).\(column.tableName)", default: []].append(column)
             }
+            let keyConstraintsByTable = Self.groupKeyConstraints(keyRows)
 
             let tables = tableRows.map { row in
-                TableInfo(
+                let tableKey = "\(row.schema).\(row.name)"
+                return TableInfo(
                     schema: row.schema,
                     name: row.name,
                     type: TableType(rawValue: row.type) ?? .baseTable,
-                    columns: (columnsByTable["\(row.schema).\(row.name)"] ?? [])
-                        .sorted { $0.ordinalPosition < $1.ordinalPosition }
+                    comment: row.comment,
+                    columns: (columnsByTable[tableKey] ?? [])
+                        .sorted { $0.ordinalPosition < $1.ordinalPosition },
+                    keyConstraints: keyConstraintsByTable[tableKey] ?? []
                 )
             }
 
@@ -101,6 +121,7 @@ public struct SchemaIntrospectionService: Sendable {
                 schemas: schemaNames.sorted().map(SchemaInfo.init(name:)),
                 tables: tables,
                 foreignKeys: foreignKeys,
+                foreignKeyConstraints: DatabaseSchema.groupForeignKeys(foreignKeys),
                 loadedAt: Date()
             )
         } catch let error as AppError {
@@ -115,6 +136,7 @@ public struct SchemaIntrospectionService: Sendable {
         var schema: String
         var name: String
         var type: String
+        var comment: String?
     }
 
     private struct EnumValueRow: Sendable {
@@ -129,6 +151,67 @@ public struct SchemaIntrospectionService: Sendable {
         var columnName: String
         var constraintName: String
         var expression: String
+    }
+
+    private struct KeyConstraintRow: Sendable {
+        var tableSchema: String
+        var tableName: String
+        var constraintName: String
+        var kind: SchemaKeyConstraintKind
+        var columnName: String
+        var ordinalPosition: Int
+    }
+
+    private static func groupKeyConstraints(
+        _ rows: [KeyConstraintRow]
+    ) -> [String: [SchemaKeyConstraintInfo]] {
+        struct GroupKey: Hashable {
+            var tableSchema: String
+            var tableName: String
+            var constraintName: String
+            var kind: SchemaKeyConstraintKind
+        }
+
+        let grouped = Dictionary(grouping: rows) {
+            GroupKey(
+                tableSchema: $0.tableSchema,
+                tableName: $0.tableName,
+                constraintName: $0.constraintName,
+                kind: $0.kind
+            )
+        }
+
+        let constraintsByTable = grouped.reduce(
+            into: [String: [SchemaKeyConstraintInfo]]()
+        ) { result, entry in
+            let key = entry.key
+            let columns = entry.value
+                .sorted {
+                    if $0.ordinalPosition == $1.ordinalPosition {
+                        return $0.columnName < $1.columnName
+                    }
+                    return $0.ordinalPosition < $1.ordinalPosition
+                }
+                .map(\.columnName)
+            result["\(key.tableSchema).\(key.tableName)", default: []].append(
+                SchemaKeyConstraintInfo(
+                    constraintName: key.constraintName,
+                    schema: key.tableSchema,
+                    table: key.tableName,
+                    kind: key.kind,
+                    columns: columns
+                )
+            )
+        }
+
+        return constraintsByTable.mapValues {
+            $0.sorted {
+                if $0.kind == $1.kind {
+                    return $0.constraintName < $1.constraintName
+                }
+                return $0.kind.rawValue < $1.kind.rawValue
+            }
+        }
     }
 
     private static func valueConstraints(
@@ -216,30 +299,45 @@ public struct SchemaIntrospectionService: Sendable {
 
     static let tablesSQL = """
         SELECT
-          table_schema,
-          table_name,
-          table_type
-        FROM information_schema.tables
-        WHERE table_schema <> 'information_schema'
-          AND table_schema NOT LIKE 'pg\\_%' ESCAPE '\\'
-          AND table_type IN ('BASE TABLE', 'VIEW')
-        ORDER BY table_schema, table_name
+          t.table_schema,
+          t.table_name,
+          t.table_type,
+          pg_catalog.obj_description(cls.oid, 'pg_class') AS table_comment
+        FROM information_schema.tables AS t
+        JOIN pg_catalog.pg_namespace AS ns
+          ON ns.nspname = t.table_schema
+        JOIN pg_catalog.pg_class AS cls
+          ON cls.relnamespace = ns.oid
+         AND cls.relname = t.table_name
+        WHERE t.table_schema <> 'information_schema'
+          AND t.table_schema NOT LIKE 'pg\\_%' ESCAPE '\\'
+          AND t.table_type IN ('BASE TABLE', 'VIEW')
+        ORDER BY t.table_schema, t.table_name
         """
 
     static let columnsSQL = """
         SELECT
-          table_schema,
-          table_name,
-          column_name,
-          data_type,
-          udt_schema,
-          udt_name,
-          is_nullable,
-          ordinal_position
-        FROM information_schema.columns
-        WHERE table_schema <> 'information_schema'
-          AND table_schema NOT LIKE 'pg\\_%' ESCAPE '\\'
-        ORDER BY table_schema, table_name, ordinal_position
+          c.table_schema,
+          c.table_name,
+          c.column_name,
+          c.data_type,
+          c.udt_schema,
+          c.udt_name,
+          c.is_nullable,
+          c.ordinal_position,
+          pg_catalog.col_description(cls.oid, att.attnum) AS column_comment
+        FROM information_schema.columns AS c
+        JOIN pg_catalog.pg_namespace AS ns
+          ON ns.nspname = c.table_schema
+        JOIN pg_catalog.pg_class AS cls
+          ON cls.relnamespace = ns.oid
+         AND cls.relname = c.table_name
+        JOIN pg_catalog.pg_attribute AS att
+          ON att.attrelid = cls.oid
+         AND att.attname = c.column_name
+        WHERE c.table_schema <> 'information_schema'
+          AND c.table_schema NOT LIKE 'pg\\_%' ESCAPE '\\'
+        ORDER BY c.table_schema, c.table_name, c.ordinal_position
         """
 
     static let enumValuesSQL = """
@@ -280,6 +378,33 @@ public struct SchemaIntrospectionService: Sendable {
         ORDER BY ns.nspname, cls.relname, con.conname
         """
 
+    static let keyConstraintsSQL = """
+        SELECT
+          ns.nspname AS table_schema,
+          cls.relname AS table_name,
+          con.conname AS constraint_name,
+          CASE con.contype
+            WHEN 'p' THEN 'primary_key'
+            ELSE 'unique'
+          END AS constraint_kind,
+          att.attname AS column_name,
+          key_column.ordinality AS ordinal_position
+        FROM pg_catalog.pg_constraint AS con
+        JOIN pg_catalog.pg_class AS cls
+          ON cls.oid = con.conrelid
+        JOIN pg_catalog.pg_namespace AS ns
+          ON ns.oid = cls.relnamespace
+        JOIN unnest(con.conkey) WITH ORDINALITY AS key_column(attnum, ordinality)
+          ON true
+        JOIN pg_catalog.pg_attribute AS att
+          ON att.attrelid = con.conrelid
+         AND att.attnum = key_column.attnum
+        WHERE con.contype IN ('p', 'u')
+          AND ns.nspname <> 'information_schema'
+          AND ns.nspname NOT LIKE 'pg\\_%' ESCAPE '\\'
+        ORDER BY ns.nspname, cls.relname, con.conname, key_column.ordinality
+        """
+
     static let foreignKeysSQL = """
         SELECT
           tc.table_schema,
@@ -288,7 +413,8 @@ public struct SchemaIntrospectionService: Sendable {
           ccu.table_schema AS foreign_table_schema,
           ccu.table_name AS foreign_table_name,
           ccu.column_name AS foreign_column_name,
-          tc.constraint_name
+          tc.constraint_name,
+          kcu.ordinal_position
         FROM information_schema.table_constraints AS tc
         JOIN information_schema.key_column_usage AS kcu
           ON kcu.constraint_catalog = tc.constraint_catalog

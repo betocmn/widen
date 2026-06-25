@@ -1,0 +1,260 @@
+{
+  "name": "schema-retrieval-v1",
+  "version": "1",
+  "cases": [
+    {
+      "id": "commerce.recent-orders",
+      "schemaFixture": "commerce",
+      "question": "Show the 10 most recent orders",
+      "retrieval": {
+        "primaryTable": "public.orders",
+        "requiredTables": ["public.orders"]
+      }
+    },
+    {
+      "id": "commerce.customer-paid-revenue",
+      "schemaFixture": "commerce",
+      "question": "Show total paid revenue per customer",
+      "databaseContext": "Paid revenue comes from orders where status is paid.",
+      "retrieval": {
+        "primaryTable": "public.orders",
+        "requiredTables": ["public.customers", "public.orders"],
+        "requiredJoinPaths": [
+          { "from": "public.customers", "to": "public.orders", "maximumHops": 1 }
+        ]
+      }
+    },
+    {
+      "id": "commerce.customers-without-orders",
+      "schemaFixture": "commerce",
+      "question": "Which customers have never placed an order?",
+      "retrieval": {
+        "primaryTable": "public.customers",
+        "requiredTables": ["public.customers", "public.orders"],
+        "requiredJoinPaths": [
+          { "from": "public.customers", "to": "public.orders", "maximumHops": 1 }
+        ]
+      }
+    },
+    {
+      "id": "commerce.best-customers-ambiguous",
+      "schemaFixture": "commerce",
+      "question": "Who are our best customers?",
+      "retrieval": {
+        "acceptableAlternativeTableGroups": [
+          ["public.customers", "public.orders"],
+          ["public.customers"]
+        ]
+      }
+    },
+    {
+      "id": "support.frequent-feedback-cluster",
+      "schemaFixture": "support",
+      "question": "What is the most frequent feedback cluster?",
+      "retrieval": {
+        "primaryTable": "public.feedback_item",
+        "requiredTables": ["public.feedback_item", "public.feedback_cluster"],
+        "requiredJoinPaths": [
+          { "from": "public.feedback_item", "to": "public.feedback_cluster", "maximumHops": 1 }
+        ]
+      }
+    },
+    {
+      "id": "support.unresolved-by-assignee",
+      "schemaFixture": "support",
+      "question": "Count unresolved tickets by assignee",
+      "databaseContext": "Unresolved means support_ticket.status is open or pending.",
+      "retrieval": {
+        "primaryTable": "public.support_ticket",
+        "requiredTables": ["public.support_ticket", "public.support_agent"],
+        "requiredJoinPaths": [
+          { "from": "public.support_ticket", "to": "public.support_agent", "maximumHops": 1 }
+        ]
+      }
+    },
+    {
+      "id": "support.unclustered-feedback",
+      "schemaFixture": "support",
+      "question": "Show feedback items without a cluster",
+      "retrieval": {
+        "primaryTable": "public.feedback_item",
+        "requiredTables": ["public.feedback_item", "public.feedback_cluster"],
+        "requiredJoinPaths": [
+          { "from": "public.feedback_item", "to": "public.feedback_cluster", "maximumHops": 1 }
+        ]
+      }
+    },
+    {
+      "id": "saas.expiring-subscriptions",
+      "schemaFixture": "saas",
+      "question": "Subscriptions expiring in the next 30 days",
+      "retrieval": {
+        "primaryTable": "public.subscription",
+        "requiredTables": ["public.subscription"]
+      }
+    },
+    {
+      "id": "saas.active-users-by-org",
+      "schemaFixture": "saas",
+      "question": "Active users by organization in the last week",
+      "databaseContext": "A user is active when app_user.last_seen_at is within the requested time window.",
+      "retrieval": {
+        "primaryTable": "public.app_user",
+        "requiredTables": ["public.app_user", "public.organization", "public.organization_membership"],
+        "requiredJoinPaths": [
+          { "from": "public.app_user", "to": "public.organization_membership", "maximumHops": 1 },
+          { "from": "public.organization_membership", "to": "public.organization", "maximumHops": 1 }
+        ]
+      }
+    },
+    {
+      "id": "preseason.top-wins-defined",
+      "schemaFixture": "preseason",
+      "question": "what are tools that are getting the most wins in the last two weeks?",
+      "databaseContext": "Each evaluation with a non-null winner_id records one win. Use the evaluation createdAt timestamp.",
+      "retrieval": {
+        "primaryTable": "public.preseason_match_evaluation",
+        "requiredTables": ["public.preseason_match_evaluation", "public.preseason_tool"],
+        "requiredColumnMatches": [
+          "public.preseason_match_evaluation.winner_id",
+          "public.preseason_match_evaluation.createdAt"
+        ],
+        "requiredJoinPaths": [
+          { "from": "public.preseason_match_evaluation", "to": "public.preseason_tool", "maximumHops": 1 }
+        ],
+        "forbiddenTopKDistractors": [
+          { "table": "public.preseason_match_batch", "topK": 2 },
+          { "table": "public.preseason_match_config", "topK": 3 }
+        ]
+      }
+    },
+    {
+      "id": "preseason.top-wins-ambiguous",
+      "schemaFixture": "preseason",
+      "question": "Tools with the most wins in the last two weeks",
+      "retrieval": {
+        "acceptableAlternativeTableGroups": [
+          ["public.preseason_tool"],
+          ["public.preseason_match_evaluation", "public.preseason_tool"]
+        ]
+      }
+    },
+    {
+      "id": "preseason.latest-failed-runs",
+      "schemaFixture": "preseason",
+      "question": "Show the latest failed benchmark runs",
+      "retrieval": {
+        "primaryTable": "public.preseason_benchmark_run",
+        "requiredTables": ["public.preseason_benchmark_run"]
+      }
+    },
+    {
+      "id": "noise.duplicate-schema-explicit",
+      "schemaFixture": "retrieval-noise",
+      "question": "List auth.users by provider",
+      "retrieval": {
+        "primaryTable": "auth.users",
+        "requiredTables": ["auth.users"]
+      }
+    },
+    {
+      "id": "noise.quoted-mixed-case",
+      "schemaFixture": "retrieval-noise",
+      "question": "Show rows from public.\"UserEvents\"",
+      "retrieval": {
+        "primaryTable": "public.UserEvents",
+        "requiredTables": ["public.UserEvents"]
+      }
+    },
+    {
+      "id": "noise.lowercase-same-name",
+      "schemaFixture": "retrieval-noise",
+      "question": "Show rows from public.userevents",
+      "retrieval": {
+        "primaryTable": "public.userevents",
+        "requiredTables": ["public.userevents"]
+      }
+    },
+    {
+      "id": "noise.relevant-column-comment",
+      "schemaFixture": "retrieval-noise",
+      "question": "Revenue recognized this month",
+      "retrieval": {
+        "primaryTable": "public.ledger_entries",
+        "requiredTables": ["public.ledger_entries"],
+        "requiredColumnMatches": ["public.ledger_entries.amount_cents"]
+      }
+    },
+    {
+      "id": "noise.table-comment-business-term",
+      "schemaFixture": "retrieval-noise",
+      "question": "Customer payment revenue records",
+      "retrieval": {
+        "primaryTable": "public.payment_records",
+        "requiredTables": ["public.payment_records"]
+      }
+    },
+    {
+      "id": "noise.enum-check-value",
+      "schemaFixture": "retrieval-noise",
+      "question": "Failed benchmark runs",
+      "retrieval": {
+        "primaryTable": "public.benchmark_runs",
+        "requiredTables": ["public.benchmark_runs"]
+      }
+    },
+    {
+      "id": "noise.bridge-table-path",
+      "schemaFixture": "retrieval-noise",
+      "question": "Products included in orders",
+      "retrieval": {
+        "primaryTable": "public.products",
+        "requiredTables": ["public.orders", "public.order_products", "public.products"],
+        "requiredJoinPaths": [
+          { "from": "public.orders", "to": "public.products", "maximumHops": 2 }
+        ]
+      }
+    },
+    {
+      "id": "noise.multiple-fks-between-pair",
+      "schemaFixture": "retrieval-noise",
+      "question": "Tool winners and losers in matches",
+      "retrieval": {
+        "primaryTable": "public.tool_matches",
+        "requiredTables": ["public.tool_matches", "public.tools"],
+        "requiredJoinPaths": [
+          { "from": "public.tool_matches", "to": "public.tools", "maximumHops": 1 }
+        ]
+      }
+    },
+    {
+      "id": "noise.composite-foreign-key",
+      "schemaFixture": "retrieval-noise",
+      "question": "Account event statuses by account",
+      "retrieval": {
+        "primaryTable": "public.account_events",
+        "requiredTables": ["public.account_events", "public.accounts"],
+        "requiredJoinPaths": [
+          { "from": "public.account_events", "to": "public.accounts", "maximumHops": 1 }
+        ]
+      }
+    },
+    {
+      "id": "noise.common-id-status-no-match",
+      "schemaFixture": "retrieval-noise",
+      "question": "How many flarble widgets have moon phases?",
+      "retrieval": {
+        "acceptableAlternativeTableGroups": []
+      }
+    },
+    {
+      "id": "noise.singular-plural",
+      "schemaFixture": "retrieval-noise",
+      "question": "Find invoice by number",
+      "retrieval": {
+        "primaryTable": "public.invoices",
+        "requiredTables": ["public.invoices"]
+      }
+    }
+  ]
+}

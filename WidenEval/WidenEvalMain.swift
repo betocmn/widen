@@ -18,6 +18,23 @@ enum WidenEvalMain {
 
             await GenerationLog.shared.setEnabled(options.recordPrompts)
 
+            if options.retrieverMode != nil {
+                let runner = SchemaRetrievalEvalRunner(options: options)
+                let run = try await runner.run()
+                let output = try SchemaRetrievalEvalReporter.write(run: run, options: options)
+
+                print("Wrote retrieval eval results to \(output.directory.path)")
+                print("Summary: \(output.summary.path)")
+                if !run.acceptance.passed {
+                    fputs(
+                        "Schema retrieval acceptance failed: \(run.acceptance.messages.joined(separator: "; "))\n",
+                        stderr
+                    )
+                    exit(1)
+                }
+                return
+            }
+
             let runner = EvalRunner(options: options)
             let run = try await runner.run()
             let output = try EvalReporter.write(run: run, options: options)
@@ -84,6 +101,7 @@ struct EvalCLIOptions {
     var recordPrompts = false
     var failUnder: Double?
     var semanticDatabase = false
+    var retrieverMode: SchemaRetrievalMode?
     var showHelp = false
 
     static let helpText = """
@@ -100,6 +118,7 @@ struct EvalCLIOptions {
           --record-prompts
           --fail-under <percentage>
           --semantic-db
+          --retriever legacy|index|both
           --help
         """
 
@@ -152,6 +171,12 @@ struct EvalCLIOptions {
                 options.failUnder = failUnder
             case "--semantic-db":
                 options.semanticDatabase = true
+            case "--retriever":
+                let value = try nextValue(after: argument)
+                guard let retriever = SchemaRetrievalMode(rawValue: value) else {
+                    throw EvalCLIError.invalidValue(argument, value)
+                }
+                options.retrieverMode = retriever
             case "--help", "-h":
                 options.showHelp = true
             default:
