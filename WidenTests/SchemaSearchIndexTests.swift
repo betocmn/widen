@@ -174,6 +174,27 @@ struct SchemaSearchIndexTests {
         #expect((hit?.exactMatchScore ?? 0) == 0)
     }
 
+    @Test func quotedIdentifierDoesNotMatchLowercasedUnquotedAlias() throws {
+        let schema = DatabaseSchema(
+            schemas: [SchemaInfo(name: "public")],
+            tables: [
+                table(schema: "public", name: "userevents", columns: ["id", "event_name"]),
+            ]
+        )
+        let searcher = makeSearcher(schema: schema)
+
+        let response = searcher.search(
+            SchemaSearchRequest(query: #"public."UserEvents""#),
+            in: snapshot(schema)
+        )
+        let hit = response.hits.first {
+            $0.tableObjectID == .table(schema: "public", name: "userevents")
+        }
+
+        #expect(!response.exactIdentifierMatch)
+        #expect((hit?.exactMatchScore ?? 0) == 0)
+    }
+
     @Test func unqualifiedDuplicateTableNameIsAmbiguous() throws {
         let schema = DatabaseSchema(
             schemas: [SchemaInfo(name: "public"), SchemaInfo(name: "auth")],
@@ -338,6 +359,25 @@ struct SchemaSearchIndexTests {
     @Test func shortTokenFuzzyMatchingIsDisabled() {
         #expect(SchemaSearchTokenizer.similarity(queryToken: "id", indexedToken: "if") == 0)
         #expect(SchemaSearchTokenizer.similarity(queryToken: "at", indexedToken: "ad") == 0)
+    }
+
+    @Test func fuzzyMatchTieBreaksByIndexedToken() throws {
+        let schema = DatabaseSchema(
+            schemas: [SchemaInfo(name: "public")],
+            tables: [
+                table(schema: "public", name: "events", columns: ["accounta", "accountb"]),
+            ]
+        )
+        let searcher = makeSearcher(schema: schema)
+
+        let response = searcher.search(
+            SchemaSearchRequest(query: "accountc"),
+            in: snapshot(schema)
+        )
+        let hit = try #require(response.hits.first)
+
+        #expect(hit.tableObjectID == .table(schema: "public", name: "events"))
+        #expect(hit.matchedColumnIDs == [.column(schema: "public", table: "events", name: "accounta")])
     }
 
     @Test func deterministicTieOrderingUsesQualifiedName() {
@@ -823,6 +863,29 @@ struct SchemaSearchIndexTests {
         let files = (try? FileManager.default.contentsOfDirectory(atPath: directory.path)
             .filter { $0.hasSuffix(".json") }) ?? []
         #expect(files.isEmpty)
+    }
+
+    @Test func clearingCacheDoesNotStoreBuildFinishingAfterClear() async throws {
+        let directory = tempDirectory()
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let schema = DatabaseSchema(
+            schemas: [SchemaInfo(name: "public")],
+            tables: [table(schema: "public", name: "orders", columns: ["id"])]
+        )
+        let store = SchemaSearchIndexStore(
+            directory: directory,
+            finishDelayNanoseconds: 100_000_000
+        )
+
+        let task = Task {
+            try await store.searcher(for: snapshot(schema))
+        }
+        try await Task.sleep(nanoseconds: 30_000_000)
+        await store.removeAllCachedSearchers()
+
+        await #expect(throws: CancellationError.self) {
+            _ = try await task.value
+        }
     }
 
     @Test func persistedIndexDoesNotContainQueryContextSQLOrCredentials() async throws {

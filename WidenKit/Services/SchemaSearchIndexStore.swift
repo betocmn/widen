@@ -4,6 +4,7 @@ import Foundation
 private final class InFlightSchemaIndexBuild: @unchecked Sendable {
     let id = UUID()
     let task: Task<LocalSchemaSearcher, Error>
+    var completedSearcher: LocalSchemaSearcher?
 
     init(task: Task<LocalSchemaSearcher, Error>) {
         self.task = task
@@ -24,17 +25,20 @@ public actor SchemaSearchIndexStore {
     private let directory: URL
     private let retentionLimit: Int
     private let buildDelayNanoseconds: UInt64
+    private let finishDelayNanoseconds: UInt64
     private var memoryCache: [String: LocalSchemaSearcher] = [:]
     private var inFlightBuilds: [String: InFlightSchemaIndexBuild] = [:]
 
     public init(
         directory: URL = SchemaSearchIndexStore.defaultDirectory,
         retentionLimit: Int = 12,
-        buildDelayNanoseconds: UInt64 = 0
+        buildDelayNanoseconds: UInt64 = 0,
+        finishDelayNanoseconds: UInt64 = 0
     ) {
         self.directory = directory
         self.retentionLimit = max(1, retentionLimit)
         self.buildDelayNanoseconds = buildDelayNanoseconds
+        self.finishDelayNanoseconds = finishDelayNanoseconds
     }
 
     public func searcher(for snapshot: SchemaSearchSnapshot) async throws -> LocalSchemaSearcher {
@@ -80,6 +84,17 @@ public actor SchemaSearchIndexStore {
     ) async throws -> LocalSchemaSearcher {
         do {
             let searcher = try await build.task.value
+            if finishDelayNanoseconds > 0 {
+                try await Task.sleep(nanoseconds: finishDelayNanoseconds)
+            }
+            guard inFlightBuilds[cacheID]?.id == build.id else {
+                if let completedSearcher = build.completedSearcher {
+                    try Task.checkCancellation()
+                    return completedSearcher
+                }
+                throw CancellationError()
+            }
+            build.completedSearcher = searcher
             memoryCache[cacheID] = searcher
             inFlightBuilds[cacheID] = nil
             try Task.checkCancellation()

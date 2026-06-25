@@ -340,7 +340,7 @@ public struct LocalSchemaSearcher: SchemaSearching {
         document: SchemaSearchDocument
     ) -> ApproximateMatch? {
         var best: ApproximateMatch?
-        for indexedToken in counts.keys {
+        for indexedToken in counts.keys.sorted() {
             let similarity = SchemaSearchTokenizer.similarity(
                 queryToken: queryToken,
                 indexedToken: indexedToken
@@ -351,8 +351,8 @@ public struct LocalSchemaSearcher: SchemaSearching {
                 fieldCounts: fieldCounts,
                 documentLength: document.length
             ) * similarity * 0.35
-            guard score > (best?.score ?? 0) else { continue }
-            best = ApproximateMatch(
+            let candidate = ApproximateMatch(
+                indexedToken: indexedToken,
                 score: score,
                 matchedFields: document.origins(for: indexedToken).map {
                     SchemaSearchMatchedField(
@@ -362,6 +362,8 @@ public struct LocalSchemaSearcher: SchemaSearching {
                     )
                 }
             )
+            guard candidate.isBetter(than: best) else { continue }
+            best = candidate
         }
         return best
     }
@@ -391,7 +393,7 @@ public struct LocalSchemaSearcher: SchemaSearching {
         document: SchemaSearchDocument,
         query: String
     ) -> ExactIdentifierScore {
-        let lowercasedQuery = query.lowercased()
+        let lowercasedUnquotedQuery = lowercasedOutsideQuotedIdentifiers(query)
         var score = 0.0
         var quality = 0
         var matchedFields: [SchemaSearchMatchedField] = []
@@ -423,7 +425,7 @@ public struct LocalSchemaSearcher: SchemaSearching {
         }
 
         for alias in document.lowercasedAliases where !containsQuotedIdentifier(alias) {
-            guard containsIdentifierAlias(lowercasedQuery, alias: alias, caseSensitive: true) else { continue }
+            guard containsIdentifierAlias(lowercasedUnquotedQuery, alias: alias, caseSensitive: true) else { continue }
             let qualified = alias.contains(".")
             if qualified {
                 score += 18
@@ -644,8 +646,20 @@ private struct LexicalScore {
 }
 
 private struct ApproximateMatch {
+    var indexedToken: String
     var score: Double
     var matchedFields: [SchemaSearchMatchedField]
+
+    func isBetter(than current: ApproximateMatch?) -> Bool {
+        guard let current else { return true }
+        if score != current.score {
+            return score > current.score
+        }
+        if indexedToken != current.indexedToken {
+            return indexedToken < current.indexedToken
+        }
+        return matchedFields.stableSortKey < current.matchedFields.stableSortKey
+    }
 }
 
 private struct ExactIdentifierScore {
@@ -795,6 +809,37 @@ private func containsIdentifierAlias(
     return false
 }
 
+private func lowercasedOutsideQuotedIdentifiers(_ text: String) -> String {
+    var result = ""
+    var index = text.startIndex
+    var insideQuotedIdentifier = false
+
+    while index < text.endIndex {
+        let character = text[index]
+        if character == "\"" {
+            result.append(" ")
+            let next = text.index(after: index)
+            if insideQuotedIdentifier, next < text.endIndex, text[next] == "\"" {
+                result.append(" ")
+                index = text.index(after: next)
+            } else {
+                insideQuotedIdentifier.toggle()
+                index = next
+            }
+            continue
+        }
+
+        if insideQuotedIdentifier {
+            result.append(" ")
+        } else {
+            result.append(contentsOf: String(character).lowercased())
+        }
+        index = text.index(after: index)
+    }
+
+    return result
+}
+
 private func isUnquotedUnqualifiedAlias(_ alias: String) -> Bool {
     !alias.contains(".")
         && !containsQuotedIdentifier(alias)
@@ -829,6 +874,15 @@ private func hasIdentifierAliasBoundaries(
 
 private func isIdentifierBody(_ character: Character) -> Bool {
     character == "_" || character == "$" || character.isLetter || character.isNumber
+}
+
+private extension Array where Element == SchemaSearchMatchedField {
+    var stableSortKey: String {
+        map { field in
+            "\(field.field.rawValue):\(field.term):\(field.objectID?.stableString ?? "")"
+        }
+        .joined(separator: "|")
+    }
 }
 
 private func pathSortKey(_ path: SchemaJoinPath) -> String {
