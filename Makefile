@@ -33,7 +33,7 @@ ifdef FAIL_UNDER
 EVAL_ARGS += --fail-under $(FAIL_UNDER)
 endif
 
-.PHONY: project build test test-db test-fm eval-build eval-local eval-cloud eval-all eval-case eval-retrieval eval-retrieval-case eval-db-local eval-db-cloud eval-db-case eval-openrouter-smoke setup run run-conductor release release-mac xcode clean
+.PHONY: project build test test-db test-fm eval-build eval-local eval-cloud eval-all eval-case eval-retrieval eval-retrieval-case eval-schema-tools eval-db-local eval-db-cloud eval-db-case eval-openrouter-smoke setup run run-conductor release release-mac xcode clean
 
 ## Regenerate Widen.xcodeproj from project.yml
 project:
@@ -100,6 +100,10 @@ eval-retrieval: eval-build
 eval-retrieval-case: eval-build
 	@test -n "$(CASE)" || (echo "error: CASE is required" >&2; exit 1)
 	$(EVAL) --suite Evals/suites/schema-retrieval-v1.json --retriever "$(RETRIEVER)" $(filter-out --suite Evals/suites/text-to-sql-v1.json,$(EVAL_ARGS))
+
+## Run deterministic bounded schema tool contract evals with no model or database calls
+eval-schema-tools: eval-build
+	$(EVAL) --schema-tools $(filter-out --suite Evals/suites/text-to-sql-v1.json,$(EVAL_ARGS))
 
 ## Run the text-to-SQL eval suite with seeded Postgres semantic grading locally
 eval-db-local: eval-build

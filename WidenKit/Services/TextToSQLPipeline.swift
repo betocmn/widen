@@ -131,11 +131,36 @@ public struct TextToSQLTrace: Codable, Equatable, Sendable {
     public var stages: [TextToSQLStageResult]
     public var modelCalls: Int
     public var elapsedMs: Int
+    public var schemaToolCalls: [SchemaToolCallTrace]
 
-    public init(stages: [TextToSQLStageResult], modelCalls: Int, elapsedMs: Int) {
+    public init(
+        stages: [TextToSQLStageResult],
+        modelCalls: Int,
+        elapsedMs: Int,
+        schemaToolCalls: [SchemaToolCallTrace] = []
+    ) {
         self.stages = stages
         self.modelCalls = modelCalls
         self.elapsedMs = elapsedMs
+        self.schemaToolCalls = schemaToolCalls
+    }
+
+    private enum CodingKeys: String, CodingKey {
+        case stages
+        case modelCalls
+        case elapsedMs
+        case schemaToolCalls
+    }
+
+    public init(from decoder: any Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        stages = try container.decode([TextToSQLStageResult].self, forKey: .stages)
+        modelCalls = try container.decode(Int.self, forKey: .modelCalls)
+        elapsedMs = try container.decode(Int.self, forKey: .elapsedMs)
+        schemaToolCalls = try container.decodeIfPresent(
+            [SchemaToolCallTrace].self,
+            forKey: .schemaToolCalls
+        ) ?? []
     }
 }
 

@@ -312,7 +312,7 @@ private struct OpenRouterAPIErrorEnvelope: Decodable {
             }
         }
 
-        let code: JSONValue?
+        let code: OpenRouterJSONValue?
         let message: String?
         let metadata: Metadata?
 
@@ -345,13 +345,13 @@ private struct OpenRouterAPIErrorEnvelope: Decodable {
     }
 }
 
-private enum JSONValue: Decodable, Equatable, Sendable {
+private enum OpenRouterJSONValue: Decodable, Equatable, Sendable {
     case string(String)
     case int(Int)
     case double(Double)
     case bool(Bool)
-    case object([String: JSONValue])
-    case array([JSONValue])
+    case object([String: OpenRouterJSONValue])
+    case array([OpenRouterJSONValue])
     case null
 
     init(from decoder: any Decoder) throws {
@@ -366,10 +366,10 @@ private enum JSONValue: Decodable, Equatable, Sendable {
             self = .double(value)
         } else if let value = try? container.decode(String.self) {
             self = .string(value)
-        } else if let value = try? container.decode([String: JSONValue].self) {
+        } else if let value = try? container.decode([String: OpenRouterJSONValue].self) {
             self = .object(value)
         } else {
-            self = .array(try container.decode([JSONValue].self))
+            self = .array(try container.decode([OpenRouterJSONValue].self))
         }
     }
 }

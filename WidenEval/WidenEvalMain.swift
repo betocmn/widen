@@ -18,6 +18,23 @@ enum WidenEvalMain {
 
             await GenerationLog.shared.setEnabled(options.recordPrompts)
 
+            if options.schemaTools {
+                let runner = SchemaToolContractEvalRunner(options: options)
+                let run = try await runner.run()
+                let output = try SchemaToolContractEvalReporter.write(run: run, options: options)
+
+                print("Wrote schema tool eval results to \(output.directory.path)")
+                print("Summary: \(output.summary.path)")
+                if !run.acceptance.passed {
+                    fputs(
+                        "Schema tool acceptance failed: \(run.acceptance.messages.joined(separator: "; "))\n",
+                        stderr
+                    )
+                    exit(1)
+                }
+                return
+            }
+
             if options.retrieverMode != nil {
                 let runner = SchemaRetrievalEvalRunner(options: options)
                 let run = try await runner.run()
@@ -102,6 +119,7 @@ struct EvalCLIOptions {
     var failUnder: Double?
     var semanticDatabase = false
     var retrieverMode: SchemaRetrievalMode?
+    var schemaTools = false
     var showHelp = false
 
     static let helpText = """
@@ -119,6 +137,7 @@ struct EvalCLIOptions {
           --fail-under <percentage>
           --semantic-db
           --retriever legacy|index|both
+          --schema-tools
           --help
         """
 
@@ -177,6 +196,8 @@ struct EvalCLIOptions {
                     throw EvalCLIError.invalidValue(argument, value)
                 }
                 options.retrieverMode = retriever
+            case "--schema-tools":
+                options.schemaTools = true
             case "--help", "-h":
                 options.showHelp = true
             default:
