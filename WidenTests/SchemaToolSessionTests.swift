@@ -989,6 +989,97 @@ struct SchemaToolSessionTests {
         #expect(result.outputByteCount <= policy.maximumResultBytes)
     }
 
+    @Test func describeTablesReturnsBudgetErrorWhenFirstTableCannotFitWithoutFocus() async throws {
+        let policy = SchemaToolPolicy(
+            maximumCallCount: 4,
+            maximumResultBytes: 900,
+            maximumSessionResultBytes: 8_000
+        )
+        let session = try await makeSession(schema: oversizedProtectedTableSchema(), policy: policy)
+        let tableHandle = try await requireHandle(session, .table(schema: "public", name: "huge_events"))
+
+        let result = try await invoke(
+            session,
+            id: "first-table-overflow",
+            tool: .describeTables,
+            arguments: ["table_ids": handles(tableHandle)]
+        )
+
+        #expect(result.error?.code == .resultBudgetExceeded)
+        #expect(result.payload?["tables"]?.arrayValue?.isEmpty != true)
+        #expect(result.outputByteCount <= policy.maximumResultBytes)
+    }
+
+    @Test func describeTablesKeepsFirstRequestedTableWhenOmittingNonFocusedTables() async throws {
+        let session = try await makeSession(
+            schema: focusedTableOmissionSchema(),
+            policy: SchemaToolPolicy(
+                maximumCallCount: 4,
+                maximumResultBytes: 1_600,
+                maximumSessionResultBytes: 8_000
+            )
+        )
+        var tableHandles: [String] = []
+        for index in 0..<4 {
+            tableHandles.append(
+                try await requireHandle(session, .table(schema: "public", name: "focus_t\(index)"))
+            )
+        }
+
+        let result = try await invoke(
+            session,
+            id: "first-table-survives",
+            tool: .describeTables,
+            arguments: ["table_ids": .array(tableHandles.map { .string($0) })]
+        )
+        let tableNames = result.payload?["tables"]?.arrayValue?
+            .compactMap { $0["sql_name"]?.stringValue } ?? []
+        let omittedTableCount = result.payload?["omitted_table_count"]?.intValue ?? 0
+
+        #expect(result.success)
+        #expect(result.truncation.truncated)
+        #expect(tableNames.first == #""public"."focus_t0""#)
+        #expect(!tableNames.contains(#""public"."focus_t3""#))
+        #expect(omittedTableCount == 4 - tableNames.count)
+        #expect(omittedTableCount > 0)
+    }
+
+    @Test func successfulDescribeTablesResponsesForNonemptyRequestsContainTables() async throws {
+        let simpleSession = try await makeSession(schema: simpleSchema())
+        let users = try await requireHandle(simpleSession, .table(schema: "public", name: "users"))
+        let simple = try await invoke(
+            simpleSession,
+            id: "simple-describe",
+            tool: .describeTables,
+            arguments: ["table_ids": handles(users)]
+        )
+
+        let compactSession = try await makeSession(
+            schema: focusedTableOmissionSchema(),
+            policy: SchemaToolPolicy(
+                maximumCallCount: 4,
+                maximumResultBytes: 1_600,
+                maximumSessionResultBytes: 8_000
+            )
+        )
+        var compactTableHandles: [String] = []
+        for index in 0..<4 {
+            compactTableHandles.append(
+                try await requireHandle(compactSession, .table(schema: "public", name: "focus_t\(index)"))
+            )
+        }
+        let compact = try await invoke(
+            compactSession,
+            id: "compact-describe",
+            tool: .describeTables,
+            arguments: ["table_ids": .array(compactTableHandles.map { .string($0) })]
+        )
+
+        for result in [simple, compact] where result.success {
+            #expect(result.payload?["tables"]?.arrayValue?.isEmpty == false)
+        }
+    }
+
     private func invoke(
         _ session: SchemaToolSession,
         id: String,
@@ -1306,6 +1397,40 @@ private func focusedTableOmissionSchema() -> DatabaseSchema {
         )
     }
     return DatabaseSchema(schemas: [SchemaInfo(name: "public")], tables: tables)
+}
+
+private func oversizedProtectedTableSchema() -> DatabaseSchema {
+    var columns = [
+        column("huge_events", "id", type: "uuid", ordinal: 1),
+    ]
+    var keys = [
+        SchemaKeyConstraintInfo(
+            constraintName: "huge_events_pkey",
+            schema: "public",
+            table: "huge_events",
+            kind: .primaryKey,
+            columns: ["id"]
+        ),
+    ]
+    for index in 0..<24 {
+        let columnName = "oversized_payload_column_\(index)"
+        columns.append(column("huge_events", columnName, ordinal: index + 2))
+        keys.append(
+            SchemaKeyConstraintInfo(
+                constraintName: "huge_events_extremely_verbose_unique_constraint_name_\(index)_kept_to_force_minimal_card_over_budget",
+                schema: "public",
+                table: "huge_events",
+                kind: .unique,
+                columns: [columnName]
+            )
+        )
+    }
+    return DatabaseSchema(
+        schemas: [SchemaInfo(name: "public")],
+        tables: [
+            table("huge_events", columns: columns, keys: keys),
+        ]
+    )
 }
 
 private func largeCompositeSchema() -> DatabaseSchema {

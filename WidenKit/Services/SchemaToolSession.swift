@@ -280,14 +280,20 @@ public struct SchemaToolExecutor: Sendable {
             SchemaObjectID.table(schema: $0.schema, name: $0.table ?? "").stableString
         }
         let focusedTableIDs = Set(focusByTable.keys)
-        let nonFocusedCount = tableIDs.filter { !focusedTableIDs.contains($0.stableString) }.count
-        var nonFocusedLimit = nonFocusedCount
+        let protectedTableIDs: Set<String>
+        if focusedTableIDs.isEmpty, let firstTableID = tableIDs.first {
+            protectedTableIDs = [firstTableID.stableString]
+        } else {
+            protectedTableIDs = focusedTableIDs
+        }
+        let nonProtectedCount = tableIDs.filter { !protectedTableIDs.contains($0.stableString) }.count
+        var nonProtectedLimit = nonProtectedCount
         var truncated = false
         func selectedTableIDs() -> [SchemaObjectID] {
             selectedDescribeTableIDs(
                 from: tableIDs,
-                focusedTableIDs: focusedTableIDs,
-                nonFocusedLimit: nonFocusedLimit
+                protectedTableIDs: protectedTableIDs,
+                nonProtectedLimit: nonProtectedLimit
             )
         }
         var cards = tableCards(
@@ -335,11 +341,11 @@ public struct SchemaToolExecutor: Sendable {
             ]
         }
         while (try? payload.utf8ByteCount()) ?? Int.max > max(512, policy.maximumResultBytes - 512),
-            nonFocusedLimit > 0
+            nonProtectedLimit > 0
         {
             truncated = true
             compactColumns = true
-            nonFocusedLimit -= 1
+            nonProtectedLimit -= 1
             cards = tableCards(
                 tableIDs: selectedTableIDs(),
                 snapshot: snapshot,
@@ -358,12 +364,12 @@ public struct SchemaToolExecutor: Sendable {
             ]
         }
         if (try? payload.utf8ByteCount()) ?? Int.max > max(512, policy.maximumResultBytes - 512),
-            !focusedTableIDs.isEmpty
+            !protectedTableIDs.isEmpty
         {
             return .failure(
                 .init(
                     code: .resultBudgetExceeded,
-                    message: "Focused table descriptions exceeded the schema tool result budget."
+                    message: "Protected table descriptions exceeded the schema tool result budget."
                 )
             )
         }
@@ -1424,18 +1430,18 @@ private func relevantColumns(
 
 private func selectedDescribeTableIDs(
     from tableIDs: [SchemaObjectID],
-    focusedTableIDs: Set<String>,
-    nonFocusedLimit: Int
+    protectedTableIDs: Set<String>,
+    nonProtectedLimit: Int
 ) -> [SchemaObjectID] {
-    var keptNonFocused = 0
+    var keptNonProtected = 0
     return tableIDs.filter { tableID in
-        if focusedTableIDs.contains(tableID.stableString) {
+        if protectedTableIDs.contains(tableID.stableString) {
             return true
         }
-        guard keptNonFocused < nonFocusedLimit else {
+        guard keptNonProtected < nonProtectedLimit else {
             return false
         }
-        keptNonFocused += 1
+        keptNonProtected += 1
         return true
     }
 }
