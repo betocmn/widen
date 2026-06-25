@@ -61,6 +61,96 @@ struct TextToSQLEvalTests {
         }
     }
 
+    private struct AgentBudgetFailureGenerator: SQLGenerator {
+        func generateSQL(
+            question: String,
+            schema: DatabaseSchema,
+            context: SQLGenerationContext,
+            config: SQLGenerationConfig
+        ) async throws -> SQLGenerationResult {
+            var metadata = OpenRouterGenerationMetadata(
+                requestedModelID: "test/model",
+                returnedModelID: "test/returned",
+                providerName: "TestProvider",
+                completionID: "cmpl-agent-failure",
+                requestID: "req-agent-failure",
+                structuredOutputMode: .promptOnlyJSON,
+                requestCount: 3,
+                retryCount: 1,
+                promptTokens: 30,
+                completionTokens: 12,
+                reasoningTokens: 2,
+                totalTokens: 42,
+                costUSD: 0.001,
+                serviceTier: nil,
+                finishReason: "tool_calls",
+                nativeFinishReason: nil
+            )
+            metadata.agentSelectionReason = "tools"
+            metadata.agentLogicalTurnCount = 2
+            metadata.agentHTTPAttemptCount = 3
+            metadata.agentSchemaToolCallCount = 1
+            throw OpenRouterSchemaToolAgentFailure(
+                category: .schemaToolCallBudgetExhausted,
+                message: "Schema tool call budget exhausted.",
+                backendMetadata: metadata,
+                schemaToolCalls: [
+                    SchemaToolCallTrace(
+                        callID: "search-over-budget",
+                        toolName: "search_schema",
+                        outcome: .error,
+                        latencyMs: 1,
+                        returnedObjectCount: 0,
+                        outputByteCount: 128,
+                        truncated: false,
+                        errorCode: .sessionBudgetExceeded,
+                        schemaFingerprintPrefix: "abcdef123456",
+                        cacheHit: false
+                    ),
+                ]
+            )
+        }
+    }
+
+    private struct RepairAgentFailureGenerator: SQLGenerator {
+        func generateSQL(
+            question: String,
+            schema: DatabaseSchema,
+            context: SQLGenerationContext,
+            config: SQLGenerationConfig
+        ) async throws -> SQLGenerationResult {
+            if context.mode == .initial {
+                return SQLGenerationResult(
+                    sql: "SELECT missing_column FROM public.orders LIMIT 10",
+                    explanation: "Intentionally references a missing column.",
+                    assumptions: [],
+                    referencedTables: [],
+                    confidence: 0.5,
+                    riskLevel: .medium,
+                    needsClarification: false,
+                    clarificationQuestion: nil,
+                    generationCallCount: 1
+                )
+            }
+            var metadata = OpenRouterGenerationMetadata(
+                requestedModelID: "test/model",
+                structuredOutputMode: .promptOnlyJSON,
+                requestCount: 1,
+                retryCount: 0
+            )
+            metadata.agentSelectionReason = "tools"
+            metadata.agentLogicalTurnCount = 1
+            metadata.agentHTTPAttemptCount = 1
+            metadata.agentSchemaToolCallCount = 1
+            throw OpenRouterSchemaToolAgentFailure(
+                category: .schemaToolCallBudgetExhausted,
+                message: "Schema tool call budget exhausted.",
+                backendMetadata: metadata,
+                schemaToolCalls: [TextToSQLEvalTests.schemaToolTrace(callID: "repair-agent-failure")]
+            )
+        }
+    }
+
     private final class HangingGenerator: SQLGenerator, @unchecked Sendable {
         private let lock = NSLock()
         private var cancellationObserved = false
@@ -869,6 +959,104 @@ struct TextToSQLEvalTests {
         #expect(result.diagnostics.openRouterAttemptCount == 3)
     }
 
+    @Test func pipelineFailurePreservesAgentAggregateMetadata() async {
+        let evalCase = TextToSQLEvalCase(
+            id: "commerce.recent-orders",
+            schemaFixture: "commerce",
+            question: "Show the 10 most recent orders",
+            expected: TextToSQLEvalExpectation(decision: .sql)
+        )
+
+        let result = await TextToSQLEvalCaseRunner.run(
+            evalCase: evalCase,
+            schema: makeCommerceSchema(),
+            generator: AgentBudgetFailureGenerator(),
+            options: TextToSQLEvalRunOptions(backend: .cloud, model: "test/model")
+        )
+
+        #expect(result.status == .generationFailure)
+        #expect(result.metrics.modelCallCount == 3)
+        #expect(result.metrics.openRouterRetryCount == 1)
+        #expect(result.metrics.tokenUsage == 42)
+        #expect(result.metrics.estimatedCloudCostUSD == 0.001)
+        #expect(result.metrics.openRouterRequestedModelID == "test/model")
+        #expect(result.metrics.openRouterReturnedModelID == "test/returned")
+        #expect(result.metrics.openRouterProviderName == "TestProvider")
+        #expect(result.metrics.openRouterAgentSelectionReason == "tools")
+        #expect(result.metrics.openRouterAgentLogicalTurnCount == 2)
+        #expect(result.metrics.openRouterAgentHTTPAttemptCount == 3)
+        #expect(result.metrics.openRouterSchemaToolCallCount == 1)
+        #expect(result.trace?.schemaToolCalls.first?.errorCode == .sessionBudgetExceeded)
+    }
+
+    @Test func failedAgentRepairDoesNotDoubleCountCurrentAttempt() async {
+        let evalCase = TextToSQLEvalCase(
+            id: "commerce.recent-orders",
+            schemaFixture: "commerce",
+            question: "Show the 10 most recent orders",
+            expected: TextToSQLEvalExpectation(decision: .sql)
+        )
+
+        let result = await TextToSQLEvalCaseRunner.run(
+            evalCase: evalCase,
+            schema: makeCommerceSchema(),
+            generator: RepairAgentFailureGenerator(),
+            options: TextToSQLEvalRunOptions(backend: .cloud, model: "test/model")
+        )
+
+        #expect(result.status == .generationFailure)
+        #expect(result.metrics.modelCallCount == 2)
+        #expect(result.metrics.openRouterAgentHTTPAttemptCount == 1)
+        #expect(result.metrics.openRouterSchemaToolCallCount == 1)
+    }
+
+    @Test func evalMetricsPreferTraceSchemaToolCallTotal() {
+        let evalCase = TextToSQLEvalCase(
+            id: "commerce.recent-orders",
+            schemaFixture: "commerce",
+            question: "Show the 10 most recent orders",
+            expected: TextToSQLEvalExpectation(decision: .sql)
+        )
+        var metadata = OpenRouterGenerationMetadata(
+            requestedModelID: "test/model",
+            structuredOutputMode: .promptOnlyJSON,
+            requestCount: 1,
+            retryCount: 0
+        )
+        metadata.agentSelectionReason = "tools"
+        metadata.agentSchemaToolCallCount = 1
+        let generation = SQLGenerationResult(
+            sql: "SELECT id FROM public.orders LIMIT 100",
+            explanation: "Lists orders.",
+            assumptions: [],
+            referencedTables: ["public.orders"],
+            confidence: 0.8,
+            riskLevel: .low,
+            needsClarification: false,
+            clarificationQuestion: nil,
+            backendMetadata: metadata
+        )
+
+        let result = TextToSQLEvalScorer.score(
+            evalCase: evalCase,
+            schema: makeCommerceSchema(),
+            generation: generation,
+            options: TextToSQLEvalRunOptions(backend: .cloud, model: "test/model"),
+            latencyMs: 12,
+            trace: TextToSQLTrace(
+                stages: [],
+                modelCalls: 2,
+                elapsedMs: 12,
+                schemaToolCalls: [
+                    Self.schemaToolTrace(callID: "initial-search"),
+                    Self.schemaToolTrace(callID: "repair-search"),
+                ]
+            )
+        )
+
+        #expect(result.metrics.openRouterSchemaToolCallCount == 2)
+    }
+
     @Test func wrongSQLDecisionDoesNotInflateShapeCoverage() {
         let evalCase = TextToSQLEvalCase(
             id: "commerce.recent-orders",
@@ -1211,6 +1399,21 @@ struct TextToSQLEvalTests {
             dataType: type,
             isNullable: false,
             ordinalPosition: ordinal
+        )
+    }
+
+    private static func schemaToolTrace(callID: String) -> SchemaToolCallTrace {
+        SchemaToolCallTrace(
+            callID: callID,
+            toolName: "search_schema",
+            outcome: .success,
+            latencyMs: 1,
+            returnedObjectCount: 1,
+            outputByteCount: 128,
+            truncated: false,
+            errorCode: nil,
+            schemaFingerprintPrefix: "abcdef123456",
+            cacheHit: false
         )
     }
 }

@@ -23,6 +23,7 @@ struct EvalRunManifest: Codable {
     var startedAt: String
     var finishedAt: String
     var backendMode: String
+    var cloudAgentMode: String?
     var model: String?
     var osVersion: String
     var architecture: String
@@ -90,6 +91,10 @@ struct EvalRunSummary: Codable {
     var totalModelCalls: Int?
     var totalTokenUsage: Int?
     var estimatedCloudCostUSD: Double?
+    var totalSchemaToolCalls: Int?
+    var totalAgentModelTurns: Int?
+    var totalAgentHTTPAttempts: Int?
+    var toolBudgetFailureCount: Int?
     var averageEstimatedInitialPromptCharacters: Double?
     var maxEstimatedInitialPromptCharacters: Int?
 }
@@ -230,6 +235,11 @@ struct EvalRunner {
             "WidenKit/Services/SQLGenerationFailure.swift",
             "WidenKit/Services/GeneratedSQLRepairSupport.swift",
         ] + (isOpenRouterSmoke ? ["WidenKit/Services/OpenRouterSQLGenerator.swift"] : [])
+            + (options.cloudAgentMode == .tools ? [
+                "WidenKit/Services/OpenRouterSchemaToolSQLAgent.swift",
+                "WidenKit/Services/OpenRouterToolChatProtocol.swift",
+                "WidenKit/Services/SchemaToolSession.swift",
+            ] : [])
         let manifest = EvalRunManifest(
             suiteName: suite.name,
             suiteVersion: suite.version,
@@ -243,6 +253,9 @@ struct EvalRunner {
             startedAt: startedAt,
             finishedAt: finishedAt,
             backendMode: options.backendMode.rawValue,
+            cloudAgentMode: options.backendMode.backends.contains(.cloud)
+                ? options.cloudAgentMode.rawValue
+                : nil,
             model: options.backendMode == .local ? nil : options.model,
             osVersion: ProcessInfo.processInfo.operatingSystemVersionString,
             architecture: Self.architecture(),
@@ -643,6 +656,9 @@ struct EvalRunner {
             #endif
         case .cloud:
             guard let apiKey = Self.openRouterAPIKey() else { return nil }
+            if options.cloudAgentMode == .tools {
+                return EvalCloudSchemaToolSQLGenerator(apiKey: apiKey, model: options.model)
+            }
             return OpenRouterSQLGenerator(apiKey: apiKey, model: options.model)
         }
     }
@@ -667,6 +683,14 @@ struct EvalRunner {
         evalCase: TextToSQLEvalCase,
         schema: DatabaseSchema
     ) -> String {
+        if backend == .cloud, options.cloudAgentMode == .tools {
+            return [
+                "Schema-tool agent initial request estimate.",
+                "The full DatabaseSchema is intentionally not sent in the first request.",
+                "Question: \(evalCase.question)",
+                "Database context: \(evalCase.databaseContext ?? "")",
+            ].joined(separator: "\n")
+        }
         let budget = backend == .cloud ? 60_000 : 8_000
         return SQLPromptBuilder.prompt(
             question: evalCase.question,
@@ -716,6 +740,25 @@ struct EvalRunner {
         let modelCalls = results.compactMap(\.metrics.modelCallCount)
         let tokenUsage = results.compactMap(\.metrics.tokenUsage)
         let cloudCosts = results.compactMap(\.metrics.estimatedCloudCostUSD)
+        let schemaToolCalls = results.compactMap(\.metrics.openRouterSchemaToolCallCount)
+        let agentModelTurns = results.compactMap(\.metrics.openRouterAgentLogicalTurnCount)
+        let agentHTTPAttempts = results.compactMap(\.metrics.openRouterAgentHTTPAttemptCount)
+        let toolsModeRequested = options.backendMode.backends.contains(.cloud)
+            && options.cloudAgentMode == .tools
+        let toolBudgetFailures = results.filter { result in
+            return result.status == .generationFailure
+                && (
+                    result.metrics.openRouterAgentSelectionReason == "tools"
+                        || (
+                            toolsModeRequested
+                                && result.metrics.openRouterAgentSelectionReason == nil
+                        )
+                )
+                && result.trace?.schemaToolCalls.contains {
+                    $0.errorCode == .sessionBudgetExceeded
+                        || $0.errorCode == .resultBudgetExceeded
+                } == true
+        }
         let promptEstimateValues = results.compactMap(\.metrics.estimatedInitialPromptCharacters)
         let backendAvailableValues = results.map(\.metrics.backendAvailable)
         let transportEvaluated = results.filter(transportAttempted)
@@ -847,6 +890,10 @@ struct EvalRunner {
             totalModelCalls: modelCalls.isEmpty ? nil : modelCalls.reduce(0, +),
             totalTokenUsage: tokenUsage.isEmpty ? nil : tokenUsage.reduce(0, +),
             estimatedCloudCostUSD: cloudCosts.isEmpty ? nil : cloudCosts.reduce(0, +),
+            totalSchemaToolCalls: schemaToolCalls.isEmpty ? nil : schemaToolCalls.reduce(0, +),
+            totalAgentModelTurns: agentModelTurns.isEmpty ? nil : agentModelTurns.reduce(0, +),
+            totalAgentHTTPAttempts: agentHTTPAttempts.isEmpty ? nil : agentHTTPAttempts.reduce(0, +),
+            toolBudgetFailureCount: schemaToolCalls.isEmpty ? nil : toolBudgetFailures.count,
             averageEstimatedInitialPromptCharacters: promptEstimateValues.isEmpty
                 ? nil
                 : Double(promptEstimateValues.reduce(0, +)) / Double(promptEstimateValues.count),
@@ -1145,6 +1192,55 @@ private extension TextToSQLEvalResult {
     ) -> Bool? {
         if status == .notApplicable && !attempted { return nil }
         return status != .semanticEnvironmentUnavailable
+    }
+}
+
+private struct EvalCloudSchemaToolSQLGenerator: SQLGenerator, Sendable {
+    var apiKey: String
+    var model: String
+
+    func generateSQL(
+        question: String,
+        schema: DatabaseSchema,
+        context: SQLGenerationContext,
+        config: SQLGenerationConfig
+    ) async throws -> SQLGenerationResult {
+        let selectedSchemas = selectedSchemaSet(from: schema)
+        let schemaFingerprint = try SchemaSearchIndexStore.schemaFingerprint(for: schema)
+        let connectionID = deterministicConnectionID(
+            for: "\(schemaFingerprint)|\(selectedSchemas.joined(separator: ","))"
+        )
+        let agent = OpenRouterSchemaToolSQLAgent(
+            apiKey: apiKey,
+            model: model,
+            connectionID: connectionID,
+            selectedSchemas: selectedSchemas
+        )
+        return try await agent.generateSQL(
+            question: question,
+            schema: schema,
+            context: context,
+            config: config
+        )
+    }
+
+    private func selectedSchemaSet(from schema: DatabaseSchema) -> [String] {
+        let names = Set(schema.schemas.map(\.name) + schema.tables.map(\.schema))
+        return names.sorted()
+    }
+
+    private func deterministicConnectionID(for value: String) -> UUID {
+        let digest = SHA256.hash(data: Data(value.utf8))
+        let bytes = Array(digest.prefix(16))
+        let uuidString = String(
+            format: "%02x%02x%02x%02x-%02x%02x-%02x%02x-%02x%02x-%02x%02x%02x%02x%02x%02x",
+            bytes[0], bytes[1], bytes[2], bytes[3],
+            bytes[4], bytes[5],
+            bytes[6], bytes[7],
+            bytes[8], bytes[9],
+            bytes[10], bytes[11], bytes[12], bytes[13], bytes[14], bytes[15]
+        )
+        return UUID(uuidString: uuidString) ?? UUID()
     }
 }
 

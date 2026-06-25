@@ -563,6 +563,7 @@ public struct SchemaToolExecutor: Sendable {
             let finiteValuesKnown = allConstraints.contains { !$0.values.isEmpty }
             let json: JSONValue = [
                 "table_id": .string(handles.handle(for: tableID) ?? ""),
+                "table": .string(quotedTableName(tableID.schema, tableID.table ?? "")),
                 "column_id": .string(handles.handle(for: columnID) ?? ""),
                 "sql_name": .string(quotedColumnName(column)),
                 "constraints": .array(Array(constraints)),

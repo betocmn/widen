@@ -10,6 +10,7 @@ public enum SQLGenerationFailure: Error, LocalizedError, Equatable, Sendable {
     case structuredResponseParsing(String)
     case generation(String)
     case openRouter(OpenRouterFailure)
+    case schemaToolAgent(OpenRouterSchemaToolAgentFailure)
 
     public var errorDescription: String? {
         switch self {
@@ -21,6 +22,8 @@ public enum SQLGenerationFailure: Error, LocalizedError, Equatable, Sendable {
             .generation(let detail):
             "SQL generation failed: \(detail)"
         case .openRouter(let failure):
+            failure.localizedDescription
+        case .schemaToolAgent(let failure):
             failure.localizedDescription
         }
     }
@@ -34,6 +37,8 @@ public enum SQLGenerationFailure: Error, LocalizedError, Equatable, Sendable {
             .generation(let detail):
             detail
         case .openRouter(let failure):
+            failure.message
+        case .schemaToolAgent(let failure):
             failure.message
         }
     }
@@ -52,6 +57,8 @@ public enum SQLGenerationFailure: Error, LocalizedError, Equatable, Sendable {
             .modelGeneration
         case .openRouter(let failure):
             failure.pipelineCategory
+        case .schemaToolAgent(let failure):
+            failure.pipelineCategory
         }
     }
 
@@ -61,6 +68,9 @@ public enum SQLGenerationFailure: Error, LocalizedError, Equatable, Sendable {
         }
         if let failure = error as? OpenRouterFailure {
             return .openRouter(failure)
+        }
+        if let failure = error as? OpenRouterSchemaToolAgentFailure {
+            return .schemaToolAgent(failure)
         }
         if let appError = error as? AppError {
             switch appError {

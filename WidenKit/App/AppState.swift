@@ -153,6 +153,21 @@ public final class AppState {
     }
     private static let openRouterModelIDKey = "WidenOpenRouterModelID"
 
+    /// Experimental OpenRouter-only schema-tool agent. Disabled by default;
+    /// the legacy one-shot OpenRouter generator remains the production path.
+    public var experimentalCloudSchemaAgentEnabled: Bool =
+        UserDefaults.standard.bool(forKey: AppState.experimentalCloudSchemaAgentEnabledKey)
+    {
+        didSet {
+            UserDefaults.standard.set(
+                experimentalCloudSchemaAgentEnabled,
+                forKey: Self.experimentalCloudSchemaAgentEnabledKey
+            )
+        }
+    }
+    private static let experimentalCloudSchemaAgentEnabledKey =
+        "WidenExperimentalCloudSchemaAgentEnabled"
+
     /// Test seam, mirrors `titleGeneratorOverride`: `.some(value)` replaces
     /// the Keychain lookup, including `.some(nil)` to force "no key stored".
     var openRouterAPIKeyOverride: String??
@@ -228,6 +243,23 @@ public final class AppState {
     /// backend if it is available. Production never silently swaps to another
     /// backend when the selected one is unavailable.
     public var sqlGenerator: any SQLGenerator {
+        makeSQLGenerator(connectionID: nil, schema: nil)
+    }
+
+    /// Connection-aware generation path used by live database sessions. The
+    /// experimental cloud schema-tool agent needs host-controlled connection
+    /// and schema scope; callers without that context keep using `sqlGenerator`.
+    public func sqlGenerator(
+        connectionID: UUID,
+        schema: DatabaseSchema
+    ) -> any SQLGenerator {
+        makeSQLGenerator(connectionID: connectionID, schema: schema)
+    }
+
+    private func makeSQLGenerator(
+        connectionID: UUID?,
+        schema: DatabaseSchema?
+    ) -> any SQLGenerator {
         if let sqlGeneratorOverride { return sqlGeneratorOverride }
         if useMockAI { return MockSQLGenerator() }
         if aiBackendMode == .cloud {
@@ -239,6 +271,22 @@ public final class AppState {
             switch cloudProvider {
             case .openRouter:
                 if let key = openRouterAPIKey, !key.isEmpty {
+                    if experimentalCloudSchemaAgentEnabled,
+                        let connectionID,
+                        let schema
+                    {
+                        let selectedSchemas = selectedSchemaSet(from: schema)
+                        return OpenRouterSchemaToolSQLAgent(
+                            apiKey: key,
+                            model: openRouterModelID,
+                            connectionID: connectionID,
+                            selectedSchemas: selectedSchemas,
+                            currentSchemaFingerprint: schemaFingerprintProvider(
+                                connectionID: connectionID,
+                                selectedSchemas: selectedSchemas
+                            )
+                        )
+                    }
                     return OpenRouterSQLGenerator(apiKey: key, model: openRouterModelID)
                 }
             case .applePCC:
@@ -264,6 +312,34 @@ public final class AppState {
                 ).message)
         #endif
         return UnavailableSQLGenerator(message: localStatus.message)
+    }
+
+    private func selectedSchemaSet(from schema: DatabaseSchema) -> [String] {
+        let names = Set(schema.schemas.map(\.name) + schema.tables.map(\.schema))
+        return names.sorted()
+    }
+
+    private func schemaFingerprintProvider(
+        connectionID: UUID,
+        selectedSchemas: [String]
+    ) -> @Sendable () async throws -> String {
+        { [weak self] in
+            try await MainActor.run {
+                guard let self, let schema = self.schemas[connectionID] else { return "" }
+                let scopedSchema: DatabaseSchema
+                if selectedSchemas.count == 1, let name = selectedSchemas.first {
+                    scopedSchema = schema.filtered(toSchema: name)
+                } else {
+                    scopedSchema = schema
+                }
+                let snapshot = SchemaSearchSnapshot(
+                    connectionID: connectionID,
+                    selectedSchemas: selectedSchemas,
+                    schema: scopedSchema
+                )
+                return try SchemaSearchIndexStore.cacheKey(for: snapshot).schemaFingerprint
+            }
+        }
     }
 
     /// Label for the backend now serving generations, phrased to follow

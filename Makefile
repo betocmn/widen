@@ -16,6 +16,7 @@ EVAL := build/Build/Products/Debug/WidenEval
 MODEL ?= openai/gpt-5.5
 BACKEND ?= local
 RETRIEVER ?= both
+CLOUD_AGENT ?= tools
 EVAL_ARGS := --suite Evals/suites/text-to-sql-v1.json
 ifdef CASE
 EVAL_ARGS += --case $(CASE)
@@ -33,7 +34,7 @@ ifdef FAIL_UNDER
 EVAL_ARGS += --fail-under $(FAIL_UNDER)
 endif
 
-.PHONY: project build test test-db test-fm eval-build eval-local eval-cloud eval-all eval-case eval-retrieval eval-retrieval-case eval-schema-tools eval-db-local eval-db-cloud eval-db-case eval-openrouter-smoke setup run run-conductor release release-mac xcode clean
+.PHONY: project build test test-db test-fm eval-build eval-local eval-cloud eval-cloud-agent eval-all eval-case eval-cloud-agent-case eval-retrieval eval-retrieval-case eval-schema-tools eval-db-local eval-db-cloud eval-db-cloud-agent eval-db-case eval-openrouter-smoke setup run run-conductor release release-mac xcode clean
 
 ## Regenerate Widen.xcodeproj from project.yml
 project:
@@ -76,6 +77,11 @@ eval-cloud: eval-build
 	@set -a; if [ -f .env.eval.local ]; then . ./.env.eval.local; fi; set +a; \
 	$(EVAL) --backend cloud --model "$(MODEL)" $(EVAL_ARGS)
 
+## Run the text-to-SQL eval suite against OpenRouter with --cloud-agent legacy|tools
+eval-cloud-agent: eval-build
+	@set -a; if [ -f .env.eval.local ]; then . ./.env.eval.local; fi; set +a; \
+	$(EVAL) --backend cloud --model "$(MODEL)" --cloud-agent "$(CLOUD_AGENT)" $(EVAL_ARGS)
+
 ## Run a tiny OpenRouter transport and structured-response smoke suite
 eval-openrouter-smoke: eval-build
 	@set -a; if [ -f .env.eval.local ]; then . ./.env.eval.local; fi; set +a; \
@@ -91,6 +97,12 @@ eval-case: eval-build
 	@test -n "$(CASE)" || (echo "error: CASE is required" >&2; exit 1)
 	@set -a; if [ -f .env.eval.local ]; then . ./.env.eval.local; fi; set +a; \
 	$(EVAL) --backend "$(BACKEND)" --model "$(MODEL)" $(EVAL_ARGS)
+
+## Run one OpenRouter cloud-agent eval case. Example: make eval-cloud-agent-case CASE=preseason.top-wins-defined CLOUD_AGENT=tools
+eval-cloud-agent-case: eval-build
+	@test -n "$(CASE)" || (echo "error: CASE is required" >&2; exit 1)
+	@set -a; if [ -f .env.eval.local ]; then . ./.env.eval.local; fi; set +a; \
+	$(EVAL) --backend cloud --model "$(MODEL)" --cloud-agent "$(CLOUD_AGENT)" $(EVAL_ARGS)
 
 ## Run deterministic schema retrieval evals with --retriever legacy|index|both
 eval-retrieval: eval-build
@@ -114,6 +126,11 @@ eval-db-local: eval-build
 eval-db-cloud: eval-build
 	@set -a; if [ -f .env.eval.local ]; then . ./.env.eval.local; fi; set +a; \
 	$(EVAL) --backend cloud --model "$(MODEL)" --semantic-db $(EVAL_ARGS)
+
+## Run seeded Postgres semantic grading through OpenRouter with --cloud-agent legacy|tools
+eval-db-cloud-agent: eval-build
+	@set -a; if [ -f .env.eval.local ]; then . ./.env.eval.local; fi; set +a; \
+	$(EVAL) --backend cloud --model "$(MODEL)" --cloud-agent "$(CLOUD_AGENT)" --semantic-db $(EVAL_ARGS)
 
 ## Run one seeded Postgres semantic eval case
 eval-db-case: eval-build

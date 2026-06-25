@@ -109,19 +109,22 @@ public struct TextToSQLPipelineFailure: Error, LocalizedError, Codable, Equatabl
     public var message: String
     public var validationIssueIDs: [String]
     public var openRouterFailure: OpenRouterFailureDiagnostic?
+    public var backendMetadata: OpenRouterGenerationMetadata?
 
     public init(
         stage: TextToSQLStage,
         category: TextToSQLFailureCategory,
         message: String,
         validationIssueIDs: [String] = [],
-        openRouterFailure: OpenRouterFailureDiagnostic? = nil
+        openRouterFailure: OpenRouterFailureDiagnostic? = nil,
+        backendMetadata: OpenRouterGenerationMetadata? = nil
     ) {
         self.stage = stage
         self.category = category
         self.message = message
         self.validationIssueIDs = validationIssueIDs
         self.openRouterFailure = openRouterFailure
+        self.backendMetadata = backendMetadata
     }
 
     public var errorDescription: String? { message }
@@ -256,6 +259,7 @@ public struct TextToSQLPipeline: TextToSQLRunning {
                 context: request.context,
                 config: request.config
             )
+            trace.mergeSchemaToolCalls(generated.schemaToolCalls)
             trace.append(
                 .modelGeneration,
                 outcome: .success,
@@ -271,6 +275,7 @@ public struct TextToSQLPipeline: TextToSQLRunning {
             )
             throw CancellationError()
         } catch {
+            trace.mergeSchemaToolCalls(schemaToolCalls(from: error))
             let failure = generationFailure(error, stage: .modelGeneration)
             trace.append(
                 .modelGeneration,
@@ -509,6 +514,7 @@ public struct TextToSQLPipeline: TextToSQLRunning {
                     context: context,
                     config: request.config
                 )
+                trace.mergeSchemaToolCalls(generated.schemaToolCalls)
                 generation = GeneratedSQLPostprocessor.enriched(
                     generated,
                     question: repairQuestionContext.question,
@@ -527,6 +533,7 @@ public struct TextToSQLPipeline: TextToSQLRunning {
                 )
                 throw CancellationError()
             } catch {
+                trace.mergeSchemaToolCalls(schemaToolCalls(from: error))
                 let failure = generationFailure(error, stage: .validationRepair)
                 await record(
                     TextToSQLPipelineEvent(
@@ -760,16 +767,28 @@ public struct TextToSQLPipeline: TextToSQLRunning {
     ) -> TextToSQLPipelineFailure {
         if let failure = SQLGenerationFailure.typed(error) {
             let openRouterDiagnostic: OpenRouterFailureDiagnostic?
+            let backendMetadata: OpenRouterGenerationMetadata?
             if case .openRouter(let openRouterFailure) = failure {
                 openRouterDiagnostic = openRouterFailure.diagnostic
+                backendMetadata = nil
+            } else if case .schemaToolAgent(let agentFailure) = failure,
+                let openRouterFailure = agentFailure.openRouterFailure
+            {
+                openRouterDiagnostic = openRouterFailure.diagnostic
+                backendMetadata = agentFailure.backendMetadata
+            } else if case .schemaToolAgent(let agentFailure) = failure {
+                openRouterDiagnostic = nil
+                backendMetadata = agentFailure.backendMetadata
             } else {
                 openRouterDiagnostic = nil
+                backendMetadata = nil
             }
             return TextToSQLPipelineFailure(
                 stage: stage,
                 category: failure.pipelineCategory,
                 message: failure.localizedDescription,
-                openRouterFailure: openRouterDiagnostic
+                openRouterFailure: openRouterDiagnostic,
+                backendMetadata: backendMetadata
             )
         }
         return TextToSQLPipelineFailure(
@@ -836,7 +855,8 @@ public struct TextToSQLPipeline: TextToSQLRunning {
                     decision.modelCallCount,
                     trace.stages.compactMap(\.modelCallCount).max() ?? 0
                 ),
-                elapsedMs: elapsedMilliseconds(since: started)
+                elapsedMs: elapsedMilliseconds(since: started),
+                schemaToolCalls: trace.schemaToolCalls
             ),
             events: events
         )
@@ -860,6 +880,7 @@ private struct RepairRun {
 private struct TraceBuilder {
     private let schemaFingerprint: String
     var stages: [TextToSQLStageResult] = []
+    var schemaToolCalls: [SchemaToolCallTrace] = []
 
     init(schema: DatabaseSchema) {
         self.schemaFingerprint = Self.fingerprint(schema)
@@ -890,6 +911,11 @@ private struct TraceBuilder {
         )
     }
 
+    mutating func mergeSchemaToolCalls(_ traces: [SchemaToolCallTrace]) {
+        guard !traces.isEmpty else { return }
+        schemaToolCalls.append(contentsOf: traces)
+    }
+
     private static func fingerprint(_ schema: DatabaseSchema) -> String {
         let text = schema.tables
             .sorted { $0.qualifiedName < $1.qualifiedName }
@@ -905,6 +931,16 @@ private struct TraceBuilder {
             .map { String(format: "%02x", $0) }
             .joined()
     }
+}
+
+private func schemaToolCalls(from error: any Error) -> [SchemaToolCallTrace] {
+    if let failure = error as? OpenRouterSchemaToolAgentFailure {
+        return failure.schemaToolCalls
+    }
+    if case .schemaToolAgent(let failure)? = SQLGenerationFailure.typed(error) {
+        return failure.schemaToolCalls
+    }
+    return []
 }
 
 private extension SQLGenerationMode {

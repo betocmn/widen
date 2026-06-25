@@ -107,8 +107,14 @@ enum EvalBackendMode: String {
     }
 }
 
+enum EvalCloudAgentMode: String {
+    case legacy
+    case tools
+}
+
 struct EvalCLIOptions {
     var backendMode: EvalBackendMode = .local
+    var cloudAgentMode: EvalCloudAgentMode = .legacy
     var model: String = "openai/gpt-5.5"
     var suitePath: String = "Evals/suites/text-to-sql-v1.json"
     var caseID: String?
@@ -127,6 +133,7 @@ struct EvalCLIOptions {
 
         Options:
           --backend local|cloud|both
+          --cloud-agent legacy|tools
           --model <openrouter-model-id>
           --suite <path>
           --case <case-id>
@@ -160,6 +167,12 @@ struct EvalCLIOptions {
                     throw EvalCLIError.invalidValue(argument, value)
                 }
                 options.backendMode = backend
+            case "--cloud-agent":
+                let value = try nextValue(after: argument)
+                guard let mode = EvalCloudAgentMode(rawValue: value) else {
+                    throw EvalCLIError.invalidValue(argument, value)
+                }
+                options.cloudAgentMode = mode
             case "--model":
                 options.model = try nextValue(after: argument)
             case "--suite":

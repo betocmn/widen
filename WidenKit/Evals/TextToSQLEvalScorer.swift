@@ -390,7 +390,8 @@ public enum TextToSQLEvalCaseRunner {
         latencyMs: Int,
         trace: TextToSQLTrace
     ) -> TextToSQLEvalResult {
-        TextToSQLEvalResult(
+        let backendMetadata = failure.backendMetadata
+        return TextToSQLEvalResult(
             caseID: evalCase.id,
             backend: options.backend,
             model: options.model,
@@ -410,14 +411,22 @@ public enum TextToSQLEvalCaseRunner {
                 latencyMs: latencyMs,
                 modelCallCount: failureModelCallCount(
                     trace: trace,
-                    openRouterFailure: failure.openRouterFailure
+                    openRouterFailure: failure.openRouterFailure,
+                    backendMetadata: backendMetadata
                 ),
                 estimatedInitialPromptCharacters: options.estimatedInitialPromptCharacters,
-                openRouterRetryCount: failure.openRouterFailure.map { max(0, $0.attemptCount - 1) },
-                openRouterRequestedModelID: failure.openRouterFailure?.requestedModelID,
-                openRouterReturnedModelID: failure.openRouterFailure?.returnedModelID,
-                openRouterProviderName: failure.openRouterFailure?.providerName
-            ),
+                tokenUsage: backendMetadata?.totalTokens,
+                estimatedCloudCostUSD: backendMetadata?.costUSD,
+                openRouterStructuredOutputMode: backendMetadata?.structuredOutputMode.rawValue,
+                openRouterRetryCount: backendMetadata?.retryCount
+                    ?? failure.openRouterFailure.map { max(0, $0.attemptCount - 1) },
+                openRouterRequestedModelID: backendMetadata?.requestedModelID
+                    ?? failure.openRouterFailure?.requestedModelID,
+                openRouterReturnedModelID: backendMetadata?.returnedModelID
+                    ?? failure.openRouterFailure?.returnedModelID,
+                openRouterProviderName: backendMetadata?.providerName
+                    ?? failure.openRouterFailure?.providerName
+            ).withOpenRouterAgentMetadata(backendMetadata, trace: trace),
             diagnostics: TextToSQLEvalDiagnostics(
                 errorMessage: failure.localizedDescription,
                 openRouterFailure: failure.openRouterFailure
@@ -429,8 +438,13 @@ public enum TextToSQLEvalCaseRunner {
 
     private static func failureModelCallCount(
         trace: TextToSQLTrace,
-        openRouterFailure: OpenRouterFailureDiagnostic?
+        openRouterFailure: OpenRouterFailureDiagnostic?,
+        backendMetadata: OpenRouterGenerationMetadata? = nil
     ) -> Int? {
+        if let agentAttemptCount = backendMetadata?.agentHTTPAttemptCount ?? backendMetadata?.requestCount {
+            guard trace.modelCalls > 0 else { return agentAttemptCount }
+            return trace.modelCalls + max(0, agentAttemptCount - 1)
+        }
         guard let attemptCount = openRouterFailure?.attemptCount else {
             return trace.modelCalls == 0 ? nil : trace.modelCalls
         }
@@ -518,7 +532,7 @@ public enum TextToSQLEvalScorer {
                     openRouterRequestedModelID: backendMetadata?.requestedModelID,
                     openRouterReturnedModelID: backendMetadata?.returnedModelID,
                     openRouterProviderName: backendMetadata?.providerName
-                ),
+                ).withOpenRouterAgentMetadata(backendMetadata, trace: trace),
                 diagnostics: TextToSQLEvalDiagnostics(),
                 generatedSQL: generation.sql.nilIfBlank,
                 clarificationQuestion: generation.clarificationQuestion,
@@ -554,7 +568,7 @@ public enum TextToSQLEvalScorer {
                     openRouterRequestedModelID: backendMetadata?.requestedModelID,
                     openRouterReturnedModelID: backendMetadata?.returnedModelID,
                     openRouterProviderName: backendMetadata?.providerName
-                ),
+                ).withOpenRouterAgentMetadata(backendMetadata, trace: trace),
                 generatedSQL: generation.sql.nilIfBlank,
                 clarificationQuestion: generation.clarificationQuestion,
                 referencedTables: generation.referencedTables,
@@ -588,7 +602,7 @@ public enum TextToSQLEvalScorer {
                     openRouterRequestedModelID: backendMetadata?.requestedModelID,
                     openRouterReturnedModelID: backendMetadata?.returnedModelID,
                     openRouterProviderName: backendMetadata?.providerName
-                ),
+                ).withOpenRouterAgentMetadata(backendMetadata, trace: trace),
                 diagnostics: TextToSQLEvalDiagnostics(safetyErrors: safety.errors),
                 generatedSQL: generation.sql.nilIfBlank,
                 referencedTables: generation.referencedTables,
@@ -666,7 +680,7 @@ public enum TextToSQLEvalScorer {
                 openRouterRequestedModelID: backendMetadata?.requestedModelID,
                 openRouterReturnedModelID: backendMetadata?.returnedModelID,
                 openRouterProviderName: backendMetadata?.providerName
-            ),
+            ).withOpenRouterAgentMetadata(backendMetadata, trace: trace),
             diagnostics: TextToSQLEvalDiagnostics(
                 missingTables: missingTables,
                 missingColumnBindings: missingColumnBindings,
@@ -1028,6 +1042,28 @@ public enum TextToSQLEvalScorer {
             .replacingOccurrences(of: "\"", with: "")
             .trimmingCharacters(in: .whitespacesAndNewlines)
             .lowercased()
+    }
+}
+
+private extension TextToSQLEvalMetrics {
+    func withOpenRouterAgentMetadata(
+        _ metadata: OpenRouterGenerationMetadata?,
+        trace: TextToSQLTrace?
+    ) -> TextToSQLEvalMetrics {
+        var copy = self
+        copy.openRouterAgentSelectionReason = metadata?.agentSelectionReason
+        copy.openRouterAgentLogicalTurnCount = metadata?.agentLogicalTurnCount
+        copy.openRouterAgentHTTPAttemptCount = metadata?.agentHTTPAttemptCount
+        copy.openRouterSchemaToolCallCount = trace?.schemaToolCalls.nonEmptyCount
+            ?? metadata?.agentSchemaToolCallCount
+        copy.openRouterAgentTerminalOutcome = metadata?.agentTerminalOutcome
+        return copy
+    }
+}
+
+private extension Array where Element == SchemaToolCallTrace {
+    var nonEmptyCount: Int? {
+        isEmpty ? nil : count
     }
 }
 

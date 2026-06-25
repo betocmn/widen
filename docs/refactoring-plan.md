@@ -30,11 +30,11 @@ PR 1 — Eval harness and first 20 cases
   ├── PR 3 — Seeded Postgres semantic grader               [parallel]
   ├── PR 4 — OpenRouter adapter reliability                [parallel]
   └── PR 5 — Local schema search index                     [parallel]
-          ├── PR 6 — Bounded schema tools                     [done 2026-06-25]
+          ├── PR 6 ✅ — Bounded schema tools                  [done 2026-06-25]
           └── PR 10 — Embedding retrieval experiment       [parallel]
 
 PR 2 + PR 4 + PR 6
-  └── PR 7 — Cloud tool-using SQL agent
+  └── PR 7 ✅ — Cloud tool-using SQL agent                  [done 2026-06-25]
 
 PR 2 + PR 3
   └── PR 8 — PostgreSQL verification and one repair        [parallel with PR 7]
@@ -640,7 +640,7 @@ Forbidden distractor violations: 0
 
 ---
 
-# PR 6 — Add bounded schema tools [done 2026-06-25]
+# PR 6 ✅ — Add bounded schema tools [done 2026-06-25]
 
 Suggested title:
 
@@ -706,7 +706,7 @@ Schema tool contract response sizes: definitions 1686 bytes; no-finite-values 43
 
 ---
 
-# PR 7 — Add a cloud tool-using SQL agent
+# PR 7 ✅ — Add a cloud tool-using SQL agent [done 2026-06-25]
 
 Suggested title:
 
@@ -767,7 +767,7 @@ no previous failed SQL in a reconstruction prompt
 Keep it behind:
 
 ```text
-textToSQLAgentV2
+experimentalCloudSchemaAgentEnabled
 ```
 
 ## Merge versus promotion criteria
@@ -783,6 +783,49 @@ zero nonexistent identifiers reaching execution
 all four clarification cases classified correctly
 at least 95% cloud transport success
 ```
+
+Completed on 2026-06-25.
+
+Implementation notes:
+
+* Added an experimental OpenRouter-only `OpenRouterSchemaToolSQLAgent` separate from the legacy one-shot `OpenRouterSQLGenerator`.
+* Added OpenRouter tool-chat protocol support, terminal `submit_text_to_sql_result`, schema-tool evidence checks, typed agent failures, and aggregate agent metadata.
+* Added the persisted `experimentalCloudSchemaAgentEnabled` preference under OpenRouter Advanced / Experimental settings. Default remains false.
+* App construction now uses a connection-aware generator path so connection ID, selected schemas, schema fingerprint, schema-tool session factory, and search index store stay host-controlled.
+* Added `WidenEval --cloud-agent legacy|tools` plus `make eval-cloud-agent`, `make eval-db-cloud-agent`, and `make eval-cloud-agent-case`.
+* Added deterministic scripted OpenRouter tests for the happy path, multiple schema calls, terminal-before-search correction, mixed terminal/schema rejection, unsupported-tool-model legacy selection, prompt injection exclusion from the initial request, and pipeline trace merging.
+* Review follow-up fixes preserve provider tool-call response protocol during corrections, keep schema-tool traces on stale-schema and provider-failure agent failures, bound retry backoff by the agent wall-clock timeout, and gate terminal SQL on existing safety/schema validators before success.
+* Latest review follow-up fixes preserve quoted identifier case in evidence keys, avoid crediting endpoint tables from empty join-path results, keep initial and repair schema-tool traces separate, and count tools-mode budget failures even when generation failure metadata is partial.
+* Second review follow-up fixes classify unsafe terminal SQL as safety validation, recheck schema freshness before terminal returns, preserve follow-up current SQL and reconstruction repair facts, reject unqualified `SELECT *` unless the table was fully described, and count repair-mode tool-budget failures against the repair budget.
+* Third review follow-up fixes count only typed schema-tool budget errors, keep reconstruction attempts on the repair schema-tool budget, preserve aggregate agent metadata on failures, include agent-only failures in OpenRouter reporting, and preserve typed OpenRouter error envelopes in tool-chat responses.
+* Fourth review follow-up fixes unqualified `SELECT *` detection so arithmetic multiplication is not treated as wildcard projection, returns typed model-turn budget failures for zero-turn configurations, and includes the configured default row limit in the cloud tool-agent prompt.
+* Fifth review follow-up fixes repair/current-request model-call accounting, preserves non-tool invalid-request failures, prefers full pipeline schema-tool traces in eval metrics, and attempts the tool agent when tool capabilities are unknown rather than silently selecting legacy.
+* Sixth review follow-up bounds in-flight OpenRouter sends by the agent wall-clock deadline, applies a `max_tokens` fallback when token-capability metadata is absent, and counts schema-tool result-byte budget failures in eval summaries. It intentionally preserves the PR 7 requirement to return a typed unsupported-tools failure, not silently fall back to one-shot generation, after a paid tool request is rejected.
+* Seventh review follow-up preserves provider tool-call IDs in tool response envelopes, includes last-run errors in non-repair follow-up prompts, bounds confirmed semantic bindings before prompting, and restores PostgreSQL date/time dialect guardrails for the schema-tool agent.
+
+Verification:
+
+```text
+make project
+make test
+make eval-schema-tools
+make eval-openrouter-smoke MODEL=openai/gpt-5.5 REPEAT=3
+make eval-cloud-agent MODEL=openai/gpt-5.5 REPEAT=3
+make eval-db-cloud-agent MODEL=openai/gpt-5.5 REPEAT=3
+```
+
+Results:
+
+```text
+make test: 724 tests in 42 suites passed.
+make eval-build: WidenEval build succeeded.
+make eval-schema-tools: 10/10 cases passed; max response bytes 6111; truncated results 1; determinism failures 0.
+make eval-openrouter-smoke MODEL=openai/gpt-5.5 REPEAT=3: completed with backend/transport 15/15, structured parse 15/15, static-shape 9/15, estimated cost $0.181115. Summary: .eval-results/20260625-123540-793/summary.md.
+make eval-cloud-agent MODEL=openai/gpt-5.5 REPEAT=3: completed tools mode with backend 60/60, transport 60/60, static-shape 10/60, 221 schema-tool calls, 141 model calls, 123 agent HTTP attempts, estimated cost $1.353450. Summary: .eval-results/20260625-125522-075/summary.md.
+make eval-db-cloud-agent MODEL=openai/gpt-5.5 REPEAT=3: completed tools mode with backend 60/60, transport 60/60, static-shape 11/60, semantic end-to-end 11/60, SQL semantic 8/12, clarification decision 8/12, 221 schema-tool calls, 145 model calls, 127 agent HTTP attempts, estimated cost $1.405265. Summary: .eval-results/20260625-131721-290/summary.md.
+```
+
+The live tools-mode results are safe to keep behind the disabled feature flag, but they do not meet the promotion gate.
 
 ---
 
