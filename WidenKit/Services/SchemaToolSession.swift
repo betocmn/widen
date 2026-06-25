@@ -566,15 +566,18 @@ public actor SchemaToolSession {
         let countsAgainstCallBudget = !cacheHit || policy.countCachedCalls
 
         guard !countsAgainstCallBudget || callCount < policy.maximumCallCount else {
-            return record(
-                result: finalizedError(
+            let result = finalizeAndCount(
+                finalizedError(
                     callID: invocation.callID,
                     toolName: invocation.toolName,
                     error: .init(
                         code: .sessionBudgetExceeded,
                         message: "Schema tool call budget exceeded."
                     )
-                ),
+                )
+            )
+            return record(
+                result: result,
                 started: started,
                 returnedObjectCount: 0,
                 cacheHit: false
@@ -598,7 +601,9 @@ public actor SchemaToolSession {
                 policy: policy,
                 matchedColumnsByTable: matchedColumnsByTable
             )
-            cache[cacheKey] = SchemaToolCachedExecution(execution: execution)
+            if invocation.toolName != SchemaToolName.describeTables.rawValue {
+                cache[cacheKey] = SchemaToolCachedExecution(execution: execution)
+            }
         }
 
         for (tableID, columns) in execution.matchedColumnIDsByTable {
@@ -642,6 +647,22 @@ public actor SchemaToolSession {
             returnedObjectCount: execution.returnedObjectCount,
             cacheHit: cacheHit
         )
+    }
+
+    private func finalizeAndCount(_ result: SchemaToolResult) -> SchemaToolResult {
+        var result = result
+        if cumulativeOutputBytes + result.outputByteCount > policy.maximumSessionResultBytes {
+            result = finalizedError(
+                callID: result.callID,
+                toolName: result.toolName,
+                error: .init(
+                    code: .sessionBudgetExceeded,
+                    message: "Schema tool session output budget exceeded."
+                )
+            )
+        }
+        cumulativeOutputBytes += result.outputByteCount
+        return result
     }
 
     private func record(

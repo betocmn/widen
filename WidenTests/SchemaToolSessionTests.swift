@@ -444,6 +444,66 @@ struct SchemaToolSessionTests {
         #expect(third.error?.code == .sessionBudgetExceeded)
     }
 
+    @Test func callBudgetErrorsCountAgainstSessionOutputBudget() async throws {
+        let session = try await makeSession(
+            schema: simpleSchema(),
+            policy: SchemaToolPolicy(
+                maximumCallCount: 1,
+                maximumResultBytes: 8_000,
+                maximumSessionResultBytes: 900
+            )
+        )
+        let results = try await session.invoke([
+            SchemaToolInvocation(callID: "one", toolName: SchemaToolName.searchSchema.rawValue, arguments: ["query": "users", "limit": 1]),
+            SchemaToolInvocation(callID: "two", toolName: SchemaToolName.searchSchema.rawValue, arguments: ["query": "users", "limit": 1]),
+            SchemaToolInvocation(callID: "three", toolName: SchemaToolName.searchSchema.rawValue, arguments: ["query": "users", "limit": 1]),
+        ])
+        let traces = await session.tracesSnapshot()
+
+        #expect(results.map(\.success) == [true, false, false])
+        #expect(results[1].error?.message == "Schema tool call budget exceeded.")
+        #expect(results[2].error?.message == "Schema tool session output budget exceeded.")
+        #expect(traces.map(\.outputByteCount).reduce(0, +) > 900)
+    }
+
+    @Test func describeTablesRefreshesAfterSearchUpdatesMatchedColumns() async throws {
+        let session = try await makeSession(
+            schema: cacheSensitiveDescribeSchema(),
+            policy: SchemaToolPolicy(
+                maximumCallCount: 4,
+                maximumResultBytes: 20_000,
+                maximumSessionResultBytes: 40_000
+            )
+        )
+        let events = try await requireHandle(session, .table(schema: "public", name: "events"))
+        let firstDescribe = try await invoke(
+            session,
+            id: "describe-before-search",
+            tool: .describeTables,
+            arguments: ["table_ids": handles(events)]
+        )
+        let firstColumns = describedColumnNames(firstDescribe)
+
+        _ = try await invoke(
+            session,
+            id: "search-payload-column",
+            tool: .searchSchema,
+            arguments: ["query": "cache refresh sentinel", "limit": 1]
+        )
+        let secondDescribe = try await invoke(
+            session,
+            id: "describe-after-search",
+            tool: .describeTables,
+            arguments: ["table_ids": handles(events)]
+        )
+        let secondColumns = describedColumnNames(secondDescribe)
+        let traces = await session.tracesSnapshot()
+
+        #expect(!firstColumns.contains(#""public"."events"."late_context_column""#))
+        #expect(secondColumns.contains(#""public"."events"."late_context_column""#))
+        #expect(traces.last?.cacheHit == false)
+    }
+
     @Test func batchInvocationPreservesDeclaredOrderAndTraceIsRedacted() async throws {
         let session = try await makeSession(schema: constraintSchema())
         let results = try await session.invoke([
@@ -462,6 +522,9 @@ struct SchemaToolSessionTests {
     @Test func cancellationPropagatesAsCancellationError() async throws {
         let session = try await makeSession(schema: simpleSchema())
         let task = Task {
+            while !Task.isCancelled {
+                await Task.yield()
+            }
             try await session.invoke(
                 SchemaToolInvocation(
                     callID: "cancelled",
@@ -586,6 +649,12 @@ struct SchemaToolSessionTests {
 
     private func requireHandle(_ session: SchemaToolSession, _ objectID: SchemaObjectID) async throws -> String {
         try #require(await session.handle(for: objectID))
+    }
+
+    private func describedColumnNames(_ result: SchemaToolResult) -> [String] {
+        result.payload?["tables"]?.arrayValue?
+            .flatMap { $0["columns"]?.arrayValue ?? [] }
+            .compactMap { $0["sql_name"]?.stringValue } ?? []
     }
 
     private func handles(_ values: String...) -> JSONValue {
@@ -746,6 +815,27 @@ private func largeCompositeSchema() -> DatabaseSchema {
     )
 }
 
+private func cacheSensitiveDescribeSchema() -> DatabaseSchema {
+    var columns: [ColumnInfo] = []
+    for index in 0..<50 {
+        columns.append(column("events", "payload_column_\(index)", ordinal: index + 1))
+    }
+    columns.append(
+        column(
+            "events",
+            "late_context_column",
+            ordinal: 99,
+            comment: "cache refresh sentinel"
+        )
+    )
+    return DatabaseSchema(
+        schemas: [SchemaInfo(name: "public")],
+        tables: [
+            table("events", columns: columns),
+        ]
+    )
+}
+
 private func table(
     _ name: String,
     schema: String = "public",
@@ -760,12 +850,14 @@ private func column(
     _ name: String,
     schema: String = "public",
     type: String = "text",
-    ordinal: Int
+    ordinal: Int,
+    comment: String? = nil
 ) -> ColumnInfo {
     ColumnInfo(
         tableSchema: schema,
         tableName: table,
         name: name,
+        comment: comment,
         dataType: type,
         isNullable: false,
         ordinalPosition: ordinal
