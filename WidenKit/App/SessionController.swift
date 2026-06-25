@@ -360,6 +360,10 @@ public final class SessionController: Identifiable {
             defaultRowLimit: connection?.defaultRowLimit ?? 100,
             databaseContext: connection?.databaseContext ?? ""
         )
+        let verificationConnection =
+            appState.connectionState(connectionID) == .connected
+            ? PostgresConnectionHandle(postgres: appState.postgres(for: connectionID))
+            : nil
 
         chatVM.input = ""
         chatVM.messages.append(ChatMessage(role: .user, text: question))
@@ -401,7 +405,9 @@ public final class SessionController: Identifiable {
                         originalQuestion: context.originalQuestion ?? generationQuestion,
                         conversationMessages: context.conversationMessages
                             + [SQLConversationMessage(role: .user, text: question)]
-                    )
+                    ),
+                    sqlVerifier: PostgresSQLVerifier(),
+                    verificationConnection: verificationConnection
                 )
             )
             for event in run.events {

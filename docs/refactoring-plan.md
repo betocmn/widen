@@ -829,7 +829,7 @@ The live tools-mode results are safe to keep behind the disabled feature flag, b
 
 ---
 
-# PR 8 — Verify SQL with PostgreSQL and allow one repair
+# PR 8 — Verify SQL with PostgreSQL and allow one repair — Done
 
 Suggested title:
 
@@ -888,6 +888,41 @@ verification latency
 * Exactly one repair is permitted.
 * Repeated SQL terminates immediately.
 * Permission/connection/timeout failures do not trigger model repair.
+
+Completed on 2026-06-26.
+
+Implementation notes:
+
+* Added a separate `GeneratedSQLVerifying` service and production `PostgresSQLVerifier` that verifies generated read SQL through `PREPARE` inside a short-lived read-only transaction with local timeouts and deterministic session settings, then always deallocates and rolls back.
+* Preserved structured PostgreSQL diagnostics, including SQLSTATE, severity, detail/hint, position, relation/column/type/constraint fields, and debug server fields when available.
+* Integrated verification into the generated SQL pipeline after deterministic repair and static validation, with trace stages for PostgreSQL verification and one verification repair.
+* Limited verification repair to exactly one model call for repairable database diagnostics and stopped without repair for permission, connection, cancellation, and timeout failures.
+* Wired live connected app sessions to pass a verification-capable connection handle; missing verifier or connection is recorded as a skipped verification result.
+* Extended WidenEval metrics, reports, and seeded DB semantic runs so PostgreSQL verification is reported separately and must pass before semantic execution can count as end-to-end success.
+* Added fake-verifier pipeline tests for pass/fail/repair/skip/cancellation/nonrepairable behavior, schema-tool trace preservation, and Preseason regressions, plus gated Postgres integration coverage for real `PREPARE` SQLSTATE failures and non-execution behavior.
+
+Verification:
+
+```text
+make project
+swiftc -parse WidenTests/TextToSQLPipelineTests.swift
+swiftc -parse WidenTests/PostgresIntegrationTests.swift
+make test
+make test-db
+make eval-local REPEAT=3
+```
+
+Results:
+
+```text
+make project: project generation succeeded.
+swiftc -parse WidenTests/TextToSQLPipelineTests.swift: succeeded.
+swiftc -parse WidenTests/PostgresIntegrationTests.swift: succeeded.
+make test: 744 tests in 42 suites passed.
+make test-db: 31 tests in 3 suites passed.
+make eval-local REPEAT=3: WidenEval built and launched, but the local backend produced no output for several minutes; the run was interrupted with no summary produced.
+Cloud eval commands were not run because WIDEN_EVAL_OPENROUTER_API_KEY was not set in this workspace.
+```
 
 ---
 

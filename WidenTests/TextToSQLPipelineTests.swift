@@ -36,6 +36,35 @@ struct TextToSQLPipelineTests {
         }
     }
 
+    private final class ScriptedVerifier: GeneratedSQLVerifying, @unchecked Sendable {
+        struct Request: Sendable, Equatable {
+            var sql: String
+            var safetyMode: SQLSafetyMode
+        }
+
+        private let lock = NSLock()
+        private var queue: [Result<SQLVerificationResult, Error>]
+        private(set) var requests: [Request] = []
+
+        init(_ queue: [Result<SQLVerificationResult, Error>]) {
+            self.queue = queue
+        }
+
+        func verify(
+            sql: String,
+            connection: PostgresConnectionHandle,
+            safetyMode: SQLSafetyMode
+        ) async throws -> SQLVerificationResult {
+            try lock.withLock {
+                requests.append(Request(sql: sql, safetyMode: safetyMode))
+                guard !queue.isEmpty else {
+                    throw SQLGenerationFailure.generation("No scripted verification response.")
+                }
+                return try queue.removeFirst().get()
+            }
+        }
+    }
+
     private final class DelayedRepairFailureGenerator: SQLGenerator, @unchecked Sendable {
         private let lock = NSLock()
         private var callCount = 0
@@ -140,6 +169,71 @@ struct TextToSQLPipelineTests {
         )
     }
 
+    private func makePreseasonSchema() -> DatabaseSchema {
+        DatabaseSchema(
+            schemas: [SchemaInfo(name: "public")],
+            tables: [
+                TableInfo(
+                    schema: "public",
+                    name: "preseason_match_evaluation",
+                    type: .baseTable,
+                    columns: [
+                        column("preseason_match_evaluation", "id", ordinal: 1),
+                        column("preseason_match_evaluation", "batch_id", ordinal: 2),
+                        column("preseason_match_evaluation", "winner_id", ordinal: 3),
+                        column(
+                            "preseason_match_evaluation",
+                            "createdAt",
+                            type: "timestamp with time zone",
+                            ordinal: 4
+                        ),
+                    ]
+                ),
+                TableInfo(
+                    schema: "public",
+                    name: "preseason_tool",
+                    type: .baseTable,
+                    columns: [
+                        column("preseason_tool", "id", ordinal: 1),
+                        column(
+                            "preseason_tool",
+                            "name",
+                            type: "character varying",
+                            ordinal: 2
+                        ),
+                    ]
+                ),
+            ],
+            foreignKeys: [
+                ForeignKeyInfo(
+                    constraintName: "preseason_match_evaluation_winner_id_fkey",
+                    sourceSchema: "public",
+                    sourceTable: "preseason_match_evaluation",
+                    sourceColumn: "winner_id",
+                    targetSchema: "public",
+                    targetTable: "preseason_tool",
+                    targetColumn: "id"
+                )
+            ]
+        )
+    }
+
+    private func column(
+        _ tableName: String,
+        _ name: String,
+        type: String = "uuid",
+        ordinal: Int
+    ) -> ColumnInfo {
+        ColumnInfo(
+            tableSchema: "public",
+            tableName: tableName,
+            name: name,
+            dataType: type,
+            isNullable: false,
+            ordinalPosition: ordinal
+        )
+    }
+
     private func generation(
         sql: String,
         explanation: String = "Generated SQL.",
@@ -162,12 +256,48 @@ struct TextToSQLPipelineTests {
         )
     }
 
-    private func run(_ generator: ScriptedGenerator) async throws -> TextToSQLRun {
+    private func diagnostic(
+        _ kind: DatabaseDiagnosticKind,
+        sqlState: String,
+        message: String = "PostgreSQL rejected the generated SQL."
+    ) -> DatabaseDiagnostic {
+        DatabaseDiagnostic(
+            kind: kind,
+            sqlState: sqlState,
+            severity: "ERROR",
+            message: message
+        )
+    }
+
+    private func verificationFailure(
+        _ kind: DatabaseDiagnosticKind,
+        sqlState: String,
+        message: String = "PostgreSQL rejected the generated SQL.",
+        elapsedMs: Int = 7
+    ) -> SQLVerificationResult {
+        .failed(
+            diagnostic: diagnostic(kind, sqlState: sqlState, message: message),
+            elapsedMs: elapsedMs,
+            stage: .prepare
+        )
+    }
+
+    private func verificationConnection() -> PostgresConnectionHandle {
+        PostgresConnectionHandle(postgres: PostgresService())
+    }
+
+    private func run(
+        _ generator: ScriptedGenerator,
+        verifier: (any GeneratedSQLVerifying)? = nil,
+        verificationConnection: PostgresConnectionHandle? = nil
+    ) async throws -> TextToSQLRun {
         try await TextToSQLPipeline(generator: generator).run(
             TextToSQLRequest(
                 question: "show users",
                 schema: makeSchema(),
-                config: SQLGenerationConfig(defaultRowLimit: 100)
+                config: SQLGenerationConfig(defaultRowLimit: 100),
+                sqlVerifier: verifier,
+                verificationConnection: verificationConnection
             )
         )
     }
@@ -199,6 +329,243 @@ struct TextToSQLPipelineTests {
         }
         #expect(generation.sql == "SELECT id FROM public.users LIMIT 100")
         #expect(result.trace.stages.contains { $0.stage == .finalDecision && $0.outcome == .success })
+    }
+
+    @Test func postgresVerificationPassesAndReturnsFinalSQL() async throws {
+        let sql = "SELECT id FROM public.users LIMIT 100"
+        let generator = ScriptedGenerator([.success(generation(sql: sql))])
+        let verifier = ScriptedVerifier([.success(.passed(elapsedMs: 4))])
+
+        let result = try await run(
+            generator,
+            verifier: verifier,
+            verificationConnection: verificationConnection()
+        )
+
+        guard case .sql(let generation) = result.finalDecision else {
+            Issue.record("expected SQL decision")
+            return
+        }
+        #expect(generation.sql == sql)
+        #expect(verifier.requests == [.init(sql: sql, safetyMode: .generatedRead)])
+        #expect(result.trace.stages.contains {
+            $0.stage == .postgresVerification
+                && $0.outcome == .success
+                && $0.verificationStatus == .passed
+                && $0.elapsedMs == 4
+        })
+    }
+
+    @Test func postgresVerificationFailureCallsOneRepair() async throws {
+        let originalSQL = "SELECT id FROM public.users LIMIT 100"
+        let repairedSQL = #"SELECT "createdAt" FROM public.users LIMIT 100"#
+        let generator = ScriptedGenerator([
+            .success(generation(sql: originalSQL)),
+            .success(generation(sql: repairedSQL)),
+        ])
+        let verifier = ScriptedVerifier([
+            .success(
+                verificationFailure(
+                    .undefinedFunction,
+                    sqlState: "42883",
+                    message: "function date_sub(timestamp with time zone, interval) does not exist"
+                )
+            ),
+            .success(.passed(elapsedMs: 3)),
+        ])
+
+        let result = try await run(
+            generator,
+            verifier: verifier,
+            verificationConnection: verificationConnection()
+        )
+
+        guard case .sql(let generation) = result.finalDecision else {
+            Issue.record("expected repaired SQL decision")
+            return
+        }
+        #expect(generation.sql == repairedSQL)
+        #expect(generator.contexts.count == 2)
+        #expect(generator.contexts[1].mode == .repair)
+        #expect(verifier.requests.map(\.sql) == [originalSQL, repairedSQL])
+        #expect(result.events.map(\.kind).contains(.postgresVerificationRepairStarted))
+        #expect(result.events.map(\.kind).contains(.postgresVerificationRepairPassed))
+        #expect(result.trace.stages.contains {
+            $0.stage == .postgresVerification
+                && $0.outcome == .failure
+                && $0.verificationStatus == .failed
+                && $0.sqlState == "42883"
+                && $0.databaseDiagnosticKind == .undefinedFunction
+        })
+        #expect(result.trace.stages.contains {
+            $0.stage == .postgresVerificationRepair
+                && $0.outcome == .success
+                && $0.verificationStatus == .passed
+                && $0.verificationRepairAttempted == true
+        })
+    }
+
+    @Test func repairedSQLThatFailsPostgresVerificationStopsWithoutSecondRepair() async throws {
+        let originalSQL = "SELECT id FROM public.users LIMIT 100"
+        let repairedSQL = #"SELECT "createdAt" FROM public.users LIMIT 100"#
+        let generator = ScriptedGenerator([
+            .success(generation(sql: originalSQL)),
+            .success(generation(sql: repairedSQL)),
+            .success(generation(sql: "SELECT id FROM public.users")),
+        ])
+        let verifier = ScriptedVerifier([
+            .success(verificationFailure(.undefinedFunction, sqlState: "42883")),
+            .success(verificationFailure(.missingColumn, sqlState: "42703")),
+        ])
+
+        let result = try await run(
+            generator,
+            verifier: verifier,
+            verificationConnection: verificationConnection()
+        )
+
+        guard case .failed(let failure) = result.finalDecision else {
+            Issue.record("expected failure decision")
+            return
+        }
+        #expect(failure.stage == .postgresVerificationRepair)
+        #expect(failure.category == .postgresVerification)
+        #expect(failure.databaseDiagnostic?.sqlState == "42703")
+        #expect(generator.contexts.count == 2)
+        #expect(verifier.requests.map(\.sql) == [originalSQL, repairedSQL])
+        #expect(!result.events.map(\.kind).contains(.validationRepairStarted))
+    }
+
+    @Test func postgresPermissionFailureDoesNotRepair() async throws {
+        let sql = "SELECT id FROM public.users LIMIT 100"
+        let generator = ScriptedGenerator([.success(generation(sql: sql))])
+        let verifier = ScriptedVerifier([
+            .success(
+                verificationFailure(
+                    .insufficientPrivilege,
+                    sqlState: "42501",
+                    message: "permission denied for table users"
+                )
+            )
+        ])
+
+        let result = try await run(
+            generator,
+            verifier: verifier,
+            verificationConnection: verificationConnection()
+        )
+
+        guard case .failed(let failure) = result.finalDecision else {
+            Issue.record("expected failure decision")
+            return
+        }
+        #expect(failure.stage == .postgresVerification)
+        #expect(failure.category == .postgresVerification)
+        #expect(failure.databaseDiagnostic?.kind == .insufficientPrivilege)
+        #expect(generator.contexts.count == 1)
+        #expect(verifier.requests.count == 1)
+        #expect(!result.events.map(\.kind).contains(.postgresVerificationRepairStarted))
+    }
+
+    @Test func postgresStatementTimeoutDoesNotRepair() async throws {
+        let sql = "SELECT id FROM public.users LIMIT 100"
+        let generator = ScriptedGenerator([.success(generation(sql: sql))])
+        let verifier = ScriptedVerifier([
+            .success(
+                verificationFailure(
+                    .timedOut,
+                    sqlState: "57014",
+                    message: "canceling statement due to statement timeout"
+                )
+            )
+        ])
+
+        let result = try await run(
+            generator,
+            verifier: verifier,
+            verificationConnection: verificationConnection()
+        )
+
+        guard case .failed(let failure) = result.finalDecision else {
+            Issue.record("expected failure decision")
+            return
+        }
+        #expect(failure.stage == .postgresVerification)
+        #expect(failure.category == .postgresVerification)
+        #expect(failure.databaseDiagnostic?.kind == .timedOut)
+        #expect(generator.contexts.count == 1)
+        #expect(verifier.requests.count == 1)
+        #expect(!result.events.map(\.kind).contains(.postgresVerificationRepairStarted))
+    }
+
+    @Test func postgresConnectionFailureDoesNotRepair() async throws {
+        let sql = "SELECT id FROM public.users LIMIT 100"
+        let generator = ScriptedGenerator([.success(generation(sql: sql))])
+        let verifier = ScriptedVerifier([.failure(AppError.notConnected)])
+
+        let result = try await run(
+            generator,
+            verifier: verifier,
+            verificationConnection: verificationConnection()
+        )
+
+        guard case .failed(let failure) = result.finalDecision else {
+            Issue.record("expected failure decision")
+            return
+        }
+        #expect(failure.stage == .postgresVerification)
+        #expect(failure.category == .postgresVerification)
+        #expect(failure.databaseDiagnostic == nil)
+        #expect(generator.contexts.count == 1)
+        #expect(verifier.requests.count == 1)
+        #expect(!result.events.map(\.kind).contains(.postgresVerificationRepairStarted))
+    }
+
+    @Test func postgresVerificationCancellationPropagates() async {
+        let generator = ScriptedGenerator([
+            .success(generation(sql: "SELECT id FROM public.users LIMIT 100"))
+        ])
+        let verifier = ScriptedVerifier([.failure(CancellationError())])
+
+        do {
+            _ = try await run(
+                generator,
+                verifier: verifier,
+                verificationConnection: verificationConnection()
+            )
+            Issue.record("expected cancellation")
+        } catch is CancellationError {
+            #expect(true)
+        } catch {
+            Issue.record("expected CancellationError, got \(error)")
+        }
+    }
+
+    @Test func postgresVerificationSkipsWhenUnavailableOrNoConnection() async throws {
+        let noVerifierResult = try await run(
+            ScriptedGenerator([
+                .success(generation(sql: "SELECT id FROM public.users LIMIT 100"))
+            ])
+        )
+        #expect(noVerifierResult.trace.stages.contains {
+            $0.stage == .postgresVerification
+                && $0.outcome == .skipped
+                && $0.verificationStatus == .notAvailable
+        })
+
+        let verifier = ScriptedVerifier([.success(.passed(elapsedMs: 1))])
+        let noConnectionResult = try await run(
+            ScriptedGenerator([
+                .success(generation(sql: "SELECT id FROM public.users LIMIT 100"))
+            ]),
+            verifier: verifier
+        )
+        #expect(verifier.requests.isEmpty)
+        #expect(noConnectionResult.trace.stages.contains {
+            $0.stage == .postgresVerification
+                && $0.outcome == .skipped
+                && $0.verificationStatus == .skippedNoConnection
+        })
     }
 
     @Test func clarificationReturnsFinalClarification() async throws {
@@ -265,6 +632,180 @@ struct TextToSQLPipelineTests {
                     && $0.canonicalizationFixes.contains("quote-repair")
             }
         )
+    }
+
+    @Test func preseasonCreatedAtIsFixedBeforePostgresVerification() async throws {
+        let generator = ScriptedGenerator([
+            .success(
+                generation(
+                    sql: "SELECT createdAt FROM public.preseason_match_evaluation LIMIT 100"
+                )
+            )
+        ])
+        let verifier = ScriptedVerifier([.success(.passed(elapsedMs: 1))])
+
+        let result = try await TextToSQLPipeline(generator: generator).run(
+            TextToSQLRequest(
+                question: "show recent preseason evaluations",
+                schema: makePreseasonSchema(),
+                config: SQLGenerationConfig(defaultRowLimit: 100),
+                sqlVerifier: verifier,
+                verificationConnection: verificationConnection()
+            )
+        )
+
+        guard case .sql(let generation) = result.finalDecision else {
+            Issue.record("expected SQL decision")
+            return
+        }
+        #expect(
+            generation.sql
+                == #"SELECT "createdAt" FROM public.preseason_match_evaluation LIMIT 100"#
+        )
+        #expect(verifier.requests.map(\.sql) == [generation.sql])
+        #expect(result.trace.stages.contains {
+            $0.stage == .canonicalization
+                && $0.canonicalizationFixes.contains("quote-repair")
+        })
+    }
+
+    @Test func preseasonDateSubCurdateFailsInPostgresVerificationWhenStaticValidationMissesIt()
+        async throws
+    {
+        let badSQL = #"""
+        SELECT e.id
+        FROM public.preseason_match_evaluation AS e
+        WHERE e."createdAt" >= DATE_SUB(CURDATE(), INTERVAL '7 days')
+        LIMIT 100
+        """#
+        let repairedSQL = #"""
+        SELECT e.id
+        FROM public.preseason_match_evaluation AS e
+        WHERE e."createdAt" >= DATE_SUB(NOW(), INTERVAL '7 days')
+        LIMIT 100
+        """#
+        let generator = ScriptedGenerator([
+            .success(generation(sql: badSQL)),
+            .success(generation(sql: repairedSQL)),
+        ])
+        let verifier = ScriptedVerifier([
+            .success(
+                verificationFailure(
+                    .undefinedFunction,
+                    sqlState: "42883",
+                    message: "function curdate() does not exist"
+                )
+            ),
+            .success(
+                verificationFailure(
+                    .undefinedFunction,
+                    sqlState: "42883",
+                    message: "function date_sub(timestamp with time zone, interval) does not exist"
+                )
+            ),
+        ])
+
+        let result = try await TextToSQLPipeline(generator: generator).run(
+            TextToSQLRequest(
+                question: "show recent preseason evaluations",
+                schema: makePreseasonSchema(),
+                config: SQLGenerationConfig(defaultRowLimit: 100),
+                sqlVerifier: verifier,
+                verificationConnection: verificationConnection()
+            )
+        )
+
+        guard case .failed(let failure) = result.finalDecision else {
+            Issue.record("expected verification failure")
+            return
+        }
+        #expect(failure.category == .postgresVerification)
+        #expect(failure.databaseDiagnostic?.kind == .undefinedFunction)
+        #expect(verifier.requests.count == 2)
+        #expect(result.trace.stages.contains {
+            $0.stage == .schemaValidation && $0.outcome == .success
+        })
+    }
+
+    @Test func preseasonToolAAndToolBReferencesFailBeforeFinalSuccess() async throws {
+        let badSQL = """
+        SELECT tool_a_id, tool_b_id
+        FROM public.preseason_match_evaluation
+        LIMIT 100
+        """
+        let repairedSQL = """
+        SELECT winner_id
+        FROM public.preseason_match_evaluation
+        WHERE winner_id IS NOT NULL
+        LIMIT 100
+        """
+        let generator = ScriptedGenerator([
+            .success(generation(sql: badSQL)),
+            .success(generation(sql: repairedSQL)),
+        ])
+        let verifier = ScriptedVerifier([.success(.passed(elapsedMs: 1))])
+
+        let result = try await TextToSQLPipeline(generator: generator).run(
+            TextToSQLRequest(
+                question: "show preseason winners",
+                schema: makePreseasonSchema(),
+                config: SQLGenerationConfig(defaultRowLimit: 100),
+                sqlVerifier: verifier,
+                verificationConnection: verificationConnection()
+            )
+        )
+
+        guard case .sql(let generation) = result.finalDecision else {
+            Issue.record("expected repaired SQL decision")
+            return
+        }
+        #expect(generation.sql == repairedSQL)
+        #expect(verifier.requests.map(\.sql) == [repairedSQL])
+        #expect(result.trace.stages.contains {
+            $0.stage == .schemaValidation && $0.outcome == .failure
+        })
+        #expect(result.trace.stages.contains {
+            $0.stage == .postgresVerification
+                && $0.outcome == .skipped
+                && $0.verificationStatus == .skippedStaticValidationFailed
+        })
+    }
+
+    @Test func preseasonWinnerIDToToolIDSQLVerifies() async throws {
+        let sql = """
+        SELECT t.id, t.name, count(*) AS wins
+        FROM public.preseason_match_evaluation AS e
+        JOIN public.preseason_tool AS t ON e.winner_id = t.id
+        WHERE e.winner_id IS NOT NULL
+        GROUP BY t.id, t.name
+        ORDER BY wins DESC
+        LIMIT 100
+        """
+        let generator = ScriptedGenerator([.success(generation(sql: sql))])
+        let verifier = ScriptedVerifier([.success(.passed(elapsedMs: 2))])
+
+        let result = try await TextToSQLPipeline(generator: generator).run(
+            TextToSQLRequest(
+                question: "show top preseason tools by wins",
+                schema: makePreseasonSchema(),
+                config: SQLGenerationConfig(defaultRowLimit: 100),
+                allowGroundingClarification: false,
+                sqlVerifier: verifier,
+                verificationConnection: verificationConnection()
+            )
+        )
+
+        guard case .sql(let generation) = result.finalDecision else {
+            Issue.record("expected SQL decision")
+            return
+        }
+        #expect(generation.sql == sql)
+        #expect(verifier.requests.map(\.sql) == [sql])
+        #expect(result.trace.stages.contains {
+            $0.stage == .postgresVerification
+                && $0.outcome == .success
+                && $0.verificationStatus == .passed
+        })
     }
 
     @Test func quoteRepairRevalidatesBeforeReturningSQL() async throws {
@@ -597,6 +1138,39 @@ struct TextToSQLPipelineTests {
 
         #expect(result.trace.schemaToolCalls.map(\.callID) == ["search", "search"])
         #expect(result.trace.schemaToolCalls.count == 2)
+    }
+
+    @Test func postgresVerificationRepairPreservesSchemaToolTraces() async throws {
+        let initialTrace = schemaToolTrace(callID: "search", toolName: "search_schema")
+        let repairTrace = schemaToolTrace(callID: "search", toolName: "search_schema")
+        let generator = ScriptedGenerator([
+            .success(
+                generation(
+                    sql: "SELECT id FROM public.users LIMIT 100",
+                    schemaToolCalls: [initialTrace]
+                )
+            ),
+            .success(
+                generation(
+                    sql: #"SELECT "createdAt" FROM public.users LIMIT 100"#,
+                    schemaToolCalls: [repairTrace]
+                )
+            ),
+        ])
+        let verifier = ScriptedVerifier([
+            .success(verificationFailure(.undefinedFunction, sqlState: "42883")),
+            .success(.passed(elapsedMs: 2)),
+        ])
+
+        let result = try await run(
+            generator,
+            verifier: verifier,
+            verificationConnection: verificationConnection()
+        )
+
+        #expect(result.trace.schemaToolCalls.map(\.callID) == ["search", "search"])
+        #expect(result.trace.schemaToolCalls.count == 2)
+        #expect(result.trace.stages.contains { $0.stage == .postgresVerificationRepair })
     }
 
     @Test func repairFailureTraceKeepsGeneratorElapsedTime() async throws {

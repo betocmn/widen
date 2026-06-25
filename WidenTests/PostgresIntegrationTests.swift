@@ -152,6 +152,18 @@ private func withDatabase<T>(
 
 @Suite("Postgres integration", .enabled(if: integrationEnabled), .serialized)
 struct PostgresIntegrationTests {
+    private func verify(
+        _ sql: String,
+        using service: PostgresService,
+        safetyMode: SQLSafetyMode = .generatedRead
+    ) async throws -> SQLVerificationResult {
+        try await PostgresSQLVerifier().verify(
+            sql: sql,
+            connection: PostgresConnectionHandle(postgres: service),
+            safetyMode: safetyMode
+        )
+    }
+
     @Test func testConnectionSucceeds() async throws {
         try await withDatabase { config, _ in
             try await PostgresService.testConnection(config: config, password: nil)
@@ -357,6 +369,131 @@ struct PostgresIntegrationTests {
         let service = PostgresService()
         await #expect(throws: AppError.notConnected) {
             _ = try await service.query("SELECT 1") { _ in 0 }
+        }
+    }
+
+    @Test func generatedSQLVerifierCatchesUndefinedFunction() async throws {
+        try await withDatabase(seeded: true) { _, service in
+            let result = try await verify(
+                "SELECT widen_missing_function(id) FROM public.users",
+                using: service
+            )
+
+            #expect(result.status == .failed)
+            #expect(result.diagnostic?.sqlState == "42883")
+            #expect(result.diagnostic?.kind == .undefinedFunction)
+        }
+    }
+
+    @Test func generatedSQLVerifierCatchesTypeMismatch() async throws {
+        try await withDatabase { _, service in
+            let result = try await verify(
+                "SELECT CASE WHEN true THEN 1 ELSE false END",
+                using: service
+            )
+
+            #expect(result.status == .failed)
+            #expect(result.diagnostic?.sqlState == "42804")
+            #expect(result.diagnostic?.kind == .datatypeMismatch)
+        }
+    }
+
+    @Test func generatedSQLVerifierCatchesGroupingError() async throws {
+        try await withDatabase(seeded: true) { _, service in
+            let result = try await verify(
+                "SELECT email, count(*) FROM public.users",
+                using: service
+            )
+
+            #expect(result.status == .failed)
+            #expect(result.diagnostic?.sqlState == "42803")
+            #expect(result.diagnostic?.kind == .groupingError)
+        }
+    }
+
+    @Test func generatedSQLVerifierCatchesMissingRelationAndColumn() async throws {
+        try await withDatabase(seeded: true) { _, service in
+            let missingRelation = try await verify(
+                "SELECT id FROM public.missing_users",
+                using: service
+            )
+            let missingColumn = try await verify(
+                "SELECT missing_column FROM public.users",
+                using: service
+            )
+
+            #expect(missingRelation.status == .failed)
+            #expect(missingRelation.diagnostic?.sqlState == "42P01")
+            #expect(missingRelation.diagnostic?.kind == .missingRelation)
+            #expect(missingColumn.status == .failed)
+            #expect(missingColumn.diagnostic?.sqlState == "42703")
+            #expect(missingColumn.diagnostic?.kind == .missingColumn)
+        }
+    }
+
+    @Test func generatedSQLVerifierDoesNotLeavePreparedStatementsBehind() async throws {
+        try await withDatabase(seeded: true) { _, service in
+            let result = try await verify(
+                "SELECT id FROM public.users LIMIT 1",
+                using: service
+            )
+            let preparedStatementCounts = try await service.query(
+                """
+                SELECT count(*) AS n
+                FROM pg_prepared_statements
+                WHERE name LIKE 'widen_generated_check_%'
+                """
+            ) { row in
+                try row["n"].decode(Int64.self)
+            }
+
+            #expect(result.status == .passed)
+            #expect(preparedStatementCounts == [0])
+        }
+    }
+
+    @Test func generatedWriteSQLIsNotVerifiedAsAReadQuery() async throws {
+        try await withDatabase { config, service in
+            try await runStatements(["CREATE TABLE t (id int primary key)"], on: config.database)
+
+            let result = try await verify(
+                "INSERT INTO public.t (id) VALUES (1)",
+                using: service,
+                safetyMode: .generatedWrite
+            )
+            let counts = try await service.query("SELECT count(*) AS n FROM public.t") { row in
+                try row["n"].decode(Int64.self)
+            }
+
+            #expect(result.status == .skippedNonRead)
+            #expect(counts == [0])
+        }
+    }
+
+    @Test func generatedSQLVerifierDoesNotExecuteOrReturnRows() async throws {
+        try await withDatabase { config, service in
+            try await runStatements(
+                ["CREATE SEQUENCE verify_no_execute_seq START 1"],
+                on: config.database
+            )
+
+            let result = try await verify(
+                "SELECT nextval('verify_no_execute_seq')",
+                using: service
+            )
+            let sequenceState = try await service.query(
+                "SELECT last_value, is_called FROM verify_no_execute_seq"
+            ) { row in
+                (
+                    try row["last_value"].decode(Int64.self),
+                    try row["is_called"].decode(Bool.self)
+                )
+            }
+
+            #expect(result.status == .passed)
+            #expect(sequenceState.count == 1)
+            #expect(sequenceState.first?.0 == 1)
+            #expect(sequenceState.first?.1 == false)
         }
     }
 }

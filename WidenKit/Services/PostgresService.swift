@@ -136,6 +136,90 @@ public actor PostgresService {
         }
     }
 
+    /// Verifies generated read SQL using PostgreSQL parse/analyze/bind/type
+    /// checks without executing the user query or fetching rows.
+    public func verifyGeneratedReadOnlySQL(_ sql: String) async throws -> SQLVerificationResult {
+        guard let client else {
+            return .skipped(
+                .skippedNoConnection,
+                message: AppError.notConnected.localizedDescription
+            )
+        }
+        let logger = logger
+        let start = ContinuousClock.now
+        let statementName = Self.verificationPreparedStatementName()
+        let generatedSQL = Self.sqlWithoutTrailingTerminator(sql)
+        var stage: SQLVerificationStage = .transaction
+        var prepared = false
+
+        return try await client.withConnection { connection in
+            do {
+                try await connection.query(
+                    "BEGIN ISOLATION LEVEL REPEATABLE READ READ ONLY",
+                    logger: logger
+                )
+                try await connection.query(
+                    "SET LOCAL statement_timeout = '2s'",
+                    logger: logger
+                )
+                try await connection.query(
+                    "SET LOCAL lock_timeout = '500ms'",
+                    logger: logger
+                )
+                try await connection.query(
+                    "SET LOCAL idle_in_transaction_session_timeout = '5s'",
+                    logger: logger
+                )
+                try await connection.query("SET LOCAL timezone = 'UTC'", logger: logger)
+                try await connection.query("SET LOCAL DateStyle = 'ISO, MDY'", logger: logger)
+                try await connection.query("SET LOCAL IntervalStyle = 'postgres'", logger: logger)
+
+                stage = .prepare
+                try await connection.query(
+                    PostgresQuery(
+                        unsafeSQL: "PREPARE \(statementName) AS \(generatedSQL)"
+                    ),
+                    logger: logger
+                )
+                prepared = true
+
+                stage = .deallocate
+                try await connection.query(
+                    PostgresQuery(unsafeSQL: "DEALLOCATE \(statementName)"),
+                    logger: logger
+                )
+
+                stage = .rollback
+                try await connection.query("ROLLBACK", logger: logger)
+                return .passed(elapsedMs: Int(start.duration(to: .now) / .milliseconds(1)))
+            } catch is CancellationError {
+                if prepared {
+                    try? await connection.query(
+                        PostgresQuery(unsafeSQL: "DEALLOCATE \(statementName)"),
+                        logger: logger
+                    )
+                }
+                try? await connection.query("ROLLBACK", logger: logger)
+                throw CancellationError()
+            } catch {
+                if prepared, stage != .deallocate {
+                    try? await connection.query(
+                        PostgresQuery(unsafeSQL: "DEALLOCATE \(statementName)"),
+                        logger: logger
+                    )
+                }
+                try? await connection.query("ROLLBACK", logger: logger)
+                let mapped = Self.verificationFailure(from: error)
+                return .failed(
+                    diagnostic: mapped.diagnostic,
+                    elapsedMs: Int(start.duration(to: .now) / .milliseconds(1)),
+                    stage: stage,
+                    message: mapped.message
+                )
+            }
+        }
+    }
+
     /// Executes a validated write (INSERT/UPDATE/DELETE) inside a read-write
     /// transaction with a statement timeout, pinned to a single pooled
     /// connection. Captures the affected-row count from the command tag and any
@@ -208,6 +292,35 @@ public actor PostgresService {
 
     private static let returningRowNumberColumn = "__widen_returning_row_number"
     private static let returningAffectedRowsColumn = "__widen_affected_rows"
+
+    private static func verificationPreparedStatementName() -> String {
+        "widen_generated_check_"
+            + UUID().uuidString.replacingOccurrences(of: "-", with: "_").lowercased()
+    }
+
+    private static func verificationFailure(
+        from error: any Error
+    ) -> (diagnostic: DatabaseDiagnostic?, message: String) {
+        if let psql = error as? PSQLError, let server = psql.serverInfo {
+            let diagnostic = PostgresErrorMapper.diagnostic(from: server)
+            return (diagnostic, diagnostic.displayMessage)
+        }
+        if let appError = error as? AppError {
+            switch appError {
+            case .databaseFailed(let diagnostic):
+                return (diagnostic, diagnostic.displayMessage)
+            default:
+                return (nil, appError.localizedDescription)
+            }
+        }
+        let mapped = PostgresErrorMapper.map(error)
+        switch mapped {
+        case .databaseFailed(let diagnostic):
+            return (diagnostic, diagnostic.displayMessage)
+        default:
+            return (nil, mapped.localizedDescription)
+        }
+    }
 
     private static func limitedReturningWriteSQL(sql: String, rowLimit: Int) -> String {
         let writeSQL = sqlWithoutTrailingTerminator(sql)

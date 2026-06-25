@@ -138,6 +138,7 @@
 		E6D7FC41D036A819E2CCED89 /* OpenRouterToolChatProtocol.swift in Sources */ = {isa = PBXBuildFile; fileRef = C1E2311CABF8F230DB7FF860 /* OpenRouterToolChatProtocol.swift */; };
 		E957937EC064C663007A8B79 /* SchemaSearchIndexStore.swift in Sources */ = {isa = PBXBuildFile; fileRef = 2AAE8B9C71FDC5AF3BE1734C /* SchemaSearchIndexStore.swift */; };
 		EC273246F94C557313664FE4 /* SchemaSearchTypes.swift in Sources */ = {isa = PBXBuildFile; fileRef = 64C3A32530B69BE1C9CDCDC3 /* SchemaSearchTypes.swift */; };
+		EC6F63AF554E4C060799CADD /* GeneratedSQLVerifier.swift in Sources */ = {isa = PBXBuildFile; fileRef = 3B7406ECAEDEC28820DA8CD9 /* GeneratedSQLVerifier.swift */; };
 		ED5BCEF2845478E58F7E3758 /* AppState.swift in Sources */ = {isa = PBXBuildFile; fileRef = 766339FF7AE746B877592F59 /* AppState.swift */; };
 		EE1924EF18C4616FB2D046BB /* UpdaterControlling.swift in Sources */ = {isa = PBXBuildFile; fileRef = 85A8BC5B064230B8C18C5643 /* UpdaterControlling.swift */; };
 		EE50BE11675F01AF64D8FF3E /* TextToSQLSemanticComparatorTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = F7F5CFF578647CD40E63C22D /* TextToSQLSemanticComparatorTests.swift */; };
@@ -230,6 +231,7 @@
 		380C5B84E053C4AF68EC7A81 /* TextToSQLPipelineTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = TextToSQLPipelineTests.swift; sourceTree = "<group>"; };
 		3A76279AE12FC6943909F765 /* SQLReferenceAnalyzer.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SQLReferenceAnalyzer.swift; sourceTree = "<group>"; };
 		3AE56AC48C310510AFE22F85 /* SchemaToolSession.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SchemaToolSession.swift; sourceTree = "<group>"; };
+		3B7406ECAEDEC28820DA8CD9 /* GeneratedSQLVerifier.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = GeneratedSQLVerifier.swift; sourceTree = "<group>"; };
 		3F4D5F2F87350CA819E01F58 /* Widen.entitlements */ = {isa = PBXFileReference; lastKnownFileType = text.plist.entitlements; path = Widen.entitlements; sourceTree = "<group>"; };
 		4089BA52528E9EEAC2396AB2 /* Widen.app */ = {isa = PBXFileReference; explicitFileType = wrapper.application; includeInIndex = 0; path = Widen.app; sourceTree = BUILT_PRODUCTS_DIR; };
 		410F25FEC1FDA966462FC406 /* SchemaSearchIndexTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SchemaSearchIndexTests.swift; sourceTree = "<group>"; };
@@ -513,6 +515,7 @@
 				6399B3911003C49C8E5A23BB /* FoundationModelsTitleGenerator.swift */,
 				D357EBFEA721E116CB5B66BB /* GeneratedSQLRepairCoordinator.swift */,
 				1A59BE7598E94758A8070B5A /* GeneratedSQLRepairSupport.swift */,
+				3B7406ECAEDEC28820DA8CD9 /* GeneratedSQLVerifier.swift */,
 				B594613B4437F5693FC5294D /* GenerationLog.swift */,
 				CB10154B7158004651F823CF /* HTTPTransport.swift */,
 				A103E85DE2A899598A7072B5 /* JSONValue.swift */,
@@ -894,6 +897,7 @@
 				92175B834D98973A909CD346 /* GeneralSettingsView.swift in Sources */,
 				8A32737A8620531A6D474C93 /* GeneratedSQLRepairCoordinator.swift in Sources */,
 				9CEB05D7B21DC2CA6F6B9A01 /* GeneratedSQLRepairSupport.swift in Sources */,
+				EC6F63AF554E4C060799CADD /* GeneratedSQLVerifier.swift in Sources */,
 				677AC815A764B633F9F22D26 /* GenerationLog.swift in Sources */,
 				ADC54918FA78A02A2935BA0D /* HTTPTransport.swift in Sources */,
 				1FFCE89DC98C97418DEA2A18 /* JSONValue.swift in Sources */,

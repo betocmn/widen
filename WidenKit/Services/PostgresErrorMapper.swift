@@ -43,18 +43,24 @@ enum PostgresErrorMapper {
         }
     }
 
-    private static func diagnostic(from server: PSQLError.ServerInfo) -> DatabaseDiagnostic {
+    static func diagnostic(from server: PSQLError.ServerInfo) -> DatabaseDiagnostic {
         let sqlState = server[.sqlState]
         return DatabaseDiagnostic(
             kind: DatabaseDiagnostic.kind(forSQLState: sqlState),
             sqlState: sqlState,
+            severity: server[.severity] ?? server[.localizedSeverity],
             message: server[.message] ?? "The server reported an error.",
             detail: server[.detail],
             hint: server[.hint],
             position: server[.position].flatMap(Int.init),
             schemaName: server[.schemaName],
             tableName: server[.tableName],
-            columnName: server[.columnName]
+            columnName: server[.columnName],
+            dataTypeName: server[.dataTypeName],
+            constraintName: server[.constraintName],
+            debugFile: server[.file],
+            debugLine: server[.line].flatMap(Int.init),
+            debugRoutine: server[.routine]
         )
     }
 
