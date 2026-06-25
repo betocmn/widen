@@ -867,6 +867,7 @@ struct SchemaToolSessionTests {
         )
         let hits = search.payload?["hits"]?.arrayValue ?? []
         let names = hits.compactMap { $0["sql_name"]?.stringValue }
+        #expect(hits.allSatisfy { $0["matched_columns"] == nil && $0["relevant_columns"] == nil })
         #expect(names.contains(#""public"."preseason_match_evaluation""#))
         #expect(names.contains(#""public"."preseason_tool""#))
 
@@ -912,6 +913,80 @@ struct SchemaToolSessionTests {
         let inspectText = String(decoding: try JSONEncoder.schemaToolEncoder.encode(inspect.payload), as: UTF8.self)
         #expect(inspectText.contains("tool_a"))
         #expect(inspectText.contains(#""live_data_queried":false"#))
+    }
+
+    @Test func describeTablesOmitsNonFocusedTablesBeforeFocusedTailTable() async throws {
+        let session = try await makeSession(
+            schema: focusedTableOmissionSchema(),
+            policy: SchemaToolPolicy(
+                maximumCallCount: 4,
+                maximumResultBytes: 1_600,
+                maximumSessionResultBytes: 8_000
+            )
+        )
+        var tableHandles: [String] = []
+        for index in 0..<4 {
+            tableHandles.append(
+                try await requireHandle(session, .table(schema: "public", name: "focus_t\(index)"))
+            )
+        }
+        let finalFocus = try await requireHandle(
+            session,
+            .column(schema: "public", table: "focus_t3", name: "focus_metric")
+        )
+
+        let result = try await invoke(
+            session,
+            id: "focused-tail-table",
+            tool: .describeTables,
+            arguments: [
+                "table_ids": .array(tableHandles.map { .string($0) }),
+                "focus_column_ids": handles(finalFocus),
+            ]
+        )
+        let tableNames = result.payload?["tables"]?.arrayValue?
+            .compactMap { $0["sql_name"]?.stringValue } ?? []
+
+        #expect(result.success)
+        #expect(result.truncation.truncated)
+        #expect(tableNames.contains(#""public"."focus_t3""#))
+        #expect(!tableNames.contains(#""public"."focus_t2""#))
+        #expect(result.payload?["omitted_table_count"]?.intValue ?? 0 > 0)
+    }
+
+    @Test func describeTablesReturnsBudgetErrorInsteadOfDroppingFocusedTables() async throws {
+        let policy = SchemaToolPolicy(
+            maximumCallCount: 4,
+            maximumResultBytes: 900,
+            maximumSessionResultBytes: 8_000
+        )
+        let session = try await makeSession(schema: focusedTableOmissionSchema(), policy: policy)
+        var tableHandles: [String] = []
+        var focusHandles: [String] = []
+        for index in 0..<4 {
+            tableHandles.append(
+                try await requireHandle(session, .table(schema: "public", name: "focus_t\(index)"))
+            )
+            focusHandles.append(
+                try await requireHandle(
+                    session,
+                    .column(schema: "public", table: "focus_t\(index)", name: "focus_metric")
+                )
+            )
+        }
+
+        let result = try await invoke(
+            session,
+            id: "all-focused-overflow",
+            tool: .describeTables,
+            arguments: [
+                "table_ids": .array(tableHandles.map { .string($0) }),
+                "focus_column_ids": .array(focusHandles.map { .string($0) }),
+            ]
+        )
+
+        #expect(result.error?.code == .resultBudgetExceeded)
+        #expect(result.outputByteCount <= policy.maximumResultBytes)
     }
 
     private func invoke(
@@ -1196,6 +1271,41 @@ private func policyExerciseSchema() -> DatabaseSchema {
             ),
         ]
     )
+}
+
+private func focusedTableOmissionSchema() -> DatabaseSchema {
+    var tables: [TableInfo] = []
+    for tableIndex in 0..<4 {
+        var columns = [
+            column("focus_t\(tableIndex)", "id", type: "uuid", ordinal: 1),
+            column("focus_t\(tableIndex)", "focus_metric", type: "integer", ordinal: 2),
+        ]
+        for columnIndex in 0..<24 {
+            columns.append(
+                column(
+                    "focus_t\(tableIndex)",
+                    "payload_column_\(columnIndex)",
+                    ordinal: columnIndex + 3
+                )
+            )
+        }
+        tables.append(
+            table(
+                "focus_t\(tableIndex)",
+                columns: columns,
+                keys: [
+                    SchemaKeyConstraintInfo(
+                        constraintName: "focus_t\(tableIndex)_pkey",
+                        schema: "public",
+                        table: "focus_t\(tableIndex)",
+                        kind: .primaryKey,
+                        columns: ["id"]
+                    ),
+                ]
+            )
+        )
+    }
+    return DatabaseSchema(schemas: [SchemaInfo(name: "public")], tables: tables)
 }
 
 private func largeCompositeSchema() -> DatabaseSchema {

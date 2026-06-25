@@ -555,11 +555,7 @@ struct SchemaToolContractEvalRunner {
     }
 
     private func columnNames(_ hit: JSONValue?) -> [String] {
-        var names: [String] = []
-        names.append(contentsOf: columnNames(hit?["columns"]?.arrayValue ?? []))
-        names.append(contentsOf: columnNames(hit?["matched_columns"]?.arrayValue ?? []))
-        names.append(contentsOf: columnNames(hit?["relevant_columns"]?.arrayValue ?? []))
-        return Array(Set(names)).sorted()
+        columnNames(hit?["columns"]?.arrayValue ?? [])
     }
 
     private func tableHandle(named sqlName: String, in hits: [JSONValue]) -> String? {

@@ -123,7 +123,6 @@ public struct SchemaToolExecutor: Sendable {
         }
         var hitCount = hitContexts.count
         var columnLimit = 8
-        var includeLegacyColumns = true
         let budget = payloadBudget(for: policy)
         func buildPayload() -> (payload: JSONValue, omittedColumnCount: Int) {
             var omittedColumnCount = 0
@@ -131,8 +130,7 @@ public struct SchemaToolExecutor: Sendable {
                 let rendered = searchHitJSON(
                     context,
                     handles: handles,
-                    columnLimit: columnLimit,
-                    includeLegacyColumns: includeLegacyColumns
+                    columnLimit: columnLimit
                 )
                 omittedColumnCount += rendered.omittedColumnCount
                 return rendered.json
@@ -144,7 +142,7 @@ public struct SchemaToolExecutor: Sendable {
                 "query_token_coverage": .number(response.queryTokenCoverage),
             ]
             let omittedHitCount = max(0, hitContexts.count - hitCount)
-            if omittedHitCount > 0 || omittedColumnCount > 0 || !includeLegacyColumns {
+            if omittedHitCount > 0 || omittedColumnCount > 0 {
                 object["truncated"] = true
                 object["omitted_hit_count"] = .number(Double(omittedHitCount))
                 object["omitted_column_count"] = .number(Double(omittedColumnCount))
@@ -153,9 +151,7 @@ public struct SchemaToolExecutor: Sendable {
         }
         var built = buildPayload()
         while ((try? built.payload.utf8ByteCount()) ?? Int.max) > budget {
-            if includeLegacyColumns {
-                includeLegacyColumns = false
-            } else if columnLimit > 1 {
+            if columnLimit > 1 {
                 columnLimit = max(1, columnLimit / 2)
             } else if hitCount > 1 {
                 hitCount -= 1
@@ -176,8 +172,8 @@ public struct SchemaToolExecutor: Sendable {
         return .success(
             payload: built.payload,
             truncation: SchemaToolTruncation(
-                truncated: hitCount < hitContexts.count || built.omittedColumnCount > 0 || !includeLegacyColumns,
-                reason: hitCount < hitContexts.count || built.omittedColumnCount > 0 || !includeLegacyColumns ? "result_budget_compaction" : nil,
+                truncated: hitCount < hitContexts.count || built.omittedColumnCount > 0,
+                reason: hitCount < hitContexts.count || built.omittedColumnCount > 0 ? "result_budget_compaction" : nil,
                 suggestion: hitCount < hitContexts.count ? "Call search_schema with a more specific query." : nil
             ),
             returnedObjectCount: hitCount
@@ -283,10 +279,19 @@ public struct SchemaToolExecutor: Sendable {
         let focusByTable = Dictionary(grouping: focusIDs) {
             SchemaObjectID.table(schema: $0.schema, name: $0.table ?? "").stableString
         }
-        var tableLimit = tableIDs.count
+        let focusedTableIDs = Set(focusByTable.keys)
+        let nonFocusedCount = tableIDs.filter { !focusedTableIDs.contains($0.stableString) }.count
+        var nonFocusedLimit = nonFocusedCount
         var truncated = false
+        func selectedTableIDs() -> [SchemaObjectID] {
+            selectedDescribeTableIDs(
+                from: tableIDs,
+                focusedTableIDs: focusedTableIDs,
+                nonFocusedLimit: nonFocusedLimit
+            )
+        }
         var cards = tableCards(
-            tableIDs: Array(tableIDs.prefix(tableLimit)),
+            tableIDs: selectedTableIDs(),
             snapshot: snapshot,
             handles: handles,
             focusByTable: focusByTable,
@@ -296,7 +301,7 @@ public struct SchemaToolExecutor: Sendable {
             truncated: &truncated
         )
         var payload: JSONValue = [
-        "tables": .array(cards),
+            "tables": .array(cards),
             "truncated": .bool(truncated),
         ]
 
@@ -314,7 +319,7 @@ public struct SchemaToolExecutor: Sendable {
                 compactColumns = true
             }
             cards = tableCards(
-                tableIDs: Array(tableIDs.prefix(tableLimit)),
+                tableIDs: selectedTableIDs(),
                 snapshot: snapshot,
                 handles: handles,
                 focusByTable: focusByTable,
@@ -330,13 +335,13 @@ public struct SchemaToolExecutor: Sendable {
             ]
         }
         while (try? payload.utf8ByteCount()) ?? Int.max > max(512, policy.maximumResultBytes - 512),
-            tableLimit > 1
+            nonFocusedLimit > 0
         {
             truncated = true
             compactColumns = true
-            tableLimit -= 1
+            nonFocusedLimit -= 1
             cards = tableCards(
-                tableIDs: Array(tableIDs.prefix(tableLimit)),
+                tableIDs: selectedTableIDs(),
                 snapshot: snapshot,
                 handles: handles,
                 focusByTable: focusByTable,
@@ -348,9 +353,19 @@ public struct SchemaToolExecutor: Sendable {
             payload = [
                 "tables": .array(cards),
                 "truncated": .bool(true),
-                "omitted_table_count": .number(Double(tableIDs.count - tableLimit)),
+                "omitted_table_count": .number(Double(tableIDs.count - cards.count)),
                 "next_tool_suggestion": .string(describeTruncationSuggestion),
             ]
+        }
+        if (try? payload.utf8ByteCount()) ?? Int.max > max(512, policy.maximumResultBytes - 512),
+            !focusedTableIDs.isEmpty
+        {
+            return .failure(
+                .init(
+                    code: .resultBudgetExceeded,
+                    message: "Focused table descriptions exceeded the schema tool result budget."
+                )
+            )
         }
 
         return .success(
@@ -1328,8 +1343,7 @@ private struct SchemaSearchHitContext {
 private func searchHitJSON(
     _ context: SchemaSearchHitContext,
     handles: SchemaToolHandleRegistry,
-    columnLimit: Int,
-    includeLegacyColumns: Bool
+    columnLimit: Int
 ) -> (json: JSONValue, omittedColumnCount: Int) {
     var seen = Set<String>()
     let matched = context.hit.matchedColumnIDs.filter { seen.insert($0.stableString).inserted }
@@ -1355,50 +1369,10 @@ private func searchHitJSON(
         "match_reasons": .array(matchReasons(context.hit.matchedFields).map { .string($0) }),
         "columns": .array(keptColumns),
     ]
-    if includeLegacyColumns {
-        let matchedValues = compactColumns(
-            matched,
-            handles: handles,
-            table: context.table,
-            limit: columnLimit
-        )
-        let relevantValues = compactColumns(
-            relevant,
-            handles: handles,
-            table: context.table,
-            limit: max(0, columnLimit - matchedValues.count)
-        )
-        object["matched_columns"] = .array(matchedValues)
-        object["relevant_columns"] = .array(relevantValues)
-    }
     if omittedColumnCount > 0 {
         object["omitted_column_count"] = .number(Double(omittedColumnCount))
     }
     return (.object(object), omittedColumnCount)
-}
-
-private func compactColumns(
-    _ columnIDs: [SchemaObjectID],
-    handles: SchemaToolHandleRegistry,
-    table: TableInfo,
-    limit: Int
-) -> [JSONValue] {
-    var seen = Set<String>()
-    return columnIDs.compactMap { columnID -> JSONValue? in
-        guard seen.insert(columnID.stableString).inserted,
-            let handle = handles.handle(for: columnID),
-            let columnName = columnID.column,
-            table.columns.contains(where: { $0.name == columnName })
-        else {
-            return nil
-        }
-        return [
-            "column_id": .string(handle),
-            "sql_name": .string(quotedName(columnID)),
-        ]
-    }
-    .prefix(limit)
-    .map { $0 }
 }
 
 private func relevantColumns(
@@ -1446,6 +1420,24 @@ private func relevantColumns(
     }
     var seen = Set<String>()
     return columns.filter { seen.insert($0.stableString).inserted }
+}
+
+private func selectedDescribeTableIDs(
+    from tableIDs: [SchemaObjectID],
+    focusedTableIDs: Set<String>,
+    nonFocusedLimit: Int
+) -> [SchemaObjectID] {
+    var keptNonFocused = 0
+    return tableIDs.filter { tableID in
+        if focusedTableIDs.contains(tableID.stableString) {
+            return true
+        }
+        guard keptNonFocused < nonFocusedLimit else {
+            return false
+        }
+        keptNonFocused += 1
+        return true
+    }
 }
 
 private func tableCards(
