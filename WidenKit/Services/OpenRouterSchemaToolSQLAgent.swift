@@ -468,7 +468,7 @@ public final class OpenRouterSchemaToolSQLAgent: SQLGenerator, Sendable {
                             session: session
                         )
                     }
-                    messages.append(try toolResponse(result))
+                    messages.append(try toolResponse(result, providerCallID: call.id))
                 }
             }
 
@@ -750,8 +750,8 @@ public final class OpenRouterSchemaToolSQLAgent: SQLGenerator, Sendable {
         if !databaseContext.isEmpty {
             sections.append("Database context:\n\(databaseContext)")
         }
-        if !context.confirmedSemanticBindings.isEmpty {
-            sections.append("Confirmed semantic bindings:\n\(context.confirmedSemanticBindings.joined(separator: "\n"))")
+        if let bindingSection = Self.confirmedSemanticBindingsPrompt(context.confirmedSemanticBindings) {
+            sections.append("Confirmed semantic bindings:\n\(bindingSection)")
         }
         if !context.recentQuestions.isEmpty {
             sections.append("Recent questions:\n\(context.recentQuestions.suffix(3).joined(separator: "\n"))")
@@ -789,15 +789,39 @@ public final class OpenRouterSchemaToolSQLAgent: SQLGenerator, Sendable {
         {
             sections.append("Current SQL for follow-up:\n\(currentSQL)")
         }
+        if context.mode != .repair && context.mode != .reconstructAfterFailedRepair,
+            let lastRunError = context.lastRunError?.trimmingCharacters(in: .whitespacesAndNewlines),
+            !lastRunError.isEmpty
+        {
+            sections.append("Last run error:\n\(Self.truncated(lastRunError, to: 300))")
+        }
         return sections.joined(separator: "\n\n")
     }
 
-    private func toolResponse(_ result: SchemaToolResult) throws -> OpenRouterToolChatMessage {
+    private static func confirmedSemanticBindingsPrompt(_ bindings: [String]) -> String? {
+        let trimmed = bindings
+            .map { $0.trimmingCharacters(in: .whitespacesAndNewlines) }
+            .filter { !$0.isEmpty }
+        guard !trimmed.isEmpty else { return nil }
+        return ([
+            "User-confirmed database-specific definitions. Treat these as business semantics, but the schema remains authoritative for available tables and columns.",
+        ] + trimmed.suffix(12).map { "- \(truncated($0, to: 500))" })
+            .joined(separator: "\n")
+    }
+
+    private static func truncated(_ text: String, to limit: Int) -> String {
+        guard text.count > limit else {
+            return text
+        }
+        return String(text.prefix(limit)) + "..."
+    }
+
+    private func toolResponse(_ result: SchemaToolResult, providerCallID: String) throws -> OpenRouterToolChatMessage {
         let data = try JSONEncoder.schemaToolEncoder.encode(result)
         return OpenRouterToolChatMessage(
             role: .tool,
             content: String(decoding: data, as: UTF8.self),
-            toolCallID: result.callID,
+            toolCallID: providerCallID,
             toolName: result.toolName
         )
     }
@@ -932,6 +956,9 @@ public final class OpenRouterSchemaToolSQLAgent: SQLGenerator, Sendable {
         - search for relevant tables;
         - describe every base table used;
         - inspect required relationships;
+        - Generate PostgreSQL syntax only;
+        - use PostgreSQL date and time syntax: CURRENT_DATE, CURRENT_TIMESTAMP, NOW(), DATE_TRUNC('day', timestamp_column), and quoted intervals like INTERVAL '7 days';
+        - never use MySQL functions such as CURDATE(), DATE_SUB(), DAY(timestamp_column), or unquoted interval units like INTERVAL 7 DAY;
         - use only exact SQL identifiers returned by tools;
         - preserve quoted identifiers exactly;
         - do not infer business meaning from connectivity alone;

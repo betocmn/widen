@@ -584,6 +584,58 @@ struct OpenRouterSchemaToolSQLAgentTests {
         }
     }
 
+    @Test func followUpPromptIncludesLastRunError() async throws {
+        let schema = Self.makeSchema()
+        let chatTransport = ScriptedTransport { _, _ in
+            Self.lengthStoppedResponse()
+        }
+        let agent = makeAgent(schema: schema, chatTransport: chatTransport)
+
+        do {
+            _ = try await agent.generateSQL(
+                question: "Fix that error",
+                schema: schema,
+                context: SQLGenerationContext(
+                    currentSQL: "SELECT bad_column FROM public.users",
+                    lastRunError: #"column "bad_column" does not exist"#
+                ),
+                config: SQLGenerationConfig()
+            )
+            Issue.record("Expected provider failure")
+        } catch {
+            let body = try Self.requestBodyText(try #require(chatTransport.requests.first))
+            #expect(body.contains("Last run error"))
+            #expect(body.contains("bad_column"))
+            #expect(body.contains("does not exist"))
+        }
+    }
+
+    @Test func semanticBindingsPromptIsBounded() async throws {
+        let schema = Self.makeSchema()
+        let chatTransport = ScriptedTransport { _, _ in
+            Self.lengthStoppedResponse()
+        }
+        let longBinding = "binding-13 " + String(repeating: "x", count: 600)
+        let bindings = (1...12).map { "binding-\($0)" } + [longBinding]
+        let agent = makeAgent(schema: schema, chatTransport: chatTransport)
+
+        do {
+            _ = try await agent.generateSQL(
+                question: "List users",
+                schema: schema,
+                context: SQLGenerationContext(confirmedSemanticBindings: bindings),
+                config: SQLGenerationConfig()
+            )
+            Issue.record("Expected provider failure")
+        } catch {
+            let body = try Self.requestBodyText(try #require(chatTransport.requests.first))
+            #expect(!body.contains("binding-1\\n"))
+            #expect(body.contains("binding-2"))
+            #expect(body.contains("binding-13"))
+            #expect(!body.contains(String(repeating: "x", count: 600)))
+        }
+    }
+
     @Test func promptIncludesConfiguredDefaultRowLimit() async throws {
         let schema = Self.makeSchema()
         let chatTransport = ScriptedTransport { _, _ in
@@ -603,6 +655,30 @@ struct OpenRouterSchemaToolSQLAgentTests {
             let body = try Self.requestBodyText(try #require(chatTransport.requests.first))
             #expect(body.contains("Default row limit"))
             #expect(body.contains("LIMIT 25"))
+        }
+    }
+
+    @Test func instructionsIncludePostgreSQLDialectGuardrails() async throws {
+        let schema = Self.makeSchema()
+        let chatTransport = ScriptedTransport { _, _ in
+            Self.lengthStoppedResponse()
+        }
+        let agent = makeAgent(schema: schema, chatTransport: chatTransport)
+
+        do {
+            _ = try await agent.generateSQL(
+                question: "List users from the last 7 days",
+                schema: schema,
+                context: SQLGenerationContext(),
+                config: SQLGenerationConfig()
+            )
+            Issue.record("Expected provider failure")
+        } catch {
+            let body = try Self.requestBodyText(try #require(chatTransport.requests.first))
+            #expect(body.contains("Generate PostgreSQL syntax only"))
+            #expect(body.contains("CURDATE()"))
+            #expect(body.contains("DATE_SUB()"))
+            #expect(body.contains("INTERVAL '7 days'"))
         }
     }
 
@@ -632,6 +708,40 @@ struct OpenRouterSchemaToolSQLAgentTests {
             let body = try Self.requestBody(try #require(chatTransport.requests.first))
             #expect(body["max_tokens"] as? Int == OpenRouterToolChatRequestBuilder.completionTokenBudget)
             #expect(body["max_completion_tokens"] == nil)
+        }
+    }
+
+    @Test func schemaToolResponsePreservesProviderCallIDWhenSessionRewritesPayloadCallID() async throws {
+        let schema = Self.makeSchema()
+        let providerCallID = String(repeating: "c", count: 129)
+        let chatTransport = ScriptedTransport { _, index in
+            switch index {
+            case 1:
+                return Self.assistantToolCalls([
+                    Self.toolCall(id: providerCallID, name: "search_schema", arguments: [
+                        "query": "users",
+                    ]),
+                ])
+            default:
+                return Self.lengthStoppedResponse()
+            }
+        }
+        let agent = makeAgent(schema: schema, chatTransport: chatTransport)
+
+        do {
+            _ = try await agent.generateSQL(
+                question: "List users",
+                schema: schema,
+                context: SQLGenerationContext(),
+                config: SQLGenerationConfig()
+            )
+            Issue.record("Expected provider failure")
+        } catch {
+            let secondRequest = try #require(chatTransport.requests.dropFirst().first)
+            #expect(try Self.toolMessageIDs(in: secondRequest) == [providerCallID])
+            let toolResult = try #require(Self.toolResults(in: secondRequest).first)
+            #expect(toolResult.callID == "invalid_call_id")
+            #expect(toolResult.error?.code == .argumentOutOfRange)
         }
     }
 
