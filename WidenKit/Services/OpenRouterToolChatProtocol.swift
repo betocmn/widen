@@ -75,6 +75,8 @@ struct OpenRouterToolChatRequestBuilder: Sendable {
             body["max_completion_tokens"] = cappedCompletionTokens(capabilities)
         } else if capabilities.supportsMaxTokens {
             body["max_tokens"] = cappedCompletionTokens(capabilities)
+        } else {
+            body["max_tokens"] = cappedCompletionTokens(capabilities)
         }
         if capabilities.supportsToolChoice, requireToolChoice {
             body["tool_choice"] = "required"

@@ -516,7 +516,7 @@ public final class OpenRouterSchemaToolSQLAgent: SQLGenerator, Sendable {
             }
             aggregate.httpAttemptCount += 1
             do {
-                let (data, response) = try await transport.send(built.request)
+                let (data, response) = try await sendWithDeadline(built.request, deadline: deadline)
                 let retryAfter = retryPolicy.retryAfter(from: response)
                 do {
                     let parsed = try parser.parse(
@@ -570,6 +570,59 @@ public final class OpenRouterSchemaToolSQLAgent: SQLGenerator, Sendable {
                     continue
                 }
                 throw failure.withAttemptCount(attempt)
+            }
+        }
+    }
+
+    private enum SendDeadlineRaceResult: Sendable {
+        case response(Data, HTTPURLResponse)
+        case deadlineExceeded
+    }
+
+    private func sendWithDeadline(
+        _ request: URLRequest,
+        deadline: Date
+    ) async throws -> (Data, HTTPURLResponse) {
+        try checkDeadline(deadline)
+        let remaining = deadline.timeIntervalSinceNow
+        guard remaining > 0 else {
+            try checkDeadline(deadline)
+            throw OpenRouterSchemaToolAgentFailure(
+                category: .modelTurnBudgetExhausted,
+                message: "The schema-tool agent timed out."
+            )
+        }
+        let timeoutNanoseconds = UInt64(remaining * 1_000_000_000)
+
+        return try await withThrowingTaskGroup(of: SendDeadlineRaceResult.self) { group in
+            group.addTask { [transport] in
+                let (data, response) = try await transport.send(request)
+                return .response(data, response)
+            }
+            group.addTask {
+                try await Task.sleep(nanoseconds: timeoutNanoseconds)
+                return .deadlineExceeded
+            }
+
+            do {
+                guard let result = try await group.next() else {
+                    throw CancellationError()
+                }
+                group.cancelAll()
+                switch result {
+                case .response(let data, let response):
+                    try Task.checkCancellation()
+                    try checkDeadline(deadline)
+                    return (data, response)
+                case .deadlineExceeded:
+                    throw OpenRouterSchemaToolAgentFailure(
+                        category: .modelTurnBudgetExhausted,
+                        message: "The schema-tool agent timed out."
+                    )
+                }
+            } catch {
+                group.cancelAll()
+                throw error
             }
         }
     }

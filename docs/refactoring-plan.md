@@ -800,6 +800,7 @@ Implementation notes:
 * Third review follow-up fixes count only typed schema-tool budget errors, keep reconstruction attempts on the repair schema-tool budget, preserve aggregate agent metadata on failures, include agent-only failures in OpenRouter reporting, and preserve typed OpenRouter error envelopes in tool-chat responses.
 * Fourth review follow-up fixes unqualified `SELECT *` detection so arithmetic multiplication is not treated as wildcard projection, returns typed model-turn budget failures for zero-turn configurations, and includes the configured default row limit in the cloud tool-agent prompt.
 * Fifth review follow-up fixes repair/current-request model-call accounting, preserves non-tool invalid-request failures, prefers full pipeline schema-tool traces in eval metrics, and attempts the tool agent when tool capabilities are unknown rather than silently selecting legacy.
+* Sixth review follow-up bounds in-flight OpenRouter sends by the agent wall-clock deadline, applies a `max_tokens` fallback when token-capability metadata is absent, and counts schema-tool result-byte budget failures in eval summaries. It intentionally preserves the PR 7 requirement to return a typed unsupported-tools failure, not silently fall back to one-shot generation, after a paid tool request is rejected.
 
 Verification:
 
@@ -815,7 +816,7 @@ make eval-db-cloud-agent MODEL=openai/gpt-5.5 REPEAT=3
 Results:
 
 ```text
-make test: 718 tests in 42 suites passed.
+make test: 720 tests in 42 suites passed.
 make eval-build: WidenEval build succeeded.
 make eval-schema-tools: 10/10 cases passed; max response bytes 6111; truncated results 1; determinism failures 0.
 make eval-openrouter-smoke MODEL=openai/gpt-5.5 REPEAT=3: completed with backend/transport 15/15, structured parse 15/15, static-shape 9/15, estimated cost $0.181115. Summary: .eval-results/20260625-123540-793/summary.md.

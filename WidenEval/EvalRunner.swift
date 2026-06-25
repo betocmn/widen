@@ -756,6 +756,7 @@ struct EvalRunner {
                 )
                 && result.trace?.schemaToolCalls.contains {
                     $0.errorCode == .sessionBudgetExceeded
+                        || $0.errorCode == .resultBudgetExceeded
                 } == true
         }
         let promptEstimateValues = results.compactMap(\.metrics.estimatedInitialPromptCharacters)

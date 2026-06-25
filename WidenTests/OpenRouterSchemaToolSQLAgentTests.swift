@@ -58,6 +58,31 @@ struct OpenRouterSchemaToolSQLAgentTests {
         }
     }
 
+    private final class HangingTransport: HTTPTransport, @unchecked Sendable {
+        private let lock = NSLock()
+        private var recorded: [URLRequest] = []
+        private var observedCancellation = false
+
+        var requests: [URLRequest] {
+            lock.withLock { recorded }
+        }
+
+        var wasCancelled: Bool {
+            lock.withLock { observedCancellation }
+        }
+
+        func send(_ request: URLRequest) async throws -> (Data, HTTPURLResponse) {
+            lock.withLock { recorded.append(request) }
+            do {
+                try await Task.sleep(nanoseconds: 5_000_000_000)
+            } catch {
+                lock.withLock { observedCancellation = true }
+                throw error
+            }
+            return (Data(), HTTPURLResponse(url: request.url!, statusCode: 200, httpVersion: nil, headerFields: nil)!)
+        }
+    }
+
     private final class LegacyGenerator: SQLGenerator, @unchecked Sendable {
         private let lock = NSLock()
         private var recordedCallCount = 0
@@ -578,6 +603,35 @@ struct OpenRouterSchemaToolSQLAgentTests {
             let body = try Self.requestBodyText(try #require(chatTransport.requests.first))
             #expect(body.contains("Default row limit"))
             #expect(body.contains("LIMIT 25"))
+        }
+    }
+
+    @Test func toolChatRequestUsesMaxTokensWhenCapabilityMetadataOmitsTokenParameters() async throws {
+        let schema = Self.makeSchema()
+        let chatTransport = ScriptedTransport { _, _ in
+            Self.lengthStoppedResponse()
+        }
+        let catalogTransport = ScriptedTransport { _, _ in
+            Self.catalogResponse(parameters: ["tools", "tool_choice", "temperature"])
+        }
+        let agent = makeAgent(
+            schema: schema,
+            chatTransport: chatTransport,
+            catalogTransport: catalogTransport
+        )
+
+        do {
+            _ = try await agent.generateSQL(
+                question: "List users",
+                schema: schema,
+                context: SQLGenerationContext(),
+                config: SQLGenerationConfig()
+            )
+            Issue.record("Expected provider failure")
+        } catch {
+            let body = try Self.requestBody(try #require(chatTransport.requests.first))
+            #expect(body["max_tokens"] as? Int == OpenRouterToolChatRequestBuilder.completionTokenBudget)
+            #expect(body["max_completion_tokens"] == nil)
         }
     }
 
@@ -1221,6 +1275,41 @@ struct OpenRouterSchemaToolSQLAgentTests {
         } catch let failure as OpenRouterSchemaToolAgentFailure {
             let elapsed = started.duration(to: .now)
             #expect(failure.category == .modelTurnBudgetExhausted)
+            #expect(elapsed < .milliseconds(500))
+        }
+    }
+
+    @Test func stalledOpenRouterSendIsBoundedByWallClockTimeout() async throws {
+        let schema = Self.makeSchema()
+        let chatTransport = HangingTransport()
+        let agent = makeAgent(
+            schema: schema,
+            chatTransport: chatTransport,
+            configuration: OpenRouterSchemaToolSQLAgentConfiguration(
+                maximumSchemaToolCalls: 4,
+                maximumRepairSchemaToolCalls: 2,
+                maximumModelTurns: 6,
+                maximumMalformedTerminalCorrections: 1,
+                maximumRepeatedToolCorrections: 1,
+                maximumHTTPAttempts: 8,
+                wallClockTimeoutSeconds: 0.03
+            )
+        )
+        let started = ContinuousClock.now
+
+        do {
+            _ = try await agent.generateSQL(
+                question: "List users",
+                schema: schema,
+                context: SQLGenerationContext(),
+                config: SQLGenerationConfig()
+            )
+            Issue.record("Expected timeout failure")
+        } catch let failure as OpenRouterSchemaToolAgentFailure {
+            let elapsed = started.duration(to: .now)
+            #expect(failure.category == .modelTurnBudgetExhausted)
+            #expect(chatTransport.requests.count == 1)
+            #expect(chatTransport.wasCancelled)
             #expect(elapsed < .milliseconds(500))
         }
     }
