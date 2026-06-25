@@ -698,9 +698,10 @@ make eval-schema-tools
 Results:
 
 ```text
-make test: 670 tests passed.
-make eval-retrieval RETRIEVER=index: acceptance passed, 23 cases, required-table Recall@5 100.0%, required join-path recall 100.0%.
-make eval-schema-tools: 10/10 cases passed, definition bytes 1686, estimated definition tokens 562, max response bytes 4816.
+make test: 685 tests in 41 suites passed.
+make eval-retrieval RETRIEVER=index: acceptance passed, 23 cases, required-table Recall@3/5/8 100.0%, required join-path recall 100.0%, missing required column matches 0, forbidden distractor violations 0.
+make eval-schema-tools: 10/10 cases passed, definition bytes 1686, estimated definition tokens 562, max response bytes 6111, truncated results 1, determinism failures 0.
+Schema tool contract response sizes: definitions 1686 bytes; no-finite-values 431 bytes; no-match 219 bytes; no-path 310 bytes; invalid-id 367 bytes; wrong-kind 333 bytes; call-count-budget 299 bytes; large-table-truncation 3743 bytes; preseason workflow 6111 bytes.
 ```
 
 ---
