@@ -310,7 +310,7 @@ public struct OpenRouterFailure: Error, LocalizedError, Equatable, Sendable {
     }
 }
 
-private struct OpenRouterAPIErrorEnvelope: Decodable {
+struct OpenRouterAPIErrorEnvelope: Decodable {
     struct APIError: Decodable {
         struct Metadata: Decodable {
             let errorType: String?
@@ -355,7 +355,7 @@ private struct OpenRouterAPIErrorEnvelope: Decodable {
     }
 }
 
-private enum OpenRouterJSONValue: Decodable, Equatable, Sendable {
+enum OpenRouterJSONValue: Decodable, Equatable, Sendable {
     case string(String)
     case int(Int)
     case double(Double)
@@ -1388,7 +1388,7 @@ struct OpenRouterResponseParser: Sendable {
         )
     }
 
-    private static func failure(
+    static func failure(
         apiError: OpenRouterAPIErrorEnvelope.APIError,
         httpStatus: Int?,
         completionID: String?,
@@ -1501,7 +1501,7 @@ struct OpenRouterResponseParser: Sendable {
     }
 }
 
-private struct OpenRouterRouterMetadata: Decodable, Equatable, Sendable {
+struct OpenRouterRouterMetadata: Decodable, Equatable, Sendable {
     struct Endpoints: Decodable, Equatable, Sendable {
         struct Endpoint: Decodable, Equatable, Sendable {
             let provider: String?

@@ -61,6 +61,57 @@ struct TextToSQLEvalTests {
         }
     }
 
+    private struct AgentBudgetFailureGenerator: SQLGenerator {
+        func generateSQL(
+            question: String,
+            schema: DatabaseSchema,
+            context: SQLGenerationContext,
+            config: SQLGenerationConfig
+        ) async throws -> SQLGenerationResult {
+            var metadata = OpenRouterGenerationMetadata(
+                requestedModelID: "test/model",
+                returnedModelID: "test/returned",
+                providerName: "TestProvider",
+                completionID: "cmpl-agent-failure",
+                requestID: "req-agent-failure",
+                structuredOutputMode: .promptOnlyJSON,
+                requestCount: 3,
+                retryCount: 1,
+                promptTokens: 30,
+                completionTokens: 12,
+                reasoningTokens: 2,
+                totalTokens: 42,
+                costUSD: 0.001,
+                serviceTier: nil,
+                finishReason: "tool_calls",
+                nativeFinishReason: nil
+            )
+            metadata.agentSelectionReason = "tools"
+            metadata.agentLogicalTurnCount = 2
+            metadata.agentHTTPAttemptCount = 3
+            metadata.agentSchemaToolCallCount = 1
+            throw OpenRouterSchemaToolAgentFailure(
+                category: .schemaToolCallBudgetExhausted,
+                message: "Schema tool call budget exhausted.",
+                backendMetadata: metadata,
+                schemaToolCalls: [
+                    SchemaToolCallTrace(
+                        callID: "search-over-budget",
+                        toolName: "search_schema",
+                        outcome: .error,
+                        latencyMs: 1,
+                        returnedObjectCount: 0,
+                        outputByteCount: 128,
+                        truncated: false,
+                        errorCode: .sessionBudgetExceeded,
+                        schemaFingerprintPrefix: "abcdef123456",
+                        cacheHit: false
+                    ),
+                ]
+            )
+        }
+    }
+
     private final class HangingGenerator: SQLGenerator, @unchecked Sendable {
         private let lock = NSLock()
         private var cancellationObserved = false
@@ -867,6 +918,36 @@ struct TextToSQLEvalTests {
         #expect(result.metrics.modelCallCount == 4)
         #expect(result.metrics.openRouterRetryCount == 2)
         #expect(result.diagnostics.openRouterAttemptCount == 3)
+    }
+
+    @Test func pipelineFailurePreservesAgentAggregateMetadata() async {
+        let evalCase = TextToSQLEvalCase(
+            id: "commerce.recent-orders",
+            schemaFixture: "commerce",
+            question: "Show the 10 most recent orders",
+            expected: TextToSQLEvalExpectation(decision: .sql)
+        )
+
+        let result = await TextToSQLEvalCaseRunner.run(
+            evalCase: evalCase,
+            schema: makeCommerceSchema(),
+            generator: AgentBudgetFailureGenerator(),
+            options: TextToSQLEvalRunOptions(backend: .cloud, model: "test/model")
+        )
+
+        #expect(result.status == .generationFailure)
+        #expect(result.metrics.modelCallCount == 3)
+        #expect(result.metrics.openRouterRetryCount == 1)
+        #expect(result.metrics.tokenUsage == 42)
+        #expect(result.metrics.estimatedCloudCostUSD == 0.001)
+        #expect(result.metrics.openRouterRequestedModelID == "test/model")
+        #expect(result.metrics.openRouterReturnedModelID == "test/returned")
+        #expect(result.metrics.openRouterProviderName == "TestProvider")
+        #expect(result.metrics.openRouterAgentSelectionReason == "tools")
+        #expect(result.metrics.openRouterAgentLogicalTurnCount == 2)
+        #expect(result.metrics.openRouterAgentHTTPAttemptCount == 3)
+        #expect(result.metrics.openRouterSchemaToolCallCount == 1)
+        #expect(result.trace?.schemaToolCalls.first?.errorCode == .sessionBudgetExceeded)
     }
 
     @Test func wrongSQLDecisionDoesNotInflateShapeCoverage() {

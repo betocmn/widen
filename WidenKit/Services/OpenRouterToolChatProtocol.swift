@@ -183,7 +183,7 @@ struct OpenRouterToolChatParser: Sendable {
             let message: Message?
             let finishReason: String?
             let nativeFinishReason: String?
-            let error: JSONValue?
+            let error: OpenRouterAPIErrorEnvelope.APIError?
 
             private enum CodingKeys: String, CodingKey {
                 case index
@@ -200,7 +200,7 @@ struct OpenRouterToolChatParser: Sendable {
         let serviceTier: String?
         let choices: [Choice]
         let usage: Usage?
-        let error: JSONValue?
+        let error: OpenRouterAPIErrorEnvelope.APIError?
         let openrouterMetadata: RouterMetadata?
 
         private enum CodingKeys: String, CodingKey {
@@ -222,7 +222,7 @@ struct OpenRouterToolChatParser: Sendable {
             serviceTier = try container.decodeIfPresent(String.self, forKey: .serviceTier)
             choices = try container.decodeIfPresent([Choice].self, forKey: .choices) ?? []
             usage = try container.decodeIfPresent(Usage.self, forKey: .usage)
-            error = try container.decodeIfPresent(JSONValue.self, forKey: .error)
+            error = try container.decodeIfPresent(OpenRouterAPIErrorEnvelope.APIError.self, forKey: .error)
             openrouterMetadata = try container.decodeIfPresent(RouterMetadata.self, forKey: .openrouterMetadata)
         }
     }
@@ -332,10 +332,9 @@ struct OpenRouterToolChatParser: Sendable {
                 attemptCount: requestCount
             )
         }
-        if completion.error != nil {
-            throw OpenRouterFailure(
-                category: .serverFailure,
-                message: "OpenRouter returned an error response.",
+        if let topError = completion.error {
+            throw OpenRouterResponseParser.failure(
+                apiError: topError,
                 httpStatus: response.statusCode,
                 completionID: completion.id,
                 requestID: requestID,
@@ -358,7 +357,19 @@ struct OpenRouterToolChatParser: Sendable {
                 attemptCount: requestCount
             )
         }
-        if choice.error != nil || choice.finishReason == "error" {
+        if let choiceError = choice.error {
+            throw OpenRouterResponseParser.failure(
+                apiError: choiceError,
+                httpStatus: response.statusCode,
+                completionID: completion.id,
+                requestID: requestID,
+                requestedModelID: requestedModelID,
+                returnedModelID: completion.model,
+                providerName: completion.provider ?? completion.openrouterMetadata?.selectedProvider,
+                attemptCount: requestCount
+            )
+        }
+        if choice.finishReason == "error" {
             throw OpenRouterFailure(
                 category: .providerUnavailable,
                 message: "The provider ended generation with an error.",

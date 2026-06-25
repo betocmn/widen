@@ -843,6 +843,116 @@ struct OpenRouterSchemaToolSQLAgentTests {
             #expect(failure.category == .openRouterRequestFailure)
             #expect(failure.openRouterFailure?.category == .maxTokensExceeded)
             #expect(failure.schemaToolCalls.map(\.callID) == ["search-before-provider-failure"])
+            #expect(failure.backendMetadata?.agentSelectionReason == "tools")
+            #expect(failure.backendMetadata?.agentLogicalTurnCount == 1)
+            #expect(failure.backendMetadata?.agentHTTPAttemptCount == 2)
+            #expect(failure.backendMetadata?.requestCount == 2)
+            #expect(failure.backendMetadata?.totalTokens == 15)
+        }
+    }
+
+    @Test func reconstructionModeUsesRepairSchemaToolBudget() async throws {
+        let schema = Self.makeSchema()
+        let chatTransport = ScriptedTransport { request, index in
+            switch index {
+            case 1:
+                return Self.assistantToolCalls([
+                    Self.toolCall(id: "search-repair-budget", name: "search_schema", arguments: [
+                        "query": "users",
+                        "limit": 2,
+                    ]),
+                ])
+            case 2:
+                let tableID = try Self.tableHandle(named: #""public"."users""#, in: request)
+                return Self.assistantToolCalls([
+                    Self.toolCall(id: "describe-repair-budget", name: "describe_tables", arguments: [
+                        "table_ids": [tableID],
+                    ]),
+                ])
+            case 3:
+                return Self.assistantToolCalls([
+                    Self.toolCall(id: "search-over-repair-budget", name: "search_schema", arguments: [
+                        "query": "orders",
+                        "limit": 2,
+                    ]),
+                ])
+            default:
+                throw URLError(.badServerResponse)
+            }
+        }
+        let agent = makeAgent(
+            schema: schema,
+            chatTransport: chatTransport,
+            configuration: OpenRouterSchemaToolSQLAgentConfiguration(
+                maximumSchemaToolCalls: 4,
+                maximumRepairSchemaToolCalls: 2,
+                maximumModelTurns: 6,
+                maximumMalformedTerminalCorrections: 1,
+                maximumRepeatedToolCorrections: 1,
+                maximumHTTPAttempts: 8,
+                wallClockTimeoutSeconds: 10
+            )
+        )
+
+        do {
+            _ = try await agent.generateSQL(
+                question: "Rebuild the failed query",
+                schema: schema,
+                context: SQLGenerationContext(mode: .reconstructAfterFailedRepair),
+                config: SQLGenerationConfig()
+            )
+            Issue.record("Expected reconstruction budget failure")
+        } catch let failure as OpenRouterSchemaToolAgentFailure {
+            #expect(failure.category == .schemaToolCallBudgetExhausted)
+            #expect(failure.schemaToolCalls.map(\.callID) == [
+                "search-repair-budget",
+                "describe-repair-budget",
+                "search-over-repair-budget",
+            ])
+            #expect(failure.schemaToolCalls.last?.errorCode == .sessionBudgetExceeded)
+        }
+    }
+
+    @Test func toolChatParserPreservesTypedOpenRouterErrorEnvelope() throws {
+        let parser = OpenRouterToolChatParser()
+        let data = Self.jsonData([
+            "id": "cmpl-error",
+            "model": Self.modelID,
+            "provider": "OpenAI",
+            "error": [
+                "code": 400,
+                "message": "Unsupported parameter: tools",
+                "metadata": [
+                    "error_type": "unsupported_parameter",
+                    "provider_code": "bad_parameter",
+                ],
+            ],
+        ])
+        let response = HTTPURLResponse(
+            url: Self.chatEndpoint,
+            statusCode: 200,
+            httpVersion: "HTTP/1.1",
+            headerFields: ["X-Request-ID": "req-typed-error"]
+        )!
+
+        do {
+            _ = try parser.parse(
+                data: data,
+                response: response,
+                requestedModelID: Self.modelID,
+                requestCount: 1,
+                retryCount: 0
+            )
+            Issue.record("Expected typed OpenRouter failure")
+        } catch let failure as OpenRouterFailure {
+            #expect(failure.category == .unsupportedFeature)
+            #expect(failure.diagnostic.httpStatus == 400)
+            #expect(failure.diagnostic.openRouterErrorType == "unsupported_parameter")
+            #expect(failure.diagnostic.providerCode == "bad_parameter")
+            #expect(failure.diagnostic.completionID == "cmpl-error")
+            #expect(failure.diagnostic.requestID == "req-typed-error")
+            #expect(failure.diagnostic.returnedModelID == Self.modelID)
+            #expect(failure.diagnostic.providerName == "OpenAI")
         }
     }
 

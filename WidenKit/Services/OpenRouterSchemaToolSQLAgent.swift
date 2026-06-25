@@ -52,17 +52,20 @@ public struct OpenRouterSchemaToolAgentFailure: Error, LocalizedError, Equatable
     public var category: Category
     public var message: String
     public var openRouterFailure: OpenRouterFailure?
+    public var backendMetadata: OpenRouterGenerationMetadata?
     public var schemaToolCalls: [SchemaToolCallTrace]
 
     public init(
         category: Category,
         message: String,
         openRouterFailure: OpenRouterFailure? = nil,
+        backendMetadata: OpenRouterGenerationMetadata? = nil,
         schemaToolCalls: [SchemaToolCallTrace] = []
     ) {
         self.category = category
         self.message = message
         self.openRouterFailure = openRouterFailure
+        self.backendMetadata = backendMetadata
         self.schemaToolCalls = schemaToolCalls
     }
 
@@ -468,7 +471,12 @@ public final class OpenRouterSchemaToolSQLAgent: SQLGenerator, Sendable {
         } catch is CancellationError {
             throw CancellationError()
         } catch let failure as OpenRouterSchemaToolAgentFailure {
-            throw await enrichedAgentFailure(failure, session: session)
+            throw await enrichedAgentFailure(
+                failure,
+                session: session,
+                aggregate: aggregate,
+                contextModelCallCount: context.modelCallCount
+            )
         }
     }
 
@@ -630,7 +638,7 @@ public final class OpenRouterSchemaToolSQLAgent: SQLGenerator, Sendable {
 
     private func schemaToolPolicy(for mode: SQLGenerationMode) -> SchemaToolPolicy {
         var policy = SchemaToolPolicy.cloudAgent
-        policy.maximumCallCount = mode == .repair
+        policy.maximumCallCount = mode == .repair || mode == .reconstructAfterFailedRepair
             ? configuration.maximumRepairSchemaToolCalls
             : configuration.maximumSchemaToolCalls
         return policy
@@ -782,11 +790,23 @@ public final class OpenRouterSchemaToolSQLAgent: SQLGenerator, Sendable {
 
     private func enrichedAgentFailure(
         _ failure: OpenRouterSchemaToolAgentFailure,
-        session: SchemaToolSession
+        session: SchemaToolSession,
+        aggregate: OpenRouterAgentMetadataAccumulator,
+        contextModelCallCount: Int
     ) async -> OpenRouterSchemaToolAgentFailure {
-        guard failure.schemaToolCalls.isEmpty else { return failure }
         var enriched = failure
-        enriched.schemaToolCalls = await session.tracesSnapshot()
+        let traces = failure.schemaToolCalls.isEmpty
+            ? await session.tracesSnapshot()
+            : failure.schemaToolCalls
+        enriched.schemaToolCalls = traces
+        if enriched.backendMetadata == nil {
+            var metadata = aggregate.metadata(
+                contextModelCallCount: contextModelCallCount,
+                schemaToolCalls: traces
+            )
+            metadata.agentSelectionReason = "tools"
+            enriched.backendMetadata = metadata
+        }
         return enriched
     }
 

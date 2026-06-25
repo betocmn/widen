@@ -254,6 +254,11 @@ enum EvalReporter {
                         || result.metrics.openRouterRetryCount != nil
                         || result.metrics.openRouterRequestedModelID != nil
                         || result.diagnostics.openRouterFailureCategory != nil
+                        || result.metrics.openRouterAgentSelectionReason != nil
+                        || result.metrics.openRouterAgentLogicalTurnCount != nil
+                        || result.metrics.openRouterAgentHTTPAttemptCount != nil
+                        || result.metrics.openRouterSchemaToolCallCount != nil
+                        || result.metrics.openRouterAgentTerminalOutcome != nil
                 )
         }
         guard !openRouterResults.isEmpty else { return [] }

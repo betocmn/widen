@@ -109,19 +109,22 @@ public struct TextToSQLPipelineFailure: Error, LocalizedError, Codable, Equatabl
     public var message: String
     public var validationIssueIDs: [String]
     public var openRouterFailure: OpenRouterFailureDiagnostic?
+    public var backendMetadata: OpenRouterGenerationMetadata?
 
     public init(
         stage: TextToSQLStage,
         category: TextToSQLFailureCategory,
         message: String,
         validationIssueIDs: [String] = [],
-        openRouterFailure: OpenRouterFailureDiagnostic? = nil
+        openRouterFailure: OpenRouterFailureDiagnostic? = nil,
+        backendMetadata: OpenRouterGenerationMetadata? = nil
     ) {
         self.stage = stage
         self.category = category
         self.message = message
         self.validationIssueIDs = validationIssueIDs
         self.openRouterFailure = openRouterFailure
+        self.backendMetadata = backendMetadata
     }
 
     public var errorDescription: String? { message }
@@ -764,20 +767,28 @@ public struct TextToSQLPipeline: TextToSQLRunning {
     ) -> TextToSQLPipelineFailure {
         if let failure = SQLGenerationFailure.typed(error) {
             let openRouterDiagnostic: OpenRouterFailureDiagnostic?
+            let backendMetadata: OpenRouterGenerationMetadata?
             if case .openRouter(let openRouterFailure) = failure {
                 openRouterDiagnostic = openRouterFailure.diagnostic
+                backendMetadata = nil
             } else if case .schemaToolAgent(let agentFailure) = failure,
                 let openRouterFailure = agentFailure.openRouterFailure
             {
                 openRouterDiagnostic = openRouterFailure.diagnostic
+                backendMetadata = agentFailure.backendMetadata
+            } else if case .schemaToolAgent(let agentFailure) = failure {
+                openRouterDiagnostic = nil
+                backendMetadata = agentFailure.backendMetadata
             } else {
                 openRouterDiagnostic = nil
+                backendMetadata = nil
             }
             return TextToSQLPipelineFailure(
                 stage: stage,
                 category: failure.pipelineCategory,
                 message: failure.localizedDescription,
-                openRouterFailure: openRouterDiagnostic
+                openRouterFailure: openRouterDiagnostic,
+                backendMetadata: backendMetadata
             )
         }
         return TextToSQLPipelineFailure(
