@@ -109,6 +109,46 @@ struct SchemaToolSessionTests {
         #expect(result.error?.code == .staleObjectID)
     }
 
+    @Test func handlesAreScopedToConnectionAndSchemaFingerprint() async throws {
+        let connectionA = UUID(uuidString: "aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa")!
+        let connectionB = UUID(uuidString: "bbbbbbbb-bbbb-bbbb-bbbb-bbbbbbbbbbbb")!
+        let schema = simpleSchema()
+        let sessionA = try await makeSession(schema: schema, connectionID: connectionA)
+        let sessionB = try await makeSession(schema: schema, connectionID: connectionB)
+        let usersFromA = try await requireHandle(sessionA, .table(schema: "public", name: "users"))
+
+        let crossConnection = try await invoke(
+            sessionB,
+            id: "cross-connection",
+            tool: .describeTables,
+            arguments: ["table_ids": handles(usersFromA)]
+        )
+        #expect(crossConnection.error?.code == .staleObjectID)
+
+        let changedSchema = DatabaseSchema(
+            schemas: [SchemaInfo(name: "public")],
+            tables: [
+                table("users", columns: [
+                    column("users", "id", type: "uuid", ordinal: 1),
+                    column("users", "email", ordinal: 2),
+                    column("users", "display_name", ordinal: 3),
+                ]),
+                table("invoices", columns: [
+                    column("invoices", "id", type: "uuid", ordinal: 1),
+                    column("invoices", "total_cents", type: "integer", ordinal: 2),
+                ]),
+            ]
+        )
+        let changedSession = try await makeSession(schema: changedSchema, connectionID: connectionA)
+        let staleFingerprint = try await invoke(
+            changedSession,
+            id: "stale-fingerprint",
+            tool: .describeTables,
+            arguments: ["table_ids": handles(usersFromA)]
+        )
+        #expect(staleFingerprint.error?.code == .staleObjectID)
+    }
+
     @Test func searchHandlesDuplicateQuotedAndSpecialIdentifiersDeterministically() async throws {
         let session = try await makeSession(schema: duplicateSchema(), selectedSchemas: ["Sales Data", "auth", "public"])
 
@@ -504,18 +544,23 @@ struct SchemaToolSessionTests {
     private func makeSession(
         schema: DatabaseSchema,
         selectedSchemas: [String]? = nil,
-        policy: SchemaToolPolicy = .cloudAgent
+        policy: SchemaToolPolicy = .cloudAgent,
+        connectionID: UUID = UUID(uuidString: "11111111-1111-1111-1111-111111111111")!
     ) async throws -> SchemaToolSession {
         try await SchemaToolSessionFactory(indexStore: SchemaSearchIndexStore(directory: temporaryDirectory()))
-            .makeSession(snapshot: snapshot(schema, selectedSchemas: selectedSchemas), policy: policy)
+            .makeSession(
+                snapshot: snapshot(schema, selectedSchemas: selectedSchemas, connectionID: connectionID),
+                policy: policy
+            )
     }
 
     private func snapshot(
         _ schema: DatabaseSchema,
-        selectedSchemas: [String]? = nil
+        selectedSchemas: [String]? = nil,
+        connectionID: UUID = UUID(uuidString: "11111111-1111-1111-1111-111111111111")!
     ) -> SchemaSearchSnapshot {
         SchemaSearchSnapshot(
-            connectionID: UUID(uuidString: "11111111-1111-1111-1111-111111111111")!,
+            connectionID: connectionID,
             selectedSchemas: selectedSchemas ?? schema.schemas.map(\.name).sorted(),
             schema: schema
         )

@@ -485,13 +485,18 @@ public actor SchemaToolSession {
         policy: SchemaToolPolicy,
         executor: SchemaToolExecutor = SchemaToolExecutor()
     ) {
+        let sortedSelectedSchemas = selectedSchemas.sorted()
         self.snapshot = snapshot
         self.searcher = searcher
         self.schemaFingerprint = schemaFingerprint
-        self.selectedSchemas = selectedSchemas.sorted()
+        self.selectedSchemas = sortedSelectedSchemas
         self.policy = policy
         self.executor = executor
-        self.handles = SchemaToolHandleRegistry(snapshot: snapshot)
+        self.handles = SchemaToolHandleRegistry(
+            snapshot: snapshot,
+            schemaFingerprint: schemaFingerprint,
+            selectedSchemas: sortedSelectedSchemas
+        )
     }
 
     public nonisolated var definitions: [SchemaToolDefinition] {
@@ -769,11 +774,20 @@ struct SchemaToolHandleRegistry: Sendable {
     var columnsByStableID: [String: ColumnInfo] = [:]
     var relationshipsByStableID: [String: SchemaForeignKeyConstraintInfo] = [:]
 
-    init(snapshot: SchemaSearchSnapshot) {
+    init(
+        snapshot: SchemaSearchSnapshot,
+        schemaFingerprint: String,
+        selectedSchemas: [String]
+    ) {
+        let namespace = [
+            snapshot.connectionID.uuidString.lowercased(),
+            schemaFingerprint,
+            selectedSchemas.joined(separator: "\u{1f}"),
+        ].joined(separator: "\u{1e}")
         var usedHandles = Set<String>()
         for table in snapshot.schemaSearchTables.sorted(by: Self.tableSort) {
             let tableID = SchemaObjectID.table(schema: table.schema, name: table.name)
-            register(tableID, prefix: "tbl", usedHandles: &usedHandles)
+            register(tableID, prefix: "tbl", namespace: namespace, usedHandles: &usedHandles)
             tablesByStableID[tableID.stableString] = table
             for column in table.columns.sorted(by: { $0.ordinalPosition < $1.ordinalPosition }) {
                 let columnID = SchemaObjectID.column(
@@ -781,7 +795,7 @@ struct SchemaToolHandleRegistry: Sendable {
                     table: column.tableName,
                     name: column.name
                 )
-                register(columnID, prefix: "col", usedHandles: &usedHandles)
+                register(columnID, prefix: "col", namespace: namespace, usedHandles: &usedHandles)
                 columnsByStableID[columnID.stableString] = column
             }
         }
@@ -791,7 +805,7 @@ struct SchemaToolHandleRegistry: Sendable {
                 table: relationship.sourceTable,
                 name: relationship.constraintName
             )
-            register(relationshipID, prefix: "fk", usedHandles: &usedHandles)
+            register(relationshipID, prefix: "fk", namespace: namespace, usedHandles: &usedHandles)
             relationshipsByStableID[relationshipID.stableString] = relationship
         }
     }
@@ -856,10 +870,12 @@ struct SchemaToolHandleRegistry: Sendable {
     private mutating func register(
         _ objectID: SchemaObjectID,
         prefix: String,
+        namespace: String,
         usedHandles: inout Set<String>
     ) {
         let stable = objectID.stableString
-        let digest = SHA256.hash(data: Data(stable.utf8))
+        let digestInput = "\(namespace)\u{1e}\(stable)"
+        let digest = SHA256.hash(data: Data(digestInput.utf8))
             .map { String(format: "%02x", $0) }
             .joined()
         var length = 12
