@@ -404,14 +404,15 @@ public struct SchemaToolExecutor: Sendable {
             return .failure(.stale("Column handle is outside the current schema snapshot.", argument: "column_id"))
         }
 
+        let valueLimit = 32
         let constraints = (column.valueConstraints ?? []).prefix(16).map { constraint -> JSONValue in
-            let values = constraint.values.prefix(32).map {
+            let values = constraint.values.prefix(valueLimit).map {
                 JSONValue.string(sanitizedMetadata($0, maxCharacters: 160))
             }
             var object: [String: JSONValue] = [
                 "kind": .string(constraint.kind.rawValue),
                 "database_values": .array(Array(values)),
-                "values_complete": .bool(!constraint.values.isEmpty),
+                "values_complete": .bool(!constraint.values.isEmpty && constraint.values.count <= valueLimit),
                 "unparsed_check_exists": .bool(
                     constraint.kind == .check
                         && constraint.values.isEmpty
@@ -425,6 +426,9 @@ public struct SchemaToolExecutor: Sendable {
                 object["database_check_expression"] = .string(
                     sanitizedMetadata(expression, maxCharacters: 240)
                 )
+            }
+            if constraint.values.count > valueLimit {
+                object["omitted_value_count"] = .number(Double(constraint.values.count - valueLimit))
             }
             return .object(object)
         }
@@ -543,7 +547,12 @@ public actor SchemaToolSession {
         try Task.checkCancellation()
         let started = ContinuousClock.now
 
-        guard callCount < policy.maximumCallCount else {
+        let cacheKey = SchemaToolInvocationCacheKey(invocation: invocation)
+        let cachedExecution = forcedError == nil ? cache[cacheKey]?.execution : nil
+        let cacheHit = cachedExecution != nil
+        let countsAgainstCallBudget = !cacheHit || policy.countCachedCalls
+
+        guard !countsAgainstCallBudget || callCount < policy.maximumCallCount else {
             return record(
                 result: finalizedError(
                     callID: invocation.callID,
@@ -558,17 +567,15 @@ public actor SchemaToolSession {
                 cacheHit: false
             )
         }
-        callCount += 1
+        if countsAgainstCallBudget {
+            callCount += 1
+        }
 
-        let cacheKey = SchemaToolInvocationCacheKey(invocation: invocation)
         let execution: SchemaToolExecution
-        let cacheHit: Bool
         if let forcedError {
             execution = .failure(forcedError)
-            cacheHit = false
-        } else if let cached = cache[cacheKey] {
-            execution = cached.execution
-            cacheHit = true
+        } else if let cachedExecution {
+            execution = cachedExecution
         } else {
             execution = executor.execute(
                 invocation,
@@ -579,7 +586,6 @@ public actor SchemaToolSession {
                 matchedColumnsByTable: matchedColumnsByTable
             )
             cache[cacheKey] = SchemaToolCachedExecution(execution: execution)
-            cacheHit = false
         }
 
         for (tableID, columns) in execution.matchedColumnIDsByTable {
@@ -1082,17 +1088,34 @@ private func tableCards(
                 }
             }
         )
+        let focusColumnNames = Set(
+            (focusByTable[tableID.stableString] ?? []).compactMap(\.column)
+        )
         let priority = columnPriority(
             table: table,
             focus: Set(focusByTable[tableID.stableString] ?? []),
             matched: matchedColumnsByTable[tableID.stableString] ?? [],
             relationshipColumnNames: requiredRelationshipColumnNames
         )
-        let keptColumns = Array(priority.prefix(maxColumnsPerTable))
+        var keptColumns = Array(priority.prefix(maxColumnsPerTable))
+        let requiredColumnNames = focusColumnNames.union(requiredRelationshipColumnNames)
+        var keptNames = Set(keptColumns.map(\.name))
+        let missingRequiredColumns = table.columns
+            .filter { requiredColumnNames.contains($0.name) && !keptNames.contains($0.name) }
+            .sorted { lhs, rhs in
+                if lhs.ordinalPosition == rhs.ordinalPosition {
+                    return lhs.name < rhs.name
+                }
+                return lhs.ordinalPosition < rhs.ordinalPosition
+            }
+        if !missingRequiredColumns.isEmpty {
+            truncated = true
+            keptColumns.append(contentsOf: missingRequiredColumns)
+            keptNames.formUnion(missingRequiredColumns.map(\.name))
+        }
         if keptColumns.count < table.columns.count {
             truncated = true
         }
-        let keptNames = Set(keptColumns.map(\.name))
         let omittedColumnCount = max(0, table.columns.count - keptColumns.count)
         let omittedRelationshipCount = max(0, relationships.count - keptRelationships.count)
         var object: [String: JSONValue] = [
@@ -1111,12 +1134,6 @@ private func tableCards(
             !comment.isEmpty
         {
             object["database_comment"] = .string(sanitizedMetadata(comment, maxCharacters: 240))
-        }
-        let missingRequiredRelationshipColumns = requiredRelationshipColumnNames.subtracting(keptNames)
-        if !missingRequiredRelationshipColumns.isEmpty {
-            object["relationship_column_warning"] = .string(
-                "Relationship columns were preserved before truncation; reduce table_ids if more detail is needed."
-            )
         }
         if omittedColumnCount > 0 || omittedRelationshipCount > 0 {
             object["next_tool_suggestion"] = .string(

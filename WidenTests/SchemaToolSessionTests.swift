@@ -19,7 +19,10 @@ struct SchemaToolSessionTests {
     }
 
     @Test func malformedJSONUnknownToolUnknownArgumentAndRangeErrorsAreStructured() async throws {
-        let session = try await makeSession(schema: simpleSchema())
+        let session = try await makeSession(
+            schema: simpleSchema(),
+            policy: SchemaToolPolicy(maximumCallCount: 8, maximumResultBytes: 8_000, maximumSessionResultBytes: 16_000)
+        )
 
         let malformed = try await session.invoke(
             callID: "bad-json",
@@ -48,6 +51,14 @@ struct SchemaToolSessionTests {
             arguments: ["query": "users", "limit": 9]
         )
         #expect(outOfRange.error?.code == .argumentOutOfRange)
+
+        let hugeNumber = try await invoke(
+            session,
+            id: "huge-number",
+            tool: .searchSchema,
+            arguments: ["query": "users", "limit": .number(1.0e100)]
+        )
+        #expect(hugeNumber.error?.code == .invalidArgumentType)
     }
 
     @Test func handlesRejectWrongKindStaleIDAndColumnTableMismatch() async throws {
@@ -173,6 +184,7 @@ struct SchemaToolSessionTests {
         let table = try await requireHandle(session, .table(schema: "public", name: "events"))
         let status = try await requireHandle(session, .column(schema: "public", table: "events", name: "status"))
         let mode = try await requireHandle(session, .column(schema: "public", table: "events", name: "mode"))
+        let manyValues = try await requireHandle(session, .column(schema: "public", table: "events", name: "many_values"))
 
         let statusResult = try await invoke(
             session,
@@ -195,6 +207,18 @@ struct SchemaToolSessionTests {
         #expect(modeResult.success)
         #expect(modeResult.payload?["unparsed_check_exists"]?.boolValue == true)
         #expect(modeResult.payload?["finite_values_known"]?.boolValue == false)
+
+        let cappedValuesResult = try await invoke(
+            session,
+            id: "capped-values",
+            tool: .inspectColumnConstraints,
+            arguments: ["table_id": .string(table), "column_id": .string(manyValues)]
+        )
+        let cappedConstraint = cappedValuesResult.payload?["constraints"]?.arrayValue?.first
+        #expect(cappedValuesResult.success)
+        #expect(cappedConstraint?["database_values"]?.arrayValue?.count == 32)
+        #expect(cappedConstraint?["values_complete"]?.boolValue == false)
+        #expect(cappedConstraint?["omitted_value_count"]?.intValue == 8)
     }
 
     @Test func describeTablesTruncatesAtSemanticBoundariesAndKeepsFocusAndCompositeFKPairs() async throws {
@@ -222,6 +246,50 @@ struct SchemaToolSessionTests {
         #expect(text.contains("tenant_id"))
         #expect(text.contains("external_id"))
         #expect(!text.contains("payload_column_79"))
+    }
+
+    @Test func describeTablesKeepsFocusColumnsAndIncludedFKColumnsUnderTruncationPressure() async throws {
+        let session = try await makeSession(
+            schema: largeCompositeSchema(),
+            policy: SchemaToolPolicy(
+                maximumCallCount: 4,
+                maximumResultBytes: 5_500,
+                maximumSessionResultBytes: 8_000
+            )
+        )
+        let events = try await requireHandle(session, .table(schema: "public", name: "account_events"))
+        var focusHandles: [String] = []
+        for index in 0..<16 {
+            focusHandles.append(
+                try await requireHandle(
+                    session,
+                    .column(schema: "public", table: "account_events", name: "payload_column_\(index)")
+                )
+            )
+        }
+
+        let result = try await invoke(
+            session,
+            id: "focus-pressure",
+            tool: .describeTables,
+            arguments: [
+                "table_ids": handles(events),
+                "focus_column_ids": .array(focusHandles.map { .string($0) }),
+            ]
+        )
+        let columns = result.payload?["tables"]?.arrayValue?.first?["columns"]?.arrayValue?
+            .compactMap { $0["sql_name"]?.stringValue } ?? []
+        let foreignKeyPairs = result.payload?["tables"]?.arrayValue?.first?["foreign_keys"]?.arrayValue?.first?["column_pairs"]?.arrayValue ?? []
+
+        #expect(result.success)
+        #expect(result.truncation.truncated)
+        for index in 0..<16 {
+            #expect(columns.contains(#""public"."account_events"."payload_column_\#(index)""#))
+        }
+        #expect(columns.contains(#""public"."account_events"."tenant_id""#))
+        #expect(columns.contains(#""public"."account_events"."external_id""#))
+        #expect(columns.count <= 20)
+        #expect(foreignKeyPairs.count == 2)
     }
 
     @Test func budgetsUseUTF8BytesAndReturnStructuredErrors() async throws {
@@ -281,6 +349,41 @@ struct SchemaToolSessionTests {
         #expect(traces.count == 3)
         #expect(traces[0].cacheHit == false)
         #expect(traces[1].cacheHit == true)
+    }
+
+    @Test func cachedCallsCanBeExemptedFromCallCountWhenPolicyAllowsIt() async throws {
+        let session = try await makeSession(
+            schema: simpleSchema(),
+            policy: SchemaToolPolicy(
+                maximumCallCount: 1,
+                maximumResultBytes: 8_000,
+                maximumSessionResultBytes: 16_000,
+                countCachedCalls: false
+            )
+        )
+        let invocation = SchemaToolInvocation(
+            callID: "repeat-1",
+            toolName: SchemaToolName.searchSchema.rawValue,
+            arguments: ["query": "users", "limit": 2]
+        )
+        let first = try await session.invoke(invocation)
+        let second = try await session.invoke(
+            SchemaToolInvocation(
+                callID: "repeat-2",
+                toolName: invocation.toolName,
+                arguments: invocation.arguments
+            )
+        )
+        let third = try await invoke(
+            session,
+            id: "different",
+            tool: .searchSchema,
+            arguments: ["query": "invoices", "limit": 2]
+        )
+
+        #expect(first.success)
+        #expect(second.success)
+        #expect(third.error?.code == .sessionBudgetExceeded)
     }
 
     @Test func batchInvocationPreservesDeclaredOrderAndTraceIsRedacted() async throws {
@@ -510,6 +613,22 @@ private func constraintSchema() -> DatabaseSchema {
                             values: [],
                             expression: "CHECK (length(mode) > 2)",
                             constraintName: "events_mode_check"
+                        )
+                    ]
+                ),
+                ColumnInfo(
+                    tableSchema: "public",
+                    tableName: "events",
+                    name: "many_values",
+                    dataType: "text",
+                    isNullable: false,
+                    ordinalPosition: 4,
+                    valueConstraints: [
+                        ColumnValueConstraint(
+                            kind: .check,
+                            values: (0..<40).map { "value_\($0)" },
+                            expression: "CHECK (many_values IN (...))",
+                            constraintName: "events_many_values_check"
                         )
                     ]
                 ),
