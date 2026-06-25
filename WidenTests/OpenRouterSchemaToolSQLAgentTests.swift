@@ -406,6 +406,40 @@ struct OpenRouterSchemaToolSQLAgentTests {
         }
     }
 
+    @Test func openRouterFailureAfterToolCallKeepsSchemaToolTraces() async throws {
+        let schema = Self.makeSchema()
+        let chatTransport = ScriptedTransport { _, index in
+            switch index {
+            case 1:
+                return Self.assistantToolCalls([
+                    Self.toolCall(id: "search-before-provider-failure", name: "search_schema", arguments: [
+                        "query": "users",
+                        "limit": 2,
+                    ]),
+                ])
+            case 2:
+                return Self.lengthStoppedResponse()
+            default:
+                throw URLError(.badServerResponse)
+            }
+        }
+        let agent = makeAgent(schema: schema, chatTransport: chatTransport)
+
+        do {
+            _ = try await agent.generateSQL(
+                question: "List users",
+                schema: schema,
+                context: SQLGenerationContext(),
+                config: SQLGenerationConfig()
+            )
+            Issue.record("Expected OpenRouter failure")
+        } catch let failure as OpenRouterSchemaToolAgentFailure {
+            #expect(failure.category == .openRouterRequestFailure)
+            #expect(failure.openRouterFailure?.category == .maxTokensExceeded)
+            #expect(failure.schemaToolCalls.map(\.callID) == ["search-before-provider-failure"])
+        }
+    }
+
     private func makeAgent(
         schema: DatabaseSchema,
         chatTransport: ScriptedTransport,
@@ -577,6 +611,29 @@ struct OpenRouterSchemaToolSQLAgentTests {
                         "request": "0",
                     ],
                 ],
+            ],
+        ])
+    }
+
+    private static func lengthStoppedResponse() -> Data {
+        jsonData([
+            "id": "cmpl-length",
+            "model": modelID,
+            "provider": "OpenAI",
+            "choices": [
+                [
+                    "index": 0,
+                    "finish_reason": "length",
+                    "message": [
+                        "role": "assistant",
+                        "content": "",
+                    ],
+                ],
+            ],
+            "usage": [
+                "prompt_tokens": 10,
+                "completion_tokens": 5,
+                "total_tokens": 15,
             ],
         ])
     }

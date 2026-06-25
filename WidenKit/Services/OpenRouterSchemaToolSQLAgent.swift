@@ -45,6 +45,7 @@ public struct OpenRouterSchemaToolAgentFailure: Error, LocalizedError, Equatable
         case uninspectedSchemaObjects
         case staleSchemaSnapshot
         case cancellation
+        case openRouterRequestFailure
     }
 
     public var category: Category
@@ -83,6 +84,8 @@ public struct OpenRouterSchemaToolAgentFailure: Error, LocalizedError, Equatable
             .modelGeneration
         case .cancellation:
             .cancellation
+        case .openRouterRequestFailure:
+            openRouterFailure?.pipelineCategory ?? .transport
         }
     }
 }
@@ -241,7 +244,12 @@ public final class OpenRouterSchemaToolSQLAgent: SQLGenerator, Sendable {
                             openRouterFailure: failure
                         )
                     }
-                    throw failure
+                    throw await agentFailure(
+                        .openRouterRequestFailure,
+                        failure.message,
+                        session: session,
+                        openRouterFailure: failure
+                    )
                 }
                 aggregate.logicalTurnCount = turn
 
