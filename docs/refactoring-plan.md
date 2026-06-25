@@ -30,7 +30,7 @@ PR 1 — Eval harness and first 20 cases
   ├── PR 3 — Seeded Postgres semantic grader               [parallel]
   ├── PR 4 — OpenRouter adapter reliability                [parallel]
   └── PR 5 — Local schema search index                     [parallel]
-          ├── PR 6 — Bounded schema tools
+          ├── PR 6 — Bounded schema tools                     [done 2026-06-25]
           └── PR 10 — Embedding retrieval experiment       [parallel]
 
 PR 2 + PR 4 + PR 6
@@ -640,7 +640,7 @@ Forbidden distractor violations: 0
 
 ---
 
-# PR 6 — Add bounded schema tools
+# PR 6 — Add bounded schema tools [done 2026-06-25]
 
 Suggested title:
 
@@ -660,10 +660,10 @@ Give a model controlled schema discovery without sending the entire schema.
 search_schema(query, limit)
 describe_tables(table_ids)
 find_join_paths(from_table_id, to_table_id, max_hops)
-inspect_schema_values(table_id, column_id)
+inspect_column_constraints(table_id, column_id)
 ```
 
-`inspect_schema_values` initially returns only enum/check-constraint values, not live row values.
+`inspect_column_constraints` returns only enum/check-constraint values, not live row values.
 
 Requirements:
 
@@ -674,7 +674,7 @@ Requirements:
 * No arbitrary SQL tool.
 * No credentials.
 * No sample rows.
-* Every tool call appears in `TextToSQLTrace`.
+* Every standalone tool call records a redacted `SchemaToolCallTrace`; `TextToSQLTrace` can carry tool traces once PR 7 starts using them.
 
 ## Acceptance criteria
 
@@ -683,6 +683,26 @@ Requirements:
 * `describe_tables` never silently truncates a table’s relevant relationship columns.
 * Tool output remains below configured token limits.
 * Tools can be exercised without an LLM.
+
+Completed on 2026-06-25.
+
+Verification:
+
+```text
+make project
+make test
+make eval-retrieval RETRIEVER=index
+make eval-schema-tools
+```
+
+Results:
+
+```text
+make test: 688 tests in 41 suites passed.
+make eval-retrieval RETRIEVER=index: acceptance passed, 23 cases, required-table Recall@3/5/8 100.0%, required join-path recall 100.0%, missing required column matches 0, forbidden distractor violations 0.
+make eval-schema-tools: 10/10 cases passed, definition bytes 1686, estimated definition tokens 562, max response bytes 6111, truncated results 1, determinism failures 0.
+Schema tool contract response sizes: definitions 1686 bytes; no-finite-values 431 bytes; no-match 219 bytes; no-path 310 bytes; invalid-id 367 bytes; wrong-kind 333 bytes; call-count-budget 299 bytes; large-table-truncation 3743 bytes; preseason workflow 6111 bytes.
+```
 
 ---
 
