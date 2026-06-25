@@ -200,257 +200,263 @@ public final class OpenRouterSchemaToolSQLAgent: SQLGenerator, Sendable {
         var uninspectedSQLCorrections = 0
         let deadline = Date().addingTimeInterval(configuration.wallClockTimeoutSeconds)
 
-        var messages: [OpenRouterToolChatMessage] = [
-            OpenRouterToolChatMessage(role: .system, content: Self.instructions),
-            OpenRouterToolChatMessage(
-                role: .user,
-                content: userPrompt(
-                    question: question,
-                    context: context,
-                    config: config,
-                    selectedSchemas: snapshot.selectedSchemas
-                )
-            ),
-        ]
-        let tools = await toolDefinitions(from: session)
-
-        for turn in 1...configuration.maximumModelTurns {
-            try Task.checkCancellation()
-            try await checkStaleSnapshot(expected: initialFingerprint)
-            try checkDeadline(deadline)
-
-            let parsed: OpenRouterToolChatParser.ParsedTurn
-            do {
-                parsed = try await performRequest(
-                    messages: messages,
-                    tools: tools,
-                    capabilities: capabilities,
-                    aggregate: &aggregate,
-                    deadline: deadline
-                )
-            } catch is CancellationError {
-                throw CancellationError()
-            } catch let failure as OpenRouterFailure {
-                if failure.category == .unsupportedFeature || failure.category == .invalidRequest {
-                    await catalogService.invalidate(apiKey: apiKey, modelID: model)
-                    throw await agentFailure(
-                        .unsupportedTools,
-                        "The selected OpenRouter model rejected tool parameters.",
-                        session: session,
-                        openRouterFailure: failure
+        do {
+            var messages: [OpenRouterToolChatMessage] = [
+                OpenRouterToolChatMessage(role: .system, content: Self.instructions),
+                OpenRouterToolChatMessage(
+                    role: .user,
+                    content: userPrompt(
+                        question: question,
+                        context: context,
+                        config: config,
+                        selectedSchemas: snapshot.selectedSchemas
                     )
-                }
-                throw failure
-            }
-            aggregate.logicalTurnCount = turn
+                ),
+            ]
+            let tools = await toolDefinitions(from: session)
 
-            let toolCalls = parsed.toolCalls
-            guard !toolCalls.isEmpty else {
-                if malformedTerminalCorrections < configuration.maximumMalformedTerminalCorrections {
-                    malformedTerminalCorrections += 1
-                    messages.append(OpenRouterToolChatMessage(role: .assistant, content: parsed.content))
-                    messages.append(correction("Finish only by calling \(Self.terminalToolName) or a schema tool."))
-                    continue
-                }
-                throw await agentFailure(.terminalResultMissing, "The model did not call a terminal tool.", session: session)
-            }
+            for turn in 1...configuration.maximumModelTurns {
+                try Task.checkCancellation()
+                try await checkStaleSnapshot(expected: initialFingerprint)
+                try checkDeadline(deadline)
 
-            let duplicateCallIDs = toolCalls.map(\.id).hasDuplicates
-                || toolCalls.contains { !seenProviderCallIDs.insert($0.id).inserted }
-            guard !duplicateCallIDs else {
-                throw await agentFailure(.malformedToolCall, "The model reused a tool call ID.", session: session)
-            }
-
-            let terminalCalls = toolCalls.filter { $0.name == Self.terminalToolName }
-            let knownSchemaCalls = toolCalls.filter { SchemaToolName(rawValue: $0.name) != nil }
-            let unknownCalls = toolCalls.filter {
-                $0.name != Self.terminalToolName && SchemaToolName(rawValue: $0.name) == nil
-            }
-            let mixesTerminalAndSchema = !terminalCalls.isEmpty && (knownSchemaCalls.count + unknownCalls.count) > 0
-            if mixesTerminalAndSchema {
-                messages.append(OpenRouterToolChatMessage(role: .assistant, toolCalls: toolCalls))
-                if malformedTerminalCorrections < configuration.maximumMalformedTerminalCorrections {
-                    malformedTerminalCorrections += 1
-                    appendToolErrorResponses(
-                        for: toolCalls,
-                        to: &messages,
-                        code: "mixed_terminal_schema_calls",
-                        message: "Do not mix schema tools with the terminal result tool."
-                    )
-                    messages.append(correction("Do not mix schema tools with \(Self.terminalToolName) in the same turn."))
-                    continue
-                }
-                throw await agentFailure(
-                    .mixedTerminalAndSchemaCalls,
-                    "The model mixed schema and terminal tool calls.",
-                    session: session
-                )
-            }
-
-            if terminalCalls.count > 1 {
-                messages.append(OpenRouterToolChatMessage(role: .assistant, toolCalls: toolCalls))
-                if malformedTerminalCorrections < configuration.maximumMalformedTerminalCorrections {
-                    malformedTerminalCorrections += 1
-                    appendToolErrorResponses(
-                        for: terminalCalls,
-                        to: &messages,
-                        code: "multiple_terminal_calls",
-                        message: "Call the terminal result tool exactly once."
-                    )
-                    messages.append(correction("Call \(Self.terminalToolName) exactly once."))
-                    continue
-                }
-                throw await agentFailure(
-                    .terminalResultMalformed,
-                    "The model called the terminal tool more than once.",
-                    session: session
-                )
-            }
-
-            if terminalCalls.count == 1 {
-                let terminal = terminalCalls[0]
-                messages.append(OpenRouterToolChatMessage(role: .assistant, toolCalls: toolCalls))
-                let terminalResult: TerminalResult
+                let parsed: OpenRouterToolChatParser.ParsedTurn
                 do {
-                    terminalResult = try Self.parseTerminalResult(terminal.arguments)
-                } catch {
+                    parsed = try await performRequest(
+                        messages: messages,
+                        tools: tools,
+                        capabilities: capabilities,
+                        aggregate: &aggregate,
+                        deadline: deadline
+                    )
+                } catch is CancellationError {
+                    throw CancellationError()
+                } catch let failure as OpenRouterFailure {
+                    if failure.category == .unsupportedFeature || failure.category == .invalidRequest {
+                        await catalogService.invalidate(apiKey: apiKey, modelID: model)
+                        throw await agentFailure(
+                            .unsupportedTools,
+                            "The selected OpenRouter model rejected tool parameters.",
+                            session: session,
+                            openRouterFailure: failure
+                        )
+                    }
+                    throw failure
+                }
+                aggregate.logicalTurnCount = turn
+
+                let toolCalls = parsed.toolCalls
+                guard !toolCalls.isEmpty else {
                     if malformedTerminalCorrections < configuration.maximumMalformedTerminalCorrections {
                         malformedTerminalCorrections += 1
-                        messages.append(
-                            toolErrorResponse(
-                                call: terminal,
-                                code: "malformed_terminal_arguments",
-                                message: "The terminal tool arguments were invalid."
-                            )
-                        )
-                        messages.append(correction("The terminal tool arguments were invalid. Call \(Self.terminalToolName) with valid arguments."))
+                        messages.append(OpenRouterToolChatMessage(role: .assistant, content: parsed.content))
+                        messages.append(correction("Finish only by calling \(Self.terminalToolName) or a schema tool."))
                         continue
                     }
-                    throw await agentFailure(.terminalResultMalformed, "The terminal tool arguments were malformed.", session: session)
+                    throw await agentFailure(.terminalResultMissing, "The model did not call a terminal tool.", session: session)
                 }
 
-                switch terminalResult.action {
-                case .clarify:
-                    guard evidence.hasSuccessfulSearch else {
+                let duplicateCallIDs = toolCalls.map(\.id).hasDuplicates
+                    || toolCalls.contains { !seenProviderCallIDs.insert($0.id).inserted }
+                guard !duplicateCallIDs else {
+                    throw await agentFailure(.malformedToolCall, "The model reused a tool call ID.", session: session)
+                }
+
+                let terminalCalls = toolCalls.filter { $0.name == Self.terminalToolName }
+                let knownSchemaCalls = toolCalls.filter { SchemaToolName(rawValue: $0.name) != nil }
+                let unknownCalls = toolCalls.filter {
+                    $0.name != Self.terminalToolName && SchemaToolName(rawValue: $0.name) == nil
+                }
+                let mixesTerminalAndSchema = !terminalCalls.isEmpty && (knownSchemaCalls.count + unknownCalls.count) > 0
+                if mixesTerminalAndSchema {
+                    messages.append(OpenRouterToolChatMessage(role: .assistant, toolCalls: toolCalls))
+                    if malformedTerminalCorrections < configuration.maximumMalformedTerminalCorrections {
+                        malformedTerminalCorrections += 1
+                        appendToolErrorResponses(
+                            for: toolCalls,
+                            to: &messages,
+                            code: "mixed_terminal_schema_calls",
+                            message: "Do not mix schema tools with the terminal result tool."
+                        )
+                        messages.append(correction("Do not mix schema tools with \(Self.terminalToolName) in the same turn."))
+                        continue
+                    }
+                    throw await agentFailure(
+                        .mixedTerminalAndSchemaCalls,
+                        "The model mixed schema and terminal tool calls.",
+                        session: session
+                    )
+                }
+
+                if terminalCalls.count > 1 {
+                    messages.append(OpenRouterToolChatMessage(role: .assistant, toolCalls: toolCalls))
+                    if malformedTerminalCorrections < configuration.maximumMalformedTerminalCorrections {
+                        malformedTerminalCorrections += 1
+                        appendToolErrorResponses(
+                            for: terminalCalls,
+                            to: &messages,
+                            code: "multiple_terminal_calls",
+                            message: "Call the terminal result tool exactly once."
+                        )
+                        messages.append(correction("Call \(Self.terminalToolName) exactly once."))
+                        continue
+                    }
+                    throw await agentFailure(
+                        .terminalResultMalformed,
+                        "The model called the terminal tool more than once.",
+                        session: session
+                    )
+                }
+
+                if terminalCalls.count == 1 {
+                    let terminal = terminalCalls[0]
+                    messages.append(OpenRouterToolChatMessage(role: .assistant, toolCalls: toolCalls))
+                    let terminalResult: TerminalResult
+                    do {
+                        terminalResult = try Self.parseTerminalResult(terminal.arguments)
+                    } catch {
                         if malformedTerminalCorrections < configuration.maximumMalformedTerminalCorrections {
                             malformedTerminalCorrections += 1
                             messages.append(
                                 toolErrorResponse(
                                     call: terminal,
-                                    code: "schema_search_required",
-                                    message: "Search the schema before asking for clarification."
+                                    code: "malformed_terminal_arguments",
+                                    message: "The terminal tool arguments were invalid."
                                 )
                             )
-                            messages.append(correction("Search the schema before asking a clarification question."))
+                            messages.append(correction("The terminal tool arguments were invalid. Call \(Self.terminalToolName) with valid arguments."))
                             continue
                         }
-                        throw await agentFailure(
-                            .terminalResultMalformed,
-                            "The model asked for clarification before searching the schema.",
-                            session: session
-                        )
+                        throw await agentFailure(.terminalResultMalformed, "The terminal tool arguments were malformed.", session: session)
                     }
-                    aggregate.terminalOutcome = "clarify"
-                    return try await finalResult(
-                        terminalResult,
-                        schema: schema,
-                        context: context,
-                        aggregate: aggregate,
-                        session: session
-                    )
-                case .sql:
-                    let inspection = evidence.validate(sql: terminalResult.sql, schema: schema)
-                    if !inspection.accepted {
-                        if uninspectedSQLCorrections < 1 {
-                            uninspectedSQLCorrections += 1
-                            messages.append(
-                                toolErrorResponse(
-                                    call: terminal,
-                                    code: "uninspected_schema_objects",
-                                    message: inspection.message
-                                )
-                            )
-                            messages.append(
-                                correction(
-                                    "Inspect the schema object before using it in SQL: \(inspection.message)."
-                                )
-                            )
-                            continue
-                        }
-                        throw await agentFailure(
-                            .uninspectedSchemaObjects,
-                            inspection.message,
-                            session: session
-                        )
-                    }
-                    aggregate.terminalOutcome = "sql"
-                    return try await finalResult(
-                        terminalResult,
-                        schema: schema,
-                        context: context,
-                        aggregate: aggregate,
-                        session: session
-                    )
-                }
-            }
 
-            messages.append(OpenRouterToolChatMessage(role: .assistant, toolCalls: toolCalls))
-            for call in toolCalls {
-                try Task.checkCancellation()
-                try await checkStaleSnapshot(expected: initialFingerprint)
-                try checkDeadline(deadline)
-                if let unknown = unknownCalls.first(where: { $0.id == call.id }) {
-                    messages.append(toolErrorResponse(call: unknown, code: "unknown_tool", message: "Unknown tool."))
-                    continue
-                }
-                let signature = "\(call.name):\(call.arguments)"
-                if !seenToolSignatures.insert(signature).inserted {
-                    if repeatedToolCorrections < configuration.maximumRepeatedToolCorrections {
-                        repeatedToolCorrections += 1
-                        messages.append(
-                            toolErrorResponse(
-                                call: call,
-                                code: "repeated_tool_call",
-                                message: "Repeated schema tool call without progress. Use a different schema tool call."
+                    switch terminalResult.action {
+                    case .clarify:
+                        guard evidence.hasSuccessfulSearch else {
+                            if malformedTerminalCorrections < configuration.maximumMalformedTerminalCorrections {
+                                malformedTerminalCorrections += 1
+                                messages.append(
+                                    toolErrorResponse(
+                                        call: terminal,
+                                        code: "schema_search_required",
+                                        message: "Search the schema before asking for clarification."
+                                    )
+                                )
+                                messages.append(correction("Search the schema before asking a clarification question."))
+                                continue
+                            }
+                            throw await agentFailure(
+                                .terminalResultMalformed,
+                                "The model asked for clarification before searching the schema.",
+                                session: session
                             )
+                        }
+                        aggregate.terminalOutcome = "clarify"
+                        return try await finalResult(
+                            terminalResult,
+                            schema: schema,
+                            context: context,
+                            aggregate: aggregate,
+                            session: session
                         )
+                    case .sql:
+                        let inspection = evidence.validate(sql: terminalResult.sql, schema: schema)
+                        if !inspection.accepted {
+                            if uninspectedSQLCorrections < 1 {
+                                uninspectedSQLCorrections += 1
+                                messages.append(
+                                    toolErrorResponse(
+                                        call: terminal,
+                                        code: "uninspected_schema_objects",
+                                        message: inspection.message
+                                    )
+                                )
+                                messages.append(
+                                    correction(
+                                        "Inspect the schema object before using it in SQL: \(inspection.message)."
+                                    )
+                                )
+                                continue
+                            }
+                            throw await agentFailure(
+                                .uninspectedSchemaObjects,
+                                inspection.message,
+                                session: session
+                            )
+                        }
+                        aggregate.terminalOutcome = "sql"
+                        return try await finalResult(
+                            terminalResult,
+                            schema: schema,
+                            context: context,
+                            aggregate: aggregate,
+                            session: session
+                        )
+                    }
+                }
+
+                messages.append(OpenRouterToolChatMessage(role: .assistant, toolCalls: toolCalls))
+                for call in toolCalls {
+                    try Task.checkCancellation()
+                    try await checkStaleSnapshot(expected: initialFingerprint)
+                    try checkDeadline(deadline)
+                    if let unknown = unknownCalls.first(where: { $0.id == call.id }) {
+                        messages.append(toolErrorResponse(call: unknown, code: "unknown_tool", message: "Unknown tool."))
                         continue
                     }
-                    throw await agentFailure(
-                        .repeatedToolCallNoProgress,
-                        "The model repeated a schema tool call without progress.",
-                        session: session
+                    let signature = "\(call.name):\(call.arguments)"
+                    if !seenToolSignatures.insert(signature).inserted {
+                        if repeatedToolCorrections < configuration.maximumRepeatedToolCorrections {
+                            repeatedToolCorrections += 1
+                            messages.append(
+                                toolErrorResponse(
+                                    call: call,
+                                    code: "repeated_tool_call",
+                                    message: "Repeated schema tool call without progress. Use a different schema tool call."
+                                )
+                            )
+                            continue
+                        }
+                        throw await agentFailure(
+                            .repeatedToolCallNoProgress,
+                            "The model repeated a schema tool call without progress.",
+                            session: session
+                        )
+                    }
+                    let result = try await session.invoke(
+                        callID: call.id,
+                        toolName: call.name,
+                        argumentsJSON: Data(call.arguments.utf8)
                     )
+                    evidence.record(result)
+                    if result.error?.code == .sessionBudgetExceeded {
+                        throw await agentFailure(
+                            .schemaToolCallBudgetExhausted,
+                            "Schema tool call budget exhausted.",
+                            session: session
+                        )
+                    }
+                    if result.error?.code == .resultBudgetExceeded {
+                        throw await agentFailure(
+                            .schemaToolByteBudgetExhausted,
+                            "Schema tool byte budget exhausted.",
+                            session: session
+                        )
+                    }
+                    messages.append(try toolResponse(result))
                 }
-                let result = try await session.invoke(
-                    callID: call.id,
-                    toolName: call.name,
-                    argumentsJSON: Data(call.arguments.utf8)
-                )
-                evidence.record(result)
-                if result.error?.code == .sessionBudgetExceeded {
-                    throw await agentFailure(
-                        .schemaToolCallBudgetExhausted,
-                        "Schema tool call budget exhausted.",
-                        session: session
-                    )
-                }
-                if result.error?.code == .resultBudgetExceeded {
-                    throw await agentFailure(
-                        .schemaToolByteBudgetExhausted,
-                        "Schema tool byte budget exhausted.",
-                        session: session
-                    )
-                }
-                messages.append(try toolResponse(result))
             }
-        }
 
-        throw await agentFailure(
-            .modelTurnBudgetExhausted,
-            "The schema-tool agent exhausted its model-turn budget.",
-            session: session
-        )
+            throw await agentFailure(
+                .modelTurnBudgetExhausted,
+                "The schema-tool agent exhausted its model-turn budget.",
+                session: session
+            )
+        } catch is CancellationError {
+            throw CancellationError()
+        } catch let failure as OpenRouterSchemaToolAgentFailure {
+            throw await enrichedAgentFailure(failure, session: session)
+        }
     }
 
     private func performRequest(
@@ -750,6 +756,16 @@ public final class OpenRouterSchemaToolSQLAgent: SQLGenerator, Sendable {
             openRouterFailure: openRouterFailure,
             schemaToolCalls: await session.tracesSnapshot()
         )
+    }
+
+    private func enrichedAgentFailure(
+        _ failure: OpenRouterSchemaToolAgentFailure,
+        session: SchemaToolSession
+    ) async -> OpenRouterSchemaToolAgentFailure {
+        guard failure.schemaToolCalls.isEmpty else { return failure }
+        var enriched = failure
+        enriched.schemaToolCalls = await session.tracesSnapshot()
+        return enriched
     }
 
     private static let terminalToolDefinition = OpenRouterToolDefinition(

@@ -72,6 +72,23 @@ struct OpenRouterSchemaToolSQLAgentTests {
         }
     }
 
+    private final class FingerprintSequence: @unchecked Sendable {
+        private let lock = NSLock()
+        private let initial: String
+        private var callCount = 0
+
+        init(initial: String) {
+            self.initial = initial
+        }
+
+        func current() -> String {
+            lock.withLock {
+                callCount += 1
+                return callCount <= 2 ? initial : "stale-\(callCount)"
+            }
+        }
+    }
+
     private static let modelID = "openai/gpt-5.5"
     private static let chatEndpoint = URL(string: "https://openrouter.test/api/v1/chat/completions")!
     private static let apiBase = URL(string: "https://openrouter.test/api/v1")!
@@ -347,6 +364,48 @@ struct OpenRouterSchemaToolSQLAgentTests {
         #expect(run.trace.schemaToolCalls.map { $0.toolName } == ["search_schema", "describe_tables"])
     }
 
+    @Test func staleSnapshotFailureKeepsSchemaToolTraces() async throws {
+        let schema = Self.makeSchema()
+        let snapshot = SchemaSearchSnapshot(
+            connectionID: Self.connectionID,
+            selectedSchemas: ["public"],
+            schema: schema
+        )
+        let fingerprint = try SchemaSearchIndexStore.cacheKey(for: snapshot).schemaFingerprint
+        let sequence = FingerprintSequence(initial: fingerprint)
+        let chatTransport = ScriptedTransport { _, index in
+            switch index {
+            case 1:
+                return Self.assistantToolCalls([
+                    Self.toolCall(id: "search-before-stale", name: "search_schema", arguments: [
+                        "query": "users",
+                        "limit": 2,
+                    ]),
+                ])
+            default:
+                throw URLError(.badServerResponse)
+            }
+        }
+        let agent = makeAgent(
+            schema: schema,
+            chatTransport: chatTransport,
+            currentSchemaFingerprint: { sequence.current() }
+        )
+
+        do {
+            _ = try await agent.generateSQL(
+                question: "List users",
+                schema: schema,
+                context: SQLGenerationContext(),
+                config: SQLGenerationConfig()
+            )
+            Issue.record("Expected stale snapshot failure")
+        } catch let failure as OpenRouterSchemaToolAgentFailure {
+            #expect(failure.category == .staleSchemaSnapshot)
+            #expect(failure.schemaToolCalls.map(\.callID) == ["search-before-stale"])
+        }
+    }
+
     private func makeAgent(
         schema: DatabaseSchema,
         chatTransport: ScriptedTransport,
@@ -360,7 +419,8 @@ struct OpenRouterSchemaToolSQLAgentTests {
             maximumRepeatedToolCorrections: 1,
             maximumHTTPAttempts: 8,
             wallClockTimeoutSeconds: 10
-        )
+        ),
+        currentSchemaFingerprint: (@Sendable () async throws -> String)? = nil
     ) -> OpenRouterSchemaToolSQLAgent {
         let catalog = OpenRouterModelCatalogService(
             transport: catalogTransport ?? ScriptedTransport { _, _ in Self.catalogResponse() },
@@ -381,7 +441,7 @@ struct OpenRouterSchemaToolSQLAgentTests {
             requestBuilder: OpenRouterToolChatRequestBuilder(endpoint: Self.chatEndpoint),
             legacyGenerator: legacyGenerator ?? LegacyGenerator(),
             configuration: configuration,
-            currentSchemaFingerprint: {
+            currentSchemaFingerprint: currentSchemaFingerprint ?? {
                 let snapshot = SchemaSearchSnapshot(
                     connectionID: Self.connectionID,
                     selectedSchemas: ["public"],
