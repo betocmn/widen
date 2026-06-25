@@ -50,6 +50,20 @@ struct LLMSettingsView: View {
                 }
             }
 
+            if appState.cloudProvider == .openRouter {
+                Section("OpenRouter Advanced / Experimental") {
+                    Toggle(
+                        "Use schema-tool SQL agent",
+                        isOn: $appState.experimentalCloudSchemaAgentEnabled
+                    )
+                    Text(
+                        "Experimental and disabled by default. When enabled, OpenRouter receives only schema metadata through bounded tools; no row data is queried or sent. The selected model ID is preserved, and unsupported tool models use the legacy one-shot OpenRouter generator before any agent request."
+                    )
+                    .font(.callout)
+                    .foregroundStyle(.secondary)
+                }
+            }
+
             Section("Developer") {
                 Toggle("Use mock AI (developer)", isOn: $appState.useMockAI)
                 if appState.useMockAI {

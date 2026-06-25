@@ -219,7 +219,10 @@ public final class SessionController: Identifiable {
 
         let generation: SQLGenerationResult
         do {
-            let generated = try await appState.sqlGenerator.generateSQL(
+            let generated = try await appState.sqlGenerator(
+                connectionID: connectionID,
+                schema: schema
+            ).generateSQL(
                 question: questionContext.question,
                 schema: schema,
                 context: context,
@@ -384,7 +387,9 @@ public final class SessionController: Identifiable {
         }
 
         do {
-            let run = try await TextToSQLPipeline(generator: appState.sqlGenerator).run(
+            let run = try await TextToSQLPipeline(
+                generator: appState.sqlGenerator(connectionID: connectionID, schema: schema)
+            ).run(
                 TextToSQLRequest(
                     question: generationQuestion,
                     schema: schema,
@@ -702,7 +707,10 @@ public final class SessionController: Identifiable {
 
             let generation: SQLGenerationResult
             do {
-                let generated = try await appState.sqlGenerator.generateSQL(
+                let generated = try await appState.sqlGenerator(
+                    connectionID: connectionID,
+                    schema: schema
+                ).generateSQL(
                     question: questionContext.question,
                     schema: schema,
                     context: context,
