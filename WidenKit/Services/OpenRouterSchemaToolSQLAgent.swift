@@ -554,7 +554,13 @@ public final class OpenRouterSchemaToolSQLAgent: SQLGenerator, Sendable {
 
     private func sleep(_ delay: TimeInterval, deadline: Date) async throws {
         try checkDeadline(deadline)
-        try await Task.sleep(nanoseconds: UInt64(delay * 1_000_000_000))
+        let remaining = deadline.timeIntervalSinceNow
+        guard remaining > 0 else {
+            try checkDeadline(deadline)
+            return
+        }
+        let boundedDelay = min(delay, remaining)
+        try await Task.sleep(nanoseconds: UInt64(boundedDelay * 1_000_000_000))
         try checkDeadline(deadline)
     }
 

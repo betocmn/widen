@@ -38,6 +38,26 @@ struct OpenRouterSchemaToolSQLAgentTests {
         }
     }
 
+    private final class ScriptedHTTPTransport: HTTPTransport, @unchecked Sendable {
+        typealias Handler = @Sendable (URLRequest, Int) throws -> (Data, HTTPURLResponse)
+
+        private let lock = NSLock()
+        private let handler: Handler
+        private var recorded: [URLRequest] = []
+
+        init(_ handler: @escaping Handler) {
+            self.handler = handler
+        }
+
+        func send(_ request: URLRequest) async throws -> (Data, HTTPURLResponse) {
+            let index = lock.withLock {
+                recorded.append(request)
+                return recorded.count
+            }
+            return try handler(request, index)
+        }
+    }
+
     private final class LegacyGenerator: SQLGenerator, @unchecked Sendable {
         private let lock = NSLock()
         private var recordedCallCount = 0
@@ -440,9 +460,55 @@ struct OpenRouterSchemaToolSQLAgentTests {
         }
     }
 
+    @Test func retryBackoffIsBoundedByWallClockTimeout() async throws {
+        let schema = Self.makeSchema()
+        let chatTransport = ScriptedHTTPTransport { request, _ in
+            (
+                Self.openRouterErrorResponse(),
+                HTTPURLResponse(
+                    url: request.url!,
+                    statusCode: 429,
+                    httpVersion: "HTTP/1.1",
+                    headerFields: [
+                        "Content-Type": "application/json",
+                        "Retry-After": "1",
+                    ]
+                )!
+            )
+        }
+        let agent = makeAgent(
+            schema: schema,
+            chatTransport: chatTransport,
+            configuration: OpenRouterSchemaToolSQLAgentConfiguration(
+                maximumSchemaToolCalls: 4,
+                maximumRepairSchemaToolCalls: 2,
+                maximumModelTurns: 6,
+                maximumMalformedTerminalCorrections: 1,
+                maximumRepeatedToolCorrections: 1,
+                maximumHTTPAttempts: 8,
+                wallClockTimeoutSeconds: 0.02
+            )
+        )
+        let started = ContinuousClock.now
+
+        do {
+            _ = try await agent.generateSQL(
+                question: "List users",
+                schema: schema,
+                context: SQLGenerationContext(),
+                config: SQLGenerationConfig()
+            )
+            Issue.record("Expected timeout failure")
+        } catch let failure as OpenRouterSchemaToolAgentFailure {
+            let elapsed = started.duration(to: .now)
+            #expect(failure.category == .modelTurnBudgetExhausted)
+            #expect(elapsed < .milliseconds(500))
+        }
+    }
+
     private func makeAgent(
         schema: DatabaseSchema,
-        chatTransport: ScriptedTransport,
+        chatTransport: any HTTPTransport,
         catalogTransport: ScriptedTransport? = nil,
         legacyGenerator: (any SQLGenerator)? = nil,
         configuration: OpenRouterSchemaToolSQLAgentConfiguration = OpenRouterSchemaToolSQLAgentConfiguration(
@@ -634,6 +700,17 @@ struct OpenRouterSchemaToolSQLAgentTests {
                 "prompt_tokens": 10,
                 "completion_tokens": 5,
                 "total_tokens": 15,
+            ],
+        ])
+    }
+
+    private static func openRouterErrorResponse() -> Data {
+        jsonData([
+            "error": [
+                "message": "Rate limited.",
+                "metadata": [
+                    "error_type": "rate_limited",
+                ],
             ],
         ])
     }
