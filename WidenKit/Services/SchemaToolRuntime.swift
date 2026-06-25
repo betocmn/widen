@@ -270,17 +270,29 @@ public struct SchemaToolPolicy: Codable, Equatable, Sendable {
     public var maximumResultBytes: Int
     public var maximumSessionResultBytes: Int
     public var countCachedCalls: Bool
+    public var maximumInvocationBatchCount: Int
+    public var maximumArgumentsJSONBytes: Int
+    public var maximumCallIDBytes: Int
+    public var maximumToolNameBytes: Int
 
     public init(
         maximumCallCount: Int,
         maximumResultBytes: Int,
         maximumSessionResultBytes: Int,
-        countCachedCalls: Bool = true
+        countCachedCalls: Bool = true,
+        maximumInvocationBatchCount: Int = 8,
+        maximumArgumentsJSONBytes: Int = 4_096,
+        maximumCallIDBytes: Int = 128,
+        maximumToolNameBytes: Int = 64
     ) {
         self.maximumCallCount = maximumCallCount
         self.maximumResultBytes = maximumResultBytes
         self.maximumSessionResultBytes = maximumSessionResultBytes
         self.countCachedCalls = countCachedCalls
+        self.maximumInvocationBatchCount = maximumInvocationBatchCount
+        self.maximumArgumentsJSONBytes = maximumArgumentsJSONBytes
+        self.maximumCallIDBytes = maximumCallIDBytes
+        self.maximumToolNameBytes = maximumToolNameBytes
     }
 
     public static let cloudAgent = SchemaToolPolicy(

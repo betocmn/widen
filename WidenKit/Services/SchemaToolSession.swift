@@ -9,8 +9,7 @@ public struct SchemaToolExecutor: Sendable {
         snapshot: SchemaSearchSnapshot,
         searcher: any SchemaSearching,
         handles: SchemaToolHandleRegistry,
-        policy: SchemaToolPolicy,
-        matchedColumnsByTable: [String: Set<SchemaObjectID>]
+        policy: SchemaToolPolicy
     ) -> SchemaToolExecution {
         guard let toolName = SchemaToolName(rawValue: invocation.toolName) else {
             return .failure(
@@ -36,7 +35,8 @@ public struct SchemaToolExecutor: Sendable {
                 arguments: arguments,
                 snapshot: snapshot,
                 searcher: searcher,
-                handles: handles
+                handles: handles,
+                policy: policy
             )
         case .describeTables:
             return describeTables(
@@ -44,21 +44,22 @@ public struct SchemaToolExecutor: Sendable {
                 snapshot: snapshot,
                 searcher: searcher,
                 handles: handles,
-                policy: policy,
-                matchedColumnsByTable: matchedColumnsByTable
+                policy: policy
             )
         case .findJoinPaths:
             return findJoinPaths(
                 arguments: arguments,
                 snapshot: snapshot,
                 searcher: searcher,
-                handles: handles
+                handles: handles,
+                policy: policy
             )
         case .inspectColumnConstraints:
             return inspectColumnConstraints(
                 arguments: arguments,
                 snapshot: snapshot,
-                handles: handles
+                handles: handles,
+                policy: policy
             )
         }
     }
@@ -67,7 +68,8 @@ public struct SchemaToolExecutor: Sendable {
         arguments: [String: JSONValue],
         snapshot: SchemaSearchSnapshot,
         searcher: any SchemaSearching,
-        handles: SchemaToolHandleRegistry
+        handles: SchemaToolHandleRegistry,
+        policy: SchemaToolPolicy
     ) -> SchemaToolExecution {
         if let validation = validateKeys(arguments, allowed: ["query", "limit"]) {
             return .failure(validation)
@@ -101,50 +103,84 @@ public struct SchemaToolExecutor: Sendable {
             in: snapshot
         )
         let tablesByID = handles.tablesByStableID
-        var matchedByTable: [String: Set<SchemaObjectID>] = [:]
-        let hits = response.hits.compactMap { hit -> JSONValue? in
+        let hitContexts = response.hits.compactMap { hit -> SchemaSearchHitContext? in
             guard let table = tablesByID[hit.tableObjectID.stableString],
                 let tableHandle = handles.handle(for: hit.tableObjectID)
             else {
                 return nil
             }
-            let matchedColumns = compactColumns(
-                hit.matchedColumnIDs,
-                handles: handles,
+            return SchemaSearchHitContext(
+                hit: hit,
                 table: table,
-                limit: 8
-            )
-            matchedByTable[hit.tableObjectID.stableString] = Set(hit.matchedColumnIDs)
-            let relevantColumns = compactColumns(
-                relevantColumns(
+                tableHandle: tableHandle,
+                relevantColumnIDs: relevantColumns(
                     for: table,
                     matched: hit.matchedColumnIDs,
                     relationships: snapshot.schemaSearchRelationships,
                     query: trimmedQuery
-                ),
-                handles: handles,
-                table: table,
-                limit: 8
+                )
             )
-            return [
-                "table_id": .string(tableHandle),
-                "sql_name": .string(quotedTableName(table.schema, table.name)),
-                "table_type": .string(table.type.rawValue),
-                "match_reasons": .array(matchReasons(hit.matchedFields).map { .string($0) }),
-                "matched_columns": .array(matchedColumns),
-                "relevant_columns": .array(relevantColumns),
-            ]
         }
-
-        return .success(
-            payload: [
-                "hits": .array(hits),
+        var hitCount = hitContexts.count
+        var columnLimit = 8
+        var includeLegacyColumns = true
+        let budget = payloadBudget(for: policy)
+        func buildPayload() -> (payload: JSONValue, omittedColumnCount: Int) {
+            var omittedColumnCount = 0
+            let hits = hitContexts.prefix(hitCount).map { context -> JSONValue in
+                let rendered = searchHitJSON(
+                    context,
+                    handles: handles,
+                    columnLimit: columnLimit,
+                    includeLegacyColumns: includeLegacyColumns
+                )
+                omittedColumnCount += rendered.omittedColumnCount
+                return rendered.json
+            }
+            var object: [String: JSONValue] = [
+                "hits": .array(Array(hits)),
                 "no_strong_match": .bool(response.noStrongMatch),
                 "exact_identifier_match": .bool(response.exactIdentifierMatch),
                 "query_token_coverage": .number(response.queryTokenCoverage),
-            ],
-            returnedObjectCount: hits.count,
-            matchedColumnIDsByTable: matchedByTable
+            ]
+            let omittedHitCount = max(0, hitContexts.count - hitCount)
+            if omittedHitCount > 0 || omittedColumnCount > 0 || !includeLegacyColumns {
+                object["truncated"] = true
+                object["omitted_hit_count"] = .number(Double(omittedHitCount))
+                object["omitted_column_count"] = .number(Double(omittedColumnCount))
+            }
+            return (.object(object), omittedColumnCount)
+        }
+        var built = buildPayload()
+        while ((try? built.payload.utf8ByteCount()) ?? Int.max) > budget {
+            if includeLegacyColumns {
+                includeLegacyColumns = false
+            } else if columnLimit > 1 {
+                columnLimit = max(1, columnLimit / 2)
+            } else if hitCount > 1 {
+                hitCount -= 1
+            } else {
+                break
+            }
+            built = buildPayload()
+        }
+        if ((try? built.payload.utf8ByteCount()) ?? Int.max) > budget {
+            return .failure(
+                .init(
+                    code: .resultBudgetExceeded,
+                    message: "The best schema search hit exceeded the schema tool result budget."
+                )
+            )
+        }
+
+        return .success(
+            payload: built.payload,
+            truncation: SchemaToolTruncation(
+                truncated: hitCount < hitContexts.count || built.omittedColumnCount > 0 || !includeLegacyColumns,
+                reason: hitCount < hitContexts.count || built.omittedColumnCount > 0 || !includeLegacyColumns ? "result_budget_compaction" : nil,
+                suggestion: hitCount < hitContexts.count ? "Call search_schema with a more specific query." : nil
+            ),
+            returnedObjectCount: hitCount
         )
     }
 
@@ -153,8 +189,7 @@ public struct SchemaToolExecutor: Sendable {
         snapshot: SchemaSearchSnapshot,
         searcher: any SchemaSearching,
         handles: SchemaToolHandleRegistry,
-        policy: SchemaToolPolicy,
-        matchedColumnsByTable: [String: Set<SchemaObjectID>]
+        policy: SchemaToolPolicy
     ) -> SchemaToolExecution {
         if let validation = validateKeys(
             arguments,
@@ -184,6 +219,9 @@ public struct SchemaToolExecutor: Sendable {
             return .failure(error)
         } catch {
             return .failure(.internalFailure("Failed to resolve table handles."))
+        }
+        guard Set(tableIDs.map(\.stableString)).count == tableIDs.count else {
+            return .failure(.range("table_ids must not contain duplicate handles.", argument: "table_ids"))
         }
 
         let focusValues: [JSONValue]
@@ -216,6 +254,9 @@ public struct SchemaToolExecutor: Sendable {
         } catch {
             return .failure(.internalFailure("Failed to resolve focus column handles."))
         }
+        guard Set(focusIDs.map(\.stableString)).count == focusIDs.count else {
+            return .failure(.range("focus_column_ids must not contain duplicate handles.", argument: "focus_column_ids"))
+        }
 
         let tableStableIDs = Set(tableIDs.map(\.stableString))
         for columnID in focusIDs {
@@ -242,44 +283,73 @@ public struct SchemaToolExecutor: Sendable {
         let focusByTable = Dictionary(grouping: focusIDs) {
             SchemaObjectID.table(schema: $0.schema, name: $0.table ?? "").stableString
         }
+        var tableLimit = tableIDs.count
         var truncated = false
         var cards = tableCards(
-            tableIDs: tableIDs,
+            tableIDs: Array(tableIDs.prefix(tableLimit)),
             snapshot: snapshot,
             handles: handles,
             focusByTable: focusByTable,
-            matchedColumnsByTable: matchedColumnsByTable,
             maxColumnsPerTable: 36,
             maxRelationshipsPerTable: 24,
+            compactColumns: false,
             truncated: &truncated
         )
         var payload: JSONValue = [
-            "tables": .array(cards),
+        "tables": .array(cards),
             "truncated": .bool(truncated),
         ]
 
         var maxColumns = 24
         var maxRelationships = 12
+        var compactColumns = false
         while (try? payload.utf8ByteCount()) ?? Int.max > max(512, policy.maximumResultBytes - 512),
-            (maxColumns > 8 || maxRelationships > 4)
+            (maxColumns > 1 || maxRelationships > 1 || !compactColumns)
         {
             truncated = true
-            maxColumns = max(8, maxColumns / 2)
-            maxRelationships = max(4, maxRelationships / 2)
+            if maxColumns > 1 || maxRelationships > 1 {
+                maxColumns = max(1, maxColumns / 2)
+                maxRelationships = max(1, maxRelationships / 2)
+            } else {
+                compactColumns = true
+            }
             cards = tableCards(
-                tableIDs: tableIDs,
+                tableIDs: Array(tableIDs.prefix(tableLimit)),
                 snapshot: snapshot,
                 handles: handles,
                 focusByTable: focusByTable,
-                matchedColumnsByTable: matchedColumnsByTable,
                 maxColumnsPerTable: maxColumns,
                 maxRelationshipsPerTable: maxRelationships,
+                compactColumns: compactColumns,
                 truncated: &truncated
             )
             payload = [
                 "tables": .array(cards),
                 "truncated": .bool(truncated),
-                "next_tool_suggestion": .string("Call describe_tables with fewer table_ids or focus_column_ids for omitted columns."),
+                "next_tool_suggestion": .string(describeTruncationSuggestion),
+            ]
+        }
+        while (try? payload.utf8ByteCount()) ?? Int.max > max(512, policy.maximumResultBytes - 512),
+            tableLimit > 1
+        {
+            truncated = true
+            compactColumns = true
+            tableLimit -= 1
+            cards = tableCards(
+                tableIDs: Array(tableIDs.prefix(tableLimit)),
+                snapshot: snapshot,
+                handles: handles,
+                focusByTable: focusByTable,
+                maxColumnsPerTable: maxColumns,
+                maxRelationshipsPerTable: maxRelationships,
+                compactColumns: compactColumns,
+                truncated: &truncated
+            )
+            payload = [
+                "tables": .array(cards),
+                "truncated": .bool(true),
+                "omitted_table_count": .number(Double(tableIDs.count - tableLimit)),
+                "next_tool_suggestion": .string(describeTruncationSuggestion),
             ]
         }
 
@@ -288,7 +358,7 @@ public struct SchemaToolExecutor: Sendable {
             truncation: SchemaToolTruncation(
                 truncated: truncated,
                 reason: truncated ? "semantic_boundary_limit" : nil,
-                suggestion: truncated ? "Call describe_tables with fewer table_ids or focus_column_ids." : nil
+                suggestion: truncated ? describeTruncationSuggestion : nil
             ),
             returnedObjectCount: cards.count
         )
@@ -298,7 +368,8 @@ public struct SchemaToolExecutor: Sendable {
         arguments: [String: JSONValue],
         snapshot: SchemaSearchSnapshot,
         searcher: any SchemaSearching,
-        handles: SchemaToolHandleRegistry
+        handles: SchemaToolHandleRegistry,
+        policy: SchemaToolPolicy
     ) -> SchemaToolExecution {
         if let validation = validateKeys(
             arguments,
@@ -342,35 +413,47 @@ public struct SchemaToolExecutor: Sendable {
             searcher.findJoinPaths(from: from, to: to, maxHops: maxHops, in: snapshot)
                 .prefix(maxPaths)
         )
-        let pathObjects = paths.map { path in
-            JSONValue.object([
-                "hop_count": .number(Double(path.hopCount)),
-                "edges": .array(path.edges.map { edge in
-                    [
-                        "traversal_direction": .string(edge.traversalDirection.rawValue),
-                        "constraint_name": .string(sanitizedMetadata(edge.constraintName, maxCharacters: 160)),
-                        "from_table": .string(quotedName(edge.fromTableID)),
-                        "to_table": .string(quotedName(edge.toTableID)),
-                        "source_table": .string(quotedName(edge.sourceTableID)),
-                        "target_table": .string(quotedName(edge.targetTableID)),
-                        "column_pairs": .array(edge.columnPairs.map { pair in
-                            [
-                                "source_column": .string(quotedIdentifier(pair.sourceColumn)),
-                                "target_column": .string(quotedIdentifier(pair.targetColumn)),
-                                "ordinal_position": .number(Double(pair.ordinalPosition)),
-                            ]
-                        }),
-                    ]
-                }),
-            ])
-        }
-        return .success(
-            payload: [
+        var pathObjects = paths.map { joinPathJSON($0, handles: handles) }
+        var omittedPathCount = 0
+        var truncated = false
+        func payload() -> JSONValue {
+            var object: [String: JSONValue] = [
+                "source_table_id": .string(handles.handle(for: from) ?? ""),
                 "source_table": .string(quotedName(from)),
+                "target_table_id": .string(handles.handle(for: to) ?? ""),
                 "target_table": .string(quotedName(to)),
                 "paths": .array(pathObjects),
                 "no_path": .bool(pathObjects.isEmpty),
-            ],
+            ]
+            if omittedPathCount > 0 {
+                object["omitted_path_count"] = .number(Double(omittedPathCount))
+                object["truncated"] = true
+            }
+            return .object(object)
+        }
+        let budget = payloadBudget(for: policy)
+        while !pathObjects.isEmpty,
+            ((try? payload().utf8ByteCount()) ?? Int.max) > budget
+        {
+            pathObjects.removeLast()
+            omittedPathCount += 1
+            truncated = true
+        }
+        if pathObjects.isEmpty, !paths.isEmpty {
+            return .failure(
+                .init(
+                    code: .resultBudgetExceeded,
+                    message: "One complete join path exceeded the schema tool result budget."
+                )
+            )
+        }
+        return .success(
+            payload: payload(),
+            truncation: SchemaToolTruncation(
+                truncated: truncated,
+                reason: truncated ? "result_budget_path_omission" : nil,
+                suggestion: truncated ? "Call find_join_paths with max_paths set to 1 or max_hops set lower." : nil
+            ),
             returnedObjectCount: pathObjects.count
         )
     }
@@ -378,7 +461,8 @@ public struct SchemaToolExecutor: Sendable {
     private func inspectColumnConstraints(
         arguments: [String: JSONValue],
         snapshot: SchemaSearchSnapshot,
-        handles: SchemaToolHandleRegistry
+        handles: SchemaToolHandleRegistry,
+        policy: SchemaToolPolicy
     ) -> SchemaToolExecution {
         if let validation = validateKeys(arguments, allowed: ["table_id", "column_id"]) {
             return .failure(validation)
@@ -412,61 +496,92 @@ public struct SchemaToolExecutor: Sendable {
             return .failure(.stale("Column handle is outside the current schema snapshot.", argument: "column_id"))
         }
 
-        let valueLimit = 32
-        let constraints = (column.valueConstraints ?? []).prefix(16).map { constraint -> JSONValue in
-            let values = constraint.values.prefix(valueLimit).map {
-                JSONValue.string(sanitizedMetadata($0, maxCharacters: 160))
-            }
-            var object: [String: JSONValue] = [
-                "kind": .string(constraint.kind.rawValue),
-                "database_values": .array(Array(values)),
-                "values_complete": .bool(!constraint.values.isEmpty && constraint.values.count <= valueLimit),
-                "unparsed_check_exists": .bool(
-                    constraint.kind == .check
-                        && constraint.values.isEmpty
-                        && constraint.expression?.isEmpty == false
-                ),
-            ]
-            if let name = constraint.constraintName {
-                object["constraint_name"] = .string(sanitizedMetadata(name, maxCharacters: 160))
-            }
-            if let expression = constraint.expression, constraint.values.isEmpty {
-                object["database_check_expression"] = .string(
-                    sanitizedMetadata(expression, maxCharacters: 240)
-                )
-            }
-            if constraint.values.count > valueLimit {
-                object["omitted_value_count"] = .number(Double(constraint.values.count - valueLimit))
-            }
-            return .object(object)
-        }
-        let enumValues = (column.valueConstraints ?? [])
-            .filter { $0.kind == .enumValues }
-            .flatMap(\.values)
-            .prefix(32)
-            .map { JSONValue.string(sanitizedMetadata($0, maxCharacters: 160)) }
-        let checkValues = (column.valueConstraints ?? [])
-            .filter { $0.kind == .check }
-            .flatMap(\.values)
-            .prefix(32)
-            .map { JSONValue.string(sanitizedMetadata($0, maxCharacters: 160)) }
+        let allConstraints = column.valueConstraints ?? []
+        var constraintLimit = min(16, allConstraints.count)
+        var valueLimit = 32
         let unparsed = (column.valueConstraints ?? []).contains {
             $0.kind == .check && $0.values.isEmpty && $0.expression?.isEmpty == false
         }
-
-        return .success(
-            payload: [
+        let budget = payloadBudget(for: policy)
+        func payload() -> (json: JSONValue, omittedValueCount: Int, omittedConstraintCount: Int) {
+            var omittedValueCount = 0
+            let constraints = allConstraints.prefix(constraintLimit).map { constraint -> JSONValue in
+                var boundedValues: [JSONValue] = []
+                for value in constraint.values.prefix(valueLimit) {
+                    if let bounded = boundedConstraintValue(value) {
+                        boundedValues.append(.string(bounded))
+                    } else {
+                        omittedValueCount += 1
+                    }
+                }
+                if constraint.values.count > valueLimit {
+                    omittedValueCount += constraint.values.count - valueLimit
+                }
+                var object: [String: JSONValue] = [
+                    "kind": .string(constraint.kind.rawValue),
+                    "database_values": .array(boundedValues),
+                    "values_complete": .bool(constraint.values.count == boundedValues.count),
+                    "omitted_value_count": .number(Double(max(0, constraint.values.count - boundedValues.count))),
+                    "unparsed_check_exists": .bool(
+                        constraint.kind == .check
+                            && constraint.values.isEmpty
+                            && constraint.expression?.isEmpty == false
+                    ),
+                ]
+                if let name = constraint.constraintName {
+                    object["constraint_name"] = .string(sanitizedMetadata(name, maxCharacters: 160))
+                }
+                if let expression = constraint.expression, constraint.values.isEmpty {
+                    object["database_check_expression"] = .string(
+                        sanitizedMetadata(expression, maxCharacters: 240)
+                    )
+                }
+                return .object(object)
+            }
+            let omittedConstraintCount = max(0, allConstraints.count - constraintLimit)
+            let finiteValuesKnown = allConstraints.contains { !$0.values.isEmpty }
+            let json: JSONValue = [
                 "table_id": .string(handles.handle(for: tableID) ?? ""),
                 "column_id": .string(handles.handle(for: columnID) ?? ""),
                 "sql_name": .string(quotedColumnName(column)),
-                "enum_values": .array(Array(enumValues)),
-                "check_values": .array(Array(checkValues)),
                 "constraints": .array(Array(constraints)),
-                "finite_values_known": .bool(!enumValues.isEmpty || !checkValues.isEmpty),
+                "constraints_complete": .bool(omittedConstraintCount == 0),
+                "omitted_constraint_count": .number(Double(omittedConstraintCount)),
+                "omitted_value_count": .number(Double(omittedValueCount)),
+                "finite_values_known": .bool(finiteValuesKnown),
                 "unparsed_check_exists": .bool(unparsed),
                 "live_data_queried": false,
-            ],
-            returnedObjectCount: enumValues.count + checkValues.count
+            ]
+            return (json, omittedValueCount, omittedConstraintCount)
+        }
+        var built = payload()
+        while ((try? built.json.utf8ByteCount()) ?? Int.max) > budget {
+            if valueLimit > 1 {
+                valueLimit = max(1, valueLimit / 2)
+            } else if constraintLimit > 1 {
+                constraintLimit -= 1
+            } else {
+                break
+            }
+            built = payload()
+        }
+        if ((try? built.json.utf8ByteCount()) ?? Int.max) > budget {
+            return .failure(
+                .init(
+                    code: .resultBudgetExceeded,
+                    message: "One complete column constraint exceeded the schema tool result budget."
+                )
+            )
+        }
+
+        return .success(
+            payload: built.json,
+            truncation: SchemaToolTruncation(
+                truncated: built.omittedValueCount > 0 || built.omittedConstraintCount > 0,
+                reason: built.omittedValueCount > 0 || built.omittedConstraintCount > 0 ? "result_budget_constraint_omission" : nil,
+                suggestion: built.omittedConstraintCount > 0 ? "Inspect a more specific column or use a larger schema tool budget." : nil
+            ),
+            returnedObjectCount: allConstraints.count
         )
     }
 }
@@ -483,7 +598,8 @@ public actor SchemaToolSession {
     private var cumulativeOutputBytes = 0
     private var traces: [SchemaToolCallTrace] = []
     private var cache: [SchemaToolInvocationCacheKey: SchemaToolCachedExecution] = [:]
-    private var matchedColumnsByTable: [String: Set<SchemaObjectID>] = [:]
+    private var seenCallIDs: Set<String> = []
+    private var terminalExhausted = false
 
     public init(
         snapshot: SchemaSearchSnapshot,
@@ -525,6 +641,12 @@ public actor SchemaToolSession {
         argumentsJSON: Data
     ) async throws -> SchemaToolResult {
         try Task.checkCancellation()
+        if argumentsJSON.count > policy.maximumArgumentsJSONBytes {
+            return try await invoke(
+                SchemaToolInvocation(callID: callID, toolName: toolName, arguments: .object([:])),
+                forcedError: .range("Tool arguments JSON exceeds the schema tool input budget.", argument: "arguments")
+            )
+        }
         let arguments: JSONValue
         do {
             arguments = try JSONDecoder().decode(JSONValue.self, from: argumentsJSON)
@@ -545,10 +667,25 @@ public actor SchemaToolSession {
     }
 
     public func invoke(_ invocations: [SchemaToolInvocation]) async throws -> [SchemaToolResult] {
+        guard invocations.count <= policy.maximumInvocationBatchCount else {
+            let result = try await invoke(
+                SchemaToolInvocation(
+                    callID: "batch",
+                    toolName: "schema_tools",
+                    arguments: .object([:])
+                ),
+                forcedError: .range("Schema tool invocation batch exceeds the input budget.", argument: "invocations")
+            )
+            return [result]
+        }
         var results: [SchemaToolResult] = []
-        results.reserveCapacity(invocations.count)
+        results.reserveCapacity(min(invocations.count, policy.maximumInvocationBatchCount))
         for invocation in invocations {
-            results.append(try await invoke(invocation, forcedError: nil))
+            let result = try await invoke(invocation, forcedError: nil)
+            results.append(result)
+            if result.error?.code == .sessionBudgetExceeded {
+                break
+            }
         }
         return results
     }
@@ -558,34 +695,125 @@ public actor SchemaToolSession {
         forcedError: SchemaToolError?
     ) async throws -> SchemaToolResult {
         try Task.checkCancellation()
+        guard !terminalExhausted else {
+            throw terminalSessionError()
+        }
         let started = ContinuousClock.now
+        let identity = invocationIdentity(for: invocation)
+        if let error = identity.error {
+            return try finish(
+                result: finalizedError(
+                    callID: identity.callID,
+                    toolName: identity.toolName,
+                    error: error
+                ),
+                started: started,
+                returnedObjectCount: 0,
+                cacheHit: false,
+                terminal: false
+            )
+        }
+        guard seenCallIDs.insert(identity.callID).inserted else {
+            return try finish(
+                result: finalizedError(
+                    callID: identity.callID,
+                    toolName: identity.toolName,
+                    error: .range("Duplicate schema tool call_id.", argument: "call_id")
+                ),
+                started: started,
+                returnedObjectCount: 0,
+                cacheHit: false,
+                terminal: false
+            )
+        }
+        let argumentsData: Data
+        do {
+            argumentsData = try invocation.arguments.encodedData()
+        } catch {
+            return try finish(
+                result: finalizedError(
+                    callID: identity.callID,
+                    toolName: identity.toolName,
+                    error: .malformed("Tool arguments are malformed JSON.")
+                ),
+                started: started,
+                returnedObjectCount: 0,
+                cacheHit: false,
+                terminal: false
+            )
+        }
+        guard argumentsData.count <= policy.maximumArgumentsJSONBytes else {
+            return try finish(
+                result: finalizedError(
+                    callID: identity.callID,
+                    toolName: identity.toolName,
+                    error: .range("Tool arguments JSON exceeds the schema tool input budget.", argument: "arguments")
+                ),
+                started: started,
+                returnedObjectCount: 0,
+                cacheHit: false,
+                terminal: false
+            )
+        }
 
-        let cacheKey = SchemaToolInvocationCacheKey(invocation: invocation)
+        let terminalReserveBytes = terminalSessionError(
+            callID: identity.callID,
+            toolName: identity.toolName
+        ).outputByteCount
+        guard remainingOutputBytes > terminalReserveBytes else {
+            return try finish(
+                result: terminalSessionError(callID: identity.callID, toolName: identity.toolName),
+                started: started,
+                returnedObjectCount: 0,
+                cacheHit: false,
+                terminal: true
+            )
+        }
+
+        let effectiveResultBudget = min(
+            policy.maximumResultBytes,
+            remainingOutputBytes - terminalReserveBytes
+        )
+        guard effectiveResultBudget >= terminalReserveBytes else {
+            return try finish(
+                result: terminalSessionError(callID: identity.callID, toolName: identity.toolName),
+                started: started,
+                returnedObjectCount: 0,
+                cacheHit: false,
+                terminal: true
+            )
+        }
+
+        let cacheKey = SchemaToolInvocationCacheKey(
+            toolName: identity.toolName,
+            argumentsData: argumentsData
+        )
         let cachedExecution = forcedError == nil ? cache[cacheKey]?.execution : nil
         let cacheHit = cachedExecution != nil
         let countsAgainstCallBudget = !cacheHit || policy.countCachedCalls
 
         guard !countsAgainstCallBudget || callCount < policy.maximumCallCount else {
-            let result = finalizeAndCount(
-                finalizedError(
-                    callID: invocation.callID,
-                    toolName: invocation.toolName,
+            return try finish(
+                result: finalizedError(
+                    callID: identity.callID,
+                    toolName: identity.toolName,
                     error: .init(
                         code: .sessionBudgetExceeded,
-                        message: "Schema tool call budget exceeded."
+                        message: "Schema tool call budget exhausted."
                     )
-                )
-            )
-            return record(
-                result: result,
+                ),
                 started: started,
                 returnedObjectCount: 0,
-                cacheHit: false
+                cacheHit: false,
+                terminal: true
             )
         }
         if countsAgainstCallBudget {
             callCount += 1
         }
+
+        var effectivePolicy = policy
+        effectivePolicy.maximumResultBytes = effectiveResultBudget
 
         let execution: SchemaToolExecution
         if let forcedError {
@@ -594,31 +822,28 @@ public actor SchemaToolSession {
             execution = cachedExecution
         } else {
             execution = executor.execute(
-                invocation,
+                SchemaToolInvocation(
+                    callID: identity.callID,
+                    toolName: identity.toolName,
+                    arguments: invocation.arguments
+                ),
                 snapshot: snapshot,
                 searcher: searcher,
                 handles: handles,
-                policy: policy,
-                matchedColumnsByTable: matchedColumnsByTable
+                policy: effectivePolicy
             )
-            if invocation.toolName != SchemaToolName.describeTables.rawValue {
-                cache[cacheKey] = SchemaToolCachedExecution(execution: execution)
-            }
-        }
-
-        for (tableID, columns) in execution.matchedColumnIDsByTable {
-            matchedColumnsByTable[tableID, default: []].formUnion(columns)
+            cache[cacheKey] = SchemaToolCachedExecution(execution: execution)
         }
 
         var result = finalizedResult(
-            callID: invocation.callID,
-            toolName: invocation.toolName,
+            callID: identity.callID,
+            toolName: identity.toolName,
             execution: execution
         )
-        if result.outputByteCount > policy.maximumResultBytes {
+        if result.outputByteCount > effectiveResultBudget {
             result = finalizedError(
-                callID: invocation.callID,
-                toolName: invocation.toolName,
+                callID: identity.callID,
+                toolName: identity.toolName,
                 error: .init(
                     code: .resultBudgetExceeded,
                     message: "Schema tool result exceeded the per-call output budget."
@@ -630,39 +855,105 @@ public actor SchemaToolSession {
                 )
             )
         }
-        if cumulativeOutputBytes + result.outputByteCount > policy.maximumSessionResultBytes {
-            result = finalizedError(
-                callID: invocation.callID,
-                toolName: invocation.toolName,
-                error: .init(
-                    code: .sessionBudgetExceeded,
-                    message: "Schema tool session output budget exceeded."
-                )
-            )
-        }
-        cumulativeOutputBytes += result.outputByteCount
-        return record(
+        return try finish(
             result: result,
             started: started,
             returnedObjectCount: execution.returnedObjectCount,
-            cacheHit: cacheHit
+            cacheHit: cacheHit,
+            terminal: false
         )
     }
 
-    private func finalizeAndCount(_ result: SchemaToolResult) -> SchemaToolResult {
-        var result = result
-        if cumulativeOutputBytes + result.outputByteCount > policy.maximumSessionResultBytes {
-            result = finalizedError(
-                callID: result.callID,
-                toolName: result.toolName,
-                error: .init(
-                    code: .sessionBudgetExceeded,
-                    message: "Schema tool session output budget exceeded."
-                )
+    private struct InvocationIdentity {
+        var callID: String
+        var toolName: String
+        var error: SchemaToolError?
+    }
+
+    private func invocationIdentity(for invocation: SchemaToolInvocation) -> InvocationIdentity {
+        let callIDBytes = invocation.callID.utf8.count
+        guard callIDBytes > 0, callIDBytes <= policy.maximumCallIDBytes else {
+            return InvocationIdentity(
+                callID: "invalid_call_id",
+                toolName: safeToolName(invocation.toolName),
+                error: .range("Schema tool call_id is empty or exceeds the input budget.", argument: "call_id")
             )
         }
+        let toolNameBytes = invocation.toolName.utf8.count
+        guard toolNameBytes > 0, toolNameBytes <= policy.maximumToolNameBytes else {
+            return InvocationIdentity(
+                callID: invocation.callID,
+                toolName: "invalid_tool",
+                error: .range("Schema tool name is empty or exceeds the input budget.", argument: "tool_name")
+            )
+        }
+        return InvocationIdentity(callID: invocation.callID, toolName: invocation.toolName, error: nil)
+    }
+
+    private func safeToolName(_ toolName: String) -> String {
+        let bytes = toolName.utf8.count
+        return bytes > 0 && bytes <= policy.maximumToolNameBytes ? toolName : "invalid_tool"
+    }
+
+    private var remainingOutputBytes: Int {
+        max(0, policy.maximumSessionResultBytes - cumulativeOutputBytes)
+    }
+
+    private func terminalSessionError() -> SchemaToolError {
+        SchemaToolError(
+            code: .sessionBudgetExceeded,
+            message: "Schema tool session exhausted."
+        )
+    }
+
+    private func terminalSessionError(callID: String, toolName: String) -> SchemaToolResult {
+        finalizedError(
+            callID: callID,
+            toolName: toolName,
+            error: terminalSessionError()
+        )
+    }
+
+    private func finish(
+        result input: SchemaToolResult,
+        started: ContinuousClock.Instant,
+        returnedObjectCount: Int,
+        cacheHit: Bool,
+        terminal: Bool
+    ) throws -> SchemaToolResult {
+        var result = input
+        var isTerminal = terminal
+        if result.outputByteCount > remainingOutputBytes {
+            let terminalResult = terminalSessionError(callID: result.callID, toolName: result.toolName)
+            if terminalResult.outputByteCount <= remainingOutputBytes {
+                result = terminalResult
+                isTerminal = true
+            } else {
+                terminalExhausted = true
+                throw terminalSessionError()
+            }
+        } else if !isTerminal,
+            cumulativeOutputBytes + result.outputByteCount + terminalSessionError(callID: result.callID, toolName: result.toolName).outputByteCount > policy.maximumSessionResultBytes
+        {
+            let terminalResult = terminalSessionError(callID: result.callID, toolName: result.toolName)
+            if terminalResult.outputByteCount <= remainingOutputBytes {
+                result = terminalResult
+                isTerminal = true
+            } else {
+                terminalExhausted = true
+                throw terminalSessionError()
+            }
+        }
         cumulativeOutputBytes += result.outputByteCount
-        return result
+        if isTerminal || result.error?.code == .sessionBudgetExceeded {
+            terminalExhausted = true
+        }
+        return record(
+            result: result,
+            started: started,
+            returnedObjectCount: returnedObjectCount,
+            cacheHit: cacheHit
+        )
     }
 
     private func record(
@@ -694,7 +985,7 @@ public actor SchemaToolSession {
         execution: SchemaToolExecution
     ) -> SchemaToolResult {
         switch execution {
-        case .success(let payload, let truncation, _, _):
+        case .success(let payload, let truncation, _):
             return finalized(
                 SchemaToolResult(
                     callID: callID,
@@ -768,17 +1059,12 @@ enum SchemaToolExecution: Sendable {
     case success(
         payload: JSONValue,
         truncation: SchemaToolTruncation = SchemaToolTruncation(),
-        returnedObjectCount: Int,
-        matchedColumnIDsByTable: [String: Set<SchemaObjectID>] = [:]
+        returnedObjectCount: Int
     )
     case failure(SchemaToolError)
 
     var returnedObjectCount: Int {
-        if case .success(_, _, let count, _) = self { count } else { 0 }
-    }
-
-    var matchedColumnIDsByTable: [String: Set<SchemaObjectID>] {
-        if case .success(_, _, _, let matches) = self { matches } else { [:] }
+        if case .success(_, _, let count) = self { count } else { 0 }
     }
 }
 
@@ -790,9 +1076,9 @@ private struct SchemaToolInvocationCacheKey: Hashable, Sendable {
     var toolName: String
     var argumentsData: Data
 
-    init(invocation: SchemaToolInvocation) {
-        self.toolName = invocation.toolName
-        self.argumentsData = (try? invocation.arguments.encodedData()) ?? Data()
+    init(toolName: String, argumentsData: Data) {
+        self.toolName = toolName
+        self.argumentsData = argumentsData
     }
 }
 
@@ -946,11 +1232,16 @@ private func validateKeys(
     for key in arguments.keys.sorted() where !allowed.contains(key) {
         return .init(
             code: .malformedArguments,
-            message: "Unknown argument '\(key)'.",
-            argument: key
+            message: "Unknown schema tool argument.",
+            argument: sanitizedArgumentName(key)
         )
     }
     return nil
+}
+
+private func sanitizedArgumentName(_ value: String) -> String {
+    let sanitized = sanitizedMetadata(value, maxCharacters: 64)
+    return sanitized.isEmpty ? "argument" : sanitized
 }
 
 private func missingOrTyped(
@@ -1025,6 +1316,65 @@ private func resolveColumnID(
         error.argument = key
         throw error
     }
+}
+
+private struct SchemaSearchHitContext {
+    var hit: SchemaSearchHit
+    var table: TableInfo
+    var tableHandle: String
+    var relevantColumnIDs: [SchemaObjectID]
+}
+
+private func searchHitJSON(
+    _ context: SchemaSearchHitContext,
+    handles: SchemaToolHandleRegistry,
+    columnLimit: Int,
+    includeLegacyColumns: Bool
+) -> (json: JSONValue, omittedColumnCount: Int) {
+    var seen = Set<String>()
+    let matched = context.hit.matchedColumnIDs.filter { seen.insert($0.stableString).inserted }
+    let relevant = context.relevantColumnIDs.filter { seen.insert($0.stableString).inserted }
+    let columns = (matched.map { ($0, "match") } + relevant.map { ($0, "related") })
+        .compactMap { columnID, relevance -> JSONValue? in
+            guard let handle = handles.handle(for: columnID),
+                let columnName = columnID.column,
+                context.table.columns.contains(where: { $0.name == columnName })
+            else { return nil }
+            return [
+                "column_id": .string(handle),
+                "sql_name": .string(quotedName(columnID)),
+                "relevance": .string(relevance),
+            ]
+        }
+    let keptColumns = Array(columns.prefix(columnLimit))
+    let omittedColumnCount = max(0, columns.count - keptColumns.count)
+    var object: [String: JSONValue] = [
+        "table_id": .string(context.tableHandle),
+        "sql_name": .string(quotedTableName(context.table.schema, context.table.name)),
+        "table_type": .string(context.table.type.rawValue),
+        "match_reasons": .array(matchReasons(context.hit.matchedFields).map { .string($0) }),
+        "columns": .array(keptColumns),
+    ]
+    if includeLegacyColumns {
+        let matchedValues = compactColumns(
+            matched,
+            handles: handles,
+            table: context.table,
+            limit: columnLimit
+        )
+        let relevantValues = compactColumns(
+            relevant,
+            handles: handles,
+            table: context.table,
+            limit: max(0, columnLimit - matchedValues.count)
+        )
+        object["matched_columns"] = .array(matchedValues)
+        object["relevant_columns"] = .array(relevantValues)
+    }
+    if omittedColumnCount > 0 {
+        object["omitted_column_count"] = .number(Double(omittedColumnCount))
+    }
+    return (.object(object), omittedColumnCount)
 }
 
 private func compactColumns(
@@ -1103,9 +1453,9 @@ private func tableCards(
     snapshot: SchemaSearchSnapshot,
     handles: SchemaToolHandleRegistry,
     focusByTable: [String: [SchemaObjectID]],
-    matchedColumnsByTable: [String: Set<SchemaObjectID>],
     maxColumnsPerTable: Int,
     maxRelationshipsPerTable: Int,
+    compactColumns: Bool,
     truncated: inout Bool
 ) -> [JSONValue] {
     tableIDs.compactMap { tableID in
@@ -1116,7 +1466,17 @@ private func tableCards(
             ($0.sourceSchema == table.schema && $0.sourceTable == table.name)
                 || ($0.targetSchema == table.schema && $0.targetTable == table.name)
         }
-        let keptRelationships = Array(relationships.prefix(maxRelationshipsPerTable))
+        let focusColumnNames = Set(
+            (focusByTable[tableID.stableString] ?? []).compactMap(\.column)
+        )
+        let keptRelationships = Array(
+            relationships
+                .sorted {
+                    relationshipPriority($0, table: table, focusColumnNames: focusColumnNames)
+                        < relationshipPriority($1, table: table, focusColumnNames: focusColumnNames)
+                }
+                .prefix(maxRelationshipsPerTable)
+        )
         if keptRelationships.count < relationships.count {
             truncated = true
         }
@@ -1133,13 +1493,9 @@ private func tableCards(
                 }
             }
         )
-        let focusColumnNames = Set(
-            (focusByTable[tableID.stableString] ?? []).compactMap(\.column)
-        )
         let priority = columnPriority(
             table: table,
             focus: Set(focusByTable[tableID.stableString] ?? []),
-            matched: matchedColumnsByTable[tableID.stableString] ?? [],
             relationshipColumnNames: requiredRelationshipColumnNames
         )
         var keptColumns = Array(priority.prefix(maxColumnsPerTable))
@@ -1167,10 +1523,10 @@ private func tableCards(
             "table_id": .string(tableHandle),
             "sql_name": .string(quotedTableName(table.schema, table.name)),
             "table_type": .string(table.type.rawValue),
-            "columns": .array(keptColumns.map { columnJSON($0, handles: handles) }),
+            "columns": .array(keptColumns.map { columnJSON($0, handles: handles, compact: compactColumns) }),
             "primary_keys": .array(keyJSON(table.keyConstraints.filter { $0.kind == .primaryKey })),
             "unique_keys": .array(keyJSON(table.keyConstraints.filter { $0.kind == .unique })),
-            "foreign_keys": .array(keptRelationships.map { foreignKeyJSON($0) }),
+            "foreign_keys": .array(keptRelationships.map { foreignKeyJSON($0, handles: handles) }),
             "omitted_column_count": .number(Double(omittedColumnCount)),
             "omitted_relationship_count": .number(Double(omittedRelationshipCount)),
             "truncated": .bool(omittedColumnCount > 0 || omittedRelationshipCount > 0),
@@ -1182,7 +1538,7 @@ private func tableCards(
         }
         if omittedColumnCount > 0 || omittedRelationshipCount > 0 {
             object["next_tool_suggestion"] = .string(
-                "Call describe_tables again with this table_id and focus_column_ids for omitted columns."
+                describeTruncationSuggestion
             )
         }
         return .object(object)
@@ -1192,7 +1548,6 @@ private func tableCards(
 private func columnPriority(
     table: TableInfo,
     focus: Set<SchemaObjectID>,
-    matched: Set<SchemaObjectID>,
     relationshipColumnNames: Set<String>
 ) -> [ColumnInfo] {
     let keyColumns = table.keyConstraints.flatMap(\.columns)
@@ -1212,18 +1567,16 @@ private func columnPriority(
             rank = 2
         } else if relationshipColumnNames.contains(identifier) {
             rank = 3
-        } else if matched.contains(columnID) {
-            rank = 4
         } else if requiresQuoting(identifier) {
-            rank = 5
+            rank = 4
         } else if column.valueConstraints?.isEmpty == false {
-            rank = 6
+            rank = 5
         } else if isTemporal(column) || isNameLike(column) || identifier.lowercased().contains("status") {
-            rank = 7
+            rank = 6
         } else if keyColumns.contains(identifier) {
-            rank = 8
+            rank = 7
         } else {
-            rank = 9
+            rank = 8
         }
         return (rank, column.ordinalPosition, column.name)
     }
@@ -1240,7 +1593,48 @@ private func columnPriority(
     }
 }
 
-private func columnJSON(_ column: ColumnInfo, handles: SchemaToolHandleRegistry) -> JSONValue {
+private let describeTruncationSuggestion = "Use search_schema for the specific column or concept, call describe_tables with fewer table_ids, or pass column IDs already returned by search_schema as focus_column_ids."
+
+private func relationshipPriority(
+    _ relationship: SchemaForeignKeyConstraintInfo,
+    table: TableInfo,
+    focusColumnNames: Set<String>
+) -> (Int, String, String, String) {
+    let localColumns = relationship.columnPairs.compactMap { pair -> String? in
+        if relationship.sourceSchema == table.schema && relationship.sourceTable == table.name {
+            return pair.sourceColumn
+        }
+        if relationship.targetSchema == table.schema && relationship.targetTable == table.name {
+            return pair.targetColumn
+        }
+        return nil
+    }
+    let keyColumns = Set(
+        table.keyConstraints
+            .filter { $0.kind == .primaryKey || $0.kind == .unique }
+            .flatMap(\.columns)
+    )
+    let rank: Int
+    if localColumns.contains(where: { focusColumnNames.contains($0) }) {
+        rank = 0
+    } else if localColumns.contains(where: { keyColumns.contains($0) }) {
+        rank = 1
+    } else {
+        rank = 2
+    }
+    return (
+        rank,
+        relationship.sourceSchema,
+        relationship.sourceTable,
+        "\(relationship.constraintName)\u{1f}\(relationship.targetSchema)\u{1f}\(relationship.targetTable)"
+    )
+}
+
+private func columnJSON(
+    _ column: ColumnInfo,
+    handles: SchemaToolHandleRegistry,
+    compact: Bool = false
+) -> JSONValue {
     let columnID = SchemaObjectID.column(
         schema: column.tableSchema,
         table: column.tableName,
@@ -1249,15 +1643,21 @@ private func columnJSON(_ column: ColumnInfo, handles: SchemaToolHandleRegistry)
     var object: [String: JSONValue] = [
         "column_id": .string(handles.handle(for: columnID) ?? ""),
         "sql_name": .string(quotedColumnName(column)),
-        "name": .string(quotedIdentifier(column.name)),
-        "data_type": .string(sanitizedMetadata(column.dataType, maxCharacters: 120)),
-        "nullable": .bool(column.isNullable),
     ]
-    if let comment = column.comment, !comment.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
-        object["database_comment"] = .string(sanitizedMetadata(comment, maxCharacters: 160))
-    }
-    if column.valueConstraints?.isEmpty == false {
-        object["has_schema_values"] = true
+    if compact {
+        if column.valueConstraints?.isEmpty == false {
+            object["has_schema_values"] = true
+        }
+    } else {
+        object["name"] = .string(quotedIdentifier(column.name))
+        object["data_type"] = .string(sanitizedMetadata(column.dataType, maxCharacters: 120))
+        object["nullable"] = .bool(column.isNullable)
+        if let comment = column.comment, !comment.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+            object["database_comment"] = .string(sanitizedMetadata(comment, maxCharacters: 160))
+        }
+        if column.valueConstraints?.isEmpty == false {
+            object["has_schema_values"] = true
+        }
     }
     return .object(object)
 }
@@ -1274,19 +1674,106 @@ private func keyJSON(_ keys: [SchemaKeyConstraintInfo]) -> [JSONValue] {
     }
 }
 
-private func foreignKeyJSON(_ relationship: SchemaForeignKeyConstraintInfo) -> JSONValue {
-    [
+private func foreignKeyJSON(
+    _ relationship: SchemaForeignKeyConstraintInfo,
+    handles: SchemaToolHandleRegistry
+) -> JSONValue {
+    let relationshipID = SchemaObjectID.foreignKeyConstraint(
+        schema: relationship.sourceSchema,
+        table: relationship.sourceTable,
+        name: relationship.constraintName
+    )
+    let sourceTableID = SchemaObjectID.table(schema: relationship.sourceSchema, name: relationship.sourceTable)
+    let targetTableID = SchemaObjectID.table(schema: relationship.targetSchema, name: relationship.targetTable)
+    return [
+        "foreign_key_id": .string(handles.handle(for: relationshipID) ?? ""),
         "constraint_name": .string(sanitizedMetadata(relationship.constraintName, maxCharacters: 160)),
+        "source_table_id": .string(handles.handle(for: sourceTableID) ?? ""),
         "source_table": .string(quotedTableName(relationship.sourceSchema, relationship.sourceTable)),
+        "target_table_id": .string(handles.handle(for: targetTableID) ?? ""),
         "target_table": .string(quotedTableName(relationship.targetSchema, relationship.targetTable)),
         "column_pairs": .array(relationship.columnPairs.map { pair in
-            [
+            let sourceColumnID = SchemaObjectID.column(
+                schema: relationship.sourceSchema,
+                table: relationship.sourceTable,
+                name: pair.sourceColumn
+            )
+            let targetColumnID = SchemaObjectID.column(
+                schema: relationship.targetSchema,
+                table: relationship.targetTable,
+                name: pair.targetColumn
+            )
+            let object: [String: JSONValue] = [
+                "source_column_id": .string(handles.handle(for: sourceColumnID) ?? ""),
                 "source_column": .string(quotedIdentifier(pair.sourceColumn)),
+                "target_column_id": .string(handles.handle(for: targetColumnID) ?? ""),
                 "target_column": .string(quotedIdentifier(pair.targetColumn)),
                 "ordinal_position": .number(Double(pair.ordinalPosition)),
             ]
+            return .object(object)
         }),
     ]
+}
+
+private func joinPathJSON(_ path: SchemaJoinPath, handles: SchemaToolHandleRegistry) -> JSONValue {
+    let edges = path.edges.map { edge -> JSONValue in
+        let relationshipID = SchemaObjectID.foreignKeyConstraint(
+            schema: edge.sourceTableID.schema,
+            table: edge.sourceTableID.table ?? "",
+            name: edge.constraintName
+        )
+        let columnPairs = edge.columnPairs.map { pair -> JSONValue in
+            let sourceColumnID = SchemaObjectID.column(
+                schema: edge.sourceTableID.schema,
+                table: edge.sourceTableID.table ?? "",
+                name: pair.sourceColumn
+            )
+            let targetColumnID = SchemaObjectID.column(
+                schema: edge.targetTableID.schema,
+                table: edge.targetTableID.table ?? "",
+                name: pair.targetColumn
+            )
+            let pairObject: [String: JSONValue] = [
+                "source_column_id": .string(handles.handle(for: sourceColumnID) ?? ""),
+                "source_column": .string(quotedIdentifier(pair.sourceColumn)),
+                "target_column_id": .string(handles.handle(for: targetColumnID) ?? ""),
+                "target_column": .string(quotedIdentifier(pair.targetColumn)),
+                "ordinal_position": .number(Double(pair.ordinalPosition)),
+            ]
+            return .object(pairObject)
+        }
+        let edgeObject: [String: JSONValue] = [
+            "foreign_key_id": .string(handles.handle(for: relationshipID) ?? ""),
+            "traversal_direction": .string(edge.traversalDirection.rawValue),
+            "constraint_name": .string(sanitizedMetadata(edge.constraintName, maxCharacters: 160)),
+            "from_table_id": .string(handles.handle(for: edge.fromTableID) ?? ""),
+            "from_table": .string(quotedName(edge.fromTableID)),
+            "to_table_id": .string(handles.handle(for: edge.toTableID) ?? ""),
+            "to_table": .string(quotedName(edge.toTableID)),
+            "source_table_id": .string(handles.handle(for: edge.sourceTableID) ?? ""),
+            "source_table": .string(quotedName(edge.sourceTableID)),
+            "target_table_id": .string(handles.handle(for: edge.targetTableID) ?? ""),
+            "target_table": .string(quotedName(edge.targetTableID)),
+            "column_pairs": .array(columnPairs),
+        ]
+        return .object(edgeObject)
+    }
+    return [
+        "hop_count": .number(Double(path.hopCount)),
+        "edges": .array(edges),
+    ]
+}
+
+private func payloadBudget(for policy: SchemaToolPolicy) -> Int {
+    max(256, policy.maximumResultBytes - 600)
+}
+
+private func boundedConstraintValue(_ value: String) -> String? {
+    let sanitized = sanitizedMetadata(value, maxCharacters: 161)
+    guard !sanitized.isEmpty, sanitized.count <= 160 else {
+        return nil
+    }
+    return sanitized
 }
 
 private func matchReasons(_ fields: [SchemaSearchMatchedField]) -> [String] {

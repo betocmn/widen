@@ -175,7 +175,7 @@ struct SchemaToolContractEvalRunner {
         let evaluationHit = hits.first {
             $0["sql_name"]?.stringValue == #""public"."preseason_match_evaluation""#
         }
-        let evaluationRelevant = columnNames(evaluationHit?["relevant_columns"]?.arrayValue ?? [])
+        let evaluationRelevant = columnNames(evaluationHit)
         if !evaluationRelevant.contains(#""public"."preseason_match_evaluation"."winner_id""#) {
             messages.append("search_schema did not identify winner_id as relevant.")
         }
@@ -183,10 +183,17 @@ struct SchemaToolContractEvalRunner {
             messages.append("search_schema did not identify createdAt as relevant.")
         }
 
-        let evaluationID = SchemaObjectID.table(schema: "public", name: "preseason_match_evaluation")
-        let toolID = SchemaObjectID.table(schema: "public", name: "preseason_tool")
-        let evaluationHandle = try await requireHandle(session, evaluationID)
-        let toolHandle = try await requireHandle(session, toolID)
+        guard let evaluationHandle = tableHandle(
+            named: #""public"."preseason_match_evaluation""#,
+            in: hits
+        ) else {
+            messages.append("search_schema did not expose a model-visible handle for preseason_match_evaluation.")
+            return result("preseason.top-wins-tool-workflow", messages: messages, results: [search], started: started)
+        }
+        guard let toolHandle = tableHandle(named: #""public"."preseason_tool""#, in: hits) else {
+            messages.append("search_schema did not expose a model-visible handle for preseason_tool.")
+            return result("preseason.top-wins-tool-workflow", messages: messages, results: [search], started: started)
+        }
         let describe = try await invoke(
             session,
             id: "preseason-describe",
@@ -213,6 +220,18 @@ struct SchemaToolContractEvalRunner {
         ] where describedColumns.contains(forbidden) {
             messages.append("describe_tables invented forbidden evaluation column \(forbidden).")
         }
+        guard let winnerDecisionHandle = columnHandle(
+            named: #""public"."preseason_match_evaluation"."winner_decision""#,
+            inDescribe: describe
+        ) else {
+            messages.append("describe_tables did not expose winner_decision as a model-visible column handle.")
+            return result(
+                "preseason.top-wins-tool-workflow",
+                messages: messages,
+                results: [search, describe],
+                started: started
+            )
+        }
 
         let join = try await invoke(
             session,
@@ -236,10 +255,6 @@ struct SchemaToolContractEvalRunner {
             messages.append("Tool workflow presented completed_evaluations as win evidence.")
         }
 
-        let winnerDecisionHandle = try await requireHandle(
-            session,
-            .column(schema: "public", table: "preseason_match_evaluation", name: "winner_decision")
-        )
         let inspect = try await invoke(
             session,
             id: "preseason-constraints",
@@ -253,6 +268,7 @@ struct SchemaToolContractEvalRunner {
         if !inspectText.contains("tool_a") || !inspectText.contains(#""live_data_queried":false"#) {
             messages.append("inspect_column_constraints did not return schema enum values only.")
         }
+        messages.append(contentsOf: modelVisibleWorkflowMessages(search: search, describe: describe, join: join, inspect: inspect))
 
         let results = [search, describe, join, inspect]
         return result(
@@ -536,6 +552,69 @@ struct SchemaToolContractEvalRunner {
 
     private func columnNames(_ values: [JSONValue]) -> [String] {
         values.compactMap { $0["sql_name"]?.stringValue }
+    }
+
+    private func columnNames(_ hit: JSONValue?) -> [String] {
+        var names: [String] = []
+        names.append(contentsOf: columnNames(hit?["columns"]?.arrayValue ?? []))
+        names.append(contentsOf: columnNames(hit?["matched_columns"]?.arrayValue ?? []))
+        names.append(contentsOf: columnNames(hit?["relevant_columns"]?.arrayValue ?? []))
+        return Array(Set(names)).sorted()
+    }
+
+    private func tableHandle(named sqlName: String, in hits: [JSONValue]) -> String? {
+        hits.first { $0["sql_name"]?.stringValue == sqlName }?["table_id"]?.stringValue
+    }
+
+    private func columnHandle(named sqlName: String, inDescribe result: SchemaToolResult) -> String? {
+        result.payload?["tables"]?.arrayValue?
+            .flatMap { $0["columns"]?.arrayValue ?? [] }
+            .first { $0["sql_name"]?.stringValue == sqlName }?["column_id"]?.stringValue
+    }
+
+    private func modelVisibleWorkflowMessages(
+        search: SchemaToolResult,
+        describe: SchemaToolResult,
+        join: SchemaToolResult,
+        inspect: SchemaToolResult
+    ) -> [String] {
+        var messages: [String] = []
+        if tableHandle(
+            named: #""public"."preseason_match_evaluation""#,
+            in: search.payload?["hits"]?.arrayValue ?? []
+        ) == nil {
+            messages.append("Preseason workflow required host lookup for evaluation table handle.")
+        }
+        if tableHandle(named: #""public"."preseason_tool""#, in: search.payload?["hits"]?.arrayValue ?? []) == nil {
+            messages.append("Preseason workflow required host lookup for tool table handle.")
+        }
+        if columnHandle(
+            named: #""public"."preseason_match_evaluation"."winner_decision""#,
+            inDescribe: describe
+        ) == nil {
+            messages.append("Preseason workflow required host lookup for winner_decision column handle.")
+        }
+        let inspectTable = inspect.payload?["table_id"]?.stringValue
+        let inspectColumn = inspect.payload?["column_id"]?.stringValue
+        if inspectTable == nil || inspectColumn == nil {
+            messages.append("inspect_column_constraints did not echo bounded model-visible handles.")
+        }
+        let joinHasHandles = (join.payload?["paths"]?.arrayValue ?? []).contains { path in
+            (path["edges"]?.arrayValue ?? []).contains { edge in
+                edge["from_table_id"]?.stringValue?.isEmpty == false
+                    && edge["to_table_id"]?.stringValue?.isEmpty == false
+                    && edge["source_table_id"]?.stringValue?.isEmpty == false
+                    && edge["target_table_id"]?.stringValue?.isEmpty == false
+                    && (edge["column_pairs"]?.arrayValue ?? []).contains { pair in
+                        pair["source_column_id"]?.stringValue?.isEmpty == false
+                            && pair["target_column_id"]?.stringValue?.isEmpty == false
+                    }
+            }
+        }
+        if !joinHasHandles {
+            messages.append("find_join_paths did not expose reusable relationship handles.")
+        }
+        return messages
     }
 
     private func summarize(_ results: [SchemaToolContractEvalResult]) -> SchemaToolContractEvalSummary {
