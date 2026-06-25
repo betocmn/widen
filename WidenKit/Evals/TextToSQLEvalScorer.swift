@@ -417,7 +417,7 @@ public enum TextToSQLEvalCaseRunner {
                 openRouterRequestedModelID: failure.openRouterFailure?.requestedModelID,
                 openRouterReturnedModelID: failure.openRouterFailure?.returnedModelID,
                 openRouterProviderName: failure.openRouterFailure?.providerName
-            ),
+            ).withOpenRouterAgentMetadata(nil, trace: trace),
             diagnostics: TextToSQLEvalDiagnostics(
                 errorMessage: failure.localizedDescription,
                 openRouterFailure: failure.openRouterFailure
@@ -518,7 +518,7 @@ public enum TextToSQLEvalScorer {
                     openRouterRequestedModelID: backendMetadata?.requestedModelID,
                     openRouterReturnedModelID: backendMetadata?.returnedModelID,
                     openRouterProviderName: backendMetadata?.providerName
-                ),
+                ).withOpenRouterAgentMetadata(backendMetadata, trace: trace),
                 diagnostics: TextToSQLEvalDiagnostics(),
                 generatedSQL: generation.sql.nilIfBlank,
                 clarificationQuestion: generation.clarificationQuestion,
@@ -554,7 +554,7 @@ public enum TextToSQLEvalScorer {
                     openRouterRequestedModelID: backendMetadata?.requestedModelID,
                     openRouterReturnedModelID: backendMetadata?.returnedModelID,
                     openRouterProviderName: backendMetadata?.providerName
-                ),
+                ).withOpenRouterAgentMetadata(backendMetadata, trace: trace),
                 generatedSQL: generation.sql.nilIfBlank,
                 clarificationQuestion: generation.clarificationQuestion,
                 referencedTables: generation.referencedTables,
@@ -588,7 +588,7 @@ public enum TextToSQLEvalScorer {
                     openRouterRequestedModelID: backendMetadata?.requestedModelID,
                     openRouterReturnedModelID: backendMetadata?.returnedModelID,
                     openRouterProviderName: backendMetadata?.providerName
-                ),
+                ).withOpenRouterAgentMetadata(backendMetadata, trace: trace),
                 diagnostics: TextToSQLEvalDiagnostics(safetyErrors: safety.errors),
                 generatedSQL: generation.sql.nilIfBlank,
                 referencedTables: generation.referencedTables,
@@ -666,7 +666,7 @@ public enum TextToSQLEvalScorer {
                 openRouterRequestedModelID: backendMetadata?.requestedModelID,
                 openRouterReturnedModelID: backendMetadata?.returnedModelID,
                 openRouterProviderName: backendMetadata?.providerName
-            ),
+            ).withOpenRouterAgentMetadata(backendMetadata, trace: trace),
             diagnostics: TextToSQLEvalDiagnostics(
                 missingTables: missingTables,
                 missingColumnBindings: missingColumnBindings,
@@ -1028,6 +1028,28 @@ public enum TextToSQLEvalScorer {
             .replacingOccurrences(of: "\"", with: "")
             .trimmingCharacters(in: .whitespacesAndNewlines)
             .lowercased()
+    }
+}
+
+private extension TextToSQLEvalMetrics {
+    func withOpenRouterAgentMetadata(
+        _ metadata: OpenRouterGenerationMetadata?,
+        trace: TextToSQLTrace?
+    ) -> TextToSQLEvalMetrics {
+        var copy = self
+        copy.openRouterAgentSelectionReason = metadata?.agentSelectionReason
+        copy.openRouterAgentLogicalTurnCount = metadata?.agentLogicalTurnCount
+        copy.openRouterAgentHTTPAttemptCount = metadata?.agentHTTPAttemptCount
+        copy.openRouterSchemaToolCallCount = metadata?.agentSchemaToolCallCount
+            ?? trace?.schemaToolCalls.nonEmptyCount
+        copy.openRouterAgentTerminalOutcome = metadata?.agentTerminalOutcome
+        return copy
+    }
+}
+
+private extension Array where Element == SchemaToolCallTrace {
+    var nonEmptyCount: Int? {
+        isEmpty ? nil : count
     }
 }
 

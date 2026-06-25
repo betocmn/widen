@@ -69,6 +69,7 @@ enum EvalReporter {
             "| Started | \(tableCell(run.manifest.startedAt)) |",
             "| Finished | \(tableCell(run.manifest.finishedAt)) |",
             "| Backend | \(tableCell(run.manifest.backendMode)) |",
+            "| Cloud agent | \(tableCell(run.manifest.cloudAgentMode ?? "-")) |",
             "| Model | \(tableCell(run.manifest.model ?? "-")) |",
             "| OS | \(tableCell(run.manifest.osVersion)) |",
             "| Architecture | \(tableCell(run.manifest.architecture)) |",
@@ -176,6 +177,10 @@ enum EvalReporter {
         let tokenUsage = summary.totalTokenUsage.map(String.init) ?? "-"
         let cloudCost = summary.estimatedCloudCostUSD
             .map { String(format: "$%.6f", $0) } ?? "-"
+        let schemaToolCalls = summary.totalSchemaToolCalls.map(String.init) ?? "-"
+        let agentTurns = summary.totalAgentModelTurns.map(String.init) ?? "-"
+        let agentHTTPAttempts = summary.totalAgentHTTPAttempts.map(String.init) ?? "-"
+        let toolBudgetFailures = summary.toolBudgetFailureCount.map(String.init) ?? "-"
 
         return [
             "",
@@ -206,6 +211,10 @@ enum EvalReporter {
             "| Average required-table coverage | \(average(summary.requiredTableCoverage, suffix: " SQL results evaluated")) |",
             "| Average required-column coverage | \(average(summary.requiredColumnBindingCoverage, suffix: " SQL results evaluated")) |",
             "| Total model calls | \(modelCalls) |",
+            "| Schema-tool calls | \(schemaToolCalls) |",
+            "| Agent logical model turns | \(agentTurns) |",
+            "| Agent HTTP attempts | \(agentHTTPAttempts) |",
+            "| Tool-budget failures | \(toolBudgetFailures) |",
             "| Avg estimated initial prompt characters | \(averagePromptSize) |",
             "| Max estimated initial prompt characters | \(maxPromptSize) |",
             "| Token usage | \(tokenUsage) |",
@@ -266,6 +275,14 @@ enum EvalReporter {
                 $0.metrics.openRouterProviderName ?? $0.diagnostics.openRouterProviderName
             }
         )
+        let selectionCounts = counts(openRouterResults.compactMap(\.metrics.openRouterAgentSelectionReason))
+        let terminalCounts = counts(openRouterResults.compactMap(\.metrics.openRouterAgentTerminalOutcome))
+        let schemaToolCalls = openRouterResults.compactMap(\.metrics.openRouterSchemaToolCallCount)
+            .reduce(0, +)
+        let agentTurns = openRouterResults.compactMap(\.metrics.openRouterAgentLogicalTurnCount)
+            .reduce(0, +)
+        let agentHTTPAttempts = openRouterResults.compactMap(\.metrics.openRouterAgentHTTPAttemptCount)
+            .reduce(0, +)
 
         var lines = [
             "",
@@ -278,6 +295,9 @@ enum EvalReporter {
             "| Typed provider failures | \(failureCounts.values.reduce(0, +)) |",
             "| Retry total | \(retryTotal) |",
             "| Retry average | \(retryAverage) |",
+            "| Schema-tool calls | \(schemaToolCalls == 0 ? "-" : String(schemaToolCalls)) |",
+            "| Agent logical model turns | \(agentTurns == 0 ? "-" : String(agentTurns)) |",
+            "| Agent HTTP attempts | \(agentHTTPAttempts == 0 ? "-" : String(agentHTTPAttempts)) |",
             "| Token usage | \(tokenUsage == 0 ? "-" : String(tokenUsage)) |",
             "| Estimated cloud cost | \(cost == 0 ? "-" : String(format: "$%.6f", cost)) |",
             "",
@@ -287,6 +307,22 @@ enum EvalReporter {
             "| --- | ---: |",
         ]
         lines += tableRows(modeCounts)
+        lines += [
+            "",
+            "### OpenRouter Agent Selection",
+            "",
+            "| Selection | Count |",
+            "| --- | ---: |",
+        ]
+        lines += tableRows(selectionCounts)
+        lines += [
+            "",
+            "### OpenRouter Agent Terminal Outcomes",
+            "",
+            "| Outcome | Count |",
+            "| --- | ---: |",
+        ]
+        lines += tableRows(terminalCounts)
         lines += [
             "",
             "### OpenRouter Failures",

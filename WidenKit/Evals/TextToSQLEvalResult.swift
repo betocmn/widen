@@ -53,6 +53,11 @@ public struct TextToSQLEvalMetrics: Codable, Equatable, Sendable {
     public var openRouterRequestedModelID: String?
     public var openRouterReturnedModelID: String?
     public var openRouterProviderName: String?
+    public var openRouterAgentSelectionReason: String?
+    public var openRouterAgentLogicalTurnCount: Int?
+    public var openRouterAgentHTTPAttemptCount: Int?
+    public var openRouterSchemaToolCallCount: Int?
+    public var openRouterAgentTerminalOutcome: String?
     public var semanticExecutionAttempted: Bool?
     public var semanticEnvironmentAvailable: Bool?
     public var goldenExecutionSucceeded: Bool?
@@ -89,6 +94,11 @@ public struct TextToSQLEvalMetrics: Codable, Equatable, Sendable {
         openRouterRequestedModelID: String? = nil,
         openRouterReturnedModelID: String? = nil,
         openRouterProviderName: String? = nil,
+        openRouterAgentSelectionReason: String? = nil,
+        openRouterAgentLogicalTurnCount: Int? = nil,
+        openRouterAgentHTTPAttemptCount: Int? = nil,
+        openRouterSchemaToolCallCount: Int? = nil,
+        openRouterAgentTerminalOutcome: String? = nil,
         semanticExecutionAttempted: Bool? = nil,
         semanticEnvironmentAvailable: Bool? = nil,
         goldenExecutionSucceeded: Bool? = nil,
@@ -124,6 +134,11 @@ public struct TextToSQLEvalMetrics: Codable, Equatable, Sendable {
         self.openRouterRequestedModelID = openRouterRequestedModelID
         self.openRouterReturnedModelID = openRouterReturnedModelID
         self.openRouterProviderName = openRouterProviderName
+        self.openRouterAgentSelectionReason = openRouterAgentSelectionReason
+        self.openRouterAgentLogicalTurnCount = openRouterAgentLogicalTurnCount
+        self.openRouterAgentHTTPAttemptCount = openRouterAgentHTTPAttemptCount
+        self.openRouterSchemaToolCallCount = openRouterSchemaToolCallCount
+        self.openRouterAgentTerminalOutcome = openRouterAgentTerminalOutcome
         self.semanticExecutionAttempted = semanticExecutionAttempted
         self.semanticEnvironmentAvailable = semanticEnvironmentAvailable
         self.goldenExecutionSucceeded = goldenExecutionSucceeded
