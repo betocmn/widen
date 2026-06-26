@@ -68,6 +68,24 @@ private let fmTestEnabled =
             #expect(primaryLimit == 0)
             #expect(bundle.schemaPackage.includedTables.count == 4)
         }
+
+        @Test func optionalDiscoveryRequiresBudgetForDiscoveryAndSQLResponse() {
+            #expect(
+                FoundationModelsSQLGenerator.canSpendOptionalDiscoveryCall(
+                    context: SQLGenerationContext(modelCallCount: 0)
+                )
+            )
+            #expect(
+                !FoundationModelsSQLGenerator.canSpendOptionalDiscoveryCall(
+                    context: SQLGenerationContext(modelCallCount: 1)
+                )
+            )
+            #expect(
+                !FoundationModelsSQLGenerator.canSpendOptionalDiscoveryCall(
+                    context: SQLGenerationContext(modelCallCount: 2)
+                )
+            )
+        }
     }
 #endif
 

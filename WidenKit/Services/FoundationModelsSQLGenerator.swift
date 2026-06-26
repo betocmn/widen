@@ -292,7 +292,8 @@
             allowDiscovery: Bool
         ) async throws -> SQLGenerationContext {
             guard allowDiscovery,
-                context.mode == .initial || context.mode == .followUp
+                context.mode == .initial || context.mode == .followUp,
+                Self.canSpendOptionalDiscoveryCall(context: context)
             else { return context }
 
             let initialBundle = try promptBundle(
@@ -546,6 +547,10 @@
                         SchemaRelevanceRanker.canonicalIdentifier(table.name)
                     )
             }.count
+        }
+
+        static func canSpendOptionalDiscoveryCall(context: SQLGenerationContext) -> Bool {
+            max(0, context.modelCallCount) < maxModelCalls - 1
         }
 
         /// Shared with `PrivateCloudComputeSQLGenerator`, which produces the
