@@ -40,7 +40,7 @@ PR 2 + PR 3
   └── PR 8 ✅ — PostgreSQL verification and one repair        [done 2026-06-26]
 
 PR 6 + PR 8
-  └── PR 9 — Optional data-inspection tools
+  └── PR 9 ✅ — Optional data-inspection tools              [done 2026-06-26]
 
 PR 2 + PR 5 + PR 6
   └── PR 11 — Constrained local-model path                 [parallel with PR 7–10]
@@ -935,7 +935,7 @@ make eval-db-cloud-agent MODEL=openai/gpt-5.5 REPEAT=3: 60 results; backend avai
 
 ---
 
-# PR 9 — Add optional metadata and data-inspection tools
+# PR 9 ✅ — Add optional metadata and data-inspection tools [done 2026-06-26]
 
 Suggested title:
 
@@ -975,6 +975,28 @@ Rules:
 * Tool responses have strict row and character caps.
 
 This PR should be evaluated separately to quantify whether live metadata materially improves the suite.
+
+Completed on 2026-06-26.
+
+Verification:
+
+```text
+make project
+make test
+make test-db
+make eval-schema-tools
+make eval-inspection-tools
+```
+
+Results:
+
+```text
+make test: 764 tests in 43 suites passed.
+make test-db: 34 tests in 3 suites passed.
+make eval-schema-tools: 10/10 cases passed, definition bytes 1686, estimated definition tokens 562, max response bytes 6111, truncated results 1, determinism failures 0.
+make eval-inspection-tools: 11/11 cases passed, policy-denied calls 3, redacted values 1, max result bytes 751, truncations 1.
+Optional OpenRouter agent evals were skipped because WIDEN_EVAL_OPENROUTER_API_KEY was not set.
+```
 
 ---
 
@@ -1159,7 +1181,7 @@ When only one agent is working:
 7. PR 7 — Cloud agent
 8. PR 8 — PostgreSQL verification
 9. PR 10 — Embedding experiment
-10. PR 9 — Optional data inspection
+10. PR 9 ✅ — Optional data inspection
 11. PR 11 — Experimental local path
 12. PR 12 — Platform/default-backend decision
 ```

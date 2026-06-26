@@ -30,7 +30,13 @@ struct ConnectionStoreTests {
             sslMode: .prefer,
             defaultRowLimit: 250,
             statementTimeoutSeconds: 30,
-            databaseContext: "orders.user_id joins users.id"
+            databaseContext: "orders.user_id joins users.id",
+            allowCloudSchemaMetadata: true,
+            allowLocalDataInspection: true,
+            allowCloudDataInspection: true,
+            allowSampleRowInspection: true,
+            sensitiveColumnRules: ["customer_email"],
+            redactedColumnIDs: ["column-stable-id"]
         )
         first.updatedAt = Date(timeIntervalSince1970: 1_750_000_000)
         let second = DatabaseConnectionConfig(
@@ -50,6 +56,12 @@ struct ConnectionStoreTests {
         #expect(loaded.defaultRowLimit == 250)
         #expect(loaded.statementTimeoutSeconds == 30)
         #expect(loaded.databaseContext == "orders.user_id joins users.id")
+        #expect(loaded.allowCloudSchemaMetadata)
+        #expect(loaded.allowLocalDataInspection)
+        #expect(loaded.allowCloudDataInspection)
+        #expect(loaded.allowSampleRowInspection)
+        #expect(loaded.sensitiveColumnRules == ["customer_email"])
+        #expect(loaded.redactedColumnIDs == ["column-stable-id"])
         #expect(all.last?.id == second.id)
         #expect(all.last?.name == "Staging")
     }
@@ -81,6 +93,12 @@ struct ConnectionStoreTests {
 
         #expect(loaded.name == "Legacy")
         #expect(loaded.databaseContext == "")
+        #expect(loaded.allowCloudSchemaMetadata)
+        #expect(!loaded.allowLocalDataInspection)
+        #expect(!loaded.allowCloudDataInspection)
+        #expect(!loaded.allowSampleRowInspection)
+        #expect(loaded.sensitiveColumnRules.isEmpty)
+        #expect(loaded.redactedColumnIDs.isEmpty)
     }
 
     @Test func savedFileNeverContainsPasswordField() throws {
@@ -261,6 +279,8 @@ struct ConnectionSettingsViewModelTests {
         #expect(config?.port == 5432)
         #expect(config?.defaultRowLimit == 100)
         #expect(config?.statementTimeoutSeconds == 10)
+        #expect(config?.allowLocalDataInspection == false)
+        #expect(config?.allowCloudDataInspection == false)
     }
 
     @Test func queryContextIsTrimmedAndSaved() {
@@ -270,6 +290,23 @@ struct ConnectionSettingsViewModelTests {
         let config = viewModel.buildConfig()
 
         #expect(config?.databaseContext == "orders.user_id joins users.id")
+    }
+
+    @Test func privacySettingsAreSavedAndCloudDataRequiresLocalInspection() {
+        let viewModel = makeValidViewModel()
+        viewModel.allowLocalDataInspection = true
+        viewModel.allowCloudDataInspection = true
+
+        let enabled = viewModel.buildConfig()
+
+        #expect(enabled?.allowLocalDataInspection == true)
+        #expect(enabled?.allowCloudDataInspection == true)
+
+        viewModel.allowLocalDataInspection = false
+        let cloudOnly = viewModel.buildConfig()
+
+        #expect(cloudOnly?.allowLocalDataInspection == false)
+        #expect(cloudOnly?.allowCloudDataInspection == false)
     }
 
     @Test func invalidPortIsRejected() {

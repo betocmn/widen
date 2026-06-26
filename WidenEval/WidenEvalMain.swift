@@ -18,6 +18,23 @@ enum WidenEvalMain {
 
             await GenerationLog.shared.setEnabled(options.recordPrompts)
 
+            if options.inspectionTools {
+                let runner = DatabaseInspectionEvalRunner(options: options)
+                let run = try await runner.run()
+                let output = try DatabaseInspectionEvalReporter.write(run: run, options: options)
+
+                print("Wrote database inspection eval results to \(output.directory.path)")
+                print("Summary: \(output.summary.path)")
+                if !run.acceptance.passed {
+                    fputs(
+                        "Database inspection acceptance failed: \(run.acceptance.messages.joined(separator: "; "))\n",
+                        stderr
+                    )
+                    exit(1)
+                }
+                return
+            }
+
             if options.schemaTools {
                 let runner = SchemaToolContractEvalRunner(options: options)
                 let run = try await runner.run()
@@ -126,6 +143,7 @@ struct EvalCLIOptions {
     var semanticDatabase = false
     var retrieverMode: SchemaRetrievalMode?
     var schemaTools = false
+    var inspectionTools = false
     var showHelp = false
 
     static let helpText = """
@@ -145,6 +163,7 @@ struct EvalCLIOptions {
           --semantic-db
           --retriever legacy|index|both
           --schema-tools
+          --inspection-tools
           --help
         """
 
@@ -211,6 +230,8 @@ struct EvalCLIOptions {
                 options.retrieverMode = retriever
             case "--schema-tools":
                 options.schemaTools = true
+            case "--inspection-tools":
+                options.inspectionTools = true
             case "--help", "-h":
                 options.showHelp = true
             default:

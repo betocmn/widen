@@ -29,6 +29,12 @@ public struct DatabaseConnectionConfig: Identifiable, Codable, Equatable, Sendab
     public var defaultRowLimit: Int
     public var statementTimeoutSeconds: Int
     public var databaseContext: String
+    public var allowCloudSchemaMetadata: Bool
+    public var allowLocalDataInspection: Bool
+    public var allowCloudDataInspection: Bool
+    public var allowSampleRowInspection: Bool
+    public var sensitiveColumnRules: [String]
+    public var redactedColumnIDs: [String]
     public var createdAt: Date
     public var updatedAt: Date
 
@@ -43,6 +49,12 @@ public struct DatabaseConnectionConfig: Identifiable, Codable, Equatable, Sendab
         defaultRowLimit: Int = 100,
         statementTimeoutSeconds: Int = 10,
         databaseContext: String = "",
+        allowCloudSchemaMetadata: Bool = true,
+        allowLocalDataInspection: Bool = false,
+        allowCloudDataInspection: Bool = false,
+        allowSampleRowInspection: Bool = false,
+        sensitiveColumnRules: [String] = [],
+        redactedColumnIDs: [String] = [],
         createdAt: Date = Date(),
         updatedAt: Date = Date()
     ) {
@@ -56,6 +68,12 @@ public struct DatabaseConnectionConfig: Identifiable, Codable, Equatable, Sendab
         self.defaultRowLimit = defaultRowLimit
         self.statementTimeoutSeconds = statementTimeoutSeconds
         self.databaseContext = databaseContext
+        self.allowCloudSchemaMetadata = allowCloudSchemaMetadata
+        self.allowLocalDataInspection = allowLocalDataInspection
+        self.allowCloudDataInspection = allowCloudDataInspection
+        self.allowSampleRowInspection = allowSampleRowInspection
+        self.sensitiveColumnRules = sensitiveColumnRules
+        self.redactedColumnIDs = redactedColumnIDs
         self.createdAt = createdAt
         self.updatedAt = updatedAt
     }
@@ -71,6 +89,12 @@ public struct DatabaseConnectionConfig: Identifiable, Codable, Equatable, Sendab
         case defaultRowLimit
         case statementTimeoutSeconds
         case databaseContext
+        case allowCloudSchemaMetadata
+        case allowLocalDataInspection
+        case allowCloudDataInspection
+        case allowSampleRowInspection
+        case sensitiveColumnRules
+        case redactedColumnIDs
         case createdAt
         case updatedAt
     }
@@ -87,6 +111,12 @@ public struct DatabaseConnectionConfig: Identifiable, Codable, Equatable, Sendab
         defaultRowLimit = try container.decode(Int.self, forKey: .defaultRowLimit)
         statementTimeoutSeconds = try container.decode(Int.self, forKey: .statementTimeoutSeconds)
         databaseContext = try container.decodeIfPresent(String.self, forKey: .databaseContext) ?? ""
+        allowCloudSchemaMetadata = try container.decodeIfPresent(Bool.self, forKey: .allowCloudSchemaMetadata) ?? true
+        allowLocalDataInspection = try container.decodeIfPresent(Bool.self, forKey: .allowLocalDataInspection) ?? false
+        allowCloudDataInspection = try container.decodeIfPresent(Bool.self, forKey: .allowCloudDataInspection) ?? false
+        allowSampleRowInspection = try container.decodeIfPresent(Bool.self, forKey: .allowSampleRowInspection) ?? false
+        sensitiveColumnRules = try container.decodeIfPresent([String].self, forKey: .sensitiveColumnRules) ?? []
+        redactedColumnIDs = try container.decodeIfPresent([String].self, forKey: .redactedColumnIDs) ?? []
         createdAt = try container.decode(Date.self, forKey: .createdAt)
         updatedAt = try container.decode(Date.self, forKey: .updatedAt)
     }
@@ -103,6 +133,12 @@ public struct DatabaseConnectionConfig: Identifiable, Codable, Equatable, Sendab
         try container.encode(defaultRowLimit, forKey: .defaultRowLimit)
         try container.encode(statementTimeoutSeconds, forKey: .statementTimeoutSeconds)
         try container.encode(databaseContext, forKey: .databaseContext)
+        try container.encode(allowCloudSchemaMetadata, forKey: .allowCloudSchemaMetadata)
+        try container.encode(allowLocalDataInspection, forKey: .allowLocalDataInspection)
+        try container.encode(allowCloudDataInspection, forKey: .allowCloudDataInspection)
+        try container.encode(allowSampleRowInspection, forKey: .allowSampleRowInspection)
+        try container.encode(sensitiveColumnRules, forKey: .sensitiveColumnRules)
+        try container.encode(redactedColumnIDs, forKey: .redactedColumnIDs)
         try container.encode(createdAt, forKey: .createdAt)
         try container.encode(updatedAt, forKey: .updatedAt)
     }

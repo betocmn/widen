@@ -28,6 +28,8 @@ public final class ConnectionSettingsViewModel {
         var rowLimitText: String
         var timeoutText: String
         var databaseContext: String
+        var allowLocalDataInspection: Bool
+        var allowCloudDataInspection: Bool
     }
 
     public var name = ""
@@ -40,6 +42,8 @@ public final class ConnectionSettingsViewModel {
     public var rowLimitText = "100"
     public var timeoutText = "10"
     public var databaseContext = ""
+    public var allowLocalDataInspection = false
+    public var allowCloudDataInspection = false
 
     public private(set) var validationErrors: [String] = []
     public private(set) var testState: TestState = .idle
@@ -84,6 +88,8 @@ public final class ConnectionSettingsViewModel {
         rowLimitText = String(config.defaultRowLimit)
         timeoutText = String(config.statementTimeoutSeconds)
         databaseContext = config.databaseContext
+        allowLocalDataInspection = config.allowLocalDataInspection
+        allowCloudDataInspection = config.allowCloudDataInspection
         password = (try? keychain.loadPassword(for: config.id)) ?? ""
         validationErrors = []
         testState = .idle
@@ -225,6 +231,9 @@ public final class ConnectionSettingsViewModel {
         config.defaultRowLimit = rowLimit
         config.statementTimeoutSeconds = timeout
         config.databaseContext = trimmedDatabaseContext
+        config.allowLocalDataInspection = allowLocalDataInspection
+        config.allowCloudDataInspection = allowLocalDataInspection && allowCloudDataInspection
+        config.allowSampleRowInspection = false
         config.updatedAt = Date()
         return (config, [])
     }
@@ -264,6 +273,8 @@ public final class ConnectionSettingsViewModel {
         rowLimitText = "100"
         timeoutText = "10"
         databaseContext = ""
+        allowLocalDataInspection = false
+        allowCloudDataInspection = false
         validationErrors = []
         testState = .idle
         saveError = nil
@@ -282,7 +293,9 @@ public final class ConnectionSettingsViewModel {
             sslMode: sslMode,
             rowLimitText: rowLimitText,
             timeoutText: timeoutText,
-            databaseContext: databaseContext
+            databaseContext: databaseContext,
+            allowLocalDataInspection: allowLocalDataInspection,
+            allowCloudDataInspection: allowCloudDataInspection
         )
     }
 
