@@ -195,17 +195,20 @@ public enum SchemaPromptPackager {
         public var maxCharacters: Int
         public var compressionLevel: CompressionLevel?
         public var maxPrimaryTables: Int
+        public var maxDetailedTables: Int?
         public var includeCatalog: Bool
 
         public init(
             maxCharacters: Int,
             compressionLevel: CompressionLevel? = nil,
             maxPrimaryTables: Int = 8,
+            maxDetailedTables: Int? = nil,
             includeCatalog: Bool = true
         ) {
             self.maxCharacters = maxCharacters
             self.compressionLevel = compressionLevel
             self.maxPrimaryTables = maxPrimaryTables
+            self.maxDetailedTables = maxDetailedTables
             self.includeCatalog = includeCatalog
         }
     }
@@ -366,11 +369,19 @@ public enum SchemaPromptPackager {
         let pinnedTables = ranked
             .map(\.table)
             .filter { pinnedIDs.contains($0.id) }
-        appendSection("Pinned tables:", tables: pinnedTables, force: true)
+        let cappedPinnedTables = options.maxDetailedTables
+            .map { Array(pinnedTables.prefix(max(0, $0))) }
+            ?? pinnedTables
+        appendSection("Pinned tables:", tables: cappedPinnedTables, force: true)
 
+        let primaryTableLimit = min(
+            options.maxPrimaryTables,
+            options.maxDetailedTables.map { max(0, $0 - includedIDs.count) }
+                ?? options.maxPrimaryTables
+        )
         let primaryTables = ranked
             .filter { $0.score > 0 && !pinnedIDs.contains($0.table.id) }
-            .prefix(options.maxPrimaryTables)
+            .prefix(primaryTableLimit)
             .map(\.table)
         appendSection("Primary tables:", tables: Array(primaryTables))
 
@@ -487,6 +498,13 @@ public enum SchemaPromptPackager {
         parts.append(contentsOf: context.schemaSearchQueries)
         parts.append(question)
         return parts.joined(separator: " ")
+    }
+
+    static func contextualQuestionForPromptBuilder(
+        _ question: String,
+        context: SQLGenerationContext
+    ) -> String {
+        contextualQuestion(question, context: context)
     }
 
     private static func pinnedTableIDs(

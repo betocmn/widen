@@ -16,13 +16,141 @@ private let fmTestEnabled =
 #if canImport(FoundationModels)
     @Suite("Foundation Models generator")
     struct FoundationModelsGeneratorTests {
-        @Test func contextWindowRetryPreservesCumulativeCallCount() {
+        @Test func sqlResponseAccountingCountsCumulativeCalls() {
+            let initial = FoundationModelsSQLGenerator.sqlResponseModelCallAccounting(
+                startingModelCallCount: 0,
+                generationContextModelCallCount: 0
+            )
+            #expect(initial.cumulativeModelCallsAfterSQL == 1)
+            #expect(initial.spentModelCalls == 1)
+            #expect(initial.discoveryCallsSpent == 0)
+            #expect(!initial.exceedsBudget)
+
+            let initialWithDiscovery = FoundationModelsSQLGenerator.sqlResponseModelCallAccounting(
+                startingModelCallCount: 0,
+                generationContextModelCallCount: 1
+            )
+            #expect(initialWithDiscovery.cumulativeModelCallsAfterSQL == 2)
+            #expect(initialWithDiscovery.spentModelCalls == 2)
+            #expect(initialWithDiscovery.discoveryCallsSpent == 1)
+            #expect(!initialWithDiscovery.exceedsBudget)
+
+            let repairWithoutDiscovery = FoundationModelsSQLGenerator.sqlResponseModelCallAccounting(
+                startingModelCallCount: 1,
+                generationContextModelCallCount: 1
+            )
+            #expect(repairWithoutDiscovery.cumulativeModelCallsAfterSQL == 2)
+            #expect(repairWithoutDiscovery.spentModelCalls == 1)
+            #expect(repairWithoutDiscovery.discoveryCallsSpent == 0)
+            #expect(!repairWithoutDiscovery.exceedsBudget)
+
+            let repairWithDiscovery = FoundationModelsSQLGenerator.sqlResponseModelCallAccounting(
+                startingModelCallCount: 1,
+                generationContextModelCallCount: 2
+            )
+            #expect(repairWithDiscovery.cumulativeModelCallsAfterSQL == 3)
+            #expect(repairWithDiscovery.spentModelCalls == 2)
+            #expect(repairWithDiscovery.discoveryCallsSpent == 1)
+            #expect(repairWithDiscovery.exceedsBudget)
+        }
+
+        @Test func sqlResponsePreflightRejectsSpentLocalBudget() {
+            #expect(
+                FoundationModelsSQLGenerator.canStartSQLResponse(startingModelCallCount: 0)
+            )
+            #expect(
+                FoundationModelsSQLGenerator.canStartSQLResponse(startingModelCallCount: 1)
+            )
+            #expect(
+                !FoundationModelsSQLGenerator.canStartSQLResponse(startingModelCallCount: 2)
+            )
+            #expect(
+                !FoundationModelsSQLGenerator.canStartSQLResponse(startingModelCallCount: 3)
+            )
+        }
+
+        @Test func contextWindowRetryPreservesCumulativeCallCountWithinBudget() {
+            #expect(
+                FoundationModelsSQLGenerator.canRetryAfterContextWindow(
+                    startingModelCallCount: 0,
+                    failedAttemptSpentCalls: 1
+                )
+            )
             #expect(
                 FoundationModelsSQLGenerator.cumulativeModelCallCountAfterContextRetry(
-                    startingModelCallCount: 3,
+                    startingModelCallCount: 0,
                     failedAttemptSpentCalls: 1,
                     retrySpentCalls: 1
-                ) == 5
+                ) == 2
+            )
+            #expect(
+                !FoundationModelsSQLGenerator.canRetryAfterContextWindow(
+                    startingModelCallCount: 0,
+                    failedAttemptSpentCalls: 2
+                )
+            )
+            #expect(
+                !FoundationModelsSQLGenerator.canRetryAfterContextWindow(
+                    startingModelCallCount: 1,
+                    failedAttemptSpentCalls: 1
+                )
+            )
+        }
+
+        @Test func discoveryPinnedTablesConsumePrimaryTableSlots() {
+            let tables = (0..<8).map { index in
+                TableInfo(
+                    schema: "public",
+                    name: "events_\(index)",
+                    type: .baseTable,
+                    columns: [
+                        ColumnInfo(
+                            tableSchema: "public",
+                            tableName: "events_\(index)",
+                            name: "id",
+                            dataType: "integer",
+                            isNullable: false,
+                            ordinalPosition: 1
+                        )
+                    ]
+                )
+            }
+            let schema = DatabaseSchema(
+                schemas: [SchemaInfo(name: "public")],
+                tables: tables,
+                foreignKeys: []
+            )
+            let context = SQLGenerationContext(
+                schemaSearchQueries: (0..<4).map { "public.events_\($0)" }
+            )
+
+            let bundle = SQLPromptBuilder.promptBundle(
+                question: "show event ids",
+                schema: schema,
+                context: context,
+                maxSchemaCharacters: 20_000,
+                maxPrimarySchemaTables: 4,
+                maxDetailedSchemaTables: 4
+            )
+
+            #expect(bundle.schemaPackage.includedTables.count == 4)
+        }
+
+        @Test func optionalDiscoveryRequiresBudgetForDiscoveryAndSQLResponse() {
+            #expect(
+                FoundationModelsSQLGenerator.canSpendOptionalDiscoveryCall(
+                    context: SQLGenerationContext(modelCallCount: 0)
+                )
+            )
+            #expect(
+                !FoundationModelsSQLGenerator.canSpendOptionalDiscoveryCall(
+                    context: SQLGenerationContext(modelCallCount: 1)
+                )
+            )
+            #expect(
+                !FoundationModelsSQLGenerator.canSpendOptionalDiscoveryCall(
+                    context: SQLGenerationContext(modelCallCount: 2)
+                )
             )
         }
     }

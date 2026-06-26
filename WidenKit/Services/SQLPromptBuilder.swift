@@ -87,14 +87,18 @@ public enum SQLPromptBuilder {
         schema: DatabaseSchema,
         context: SQLGenerationContext = SQLGenerationContext(),
         databaseContext: String? = nil,
-        maxSchemaCharacters: Int = 8_000
+        maxSchemaCharacters: Int = 8_000,
+        maxPrimarySchemaTables: Int = 8,
+        maxDetailedSchemaTables: Int? = nil
     ) -> String {
         promptBundle(
             question: question,
             schema: schema,
             context: context,
             databaseContext: databaseContext,
-            maxSchemaCharacters: maxSchemaCharacters
+            maxSchemaCharacters: maxSchemaCharacters,
+            maxPrimarySchemaTables: maxPrimarySchemaTables,
+            maxDetailedSchemaTables: maxDetailedSchemaTables
         ).prompt
     }
 
@@ -103,15 +107,37 @@ public enum SQLPromptBuilder {
         schema: DatabaseSchema,
         context: SQLGenerationContext = SQLGenerationContext(),
         databaseContext: String? = nil,
-        maxSchemaCharacters: Int = 8_000
+        maxSchemaCharacters: Int = 8_000,
+        maxPrimarySchemaTables: Int = 8,
+        maxDetailedSchemaTables: Int? = nil
     ) -> PromptBundle {
         let databaseContextText = databaseContextSection(databaseContext)
+        let rankingQuestion = SchemaPromptPackager.contextualQuestionForPromptBuilder(
+            question,
+            context: context
+        )
+        let schemaInput = SchemaRankingInput(
+            question: rankingQuestion,
+            currentSQL: context.repairContext?.failedSQL ?? context.currentSQL,
+            databaseContext: databaseContext ?? "",
+            diagnostic: context.repairContext?.diagnostic,
+            forbiddenIdentifiers: context.repairContext?.forbiddenIdentifiers ?? [],
+            schemaSearchQueries: context.schemaSearchQueries,
+            semanticBindings: context.confirmedSemanticBindings
+        )
         let schemaPackage = SchemaPromptPackager.package(
             schema: schema,
-            question: question,
-            context: context,
-            databaseContext: databaseContext ?? "",
-            maxCharacters: maxSchemaCharacters
+            ranked: SchemaRelevanceRanker.rank(
+                schema: schema,
+                input: schemaInput
+            ),
+            input: schemaInput,
+            options: SchemaPromptPackager.PackageOptions(
+                maxCharacters: maxSchemaCharacters,
+                maxPrimaryTables: maxPrimarySchemaTables,
+                maxDetailedTables: maxDetailedSchemaTables,
+                includeCatalog: false
+            )
         )
         var sections = [
             taggedSection(

@@ -183,6 +183,10 @@ public protocol SQLGenerator: Sendable {
     ) async throws -> SQLGenerationResult
 }
 
+/// Marker for the constrained on-device SQL path. The shared pipeline uses
+/// this to apply stricter experimental limits without weakening cloud repair.
+public protocol ConstrainedLocalSQLGenerator: SQLGenerator {}
+
 extension SQLGenerator {
     /// Context-free convenience for callers without a conversation.
     public func generateSQL(

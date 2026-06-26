@@ -372,7 +372,7 @@ public final class AppState {
                 return "\(OpenRouterCatalog.displayName(for: openRouterModelID)) via OpenRouter"
             }
         }
-        return "the local model"
+        return "On-Device — Experimental"
     }
 
     /// The active session-title backend. Overridable for tests.

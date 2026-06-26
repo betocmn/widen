@@ -24,7 +24,7 @@ struct AIBackendToggle: View {
             HStack(spacing: 2) {
                 CapsuleSegmentButton(
                     icon: "shield.lefthalf.filled",
-                    title: "Local",
+                    title: "On-Device — Experimental",
                     isSelected: appState.aiBackendMode == .local,
                     help: localHelp
                 ) {
@@ -63,7 +63,7 @@ struct AIBackendToggle: View {
         if let message = appState.localModelAvailabilityMessage {
             return message
         }
-        return "Generate SQL with Apple's on-device model — your questions and schema stay on this Mac. This switch only picks the LLM that turns questions into SQL; nothing else moves to the cloud."
+        return "Generate SQL with Apple's on-device experimental model. It is limited to SELECT queries over narrow schema context; complex requests may require Cloud."
     }
 
     private var cloudHelp: String {

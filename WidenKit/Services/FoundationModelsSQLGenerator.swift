@@ -82,7 +82,10 @@
 
     /// Generates SQL with Apple's on-device Foundation Model. Local-only: no
     /// network, no external LLM APIs.
-    public final class FoundationModelsSQLGenerator: SQLGenerator, Sendable {
+    public final class FoundationModelsSQLGenerator: ConstrainedLocalSQLGenerator, Sendable {
+        private static let maxModelCalls = GeneratedSQLRepairSupport.constrainedLocalModelCallBudget
+        private static let maxDetailedSchemaTables = 4
+
         public init() {}
 
         /// nil when the model is ready; otherwise a user-readable reason.
@@ -103,6 +106,44 @@
             max(0, startingModelCallCount)
                 + max(0, failedAttemptSpentCalls)
                 + max(0, retrySpentCalls)
+        }
+
+        struct SQLResponseModelCallAccounting: Equatable {
+            var startingModelCalls: Int
+            var discoveryCallsSpent: Int
+            var cumulativeModelCallsAfterSQL: Int
+            var spentModelCalls: Int
+            var exceedsBudget: Bool
+        }
+
+        static func canStartSQLResponse(startingModelCallCount: Int) -> Bool {
+            max(0, startingModelCallCount) < maxModelCalls
+        }
+
+        static func canRetryAfterContextWindow(
+            startingModelCallCount: Int,
+            failedAttemptSpentCalls: Int
+        ) -> Bool {
+            max(0, startingModelCallCount) + max(0, failedAttemptSpentCalls) < maxModelCalls
+        }
+
+        static func sqlResponseModelCallAccounting(
+            startingModelCallCount: Int,
+            generationContextModelCallCount: Int
+        ) -> SQLResponseModelCallAccounting {
+            let startingModelCalls = max(0, startingModelCallCount)
+            let discoveryCallsSpent = max(
+                0,
+                max(0, generationContextModelCallCount) - startingModelCalls
+            )
+            let cumulativeModelCallsAfterSQL = startingModelCalls + discoveryCallsSpent + 1
+            return SQLResponseModelCallAccounting(
+                startingModelCalls: startingModelCalls,
+                discoveryCallsSpent: discoveryCallsSpent,
+                cumulativeModelCallsAfterSQL: cumulativeModelCallsAfterSQL,
+                spentModelCalls: cumulativeModelCallsAfterSQL - startingModelCalls,
+                exceedsBudget: cumulativeModelCallsAfterSQL > maxModelCalls
+            )
         }
 
         public func generateSQL(
@@ -127,6 +168,12 @@
                 ).result
             } catch let error as GenerationAttemptError {
                 if case .exceededContextWindowSize = error.error {
+                    guard Self.canRetryAfterContextWindow(
+                        startingModelCallCount: context.modelCallCount,
+                        failedAttemptSpentCalls: error.spentModelCalls
+                    ) else {
+                        throw Self.map(error.error)
+                    }
                     // Retry once with a smaller whole-prompt target. Discovery is
                     // skipped here so a context-window retry cannot spend another
                     // model call before SQL generation.
@@ -171,6 +218,10 @@
             inputScale: Double,
             allowDiscovery: Bool
         ) async throws -> GenerationAttempt {
+            let startingModelCalls = max(0, context.modelCallCount)
+            guard Self.canStartSQLResponse(startingModelCallCount: startingModelCalls) else {
+                throw Self.localModelCallBudgetFailure()
+            }
             // A fresh session per request keeps the context window small and
             // the generation stateless; follow-up awareness comes from the
             // compact context section in the prompt instead.
@@ -189,13 +240,14 @@
                 allowDiscovery: allowDiscovery
             )
             try Task.checkCancellation()
-            if generationContext.modelCallCount == 0 {
-                generationContext.modelCallCount = 1
-            }
-            let spentModelCalls = Self.spentModelCalls(
-                startingContext: context,
-                generationContext: generationContext
+            let accounting = Self.sqlResponseModelCallAccounting(
+                startingModelCallCount: startingModelCalls,
+                generationContextModelCallCount: generationContext.modelCallCount
             )
+            guard !accounting.exceedsBudget else {
+                throw Self.localModelCallBudgetFailure()
+            }
+            generationContext.modelCallCount = accounting.cumulativeModelCallsAfterSQL
             let session = LanguageModelSession(
                 model: model,
                 instructions: instructions
@@ -218,7 +270,7 @@
                     options: GenerationOptions(sampling: .greedy, maximumResponseTokens: 512)
                 )
                 var result = Self.result(from: response.content)
-                result.generationCallCount = generationContext.modelCallCount
+                result.generationCallCount = accounting.cumulativeModelCallsAfterSQL
                 await GenerationLog.shared.append(
                     prompt: prompt,
                     outcome: result.logDescription,
@@ -230,7 +282,7 @@
                         callCount: generationContext.modelCallCount,
                         stopReason: result.needsClarification ? "clarification" : "success"
                     ))
-                return GenerationAttempt(result: result, spentModelCalls: spentModelCalls)
+                return GenerationAttempt(result: result, spentModelCalls: accounting.spentModelCalls)
             } catch let error as LanguageModelSession.GenerationError {
                 await GenerationLog.shared.append(
                     prompt: prompt,
@@ -243,7 +295,7 @@
                         callCount: generationContext.modelCallCount,
                         stopReason: "error"
                     ))
-                throw GenerationAttemptError(error: error, spentModelCalls: spentModelCalls)
+                throw GenerationAttemptError(error: error, spentModelCalls: accounting.spentModelCalls)
             } catch {
                 await GenerationLog.shared.append(
                     prompt: prompt,
@@ -260,13 +312,10 @@
             }
         }
 
-        private static func spentModelCalls(
-            startingContext: SQLGenerationContext,
-            generationContext: SQLGenerationContext
-        ) -> Int {
-            let starting = max(0, startingContext.modelCallCount)
-            let current = max(0, generationContext.modelCallCount)
-            return max(1, current - starting)
+        private static func localModelCallBudgetFailure() -> SQLGenerationFailure {
+            SQLGenerationFailure.generation(
+                "On-device experimental mode has already used this request's two model-call budget. Try a narrower question or switch to Cloud."
+            )
         }
 
         private func contextWithOptionalDiscovery(
@@ -281,7 +330,8 @@
             allowDiscovery: Bool
         ) async throws -> SQLGenerationContext {
             guard allowDiscovery,
-                context.mode == .initial || context.mode == .followUp
+                context.mode == .initial || context.mode == .followUp,
+                Self.canSpendOptionalDiscoveryCall(context: context)
             else { return context }
 
             let initialBundle = try promptBundle(
@@ -352,9 +402,13 @@
                 )
                 let queries = discovery.sanitizedSearchQueries
                 var copy = context
-                copy.modelCallCount = max(1, context.modelCallCount) + 1
+                copy.modelCallCount = max(0, context.modelCallCount) + 1
                 guard !queries.isEmpty else { return copy }
-                let searchResults = SchemaDiscoveryService.search(schema: schema, queries: queries)
+                let searchResults = SchemaDiscoveryService.search(
+                    schema: schema,
+                    queries: queries,
+                    limit: Self.maxDetailedSchemaTables
+                )
                 guard !searchResults.isEmpty else { return copy }
                 copy.schemaSearchQueries = queries + searchResults.map(\.qualifiedName)
                 return copy
@@ -362,7 +416,7 @@
                 throw CancellationError()
             } catch {
                 var copy = context
-                copy.modelCallCount = max(1, context.modelCallCount) + 1
+                copy.modelCallCount = max(0, context.modelCallCount) + 1
                 return copy
             }
         }
@@ -467,7 +521,9 @@
                 schema: schema,
                 context: context,
                 databaseContext: databaseContext,
-                maxSchemaCharacters: schemaCharacters
+                maxSchemaCharacters: schemaCharacters,
+                maxPrimarySchemaTables: Self.maxDetailedSchemaTables,
+                maxDetailedSchemaTables: Self.maxDetailedSchemaTables
             )
             for _ in 0..<4 {
                 let inputCharacters = instructions.count + latest.prompt.count
@@ -484,7 +540,9 @@
                     schema: schema,
                     context: context,
                     databaseContext: databaseContext,
-                    maxSchemaCharacters: schemaCharacters
+                    maxSchemaCharacters: schemaCharacters,
+                    maxPrimarySchemaTables: Self.maxDetailedSchemaTables,
+                    maxDetailedSchemaTables: Self.maxDetailedSchemaTables
                 )
             }
 
@@ -494,6 +552,10 @@
                 )
             }
             return latest
+        }
+
+        static func canSpendOptionalDiscoveryCall(context: SQLGenerationContext) -> Bool {
+            max(0, context.modelCallCount) < maxModelCalls - 1
         }
 
         /// Shared with `PrivateCloudComputeSQLGenerator`, which produces the
