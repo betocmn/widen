@@ -147,7 +147,7 @@
                     quotaReachedMessage(resetDate: info.resetDate))
             case .serviceUnavailable:
                 return SQLGenerationFailure.backendUnavailable(
-                    "Private Cloud Compute is temporarily unavailable. Try again later or switch to the local model."
+                    "Private Cloud Compute is temporarily unavailable. Try again later or switch to OpenRouter."
                 )
             @unknown default:
                 return SQLGenerationFailure.generation(

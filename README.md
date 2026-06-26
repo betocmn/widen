@@ -63,7 +63,7 @@ configure in Settings.
 
 | Mode | Schema/question | Query results | Notes |
 | --- | ---: | ---: | --- |
-| Cloud mode | Question and allowed schema metadata are sent to the provider you choose | Stays on your Mac unless cloud data inspection is enabled for that connection | Default text-to-SQL backend. Use OpenRouter with your own API key, or Apple Private Cloud Compute on macOS 27+ when available. |
+| Cloud mode | Question and allowed schema metadata are sent to the provider you choose | Stays on your Mac unless cloud data inspection is enabled for that connection | Default text-to-SQL backend. Fresh installs use OpenRouter with the schema-tool agent and `openai/gpt-5.5` unless you choose another model. |
 | Local mode | Stays on your Mac | Stays on your Mac | Optional on eligible macOS 26+ Apple Silicon Macs with Apple Intelligence enabled. |
 
 Passwords and API keys live in the macOS Keychain, never on disk in plaintext.
@@ -100,9 +100,9 @@ query sessions, and turning questions into SQL:
 
 - PostgreSQL only.
 - Early MVP, not full DataGrip/TablePlus/Postico feature parity.
-- Cloud text-to-SQL requires your own provider setup. Widen currently supports
-  OpenRouter API keys and includes support for Apple's Private Cloud Compute
-  models on macOS 27+ when entitlement requirements are met.
+- Cloud text-to-SQL requires your own provider setup. Widen defaults to
+  OpenRouter. Apple Private Cloud Compute support is planned when Apple's
+  required OS and SDK support is available.
 - The optional local Foundation Model requires eligible macOS 26+ Apple Silicon
   hardware and has a small context window; very large schemas are truncated
   whole-table-at-a-time before prompting.
@@ -293,8 +293,9 @@ The PR 12 release gate is:
 make eval-release MODEL=openai/gpt-5.5
 ```
 
-It runs the 20-case suite three times in OpenRouter tools mode with seeded
-Postgres semantic grading, writes the normal `.eval-results/` artifacts, writes
+It runs the 20-case suite three times against the same OpenRouter schema-tool
+path used by the default product experience, with seeded Postgres semantic
+grading. It writes the normal `.eval-results/` artifacts, writes
 `docs/evals/<version>.md`, and exits nonzero unless the release thresholds pass.
 
 ## Development notes and caveats
@@ -323,11 +324,9 @@ Postgres semantic grading, writes the normal `.eval-results/` artifacts, writes
   large schemas are truncated whole-table-at-a-time in the prompt; Widen
   retries once with a tighter budget if the window is exceeded. Cloud models
   get a much larger schema budget.
-- **Apple Private Cloud Compute** needs macOS 27, a
-  build made with Xcode 27, and Apple's `com.apple.developer.private-cloud-compute`
-  entitlement on a properly signed build — see
-  [docs/implementation-guide.md](docs/implementation-guide.md). On macOS 26,
-  use OpenRouter for cloud generation instead.
+- **Apple Private Cloud Compute** is not part of the default product path yet.
+  Support is planned when Apple's required OS and SDK support is available. On
+  current builds, use OpenRouter for cloud generation instead.
 
 ## License
 

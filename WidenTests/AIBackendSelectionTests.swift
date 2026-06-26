@@ -8,7 +8,8 @@ import Testing
 struct AIBackendSelectionTests {
     private static let defaultsKeys = [
         "WidenAIBackendMode", "WidenCloudAIProvider", "WidenOpenRouterModelID",
-        "WidenUseMockAI", "WidenExperimentalCloudSchemaAgentEnabled",
+        "WidenUseMockAI", "WidenOpenRouterSchemaToolAgentEnabled",
+        "WidenExperimentalCloudSchemaAgentEnabled",
     ]
 
     private func clearDefaults() {
@@ -35,6 +36,24 @@ struct AIBackendSelectionTests {
         clearDefaults()
     }
 
+    private static func ordersTable() -> TableInfo {
+        TableInfo(
+            schema: "public",
+            name: "orders",
+            type: .baseTable,
+            columns: [
+                ColumnInfo(
+                    tableSchema: "public",
+                    tableName: "orders",
+                    name: "id",
+                    dataType: "integer",
+                    isNullable: false,
+                    ordinalPosition: 1
+                )
+            ]
+        )
+    }
+
     @Test func mockModeWinsOverCloud() {
         clearDefaults()
         let (state, dir) = makeState()
@@ -51,7 +70,7 @@ struct AIBackendSelectionTests {
         state.useMockAI = false
     }
 
-    @Test func cloudOpenRouterWithKeySelectsOpenRouterGenerator() {
+    @Test func cloudOpenRouterWithKeySelectsLegacyGeneratorWithoutConnectionContext() {
         clearDefaults()
         let (state, dir) = makeState()
         defer { cleanUp(dir) }
@@ -64,6 +83,51 @@ struct AIBackendSelectionTests {
         #expect(state.sqlGenerator is OpenRouterSQLGenerator)
         #expect(state.activeBackendDisplayName.contains("via OpenRouter"))
         #expect(state.modelAvailabilityMessage == nil)
+    }
+
+    @Test func cloudOpenRouterConnectedSessionUsesSchemaToolAgentByDefault() {
+        clearDefaults()
+        let (state, dir) = makeState()
+        defer { cleanUp(dir) }
+        let connection = DatabaseConnectionConfig(database: "widen_test", username: "beto")
+        state.connections = [connection]
+        state.aiBackendMode = .cloud
+        state.cloudProvider = .openRouter
+        state.openRouterAPIKeyOverride = .some("sk-test")
+
+        let generator = state.sqlGenerator(
+            connectionID: connection.id,
+            schema: DatabaseSchema(
+                schemas: [SchemaInfo(name: "public")],
+                tables: [Self.ordersTable()]
+            )
+        )
+
+        #expect(state.openRouterSchemaToolAgentEnabled)
+        #expect(generator is OpenRouterSchemaToolSQLAgent)
+    }
+
+    @Test func explicitSchemaToolAgentOptOutUsesLegacyOpenRouterGenerator() {
+        clearDefaults()
+        UserDefaults.standard.set(false, forKey: "WidenOpenRouterSchemaToolAgentEnabled")
+        let (state, dir) = makeState()
+        defer { cleanUp(dir) }
+        let connection = DatabaseConnectionConfig(database: "widen_test", username: "beto")
+        state.connections = [connection]
+        state.aiBackendMode = .cloud
+        state.cloudProvider = .openRouter
+        state.openRouterAPIKeyOverride = .some("sk-test")
+
+        let generator = state.sqlGenerator(
+            connectionID: connection.id,
+            schema: DatabaseSchema(
+                schemas: [SchemaInfo(name: "public")],
+                tables: [Self.ordersTable()]
+            )
+        )
+
+        #expect(!state.openRouterSchemaToolAgentEnabled)
+        #expect(generator is OpenRouterSQLGenerator)
     }
 
     @Test func connectionCloudSchemaMetadataOptOutBlocksCloudGeneration() {
@@ -227,6 +291,9 @@ struct AIBackendSelectionTests {
 
         #expect(state.aiBackendMode == .cloud)
         #expect(state.activeBackendDisplayName.contains("via OpenRouter"))
+        #expect(state.cloudProvider == .openRouter)
+        #expect(state.openRouterModelID == "openai/gpt-5.5")
+        #expect(state.openRouterSchemaToolAgentEnabled)
     }
 
     @Test func firstLaunchWithCloudDefaultDoesNotShowLocalCompatibilityAlert() async {
@@ -349,6 +416,15 @@ struct AIBackendSelectionTests {
         #expect(state.cloudProvider == .openRouter)
     }
 
+    @Test func legacyExperimentalSchemaAgentPreferenceIsPreserved() {
+        clearDefaults()
+        UserDefaults.standard.set(false, forKey: "WidenExperimentalCloudSchemaAgentEnabled")
+        let (state, dir) = makeState()
+        defer { cleanUp(dir) }
+
+        #expect(!state.openRouterSchemaToolAgentEnabled)
+    }
+
     @Test func backendPreferencesPersistAcrossStates() {
         clearDefaults()
         let (state, dir) = makeState()
@@ -357,11 +433,13 @@ struct AIBackendSelectionTests {
         state.aiBackendMode = .cloud
         state.cloudProvider = .openRouter
         state.openRouterModelID = "custom/model-id"
+        state.openRouterSchemaToolAgentEnabled = false
 
         let (reloaded, dir2) = makeState()
         defer { try? FileManager.default.removeItem(at: dir2) }
         #expect(reloaded.aiBackendMode == .cloud)
         #expect(reloaded.cloudProvider == .openRouter)
         #expect(reloaded.openRouterModelID == "custom/model-id")
+        #expect(!reloaded.openRouterSchemaToolAgentEnabled)
     }
 }

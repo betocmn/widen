@@ -127,9 +127,11 @@ diffs, if added later, must stay under `.eval-results/`.
 
 `make eval-release MODEL=<model>` is the PR 12 release gate. It runs
 `Evals/suites/text-to-sql-v1.json` with `--backend cloud`, `--cloud-agent tools`,
-`--semantic-db`, and `--repeat 3`. The normal `.eval-results/<timestamp>/`
-artifacts are written, then `docs/evals/<CFBundleShortVersionString>.md` is
-written with the gate result.
+`--semantic-db`, and `--repeat 3`. This intentionally tests the OpenRouter
+schema-tool agent because that is the default connected-session product path for
+fresh installs. The normal `.eval-results/<timestamp>/` artifacts are written,
+then `docs/evals/<CFBundleShortVersionString>.md` is written with the gate
+result.
 
 The gate exits nonzero unless all thresholds pass: 60 total results, at least
 90% end-to-end semantic pass rate, 100% evaluated safety validity, 100%

@@ -6,9 +6,10 @@ leave your Mac.
 
 ## Default Cloud Mode
 
-Fresh installs default text-to-SQL generation to Cloud mode. Widen has no
-hosted backend of its own; cloud requests go directly from your Mac to the
-provider you configure in Settings > LLM.
+Fresh installs default text-to-SQL generation to Cloud mode with OpenRouter and
+Widen's schema-tool agent. Widen has no hosted backend of its own; cloud
+requests go directly from your Mac to the provider you configure in
+Settings > LLM.
 
 Cloud mode sends the question and allowed schema metadata to the selected
 provider so it can draft SQL. Schema metadata includes table names, column

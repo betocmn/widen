@@ -790,7 +790,7 @@ Implementation notes:
 
 * Added an experimental OpenRouter-only `OpenRouterSchemaToolSQLAgent` separate from the legacy one-shot `OpenRouterSQLGenerator`.
 * Added OpenRouter tool-chat protocol support, terminal `submit_text_to_sql_result`, schema-tool evidence checks, typed agent failures, and aggregate agent metadata.
-* Added the persisted `experimentalCloudSchemaAgentEnabled` preference under OpenRouter Advanced / Experimental settings. Default remains false.
+* Added the persisted `experimentalCloudSchemaAgentEnabled` preference under OpenRouter advanced settings. Default remained false for PR 7; PR 12 later promoted the OpenRouter schema-tool agent to the default connected-session cloud path.
 * App construction now uses a connection-aware generator path so connection ID, selected schemas, schema fingerprint, schema-tool session factory, and search index store stay host-controlled.
 * Added `WidenEval --cloud-agent legacy|tools` plus `make eval-cloud-agent`, `make eval-db-cloud-agent`, and `make eval-cloud-agent-case`.
 * Added deterministic scripted OpenRouter tests for the happy path, multiple schema calls, terminal-before-search correction, mixed terminal/schema rejection, unsupported-tool-model legacy selection, prompt injection exclusion from the initial request, and pipeline trace merging.
@@ -1193,7 +1193,8 @@ Do not publish the text-to-SQL feature as production-ready until the gate passes
 Completion notes:
 
 * Lowered the app deployment target and `LSMinimumSystemVersion` to macOS 14.0 while keeping Foundation Models and Liquid Glass behind macOS 26 availability gates.
-* Made Cloud the default backend for fresh installs, kept Local available only on eligible macOS 26+ Apple Silicon hosts, and prevented Local compatibility alerts from blocking normal browsing/manual SQL when Cloud is selected.
+* Made OpenRouter Cloud the default backend for fresh installs (`aiBackendMode = .cloud`, `cloudProvider = .openRouter`, model `openai/gpt-5.5`), kept Local available only on eligible macOS 26+ Apple Silicon hosts, and prevented Local compatibility alerts from blocking normal browsing/manual SQL when Cloud is selected.
+* Promoted the OpenRouter schema-tool agent to the default connected-session product path so `make eval-release` tests the same path users get by default.
 * Added `make eval-release MODEL=<model>` as the PR 12 release gate with versioned summaries in `docs/evals/<release-version>.md`.
 * Updated privacy/default-backend docs to describe cloud schema metadata, optional inspected data values, and optional local mode.
 * Ran `make eval-release MODEL=openai/gpt-5.5`; the gate wrote `docs/evals/0.1.0.md` and failed the current production-ready threshold on semantic accuracy and clarification decisions.

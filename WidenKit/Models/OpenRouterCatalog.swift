@@ -23,7 +23,7 @@ public enum OpenRouterCatalog {
         OpenRouterModelOption(id: "deepseek/deepseek-v4-pro", displayName: "DeepSeek V4 Pro"),
     ]
 
-    public static let defaultModelID = curated[0].id
+    public static let defaultModelID = "openai/gpt-5.5"
 
     /// Display name for a model ID, falling back to the raw ID for custom
     /// models.

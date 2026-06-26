@@ -465,7 +465,7 @@ public protocol SQLGenerator: Sendable {
 }
 ```
 
-There are four implementations:
+There are five implementations:
 
 - `MockSQLGenerator`: deterministic development fallback returning a safe
   `SELECT 1 AS test_value` query.
@@ -478,22 +478,30 @@ There are four implementations:
   `response_format` for models that reject it, and a 60,000-character schema
   budget. HTTP goes through the injectable `HTTPTransport` seam so tests stub
   the network.
-- `PrivateCloudComputeSQLGenerator`: Apple's server-side foundation model on
-  Private Cloud Compute (announced WWDC 2026) — the same session and
-  `@Generable` shape as the local generator with a 24,000-character schema
-  budget. Compile-gated to the macOS 27 SDK and runtime-gated to macOS 27;
-  see "Dual toolchains" above and "Cloud backend selection" below.
+- `OpenRouterSchemaToolSQLAgent`: the default OpenRouter path for connected
+  sessions. It uses OpenRouter tool calls to inspect bounded schema metadata
+  from host-controlled schema tools, then submits the final text-to-SQL result.
+  The legacy one-shot OpenRouter generator remains available when no
+  connection/schema context exists or when explicitly disabled.
+- `PrivateCloudComputeSQLGenerator`: planned Apple cloud model support. It is
+  compile-gated to the required Apple SDK and runtime-gated to the required OS;
+  until that support is actually available, `PCCSupport` reports it as
+  unavailable and the default cloud path remains OpenRouter.
 
 ### Cloud backend selection
 
-`AppState.sqlGenerator` picks the backend: mock wins, then the selected cloud
-provider when `aiBackendMode == .cloud` and `cloudBackendStatus == .ready`, or
-the local model only when `LocalLLMEligibility` is visible and ready. Fresh
-preferences default `aiBackendMode` to `.cloud`. An unusable selection returns
-`UnavailableSQLGenerator` so production never silently swaps to another backend.
-`modelAvailabilityMessage` explains the selected backend problem in the chat
-banner and Settings › LLM. Session titles use the on-device generator when
-available, otherwise the deterministic fallback.
+`AppState` picks the backend: mock wins, then the selected cloud provider when
+`aiBackendMode == .cloud` and `cloudBackendStatus == .ready`, or the local model
+only when `LocalLLMEligibility` is visible and ready. Fresh preferences default
+`aiBackendMode` to `.cloud`, `cloudProvider` to `.openRouter`,
+`openRouterModelID` to `openai/gpt-5.5`, and the OpenRouter schema-tool agent
+to enabled. Connected sessions call `AppState.sqlGenerator(connectionID:schema:)`
+so the default OpenRouter path is the same schema-tool agent exercised by
+`make eval-release`. An unusable selection returns `UnavailableSQLGenerator` so
+production never silently swaps to another backend. `modelAvailabilityMessage`
+explains the selected backend problem in the chat banner and Settings › LLM.
+Session titles use the on-device generator when available, otherwise the
+deterministic fallback.
 
 Preferences and secrets:
 
@@ -502,6 +510,7 @@ Preferences and secrets:
 | Backend mode (`local`/`cloud`) | UserDefaults | `WidenAIBackendMode` |
 | Cloud provider (`applePCC`/`openRouter`) | UserDefaults | `WidenCloudAIProvider` |
 | OpenRouter model ID | UserDefaults | `WidenOpenRouterModelID` |
+| OpenRouter schema-tool agent enabled | UserDefaults | `WidenOpenRouterSchemaToolAgentEnabled` |
 | OpenRouter API key | Keychain, service `Widen` | `openrouter-api-key` |
 
 The UI surface is the Settings › LLM tab (`LLMSettingsView`) plus the
@@ -527,7 +536,9 @@ there), and build with Xcode 27+.
 What cannot be verified on a macOS 26 machine: actual PCC generation, the
 quota UI, and entitlement behavior. The PCC path is exercised only to its
 availability checks; everything reports through
-`PCCSupport.availabilityMessage`.
+`PCCSupport.availabilityMessage`. User-facing copy should not promise a date;
+it should say Apple cloud model support is planned when Apple's required OS and
+SDK support is available.
 
 `FoundationModelsSQLGenerator` is conditionally compiled with:
 
