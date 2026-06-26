@@ -281,6 +281,7 @@ struct ConnectionSettingsViewModelTests {
         #expect(config?.statementTimeoutSeconds == 10)
         #expect(config?.allowLocalDataInspection == false)
         #expect(config?.allowCloudDataInspection == false)
+        #expect(config?.allowSampleRowInspection == false)
     }
 
     @Test func queryContextIsTrimmedAndSaved() {
@@ -301,12 +302,14 @@ struct ConnectionSettingsViewModelTests {
 
         #expect(enabled?.allowLocalDataInspection == true)
         #expect(enabled?.allowCloudDataInspection == true)
+        #expect(enabled?.allowSampleRowInspection == false)
 
         viewModel.allowLocalDataInspection = false
         let cloudOnly = viewModel.buildConfig()
 
         #expect(cloudOnly?.allowLocalDataInspection == false)
         #expect(cloudOnly?.allowCloudDataInspection == false)
+        #expect(cloudOnly?.allowSampleRowInspection == false)
     }
 
     @Test func invalidPortIsRejected() {

@@ -28,20 +28,28 @@ public enum DatabaseInspectionToolRegistry {
                     properties: ["table_id": stringSchema()]
                 )
             ),
-            DatabaseInspectionToolDefinition(
-                name: DatabaseInspectionToolName.inspectColumnProfile.rawValue,
-                description: "Inspect a bounded column profile. Uses PostgreSQL statistics unless the policy explicitly permits aggregate scans. \(dataRule)",
-                parameters: objectSchema(
-                    required: ["table_id", "column_id"],
-                    properties: [
-                        "table_id": stringSchema(),
-                        "column_id": stringSchema(),
-                    ]
-                )
-            ),
         ]
 
-        if policy.allowFullTableScans {
+        let canExposeDataValuedTools = policy.audience == .local || policy.allowCloudDataInspection
+        let canExposeProfile = canExposeDataValuedTools || !policy.allowFullTableScans
+
+        if canExposeProfile {
+            definitions.append(
+                DatabaseInspectionToolDefinition(
+                    name: DatabaseInspectionToolName.inspectColumnProfile.rawValue,
+                    description: "Inspect a bounded column profile. Uses PostgreSQL statistics unless the policy explicitly permits aggregate scans. \(dataRule)",
+                    parameters: objectSchema(
+                        required: ["table_id", "column_id"],
+                        properties: [
+                            "table_id": stringSchema(),
+                            "column_id": stringSchema(),
+                        ]
+                    )
+                )
+            )
+        }
+
+        if policy.allowFullTableScans, canExposeDataValuedTools {
             definitions.append(
                 DatabaseInspectionToolDefinition(
                     name: DatabaseInspectionToolName.inspectDistinctValues.rawValue,
@@ -58,7 +66,7 @@ public enum DatabaseInspectionToolRegistry {
             )
         }
 
-        if policy.allowSampleRows {
+        if policy.allowSampleRows, canExposeDataValuedTools {
             definitions.append(
                 DatabaseInspectionToolDefinition(
                     name: DatabaseInspectionToolName.inspectSampleRows.rawValue,
@@ -79,11 +87,7 @@ public enum DatabaseInspectionToolRegistry {
             )
         }
 
-        return definitions.filter { definition in
-            policy.audience == .local || policy.allowCloudDataInspection
-                || definition.name == DatabaseInspectionToolName.inspectRelationSize.rawValue
-                || definition.name == DatabaseInspectionToolName.inspectColumnProfile.rawValue
-        }
+        return definitions
     }
 
     private static func objectSchema(
@@ -187,7 +191,7 @@ public struct DatabaseInspectionToolExecutor: Sendable {
         handles: SchemaToolHandleRegistry,
         policy: DatabaseInspectionPolicy,
         database: any DatabaseInspectionQuerying
-    ) async -> DatabaseInspectionToolExecution {
+    ) async throws -> DatabaseInspectionToolExecution {
         guard policy.allowLocalDataInspection else {
             return .failure(.policy("Data inspection is disabled for this connection."))
         }
@@ -233,7 +237,7 @@ public struct DatabaseInspectionToolExecutor: Sendable {
                 )
             }
         } catch is CancellationError {
-            return .failure(.init(code: .cancelled, message: "Database inspection was cancelled."))
+            throw CancellationError()
         } catch let error as DatabaseInspectionError {
             return .failure(error)
         } catch let appError as AppError {
@@ -750,17 +754,23 @@ public actor DatabaseInspectionToolSession {
         if let forcedError {
             execution = .failure(forcedError)
         } else {
-            execution = await executor.execute(
-                DatabaseInspectionToolInvocation(
-                    callID: identity.callID,
-                    toolName: identity.toolName,
-                    arguments: invocation.arguments
-                ),
-                snapshot: snapshot,
-                handles: handles,
-                policy: policy,
-                database: database
-            )
+            do {
+                execution = try await executor.execute(
+                    DatabaseInspectionToolInvocation(
+                        callID: identity.callID,
+                        toolName: identity.toolName,
+                        arguments: invocation.arguments
+                    ),
+                    snapshot: snapshot,
+                    handles: handles,
+                    policy: policy,
+                    database: database
+                )
+            } catch is CancellationError {
+                recordCancellation(callID: identity.callID, toolName: identity.toolName, started: started)
+                terminalExhausted = true
+                throw CancellationError()
+            }
         }
 
         var result = finalizedResult(
@@ -786,6 +796,30 @@ public actor DatabaseInspectionToolSession {
             )
         }
         return try finish(result: result, started: started, terminal: false)
+    }
+
+    private func recordCancellation(
+        callID: String,
+        toolName: String,
+        started: ContinuousClock.Instant
+    ) {
+        traces.append(
+            DatabaseInspectionToolCallTrace(
+                callID: callID,
+                toolName: toolName,
+                outcome: .error,
+                tableID: nil,
+                columnIDs: [],
+                rowCount: 0,
+                valueCount: 0,
+                outputByteCount: 0,
+                redactionCount: 0,
+                cloudShareable: false,
+                latencyMs: Int(started.duration(to: .now) / .milliseconds(1)),
+                truncated: false,
+                errorCode: .cancelled
+            )
+        )
     }
 
     private struct InvocationIdentity {

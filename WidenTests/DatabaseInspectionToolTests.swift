@@ -15,10 +15,42 @@ struct DatabaseInspectionToolTests {
         #expect(names.contains(DatabaseInspectionToolName.inspectColumnProfile.rawValue))
         #expect(names.contains(DatabaseInspectionToolName.inspectDistinctValues.rawValue))
         #expect(!names.contains(DatabaseInspectionToolName.inspectSampleRows.rawValue))
+
+        let localWithSamples = Set(
+            DatabaseInspectionToolRegistry.definitions(
+                policy: .localDataInspection(allowFullTableScans: true, allowSampleRows: true)
+            ).map(\.name)
+        )
+        #expect(localWithSamples.contains(DatabaseInspectionToolName.inspectSampleRows.rawValue))
         #expect(
             DatabaseInspectionToolRegistry.definitions(policy: local)
                 .allSatisfy { $0.description.contains(DatabaseInspectionToolRegistry.dataRule) }
         )
+    }
+
+    @Test func cloudDefinitionsOnlyExposeCurrentlyAllowedTools() {
+        var cloudFullScanDenied = DatabaseInspectionPolicy.localDataInspection(allowFullTableScans: true)
+        cloudFullScanDenied.audience = .cloud
+        cloudFullScanDenied.allowCloudDataInspection = false
+        let deniedNames = definitionNames(for: cloudFullScanDenied)
+        #expect(deniedNames == [DatabaseInspectionToolName.inspectRelationSize.rawValue])
+
+        var cloudStatsOnly = DatabaseInspectionPolicy.localDataInspection()
+        cloudStatsOnly.audience = .cloud
+        cloudStatsOnly.allowCloudDataInspection = false
+        let statsOnlyNames = definitionNames(for: cloudStatsOnly)
+        #expect(statsOnlyNames.contains(DatabaseInspectionToolName.inspectRelationSize.rawValue))
+        #expect(statsOnlyNames.contains(DatabaseInspectionToolName.inspectColumnProfile.rawValue))
+        #expect(!statsOnlyNames.contains(DatabaseInspectionToolName.inspectDistinctValues.rawValue))
+        #expect(!statsOnlyNames.contains(DatabaseInspectionToolName.inspectSampleRows.rawValue))
+
+        let cloudAllowedNames = definitionNames(
+            for: .cloudDataInspection(allowFullTableScans: true, allowSampleRows: true)
+        )
+        #expect(cloudAllowedNames.contains(DatabaseInspectionToolName.inspectRelationSize.rawValue))
+        #expect(cloudAllowedNames.contains(DatabaseInspectionToolName.inspectColumnProfile.rawValue))
+        #expect(cloudAllowedNames.contains(DatabaseInspectionToolName.inspectDistinctValues.rawValue))
+        #expect(cloudAllowedNames.contains(DatabaseInspectionToolName.inspectSampleRows.rawValue))
     }
 
     @Test func identifierQuotingEscapesEmbeddedQuotes() {
@@ -305,7 +337,7 @@ struct DatabaseInspectionToolTests {
         #expect(value?["truncated"]?.boolValue == true)
     }
 
-    @Test func timeoutAndCancellationAreClassified() async throws {
+    @Test func timeoutIsClassifiedAsToolResult() async throws {
         let timedOutDatabase = FakeInspectionDatabase()
         timedOutDatabase.error = AppError.databaseFailed(
             DatabaseDiagnostic(kind: .timedOut, sqlState: "57014", message: "canceling statement due to statement timeout")
@@ -319,18 +351,76 @@ struct DatabaseInspectionToolTests {
             arguments: ["table_id": .string(users)]
         )
         #expect(timeout.error?.code == .timeout)
+    }
 
+    @Test func cancellationDuringRelationSizeInspectionThrowsCancellationError() async throws {
         let cancelledDatabase = FakeInspectionDatabase()
         cancelledDatabase.error = CancellationError()
         let cancelledSession = try makeSession(policy: .localDataInspection(), database: cancelledDatabase)
         let cancelledUsers = try await requireHandle(cancelledSession, .table(schema: "public", name: "users"))
-        let cancelled = try await invoke(
-            cancelledSession,
-            id: "cancelled",
-            tool: .inspectRelationSize,
-            arguments: ["table_id": .string(cancelledUsers)]
+
+        await #expect(throws: CancellationError.self) {
+            _ = try await invoke(
+                cancelledSession,
+                id: "cancelled",
+                tool: .inspectRelationSize,
+                arguments: ["table_id": .string(cancelledUsers)]
+            )
+        }
+        let trace = try #require(await cancelledSession.tracesSnapshot().last)
+        #expect(trace.errorCode == .cancelled)
+        #expect(trace.outputByteCount == 0)
+        #expect(cancelledDatabase.relationSizeCallCount == 1)
+    }
+
+    @Test func cancellationDuringFullScanProfileThrowsCancellationError() async throws {
+        let cancelledDatabase = FakeInspectionDatabase()
+        cancelledDatabase.error = CancellationError()
+        let cancelledSession = try makeSession(
+            policy: .localDataInspection(allowFullTableScans: true),
+            database: cancelledDatabase
         )
-        #expect(cancelled.error?.code == .cancelled)
+        let orders = try await requireHandle(cancelledSession, .table(schema: "public", name: "orders"))
+        let created = try await requireHandle(cancelledSession, .column(schema: "public", table: "orders", name: "created_at"))
+
+        await #expect(throws: CancellationError.self) {
+            _ = try await invoke(
+                cancelledSession,
+                id: "cancelled-profile",
+                tool: .inspectColumnProfile,
+                arguments: ["table_id": .string(orders), "column_id": .string(created)]
+            )
+        }
+        let trace = try #require(await cancelledSession.tracesSnapshot().last)
+        #expect(trace.errorCode == .cancelled)
+        #expect(trace.outputByteCount == 0)
+        #expect(cancelledDatabase.aggregateCallCount == 1)
+    }
+
+    @Test func cancellationStopsSubsequentToolExecutionInSessionFlow() async throws {
+        let database = FakeInspectionDatabase()
+        database.error = CancellationError()
+        let session = try makeSession(policy: .localDataInspection(), database: database)
+        let users = try await requireHandle(session, .table(schema: "public", name: "users"))
+
+        await #expect(throws: CancellationError.self) {
+            _ = try await invoke(
+                session,
+                id: "first-cancelled",
+                tool: .inspectRelationSize,
+                arguments: ["table_id": .string(users)]
+            )
+        }
+        database.error = nil
+        await #expect(throws: DatabaseInspectionError.self) {
+            _ = try await invoke(
+                session,
+                id: "second-not-executed",
+                tool: .inspectRelationSize,
+                arguments: ["table_id": .string(users)]
+            )
+        }
+        #expect(database.relationSizeCallCount == 1)
     }
 
     private func makeSession(
@@ -367,6 +457,10 @@ struct DatabaseInspectionToolTests {
     ) async throws -> String {
         try #require(await session.handle(for: objectID))
     }
+
+    private func definitionNames(for policy: DatabaseInspectionPolicy) -> Set<String> {
+        Set(DatabaseInspectionToolRegistry.definitions(policy: policy).map(\.name))
+    }
 }
 
 private final class FakeInspectionDatabase: DatabaseInspectionQuerying, @unchecked Sendable {
@@ -385,13 +479,18 @@ private final class FakeInspectionDatabase: DatabaseInspectionQuerying, @uncheck
     ]
     var sampleRows: [DatabaseSampleRow] = []
     var error: (any Error)?
+    var relationSizeCallCount = 0
+    var statisticsCallCount = 0
     var aggregateCallCount = 0
+    var distinctValuesCallCount = 0
+    var sampleRowsCallCount = 0
 
     func inspectRelationSize(
         schema: String,
         table: String,
         policy: DatabaseInspectionPolicy
     ) async throws -> DatabaseRelationSizeSnapshot {
+        relationSizeCallCount += 1
         if let error { throw error }
         return relationSize
     }
@@ -402,6 +501,7 @@ private final class FakeInspectionDatabase: DatabaseInspectionQuerying, @uncheck
         column: String,
         policy: DatabaseInspectionPolicy
     ) async throws -> DatabaseColumnStatisticsSnapshot {
+        statisticsCallCount += 1
         if let error { throw error }
         return statistics
     }
@@ -413,8 +513,8 @@ private final class FakeInspectionDatabase: DatabaseInspectionQuerying, @uncheck
         includeMinMax: Bool,
         policy: DatabaseInspectionPolicy
     ) async throws -> DatabaseColumnAggregateSnapshot {
-        if let error { throw error }
         aggregateCallCount += 1
+        if let error { throw error }
         return aggregate
     }
 
@@ -424,6 +524,7 @@ private final class FakeInspectionDatabase: DatabaseInspectionQuerying, @uncheck
         limit: Int,
         policy: DatabaseInspectionPolicy
     ) async throws -> [DatabaseDistinctValueRow] {
+        distinctValuesCallCount += 1
         if let error { throw error }
         return distinctRows
     }
@@ -434,6 +535,7 @@ private final class FakeInspectionDatabase: DatabaseInspectionQuerying, @uncheck
         limit: Int,
         policy: DatabaseInspectionPolicy
     ) async throws -> [DatabaseSampleRow] {
+        sampleRowsCallCount += 1
         if let error { throw error }
         return sampleRows
     }

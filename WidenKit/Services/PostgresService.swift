@@ -258,6 +258,8 @@ public actor PostgresService: DatabaseInspectionQuerying {
                     throw error
                 }
             }
+        } catch is CancellationError {
+            throw CancellationError()
         } catch {
             throw PostgresErrorMapper.map(error)
         }
@@ -313,6 +315,8 @@ public actor PostgresService: DatabaseInspectionQuerying {
                     throw error
                 }
             }
+        } catch is CancellationError {
+            throw CancellationError()
         } catch {
             throw PostgresErrorMapper.map(error)
         }
@@ -375,6 +379,8 @@ public actor PostgresService: DatabaseInspectionQuerying {
                     throw error
                 }
             }
+        } catch is CancellationError {
+            throw CancellationError()
         } catch {
             throw PostgresErrorMapper.map(error)
         }
@@ -421,6 +427,8 @@ public actor PostgresService: DatabaseInspectionQuerying {
                     throw error
                 }
             }
+        } catch is CancellationError {
+            throw CancellationError()
         } catch {
             throw PostgresErrorMapper.map(error)
         }
@@ -470,6 +478,8 @@ public actor PostgresService: DatabaseInspectionQuerying {
                     throw error
                 }
             }
+        } catch is CancellationError {
+            throw CancellationError()
         } catch {
             throw PostgresErrorMapper.map(error)
         }
