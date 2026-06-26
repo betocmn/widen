@@ -31,7 +31,7 @@ PR 1 — Eval harness and first 20 cases
   ├── PR 4 — OpenRouter adapter reliability                [parallel]
   └── PR 5 — Local schema search index                     [parallel]
           ├── PR 6 ✅ — Bounded schema tools                  [done 2026-06-25]
-          └── PR 10 — Embedding retrieval experiment       [parallel]
+          └── PR 10 — Embedding retrieval experiment       [deferred — revisit after PR 11/12]
 
 PR 2 + PR 4 + PR 6
   └── PR 7 ✅ — Cloud tool-using SQL agent                  [done 2026-06-25]
@@ -978,13 +978,15 @@ This PR should be evaluated separately to quantify whether live metadata materia
 
 ---
 
-# PR 10 — Experiment with local schema embeddings
+# PR 10 — Experiment with local schema embeddings [Deferred]
 
 Suggested title:
 
 ```text
 experiment: add hybrid embedding schema retrieval
 ```
+
+**Deferred.** The historical failures were not primarily caused by missing semantic vector search — the schema often contained the needed tables and columns, but the model still mixed column ownership, produced invalid SQL, and repeated failed repairs. The priority is to finish the text-to-SQL refactor and validate the actual user experience first. Revisit after PR 11/12 and after real app/eval testing shows retrieval remains a bottleneck.
 
 **Can run in parallel after PR 5.**
 
@@ -1158,10 +1160,10 @@ When only one agent is working:
 6. PR 6 — Schema tools
 7. PR 7 — Cloud agent
 8. PR 8 — PostgreSQL verification
-9. PR 10 — Embedding experiment
-10. PR 9 — Optional data inspection
-11. PR 11 — Experimental local path
-12. PR 12 — Platform/default-backend decision
+9. PR 11 — Experimental local path
+10. PR 12 — Platform/default-backend decision
+11. PR 9 — Optional data inspection
+12. PR 10 — Embedding experiment             [deferred — revisit after PR 11/12 and real app/eval testing]
 ```
 
 The key discipline is to run the same 20 cases after every PR and reject changes that merely move failures from one stage to another.
