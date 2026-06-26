@@ -220,6 +220,28 @@ struct AIBackendSelectionTests {
         #expect(state.connectionAutofillUnavailableMessage == nil)
     }
 
+    @Test func freshPreferencesDefaultToCloudBackend() {
+        clearDefaults()
+        let (state, dir) = makeState()
+        defer { cleanUp(dir) }
+
+        #expect(state.aiBackendMode == .cloud)
+        #expect(state.activeBackendDisplayName.contains("via OpenRouter"))
+    }
+
+    @Test func firstLaunchWithCloudDefaultDoesNotShowLocalCompatibilityAlert() async {
+        clearDefaults()
+        let (state, dir) = makeState()
+        defer { cleanUp(dir) }
+
+        state.localLLMEligibilityOverride = .appleIntelligenceDisabled
+
+        await state.onLaunch()
+
+        #expect(state.aiBackendMode == .cloud)
+        #expect(state.llmCompatibilityAlert == nil)
+    }
+
     @Test func firstLaunchWithAppleIntelligenceDisabledShowsSettingsPath() async {
         clearDefaults()
         let (state, dir) = makeState()
@@ -235,6 +257,36 @@ struct AIBackendSelectionTests {
         #expect(
             state.llmCompatibilityAlert?.message.contains(
                 "System Settings › Apple Intelligence & Siri") == true)
+    }
+
+    @Test func storedLocalModeRemainsSelectedWhenReady() async {
+        clearDefaults()
+        let (state, dir) = makeState()
+        defer { cleanUp(dir) }
+
+        state.aiBackendMode = .local
+        state.localLLMEligibilityOverride = .ready
+
+        await state.onLaunch()
+
+        #expect(state.aiBackendMode == .local)
+        #expect(state.isLocalBackendVisible)
+        #expect(state.llmCompatibilityAlert == nil)
+    }
+
+    @Test func launchFallsBackToCloudWhenStoredLocalModeIsHidden() async {
+        clearDefaults()
+        let (state, dir) = makeState()
+        defer { cleanUp(dir) }
+
+        state.aiBackendMode = .local
+        state.localLLMEligibilityOverride = .osUnsupported("macOS 14")
+
+        await state.onLaunch()
+
+        #expect(state.aiBackendMode == .cloud)
+        #expect(!state.isLocalBackendVisible)
+        #expect(state.llmCompatibilityAlert == nil)
     }
 
     @Test func selectingLocalWithAppleIntelligenceDisabledFailsAndShowsAlert() {
@@ -253,6 +305,23 @@ struct AIBackendSelectionTests {
         #expect(
             state.llmCompatibilityAlert?.message.contains(
                 "System Settings › Apple Intelligence & Siri") == true)
+    }
+
+    @Test func selectingLocalOnUnsupportedHostFailsAndLeavesCloudSelected() {
+        clearDefaults()
+        let (state, dir) = makeState()
+        defer { cleanUp(dir) }
+
+        state.aiBackendMode = .cloud
+        state.localLLMEligibilityOverride = .osUnsupported("macOS 14")
+
+        let selected = state.requestAIBackendMode(.local)
+
+        #expect(!selected)
+        #expect(state.aiBackendMode == .cloud)
+        #expect(!state.isLocalBackendVisible)
+        #expect(state.llmCompatibilityAlert?.kind == .localUnavailable)
+        #expect(state.llmCompatibilityAlert?.message.contains("macOS 26") == true)
     }
 
     @Test func selectingLocalWhenReadySucceedsWithoutAlert() {

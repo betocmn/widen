@@ -124,7 +124,7 @@ public final class AppState {
     public var aiBackendMode: AIBackendMode =
         AIBackendMode(
             rawValue: UserDefaults.standard.string(forKey: AppState.aiBackendModeKey) ?? "")
-        ?? .local
+        ?? .cloud
     {
         didSet { UserDefaults.standard.set(aiBackendMode.rawValue, forKey: Self.aiBackendModeKey) }
     }
@@ -317,6 +317,9 @@ public final class AppState {
         }
 
         let localStatus = localLLMEligibility
+        guard localStatus.canShowLocalBackendOption else {
+            return UnavailableSQLGenerator(message: localStatus.message)
+        }
         guard localStatus.isReady else {
             return UnavailableSQLGenerator(message: localStatus.message)
         }
@@ -439,6 +442,10 @@ public final class AppState {
         localLLMEligibilityOverride ?? LocalLLMEligibilityChecker.status()
     }
 
+    public var isLocalBackendVisible: Bool {
+        localLLMEligibility.canShowLocalBackendOption
+    }
+
     public let connectionStore: ConnectionStore
     public let sessionStore: SessionStore
     public let schemaStore: SchemaStore
@@ -511,10 +518,14 @@ public final class AppState {
 
         UserDefaults.standard.removeObject(forKey: Self.selectedSessionKey)
         sidebarSelection = nil
+        if aiBackendMode == .local && !isLocalBackendVisible {
+            aiBackendMode = .cloud
+        }
         checkLocalLLMEligibilityForInstallIfNeeded()
     }
 
     public func checkLocalLLMEligibilityForInstallIfNeeded() {
+        guard aiBackendMode == .local else { return }
         let status = localLLMEligibility
         guard !status.isReady else { return }
         guard !UserDefaults.standard.bool(forKey: Self.didShowInstallLLMCompatibilityAlertKey)
@@ -529,6 +540,10 @@ public final class AppState {
         switch mode {
         case .local:
             let status = localLLMEligibility
+            guard status.canShowLocalBackendOption else {
+                llmCompatibilityAlert = compatibilityAlert(for: status)
+                return false
+            }
             guard status.isReady else {
                 llmCompatibilityAlert = compatibilityAlert(for: status)
                 return false

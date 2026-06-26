@@ -80,7 +80,7 @@ struct ConnectionEditorForm: View {
                                 RoundedRectangle(cornerRadius: 6)
                                     .stroke(Color.primary.opacity(0.12), lineWidth: 1)
                             }
-                            .help("Included in the local model prompt before each text-to-SQL generation.")
+                            .help("Included with each text-to-SQL generation for the selected backend.")
 
                             Text("\(viewModel.databaseContext.count) / \(SQLPromptBuilder.maxDatabaseContextCharacters.formatted()) characters")
                                 .font(.caption2.monospacedDigit())
@@ -135,7 +135,7 @@ struct ConnectionEditorForm: View {
     private var privacySection: some View {
         SettingsSectionPanel(title: "Advanced Privacy", systemImage: "lock.shield") {
             VStack(alignment: .leading, spacing: 10) {
-                Text("Schema metadata includes table/column names, comments, constraints, and enum values. Data inspection may include actual values from your database.")
+                Text("Cloud SQL generation can send your question and allowed schema metadata: table/column names, comments, constraints, and enum values. Inspected data values are sent to cloud models only when both local inspection and cloud data inspection are enabled here.")
                     .font(.caption)
                     .foregroundStyle(.secondary)
                     .fixedSize(horizontal: false, vertical: true)
