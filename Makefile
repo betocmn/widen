@@ -55,9 +55,17 @@ test:
 ## Run unit + Postgres integration tests against a local database.
 ## Each test provisions and drops its own throwaway database, so this only
 ## needs a local PostgreSQL whose role can CREATE DATABASE — no manual seeding.
+## Override host/port/user/maintenance DB by exporting WIDEN_TEST_DB_HOST,
+## WIDEN_TEST_DB_PORT, WIDEN_TEST_DB_USER, WIDEN_TEST_DB_MAINTENANCE_DB; the
+## TEST_RUNNER_ prefix is what xcodebuild forwards into the test bundle.
 test-db:
 	env -u WIDEN_TEST_DB -u TEST_RUNNER_WIDEN_TEST_DB $(XCODEBUILD) test
-	TEST_RUNNER_WIDEN_TEST_DB=$${WIDEN_TEST_DB:-1} $(XCODEBUILD) test -only-testing:WidenTests/PostgresIntegrationTests -only-testing:WidenTests/QueryExecutionIntegrationTests -only-testing:WidenTests/TextToSQLSemanticDatabaseIntegrationTests
+	TEST_RUNNER_WIDEN_TEST_DB=$${WIDEN_TEST_DB:-1} \
+	TEST_RUNNER_WIDEN_TEST_DB_HOST="$${WIDEN_TEST_DB_HOST:-}" \
+	TEST_RUNNER_WIDEN_TEST_DB_PORT="$${WIDEN_TEST_DB_PORT:-}" \
+	TEST_RUNNER_WIDEN_TEST_DB_USER="$${WIDEN_TEST_DB_USER:-}" \
+	TEST_RUNNER_WIDEN_TEST_DB_MAINTENANCE_DB="$${WIDEN_TEST_DB_MAINTENANCE_DB:-}" \
+	$(XCODEBUILD) test -only-testing:WidenTests/PostgresIntegrationTests -only-testing:WidenTests/QueryExecutionIntegrationTests -only-testing:WidenTests/TextToSQLSemanticDatabaseIntegrationTests
 
 ## Run unit + Foundation Models smoke tests (requires Apple Intelligence enabled)
 test-fm:
