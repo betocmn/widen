@@ -7,6 +7,22 @@ general = "Make sure to auto-commit after every change with semantic commit mess
 
 [scripts]
 archive = "make clean"
-run = "make run-conductor"
+setup = "bash .conductor/setup.sh"
+run = "bash .conductor/run.sh"
 run_mode = "nonconcurrent"
-setup = "make setup"
+
+# Localhost-only throwaway Postgres baked into the cloud snapshot. Auth is
+# trust-based inside the cloud workspace, so no password is needed here.
+# Widen is a macOS/Xcode app, so the cloud workspace cannot build or run
+# the app or its xcodebuild test bundle — Postgres is provided so that any
+# future Linux-friendly Swift package tests can connect to it.
+[environment_variables.cloud]
+WIDEN_TEST_DB = "1"
+WIDEN_TEST_DB_HOST = "127.0.0.1"
+WIDEN_TEST_DB_PORT = "5432"
+WIDEN_TEST_DB_USER = "test_user"
+WIDEN_TEST_DB_MAINTENANCE_DB = "postgres"
+WIDEN_EVAL_DB_HOST = "127.0.0.1"
+WIDEN_EVAL_DB_PORT = "5432"
+WIDEN_EVAL_DB_USER = "test_user"
+WIDEN_EVAL_DB_MAINTENANCE_DB = "postgres"
