@@ -43,7 +43,7 @@ PR 6 + PR 8
   └── PR 9 ✅ — Optional data-inspection tools              [done 2026-06-26]
 
 PR 2 + PR 5 + PR 6
-  └── PR 11 — Constrained local-model path                 [parallel with PR 7–10]
+  └── PR 11 ✅ — Constrained local-model path              [done 2026-06-26]
 
 PR 7 + PR 8 + PR 11 + eval evidence
   └── PR 12 — Backend defaults, older macOS, release gate
@@ -1058,7 +1058,7 @@ If it does not meet that gate, close the experiment. Embeddings are a retrieval 
 
 ---
 
-# PR 11 — Add a constrained experimental local path
+# PR 11 ✅ — Add a constrained experimental local path [done 2026-06-26]
 
 Suggested title:
 
@@ -1183,7 +1183,7 @@ When only one agent is working:
 7. PR 7 — Cloud agent
 8. PR 8 — PostgreSQL verification
 9. PR 9 ✅ — Optional data inspection
-10. PR 11 — Experimental local path
+10. PR 11 ✅ — Experimental local path
 11. PR 12 — Platform/default-backend decision
 12. PR 10 — Embedding experiment             [deferred — revisit after PR 11/12 and real app/eval testing]
 ```
