@@ -295,9 +295,10 @@ public final class AppState {
                             databaseInspectionPolicy: generationConnection?.databaseInspectionPolicy(
                                 audience: DatabaseInspectionResultAudience.cloud
                             ) ?? .disabled,
-                            databaseInspectionDatabase: generationConnection?.allowLocalDataInspection == true
-                                ? postgres(for: connectionID)
-                                : nil,
+                            databaseInspectionDatabase: databaseInspectionDatabase(
+                                for: connectionID,
+                                connection: generationConnection
+                            ),
                             currentSchemaFingerprint: schemaFingerprintProvider(
                                 connectionID: connectionID,
                                 selectedSchemas: selectedSchemas
@@ -732,6 +733,18 @@ public final class AppState {
         let service = PostgresService()
         services[id] = service
         return service
+    }
+
+    func databaseInspectionDatabase(
+        for id: UUID,
+        connection: DatabaseConnectionConfig?
+    ) -> (any DatabaseInspectionQuerying)? {
+        guard connection?.allowLocalDataInspection == true,
+            connectionState(id) == .connected
+        else {
+            return nil
+        }
+        return postgres(for: id)
     }
 
     /// Connects the given database unless it is already connected or

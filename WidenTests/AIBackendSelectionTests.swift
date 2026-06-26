@@ -8,7 +8,7 @@ import Testing
 struct AIBackendSelectionTests {
     private static let defaultsKeys = [
         "WidenAIBackendMode", "WidenCloudAIProvider", "WidenOpenRouterModelID",
-        "WidenUseMockAI",
+        "WidenUseMockAI", "WidenExperimentalCloudSchemaAgentEnabled",
     ]
 
     private func clearDefaults() {
@@ -86,6 +86,32 @@ struct AIBackendSelectionTests {
         )
 
         #expect(generator is UnavailableSQLGenerator)
+    }
+
+    @Test func cloudInspectionDatabaseRequiresConnectedConnection() {
+        clearDefaults()
+        let (state, dir) = makeState()
+        defer { cleanUp(dir) }
+        let connection = DatabaseConnectionConfig(
+            database: "widen_test",
+            username: "beto",
+            allowLocalDataInspection: true,
+            allowCloudDataInspection: true
+        )
+        state.connections = [connection]
+
+        let disconnectedDatabase = state.databaseInspectionDatabase(
+            for: connection.id,
+            connection: connection
+        )
+        #expect(disconnectedDatabase == nil)
+
+        state.connectionStates[connection.id] = .connected
+        let connectedDatabase = state.databaseInspectionDatabase(
+            for: connection.id,
+            connection: connection
+        )
+        #expect(connectedDatabase != nil)
     }
 
     @Test func cloudApplePCCQuotaReachedIsUnavailable() {
