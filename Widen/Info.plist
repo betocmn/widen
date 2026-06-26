@@ -23,7 +23,7 @@
 	<key>LSApplicationCategoryType</key>
 	<string>public.app-category.developer-tools</string>
 	<key>LSMinimumSystemVersion</key>
-	<string>26.0</string>
+	<string>14.0</string>
 	<key>NSHumanReadableCopyright</key>
 	<string>Widen — Postgres GUI</string>
 	<key>NSLocalNetworkUsageDescription</key>

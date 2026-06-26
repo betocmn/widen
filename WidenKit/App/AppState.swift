@@ -322,7 +322,9 @@ public final class AppState {
         }
 
         #if canImport(FoundationModels)
-            return FoundationModelsSQLGenerator()
+            if #available(macOS 26.0, *) {
+                return FoundationModelsSQLGenerator()
+            }
         #else
             return UnavailableSQLGenerator(
                 message: LocalLLMEligibility.sdkUnavailable(
@@ -380,7 +382,7 @@ public final class AppState {
         if let titleGeneratorOverride { return titleGeneratorOverride }
         if useMockAI { return MockTitleGenerator() }
         #if canImport(FoundationModels)
-            if localLLMEligibility.isReady {
+            if #available(macOS 26.0, *), localLLMEligibility.isReady {
                 return FoundationModelsTitleGenerator()
             }
         #endif
@@ -394,7 +396,7 @@ public final class AppState {
     public var connectionDetailsParser: (any ConnectionDetailsParsing)? {
         if useMockAI { return MockConnectionDetailsParser() }
         #if canImport(FoundationModels)
-            if localLLMEligibility.isReady {
+            if #available(macOS 26.0, *), localLLMEligibility.isReady {
                 return FoundationModelsConnectionParser()
             }
         #endif

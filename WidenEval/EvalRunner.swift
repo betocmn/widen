@@ -702,7 +702,10 @@ struct EvalRunner {
         switch backend {
         case .local:
             #if canImport(FoundationModels)
-                return FoundationModelsSQLGenerator()
+                if #available(macOS 26.0, *) {
+                    return FoundationModelsSQLGenerator()
+                }
+                return nil
             #else
                 return nil
             #endif
@@ -719,7 +722,10 @@ struct EvalRunner {
         switch backend {
         case .local:
             #if canImport(FoundationModels)
-                return FoundationModelsSQLGenerator.availabilityMessage
+                if #available(macOS 26.0, *) {
+                    return FoundationModelsSQLGenerator.availabilityMessage
+                }
+                return "Foundation Models requires macOS 26 or later."
             #else
                 return "Foundation Models is not available in this build."
             #endif

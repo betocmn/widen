@@ -681,6 +681,7 @@ struct MockConnectionDetailsParserTests {
 }
 
 #if canImport(FoundationModels)
+    @available(macOS 26.0, *)
     @Suite("FoundationModelsConnectionParser helpers")
     struct FoundationModelsConnectionParserHelperTests {
         @Test func sslMentionAcceptsTLS() {

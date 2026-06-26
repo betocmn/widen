@@ -93,13 +93,15 @@ public struct MainView: View {
                 .toolbar(removing: .sidebarToggle)
                 .toolbar {
                     if sidebarIsAvailable && columnVisibility != .detailOnly {
-                        // The flexible spacer pushes the toggle to the
-                        // sidebar's trailing corner, against the divider.
-                        ToolbarSpacer(.flexible)
+                        if #available(macOS 26.0, *) {
+                            // The flexible spacer pushes the toggle to the
+                            // sidebar's trailing corner, against the divider.
+                            ToolbarSpacer(.flexible)
+                        }
                         ToolbarItem {
                             SidebarToggle(columnVisibility: effectiveColumnVisibility)
                         }
-                        .sharedBackgroundVisibility(.hidden)
+                        .widenToolbarBackgroundHidden()
                     }
                 }
                 .navigationSplitViewColumnWidth(
@@ -132,7 +134,7 @@ public struct MainView: View {
                             isAvailable: sidebarIsAvailable
                         )
                     }
-                    .sharedBackgroundVisibility(.hidden)
+                    .widenToolbarBackgroundHidden()
                 }
                 ToolbarItem(placement: .navigation) {
                     breadcrumb
@@ -143,7 +145,7 @@ public struct MainView: View {
                 ToolbarItem(placement: .primaryAction) {
                     SchemaInspectorToggle(isAvailable: inspectorIsAvailable)
                 }
-                .sharedBackgroundVisibility(.hidden)
+                .widenToolbarBackgroundHidden()
             }
         }
         // Attached to the split view (not the detail content) so the detail
@@ -305,7 +307,7 @@ private struct WelcomeDetailView: View {
                 Button(action: addDatabase) {
                     Label("Add Database", systemImage: "plus")
                 }
-                .buttonStyle(.glassProminent)
+                .widenGlassButtonStyle(prominent: true)
             }
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity)

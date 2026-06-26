@@ -14,6 +14,7 @@ private let fmTestEnabled =
     || ProcessInfo.processInfo.environment["TEST_RUNNER_WIDEN_FM_TEST"] != nil
 
 #if canImport(FoundationModels)
+    @available(macOS 26.0, *)
     @Suite("Foundation Models generator")
     struct FoundationModelsGeneratorTests {
         @Test func sqlResponseAccountingCountsCumulativeCalls() {
@@ -156,6 +157,7 @@ private let fmTestEnabled =
     }
 #endif
 
+@available(macOS 26.0, *)
 @Suite("Foundation Models smoke", .enabled(if: fmTestEnabled))
 struct FoundationModelsSmokeTests {
     private func makeTinySchema() -> DatabaseSchema {
