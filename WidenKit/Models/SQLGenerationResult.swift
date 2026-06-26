@@ -125,6 +125,7 @@ public struct SQLGenerationResult: Codable, Equatable, Sendable {
     public var pendingClarification: PendingClarification?
     public var backendMetadata: OpenRouterGenerationMetadata?
     public var schemaToolCalls: [SchemaToolCallTrace]
+    public var inspectionToolCalls: [DatabaseInspectionToolCallTrace]
 
     private enum CodingKeys: String, CodingKey {
         case sql
@@ -143,6 +144,7 @@ public struct SQLGenerationResult: Codable, Equatable, Sendable {
         case pendingClarification
         case backendMetadata
         case schemaToolCalls
+        case inspectionToolCalls
     }
 
     public init(
@@ -161,7 +163,8 @@ public struct SQLGenerationResult: Codable, Equatable, Sendable {
         pendingClarificationID: UUID? = nil,
         pendingClarification: PendingClarification? = nil,
         backendMetadata: OpenRouterGenerationMetadata? = nil,
-        schemaToolCalls: [SchemaToolCallTrace] = []
+        schemaToolCalls: [SchemaToolCallTrace] = [],
+        inspectionToolCalls: [DatabaseInspectionToolCallTrace] = []
     ) {
         self.sql = sql
         self.explanation = explanation
@@ -179,6 +182,7 @@ public struct SQLGenerationResult: Codable, Equatable, Sendable {
         self.pendingClarification = pendingClarification
         self.backendMetadata = backendMetadata
         self.schemaToolCalls = schemaToolCalls
+        self.inspectionToolCalls = inspectionToolCalls
     }
 
     public init(from decoder: any Decoder) throws {
@@ -226,6 +230,10 @@ public struct SQLGenerationResult: Codable, Equatable, Sendable {
             [SchemaToolCallTrace].self,
             forKey: .schemaToolCalls
         ) ?? []
+        inspectionToolCalls = try container.decodeIfPresent(
+            [DatabaseInspectionToolCallTrace].self,
+            forKey: .inspectionToolCalls
+        ) ?? []
     }
 
     public func encode(to encoder: any Encoder) throws {
@@ -251,6 +259,9 @@ public struct SQLGenerationResult: Codable, Equatable, Sendable {
         try container.encodeIfPresent(backendMetadata, forKey: .backendMetadata)
         if !schemaToolCalls.isEmpty {
             try container.encode(schemaToolCalls, forKey: .schemaToolCalls)
+        }
+        if !inspectionToolCalls.isEmpty {
+            try container.encode(inspectionToolCalls, forKey: .inspectionToolCalls)
         }
     }
 }

@@ -200,6 +200,7 @@ enum EvalReporter {
         let cloudCost = summary.estimatedCloudCostUSD
             .map { String(format: "$%.6f", $0) } ?? "-"
         let schemaToolCalls = summary.totalSchemaToolCalls.map(String.init) ?? "-"
+        let inspectionToolCalls = summary.totalInspectionToolCalls.map(String.init) ?? "-"
         let agentTurns = summary.totalAgentModelTurns.map(String.init) ?? "-"
         let agentHTTPAttempts = summary.totalAgentHTTPAttempts.map(String.init) ?? "-"
         let toolBudgetFailures = summary.toolBudgetFailureCount.map(String.init) ?? "-"
@@ -235,6 +236,7 @@ enum EvalReporter {
             "| Average required-column coverage | \(average(summary.requiredColumnBindingCoverage, suffix: " SQL results evaluated")) |",
             "| Total model calls | \(modelCalls) |",
             "| Schema-tool calls | \(schemaToolCalls) |",
+            "| Inspection-tool calls | \(inspectionToolCalls) |",
             "| Agent logical model turns | \(agentTurns) |",
             "| Agent HTTP attempts | \(agentHTTPAttempts) |",
             "| Tool-budget failures | \(toolBudgetFailures) |",
@@ -299,6 +301,7 @@ enum EvalReporter {
                         || result.metrics.openRouterAgentLogicalTurnCount != nil
                         || result.metrics.openRouterAgentHTTPAttemptCount != nil
                         || result.metrics.openRouterSchemaToolCallCount != nil
+                        || result.metrics.openRouterInspectionToolCallCount != nil
                         || result.metrics.openRouterAgentTerminalOutcome != nil
                 )
         }
@@ -325,6 +328,8 @@ enum EvalReporter {
         let terminalCounts = counts(openRouterResults.compactMap(\.metrics.openRouterAgentTerminalOutcome))
         let schemaToolCalls = openRouterResults.compactMap(\.metrics.openRouterSchemaToolCallCount)
             .reduce(0, +)
+        let inspectionToolCalls = openRouterResults.compactMap(\.metrics.openRouterInspectionToolCallCount)
+            .reduce(0, +)
         let agentTurns = openRouterResults.compactMap(\.metrics.openRouterAgentLogicalTurnCount)
             .reduce(0, +)
         let agentHTTPAttempts = openRouterResults.compactMap(\.metrics.openRouterAgentHTTPAttemptCount)
@@ -342,6 +347,7 @@ enum EvalReporter {
             "| Retry total | \(retryTotal) |",
             "| Retry average | \(retryAverage) |",
             "| Schema-tool calls | \(schemaToolCalls == 0 ? "-" : String(schemaToolCalls)) |",
+            "| Inspection-tool calls | \(inspectionToolCalls == 0 ? "-" : String(inspectionToolCalls)) |",
             "| Agent logical model turns | \(agentTurns == 0 ? "-" : String(agentTurns)) |",
             "| Agent HTTP attempts | \(agentHTTPAttempts == 0 ? "-" : String(agentHTTPAttempts)) |",
             "| Token usage | \(tokenUsage == 0 ? "-" : String(tokenUsage)) |",

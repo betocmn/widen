@@ -240,7 +240,8 @@ struct TextToSQLPipelineTests {
         needsClarification: Bool = false,
         clarificationQuestion: String? = nil,
         generationCallCount: Int? = nil,
-        schemaToolCalls: [SchemaToolCallTrace] = []
+        schemaToolCalls: [SchemaToolCallTrace] = [],
+        inspectionToolCalls: [DatabaseInspectionToolCallTrace] = []
     ) -> SQLGenerationResult {
         SQLGenerationResult(
             sql: needsClarification ? "" : sql,
@@ -252,7 +253,8 @@ struct TextToSQLPipelineTests {
             needsClarification: needsClarification,
             clarificationQuestion: clarificationQuestion,
             generationCallCount: generationCallCount,
-            schemaToolCalls: schemaToolCalls
+            schemaToolCalls: schemaToolCalls,
+            inspectionToolCalls: inspectionToolCalls
         )
     }
 
@@ -313,6 +315,24 @@ struct TextToSQLPipelineTests {
             truncated: false,
             schemaFingerprintPrefix: "abcdef12",
             cacheHit: true
+        )
+    }
+
+    private func inspectionToolTrace(callID: String, toolName: String) -> DatabaseInspectionToolCallTrace {
+        DatabaseInspectionToolCallTrace(
+            callID: callID,
+            toolName: toolName,
+            outcome: .success,
+            tableID: "tbl_users",
+            columnIDs: [],
+            rowCount: 0,
+            valueCount: 0,
+            outputByteCount: 256,
+            redactionCount: 0,
+            cloudShareable: true,
+            latencyMs: 1,
+            truncated: false,
+            errorCode: nil
         )
     }
 
@@ -1222,6 +1242,30 @@ struct TextToSQLPipelineTests {
 
         #expect(result.trace.schemaToolCalls.map(\.callID) == ["search", "search"])
         #expect(result.trace.schemaToolCalls.count == 2)
+    }
+
+    @Test func repairInspectionToolTracesPreserveRepeatedProviderCallIDs() async throws {
+        let initialTrace = inspectionToolTrace(callID: "inspect", toolName: "inspect_relation_size")
+        let repairTrace = inspectionToolTrace(callID: "inspect", toolName: "inspect_relation_size")
+        let generator = ScriptedGenerator([
+            .success(
+                generation(
+                    sql: "SELECT missing FROM public.users",
+                    inspectionToolCalls: [initialTrace]
+                )
+            ),
+            .success(
+                generation(
+                    sql: "SELECT id FROM public.users LIMIT 100",
+                    inspectionToolCalls: [repairTrace]
+                )
+            ),
+        ])
+
+        let result = try await run(generator)
+
+        #expect(result.trace.inspectionToolCalls.map(\.callID) == ["inspect", "inspect"])
+        #expect(result.trace.inspectionToolCalls.count == 2)
     }
 
     @Test func postgresVerificationRepairPreservesSchemaToolTraces() async throws {

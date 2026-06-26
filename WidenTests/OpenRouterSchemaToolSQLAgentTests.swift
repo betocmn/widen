@@ -117,6 +117,61 @@ struct OpenRouterSchemaToolSQLAgentTests {
         }
     }
 
+    private final class FakeInspectionDatabase: DatabaseInspectionQuerying, @unchecked Sendable {
+        private let lock = NSLock()
+        private var recordedRelationSizeCalls = 0
+
+        var relationSizeCallCount: Int {
+            lock.withLock { recordedRelationSizeCalls }
+        }
+
+        func inspectRelationSize(
+            schema: String,
+            table: String,
+            policy: DatabaseInspectionPolicy
+        ) async throws -> DatabaseRelationSizeSnapshot {
+            lock.withLock { recordedRelationSizeCalls += 1 }
+            return DatabaseRelationSizeSnapshot(approximateRowCount: 42, source: "test")
+        }
+
+        func inspectColumnStatistics(
+            schema: String,
+            table: String,
+            column: String,
+            policy: DatabaseInspectionPolicy
+        ) async throws -> DatabaseColumnStatisticsSnapshot {
+            DatabaseColumnStatisticsSnapshot(approximateNullFraction: 0, approximateDistinctCount: 1)
+        }
+
+        func inspectColumnAggregate(
+            table: TableInfo,
+            column: ColumnInfo,
+            includeDistinct: Bool,
+            includeMinMax: Bool,
+            policy: DatabaseInspectionPolicy
+        ) async throws -> DatabaseColumnAggregateSnapshot {
+            DatabaseColumnAggregateSnapshot(rowCount: 1, nullCount: 0, distinctCount: 1)
+        }
+
+        func inspectDistinctValues(
+            table: TableInfo,
+            column: ColumnInfo,
+            limit: Int,
+            policy: DatabaseInspectionPolicy
+        ) async throws -> [DatabaseDistinctValueRow] {
+            []
+        }
+
+        func inspectSampleRows(
+            table: TableInfo,
+            columns: [ColumnInfo],
+            limit: Int,
+            policy: DatabaseInspectionPolicy
+        ) async throws -> [DatabaseSampleRow] {
+            []
+        }
+    }
+
     private final class FingerprintSequence: @unchecked Sendable {
         private let lock = NSLock()
         private let initial: String
@@ -233,6 +288,69 @@ struct OpenRouterSchemaToolSQLAgentTests {
         #expect(result.schemaToolCalls.map { $0.callID } == [
             "search-users", "search-orders", "describe-users",
         ])
+    }
+
+    @Test func databaseInspectionToolsAreAvailableWhenConnectionAllowsCloudInspection() async throws {
+        let schema = Self.makeSchema()
+        let database = FakeInspectionDatabase()
+        let policy = DatabaseConnectionConfig(
+            allowLocalDataInspection: true,
+            allowCloudDataInspection: true
+        ).databaseInspectionPolicy(audience: .cloud)
+        let chatTransport = ScriptedTransport { request, index in
+            switch index {
+            case 1:
+                let body = try Self.requestBodyText(request)
+                #expect(body.contains(DatabaseInspectionToolName.inspectRelationSize.rawValue))
+                return Self.assistantToolCalls([
+                    Self.toolCall(id: "search-1", name: "search_schema", arguments: [
+                        "query": "users",
+                        "limit": 2,
+                    ]),
+                ])
+            case 2:
+                let tableID = try Self.tableHandle(named: #""public"."users""#, in: request)
+                return Self.assistantToolCalls([
+                    Self.toolCall(
+                        id: "size-1",
+                        name: DatabaseInspectionToolName.inspectRelationSize.rawValue,
+                        arguments: ["table_id": tableID]
+                    ),
+                ])
+            case 3:
+                let body = try Self.requestBodyText(request)
+                #expect(body.contains("approximate_row_count"))
+                return Self.assistantToolCalls([
+                    Self.terminalClarification(id: "terminal-1", question: "Which user fields should I inspect?")
+                ])
+            default:
+                throw URLError(.badServerResponse)
+            }
+        }
+        let agent = makeAgent(
+            schema: schema,
+            chatTransport: chatTransport,
+            databaseInspectionPolicy: policy,
+            databaseInspectionDatabase: database
+        )
+
+        let result = try await agent.generateSQL(
+            question: "Check user scale before answering",
+            schema: schema,
+            context: SQLGenerationContext(),
+            config: SQLGenerationConfig()
+        )
+
+        #expect(result.needsClarification)
+        #expect(database.relationSizeCallCount == 1)
+        #expect(result.schemaToolCalls.map(\.toolName) == ["search_schema"])
+        #expect(result.inspectionToolCalls.map(\.toolName) == [
+            DatabaseInspectionToolName.inspectRelationSize.rawValue,
+        ])
+        #expect(result.inspectionToolCalls.first?.callID == "size-1")
+        #expect(result.inspectionToolCalls.first?.tableID != nil)
+        #expect(result.inspectionToolCalls.first?.cloudShareable == true)
+        #expect(result.backendMetadata?.agentInspectionToolCallCount == 1)
     }
 
     @Test func terminalSQLBeforeSearchReceivesCorrection() async throws {
@@ -1438,6 +1556,8 @@ struct OpenRouterSchemaToolSQLAgentTests {
             maximumHTTPAttempts: 8,
             wallClockTimeoutSeconds: 10
         ),
+        databaseInspectionPolicy: DatabaseInspectionPolicy = .disabled,
+        databaseInspectionDatabase: (any DatabaseInspectionQuerying)? = nil,
         currentSchemaFingerprint: (@Sendable () async throws -> String)? = nil
     ) -> OpenRouterSchemaToolSQLAgent {
         let catalog = OpenRouterModelCatalogService(
@@ -1456,6 +1576,8 @@ struct OpenRouterSchemaToolSQLAgentTests {
             sessionFactory: SchemaToolSessionFactory(
                 indexStore: SchemaSearchIndexStore(directory: Self.temporaryDirectory())
             ),
+            databaseInspectionPolicy: databaseInspectionPolicy,
+            databaseInspectionDatabase: databaseInspectionDatabase,
             requestBuilder: OpenRouterToolChatRequestBuilder(endpoint: Self.chatEndpoint),
             legacyGenerator: legacyGenerator ?? LegacyGenerator(),
             configuration: configuration,
@@ -1519,6 +1641,18 @@ struct OpenRouterSchemaToolSQLAgentTests {
                 "action": "sql",
                 "sql": sql,
                 "clarification_question": "",
+            ]
+        )
+    }
+
+    private static func terminalClarification(id: String, question: String) -> [String: Any] {
+        Self.toolCall(
+            id: id,
+            name: OpenRouterSchemaToolSQLAgent.terminalToolName,
+            arguments: [
+                "action": "clarify",
+                "sql": "",
+                "clarification_question": question,
             ]
         )
     }

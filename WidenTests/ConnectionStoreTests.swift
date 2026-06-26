@@ -30,7 +30,13 @@ struct ConnectionStoreTests {
             sslMode: .prefer,
             defaultRowLimit: 250,
             statementTimeoutSeconds: 30,
-            databaseContext: "orders.user_id joins users.id"
+            databaseContext: "orders.user_id joins users.id",
+            allowCloudSchemaMetadata: true,
+            allowLocalDataInspection: true,
+            allowCloudDataInspection: true,
+            allowSampleRowInspection: true,
+            sensitiveColumnRules: ["customer_email"],
+            redactedColumnIDs: ["column-stable-id"]
         )
         first.updatedAt = Date(timeIntervalSince1970: 1_750_000_000)
         let second = DatabaseConnectionConfig(
@@ -50,6 +56,12 @@ struct ConnectionStoreTests {
         #expect(loaded.defaultRowLimit == 250)
         #expect(loaded.statementTimeoutSeconds == 30)
         #expect(loaded.databaseContext == "orders.user_id joins users.id")
+        #expect(loaded.allowCloudSchemaMetadata)
+        #expect(loaded.allowLocalDataInspection)
+        #expect(loaded.allowCloudDataInspection)
+        #expect(loaded.allowSampleRowInspection)
+        #expect(loaded.sensitiveColumnRules == ["customer_email"])
+        #expect(loaded.redactedColumnIDs == ["column-stable-id"])
         #expect(all.last?.id == second.id)
         #expect(all.last?.name == "Staging")
     }
@@ -81,6 +93,12 @@ struct ConnectionStoreTests {
 
         #expect(loaded.name == "Legacy")
         #expect(loaded.databaseContext == "")
+        #expect(loaded.allowCloudSchemaMetadata)
+        #expect(!loaded.allowLocalDataInspection)
+        #expect(!loaded.allowCloudDataInspection)
+        #expect(!loaded.allowSampleRowInspection)
+        #expect(loaded.sensitiveColumnRules.isEmpty)
+        #expect(loaded.redactedColumnIDs.isEmpty)
     }
 
     @Test func savedFileNeverContainsPasswordField() throws {
@@ -261,6 +279,10 @@ struct ConnectionSettingsViewModelTests {
         #expect(config?.port == 5432)
         #expect(config?.defaultRowLimit == 100)
         #expect(config?.statementTimeoutSeconds == 10)
+        #expect(config?.allowCloudSchemaMetadata == true)
+        #expect(config?.allowLocalDataInspection == false)
+        #expect(config?.allowCloudDataInspection == false)
+        #expect(config?.allowSampleRowInspection == false)
     }
 
     @Test func queryContextIsTrimmedAndSaved() {
@@ -270,6 +292,102 @@ struct ConnectionSettingsViewModelTests {
         let config = viewModel.buildConfig()
 
         #expect(config?.databaseContext == "orders.user_id joins users.id")
+    }
+
+    @Test func privacySettingsAreSavedAndCloudDataRequiresLocalInspection() {
+        let viewModel = makeValidViewModel()
+        viewModel.allowCloudSchemaMetadata = false
+        viewModel.allowLocalDataInspection = true
+        viewModel.allowCloudDataInspection = true
+        viewModel.allowSampleRowInspection = true
+
+        let enabled = viewModel.buildConfig()
+
+        #expect(enabled?.allowCloudSchemaMetadata == false)
+        #expect(enabled?.allowLocalDataInspection == true)
+        #expect(enabled?.allowCloudDataInspection == true)
+        #expect(enabled?.allowSampleRowInspection == true)
+
+        viewModel.allowLocalDataInspection = false
+        let cloudOnly = viewModel.buildConfig()
+
+        #expect(cloudOnly?.allowCloudSchemaMetadata == false)
+        #expect(cloudOnly?.allowLocalDataInspection == false)
+        #expect(cloudOnly?.allowCloudDataInspection == false)
+        #expect(cloudOnly?.allowSampleRowInspection == false)
+    }
+
+    @Test func existingSampleRowOptInSurvivesSettingsSave() {
+        let existing = DatabaseConnectionConfig(
+            name: "Existing",
+            host: "localhost",
+            database: "widen_test",
+            username: "beto",
+            allowCloudSchemaMetadata: false,
+            allowLocalDataInspection: true,
+            allowCloudDataInspection: true,
+            allowSampleRowInspection: true
+        )
+        let viewModel = ConnectionSettingsViewModel()
+        viewModel.load(from: existing)
+        viewModel.name = "Renamed"
+
+        let saved = viewModel.buildConfig()
+
+        #expect(saved?.allowCloudSchemaMetadata == false)
+        #expect(saved?.allowLocalDataInspection == true)
+        #expect(saved?.allowCloudDataInspection == true)
+        #expect(saved?.allowSampleRowInspection == true)
+
+        viewModel.allowLocalDataInspection = false
+        let disabled = viewModel.buildConfig()
+
+        #expect(disabled?.allowLocalDataInspection == false)
+        #expect(disabled?.allowCloudDataInspection == false)
+        #expect(disabled?.allowSampleRowInspection == false)
+    }
+
+    @Test func connectionSensitiveRulesApplyToInspectionPolicy() {
+        let redactedID = SchemaObjectID.column(
+            schema: "public",
+            table: "users",
+            name: "display_name"
+        ).stableString
+        let config = DatabaseConnectionConfig(
+            database: "widen_test",
+            username: "beto",
+            allowLocalDataInspection: true,
+            allowCloudDataInspection: true,
+            allowSampleRowInspection: true,
+            sensitiveColumnRules: ["tenant"],
+            redactedColumnIDs: [redactedID]
+        )
+
+        let policy = config.databaseInspectionPolicy(audience: .cloud)
+        let tenantColumn = ColumnInfo(
+            tableSchema: "public",
+            tableName: "accounts",
+            name: "tenant_slug",
+            dataType: "text",
+            isNullable: true,
+            ordinalPosition: 1
+        )
+        let explicitlyRedactedColumn = ColumnInfo(
+            tableSchema: "public",
+            tableName: "users",
+            name: "display_name",
+            dataType: "text",
+            isNullable: true,
+            ordinalPosition: 2
+        )
+
+        #expect(policy.allowLocalDataInspection)
+        #expect(policy.allowCloudDataInspection)
+        #expect(policy.allowSampleRows)
+        #expect(policy.sensitiveNameFragments.contains("tenant"))
+        #expect(policy.redactedColumnStableIDs.contains(redactedID))
+        #expect(policy.redacts(tenantColumn))
+        #expect(policy.redacts(explicitlyRedactedColumn))
     }
 
     @Test func invalidPortIsRejected() {

@@ -94,6 +94,7 @@ struct EvalRunSummary: Codable {
     var totalTokenUsage: Int?
     var estimatedCloudCostUSD: Double?
     var totalSchemaToolCalls: Int?
+    var totalInspectionToolCalls: Int?
     var totalAgentModelTurns: Int?
     var totalAgentHTTPAttempts: Int?
     var toolBudgetFailureCount: Int?
@@ -821,6 +822,7 @@ struct EvalRunner {
         let tokenUsage = results.compactMap(\.metrics.tokenUsage)
         let cloudCosts = results.compactMap(\.metrics.estimatedCloudCostUSD)
         let schemaToolCalls = results.compactMap(\.metrics.openRouterSchemaToolCallCount)
+        let inspectionToolCalls = results.compactMap(\.metrics.openRouterInspectionToolCallCount)
         let agentModelTurns = results.compactMap(\.metrics.openRouterAgentLogicalTurnCount)
         let agentHTTPAttempts = results.compactMap(\.metrics.openRouterAgentHTTPAttemptCount)
         let toolsModeRequested = options.backendMode.backends.contains(.cloud)
@@ -834,10 +836,16 @@ struct EvalRunner {
                                 && result.metrics.openRouterAgentSelectionReason == nil
                         )
                 )
-                && result.trace?.schemaToolCalls.contains {
-                    $0.errorCode == .sessionBudgetExceeded
-                        || $0.errorCode == .resultBudgetExceeded
-                } == true
+                && (
+                    result.trace?.schemaToolCalls.contains {
+                        $0.errorCode == .sessionBudgetExceeded
+                            || $0.errorCode == .resultBudgetExceeded
+                    } == true
+                        || result.trace?.inspectionToolCalls.contains {
+                            $0.errorCode == .sessionBudgetExceeded
+                                || $0.errorCode == .resultBudgetExceeded
+                        } == true
+                )
         }
         let promptEstimateValues = results.compactMap(\.metrics.estimatedInitialPromptCharacters)
         let backendAvailableValues = results.map(\.metrics.backendAvailable)
@@ -990,9 +998,12 @@ struct EvalRunner {
             totalTokenUsage: tokenUsage.isEmpty ? nil : tokenUsage.reduce(0, +),
             estimatedCloudCostUSD: cloudCosts.isEmpty ? nil : cloudCosts.reduce(0, +),
             totalSchemaToolCalls: schemaToolCalls.isEmpty ? nil : schemaToolCalls.reduce(0, +),
+            totalInspectionToolCalls: inspectionToolCalls.isEmpty ? nil : inspectionToolCalls.reduce(0, +),
             totalAgentModelTurns: agentModelTurns.isEmpty ? nil : agentModelTurns.reduce(0, +),
             totalAgentHTTPAttempts: agentHTTPAttempts.isEmpty ? nil : agentHTTPAttempts.reduce(0, +),
-            toolBudgetFailureCount: schemaToolCalls.isEmpty ? nil : toolBudgetFailures.count,
+            toolBudgetFailureCount: schemaToolCalls.isEmpty && inspectionToolCalls.isEmpty
+                ? nil
+                : toolBudgetFailures.count,
             averageEstimatedInitialPromptCharacters: promptEstimateValues.isEmpty
                 ? nil
                 : Double(promptEstimateValues.reduce(0, +)) / Double(promptEstimateValues.count),

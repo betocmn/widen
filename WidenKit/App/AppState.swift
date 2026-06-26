@@ -262,11 +262,22 @@ public final class AppState {
     ) -> any SQLGenerator {
         if let sqlGeneratorOverride { return sqlGeneratorOverride }
         if useMockAI { return MockSQLGenerator() }
+        let generationConnection: DatabaseConnectionConfig?
+        if let connectionID {
+            generationConnection = connection(for: connectionID)
+        } else {
+            generationConnection = nil
+        }
         if aiBackendMode == .cloud {
             guard case .ready = cloudBackendStatus else {
                 return UnavailableSQLGenerator(
                     message: cloudBackendStatus.message
                         ?? "The selected cloud model is unavailable. Check Settings › LLM.")
+            }
+            if let generationConnection, !generationConnection.allowCloudSchemaMetadata {
+                return UnavailableSQLGenerator(
+                    message: "Cloud SQL generation is disabled for this connection because schema metadata sharing is turned off in Database Settings."
+                )
             }
             switch cloudProvider {
             case .openRouter:
@@ -281,6 +292,13 @@ public final class AppState {
                             model: openRouterModelID,
                             connectionID: connectionID,
                             selectedSchemas: selectedSchemas,
+                            databaseInspectionPolicy: generationConnection?.databaseInspectionPolicy(
+                                audience: DatabaseInspectionResultAudience.cloud
+                            ) ?? .disabled,
+                            databaseInspectionDatabase: databaseInspectionDatabase(
+                                for: connectionID,
+                                connection: generationConnection
+                            ),
                             currentSchemaFingerprint: schemaFingerprintProvider(
                                 connectionID: connectionID,
                                 selectedSchemas: selectedSchemas
@@ -715,6 +733,18 @@ public final class AppState {
         let service = PostgresService()
         services[id] = service
         return service
+    }
+
+    func databaseInspectionDatabase(
+        for id: UUID,
+        connection: DatabaseConnectionConfig?
+    ) -> (any DatabaseInspectionQuerying)? {
+        guard connection?.allowLocalDataInspection == true,
+            connectionState(id) == .connected
+        else {
+            return nil
+        }
+        return postgres(for: id)
     }
 
     /// Connects the given database unless it is already connected or

@@ -48,6 +48,8 @@ struct ConnectionEditorForm: View {
                         textRow("Statement timeout (seconds)", text: $viewModel.timeoutText, width: 120)
                     }
 
+                    privacySection
+
                     SettingsSectionPanel(title: "Query Context", systemImage: "text.book.closed") {
                         VStack(alignment: .leading, spacing: 8) {
                             Text("Widen already sends the loaded database schema, including tables, columns, and foreign keys, with each natural-language question. Add optional notes here only when extra business logic, relationships, or data meaning would help the model.")
@@ -127,6 +129,38 @@ struct ConnectionEditorForm: View {
                     showAutofillSheet = false
                 }
             }
+        }
+    }
+
+    private var privacySection: some View {
+        SettingsSectionPanel(title: "Advanced Privacy", systemImage: "lock.shield") {
+            VStack(alignment: .leading, spacing: 10) {
+                Text("Schema metadata includes table/column names, comments, constraints, and enum values. Data inspection may include actual values from your database.")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+                    .fixedSize(horizontal: false, vertical: true)
+
+                Toggle("Allow sending schema metadata to cloud models", isOn: $viewModel.allowCloudSchemaMetadata)
+                    .toggleStyle(.checkbox)
+
+                Toggle("Allow local data inspection for AI assistance", isOn: $viewModel.allowLocalDataInspection)
+                    .toggleStyle(.checkbox)
+                    .onChange(of: viewModel.allowLocalDataInspection) { _, enabled in
+                        if !enabled {
+                            viewModel.allowCloudDataInspection = false
+                            viewModel.allowSampleRowInspection = false
+                        }
+                    }
+
+                Toggle("Allow sending inspected data values to cloud models", isOn: $viewModel.allowCloudDataInspection)
+                    .toggleStyle(.checkbox)
+                    .disabled(!viewModel.allowLocalDataInspection)
+
+                Toggle("Allow sample row inspection for this connection", isOn: $viewModel.allowSampleRowInspection)
+                    .toggleStyle(.checkbox)
+                    .disabled(!viewModel.allowLocalDataInspection)
+            }
+            .frame(maxWidth: .infinity, alignment: .leading)
         }
     }
 

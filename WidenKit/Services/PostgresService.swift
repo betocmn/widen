@@ -1,5 +1,6 @@
 import Foundation
 import Logging
+import NIOCore
 import NIOSSL
 import PostgresNIO
 
@@ -9,7 +10,7 @@ import PostgresNIO
 /// `run()` loop in a long-lived task; `disconnect` cancels that task, which
 /// closes the client. A client is never reused after its run task is
 /// cancelled — reconnecting always builds a fresh client.
-public actor PostgresService {
+public actor PostgresService: DatabaseInspectionQuerying {
     private var client: PostgresClient?
     private var runTask: Task<Void, Never>?
     let logger: Logger
@@ -220,6 +221,305 @@ public actor PostgresService {
         }
     }
 
+    public func inspectRelationSize(
+        schema: String,
+        table: String,
+        policy: DatabaseInspectionPolicy
+    ) async throws -> DatabaseRelationSizeSnapshot {
+        guard let client else { throw AppError.notConnected }
+        let logger = logger
+        let sql = Self.relationSizeInspectionSQL(schema: schema, table: table)
+        do {
+            return try await client.withConnection { connection in
+                try await connection.query("BEGIN ISOLATION LEVEL REPEATABLE READ READ ONLY", logger: logger)
+                do {
+                    try await Self.applyInspectionSettings(on: connection, logger: logger, policy: policy)
+                    let stream = try await connection.query(PostgresQuery(unsafeSQL: sql), logger: logger)
+                    var estimate: Int64?
+                    for try await row in stream {
+                        estimate = try? row.makeRandomAccess()["row_estimate"].decode(Int64.self)
+                    }
+                    try await connection.query("ROLLBACK", logger: logger)
+                    return DatabaseRelationSizeSnapshot(
+                        approximateRowCount: estimate,
+                        source: "pg_class.reltuples"
+                    )
+                } catch {
+                    try? await connection.query("ROLLBACK", logger: logger)
+                    throw error
+                }
+            }
+        } catch is CancellationError {
+            throw CancellationError()
+        } catch {
+            throw PostgresErrorMapper.map(error)
+        }
+    }
+
+    static func relationSizeInspectionSQL(schema: String, table: String) -> String {
+        """
+        SELECT
+          CASE
+            WHEN c.reltuples < 0 THEN NULL::bigint
+            ELSE round(c.reltuples)::bigint
+          END AS row_estimate
+        FROM pg_catalog.pg_class AS c
+        JOIN pg_catalog.pg_namespace AS n
+          ON n.oid = c.relnamespace
+        WHERE n.nspname = \(Self.sqlLiteral(schema))
+          AND c.relname = \(Self.sqlLiteral(table))
+          AND c.relkind IN ('r', 'p', 'v', 'm', 'f')
+        LIMIT 1
+        """
+    }
+
+    public func inspectColumnStatistics(
+        schema: String,
+        table: String,
+        column: String,
+        policy: DatabaseInspectionPolicy
+    ) async throws -> DatabaseColumnStatisticsSnapshot {
+        guard let client else { throw AppError.notConnected }
+        let logger = logger
+        let sql = """
+            SELECT
+              s.null_frac::double precision AS null_frac,
+              CASE
+                WHEN s.n_distinct < 0 AND c.reltuples >= 0
+                  THEN abs(s.n_distinct::double precision) * c.reltuples::double precision
+                WHEN s.n_distinct >= 0
+                  THEN s.n_distinct::double precision
+                ELSE NULL
+              END AS distinct_estimate
+            FROM pg_catalog.pg_stats AS s
+            LEFT JOIN pg_catalog.pg_namespace AS n
+              ON n.nspname = s.schemaname
+            LEFT JOIN pg_catalog.pg_class AS c
+              ON c.relname = s.tablename
+             AND c.relnamespace = n.oid
+            WHERE s.schemaname = \(Self.sqlLiteral(schema))
+              AND s.tablename = \(Self.sqlLiteral(table))
+              AND s.attname = \(Self.sqlLiteral(column))
+            LIMIT 1
+            """
+        do {
+            return try await client.withConnection { connection in
+                try await connection.query("BEGIN ISOLATION LEVEL REPEATABLE READ READ ONLY", logger: logger)
+                do {
+                    try await Self.applyInspectionSettings(on: connection, logger: logger, policy: policy)
+                    let stream = try await connection.query(PostgresQuery(unsafeSQL: sql), logger: logger)
+                    var snapshot = DatabaseColumnStatisticsSnapshot()
+                    for try await row in stream {
+                        let random = row.makeRandomAccess()
+                        snapshot = DatabaseColumnStatisticsSnapshot(
+                            approximateNullFraction: try? random["null_frac"].decode(Double.self),
+                            approximateDistinctCount: try? random["distinct_estimate"].decode(Double.self)
+                        )
+                    }
+                    try await connection.query("ROLLBACK", logger: logger)
+                    return snapshot
+                } catch {
+                    try? await connection.query("ROLLBACK", logger: logger)
+                    throw error
+                }
+            }
+        } catch is CancellationError {
+            throw CancellationError()
+        } catch {
+            throw PostgresErrorMapper.map(error)
+        }
+    }
+
+    public func inspectColumnAggregate(
+        table: TableInfo,
+        column: ColumnInfo,
+        includeDistinct: Bool,
+        includeMinMax: Bool,
+        policy: DatabaseInspectionPolicy
+    ) async throws -> DatabaseColumnAggregateSnapshot {
+        guard let client else { throw AppError.notConnected }
+        let logger = logger
+        let qualifiedTable = Self.qualifiedIdentifier(schema: table.schema, table: table.name)
+        let columnSQL = Self.quotedIdentifier(column.name)
+        let distinctColumnSQL = Self.inspectionColumnExpression(for: column)
+        let distinctSQL = includeDistinct
+            ? "count(DISTINCT \(distinctColumnSQL))::bigint AS distinct_count"
+            : "NULL::bigint AS distinct_count"
+        let minSQL = includeMinMax ? "min(\(columnSQL)) AS min_value" : "NULL::text AS min_value"
+        let maxSQL = includeMinMax ? "max(\(columnSQL)) AS max_value" : "NULL::text AS max_value"
+        let sql = """
+            SELECT
+              count(*)::bigint AS row_count,
+              (count(*) - count(\(columnSQL)))::bigint AS null_count,
+              \(distinctSQL),
+              \(minSQL),
+              \(maxSQL)
+            FROM \(qualifiedTable)
+            """
+        do {
+            return try await client.withConnection { connection in
+                try await connection.query("BEGIN ISOLATION LEVEL REPEATABLE READ READ ONLY", logger: logger)
+                do {
+                    try await Self.applyInspectionSettings(on: connection, logger: logger, policy: policy)
+                    let stream = try await connection.query(PostgresQuery(unsafeSQL: sql), logger: logger)
+                    var snapshot: DatabaseColumnAggregateSnapshot?
+                    for try await row in stream {
+                        let random = row.makeRandomAccess()
+                        snapshot = DatabaseColumnAggregateSnapshot(
+                            rowCount: try random["row_count"].decode(Int64.self),
+                            nullCount: try random["null_count"].decode(Int64.self),
+                            distinctCount: try? random["distinct_count"].decode(Int64.self),
+                            minValue: Self.inspectionValue(
+                                for: random["min_value"],
+                                policy: policy,
+                                preferredKind: includeMinMax ? nil : .unsupportedType
+                            ),
+                            maxValue: Self.inspectionValue(
+                                for: random["max_value"],
+                                policy: policy,
+                                preferredKind: includeMinMax ? nil : .unsupportedType
+                            )
+                        )
+                    }
+                    try await connection.query("ROLLBACK", logger: logger)
+                    return snapshot ?? DatabaseColumnAggregateSnapshot(rowCount: 0, nullCount: 0)
+                } catch {
+                    try? await connection.query("ROLLBACK", logger: logger)
+                    throw error
+                }
+            }
+        } catch is CancellationError {
+            throw CancellationError()
+        } catch {
+            throw PostgresErrorMapper.map(error)
+        }
+    }
+
+    public func inspectDistinctValues(
+        table: TableInfo,
+        column: ColumnInfo,
+        limit: Int,
+        policy: DatabaseInspectionPolicy
+    ) async throws -> [DatabaseDistinctValueRow] {
+        guard let client else { throw AppError.notConnected }
+        let logger = logger
+        let boundedLimit = min(max(limit, 0), policy.effectiveMaximumDistinctValues) + 1
+        let qualifiedTable = Self.qualifiedIdentifier(schema: table.schema, table: table.name)
+        let columnSQL = Self.inspectionColumnExpression(for: column)
+        let preferredKind = Self.inspectionValueKind(for: column)
+        let sql = """
+            SELECT \(columnSQL) AS value, count(*)::bigint AS value_count
+            FROM \(qualifiedTable)
+            GROUP BY \(columnSQL)
+            ORDER BY value_count DESC, value ASC NULLS LAST
+            LIMIT \(boundedLimit)
+            """
+        do {
+            return try await client.withConnection { connection in
+                try await connection.query("BEGIN ISOLATION LEVEL REPEATABLE READ READ ONLY", logger: logger)
+                do {
+                    try await Self.applyInspectionSettings(on: connection, logger: logger, policy: policy)
+                    let stream = try await connection.query(PostgresQuery(unsafeSQL: sql), logger: logger)
+                    var rows: [DatabaseDistinctValueRow] = []
+                    for try await row in stream {
+                        let random = row.makeRandomAccess()
+                        rows.append(
+                            DatabaseDistinctValueRow(
+                                value: Self.inspectionValue(
+                                    for: random["value"],
+                                    policy: policy,
+                                    preferredKind: preferredKind
+                                ),
+                                count: try? random["value_count"].decode(Int64.self)
+                            )
+                        )
+                    }
+                    try await connection.query("ROLLBACK", logger: logger)
+                    return rows
+                } catch {
+                    try? await connection.query("ROLLBACK", logger: logger)
+                    throw error
+                }
+            }
+        } catch is CancellationError {
+            throw CancellationError()
+        } catch {
+            throw PostgresErrorMapper.map(error)
+        }
+    }
+
+    public func inspectSampleRows(
+        table: TableInfo,
+        columns: [ColumnInfo],
+        limit: Int,
+        policy: DatabaseInspectionPolicy
+    ) async throws -> [DatabaseSampleRow] {
+        guard let client else { throw AppError.notConnected }
+        let logger = logger
+        let boundedLimit = min(max(limit, 0), policy.effectiveMaximumReturnedRows) + 1
+        let qualifiedTable = Self.qualifiedIdentifier(schema: table.schema, table: table.name)
+        let selectedColumns = Array(columns.prefix(policy.effectiveMaximumSampleColumns))
+        let selectedColumnReferences = selectedColumns.enumerated().map { offset, column in
+            let stableID = SchemaObjectID.column(
+                schema: column.tableSchema,
+                table: column.tableName,
+                name: column.name
+            ).stableString
+            return SampleColumnReference(
+                stableID: stableID,
+                alias: "__widen_sample_\(offset)",
+                preferredKind: Self.inspectionValueKind(for: column)
+            )
+        }
+        let sampleColumnByAlias = Dictionary(
+            uniqueKeysWithValues: selectedColumnReferences.map { ($0.alias, $0) }
+        )
+        let selections: [String]
+        if selectedColumnReferences.isEmpty {
+            selections = ["1 AS \(Self.quotedIdentifier("__widen_sample_marker"))"]
+        } else {
+            selections = zip(selectedColumns, selectedColumnReferences).map { column, reference in
+                "\(Self.inspectionColumnExpression(for: column)) AS \(Self.quotedIdentifier(reference.alias))"
+            }
+        }
+        let sql = """
+            SELECT \(selections.joined(separator: ", "))
+            FROM \(qualifiedTable)
+            LIMIT \(boundedLimit)
+            """
+        do {
+            return try await client.withConnection { connection in
+                try await connection.query("BEGIN ISOLATION LEVEL REPEATABLE READ READ ONLY", logger: logger)
+                do {
+                    try await Self.applyInspectionSettings(on: connection, logger: logger, policy: policy)
+                    let stream = try await connection.query(PostgresQuery(unsafeSQL: sql), logger: logger)
+                    var sampleRows: [DatabaseSampleRow] = []
+                    for try await row in stream {
+                        var values: [String: DatabaseInspectionValue] = [:]
+                        for cell in row {
+                            guard let reference = sampleColumnByAlias[cell.columnName] else { continue }
+                            values[reference.stableID] = Self.inspectionValue(
+                                for: cell,
+                                policy: policy,
+                                preferredKind: reference.preferredKind
+                            )
+                        }
+                        sampleRows.append(DatabaseSampleRow(valuesByColumnStableID: values))
+                    }
+                    try await connection.query("ROLLBACK", logger: logger)
+                    return sampleRows
+                } catch {
+                    try? await connection.query("ROLLBACK", logger: logger)
+                    throw error
+                }
+            }
+        } catch is CancellationError {
+            throw CancellationError()
+        } catch {
+            throw PostgresErrorMapper.map(error)
+        }
+    }
+
     /// Executes a validated write (INSERT/UPDATE/DELETE) inside a read-write
     /// transaction with a statement timeout, pinned to a single pooled
     /// connection. Captures the affected-row count from the command tag and any
@@ -290,6 +590,12 @@ public actor PostgresService {
 
     // MARK: - Configuration
 
+    private struct SampleColumnReference: Sendable {
+        var stableID: String
+        var alias: String
+        var preferredKind: DatabaseInspectionValueKind?
+    }
+
     private static let returningRowNumberColumn = "__widen_returning_row_number"
     private static let returningAffectedRowsColumn = "__widen_affected_rows"
 
@@ -321,6 +627,254 @@ public actor PostgresService {
             return (nil, mapped.localizedDescription)
         }
     }
+
+    private static func applyInspectionSettings(
+        on connection: PostgresConnection,
+        logger: Logger,
+        policy: DatabaseInspectionPolicy
+    ) async throws {
+        try await connection.query(
+            PostgresQuery(unsafeSQL: "SET LOCAL statement_timeout = '\(policy.effectiveStatementTimeoutMilliseconds)ms'"),
+            logger: logger
+        )
+        try await connection.query(
+            PostgresQuery(unsafeSQL: "SET LOCAL lock_timeout = '\(policy.effectiveLockTimeoutMilliseconds)ms'"),
+            logger: logger
+        )
+        try await connection.query(
+            PostgresQuery(
+                unsafeSQL: "SET LOCAL idle_in_transaction_session_timeout = '\(policy.effectiveIdleTransactionTimeoutMilliseconds)ms'"
+            ),
+            logger: logger
+        )
+        try await connection.query("SET LOCAL timezone = 'UTC'", logger: logger)
+        try await connection.query("SET LOCAL DateStyle = 'ISO, YMD'", logger: logger)
+        try await connection.query("SET LOCAL IntervalStyle = 'iso_8601'", logger: logger)
+    }
+
+    static func quotedIdentifier(_ value: String) -> String {
+        "\"\(value.replacingOccurrences(of: "\"", with: "\"\""))\""
+    }
+
+    private static func qualifiedIdentifier(schema: String, table: String) -> String {
+        "\(quotedIdentifier(schema)).\(quotedIdentifier(table))"
+    }
+
+    private static func sqlLiteral(_ value: String) -> String {
+        "'\(value.replacingOccurrences(of: "'", with: "''"))'"
+    }
+
+    private static func inspectionColumnExpression(for column: ColumnInfo) -> String {
+        let columnSQL = quotedIdentifier(column.name)
+        return castsColumnToTextForInspection(column) ? "(\(columnSQL))::text" : columnSQL
+    }
+
+    private static func castsColumnToTextForInspection(_ column: ColumnInfo) -> Bool {
+        column.valueConstraints?.contains { $0.kind == .enumValues } == true
+            || inspectionValueKind(for: column) != nil
+    }
+
+    private static func inspectionValueKind(for column: ColumnInfo) -> DatabaseInspectionValueKind? {
+        switch column.dataType.lowercased() {
+        case "time", "time without time zone":
+            .time
+        case "time with time zone", "timetz":
+            .timeWithTimeZone
+        default:
+            nil
+        }
+    }
+
+    private static func inspectionValue(
+        for cell: PostgresCell,
+        policy: DatabaseInspectionPolicy,
+        preferredKind: DatabaseInspectionValueKind? = nil
+    ) -> DatabaseInspectionValue {
+        guard cell.bytes != nil else { return .null }
+        if preferredKind == .unsupportedType {
+            return .unsupported(cell.dataType.description)
+        }
+        do {
+            if let preferredKind {
+                switch preferredKind {
+                case .time:
+                    return .time(try stringOrTimeString(for: cell))
+                case .timeWithTimeZone:
+                    return .timeWithTimeZone(try stringOrTimeWithTimeZoneString(for: cell))
+                default:
+                    break
+                }
+            }
+            switch cell.dataType {
+            case .bool:
+                return .boolean(try cell.decode(Bool.self))
+            case .int2:
+                return .integer(Int64(try cell.decode(Int16.self)))
+            case .int4:
+                return .integer(Int64(try cell.decode(Int32.self)))
+            case .int8:
+                return .integer(try cell.decode(Int64.self))
+            case .numeric:
+                return .decimal(String(describing: try cell.decode(Decimal.self)))
+            case .float4:
+                return .float(Double(try cell.decode(Float.self)))
+            case .float8:
+                return .float(try cell.decode(Double.self))
+            case .uuid:
+                return .uuid(try cell.decode(UUID.self).uuidString.lowercased())
+            case .date:
+                return .date(dateOnlyFormatter.string(from: try cell.decode(Date.self)))
+            case .time:
+                return .time(try timeString(for: cell))
+            case .timetz:
+                return .timeWithTimeZone(try timeWithTimeZoneString(for: cell))
+            case .timestamp:
+                return .timestamp(try localTimestampString(for: cell))
+            case .timestamptz:
+                return .timestampWithTimeZone(try timestampWithTimeZoneString(for: cell))
+            case .json, .jsonb:
+                return .json(try cell.decode(String.self), cap: policy.effectiveMaximumJSONCharacters)
+            case .text, .varchar, .bpchar, .name, .char, .unknown:
+                return .text(try cell.decode(String.self), cap: policy.effectiveMaximumTextCharacters)
+            case .bytea:
+                return .unsupported("bytea")
+            default:
+                if let value = try? cell.decode(String.self), isSafeDecodedTextType(cell.dataType.description) {
+                    return .text(value, cap: policy.effectiveMaximumTextCharacters)
+                }
+                return .unsupported(cell.dataType.description)
+            }
+        } catch {
+            return .unsupported("\(cell.dataType.description):decodeFailure")
+        }
+    }
+
+    private static func isSafeDecodedTextType(_ typeName: String) -> Bool {
+        let lowered = typeName.lowercased()
+        return lowered.contains("enum") || lowered.contains("text") || lowered.contains("varchar")
+    }
+
+    private static func stringOrTimeString(for cell: PostgresCell) throws -> String {
+        if let value = try decodedTextString(for: cell) {
+            return value
+        }
+        return try timeString(for: cell)
+    }
+
+    private static func stringOrTimeWithTimeZoneString(for cell: PostgresCell) throws -> String {
+        if let value = try decodedTextString(for: cell) {
+            return value
+        }
+        return try timeWithTimeZoneString(for: cell)
+    }
+
+    private static func decodedTextString(for cell: PostgresCell) throws -> String? {
+        switch cell.dataType {
+        case .text, .varchar, .bpchar, .name, .char, .unknown:
+            return try cell.decode(String.self)
+        default:
+            return nil
+        }
+    }
+
+    private static func timeString(for cell: PostgresCell) throws -> String {
+        guard var bytes = cell.bytes, let microseconds = bytes.readInteger(as: Int64.self) else {
+            return "invalid"
+        }
+        return timeString(postgresMicroseconds: microseconds)
+    }
+
+    private static func timeWithTimeZoneString(for cell: PostgresCell) throws -> String {
+        guard var bytes = cell.bytes,
+            let microseconds = bytes.readInteger(as: Int64.self),
+            let timeZoneSecondsWest = bytes.readInteger(as: Int32.self)
+        else {
+            return "invalid"
+        }
+        return "\(timeString(postgresMicroseconds: microseconds))\(timeZoneOffsetString(secondsEast: -Int(timeZoneSecondsWest)))"
+    }
+
+    private static func timeString(postgresMicroseconds: Int64) -> String {
+        let microsecondsPerHour: Int64 = 3_600_000_000
+        let microsecondsPerMinute: Int64 = 60_000_000
+        let microsecondsPerSecond: Int64 = 1_000_000
+        let hours = postgresMicroseconds / microsecondsPerHour
+        let afterHours = postgresMicroseconds - hours * microsecondsPerHour
+        let minutes = afterHours / microsecondsPerMinute
+        let afterMinutes = afterHours - minutes * microsecondsPerMinute
+        let seconds = afterMinutes / microsecondsPerSecond
+        let micros = afterMinutes - seconds * microsecondsPerSecond
+        return String(format: "%02d:%02d:%02d.%06d", Int(hours), Int(minutes), Int(seconds), Int(micros))
+    }
+
+    private static func timeZoneOffsetString(secondsEast: Int) -> String {
+        let sign = secondsEast >= 0 ? "+" : "-"
+        let absolute = abs(secondsEast)
+        let hours = absolute / 3_600
+        let minutes = (absolute % 3_600) / 60
+        return String(format: "%@%02d:%02d", sign, hours, minutes)
+    }
+
+    private static func localTimestampString(for cell: PostgresCell) throws -> String {
+        guard var bytes = cell.bytes, let microseconds = bytes.readInteger(as: Int64.self) else {
+            return "invalid"
+        }
+        return timestampString(postgresMicroseconds: microseconds, includeTimeZone: false)
+    }
+
+    private static func timestampWithTimeZoneString(for cell: PostgresCell) throws -> String {
+        guard var bytes = cell.bytes, let microseconds = bytes.readInteger(as: Int64.self) else {
+            return "invalid"
+        }
+        return timestampString(postgresMicroseconds: microseconds, includeTimeZone: true)
+    }
+
+    private static func timestampString(
+        postgresMicroseconds: Int64,
+        includeTimeZone: Bool
+    ) -> String {
+        let seconds = floorDividing(postgresMicroseconds, by: 1_000_000)
+        let micros = postgresMicroseconds - seconds * 1_000_000
+        let date = Date(
+            timeInterval: Double(seconds),
+            since: Date(timeIntervalSince1970: 946_684_800)
+        )
+        let base = includeTimeZone
+            ? timestampWithTimeZoneFormatter.string(from: date)
+            : localTimestampFormatter.string(from: date)
+        let suffix = String(format: ".%06d", Int(micros))
+        return includeTimeZone ? "\(base)\(suffix)Z" : "\(base)\(suffix)"
+    }
+
+    private static func floorDividing(_ value: Int64, by divisor: Int64) -> Int64 {
+        let quotient = value / divisor
+        let remainder = value % divisor
+        return remainder < 0 ? quotient - 1 : quotient
+    }
+
+    nonisolated(unsafe) private static let dateOnlyFormatter: DateFormatter = {
+        let formatter = DateFormatter()
+        formatter.dateFormat = "yyyy-MM-dd"
+        formatter.timeZone = TimeZone(identifier: "UTC")
+        formatter.locale = Locale(identifier: "en_US_POSIX")
+        return formatter
+    }()
+
+    nonisolated(unsafe) private static let localTimestampFormatter: DateFormatter = {
+        let formatter = DateFormatter()
+        formatter.dateFormat = "yyyy-MM-dd HH:mm:ss"
+        formatter.timeZone = TimeZone(identifier: "UTC")
+        formatter.locale = Locale(identifier: "en_US_POSIX")
+        return formatter
+    }()
+
+    nonisolated(unsafe) private static let timestampWithTimeZoneFormatter: DateFormatter = {
+        let formatter = DateFormatter()
+        formatter.dateFormat = "yyyy-MM-dd'T'HH:mm:ss"
+        formatter.timeZone = TimeZone(identifier: "UTC")
+        formatter.locale = Locale(identifier: "en_US_POSIX")
+        return formatter
+    }()
 
     private static func limitedReturningWriteSQL(sql: String, rowLimit: Int) -> String {
         let writeSQL = sqlWithoutTrailingTerminator(sql)

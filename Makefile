@@ -34,7 +34,7 @@ ifdef FAIL_UNDER
 EVAL_ARGS += --fail-under $(FAIL_UNDER)
 endif
 
-.PHONY: project build test test-db test-fm eval-build eval-local eval-cloud eval-cloud-agent eval-all eval-case eval-cloud-agent-case eval-retrieval eval-retrieval-case eval-schema-tools eval-db-local eval-db-cloud eval-db-cloud-agent eval-db-case eval-openrouter-smoke setup run run-conductor release release-mac xcode clean
+.PHONY: project build test test-db test-fm eval-build eval-local eval-cloud eval-cloud-agent eval-all eval-case eval-cloud-agent-case eval-retrieval eval-retrieval-case eval-schema-tools eval-inspection-tools eval-db-local eval-db-cloud eval-db-cloud-agent eval-db-case eval-openrouter-smoke setup run run-conductor release release-mac xcode clean
 
 ## Regenerate Widen.xcodeproj from project.yml
 project:
@@ -116,6 +116,10 @@ eval-retrieval-case: eval-build
 ## Run deterministic bounded schema tool contract evals with no model or database calls
 eval-schema-tools: eval-build
 	$(EVAL) --schema-tools $(filter-out --suite Evals/suites/text-to-sql-v1.json,$(EVAL_ARGS))
+
+## Run deterministic privacy-gated database inspection tool evals with no model calls
+eval-inspection-tools: eval-build
+	$(EVAL) --inspection-tools $(filter-out --suite Evals/suites/text-to-sql-v1.json,$(EVAL_ARGS))
 
 ## Run the text-to-SQL eval suite with seeded Postgres semantic grading locally
 eval-db-local: eval-build

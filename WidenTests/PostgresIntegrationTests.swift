@@ -150,6 +150,41 @@ private func withDatabase<T>(
     }
 }
 
+private func makeInspectionSession(
+    schema: DatabaseSchema,
+    policy: DatabaseInspectionPolicy,
+    service: PostgresService
+) throws -> DatabaseInspectionToolSession {
+    let snapshot = SchemaSearchSnapshot(
+        connectionID: UUID(),
+        selectedSchemas: schema.schemas.map(\.name),
+        schema: schema
+    )
+    return try DatabaseInspectionToolSessionFactory().makeSession(
+        snapshot: snapshot,
+        policy: policy,
+        database: service
+    )
+}
+
+private func inspectionHandle(
+    _ session: DatabaseInspectionToolSession,
+    _ objectID: SchemaObjectID
+) async throws -> String {
+    try #require(await session.handle(for: objectID))
+}
+
+private func invokeInspection(
+    _ session: DatabaseInspectionToolSession,
+    id: String,
+    tool: DatabaseInspectionToolName,
+    arguments: JSONValue
+) async throws -> DatabaseInspectionResult {
+    try await session.invoke(
+        DatabaseInspectionToolInvocation(callID: id, toolName: tool.rawValue, arguments: arguments)
+    )
+}
+
 @Suite("Postgres integration", .enabled(if: integrationEnabled), .serialized)
 struct PostgresIntegrationTests {
     private func verify(
@@ -695,6 +730,374 @@ struct QueryExecutionIntegrationTests {
                 try row["ok"].decode(Int32.self)
             }
             #expect(values == [1])
+        }
+    }
+
+    @Test func databaseInspectionReadsBoundedProfilesDistinctValuesDatesAndTimes() async throws {
+        try await withDatabase { config, service in
+            try await runStatements(
+                [
+                    "CREATE TYPE ticket_state AS ENUM ('active', 'disabled')",
+                    """
+                    CREATE TABLE tickets (
+                      id SERIAL PRIMARY KEY,
+                      status TEXT NOT NULL CHECK (status IN ('active', 'disabled')),
+                      state ticket_state NOT NULL,
+                      opened_on DATE NOT NULL,
+                      resolved_on DATE,
+                      starts_at TIME NOT NULL,
+                      reminder_at TIME WITH TIME ZONE NOT NULL,
+                      email TEXT,
+                      note TEXT
+                    )
+                    """,
+                    """
+                    INSERT INTO tickets (status, state, opened_on, resolved_on, starts_at, reminder_at, email, note) VALUES
+                    ('active', 'active', DATE '2026-01-01', NULL, TIME '09:30:00', TIME WITH TIME ZONE '09:30:00+02', 'alice@example.com', 'short'),
+                    ('active', 'active', DATE '2026-01-05', DATE '2026-01-07', TIME '09:30:00', TIME WITH TIME ZONE '09:30:00+02', 'bob@example.com', 'short'),
+                    ('disabled', 'disabled', DATE '2026-01-15', NULL, TIME '14:45:30.123456', TIME WITH TIME ZONE '14:45:30.123456-07', 'carla@example.com', 'short'),
+                    ('active', 'active', DATE '2026-01-20', DATE '2026-01-23', TIME '16:00:00', TIME WITH TIME ZONE '16:00:00+00', 'drew@example.com', 'short')
+                    """,
+                    "ANALYZE tickets",
+                ],
+                on: config.database
+            )
+
+            let schema = try await SchemaIntrospectionService().loadSchema(using: service)
+            var policy = DatabaseInspectionPolicy.localDataInspection(
+                allowFullTableScans: true,
+                allowDistinctValuesInProfiles: true,
+                allowSampleRows: true
+            )
+            policy.maximumCallCount = 10
+            let session = try makeInspectionSession(schema: schema, policy: policy, service: service)
+            let tickets = try await inspectionHandle(
+                session,
+                .table(schema: "public", name: "tickets")
+            )
+            let status = try await inspectionHandle(
+                session,
+                .column(schema: "public", table: "tickets", name: "status")
+            )
+            let openedOn = try await inspectionHandle(
+                session,
+                .column(schema: "public", table: "tickets", name: "opened_on")
+            )
+            let state = try await inspectionHandle(
+                session,
+                .column(schema: "public", table: "tickets", name: "state")
+            )
+            let resolvedOn = try await inspectionHandle(
+                session,
+                .column(schema: "public", table: "tickets", name: "resolved_on")
+            )
+            let startsAt = try await inspectionHandle(
+                session,
+                .column(schema: "public", table: "tickets", name: "starts_at")
+            )
+            let reminderAt = try await inspectionHandle(
+                session,
+                .column(schema: "public", table: "tickets", name: "reminder_at")
+            )
+            let email = try await inspectionHandle(
+                session,
+                .column(schema: "public", table: "tickets", name: "email")
+            )
+            let note = try await inspectionHandle(
+                session,
+                .column(schema: "public", table: "tickets", name: "note")
+            )
+
+            let size = try await invokeInspection(
+                session,
+                id: "tickets-size",
+                tool: .inspectRelationSize,
+                arguments: ["table_id": .string(tickets)]
+            )
+            #expect(size.success)
+            #expect(size.payload?["approximate_row_count"]?.intValue == 4)
+            #expect(size.payload?["full_table_scanned"]?.boolValue == false)
+
+            let statusProfile = try await invokeInspection(
+                session,
+                id: "ticket-status-profile",
+                tool: .inspectColumnProfile,
+                arguments: ["table_id": .string(tickets), "column_id": .string(status)]
+            )
+            #expect(statusProfile.success)
+            #expect(statusProfile.payload?["row_count"]?.intValue == 4)
+            #expect(statusProfile.payload?["distinct_count"]?.intValue == 2)
+            #expect(statusProfile.payload?["distinct_values"]?.arrayValue?.count == 2)
+
+            let distinct = try await invokeInspection(
+                session,
+                id: "ticket-status-distinct",
+                tool: .inspectDistinctValues,
+                arguments: ["table_id": .string(tickets), "column_id": .string(status), "limit": 1]
+            )
+            #expect(distinct.success)
+            #expect(distinct.payload?["values"]?.arrayValue?.count == 1)
+            #expect(distinct.payload?["truncated"]?.boolValue == true)
+
+            let enumDistinct = try await invokeInspection(
+                session,
+                id: "ticket-state-enum-distinct",
+                tool: .inspectDistinctValues,
+                arguments: ["table_id": .string(tickets), "column_id": .string(state)]
+            )
+            #expect(enumDistinct.success)
+            let enumPayloadText = String(
+                decoding: try JSONEncoder.schemaToolEncoder.encode(enumDistinct.payload),
+                as: UTF8.self
+            )
+            #expect(enumPayloadText.contains("active"))
+            #expect(enumPayloadText.contains("disabled"))
+
+            let timeDistinct = try await invokeInspection(
+                session,
+                id: "ticket-starts-at-distinct",
+                tool: .inspectDistinctValues,
+                arguments: ["table_id": .string(tickets), "column_id": .string(startsAt), "limit": 1]
+            )
+            #expect(timeDistinct.success)
+            let timeValue = try #require(timeDistinct.payload?["values"]?.arrayValue?.first?["value"])
+            #expect(timeValue["type"]?.stringValue == "time")
+            #expect(timeValue["value"]?.stringValue == "09:30:00")
+
+            let timeWithZoneDistinct = try await invokeInspection(
+                session,
+                id: "ticket-reminder-at-distinct",
+                tool: .inspectDistinctValues,
+                arguments: ["table_id": .string(tickets), "column_id": .string(reminderAt), "limit": 1]
+            )
+            #expect(timeWithZoneDistinct.success)
+            let timeWithZoneValue = try #require(
+                timeWithZoneDistinct.payload?["values"]?.arrayValue?.first?["value"]
+            )
+            #expect(timeWithZoneValue["type"]?.stringValue == "time_tz")
+            #expect(timeWithZoneValue["value"]?.stringValue?.contains("09:30:00") == true)
+
+            let openedProfile = try await invokeInspection(
+                session,
+                id: "ticket-opened-profile",
+                tool: .inspectColumnProfile,
+                arguments: ["table_id": .string(tickets), "column_id": .string(openedOn)]
+            )
+            #expect(openedProfile.success)
+            #expect(openedProfile.payload?["min"]?["type"]?.stringValue == "date")
+            #expect(openedProfile.payload?["min"]?["value"]?.stringValue == "2026-01-01")
+            #expect(openedProfile.payload?["max"]?["value"]?.stringValue == "2026-01-20")
+
+            let nullableProfile = try await invokeInspection(
+                session,
+                id: "ticket-resolved-profile",
+                tool: .inspectColumnProfile,
+                arguments: ["table_id": .string(tickets), "column_id": .string(resolvedOn)]
+            )
+            #expect(nullableProfile.success)
+            #expect(nullableProfile.payload?["null_count"]?.intValue == 2)
+            if case .number(let nullFraction)? = nullableProfile.payload?["null_fraction"] {
+                #expect(nullFraction == 0.5)
+            } else {
+                Issue.record("Expected null_fraction to be a JSON number")
+            }
+
+            let sample = try await invokeInspection(
+                session,
+                id: "ticket-sample-truncated",
+                tool: .inspectSampleRows,
+                arguments: [
+                    "table_id": .string(tickets),
+                    "column_ids": .array([.string(status), .string(note)]),
+                    "limit": 1,
+                ]
+            )
+            #expect(sample.success)
+            #expect(sample.payload?["rows"]?.arrayValue?.count == 1)
+            #expect(sample.payload?["truncated"]?.boolValue == true)
+            #expect(sample.truncation.truncated == true)
+
+            let redacted = try await invokeInspection(
+                session,
+                id: "ticket-email-redacted",
+                tool: .inspectDistinctValues,
+                arguments: ["table_id": .string(tickets), "column_id": .string(email)]
+            )
+            #expect(redacted.success)
+            #expect(redacted.payload?["redacted"]?.boolValue == true)
+            #expect(redacted.payload?["values"]?.arrayValue == [])
+            let trace = try #require(await session.tracesSnapshot().last)
+            #expect(trace.redactionCount == 1)
+            #expect(trace.valueCount == 0)
+        }
+    }
+
+    @Test func databaseInspectionSampleRowsMapLongStableIDsFromShortAliases() async throws {
+        try await withDatabase { config, service in
+            let tableName = "sample_rows_with_very_long_identifier_names"
+            let columnName = "column_name_with_more_than_sixty_three_alias_bytes"
+            try await runStatements(
+                [
+                    """
+                    CREATE TABLE "\(tableName)" (
+                      "\(columnName)" TEXT NOT NULL
+                    )
+                    """,
+                    """
+                    INSERT INTO "\(tableName)" ("\(columnName)") VALUES ('visible')
+                    """,
+                    "ANALYZE \"\(tableName)\"",
+                ],
+                on: config.database
+            )
+
+            let schema = try await SchemaIntrospectionService().loadSchema(using: service)
+            let policy = DatabaseInspectionPolicy.localDataInspection(
+                allowFullTableScans: true,
+                allowSampleRows: true
+            )
+            let session = try makeInspectionSession(schema: schema, policy: policy, service: service)
+            let table = try await inspectionHandle(
+                session,
+                .table(schema: "public", name: tableName)
+            )
+            let column = try await inspectionHandle(
+                session,
+                .column(schema: "public", table: tableName, name: columnName)
+            )
+
+            let result = try await invokeInspection(
+                session,
+                id: "long-alias-sample",
+                tool: .inspectSampleRows,
+                arguments: [
+                    "table_id": .string(table),
+                    "column_ids": .array([.string(column)]),
+                    "limit": 1,
+                ]
+            )
+
+            #expect(result.success)
+            let value = try #require(result.payload?["rows"]?.arrayValue?.first?[column])
+            #expect(value["type"]?.stringValue == "text")
+            #expect(value["value"]?.stringValue == "visible")
+        }
+    }
+
+    @Test func databaseInspectionSampleRowsRunReadOnlyAndRollBack() async throws {
+        try await withDatabase { config, service in
+            try await runStatements(
+                [
+                    "CREATE TABLE inspection_audit (id SERIAL PRIMARY KEY)",
+                    """
+                    CREATE FUNCTION record_inspection_read() RETURNS integer
+                    LANGUAGE plpgsql
+                    AS $$
+                    BEGIN
+                      INSERT INTO inspection_audit DEFAULT VALUES;
+                      RETURN 1;
+                    END;
+                    $$;
+                    """,
+                    "CREATE VIEW dangerous_view AS SELECT record_inspection_read() AS value",
+                ],
+                on: config.database
+            )
+
+            let schema = try await SchemaIntrospectionService().loadSchema(using: service)
+            let policy = DatabaseInspectionPolicy.localDataInspection(
+                allowFullTableScans: true,
+                allowSampleRows: true
+            )
+            let session = try makeInspectionSession(schema: schema, policy: policy, service: service)
+            let view = try await inspectionHandle(
+                session,
+                .table(schema: "public", name: "dangerous_view")
+            )
+            let value = try await inspectionHandle(
+                session,
+                .column(schema: "public", table: "dangerous_view", name: "value")
+            )
+
+            let result = try await invokeInspection(
+                session,
+                id: "dangerous-sample",
+                tool: .inspectSampleRows,
+                arguments: [
+                    "table_id": .string(view),
+                    "column_ids": .array([.string(value)]),
+                    "limit": 1,
+                ]
+            )
+            #expect(result.success == false)
+            #expect(result.error?.code == .databaseError)
+
+            let counts = try await service.query("SELECT count(*) AS n FROM inspection_audit") { row in
+                try row["n"].decode(Int64.self)
+            }
+            #expect(counts == [0])
+
+            let healthy = try await service.query("SELECT 1 AS ok") { row in
+                try row["ok"].decode(Int32.self)
+            }
+            #expect(healthy == [1])
+        }
+    }
+
+    @Test func databaseInspectionStatementTimeoutLeavesConnectionHealthy() async throws {
+        try await withDatabase { config, service in
+            try await runStatements(
+                [
+                    "CREATE TABLE slow_values (id INTEGER PRIMARY KEY)",
+                    "INSERT INTO slow_values SELECT generate_series(1, 20)",
+                    """
+                    CREATE FUNCTION slow_identity(value integer) RETURNS integer
+                    LANGUAGE plpgsql
+                    AS $$
+                    BEGIN
+                      PERFORM pg_sleep(0.05);
+                      RETURN value;
+                    END;
+                    $$;
+                    """,
+                    "CREATE VIEW slow_view AS SELECT slow_identity(id) AS value FROM slow_values",
+                ],
+                on: config.database
+            )
+
+            let schema = try await SchemaIntrospectionService().loadSchema(using: service)
+            var policy = DatabaseInspectionPolicy.localDataInspection(
+                allowFullTableScans: true,
+                allowSampleRows: true
+            )
+            policy.statementTimeoutMilliseconds = 0
+            let session = try makeInspectionSession(schema: schema, policy: policy, service: service)
+            let view = try await inspectionHandle(
+                session,
+                .table(schema: "public", name: "slow_view")
+            )
+            let value = try await inspectionHandle(
+                session,
+                .column(schema: "public", table: "slow_view", name: "value")
+            )
+
+            let result = try await invokeInspection(
+                session,
+                id: "slow-sample",
+                tool: .inspectSampleRows,
+                arguments: [
+                    "table_id": .string(view),
+                    "column_ids": .array([.string(value)]),
+                    "limit": 20,
+                ]
+            )
+            #expect(result.success == false)
+            #expect(result.error?.code == .timeout)
+
+            let healthy = try await service.query("SELECT 1 AS ok") { row in
+                try row["ok"].decode(Int32.self)
+            }
+            #expect(healthy == [1])
         }
     }
 }

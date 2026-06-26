@@ -8,7 +8,7 @@ import Testing
 struct AIBackendSelectionTests {
     private static let defaultsKeys = [
         "WidenAIBackendMode", "WidenCloudAIProvider", "WidenOpenRouterModelID",
-        "WidenUseMockAI",
+        "WidenUseMockAI", "WidenExperimentalCloudSchemaAgentEnabled",
     ]
 
     private func clearDefaults() {
@@ -64,6 +64,54 @@ struct AIBackendSelectionTests {
         #expect(state.sqlGenerator is OpenRouterSQLGenerator)
         #expect(state.activeBackendDisplayName.contains("via OpenRouter"))
         #expect(state.modelAvailabilityMessage == nil)
+    }
+
+    @Test func connectionCloudSchemaMetadataOptOutBlocksCloudGeneration() {
+        clearDefaults()
+        let (state, dir) = makeState()
+        defer { cleanUp(dir) }
+        let connection = DatabaseConnectionConfig(
+            database: "widen_test",
+            username: "beto",
+            allowCloudSchemaMetadata: false
+        )
+        state.connections = [connection]
+        state.aiBackendMode = .cloud
+        state.cloudProvider = .openRouter
+        state.openRouterAPIKeyOverride = .some("sk-test")
+
+        let generator = state.sqlGenerator(
+            connectionID: connection.id,
+            schema: DatabaseSchema(schemas: [SchemaInfo(name: "public")])
+        )
+
+        #expect(generator is UnavailableSQLGenerator)
+    }
+
+    @Test func cloudInspectionDatabaseRequiresConnectedConnection() {
+        clearDefaults()
+        let (state, dir) = makeState()
+        defer { cleanUp(dir) }
+        let connection = DatabaseConnectionConfig(
+            database: "widen_test",
+            username: "beto",
+            allowLocalDataInspection: true,
+            allowCloudDataInspection: true
+        )
+        state.connections = [connection]
+
+        let disconnectedDatabase = state.databaseInspectionDatabase(
+            for: connection.id,
+            connection: connection
+        )
+        #expect(disconnectedDatabase == nil)
+
+        state.connectionStates[connection.id] = .connected
+        let connectedDatabase = state.databaseInspectionDatabase(
+            for: connection.id,
+            connection: connection
+        )
+        #expect(connectedDatabase != nil)
     }
 
     @Test func cloudApplePCCQuotaReachedIsUnavailable() {
