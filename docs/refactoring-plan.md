@@ -31,7 +31,7 @@ PR 1 — Eval harness and first 20 cases
   ├── PR 4 — OpenRouter adapter reliability                [parallel]
   └── PR 5 — Local schema search index                     [parallel]
           ├── PR 6 ✅ — Bounded schema tools                  [done 2026-06-25]
-          └── PR 10 — Embedding retrieval experiment       [deferred — revisit after PR 11/12]
+          └── PR 10 ⏸️ — Embedding retrieval experiment     [deferred 2026-06-26 — revisit after PR 12]
 
 PR 2 + PR 4 + PR 6
   └── PR 7 ✅ — Cloud tool-using SQL agent                  [done 2026-06-25]
@@ -43,7 +43,7 @@ PR 6 + PR 8
   └── PR 9 ✅ — Optional data-inspection tools              [done 2026-06-26]
 
 PR 2 + PR 5 + PR 6
-  └── PR 11 ✅ — Constrained local-model path              [done 2026-06-26]
+  └── PR 11 ✅ — Constrained local-model path              [complete 2026-06-26]
 
 PR 7 + PR 8 + PR 11 + eval evidence
   └── PR 12 — Backend defaults, older macOS, release gate
@@ -1000,7 +1000,7 @@ Optional OpenRouter agent evals were skipped because WIDEN_EVAL_OPENROUTER_API_K
 
 ---
 
-# PR 10 — Experiment with local schema embeddings [Deferred]
+# PR 10 ⏸️ — Experiment with local schema embeddings [deferred 2026-06-26]
 
 Suggested title:
 
@@ -1008,7 +1008,7 @@ Suggested title:
 experiment: add hybrid embedding schema retrieval
 ```
 
-**Deferred.** The historical failures were not primarily caused by missing semantic vector search — the schema often contained the needed tables and columns, but the model still mixed column ownership, produced invalid SQL, and repeated failed repairs. The priority is to finish the text-to-SQL refactor and validate the actual user experience first. Revisit after PR 11/12 and after real app/eval testing shows retrieval remains a bottleneck.
+**Deferred.** The historical failures were not primarily caused by missing semantic vector search — the schema often contained the needed tables and columns, but the model still mixed column ownership, produced invalid SQL, and repeated failed repairs. The priority is to finish the text-to-SQL refactor and validate the actual user experience first. Revisit after PR 12 and after real app/eval testing shows retrieval remains a bottleneck.
 
 **Can run in parallel after PR 5.**
 
@@ -1058,7 +1058,7 @@ If it does not meet that gate, close the experiment. Embeddings are a retrieval 
 
 ---
 
-# PR 11 ✅ — Add a constrained experimental local path [done 2026-06-26]
+# PR 11 ✅ — Add a constrained experimental local path [complete 2026-06-26]
 
 Suggested title:
 
@@ -1117,6 +1117,29 @@ all quoted-identifier cases
 at least 14/20 total cases
 zero unsafe or schema-invalid SQL presented to the user
 ```
+
+## Completion status
+
+Complete as of the final PR 47 accounting fix on 2026-06-26.
+
+Implemented:
+
+* Constrained the on-device path to a maximum two cumulative model calls per request, including repair/follow-up contexts that enter with prior model calls already spent.
+* Kept optional schema discovery available only when the request still has budget for both discovery and the subsequent SQL response.
+* Ensured context-window retry accounting cannot exceed the same two-call cumulative budget, including failed attempts that already spent discovery.
+* Preserved the verification-repair guard: an initial local generation can use one call and validation repair can use the second call, but a subsequent PostgreSQL verification failure does not trigger a third local model call.
+
+Final verification:
+
+```text
+make project: project generation succeeded.
+focused xcodebuild accounting/pipeline tests: 46 tests in 2 suites passed.
+make test: 797 tests in 43 suites passed.
+make eval-local REPEAT=3: 60 results; backend available 60/60; static-shape pass rate 20.0% (12/60); stable pass rate 20.0% (4/20); total model calls 84; summary .eval-results/20260626-110912-836/summary.md.
+make eval-db-local REPEAT=3: 60 results; backend available 60/60; static-shape pass rate 20.0% (12/60); semantic end-to-end pass rate 20.0% (12/60); SQL semantic pass rate 6/9; PostgreSQL verification attempted pass rate 9/9; semantic environment available 9/9; total model calls 84; summary .eval-results/20260626-111513-208/summary.md.
+```
+
+The local Foundation Models backend was available for the final eval runs. The constrained local path remains experimental because the promotion threshold above is not met.
 
 ---
 
@@ -1185,7 +1208,7 @@ When only one agent is working:
 9. PR 9 ✅ — Optional data inspection
 10. PR 11 ✅ — Experimental local path
 11. PR 12 — Platform/default-backend decision
-12. PR 10 — Embedding experiment             [deferred — revisit after PR 11/12 and real app/eval testing]
+12. PR 10 ⏸️ — Embedding experiment           [deferred 2026-06-26 — revisit after PR 12 and real app/eval testing]
 ```
 
 The key discipline is to run the same 20 cases after every PR and reject changes that merely move failures from one stage to another.

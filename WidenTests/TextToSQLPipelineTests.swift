@@ -704,6 +704,7 @@ struct TextToSQLPipelineTests {
         #expect(failure.stage == .postgresVerificationRepair)
         #expect(failure.category == .postgresVerification)
         #expect(generator.contexts.count == 2)
+        #expect(generator.contexts[0].modelCallCount == 0)
         #expect(generator.contexts[1].modelCallCount == 2)
         #expect(verifier.requests.map(\.sql) == [validationRepairedSQL])
         #expect(!result.events.map(\.kind).contains(.postgresVerificationRepairStarted))
