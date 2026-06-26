@@ -711,15 +711,18 @@ struct TextToSQLPipelineTests {
 
     @Test func constrainedLocalRejectsWritesBeforeRepairBudgetIsSpent() async throws {
         let generator = ConstrainedScriptedGenerator([
-            .success(generation(sql: "INSERT INTO public.users (id) VALUES (1)", generationCallCount: 2))
+            .success(generation(sql: "INSERT INTO public.users (id) VALUES (1)", generationCallCount: 1)),
+            .success(generation(sql: "SELECT id FROM public.users LIMIT 100")),
         ])
 
         let result = try await run(generator)
 
-        guard case .failed = result.finalDecision else {
+        guard case .failed(let failure) = result.finalDecision else {
             Issue.record("expected failed decision")
             return
         }
+        #expect(failure.stage == .safetyValidation)
+        #expect(failure.category == .safetyValidation)
         #expect(generator.contexts.count == 1)
         #expect(result.events.contains {
             $0.kind == .validationFailed
@@ -730,6 +733,7 @@ struct TextToSQLPipelineTests {
             $0.stage == .safetyValidation
                 && $0.outcome == .failure
         })
+        #expect(!result.events.map(\.kind).contains(.validationRepairStarted))
     }
 
     @Test func clarificationReturnsFinalClarification() async throws {

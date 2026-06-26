@@ -476,6 +476,26 @@ public struct TextToSQLPipeline: TextToSQLRunning {
             request: request,
             events: &events
         )
+        if usesConstrainedLocalPolicy && validation.safety.kind.isWrite {
+            let failure = TextToSQLPipelineFailure(
+                stage: validationEventStage,
+                category: validationFailureCategory,
+                message: firstError
+            )
+            trace.append(.validationRepair, outcome: .skipped, since: Date())
+            trace.append(
+                .finalDecision,
+                outcome: .failure,
+                since: Date(),
+                failureCategory: failure.category
+            )
+            return finished(
+                decision: .failed(failure),
+                trace: trace,
+                events: events,
+                started: started
+            )
+        }
         let repairRun = try await runValidationRepair(
             request: request,
             startingGeneration: result.withPipelineSQL(generatedSQL),
