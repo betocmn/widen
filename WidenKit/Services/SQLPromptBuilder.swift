@@ -88,7 +88,8 @@ public enum SQLPromptBuilder {
         context: SQLGenerationContext = SQLGenerationContext(),
         databaseContext: String? = nil,
         maxSchemaCharacters: Int = 8_000,
-        maxPrimarySchemaTables: Int = 8
+        maxPrimarySchemaTables: Int = 8,
+        maxDetailedSchemaTables: Int? = nil
     ) -> String {
         promptBundle(
             question: question,
@@ -96,7 +97,8 @@ public enum SQLPromptBuilder {
             context: context,
             databaseContext: databaseContext,
             maxSchemaCharacters: maxSchemaCharacters,
-            maxPrimarySchemaTables: maxPrimarySchemaTables
+            maxPrimarySchemaTables: maxPrimarySchemaTables,
+            maxDetailedSchemaTables: maxDetailedSchemaTables
         ).prompt
     }
 
@@ -106,7 +108,8 @@ public enum SQLPromptBuilder {
         context: SQLGenerationContext = SQLGenerationContext(),
         databaseContext: String? = nil,
         maxSchemaCharacters: Int = 8_000,
-        maxPrimarySchemaTables: Int = 8
+        maxPrimarySchemaTables: Int = 8,
+        maxDetailedSchemaTables: Int? = nil
     ) -> PromptBundle {
         let databaseContextText = databaseContextSection(databaseContext)
         let rankingQuestion = SchemaPromptPackager.contextualQuestionForPromptBuilder(
@@ -132,6 +135,7 @@ public enum SQLPromptBuilder {
             options: SchemaPromptPackager.PackageOptions(
                 maxCharacters: maxSchemaCharacters,
                 maxPrimaryTables: maxPrimarySchemaTables,
+                maxDetailedTables: maxDetailedSchemaTables,
                 includeCatalog: false
             )
         )

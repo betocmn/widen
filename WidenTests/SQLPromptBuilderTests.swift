@@ -255,6 +255,55 @@ struct SQLPromptBuilderTests {
         #expect(bundle.schemaPackage.includedTables.count == 2)
     }
 
+    @Test func promptBundleCountsPinnedTablesAgainstDetailedCap() {
+        let tables = (0..<8).map { index in
+            TableInfo(
+                schema: "public",
+                name: "events_\(index)",
+                type: .baseTable,
+                columns: [
+                    ColumnInfo(
+                        tableSchema: "public",
+                        tableName: "events_\(index)",
+                        name: "id",
+                        dataType: "integer",
+                        isNullable: false,
+                        ordinalPosition: 1
+                    )
+                ]
+            )
+        }
+        let schema = DatabaseSchema(
+            schemas: [SchemaInfo(name: "public")],
+            tables: tables,
+            foreignKeys: []
+        )
+        let context = SQLGenerationContext(
+            currentSQL: """
+            SELECT e0.id
+            FROM public.events_0 e0
+            JOIN public.events_1 e1 ON e1.id = e0.id
+            JOIN public.events_2 e2 ON e2.id = e0.id
+            JOIN public.events_3 e3 ON e3.id = e0.id
+            """
+        )
+
+        let bundle = SQLPromptBuilder.promptBundle(
+            question: "show event ids",
+            schema: schema,
+            context: context,
+            maxSchemaCharacters: 20_000,
+            maxPrimarySchemaTables: 4,
+            maxDetailedSchemaTables: 4
+        )
+
+        #expect(bundle.schemaPackage.includedTables.count == 4)
+        #expect(bundle.schemaPackage.includedTables.contains("public.events_0"))
+        #expect(bundle.schemaPackage.includedTables.contains("public.events_1"))
+        #expect(bundle.schemaPackage.includedTables.contains("public.events_2"))
+        #expect(bundle.schemaPackage.includedTables.contains("public.events_3"))
+    }
+
     @Test func promptWithoutContextHasNoContextSection() {
         let prompt = SQLPromptBuilder.prompt(
             question: "Show me users.",

@@ -484,10 +484,8 @@
                 context: context,
                 databaseContext: databaseContext,
                 maxSchemaCharacters: schemaCharacters,
-                maxPrimarySchemaTables: Self.primarySchemaTableLimit(
-                    schema: schema,
-                    context: context
-                )
+                maxPrimarySchemaTables: Self.maxDetailedSchemaTables,
+                maxDetailedSchemaTables: Self.maxDetailedSchemaTables
             )
             for _ in 0..<4 {
                 let inputCharacters = instructions.count + latest.prompt.count
@@ -505,10 +503,8 @@
                     context: context,
                     databaseContext: databaseContext,
                     maxSchemaCharacters: schemaCharacters,
-                    maxPrimarySchemaTables: Self.primarySchemaTableLimit(
-                        schema: schema,
-                        context: context
-                    )
+                    maxPrimarySchemaTables: Self.maxDetailedSchemaTables,
+                    maxDetailedSchemaTables: Self.maxDetailedSchemaTables
                 )
             }
 
@@ -518,35 +514,6 @@
                 )
             }
             return latest
-        }
-
-        static func primarySchemaTableLimit(
-            schema: DatabaseSchema,
-            context: SQLGenerationContext
-        ) -> Int {
-            max(
-                0,
-                maxDetailedSchemaTables
-                    - discoveryPinnedTableCount(schema: schema, context: context)
-            )
-        }
-
-        private static func discoveryPinnedTableCount(
-            schema: DatabaseSchema,
-            context: SQLGenerationContext
-        ) -> Int {
-            let discoveryIdentifiers = Set(
-                context.schemaSearchQueries.map(SchemaRelevanceRanker.canonicalIdentifier)
-            )
-            guard !discoveryIdentifiers.isEmpty else { return 0 }
-            return schema.tables.filter { table in
-                discoveryIdentifiers.contains(
-                    SchemaRelevanceRanker.canonicalIdentifier(table.qualifiedName)
-                )
-                    || discoveryIdentifiers.contains(
-                        SchemaRelevanceRanker.canonicalIdentifier(table.name)
-                    )
-            }.count
         }
 
         static func canSpendOptionalDiscoveryCall(context: SQLGenerationContext) -> Bool {

@@ -53,19 +53,15 @@ private let fmTestEnabled =
                 schemaSearchQueries: (0..<4).map { "public.events_\($0)" }
             )
 
-            let primaryLimit = FoundationModelsSQLGenerator.primarySchemaTableLimit(
-                schema: schema,
-                context: context
-            )
             let bundle = SQLPromptBuilder.promptBundle(
                 question: "show event ids",
                 schema: schema,
                 context: context,
                 maxSchemaCharacters: 20_000,
-                maxPrimarySchemaTables: primaryLimit
+                maxPrimarySchemaTables: 4,
+                maxDetailedSchemaTables: 4
             )
 
-            #expect(primaryLimit == 0)
             #expect(bundle.schemaPackage.includedTables.count == 4)
         }
 
