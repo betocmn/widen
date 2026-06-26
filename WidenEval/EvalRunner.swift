@@ -84,7 +84,7 @@ struct EvalRunSummary: Codable {
     var decisionMatches: EvalCountSummary
     var safetyValid: EvalCountSummary
     var schemaValid: EvalCountSummary
-    var postgresVerificationPassed: EvalCountSummary?
+    var postgresVerificationAttemptedPass: EvalCountSummary?
     var postgresVerificationStatusCounts: [String: Int]?
     var forbiddenBindingViolationCount: Int
     var requiredTableCoverage: EvalAverageSummary
@@ -272,6 +272,9 @@ struct EvalRunner {
             "WidenKit/Services/TextToSQLPipeline.swift",
             "WidenKit/Services/SQLGenerationFailure.swift",
             "WidenKit/Services/GeneratedSQLRepairSupport.swift",
+            "WidenKit/Services/GeneratedSQLVerifier.swift",
+            "WidenKit/Services/PostgresErrorMapper.swift",
+            "WidenKit/Services/PostgresService.swift",
         ] + (isOpenRouterSmoke ? ["WidenKit/Services/OpenRouterSQLGenerator.swift"] : [])
             + (options.cloudAgentMode == .tools ? [
                 "WidenKit/Services/OpenRouterSchemaToolSQLAgent.swift",
@@ -958,12 +961,16 @@ struct EvalRunner {
                 count: schemaValues.filter { $0 }.count,
                 denominator: schemaValues.count
             ),
-            postgresVerificationPassed: postgresVerificationStatuses.isEmpty
-                ? nil
-                : EvalCountSummary(
-                    count: postgresVerificationStatuses.filter { $0 == .passed }.count,
-                    denominator: postgresVerificationStatuses.count
-                ),
+            postgresVerificationAttemptedPass: {
+                let attempted = postgresVerificationStatuses.filter {
+                    $0 == .passed || $0 == .failed
+                }
+                guard !attempted.isEmpty else { return nil }
+                return EvalCountSummary(
+                    count: attempted.filter { $0 == .passed }.count,
+                    denominator: attempted.count
+                )
+            }(),
             postgresVerificationStatusCounts: postgresVerificationStatuses.isEmpty
                 ? nil
                 : postgresVerificationStatusCounts,

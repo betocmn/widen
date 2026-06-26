@@ -169,11 +169,25 @@ enum EvalReporter {
             return "**Evaluation scope:** The smoke run invokes the shared production text-to-SQL pipeline only to exercise OpenRouter transport, request-mode selection, structured-response parsing, retry accounting, and safe provider diagnostics. It does not establish SQL semantic accuracy."
         }
 
+        let verificationAttempted = postgresVerificationAttempted(in: run.summary)
+
         if run.manifest.evaluationMode.contains("seeded-postgres-semantic") {
-            return "**Evaluation scope:** The eval invokes the shared production text-to-SQL pipeline through local validation and validation-only repair, keeps the static-shape score, then independently executes eligible final SQL decisions against seeded PostgreSQL fixtures for semantic result-set grading."
+            let verificationClause = verificationAttempted
+                ? "through local validation and PostgreSQL verification, "
+                : "through local validation, "
+            return "**Evaluation scope:** The eval invokes the shared production text-to-SQL pipeline \(verificationClause)keeps the static-shape score, then independently executes eligible final SQL decisions against seeded PostgreSQL fixtures for semantic result-set grading."
         }
 
-        return "**Evaluation scope:** The eval invokes the shared production text-to-SQL pipeline through local validation and validation-only repair, then applies a static-shape score to the final decision. It does not establish result-set or semantic correctness."
+        let verificationClause = verificationAttempted
+            ? "through local validation and PostgreSQL verification, "
+            : "through local validation and validation-only repair, "
+        return "**Evaluation scope:** The eval invokes the shared production text-to-SQL pipeline \(verificationClause)then applies a static-shape score to the final decision. It does not establish result-set or semantic correctness."
+    }
+
+    private static func postgresVerificationAttempted(in summary: EvalRunSummary) -> Bool {
+        guard let counts = summary.postgresVerificationStatusCounts else { return false }
+        return (counts[SQLVerificationStatus.passed.rawValue, default: 0]
+            + counts[SQLVerificationStatus.failed.rawValue, default: 0]) > 0
     }
 
     private static func summarySection(title: String, summary: EvalRunSummary) -> [String] {
@@ -215,7 +229,7 @@ enum EvalReporter {
             "| Decision matches | \(count(summary.decisionMatches)) |",
             "| Safety valid | \(count(summary.safetyValid, suffix: " evaluated")) |",
             "| Schema valid | \(count(summary.schemaValid, suffix: " evaluated")) |",
-            "| PostgreSQL verification passed | \(summary.postgresVerificationPassed.map { count($0) } ?? "-") |",
+            "| PostgreSQL verification attempted pass rate | \(summary.postgresVerificationAttemptedPass.map { count($0) } ?? "-") |",
             "| Forbidden binding violations | \(summary.forbiddenBindingViolationCount) |",
             "| Average required-table coverage | \(average(summary.requiredTableCoverage, suffix: " SQL results evaluated")) |",
             "| Average required-column coverage | \(average(summary.requiredColumnBindingCoverage, suffix: " SQL results evaluated")) |",

@@ -901,27 +901,36 @@ Implementation notes:
 * Extended WidenEval metrics, reports, and seeded DB semantic runs so PostgreSQL verification is reported separately and must pass before semantic execution can count as end-to-end success.
 * Added fake-verifier pipeline tests for pass/fail/repair/skip/cancellation/nonrepairable behavior, schema-tool trace preservation, and Preseason regressions, plus gated Postgres integration coverage for real `PREPARE` SQLSTATE failures and non-execution behavior.
 
+Cleanup pass (pre-merge review feedback):
+
+* Routed verification-repair failures through `repairFailure(... stage: .postgresVerificationRepair)` so rejected/no-progress verification-repair candidates report `.postgresVerificationRepair` instead of `.validationRepair`, with a deterministic pipeline test for the rejected-candidate path.
+* Extended the one-shot PostgreSQL verification repair to validation-repair output: when validation repair produces locally valid SQL that fails verification with a repairable diagnostic, the pipeline now invokes `runPostgresVerificationRepair` once instead of failing immediately.
+* Aligned the verifier session `DateStyle`/`IntervalStyle` with the seeded semantic executor (`ISO, YMD` / `iso_8601`) so verification parses date/interval literals under the same rules as execution.
+* Rejected PostgreSQL bind placeholders (e.g. `$1`) before accepting verification, since `PREPARE` would accept a parameterized statement that the no-bind execution path cannot run; the diagnostic is repairable so the model can inline the value.
+* Updated WidenEval report scope text to distinguish static evals without a verifier, static evals with a verifier, and seeded semantic evals that run PostgreSQL verification before semantic execution.
+* Added `GeneratedSQLVerifier.swift`, `PostgresErrorMapper.swift`, and `PostgresService.swift` to the eval scorer source hashes so manifests stay comparable now that verification can change the final decision.
+* Split the PostgreSQL verification summary metric into an attempted pass rate (`passed / (passed + failed)`) alongside the full status-count table, so a non-DB run no longer reads as `0/N` verification passed.
+
 Verification:
 
 ```text
 make project
-swiftc -parse WidenTests/TextToSQLPipelineTests.swift
-swiftc -parse WidenTests/PostgresIntegrationTests.swift
 make test
 make test-db
-make eval-local REPEAT=3
+make eval-db-local REPEAT=3
+make eval-db-cloud MODEL=openai/gpt-5.5 REPEAT=3
+make eval-db-cloud-agent MODEL=openai/gpt-5.5 REPEAT=3
 ```
 
 Results:
 
 ```text
 make project: project generation succeeded.
-swiftc -parse WidenTests/TextToSQLPipelineTests.swift: succeeded.
-swiftc -parse WidenTests/PostgresIntegrationTests.swift: succeeded.
-make test: 744 tests in 42 suites passed.
+make test: 747 tests in 42 suites passed.
 make test-db: 31 tests in 3 suites passed.
-make eval-local REPEAT=3: WidenEval built and launched, but the local backend produced no output for several minutes; the run was interrupted with no summary produced.
-Cloud eval commands were not run because WIDEN_EVAL_OPENROUTER_API_KEY was not set in this workspace.
+make eval-db-local REPEAT=3: 60 results; static-shape 20.0%; semantic end-to-end 20.0%; overall end-to-end 12/60 (20.0%); PostgreSQL verification attempted pass rate 9/9; status counts passed=9, failed=0, skippedStaticValidationFailed=30.
+make eval-db-cloud MODEL=openai/gpt-5.5 REPEAT=3: 60 results; backend available 60/60; transport success 60/60; static-shape 35.0%; semantic end-to-end 23.3%; overall end-to-end 14/60 (23.3%); PostgreSQL verification attempted pass rate 12/12; status counts passed=12, failed=0, skippedStaticValidationFailed=8.
+make eval-db-cloud-agent MODEL=openai/gpt-5.5 REPEAT=3: 60 results; backend available 60/60; transport success 60/60; static-shape 30.0%; semantic end-to-end 20.0%; overall end-to-end 12/60 (20.0%); PostgreSQL verification attempted pass rate 12/12; status counts passed=12, failed=0, skippedStaticValidationFailed=0.
 ```
 
 ---
