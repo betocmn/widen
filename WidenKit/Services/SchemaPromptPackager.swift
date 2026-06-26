@@ -369,11 +369,14 @@ public enum SchemaPromptPackager {
         let pinnedTables = ranked
             .map(\.table)
             .filter { pinnedIDs.contains($0.id) }
-        appendSection("Pinned tables:", tables: pinnedTables, force: true)
+        let cappedPinnedTables = options.maxDetailedTables
+            .map { Array(pinnedTables.prefix(max(0, $0))) }
+            ?? pinnedTables
+        appendSection("Pinned tables:", tables: cappedPinnedTables, force: true)
 
         let primaryTableLimit = min(
             options.maxPrimaryTables,
-            options.maxDetailedTables.map { max(0, $0 - pinnedIDs.count) }
+            options.maxDetailedTables.map { max(0, $0 - includedIDs.count) }
                 ?? options.maxPrimaryTables
         )
         let primaryTables = ranked
