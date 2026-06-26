@@ -211,8 +211,8 @@ public struct DatabaseInspectionPolicy: Codable, Equatable, Sendable {
         self.maximumCallCount = maximumCallCount
         self.maximumResultBytes = min(maximumResultBytes, 64_000)
         self.maximumSessionResultBytes = min(maximumSessionResultBytes, 128_000)
-        self.maximumReturnedRows = min(max(maximumReturnedRows, 0), 20)
-        self.maximumDistinctValues = min(max(maximumDistinctValues, 0), 20)
+        self.maximumReturnedRows = min(max(maximumReturnedRows, 1), 20)
+        self.maximumDistinctValues = min(max(maximumDistinctValues, 1), 20)
         self.maximumSampleColumns = min(max(maximumSampleColumns, 0), 8)
         self.maximumTextCharacters = min(max(maximumTextCharacters, 1), 1_000)
         self.maximumJSONCharacters = min(max(maximumJSONCharacters, 1), 2_000)
@@ -413,11 +413,17 @@ public struct DatabaseInspectionValue: Codable, Equatable, Sendable {
             object["value"] = .bool(boolValue ?? false)
         case .integer:
             if let integerValue {
-                object["value"] = .number(Double(integerValue))
+                if Self.isExactlyRepresentableInJSONNumber(integerValue) {
+                    object["value"] = .number(Double(integerValue))
+                } else {
+                    object["value"] = .string(String(integerValue))
+                }
             }
         case .float:
             if let floatValue {
-                object["value"] = .number(floatValue)
+                object["value"] = floatValue.isFinite
+                    ? .number(floatValue)
+                    : .string(String(describing: floatValue))
             }
         case .decimal, .uuid, .date, .timestamp, .timestampWithTimeZone, .text, .json,
             .unsupportedType:
@@ -434,6 +440,11 @@ public struct DatabaseInspectionValue: Codable, Equatable, Sendable {
             object["source_byte_count"] = .number(Double(byteCount))
         }
         return .object(object)
+    }
+
+    private static func isExactlyRepresentableInJSONNumber(_ value: Int64) -> Bool {
+        let maximumSafeInteger: Int64 = 9_007_199_254_740_991
+        return (-maximumSafeInteger...maximumSafeInteger).contains(value)
     }
 
     private static func capped(kind: DatabaseInspectionValueKind, value: String, cap: Int) -> Self {

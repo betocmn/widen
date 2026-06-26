@@ -762,7 +762,8 @@ struct QueryExecutionIntegrationTests {
             let schema = try await SchemaIntrospectionService().loadSchema(using: service)
             var policy = DatabaseInspectionPolicy.localDataInspection(
                 allowFullTableScans: true,
-                allowDistinctValuesInProfiles: true
+                allowDistinctValuesInProfiles: true,
+                allowSampleRows: true
             )
             policy.maximumCallCount = 8
             let session = try makeInspectionSession(schema: schema, policy: policy, service: service)
@@ -785,6 +786,10 @@ struct QueryExecutionIntegrationTests {
             let email = try await inspectionHandle(
                 session,
                 .column(schema: "public", table: "tickets", name: "email")
+            )
+            let note = try await inspectionHandle(
+                session,
+                .column(schema: "public", table: "tickets", name: "note")
             )
 
             let size = try await invokeInspection(
@@ -842,6 +847,21 @@ struct QueryExecutionIntegrationTests {
             } else {
                 Issue.record("Expected null_fraction to be a JSON number")
             }
+
+            let sample = try await invokeInspection(
+                session,
+                id: "ticket-sample-truncated",
+                tool: .inspectSampleRows,
+                arguments: [
+                    "table_id": .string(tickets),
+                    "column_ids": .array([.string(status), .string(note)]),
+                    "limit": 1,
+                ]
+            )
+            #expect(sample.success)
+            #expect(sample.payload?["rows"]?.arrayValue?.count == 1)
+            #expect(sample.payload?["truncated"]?.boolValue == true)
+            #expect(sample.truncation.truncated == true)
 
             let redacted = try await invokeInspection(
                 session,

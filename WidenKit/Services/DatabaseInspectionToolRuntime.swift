@@ -360,7 +360,9 @@ public struct DatabaseInspectionToolExecutor: Sendable {
         let containsMinMaxValue = aggregate.minValue?.containsDataValue == true
             || aggregate.maxValue?.containsDataValue == true
         payload["contains_data_values"] = .bool(containsMinMaxValue)
-        var valueCount = 0
+        var valueCount = [aggregate.minValue, aggregate.maxValue].compactMap(\.self)
+            .filter(\.containsDataValue)
+            .count
         var truncated = false
         if policy.allowDistinctValuesInProfiles,
             includeDistinct,
@@ -375,7 +377,7 @@ public struct DatabaseInspectionToolExecutor: Sendable {
             )
             let kept = Array(values.prefix(policy.maximumDistinctValues))
             truncated = values.count > kept.count
-            valueCount = kept.filter { $0.value.containsDataValue }.count
+            valueCount += kept.filter { $0.value.containsDataValue }.count
             payload["distinct_values"] = .array(kept.map(distinctValueJSON))
             payload["distinct_values_truncated"] = .bool(truncated)
             payload["contains_data_values"] = .bool(valueCount > 0)
@@ -558,10 +560,12 @@ public struct DatabaseInspectionToolExecutor: Sendable {
             limit: limit,
             policy: policy
         )
+        let keptSampleRows = Array(sampleRows.prefix(limit))
+        let truncated = sampleRows.count > keptSampleRows.count
         let redactedStableIDs = Set(columns.filter { policy.redacts($0.column) }.map(\.objectID.stableString))
         var redactionCount = 0
         var valueCount = 0
-        let rows: [JSONValue] = sampleRows.map { row in
+        let rows: [JSONValue] = keptSampleRows.map { row in
             var object: [String: JSONValue] = [:]
             for column in columns {
                 if redactedStableIDs.contains(column.objectID.stableString) {
@@ -579,15 +583,15 @@ public struct DatabaseInspectionToolExecutor: Sendable {
             "table_id": .string(table.handle),
             "column_ids": .array(columns.map { .string($0.handle) }),
             "rows": .array(rows),
-            "truncated": .bool(sampleRows.count > limit),
+            "truncated": .bool(truncated),
             "contains_data_values": .bool(valueCount > 0),
             "redaction_count": .number(Double(redactionCount)),
         ]
         return .success(
             payload: payload,
             truncation: DatabaseInspectionTruncation(
-                truncated: sampleRows.count > limit,
-                reason: sampleRows.count > limit ? "sample_row_limit" : nil
+                truncated: truncated,
+                reason: truncated ? "sample_row_limit" : nil
             ),
             returnedObjectCount: rows.count,
             rowCount: rows.count,
@@ -773,28 +777,11 @@ public actor DatabaseInspectionToolSession {
             }
         }
 
-        var result = finalizedResult(
+        let result = finalizedResult(
             callID: identity.callID,
             toolName: identity.toolName,
             execution: execution
         )
-        let effectiveBudget = min(policy.maximumResultBytes, remainingOutputBytes)
-        if result.outputByteCount > effectiveBudget {
-            result = finalizedError(
-                callID: identity.callID,
-                toolName: identity.toolName,
-                error: .init(
-                    code: .resultBudgetExceeded,
-                    message: "Database inspection result exceeded the per-call output budget."
-                ),
-                truncation: DatabaseInspectionTruncation(
-                    truncated: true,
-                    reason: "result_budget_exceeded",
-                    suggestion: "Call the tool with fewer columns or a lower limit."
-                ),
-                diagnostic: result.diagnostic
-            )
-        }
         return try finish(result: result, started: started, terminal: false)
     }
 
@@ -873,10 +860,35 @@ public actor DatabaseInspectionToolSession {
         started: ContinuousClock.Instant,
         terminal: Bool
     ) throws -> DatabaseInspectionResult {
-        var result = input
+        var result = finalizedForRecord(result: input, started: started)
         var isTerminal = terminal
+        let effectiveBudget = min(policy.maximumResultBytes, remainingOutputBytes)
+        if result.outputByteCount > effectiveBudget {
+            result = finalizedForRecord(
+                result:
+                finalizedError(
+                    callID: result.callID,
+                    toolName: result.toolName,
+                    error: .init(
+                        code: .resultBudgetExceeded,
+                        message: "Database inspection result exceeded the per-call output budget."
+                    ),
+                    truncation: DatabaseInspectionTruncation(
+                        truncated: true,
+                        reason: "result_budget_exceeded",
+                        suggestion: "Call the tool with fewer columns or a lower limit."
+                    ),
+                    diagnostic: result.diagnostic
+                ),
+                started: started
+            )
+        }
         if result.outputByteCount > remainingOutputBytes {
-            let terminalResult = terminalSessionError(callID: result.callID, toolName: result.toolName)
+            let terminalResult = finalizedForRecord(
+                result:
+                terminalSessionError(callID: result.callID, toolName: result.toolName),
+                started: started
+            )
             if terminalResult.outputByteCount <= remainingOutputBytes {
                 result = terminalResult
                 isTerminal = true
@@ -889,17 +901,21 @@ public actor DatabaseInspectionToolSession {
         if isTerminal || result.error?.code == .sessionBudgetExceeded {
             terminalExhausted = true
         }
-        return record(result: result, started: started)
+        record(result: result)
+        return result
     }
 
-    private func record(
+    private func finalizedForRecord(
         result: DatabaseInspectionResult,
         started: ContinuousClock.Instant
     ) -> DatabaseInspectionResult {
         var result = result
         result.diagnostic.latencyMs = Int(started.duration(to: .now) / .milliseconds(1))
-        result.diagnostic.bytesReturned = result.outputByteCount
         result.diagnostic.errorCode = result.error?.code
+        return finalized(result)
+    }
+
+    private func record(result: DatabaseInspectionResult) {
         traces.append(
             DatabaseInspectionToolCallTrace(
                 callID: result.callID,
@@ -917,7 +933,6 @@ public actor DatabaseInspectionToolSession {
                 errorCode: result.error?.code
             )
         )
-        return finalized(result)
     }
 
     private func finalizedResult(

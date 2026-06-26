@@ -53,6 +53,47 @@ struct DatabaseInspectionToolTests {
         #expect(cloudAllowedNames.contains(DatabaseInspectionToolName.inspectSampleRows.rawValue))
     }
 
+    @Test func policyClampsRowAndDistinctLimitsAboveZero() async throws {
+        let policy = DatabaseInspectionPolicy(
+            allowLocalDataInspection: true,
+            allowSampleRows: true,
+            allowFullTableScans: true,
+            maximumReturnedRows: 0,
+            maximumDistinctValues: 0
+        )
+        #expect(policy.maximumReturnedRows == 1)
+        #expect(policy.maximumDistinctValues == 1)
+
+        let database = FakeInspectionDatabase()
+        database.sampleRows = [
+            DatabaseSampleRow(valuesByColumnStableID: [
+                SchemaObjectID.column(schema: "public", table: "users", name: "status").stableString:
+                    .text("active", cap: 160)
+            ])
+        ]
+        let session = try makeSession(policy: policy, database: database)
+        let users = try await requireHandle(session, .table(schema: "public", name: "users"))
+        let status = try await requireHandle(session, .column(schema: "public", table: "users", name: "status"))
+
+        let distinct = try await invoke(
+            session,
+            id: "clamped-distinct",
+            tool: .inspectDistinctValues,
+            arguments: ["table_id": .string(users), "column_id": .string(status)]
+        )
+        #expect(distinct.success)
+        #expect(distinct.payload?["values"]?.arrayValue?.count == 1)
+
+        let sample = try await invoke(
+            session,
+            id: "clamped-sample",
+            tool: .inspectSampleRows,
+            arguments: ["table_id": .string(users), "column_ids": [.string(status)]]
+        )
+        #expect(sample.success)
+        #expect(sample.payload?["rows"]?.arrayValue?.count == 1)
+    }
+
     @Test func identifierQuotingEscapesEmbeddedQuotes() {
         #expect(PostgresService.quotedIdentifier(#"Sales "Data""#) == #""Sales ""Data""""#)
     }
@@ -184,6 +225,9 @@ struct DatabaseInspectionToolTests {
         #expect(result.payload?["null_count"]?.intValue == 1)
         #expect(result.payload?["min"]?["type"]?.stringValue == "date")
         #expect(result.payload?["max"]?["value"]?.stringValue == "2026-01-31")
+        #expect(result.diagnostic.valueCount == 2)
+        let trace = try #require(await session.tracesSnapshot().last)
+        #expect(trace.valueCount == 2)
     }
 
     @Test func sensitiveColumnsAreRedactedByDefaultAndTracesDoNotContainValues() async throws {
@@ -335,6 +379,85 @@ struct DatabaseInspectionToolTests {
         let value = sample.payload?["rows"]?.arrayValue?.first?[textStatus]
         #expect(value?["value"]?.stringValue == "very-lon")
         #expect(value?["truncated"]?.boolValue == true)
+    }
+
+    @Test func sampleRowsTrimExtraRowAndReportTruncation() async throws {
+        var policy = DatabaseInspectionPolicy.localDataInspection(
+            allowFullTableScans: true,
+            allowSampleRows: true
+        )
+        policy.maximumReturnedRows = 2
+        let database = FakeInspectionDatabase()
+        database.sampleRows = [
+            DatabaseSampleRow(valuesByColumnStableID: [
+                SchemaObjectID.column(schema: "public", table: "users", name: "status").stableString:
+                    .text("active", cap: 160)
+            ]),
+            DatabaseSampleRow(valuesByColumnStableID: [
+                SchemaObjectID.column(schema: "public", table: "users", name: "status").stableString:
+                    .text("disabled", cap: 160)
+            ]),
+        ]
+        let session = try makeSession(policy: policy, database: database)
+        let users = try await requireHandle(session, .table(schema: "public", name: "users"))
+        let status = try await requireHandle(session, .column(schema: "public", table: "users", name: "status"))
+
+        let result = try await invoke(
+            session,
+            id: "sample-truncated",
+            tool: .inspectSampleRows,
+            arguments: ["table_id": .string(users), "column_ids": [.string(status)], "limit": 1]
+        )
+
+        #expect(result.success)
+        #expect(result.payload?["rows"]?.arrayValue?.count == 1)
+        #expect(result.payload?["truncated"]?.boolValue == true)
+        #expect(result.truncation.truncated == true)
+        let trace = try #require(await session.tracesSnapshot().last)
+        #expect(trace.rowCount == 1)
+        #expect(trace.truncated == true)
+    }
+
+    @Test func inspectedNumericValuesRemainJSONEncodableAndExact() throws {
+        let smallInteger = DatabaseInspectionValue.integer(42).jsonValue
+        #expect(smallInteger["value"]?.intValue == 42)
+
+        let largeInteger = DatabaseInspectionValue.integer(Int64.max).jsonValue
+        #expect(largeInteger["value"]?.stringValue == String(Int64.max))
+
+        let finiteFloat = DatabaseInspectionValue.float(1.5).jsonValue
+        if case .number(let value)? = finiteFloat["value"] {
+            #expect(value == 1.5)
+        } else {
+            Issue.record("Expected finite float to encode as a JSON number")
+        }
+
+        let nonFiniteFloat = DatabaseInspectionValue.float(.infinity).jsonValue
+        #expect(nonFiniteFloat["value"]?.stringValue != nil)
+        _ = try JSONEncoder.schemaToolEncoder.encode(
+            JSONValue.object([
+                "large_integer": largeInteger,
+                "non_finite_float": nonFiniteFloat,
+            ])
+        )
+    }
+
+    @Test func traceOutputBytesMatchFinalizedReturnedResult() async throws {
+        let session = try makeSession(policy: .localDataInspection(), database: FakeInspectionDatabase())
+        let users = try await requireHandle(session, .table(schema: "public", name: "users"))
+
+        let result = try await invoke(
+            session,
+            id: "byte-accounting",
+            tool: .inspectRelationSize,
+            arguments: ["table_id": .string(users)]
+        )
+
+        let trace = try #require(await session.tracesSnapshot().last)
+        let encodedByteCount = try JSONEncoder.schemaToolEncoder.encode(result).count
+        #expect(result.outputByteCount == encodedByteCount)
+        #expect(result.diagnostic.bytesReturned == result.outputByteCount)
+        #expect(trace.outputByteCount == result.outputByteCount)
     }
 
     @Test func timeoutIsClassifiedAsToolResult() async throws {

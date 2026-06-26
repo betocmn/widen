@@ -284,11 +284,11 @@ public actor PostgresService: DatabaseInspectionQuerying {
                 ELSE NULL
               END AS distinct_estimate
             FROM pg_catalog.pg_stats AS s
+            LEFT JOIN pg_catalog.pg_namespace AS n
+              ON n.nspname = s.schemaname
             LEFT JOIN pg_catalog.pg_class AS c
               ON c.relname = s.tablename
-            LEFT JOIN pg_catalog.pg_namespace AS n
-              ON n.oid = c.relnamespace
-             AND n.nspname = s.schemaname
+             AND c.relnamespace = n.oid
             WHERE s.schemaname = \(Self.sqlLiteral(schema))
               AND s.tablename = \(Self.sqlLiteral(table))
               AND s.attname = \(Self.sqlLiteral(column))
@@ -442,7 +442,7 @@ public actor PostgresService: DatabaseInspectionQuerying {
     ) async throws -> [DatabaseSampleRow] {
         guard let client else { throw AppError.notConnected }
         let logger = logger
-        let boundedLimit = min(max(limit, 0), policy.maximumReturnedRows)
+        let boundedLimit = min(max(limit, 0), policy.maximumReturnedRows) + 1
         let qualifiedTable = Self.qualifiedIdentifier(schema: table.schema, table: table.name)
         let selections = columns.prefix(policy.maximumSampleColumns).map { column in
             let stableID = SchemaObjectID.column(

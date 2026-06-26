@@ -991,7 +991,7 @@ make eval-inspection-tools
 Results:
 
 ```text
-make test: 768 tests in 43 suites passed.
+make test: 772 tests in 43 suites passed.
 make test-db: 34 tests in 3 suites passed.
 make eval-schema-tools: 10/10 cases passed, definition bytes 1686, estimated definition tokens 562, max response bytes 6111, truncated results 1, determinism failures 0.
 make eval-inspection-tools: 11/11 cases passed, policy-denied calls 3, redacted values 1, max result bytes 751, truncations 1.
