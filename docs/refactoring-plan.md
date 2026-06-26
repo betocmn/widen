@@ -1160,7 +1160,7 @@ When only one agent is working:
 6. PR 6 — Schema tools
 7. PR 7 — Cloud agent
 8. PR 8 — PostgreSQL verification
-9. PR 11 — Experimental local path         ← next
+9. PR 11 — Experimental local path
 10. PR 12 — Platform/default-backend decision
 11. PR 9 — Optional data inspection
 12. PR 10 — Embedding experiment             [deferred — revisit after PR 11/12 and real app/eval testing]
