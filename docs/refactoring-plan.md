@@ -37,7 +37,7 @@ PR 2 + PR 4 + PR 6
   └── PR 7 ✅ — Cloud tool-using SQL agent                  [done 2026-06-25]
 
 PR 2 + PR 3
-  └── PR 8 — PostgreSQL verification and one repair        [parallel with PR 7]
+  └── PR 8 ✅ — PostgreSQL verification and one repair        [done 2026-06-26]
 
 PR 6 + PR 8
   └── PR 9 — Optional data-inspection tools
@@ -829,7 +829,7 @@ The live tools-mode results are safe to keep behind the disabled feature flag, b
 
 ---
 
-# PR 8 — Verify SQL with PostgreSQL and allow one repair — Done
+# PR 8 ✅ — Verify SQL with PostgreSQL and allow one repair [done 2026-06-26]
 
 Suggested title:
 
