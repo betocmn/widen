@@ -143,3 +143,43 @@ public struct DatabaseConnectionConfig: Identifiable, Codable, Equatable, Sendab
         try container.encode(updatedAt, forKey: .updatedAt)
     }
 }
+
+public extension DatabaseConnectionConfig {
+    func databaseInspectionPolicy(
+        audience: DatabaseInspectionResultAudience
+    ) -> DatabaseInspectionPolicy {
+        let canShareDataWithAudience = allowLocalDataInspection
+            && (audience == .local || allowCloudDataInspection)
+        return DatabaseInspectionPolicy(
+            allowLocalDataInspection: allowLocalDataInspection,
+            allowCloudDataInspection: audience == .cloud && allowLocalDataInspection && allowCloudDataInspection,
+            allowSampleRows: canShareDataWithAudience && allowSampleRowInspection,
+            allowFullTableScans: canShareDataWithAudience,
+            allowDistinctValuesInProfiles: canShareDataWithAudience,
+            audience: audience,
+            sensitiveNameFragments: Self.inspectionSensitiveNameFragments(from: sensitiveColumnRules),
+            redactedColumnStableIDs: Self.inspectionRedactedColumnIDs(from: redactedColumnIDs)
+        )
+    }
+
+    private static func inspectionSensitiveNameFragments(from rules: [String]) -> [String] {
+        var fragments: [String] = []
+        var seen = Set<String>()
+        for fragment in DatabaseInspectionPolicy.defaultSensitiveNameFragments + rules {
+            let trimmed = fragment.trimmingCharacters(in: .whitespacesAndNewlines)
+            guard !trimmed.isEmpty else { continue }
+            if seen.insert(trimmed.lowercased()).inserted {
+                fragments.append(trimmed)
+            }
+        }
+        return fragments
+    }
+
+    private static func inspectionRedactedColumnIDs(from ids: [String]) -> Set<String> {
+        Set(
+            ids
+                .map { $0.trimmingCharacters(in: .whitespacesAndNewlines) }
+                .filter { !$0.isEmpty }
+        )
+    }
+}

@@ -66,6 +66,28 @@ struct AIBackendSelectionTests {
         #expect(state.modelAvailabilityMessage == nil)
     }
 
+    @Test func connectionCloudSchemaMetadataOptOutBlocksCloudGeneration() {
+        clearDefaults()
+        let (state, dir) = makeState()
+        defer { cleanUp(dir) }
+        let connection = DatabaseConnectionConfig(
+            database: "widen_test",
+            username: "beto",
+            allowCloudSchemaMetadata: false
+        )
+        state.connections = [connection]
+        state.aiBackendMode = .cloud
+        state.cloudProvider = .openRouter
+        state.openRouterAPIKeyOverride = .some("sk-test")
+
+        let generator = state.sqlGenerator(
+            connectionID: connection.id,
+            schema: DatabaseSchema(schemas: [SchemaInfo(name: "public")])
+        )
+
+        #expect(generator is UnavailableSQLGenerator)
+    }
+
     @Test func cloudApplePCCQuotaReachedIsUnavailable() {
         clearDefaults()
         let (state, dir) = makeState()

@@ -111,6 +111,9 @@ public final class OpenRouterSchemaToolSQLAgent: SQLGenerator, Sendable {
     private let parser = OpenRouterToolChatParser()
     private let retryPolicy = OpenRouterRetryPolicy()
     private let sessionFactory: SchemaToolSessionFactory
+    private let databaseInspectionSessionFactory: DatabaseInspectionToolSessionFactory
+    private let databaseInspectionPolicy: DatabaseInspectionPolicy
+    private let databaseInspectionDatabase: (any DatabaseInspectionQuerying)?
     private let configuration: OpenRouterSchemaToolSQLAgentConfiguration
     private let legacyGenerator: any SQLGenerator
     private let currentSchemaFingerprint: (@Sendable () async throws -> String)?
@@ -123,6 +126,10 @@ public final class OpenRouterSchemaToolSQLAgent: SQLGenerator, Sendable {
         transport: any HTTPTransport = URLSessionTransport(),
         indexStore: SchemaSearchIndexStore = SchemaSearchIndexStore(),
         endpoint: URL = URL(string: "https://openrouter.ai/api/v1/chat/completions")!,
+        databaseInspectionPolicy: DatabaseInspectionPolicy = .disabled,
+        databaseInspectionDatabase: (any DatabaseInspectionQuerying)? = nil,
+        databaseInspectionSessionFactory: DatabaseInspectionToolSessionFactory =
+            DatabaseInspectionToolSessionFactory(),
         configuration: OpenRouterSchemaToolSQLAgentConfiguration = .default,
         currentSchemaFingerprint: (@Sendable () async throws -> String)? = nil
     ) {
@@ -134,6 +141,9 @@ public final class OpenRouterSchemaToolSQLAgent: SQLGenerator, Sendable {
         self.catalogService = .shared
         self.requestBuilder = OpenRouterToolChatRequestBuilder(endpoint: endpoint)
         self.sessionFactory = SchemaToolSessionFactory(indexStore: indexStore)
+        self.databaseInspectionSessionFactory = databaseInspectionSessionFactory
+        self.databaseInspectionPolicy = databaseInspectionPolicy
+        self.databaseInspectionDatabase = databaseInspectionDatabase
         self.configuration = configuration
         self.currentSchemaFingerprint = currentSchemaFingerprint
         self.legacyGenerator = OpenRouterSQLGenerator(
@@ -153,6 +163,10 @@ public final class OpenRouterSchemaToolSQLAgent: SQLGenerator, Sendable {
         transport: any HTTPTransport,
         catalogService: OpenRouterModelCatalogService,
         sessionFactory: SchemaToolSessionFactory,
+        databaseInspectionSessionFactory: DatabaseInspectionToolSessionFactory =
+            DatabaseInspectionToolSessionFactory(),
+        databaseInspectionPolicy: DatabaseInspectionPolicy = .disabled,
+        databaseInspectionDatabase: (any DatabaseInspectionQuerying)? = nil,
         requestBuilder: OpenRouterToolChatRequestBuilder,
         legacyGenerator: any SQLGenerator,
         configuration: OpenRouterSchemaToolSQLAgentConfiguration = .default,
@@ -166,6 +180,9 @@ public final class OpenRouterSchemaToolSQLAgent: SQLGenerator, Sendable {
         self.catalogService = catalogService
         self.requestBuilder = requestBuilder
         self.sessionFactory = sessionFactory
+        self.databaseInspectionSessionFactory = databaseInspectionSessionFactory
+        self.databaseInspectionPolicy = databaseInspectionPolicy
+        self.databaseInspectionDatabase = databaseInspectionDatabase
         self.legacyGenerator = legacyGenerator
         self.configuration = configuration
         self.currentSchemaFingerprint = currentSchemaFingerprint
@@ -202,6 +219,7 @@ public final class OpenRouterSchemaToolSQLAgent: SQLGenerator, Sendable {
         let initialFingerprint = try SchemaSearchIndexStore.cacheKey(for: snapshot).schemaFingerprint
         let policy = schemaToolPolicy(for: context.mode)
         let session = try await sessionFactory.makeSession(snapshot: snapshot, policy: policy)
+        let inspectionSession = try makeDatabaseInspectionSession(snapshot: snapshot)
         var evidence = SchemaToolEvidenceLedger(schema: schema)
         var aggregate = OpenRouterAgentMetadataAccumulator(requestedModelID: model)
         var seenProviderCallIDs = Set<String>()
@@ -224,7 +242,7 @@ public final class OpenRouterSchemaToolSQLAgent: SQLGenerator, Sendable {
                     )
                 ),
             ]
-            let tools = await toolDefinitions(from: session)
+            let tools = await toolDefinitions(from: session, inspectionSession: inspectionSession)
             guard configuration.maximumModelTurns > 0 else {
                 throw await agentFailure(
                     .modelTurnBudgetExhausted,
@@ -287,10 +305,15 @@ public final class OpenRouterSchemaToolSQLAgent: SQLGenerator, Sendable {
 
                 let terminalCalls = toolCalls.filter { $0.name == Self.terminalToolName }
                 let knownSchemaCalls = toolCalls.filter { SchemaToolName(rawValue: $0.name) != nil }
+                let knownInspectionCalls = toolCalls.filter { DatabaseInspectionToolName(rawValue: $0.name) != nil }
                 let unknownCalls = toolCalls.filter {
-                    $0.name != Self.terminalToolName && SchemaToolName(rawValue: $0.name) == nil
+                    $0.name != Self.terminalToolName
+                        && SchemaToolName(rawValue: $0.name) == nil
+                        && DatabaseInspectionToolName(rawValue: $0.name) == nil
                 }
-                let mixesTerminalAndSchema = !terminalCalls.isEmpty && (knownSchemaCalls.count + unknownCalls.count) > 0
+                let mixesTerminalAndSchema =
+                    !terminalCalls.isEmpty
+                    && (knownSchemaCalls.count + knownInspectionCalls.count + unknownCalls.count) > 0
                 if mixesTerminalAndSchema {
                     messages.append(OpenRouterToolChatMessage(role: .assistant, toolCalls: toolCalls))
                     if malformedTerminalCorrections < configuration.maximumMalformedTerminalCorrections {
@@ -299,14 +322,14 @@ public final class OpenRouterSchemaToolSQLAgent: SQLGenerator, Sendable {
                             for: toolCalls,
                             to: &messages,
                             code: "mixed_terminal_schema_calls",
-                            message: "Do not mix schema tools with the terminal result tool."
+                            message: "Do not mix schema or inspection tools with the terminal result tool."
                         )
-                        messages.append(correction("Do not mix schema tools with \(Self.terminalToolName) in the same turn."))
+                        messages.append(correction("Do not mix schema or inspection tools with \(Self.terminalToolName) in the same turn."))
                         continue
                     }
                     throw await agentFailure(
                         .mixedTerminalAndSchemaCalls,
-                        "The model mixed schema and terminal tool calls.",
+                        "The model mixed schema or inspection and terminal tool calls.",
                         session: session
                     )
                 }
@@ -437,7 +460,7 @@ public final class OpenRouterSchemaToolSQLAgent: SQLGenerator, Sendable {
                                 toolErrorResponse(
                                     call: call,
                                     code: "repeated_tool_call",
-                                    message: "Repeated schema tool call without progress. Use a different schema tool call."
+                                    message: "Repeated tool call without progress. Use a different schema or inspection tool call."
                                 )
                             )
                             continue
@@ -448,23 +471,25 @@ public final class OpenRouterSchemaToolSQLAgent: SQLGenerator, Sendable {
                             session: session
                         )
                     }
-                    let result = try await session.invoke(
-                        callID: call.id,
-                        toolName: call.name,
-                        argumentsJSON: Data(call.arguments.utf8)
+                    let result = try await invokeToolCall(
+                        call,
+                        schemaSession: session,
+                        inspectionSession: inspectionSession
                     )
-                    evidence.record(result)
-                    if result.error?.code == .sessionBudgetExceeded {
+                    if case .schema(let schemaResult) = result {
+                        evidence.record(schemaResult)
+                    }
+                    if result.isSessionBudgetExceeded {
                         throw await agentFailure(
                             .schemaToolCallBudgetExhausted,
-                            "Schema tool call budget exhausted.",
+                            "Schema or inspection tool call budget exhausted.",
                             session: session
                         )
                     }
-                    if result.error?.code == .resultBudgetExceeded {
+                    if result.isResultBudgetExceeded {
                         throw await agentFailure(
                             .schemaToolByteBudgetExhausted,
-                            "Schema tool byte budget exhausted.",
+                            "Schema or inspection tool byte budget exhausted.",
                             session: session
                         )
                     }
@@ -693,7 +718,23 @@ public final class OpenRouterSchemaToolSQLAgent: SQLGenerator, Sendable {
         }
     }
 
-    private func toolDefinitions(from session: SchemaToolSession) async -> [OpenRouterToolDefinition] {
+    private func makeDatabaseInspectionSession(
+        snapshot: SchemaSearchSnapshot
+    ) throws -> DatabaseInspectionToolSession? {
+        guard databaseInspectionPolicy.allowLocalDataInspection,
+            let databaseInspectionDatabase
+        else { return nil }
+        return try databaseInspectionSessionFactory.makeSession(
+            snapshot: snapshot,
+            policy: databaseInspectionPolicy,
+            database: databaseInspectionDatabase
+        )
+    }
+
+    private func toolDefinitions(
+        from session: SchemaToolSession,
+        inspectionSession: DatabaseInspectionToolSession?
+    ) async -> [OpenRouterToolDefinition] {
         let schemaTools = session.definitions.map {
             OpenRouterToolDefinition(
                 name: $0.name,
@@ -701,7 +742,19 @@ public final class OpenRouterSchemaToolSQLAgent: SQLGenerator, Sendable {
                 parameters: $0.parameters
             )
         }
-        return schemaTools + [Self.terminalToolDefinition]
+        let inspectionDefinitions = if let inspectionSession {
+            await inspectionSession.definitions()
+        } else {
+            [DatabaseInspectionToolDefinition]()
+        }
+        let inspectionTools = inspectionDefinitions.map {
+            OpenRouterToolDefinition(
+                name: $0.name,
+                description: $0.description,
+                parameters: $0.parameters
+            )
+        }
+        return schemaTools + inspectionTools + [Self.terminalToolDefinition]
     }
 
     private func schemaToolPolicy(for mode: SQLGenerationMode) -> SchemaToolPolicy {
@@ -816,6 +869,66 @@ public final class OpenRouterSchemaToolSQLAgent: SQLGenerator, Sendable {
         return String(text.prefix(limit)) + "..."
     }
 
+    private enum ToolInvocationResult {
+        case schema(SchemaToolResult)
+        case inspection(DatabaseInspectionResult)
+
+        var isSessionBudgetExceeded: Bool {
+            switch self {
+            case .schema(let result):
+                result.error?.code == .sessionBudgetExceeded
+            case .inspection(let result):
+                result.error?.code == .sessionBudgetExceeded
+            }
+        }
+
+        var isResultBudgetExceeded: Bool {
+            switch self {
+            case .schema(let result):
+                result.error?.code == .resultBudgetExceeded
+            case .inspection(let result):
+                result.error?.code == .resultBudgetExceeded
+            }
+        }
+    }
+
+    private func invokeToolCall(
+        _ call: OpenRouterToolCall,
+        schemaSession: SchemaToolSession,
+        inspectionSession: DatabaseInspectionToolSession?
+    ) async throws -> ToolInvocationResult {
+        if SchemaToolName(rawValue: call.name) != nil {
+            let result = try await schemaSession.invoke(
+                callID: call.id,
+                toolName: call.name,
+                argumentsJSON: Data(call.arguments.utf8)
+            )
+            return .schema(result)
+        }
+        if DatabaseInspectionToolName(rawValue: call.name) != nil,
+            let inspectionSession
+        {
+            let result = try await inspectionSession.invoke(
+                callID: call.id,
+                toolName: call.name,
+                argumentsJSON: Data(call.arguments.utf8)
+            )
+            return .inspection(result)
+        }
+        return .schema(
+            SchemaToolResult(
+                callID: call.id,
+                toolName: call.name,
+                success: false,
+                payload: [
+                    "code": .string("unknown_tool"),
+                    "message": .string("Unknown tool."),
+                ],
+                error: SchemaToolError(code: .unknownTool, message: "Unknown tool.", argument: "tool_name")
+            )
+        )
+    }
+
     private func toolResponse(_ result: SchemaToolResult, providerCallID: String) throws -> OpenRouterToolChatMessage {
         let data = try JSONEncoder.schemaToolEncoder.encode(result)
         return OpenRouterToolChatMessage(
@@ -824,6 +937,31 @@ public final class OpenRouterSchemaToolSQLAgent: SQLGenerator, Sendable {
             toolCallID: providerCallID,
             toolName: result.toolName
         )
+    }
+
+    private func toolResponse(
+        _ result: DatabaseInspectionResult,
+        providerCallID: String
+    ) throws -> OpenRouterToolChatMessage {
+        let data = try JSONEncoder.schemaToolEncoder.encode(result)
+        return OpenRouterToolChatMessage(
+            role: .tool,
+            content: String(decoding: data, as: UTF8.self),
+            toolCallID: providerCallID,
+            toolName: result.toolName
+        )
+    }
+
+    private func toolResponse(
+        _ result: ToolInvocationResult,
+        providerCallID: String
+    ) throws -> OpenRouterToolChatMessage {
+        switch result {
+        case .schema(let schemaResult):
+            try toolResponse(schemaResult, providerCallID: providerCallID)
+        case .inspection(let inspectionResult):
+            try toolResponse(inspectionResult, providerCallID: providerCallID)
+        }
     }
 
     private func toolErrorResponse(

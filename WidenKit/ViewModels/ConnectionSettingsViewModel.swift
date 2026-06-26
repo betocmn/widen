@@ -233,7 +233,7 @@ public final class ConnectionSettingsViewModel {
         config.databaseContext = trimmedDatabaseContext
         config.allowLocalDataInspection = allowLocalDataInspection
         config.allowCloudDataInspection = allowLocalDataInspection && allowCloudDataInspection
-        config.allowSampleRowInspection = false
+        config.allowSampleRowInspection = allowLocalDataInspection && (existing?.allowSampleRowInspection ?? false)
         config.updatedAt = Date()
         return (config, [])
     }

@@ -312,6 +312,77 @@ struct ConnectionSettingsViewModelTests {
         #expect(cloudOnly?.allowSampleRowInspection == false)
     }
 
+    @Test func existingSampleRowOptInSurvivesSettingsSave() {
+        let existing = DatabaseConnectionConfig(
+            name: "Existing",
+            host: "localhost",
+            database: "widen_test",
+            username: "beto",
+            allowLocalDataInspection: true,
+            allowCloudDataInspection: true,
+            allowSampleRowInspection: true
+        )
+        let viewModel = ConnectionSettingsViewModel()
+        viewModel.load(from: existing)
+        viewModel.name = "Renamed"
+
+        let saved = viewModel.buildConfig()
+
+        #expect(saved?.allowLocalDataInspection == true)
+        #expect(saved?.allowCloudDataInspection == true)
+        #expect(saved?.allowSampleRowInspection == true)
+
+        viewModel.allowLocalDataInspection = false
+        let disabled = viewModel.buildConfig()
+
+        #expect(disabled?.allowLocalDataInspection == false)
+        #expect(disabled?.allowCloudDataInspection == false)
+        #expect(disabled?.allowSampleRowInspection == false)
+    }
+
+    @Test func connectionSensitiveRulesApplyToInspectionPolicy() {
+        let redactedID = SchemaObjectID.column(
+            schema: "public",
+            table: "users",
+            name: "display_name"
+        ).stableString
+        let config = DatabaseConnectionConfig(
+            database: "widen_test",
+            username: "beto",
+            allowLocalDataInspection: true,
+            allowCloudDataInspection: true,
+            allowSampleRowInspection: true,
+            sensitiveColumnRules: ["tenant"],
+            redactedColumnIDs: [redactedID]
+        )
+
+        let policy = config.databaseInspectionPolicy(audience: .cloud)
+        let tenantColumn = ColumnInfo(
+            tableSchema: "public",
+            tableName: "accounts",
+            name: "tenant_slug",
+            dataType: "text",
+            isNullable: true,
+            ordinalPosition: 1
+        )
+        let explicitlyRedactedColumn = ColumnInfo(
+            tableSchema: "public",
+            tableName: "users",
+            name: "display_name",
+            dataType: "text",
+            isNullable: true,
+            ordinalPosition: 2
+        )
+
+        #expect(policy.allowLocalDataInspection)
+        #expect(policy.allowCloudDataInspection)
+        #expect(policy.allowSampleRows)
+        #expect(policy.sensitiveNameFragments.contains("tenant"))
+        #expect(policy.redactedColumnStableIDs.contains(redactedID))
+        #expect(policy.redacts(tenantColumn))
+        #expect(policy.redacts(explicitlyRedactedColumn))
+    }
+
     @Test func invalidPortIsRejected() {
         let viewModel = makeValidViewModel()
         viewModel.portText = "70000"
