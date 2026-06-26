@@ -476,7 +476,7 @@ public struct TextToSQLPipeline: TextToSQLRunning {
             request: request,
             events: &events
         )
-        if usesConstrainedLocalPolicy && validation.safety.kind.isWrite {
+        if usesConstrainedLocalPolicy && shouldRejectUnsafeLocalSQL(validation.safety) {
             let failure = TextToSQLPipelineFailure(
                 stage: validationEventStage,
                 category: validationFailureCategory,
@@ -1403,6 +1403,10 @@ public struct TextToSQLPipeline: TextToSQLRunning {
             schemaValidation: &schemaValidation
         )
         return GeneratedSQLValidator.combine(safety: safety, schemaValidation: schemaValidation)
+    }
+
+    private func shouldRejectUnsafeLocalSQL(_ safety: SQLValidationResult) -> Bool {
+        safety.kind.isWrite || safety.safetyIssueKinds.contains { $0.isUnsafeExecutionRisk }
     }
 
     private func failureCategory(for validation: SQLValidationResult) -> TextToSQLFailureCategory {

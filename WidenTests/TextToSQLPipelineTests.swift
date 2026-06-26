@@ -736,6 +736,34 @@ struct TextToSQLPipelineTests {
         #expect(!result.events.map(\.kind).contains(.validationRepairStarted))
     }
 
+    @Test func constrainedLocalRejectsUnsafeReadsBeforeRepairBudgetIsSpent() async throws {
+        let generator = ConstrainedScriptedGenerator([
+            .success(
+                generation(
+                    sql: "WITH d AS (DELETE FROM public.users WHERE id = 1 RETURNING id) SELECT id FROM d",
+                    generationCallCount: 1
+                )
+            ),
+            .success(generation(sql: "SELECT id FROM public.users LIMIT 100")),
+        ])
+
+        let result = try await run(generator)
+
+        guard case .failed(let failure) = result.finalDecision else {
+            Issue.record("expected failed decision")
+            return
+        }
+        #expect(failure.stage == .safetyValidation)
+        #expect(failure.category == .safetyValidation)
+        #expect(generator.contexts.count == 1)
+        #expect(result.events.contains {
+            $0.kind == .validationFailed
+                && $0.stage == .safetyValidation
+                && $0.failureCategory == .safetyValidation
+        })
+        #expect(!result.events.map(\.kind).contains(.validationRepairStarted))
+    }
+
     @Test func clarificationReturnsFinalClarification() async throws {
         let result = try await run(
             ScriptedGenerator([

@@ -25,6 +25,49 @@ private let fmTestEnabled =
                 ) == 5
             )
         }
+
+        @Test func discoveryPinnedTablesConsumePrimaryTableSlots() {
+            let tables = (0..<8).map { index in
+                TableInfo(
+                    schema: "public",
+                    name: "events_\(index)",
+                    type: .baseTable,
+                    columns: [
+                        ColumnInfo(
+                            tableSchema: "public",
+                            tableName: "events_\(index)",
+                            name: "id",
+                            dataType: "integer",
+                            isNullable: false,
+                            ordinalPosition: 1
+                        )
+                    ]
+                )
+            }
+            let schema = DatabaseSchema(
+                schemas: [SchemaInfo(name: "public")],
+                tables: tables,
+                foreignKeys: []
+            )
+            let context = SQLGenerationContext(
+                schemaSearchQueries: (0..<4).map { "public.events_\($0)" }
+            )
+
+            let primaryLimit = FoundationModelsSQLGenerator.primarySchemaTableLimit(
+                schema: schema,
+                context: context
+            )
+            let bundle = SQLPromptBuilder.promptBundle(
+                question: "show event ids",
+                schema: schema,
+                context: context,
+                maxSchemaCharacters: 20_000,
+                maxPrimarySchemaTables: primaryLimit
+            )
+
+            #expect(primaryLimit == 0)
+            #expect(bundle.schemaPackage.includedTables.count == 4)
+        }
     }
 #endif
 

@@ -483,7 +483,10 @@
                 context: context,
                 databaseContext: databaseContext,
                 maxSchemaCharacters: schemaCharacters,
-                maxPrimarySchemaTables: Self.maxDetailedSchemaTables
+                maxPrimarySchemaTables: Self.primarySchemaTableLimit(
+                    schema: schema,
+                    context: context
+                )
             )
             for _ in 0..<4 {
                 let inputCharacters = instructions.count + latest.prompt.count
@@ -501,7 +504,10 @@
                     context: context,
                     databaseContext: databaseContext,
                     maxSchemaCharacters: schemaCharacters,
-                    maxPrimarySchemaTables: Self.maxDetailedSchemaTables
+                    maxPrimarySchemaTables: Self.primarySchemaTableLimit(
+                        schema: schema,
+                        context: context
+                    )
                 )
             }
 
@@ -511,6 +517,35 @@
                 )
             }
             return latest
+        }
+
+        static func primarySchemaTableLimit(
+            schema: DatabaseSchema,
+            context: SQLGenerationContext
+        ) -> Int {
+            max(
+                0,
+                maxDetailedSchemaTables
+                    - discoveryPinnedTableCount(schema: schema, context: context)
+            )
+        }
+
+        private static func discoveryPinnedTableCount(
+            schema: DatabaseSchema,
+            context: SQLGenerationContext
+        ) -> Int {
+            let discoveryIdentifiers = Set(
+                context.schemaSearchQueries.map(SchemaRelevanceRanker.canonicalIdentifier)
+            )
+            guard !discoveryIdentifiers.isEmpty else { return 0 }
+            return schema.tables.filter { table in
+                discoveryIdentifiers.contains(
+                    SchemaRelevanceRanker.canonicalIdentifier(table.qualifiedName)
+                )
+                    || discoveryIdentifiers.contains(
+                        SchemaRelevanceRanker.canonicalIdentifier(table.name)
+                    )
+            }.count
         }
 
         /// Shared with `PrivateCloudComputeSQLGenerator`, which produces the
