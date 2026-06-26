@@ -883,12 +883,23 @@ public actor DatabaseInspectionToolSession {
                 started: started
             )
         }
+        let terminalResult = finalizedForRecord(
+            result:
+            terminalSessionError(callID: result.callID, toolName: result.toolName),
+            started: started
+        )
         if result.outputByteCount > remainingOutputBytes {
-            let terminalResult = finalizedForRecord(
-                result:
-                terminalSessionError(callID: result.callID, toolName: result.toolName),
-                started: started
-            )
+            if terminalResult.outputByteCount <= remainingOutputBytes {
+                result = terminalResult
+                isTerminal = true
+            } else {
+                terminalExhausted = true
+                throw terminalSessionError()
+            }
+        } else if !isTerminal,
+            cumulativeOutputBytes + result.outputByteCount + terminalResult.outputByteCount
+                > policy.effectiveMaximumSessionResultBytes
+        {
             if terminalResult.outputByteCount <= remainingOutputBytes {
                 result = terminalResult
                 isTerminal = true

@@ -279,6 +279,7 @@ struct ConnectionSettingsViewModelTests {
         #expect(config?.port == 5432)
         #expect(config?.defaultRowLimit == 100)
         #expect(config?.statementTimeoutSeconds == 10)
+        #expect(config?.allowCloudSchemaMetadata == true)
         #expect(config?.allowLocalDataInspection == false)
         #expect(config?.allowCloudDataInspection == false)
         #expect(config?.allowSampleRowInspection == false)
@@ -295,18 +296,22 @@ struct ConnectionSettingsViewModelTests {
 
     @Test func privacySettingsAreSavedAndCloudDataRequiresLocalInspection() {
         let viewModel = makeValidViewModel()
+        viewModel.allowCloudSchemaMetadata = false
         viewModel.allowLocalDataInspection = true
         viewModel.allowCloudDataInspection = true
+        viewModel.allowSampleRowInspection = true
 
         let enabled = viewModel.buildConfig()
 
+        #expect(enabled?.allowCloudSchemaMetadata == false)
         #expect(enabled?.allowLocalDataInspection == true)
         #expect(enabled?.allowCloudDataInspection == true)
-        #expect(enabled?.allowSampleRowInspection == false)
+        #expect(enabled?.allowSampleRowInspection == true)
 
         viewModel.allowLocalDataInspection = false
         let cloudOnly = viewModel.buildConfig()
 
+        #expect(cloudOnly?.allowCloudSchemaMetadata == false)
         #expect(cloudOnly?.allowLocalDataInspection == false)
         #expect(cloudOnly?.allowCloudDataInspection == false)
         #expect(cloudOnly?.allowSampleRowInspection == false)
@@ -318,6 +323,7 @@ struct ConnectionSettingsViewModelTests {
             host: "localhost",
             database: "widen_test",
             username: "beto",
+            allowCloudSchemaMetadata: false,
             allowLocalDataInspection: true,
             allowCloudDataInspection: true,
             allowSampleRowInspection: true
@@ -328,6 +334,7 @@ struct ConnectionSettingsViewModelTests {
 
         let saved = viewModel.buildConfig()
 
+        #expect(saved?.allowCloudSchemaMetadata == false)
         #expect(saved?.allowLocalDataInspection == true)
         #expect(saved?.allowCloudDataInspection == true)
         #expect(saved?.allowSampleRowInspection == true)

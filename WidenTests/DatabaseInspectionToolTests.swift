@@ -615,6 +615,56 @@ struct DatabaseInspectionToolTests {
         #expect(trace.outputByteCount == result.outputByteCount)
     }
 
+    @Test func sessionBudgetReservesRoomForTerminalError() async throws {
+        let basePolicy = DatabaseInspectionPolicy.localDataInspection()
+        let measuredSession = try makeSession(policy: basePolicy, database: FakeInspectionDatabase())
+        let measuredUsers = try await requireHandle(measuredSession, .table(schema: "public", name: "users"))
+        let measured = try await invoke(
+            measuredSession,
+            id: "measured-size",
+            tool: .inspectRelationSize,
+            arguments: ["table_id": .string(measuredUsers)]
+        )
+        #expect(measured.success)
+
+        var terminalPolicy = basePolicy
+        terminalPolicy.maximumCallCount = 0
+        let terminalSession = try makeSession(policy: terminalPolicy, database: FakeInspectionDatabase())
+        let terminalUsers = try await requireHandle(terminalSession, .table(schema: "public", name: "users"))
+        let terminal = try await invoke(
+            terminalSession,
+            id: "terminal-size",
+            tool: .inspectRelationSize,
+            arguments: ["table_id": .string(terminalUsers)]
+        )
+        #expect(terminal.error?.code == .sessionBudgetExceeded)
+
+        var constrainedPolicy = basePolicy
+        constrainedPolicy.maximumSessionResultBytes = measured.outputByteCount + max(1, terminal.outputByteCount / 2)
+        let database = FakeInspectionDatabase()
+        let constrainedSession = try makeSession(policy: constrainedPolicy, database: database)
+        let constrainedUsers = try await requireHandle(constrainedSession, .table(schema: "public", name: "users"))
+
+        let reserved = try await invoke(
+            constrainedSession,
+            id: "reserved-terminal",
+            tool: .inspectRelationSize,
+            arguments: ["table_id": .string(constrainedUsers)]
+        )
+
+        #expect(reserved.error?.code == .sessionBudgetExceeded)
+        #expect(reserved.outputByteCount <= constrainedPolicy.effectiveMaximumSessionResultBytes)
+        #expect(database.relationSizeCallCount == 1)
+        await #expect(throws: DatabaseInspectionError.self) {
+            _ = try await invoke(
+                constrainedSession,
+                id: "after-terminal",
+                tool: .inspectRelationSize,
+                arguments: ["table_id": .string(constrainedUsers)]
+            )
+        }
+    }
+
     @Test func timeoutIsClassifiedAsToolResult() async throws {
         let timedOutDatabase = FakeInspectionDatabase()
         timedOutDatabase.error = AppError.databaseFailed(

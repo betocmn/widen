@@ -140,11 +140,15 @@ struct ConnectionEditorForm: View {
                     .foregroundStyle(.secondary)
                     .fixedSize(horizontal: false, vertical: true)
 
+                Toggle("Allow sending schema metadata to cloud models", isOn: $viewModel.allowCloudSchemaMetadata)
+                    .toggleStyle(.checkbox)
+
                 Toggle("Allow local data inspection for AI assistance", isOn: $viewModel.allowLocalDataInspection)
                     .toggleStyle(.checkbox)
                     .onChange(of: viewModel.allowLocalDataInspection) { _, enabled in
                         if !enabled {
                             viewModel.allowCloudDataInspection = false
+                            viewModel.allowSampleRowInspection = false
                         }
                     }
 
@@ -152,9 +156,9 @@ struct ConnectionEditorForm: View {
                     .toggleStyle(.checkbox)
                     .disabled(!viewModel.allowLocalDataInspection)
 
-                Text("Sample rows remain off until separately confirmed for this connection.")
-                    .font(.caption2)
-                    .foregroundStyle(.secondary)
+                Toggle("Allow sample row inspection for this connection", isOn: $viewModel.allowSampleRowInspection)
+                    .toggleStyle(.checkbox)
+                    .disabled(!viewModel.allowLocalDataInspection)
             }
             .frame(maxWidth: .infinity, alignment: .leading)
         }
