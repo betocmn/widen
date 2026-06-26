@@ -294,6 +294,27 @@ struct SessionControllerTests {
         }
     }
 
+    private final class ConstrainedRecordingRepairGenerator: SQLGenerator, ConstrainedLocalSQLGenerator,
+        @unchecked Sendable
+    {
+        private let result: SQLGenerationResult
+        private(set) var contexts: [SQLGenerationContext] = []
+
+        init(result: SQLGenerationResult) {
+            self.result = result
+        }
+
+        func generateSQL(
+            question: String,
+            schema: DatabaseSchema,
+            context: SQLGenerationContext,
+            config: SQLGenerationConfig
+        ) async throws -> SQLGenerationResult {
+            contexts.append(context)
+            return result
+        }
+    }
+
     private final class ContextCallCountRepairGenerator: SQLGenerator, @unchecked Sendable {
         private let result: SQLGenerationResult
         private(set) var contexts: [SQLGenerationContext] = []
@@ -2512,6 +2533,30 @@ struct SessionControllerTests {
         #expect(generator.contexts[0].lastRunError == "boom")
         #expect(controller.queryVM.sqlText == fixed.sql)
         #expect(controller.chatVM.messages.last?.role == .assistant)
+    }
+
+    @Test func retryFailedWriteDoesNotUseConstrainedLocalGenerator() async {
+        let connectionID = UUID()
+        let (state, dir) = makeState(connectionID: connectionID, connected: true)
+        defer { try? FileManager.default.removeItem(at: dir) }
+        state.schemas[connectionID] = makeSchema()
+        let generator = ConstrainedRecordingRepairGenerator(
+            result: makeGeneration(sql: "UPDATE public.users SET id = 2 WHERE id = 1")
+        )
+        state.sqlGeneratorOverride = generator
+        let controller = makeController(connectionID: connectionID)
+        controller.chatVM.messages = [ChatMessage(role: .user, text: "bump ids")]
+
+        await controller.retryFailedWrite(
+            appState: state,
+            failedSQL: "UPDATE public.users SET id = 9",
+            error: "boom"
+        )
+
+        #expect(generator.contexts.isEmpty)
+        #expect(controller.queryVM.sqlText.isEmpty)
+        #expect(controller.chatVM.messages.last?.role == .error)
+        #expect(controller.chatVM.messages.last?.text.contains("only supports SELECT queries") == true)
     }
 
     @Test func retryFailedWriteUsesGenerationSchema() async {

@@ -166,6 +166,16 @@ public final class SessionController: Identifiable {
             appState.sessionDidChange(sessionID)
             return
         }
+        let generator = appState.sqlGenerator(connectionID: connectionID, schema: schema)
+        if let validationMessage = Self.constrainedLocalValidationMessage(
+            sql: failedSQL,
+            schema: schema,
+            generator: generator
+        ) {
+            chatVM.appendRunError(validationMessage)
+            appState.sessionDidChange(sessionID)
+            return
+        }
 
         let questionContext = questionContextForRepair(startingSQL: failedSQL)
         let forbiddenIdentifiers = Self.forbiddenIdentifiers(
@@ -216,10 +226,7 @@ public final class SessionController: Identifiable {
 
         let generation: SQLGenerationResult
         do {
-            let generated = try await appState.sqlGenerator(
-                connectionID: connectionID,
-                schema: schema
-            ).generateSQL(
+            let generated = try await generator.generateSQL(
                 question: questionContext.question,
                 schema: schema,
                 context: context,
