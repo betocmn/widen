@@ -786,7 +786,8 @@ public struct TextToSQLPipeline: TextToSQLRunning {
             else {
                 let failure = repairFailure(
                     attempts: coordinator.attempts,
-                    category: .repeatedNoProgressRepair
+                    category: .repeatedNoProgressRepair,
+                    stage: .postgresVerificationRepair
                 )
                 trace.append(
                     .postgresVerificationRepair,
@@ -828,7 +829,11 @@ public struct TextToSQLPipeline: TextToSQLRunning {
                 request: request,
                 events: &events
             )
-            let failure = repairFailure(attempts: coordinator.attempts, category: category)
+            let failure = repairFailure(
+                attempts: coordinator.attempts,
+                category: category,
+                stage: .postgresVerificationRepair
+            )
             return RepairRun(decision: .failed(failure), failureCategory: failure.category)
 
         case .accepted:
@@ -840,7 +845,8 @@ public struct TextToSQLPipeline: TextToSQLRunning {
         else {
             let failure = repairFailure(
                 attempts: coordinator.attempts,
-                category: .modelGeneration
+                category: .modelGeneration,
+                stage: .postgresVerificationRepair
             )
             trace.append(
                 .postgresVerificationRepair,
@@ -1153,31 +1159,53 @@ public struct TextToSQLPipeline: TextToSQLRunning {
                 trace: &trace,
                 stage: .postgresVerification
             )
-            guard verification.passed || verification.status.isAcceptableSkip else {
-                let failure = postgresVerificationFailure(
-                    stage: .postgresVerification,
-                    verification: verification
+            if verification.passed || verification.status.isAcceptableSkip {
+                trace.append(
+                    .validationRepair,
+                    outcome: .success,
+                    since: stageStart,
+                    modelCallCount: generation.generationCallCount
                 )
-                return RepairRun(decision: .failed(failure), failureCategory: failure.category)
+                await record(
+                    TextToSQLPipelineEvent(
+                        kind: .validationRepairPassedValidation,
+                        stage: .validationRepair,
+                        title: "\(repairLabel) passed validation.",
+                        summary: "Validation repair produced locally valid SQL."
+                    ),
+                    request: request,
+                    events: &events
+                )
+                return RepairRun(decision: .sql(generation.withPipelineSQL(generatedSQL)))
             }
 
-            trace.append(
-                .validationRepair,
-                outcome: .success,
-                since: stageStart,
-                modelCallCount: generation.generationCallCount
-            )
             await record(
                 TextToSQLPipelineEvent(
-                    kind: .validationRepairPassedValidation,
-                    stage: .validationRepair,
-                    title: "\(repairLabel) passed validation.",
-                    summary: "Validation repair produced locally valid SQL."
+                    kind: .postgresVerificationFailed,
+                    stage: .postgresVerification,
+                    title: "Repaired SQL failed PostgreSQL verification.",
+                    summary: verification.diagnostic?.kind.rawValue
+                        ?? verification.status.rawValue,
+                    failureCategory: .postgresVerification
                 ),
                 request: request,
                 events: &events
             )
-            return RepairRun(decision: .sql(generation.withPipelineSQL(generatedSQL)))
+            if verification.isRepairable {
+                return try await runPostgresVerificationRepair(
+                    request: request,
+                    startingGeneration: generation,
+                    startingSQL: generatedSQL,
+                    verification: verification,
+                    trace: &trace,
+                    events: &events
+                )
+            }
+            let failure = postgresVerificationFailure(
+                stage: .postgresVerification,
+                verification: verification
+            )
+            return RepairRun(decision: .failed(failure), failureCategory: failure.category)
         }
 
         let failure = repairFailure(
@@ -1352,10 +1380,11 @@ public struct TextToSQLPipeline: TextToSQLRunning {
 
     private func repairFailure(
         attempts: [SQLRepairAttempt],
-        category: TextToSQLFailureCategory
+        category: TextToSQLFailureCategory,
+        stage: TextToSQLStage = .validationRepair
     ) -> TextToSQLPipelineFailure {
         TextToSQLPipelineFailure(
-            stage: .validationRepair,
+            stage: stage,
             category: category,
             message: GeneratedSQLRepairSupport.repairFailureMessage(
                 attempts: attempts,

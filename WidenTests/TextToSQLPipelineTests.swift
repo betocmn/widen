@@ -568,6 +568,90 @@ struct TextToSQLPipelineTests {
         })
     }
 
+    @Test func postgresVerifierRejectsBindPlaceholders() async throws {
+        let verifier = PostgresSQLVerifier()
+        let handle = PostgresConnectionHandle(postgres: PostgresService())
+
+        let rejected = try await verifier.verify(
+            sql: "SELECT id FROM public.users WHERE id = $1",
+            connection: handle,
+            safetyMode: .generatedRead
+        )
+        #expect(rejected.status == .failed)
+        #expect(rejected.diagnostic?.kind == .syntaxError)
+        #expect(rejected.message?.contains("bind parameter") == true)
+
+        let literalResult = try await verifier.verify(
+            sql: "SELECT '$1' AS literal FROM public.users LIMIT 1",
+            connection: handle,
+            safetyMode: .generatedRead
+        )
+        #expect(literalResult.status == .skippedNoConnection)
+    }
+
+    @Test func postgresVerificationRepairRejectedCandidateReportsRepairStage() async throws {
+        let originalSQL = "SELECT id FROM public.users LIMIT 100"
+        let generator = ScriptedGenerator([
+            .success(generation(sql: originalSQL)),
+            .success(generation(sql: originalSQL)),
+        ])
+        let verifier = ScriptedVerifier([
+            .success(verificationFailure(.undefinedFunction, sqlState: "42883")),
+        ])
+
+        let result = try await run(
+            generator,
+            verifier: verifier,
+            verificationConnection: verificationConnection()
+        )
+
+        guard case .failed(let failure) = result.finalDecision else {
+            Issue.record("expected failure decision")
+            return
+        }
+        #expect(failure.stage == .postgresVerificationRepair)
+        #expect(failure.category == .repeatedNoProgressRepair)
+        #expect(result.trace.stages.contains { $0.stage == .postgresVerificationRepair })
+        #expect(!result.trace.stages.contains { $0.stage == .validationRepair })
+        #expect(generator.contexts.count == 2)
+        #expect(verifier.requests.count == 1)
+        #expect(result.events.map(\.kind).contains(.postgresVerificationRepairRejected))
+    }
+
+    @Test func validationRepairThenPostgresVerificationRepairProducesSQL() async throws {
+        let invalidSQL = "SELECT missing FROM public.users"
+        let validationRepairedSQL = "SELECT id FROM public.users LIMIT 100"
+        let verificationRepairedSQL = "SELECT id FROM public.users WHERE id > 0 LIMIT 100"
+        let generator = ScriptedGenerator([
+            .success(generation(sql: invalidSQL)),
+            .success(generation(sql: validationRepairedSQL)),
+            .success(generation(sql: verificationRepairedSQL)),
+        ])
+        let verifier = ScriptedVerifier([
+            .success(verificationFailure(.undefinedFunction, sqlState: "42883")),
+            .success(.passed(elapsedMs: 3)),
+        ])
+
+        let result = try await run(
+            generator,
+            verifier: verifier,
+            verificationConnection: verificationConnection()
+        )
+
+        guard case .sql(let generation) = result.finalDecision else {
+            Issue.record("expected repaired SQL decision")
+            return
+        }
+        #expect(generation.sql == verificationRepairedSQL)
+        #expect(generator.contexts.count == 3)
+        #expect(generator.contexts[1].mode == .repair)
+        #expect(generator.contexts[2].mode == .repair)
+        #expect(verifier.requests.map(\.sql) == [validationRepairedSQL, verificationRepairedSQL])
+        #expect(result.events.map(\.kind).contains(.postgresVerificationRepairStarted))
+        #expect(result.events.map(\.kind).contains(.postgresVerificationRepairPassed))
+        #expect(result.trace.stages.contains { $0.stage == .postgresVerificationRepair })
+    }
+
     @Test func clarificationReturnsFinalClarification() async throws {
         let result = try await run(
             ScriptedGenerator([

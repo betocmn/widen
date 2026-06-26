@@ -171,8 +171,8 @@ public actor PostgresService {
                     logger: logger
                 )
                 try await connection.query("SET LOCAL timezone = 'UTC'", logger: logger)
-                try await connection.query("SET LOCAL DateStyle = 'ISO, MDY'", logger: logger)
-                try await connection.query("SET LOCAL IntervalStyle = 'postgres'", logger: logger)
+                try await connection.query("SET LOCAL DateStyle = 'ISO, YMD'", logger: logger)
+                try await connection.query("SET LOCAL IntervalStyle = 'iso_8601'", logger: logger)
 
                 stage = .prepare
                 try await connection.query(

@@ -120,6 +120,26 @@ public struct PostgresSQLVerifier: GeneratedSQLVerifying {
                 message: "PostgreSQL verification is only run for generated read SQL."
             )
         }
+        if let placeholder = Self.bindPlaceholder(in: sql) {
+            let diagnostic = DatabaseDiagnostic(
+                kind: .syntaxError,
+                message: "Generated SQL uses a PostgreSQL bind parameter (\(placeholder)), which cannot be executed as a standalone query. Inline the parameter value instead."
+            )
+            return .failed(
+                diagnostic: diagnostic,
+                elapsedMs: 0,
+                stage: .transaction,
+                message: diagnostic.displayMessage
+            )
+        }
         return try await connection.postgres.verifyGeneratedReadOnlySQL(sql)
+    }
+
+    private static func bindPlaceholder(in sql: String) -> String? {
+        let stripped = SQLSafetyValidator.strip(sql).text
+        guard let range = stripped.range(of: #"\$[0-9]+"#, options: .regularExpression) else {
+            return nil
+        }
+        return String(stripped[range])
     }
 }
