@@ -76,6 +76,22 @@ enum WidenEvalMain {
             print("Wrote eval results to \(output.directory.path)")
             print("Summary: \(output.summary.path)")
 
+            if let releaseGateVersion = options.releaseGateVersion {
+                let gateOutput = try TextToSQLReleaseGateReporter.write(
+                    run: run,
+                    evalOutput: output,
+                    version: releaseGateVersion
+                )
+                print("Release gate summary: \(gateOutput.summary.path)")
+                if !gateOutput.evaluation.passed {
+                    fputs(
+                        "Text-to-SQL release gate failed: \(gateOutput.evaluation.failureMessages.joined(separator: "; "))\n",
+                        stderr
+                    )
+                    exit(1)
+                }
+            }
+
             if let failUnder = options.failUnder {
                 let threshold = failUnder / 100
                 var failedBackends: [String] = []
@@ -140,6 +156,7 @@ struct EvalCLIOptions {
     var outputDirectory: String = ".eval-results"
     var recordPrompts = false
     var failUnder: Double?
+    var releaseGateVersion: String?
     var semanticDatabase = false
     var retrieverMode: SchemaRetrievalMode?
     var schemaTools = false
@@ -160,6 +177,7 @@ struct EvalCLIOptions {
           --output <directory>
           --record-prompts
           --fail-under <percentage>
+          --release-gate-version <version>
           --semantic-db
           --retriever legacy|index|both
           --schema-tools
@@ -220,6 +238,8 @@ struct EvalCLIOptions {
                     throw EvalCLIError.invalidValue(argument, value)
                 }
                 options.failUnder = failUnder
+            case "--release-gate-version":
+                options.releaseGateVersion = try nextValue(after: argument)
             case "--semantic-db":
                 options.semanticDatabase = true
             case "--retriever":

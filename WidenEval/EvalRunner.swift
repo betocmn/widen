@@ -98,6 +98,7 @@ struct EvalRunSummary: Codable {
     var totalAgentModelTurns: Int?
     var totalAgentHTTPAttempts: Int?
     var toolBudgetFailureCount: Int?
+    var repeatedNoProgressRepairCount: Int
     var averageEstimatedInitialPromptCharacters: Double?
     var maxEstimatedInitialPromptCharacters: Int?
 }
@@ -853,6 +854,11 @@ struct EvalRunner {
                         } == true
                 )
         }
+        let repeatedNoProgressRepairs = results.filter { result in
+            result.trace?.stages.contains {
+                $0.failureCategory == .repeatedNoProgressRepair
+            } == true
+        }
         let promptEstimateValues = results.compactMap(\.metrics.estimatedInitialPromptCharacters)
         let backendAvailableValues = results.map(\.metrics.backendAvailable)
         let transportEvaluated = results.filter(transportAttempted)
@@ -1010,6 +1016,7 @@ struct EvalRunner {
             toolBudgetFailureCount: schemaToolCalls.isEmpty && inspectionToolCalls.isEmpty
                 ? nil
                 : toolBudgetFailures.count,
+            repeatedNoProgressRepairCount: repeatedNoProgressRepairs.count,
             averageEstimatedInitialPromptCharacters: promptEstimateValues.isEmpty
                 ? nil
                 : Double(promptEstimateValues.reduce(0, +)) / Double(promptEstimateValues.count),

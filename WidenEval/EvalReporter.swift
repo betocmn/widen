@@ -240,6 +240,7 @@ enum EvalReporter {
             "| Agent logical model turns | \(agentTurns) |",
             "| Agent HTTP attempts | \(agentHTTPAttempts) |",
             "| Tool-budget failures | \(toolBudgetFailures) |",
+            "| Repeated repair fingerprint/no-progress repairs | \(summary.repeatedNoProgressRepairCount) |",
             "| Avg estimated initial prompt characters | \(averagePromptSize) |",
             "| Max estimated initial prompt characters | \(maxPromptSize) |",
             "| Token usage | \(tokenUsage) |",
