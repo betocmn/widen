@@ -489,6 +489,13 @@ public enum SchemaPromptPackager {
         return parts.joined(separator: " ")
     }
 
+    static func contextualQuestionForPromptBuilder(
+        _ question: String,
+        context: SQLGenerationContext
+    ) -> String {
+        contextualQuestion(question, context: context)
+    }
+
     private static func pinnedTableIDs(
         schema: DatabaseSchema,
         ranked: [RankedSchemaTable],

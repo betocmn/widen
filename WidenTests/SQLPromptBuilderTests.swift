@@ -221,6 +221,40 @@ struct SQLPromptBuilderTests {
         #expect(bundle.prompt.contains(#"TABLE "public"."preseason_tool""#))
     }
 
+    @Test func promptBundleHonorsPrimaryTableCap() {
+        let tables = (0..<8).map { index in
+            TableInfo(
+                schema: "public",
+                name: "events_\(index)",
+                type: .baseTable,
+                columns: [
+                    ColumnInfo(
+                        tableSchema: "public",
+                        tableName: "events_\(index)",
+                        name: "id",
+                        dataType: "integer",
+                        isNullable: false,
+                        ordinalPosition: 1
+                    )
+                ]
+            )
+        }
+        let schema = DatabaseSchema(
+            schemas: [SchemaInfo(name: "public")],
+            tables: tables,
+            foreignKeys: []
+        )
+
+        let bundle = SQLPromptBuilder.promptBundle(
+            question: "show event ids",
+            schema: schema,
+            maxSchemaCharacters: 20_000,
+            maxPrimarySchemaTables: 2
+        )
+
+        #expect(bundle.schemaPackage.includedTables.count == 2)
+    }
+
     @Test func promptWithoutContextHasNoContextSection() {
         let prompt = SQLPromptBuilder.prompt(
             question: "Show me users.",

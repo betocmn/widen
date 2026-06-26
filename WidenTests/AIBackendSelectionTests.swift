@@ -206,7 +206,7 @@ struct AIBackendSelectionTests {
         state.localLLMEligibilityOverride = .ready
 
         #expect(!(state.sqlGenerator is OpenRouterSQLGenerator))
-        #expect(state.activeBackendDisplayName == "the local model")
+        #expect(state.activeBackendDisplayName == "On-Device — Experimental")
     }
 
     @Test func connectionAutofillStaysAvailableWithoutLocalModel() {

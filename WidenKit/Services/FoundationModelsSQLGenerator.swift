@@ -82,7 +82,10 @@
 
     /// Generates SQL with Apple's on-device Foundation Model. Local-only: no
     /// network, no external LLM APIs.
-    public final class FoundationModelsSQLGenerator: SQLGenerator, Sendable {
+    public final class FoundationModelsSQLGenerator: ConstrainedLocalSQLGenerator, Sendable {
+        private static let maxModelCalls = GeneratedSQLRepairSupport.constrainedLocalModelCallBudget
+        private static let maxDetailedSchemaTables = 4
+
         public init() {}
 
         /// nil when the model is ready; otherwise a user-readable reason.
@@ -127,6 +130,9 @@
                 ).result
             } catch let error as GenerationAttemptError {
                 if case .exceededContextWindowSize = error.error {
+                    guard context.modelCallCount + error.spentModelCalls < Self.maxModelCalls else {
+                        throw Self.map(error.error)
+                    }
                     // Retry once with a smaller whole-prompt target. Discovery is
                     // skipped here so a context-window retry cannot spend another
                     // model call before SQL generation.
@@ -171,6 +177,11 @@
             inputScale: Double,
             allowDiscovery: Bool
         ) async throws -> GenerationAttempt {
+            guard context.modelCallCount <= Self.maxModelCalls else {
+                throw SQLGenerationFailure.generation(
+                    "On-device experimental mode has already used this request's two model-call budget. Try a narrower question or switch to Cloud."
+                )
+            }
             // A fresh session per request keeps the context window small and
             // the generation stateless; follow-up awareness comes from the
             // compact context section in the prompt instead.
@@ -354,7 +365,11 @@
                 var copy = context
                 copy.modelCallCount = max(1, context.modelCallCount) + 1
                 guard !queries.isEmpty else { return copy }
-                let searchResults = SchemaDiscoveryService.search(schema: schema, queries: queries)
+                let searchResults = SchemaDiscoveryService.search(
+                    schema: schema,
+                    queries: queries,
+                    limit: Self.maxDetailedSchemaTables
+                )
                 guard !searchResults.isEmpty else { return copy }
                 copy.schemaSearchQueries = queries + searchResults.map(\.qualifiedName)
                 return copy
@@ -467,7 +482,8 @@
                 schema: schema,
                 context: context,
                 databaseContext: databaseContext,
-                maxSchemaCharacters: schemaCharacters
+                maxSchemaCharacters: schemaCharacters,
+                maxPrimarySchemaTables: Self.maxDetailedSchemaTables
             )
             for _ in 0..<4 {
                 let inputCharacters = instructions.count + latest.prompt.count
@@ -484,7 +500,8 @@
                     schema: schema,
                     context: context,
                     databaseContext: databaseContext,
-                    maxSchemaCharacters: schemaCharacters
+                    maxSchemaCharacters: schemaCharacters,
+                    maxPrimarySchemaTables: Self.maxDetailedSchemaTables
                 )
             }
 

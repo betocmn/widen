@@ -20,7 +20,7 @@ struct LLMSettingsView: View {
         @Bindable var appState = appState
 
         Form {
-            Section("Local LLM") {
+            Section("On-Device — Experimental") {
                 LabeledContent("Model", value: Self.localModelName)
                 Text(localModelDescription)
                 .font(.callout)
@@ -104,11 +104,11 @@ struct LLMSettingsView: View {
     private var localModelDescription: String {
         switch appState.localLLMEligibility {
         case .ready:
-            return "Free and included with your Mac. Generation runs entirely on this device — your questions and schema never leave it, and it works offline."
+            return "Free and included with your Mac. Generation runs entirely on this device and works offline. This experimental mode is constrained to narrow SELECT requests; complex questions may require Cloud."
         case .appleIntelligenceDisabled:
             return "Local generation runs entirely on this device after Apple Intelligence is enabled in System Settings › Apple Intelligence & Siri."
         default:
-            return "Local generation runs entirely on this device when Apple's local model is available."
+            return "On-device generation runs entirely on this Mac when Apple's local model is available."
         }
     }
 
