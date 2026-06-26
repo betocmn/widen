@@ -13,17 +13,34 @@ import Testing
 /// data, and drops it afterward, so the suite never shares state with a
 /// developer's manual-testing database (and cannot drift when that database is
 /// poked by hand). The only requirement is a reachable server whose role can
-/// CREATE DATABASE on localhost:5432.
-private let integrationEnabled =
-    ProcessInfo.processInfo.environment["WIDEN_TEST_DB"] != nil
-    || ProcessInfo.processInfo.environment["TEST_RUNNER_WIDEN_TEST_DB"] != nil
+/// CREATE DATABASE on the configured host/port.
+///
+/// Host, port, username, and maintenance database default to localhost:5432 +
+/// the current macOS user + `postgres`, matching a Postgres.app developer setup.
+/// Each is overridable via `WIDEN_TEST_DB_HOST`, `WIDEN_TEST_DB_PORT`,
+/// `WIDEN_TEST_DB_USER`, and `WIDEN_TEST_DB_MAINTENANCE_DB`, which lets the
+/// same suite point at the snapshot-baked Postgres in Conductor Cloud
+/// (127.0.0.1 + `test_user`) without code changes.
+private func integrationEnv(_ name: String) -> String? {
+    let environment = ProcessInfo.processInfo.environment
+    if let value = environment[name], !value.isEmpty {
+        return value
+    }
+    if let value = environment["TEST_RUNNER_\(name)"], !value.isEmpty {
+        return value
+    }
+    return nil
+}
+
+private let integrationEnabled = integrationEnv("WIDEN_TEST_DB") != nil
 
 private enum IntegrationServer {
-    static let host = "localhost"
-    static let port = 5432
-    static let username = NSUserName()
+    static let host = integrationEnv("WIDEN_TEST_DB_HOST") ?? "localhost"
+    static let port = integrationEnv("WIDEN_TEST_DB_PORT").flatMap(Int.init) ?? 5432
+    static let username = integrationEnv("WIDEN_TEST_DB_USER") ?? NSUserName()
     /// Always-present database, used only to issue CREATE/DROP DATABASE.
-    static let maintenanceDatabase = "postgres"
+    static let maintenanceDatabase =
+        integrationEnv("WIDEN_TEST_DB_MAINTENANCE_DB") ?? "postgres"
 
     /// Sample schema + data, mirrored from `scripts/sample_db.sql`. Seeded into
     /// a fresh database for tests that read the sample tables. Kept as separate
