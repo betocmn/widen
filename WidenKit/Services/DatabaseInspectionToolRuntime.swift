@@ -287,7 +287,6 @@ public struct DatabaseInspectionToolExecutor: Sendable {
         try validateKeys(arguments, allowed: ["table_id", "column_id"])
         let resolved = try resolveTableColumn(arguments, handles: handles)
         let redacted = policy.redacts(resolved.column)
-        let cloudShareable = policy.audience == .local || !policy.allowFullTableScans
         if policy.audience == .cloud, policy.allowFullTableScans, !policy.allowCloudDataInspection {
             throw DatabaseInspectionError.policy(
                 "Cloud data inspection is disabled for this connection."
@@ -397,7 +396,7 @@ public struct DatabaseInspectionToolExecutor: Sendable {
                 columnIDs: [resolved.columnHandle],
                 rowCount: Int(min(aggregate.rowCount, Int64(Int.max))),
                 valueCount: valueCount,
-                cloudShareable: cloudShareable || policy.allowCloudDataInspection
+                cloudShareable: policy.allowCloudDataInspection
             )
         )
     }
@@ -493,7 +492,7 @@ public struct DatabaseInspectionToolExecutor: Sendable {
                 columnIDs: [resolved.columnHandle],
                 rowCount: kept.count,
                 valueCount: valueCount,
-                cloudShareable: policy.canShareDataValuesWithAudience
+                cloudShareable: policy.allowCloudDataInspection
             )
         )
     }
@@ -548,6 +547,8 @@ public struct DatabaseInspectionToolExecutor: Sendable {
         guard Set(columns.map(\.handle)).count == columns.count else {
             throw DatabaseInspectionError.range("column_ids must not contain duplicates.", argument: "column_ids")
         }
+        let redactedStableIDs = Set(columns.filter { policy.redacts($0.column) }.map(\.objectID.stableString))
+        let inspectedColumns = columns.filter { !redactedStableIDs.contains($0.objectID.stableString) }
         let limit = try optionalInt(
             arguments,
             key: "limit",
@@ -556,13 +557,12 @@ public struct DatabaseInspectionToolExecutor: Sendable {
         )
         let sampleRows = try await database.inspectSampleRows(
             table: table.table,
-            columns: columns.map(\.column),
+            columns: inspectedColumns.map(\.column),
             limit: limit,
             policy: policy
         )
         let keptSampleRows = Array(sampleRows.prefix(limit))
         let truncated = sampleRows.count > keptSampleRows.count
-        let redactedStableIDs = Set(columns.filter { policy.redacts($0.column) }.map(\.objectID.stableString))
         var redactionCount = 0
         var valueCount = 0
         let rows: [JSONValue] = keptSampleRows.map { row in
@@ -604,7 +604,7 @@ public struct DatabaseInspectionToolExecutor: Sendable {
                 rowCount: rows.count,
                 valueCount: valueCount,
                 redactionCount: redactionCount,
-                cloudShareable: policy.canShareDataValuesWithAudience
+                cloudShareable: policy.allowCloudDataInspection
             )
         )
     }

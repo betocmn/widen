@@ -228,16 +228,7 @@ public actor PostgresService: DatabaseInspectionQuerying {
     ) async throws -> DatabaseRelationSizeSnapshot {
         guard let client else { throw AppError.notConnected }
         let logger = logger
-        let sql = """
-            SELECT GREATEST(round(c.reltuples), 0)::bigint AS row_estimate
-            FROM pg_catalog.pg_class AS c
-            JOIN pg_catalog.pg_namespace AS n
-              ON n.oid = c.relnamespace
-            WHERE n.nspname = \(Self.sqlLiteral(schema))
-              AND c.relname = \(Self.sqlLiteral(table))
-              AND c.relkind IN ('r', 'p', 'v', 'm', 'f')
-            LIMIT 1
-            """
+        let sql = Self.relationSizeInspectionSQL(schema: schema, table: table)
         do {
             return try await client.withConnection { connection in
                 try await connection.query("BEGIN ISOLATION LEVEL REPEATABLE READ READ ONLY", logger: logger)
@@ -246,7 +237,7 @@ public actor PostgresService: DatabaseInspectionQuerying {
                     let stream = try await connection.query(PostgresQuery(unsafeSQL: sql), logger: logger)
                     var estimate: Int64?
                     for try await row in stream {
-                        estimate = try row.makeRandomAccess()["row_estimate"].decode(Int64.self)
+                        estimate = try? row.makeRandomAccess()["row_estimate"].decode(Int64.self)
                     }
                     try await connection.query("ROLLBACK", logger: logger)
                     return DatabaseRelationSizeSnapshot(
@@ -263,6 +254,23 @@ public actor PostgresService: DatabaseInspectionQuerying {
         } catch {
             throw PostgresErrorMapper.map(error)
         }
+    }
+
+    static func relationSizeInspectionSQL(schema: String, table: String) -> String {
+        """
+        SELECT
+          CASE
+            WHEN c.reltuples < 0 THEN NULL::bigint
+            ELSE round(c.reltuples)::bigint
+          END AS row_estimate
+        FROM pg_catalog.pg_class AS c
+        JOIN pg_catalog.pg_namespace AS n
+          ON n.oid = c.relnamespace
+        WHERE n.nspname = \(Self.sqlLiteral(schema))
+          AND c.relname = \(Self.sqlLiteral(table))
+          AND c.relkind IN ('r', 'p', 'v', 'm', 'f')
+        LIMIT 1
+        """
     }
 
     public func inspectColumnStatistics(
@@ -333,8 +341,9 @@ public actor PostgresService: DatabaseInspectionQuerying {
         let logger = logger
         let qualifiedTable = Self.qualifiedIdentifier(schema: table.schema, table: table.name)
         let columnSQL = Self.quotedIdentifier(column.name)
+        let distinctColumnSQL = Self.inspectionColumnExpression(for: column)
         let distinctSQL = includeDistinct
-            ? "count(DISTINCT \(columnSQL))::bigint AS distinct_count"
+            ? "count(DISTINCT \(distinctColumnSQL))::bigint AS distinct_count"
             : "NULL::bigint AS distinct_count"
         let minSQL = includeMinMax ? "min(\(columnSQL)) AS min_value" : "NULL::text AS min_value"
         let maxSQL = includeMinMax ? "max(\(columnSQL)) AS max_value" : "NULL::text AS max_value"
@@ -396,7 +405,7 @@ public actor PostgresService: DatabaseInspectionQuerying {
         let logger = logger
         let boundedLimit = min(max(limit, 0), policy.maximumDistinctValues) + 1
         let qualifiedTable = Self.qualifiedIdentifier(schema: table.schema, table: table.name)
-        let columnSQL = Self.quotedIdentifier(column.name)
+        let columnSQL = Self.inspectionColumnExpression(for: column)
         let sql = """
             SELECT \(columnSQL) AS value, count(*)::bigint AS value_count
             FROM \(qualifiedTable)
@@ -444,13 +453,19 @@ public actor PostgresService: DatabaseInspectionQuerying {
         let logger = logger
         let boundedLimit = min(max(limit, 0), policy.maximumReturnedRows) + 1
         let qualifiedTable = Self.qualifiedIdentifier(schema: table.schema, table: table.name)
-        let selections = columns.prefix(policy.maximumSampleColumns).map { column in
-            let stableID = SchemaObjectID.column(
-                schema: column.tableSchema,
-                table: column.tableName,
-                name: column.name
-            ).stableString
-            return "\(Self.quotedIdentifier(column.name)) AS \(Self.quotedIdentifier(stableID))"
+        let selectedColumns = columns.prefix(policy.maximumSampleColumns)
+        let selections: [String]
+        if selectedColumns.isEmpty {
+            selections = ["1 AS \(Self.quotedIdentifier("__widen_sample_marker"))"]
+        } else {
+            selections = selectedColumns.map { column in
+                let stableID = SchemaObjectID.column(
+                    schema: column.tableSchema,
+                    table: column.tableName,
+                    name: column.name
+                ).stableString
+                return "\(Self.inspectionColumnExpression(for: column)) AS \(Self.quotedIdentifier(stableID))"
+            }
         }
         let sql = """
             SELECT \(selections.joined(separator: ", "))
@@ -621,6 +636,15 @@ public actor PostgresService: DatabaseInspectionQuerying {
 
     private static func sqlLiteral(_ value: String) -> String {
         "'\(value.replacingOccurrences(of: "'", with: "''"))'"
+    }
+
+    private static func inspectionColumnExpression(for column: ColumnInfo) -> String {
+        let columnSQL = quotedIdentifier(column.name)
+        return castsColumnToTextForInspection(column) ? "(\(columnSQL))::text" : columnSQL
+    }
+
+    private static func castsColumnToTextForInspection(_ column: ColumnInfo) -> Bool {
+        column.valueConstraints?.contains { $0.kind == .enumValues } == true
     }
 
     private static func inspectionValue(

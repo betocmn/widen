@@ -59,10 +59,12 @@ struct DatabaseInspectionToolTests {
             allowSampleRows: true,
             allowFullTableScans: true,
             maximumReturnedRows: 0,
-            maximumDistinctValues: 0
+            maximumDistinctValues: 0,
+            maximumSampleColumns: 0
         )
         #expect(policy.maximumReturnedRows == 1)
         #expect(policy.maximumDistinctValues == 1)
+        #expect(policy.maximumSampleColumns == 1)
 
         let database = FakeInspectionDatabase()
         database.sampleRows = [
@@ -173,6 +175,12 @@ struct DatabaseInspectionToolTests {
         #expect(database.aggregateCallCount == 0)
     }
 
+    @Test func relationSizeSQLPreservesUnknownPostgresEstimate() {
+        let sql = PostgresService.relationSizeInspectionSQL(schema: "public", table: "new_table")
+        #expect(sql.contains("WHEN c.reltuples < 0 THEN NULL::bigint"))
+        #expect(!sql.contains("GREATEST(round(c.reltuples), 0)"))
+    }
+
     @Test func profileUsesStatisticsWhenScansAreNotAllowed() async throws {
         let database = FakeInspectionDatabase()
         database.statistics = DatabaseColumnStatisticsSnapshot(
@@ -253,6 +261,28 @@ struct DatabaseInspectionToolTests {
         #expect(trace.valueCount == 0)
     }
 
+    @Test func sensitiveTableNamesAreRedactedByDefault() {
+        let policy = DatabaseInspectionPolicy.localDataInspection(allowFullTableScans: true)
+        let resetCode = ColumnInfo(
+            tableSchema: "auth",
+            tableName: "password_resets",
+            name: "code",
+            dataType: "text",
+            isNullable: false,
+            ordinalPosition: 1
+        )
+        let sessionData = ColumnInfo(
+            tableSchema: "public",
+            tableName: "sessions",
+            name: "data",
+            dataType: "jsonb",
+            isNullable: true,
+            ordinalPosition: 2
+        )
+        #expect(policy.redacts(resetCode))
+        #expect(policy.redacts(sessionData))
+    }
+
     @Test func cloudPolicyRejectsDataValuedDistinctOutputUnlessEnabled() async throws {
         var policy = DatabaseInspectionPolicy.localDataInspection(allowFullTableScans: true)
         policy.audience = .cloud
@@ -269,6 +299,45 @@ struct DatabaseInspectionToolTests {
         )
 
         #expect(result.error?.code == .policyDenied)
+    }
+
+    @Test func localOnlyDataValuedResultsAreNotMarkedCloudShareable() async throws {
+        let localDatabase = FakeInspectionDatabase()
+        let localSession = try makeSession(
+            policy: .localDataInspection(allowFullTableScans: true),
+            database: localDatabase
+        )
+        let localOrders = try await requireHandle(localSession, .table(schema: "public", name: "orders"))
+        let localStatus = try await requireHandle(localSession, .column(schema: "public", table: "orders", name: "status"))
+
+        let localResult = try await invoke(
+            localSession,
+            id: "local-distinct",
+            tool: .inspectDistinctValues,
+            arguments: ["table_id": .string(localOrders), "column_id": .string(localStatus)]
+        )
+
+        #expect(localResult.success)
+        #expect(localResult.diagnostic.cloudShareable == false)
+        let localTrace = try #require(await localSession.tracesSnapshot().last)
+        #expect(localTrace.cloudShareable == false)
+
+        let cloudSession = try makeSession(
+            policy: .cloudDataInspection(allowFullTableScans: true),
+            database: FakeInspectionDatabase()
+        )
+        let cloudOrders = try await requireHandle(cloudSession, .table(schema: "public", name: "orders"))
+        let cloudStatus = try await requireHandle(cloudSession, .column(schema: "public", table: "orders", name: "status"))
+
+        let cloudResult = try await invoke(
+            cloudSession,
+            id: "cloud-distinct",
+            tool: .inspectDistinctValues,
+            arguments: ["table_id": .string(cloudOrders), "column_id": .string(cloudStatus)]
+        )
+
+        #expect(cloudResult.success)
+        #expect(cloudResult.diagnostic.cloudShareable)
     }
 
     @Test func distinctValuesRequireLowCardinalityAndRespectLimit() async throws {
@@ -338,6 +407,40 @@ struct DatabaseInspectionToolTests {
         )
 
         #expect(result.error?.code == .policyDenied)
+    }
+
+    @Test func sampleRowsDoNotFetchRedactedColumns() async throws {
+        let policy = DatabaseInspectionPolicy.localDataInspection(
+            allowFullTableScans: true,
+            allowSampleRows: true
+        )
+        let database = FakeInspectionDatabase()
+        database.sampleRows = [
+            DatabaseSampleRow(valuesByColumnStableID: [
+                SchemaObjectID.column(schema: "public", table: "users", name: "status").stableString:
+                    .text("active", cap: 160)
+            ])
+        ]
+        let session = try makeSession(policy: policy, database: database)
+        let users = try await requireHandle(session, .table(schema: "public", name: "users"))
+        let email = try await requireHandle(session, .column(schema: "public", table: "users", name: "email"))
+        let status = try await requireHandle(session, .column(schema: "public", table: "users", name: "status"))
+
+        let result = try await invoke(
+            session,
+            id: "sample-redacted-column",
+            tool: .inspectSampleRows,
+            arguments: ["table_id": .string(users), "column_ids": [.string(email), .string(status)]]
+        )
+
+        #expect(result.success)
+        #expect(database.lastSampleColumnNames == ["status"])
+        let row = try #require(result.payload?["rows"]?.arrayValue?.first)
+        #expect(row[email]?["type"]?.stringValue == "redacted")
+        #expect(row[status]?["value"]?.stringValue == "active")
+        let trace = try #require(await session.tracesSnapshot().last)
+        #expect(trace.redactionCount == 1)
+        #expect(trace.valueCount == 1)
     }
 
     @Test func unsupportedTypesAndTextCapsAreBounded() async throws {
@@ -607,6 +710,7 @@ private final class FakeInspectionDatabase: DatabaseInspectionQuerying, @uncheck
     var aggregateCallCount = 0
     var distinctValuesCallCount = 0
     var sampleRowsCallCount = 0
+    var lastSampleColumnNames: [String] = []
 
     func inspectRelationSize(
         schema: String,
@@ -659,6 +763,7 @@ private final class FakeInspectionDatabase: DatabaseInspectionQuerying, @uncheck
         policy: DatabaseInspectionPolicy
     ) async throws -> [DatabaseSampleRow] {
         sampleRowsCallCount += 1
+        lastSampleColumnNames = columns.map(\.name)
         if let error { throw error }
         return sampleRows
     }

@@ -213,7 +213,7 @@ public struct DatabaseInspectionPolicy: Codable, Equatable, Sendable {
         self.maximumSessionResultBytes = min(maximumSessionResultBytes, 128_000)
         self.maximumReturnedRows = min(max(maximumReturnedRows, 1), 20)
         self.maximumDistinctValues = min(max(maximumDistinctValues, 1), 20)
-        self.maximumSampleColumns = min(max(maximumSampleColumns, 0), 8)
+        self.maximumSampleColumns = min(max(maximumSampleColumns, 1), 8)
         self.maximumTextCharacters = min(max(maximumTextCharacters, 1), 1_000)
         self.maximumJSONCharacters = min(max(maximumJSONCharacters, 1), 2_000)
         self.lowCardinalityDistinctLimit = min(max(lowCardinalityDistinctLimit, 1), 100)
@@ -292,6 +292,8 @@ public struct DatabaseInspectionPolicy: Codable, Equatable, Sendable {
             return true
         }
         let searchable = [
+            column.tableSchema,
+            column.tableName,
             column.name,
             column.comment ?? "",
             column.dataType,

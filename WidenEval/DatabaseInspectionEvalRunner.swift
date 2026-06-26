@@ -50,6 +50,70 @@ struct DatabaseInspectionEvalAcceptance: Codable {
     var messages: [String]
 }
 
+private struct StableDatabaseInspectionEvalResult: Codable {
+    var caseID: String
+    var passed: Bool
+    var messages: [String]
+    var callsAttempted: Int
+    var policyDeniedCalls: Int
+    var redactedValues: Int
+    var truncated: Bool
+    var deterministicDigest: String
+
+    init(_ result: DatabaseInspectionEvalResult) {
+        self.caseID = result.caseID
+        self.passed = result.passed
+        self.messages = result.messages
+        self.callsAttempted = result.callsAttempted
+        self.policyDeniedCalls = result.policyDeniedCalls
+        self.redactedValues = result.redactedValues
+        self.truncated = result.truncated
+        self.deterministicDigest = result.deterministicDigest
+    }
+}
+
+private struct StableDatabaseInspectionToolResult: Codable {
+    var callID: String
+    var toolName: String
+    var success: Bool
+    var payload: JSONValue?
+    var error: DatabaseInspectionError?
+    var truncation: DatabaseInspectionTruncation
+    var diagnostic: StableDatabaseInspectionDiagnostic
+
+    init(_ result: DatabaseInspectionResult) {
+        self.callID = result.callID
+        self.toolName = result.toolName
+        self.success = result.success
+        self.payload = result.payload
+        self.error = result.error
+        self.truncation = result.truncation
+        self.diagnostic = StableDatabaseInspectionDiagnostic(result.diagnostic)
+    }
+}
+
+private struct StableDatabaseInspectionDiagnostic: Codable {
+    var toolName: String
+    var tableID: String?
+    var columnIDs: [String]
+    var rowCount: Int
+    var valueCount: Int
+    var redactionCount: Int
+    var cloudShareable: Bool
+    var errorCode: DatabaseInspectionErrorCode?
+
+    init(_ diagnostic: DatabaseInspectionDiagnostic) {
+        self.toolName = diagnostic.toolName
+        self.tableID = diagnostic.tableID
+        self.columnIDs = diagnostic.columnIDs
+        self.rowCount = diagnostic.rowCount
+        self.valueCount = diagnostic.valueCount
+        self.redactionCount = diagnostic.redactionCount
+        self.cloudShareable = diagnostic.cloudShareable
+        self.errorCode = diagnostic.errorCode
+    }
+}
+
 struct DatabaseInspectionEvalRunner {
     var options: EvalCLIOptions
 
@@ -70,7 +134,9 @@ struct DatabaseInspectionEvalRunner {
 
         let summary = summarize(results)
         let acceptance = acceptance(results: results)
-        let digest = try Self.sha256(JSONEncoder.schemaToolEncoder.encode(results))
+        let digest = try Self.sha256(
+            JSONEncoder.schemaToolEncoder.encode(results.map(StableDatabaseInspectionEvalResult.init))
+        )
         let finishedAt = ISO8601DateFormatter().string(from: Date())
         return DatabaseInspectionEvalRun(
             manifest: DatabaseInspectionEvalManifest(
@@ -395,7 +461,9 @@ struct DatabaseInspectionEvalRunner {
         results: [DatabaseInspectionResult]
     ) async throws -> DatabaseInspectionEvalResult {
         let traceSnapshot = await session.tracesSnapshot()
-        let payloadData = try JSONEncoder.schemaToolEncoder.encode(results)
+        let payloadData = try JSONEncoder.schemaToolEncoder.encode(
+            results.map(StableDatabaseInspectionToolResult.init)
+        )
         let policyDenied = results.filter { $0.error?.code == .policyDenied }.count
         return DatabaseInspectionEvalResult(
             caseID: caseID,

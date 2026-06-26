@@ -737,10 +737,12 @@ struct QueryExecutionIntegrationTests {
         try await withDatabase { config, service in
             try await runStatements(
                 [
+                    "CREATE TYPE ticket_state AS ENUM ('active', 'disabled')",
                     """
                     CREATE TABLE tickets (
                       id SERIAL PRIMARY KEY,
                       status TEXT NOT NULL CHECK (status IN ('active', 'disabled')),
+                      state ticket_state NOT NULL,
                       opened_on DATE NOT NULL,
                       resolved_on DATE,
                       email TEXT,
@@ -748,11 +750,11 @@ struct QueryExecutionIntegrationTests {
                     )
                     """,
                     """
-                    INSERT INTO tickets (status, opened_on, resolved_on, email, note) VALUES
-                    ('active', DATE '2026-01-01', NULL, 'alice@example.com', 'short'),
-                    ('active', DATE '2026-01-05', DATE '2026-01-07', 'bob@example.com', 'short'),
-                    ('disabled', DATE '2026-01-15', NULL, 'carla@example.com', 'short'),
-                    ('active', DATE '2026-01-20', DATE '2026-01-23', 'drew@example.com', 'short')
+                    INSERT INTO tickets (status, state, opened_on, resolved_on, email, note) VALUES
+                    ('active', 'active', DATE '2026-01-01', NULL, 'alice@example.com', 'short'),
+                    ('active', 'active', DATE '2026-01-05', DATE '2026-01-07', 'bob@example.com', 'short'),
+                    ('disabled', 'disabled', DATE '2026-01-15', NULL, 'carla@example.com', 'short'),
+                    ('active', 'active', DATE '2026-01-20', DATE '2026-01-23', 'drew@example.com', 'short')
                     """,
                     "ANALYZE tickets",
                 ],
@@ -765,7 +767,7 @@ struct QueryExecutionIntegrationTests {
                 allowDistinctValuesInProfiles: true,
                 allowSampleRows: true
             )
-            policy.maximumCallCount = 8
+            policy.maximumCallCount = 10
             let session = try makeInspectionSession(schema: schema, policy: policy, service: service)
             let tickets = try await inspectionHandle(
                 session,
@@ -778,6 +780,10 @@ struct QueryExecutionIntegrationTests {
             let openedOn = try await inspectionHandle(
                 session,
                 .column(schema: "public", table: "tickets", name: "opened_on")
+            )
+            let state = try await inspectionHandle(
+                session,
+                .column(schema: "public", table: "tickets", name: "state")
             )
             let resolvedOn = try await inspectionHandle(
                 session,
@@ -822,6 +828,20 @@ struct QueryExecutionIntegrationTests {
             #expect(distinct.success)
             #expect(distinct.payload?["values"]?.arrayValue?.count == 1)
             #expect(distinct.payload?["truncated"]?.boolValue == true)
+
+            let enumDistinct = try await invokeInspection(
+                session,
+                id: "ticket-state-enum-distinct",
+                tool: .inspectDistinctValues,
+                arguments: ["table_id": .string(tickets), "column_id": .string(state)]
+            )
+            #expect(enumDistinct.success)
+            let enumPayloadText = String(
+                decoding: try JSONEncoder.schemaToolEncoder.encode(enumDistinct.payload),
+                as: UTF8.self
+            )
+            #expect(enumPayloadText.contains("active"))
+            #expect(enumPayloadText.contains("disabled"))
 
             let openedProfile = try await invokeInspection(
                 session,
