@@ -54,19 +54,22 @@ public struct OpenRouterSchemaToolAgentFailure: Error, LocalizedError, Equatable
     public var openRouterFailure: OpenRouterFailure?
     public var backendMetadata: OpenRouterGenerationMetadata?
     public var schemaToolCalls: [SchemaToolCallTrace]
+    public var inspectionToolCalls: [DatabaseInspectionToolCallTrace]
 
     public init(
         category: Category,
         message: String,
         openRouterFailure: OpenRouterFailure? = nil,
         backendMetadata: OpenRouterGenerationMetadata? = nil,
-        schemaToolCalls: [SchemaToolCallTrace] = []
+        schemaToolCalls: [SchemaToolCallTrace] = [],
+        inspectionToolCalls: [DatabaseInspectionToolCallTrace] = []
     ) {
         self.category = category
         self.message = message
         self.openRouterFailure = openRouterFailure
         self.backendMetadata = backendMetadata
         self.schemaToolCalls = schemaToolCalls
+        self.inspectionToolCalls = inspectionToolCalls
     }
 
     public var errorDescription: String? {
@@ -404,7 +407,8 @@ public final class OpenRouterSchemaToolSQLAgent: SQLGenerator, Sendable {
                             schema: schema,
                             context: context,
                             aggregate: aggregate,
-                            session: session
+                            session: session,
+                            inspectionSession: inspectionSession
                         )
                     case .sql:
                         try await checkStaleSnapshot(expected: initialFingerprint)
@@ -438,7 +442,8 @@ public final class OpenRouterSchemaToolSQLAgent: SQLGenerator, Sendable {
                             schema: schema,
                             context: context,
                             aggregate: aggregate,
-                            session: session
+                            session: session,
+                            inspectionSession: inspectionSession
                         )
                     }
                 }
@@ -508,6 +513,7 @@ public final class OpenRouterSchemaToolSQLAgent: SQLGenerator, Sendable {
             throw await enrichedAgentFailure(
                 failure,
                 session: session,
+                inspectionSession: inspectionSession,
                 aggregate: aggregate,
                 contextModelCallCount: context.modelCallCount
             )
@@ -669,12 +675,15 @@ public final class OpenRouterSchemaToolSQLAgent: SQLGenerator, Sendable {
         schema: DatabaseSchema,
         context: SQLGenerationContext,
         aggregate: OpenRouterAgentMetadataAccumulator,
-        session: SchemaToolSession
+        session: SchemaToolSession,
+        inspectionSession: DatabaseInspectionToolSession?
     ) async throws -> SQLGenerationResult {
         let traces = await session.tracesSnapshot()
+        let inspectionTraces = await inspectionSession?.tracesSnapshot() ?? []
         var metadata = aggregate.metadata(
             contextModelCallCount: context.modelCallCount,
-            schemaToolCalls: traces
+            schemaToolCalls: traces,
+            inspectionToolCalls: inspectionTraces
         )
         metadata.agentSelectionReason = "tools"
         switch terminal.action {
@@ -695,7 +704,8 @@ public final class OpenRouterSchemaToolSQLAgent: SQLGenerator, Sendable {
                     httpAttemptCount: aggregate.httpAttemptCount
                 ),
                 backendMetadata: metadata,
-                schemaToolCalls: traces
+                schemaToolCalls: traces,
+                inspectionToolCalls: inspectionTraces
             )
         case .clarify:
             return SQLGenerationResult(
@@ -713,7 +723,8 @@ public final class OpenRouterSchemaToolSQLAgent: SQLGenerator, Sendable {
                     httpAttemptCount: aggregate.httpAttemptCount
                 ),
                 backendMetadata: metadata,
-                schemaToolCalls: traces
+                schemaToolCalls: traces,
+                inspectionToolCalls: inspectionTraces
             )
         }
     }
@@ -1040,6 +1051,7 @@ public final class OpenRouterSchemaToolSQLAgent: SQLGenerator, Sendable {
     private func enrichedAgentFailure(
         _ failure: OpenRouterSchemaToolAgentFailure,
         session: SchemaToolSession,
+        inspectionSession: DatabaseInspectionToolSession?,
         aggregate: OpenRouterAgentMetadataAccumulator,
         contextModelCallCount: Int
     ) async -> OpenRouterSchemaToolAgentFailure {
@@ -1047,11 +1059,16 @@ public final class OpenRouterSchemaToolSQLAgent: SQLGenerator, Sendable {
         let traces = failure.schemaToolCalls.isEmpty
             ? await session.tracesSnapshot()
             : failure.schemaToolCalls
+        let inspectionTraces = failure.inspectionToolCalls.isEmpty
+            ? await inspectionSession?.tracesSnapshot() ?? []
+            : failure.inspectionToolCalls
         enriched.schemaToolCalls = traces
+        enriched.inspectionToolCalls = inspectionTraces
         if enriched.backendMetadata == nil {
             var metadata = aggregate.metadata(
                 contextModelCallCount: contextModelCallCount,
-                schemaToolCalls: traces
+                schemaToolCalls: traces,
+                inspectionToolCalls: inspectionTraces
             )
             metadata.agentSelectionReason = "tools"
             enriched.backendMetadata = metadata
@@ -1692,7 +1709,8 @@ private struct OpenRouterAgentMetadataAccumulator {
 
     func metadata(
         contextModelCallCount: Int,
-        schemaToolCalls: [SchemaToolCallTrace]
+        schemaToolCalls: [SchemaToolCallTrace],
+        inspectionToolCalls: [DatabaseInspectionToolCallTrace]
     ) -> OpenRouterGenerationMetadata {
         var metadata = OpenRouterGenerationMetadata(
             requestedModelID: requestedModelID,
@@ -1715,6 +1733,7 @@ private struct OpenRouterAgentMetadataAccumulator {
         metadata.agentLogicalTurnCount = logicalTurnCount
         metadata.agentHTTPAttemptCount = httpAttemptCount
         metadata.agentSchemaToolCallCount = schemaToolCalls.count
+        metadata.agentInspectionToolCallCount = inspectionToolCalls.count
         metadata.agentTerminalOutcome = terminalOutcome
         metadata.agentFinishReasons = finishReasons.isEmpty ? nil : finishReasons
         metadata.agentCompletionIDs = completionIDs.isEmpty ? nil : completionIDs

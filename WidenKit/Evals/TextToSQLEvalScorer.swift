@@ -1102,6 +1102,8 @@ private extension TextToSQLEvalMetrics {
         copy.openRouterAgentHTTPAttemptCount = metadata?.agentHTTPAttemptCount
         copy.openRouterSchemaToolCallCount = trace?.schemaToolCalls.nonEmptyCount
             ?? metadata?.agentSchemaToolCallCount
+        copy.openRouterInspectionToolCallCount = trace?.inspectionToolCalls.nonEmptyCount
+            ?? metadata?.agentInspectionToolCallCount
         copy.openRouterAgentTerminalOutcome = metadata?.agentTerminalOutcome
         return copy
     }
@@ -1121,6 +1123,12 @@ private extension TextToSQLEvalMetrics {
 }
 
 private extension Array where Element == SchemaToolCallTrace {
+    var nonEmptyCount: Int? {
+        isEmpty ? nil : count
+    }
+}
+
+private extension Array where Element == DatabaseInspectionToolCallTrace {
     var nonEmptyCount: Int? {
         isEmpty ? nil : count
     }

@@ -150,17 +150,20 @@ public struct TextToSQLTrace: Codable, Equatable, Sendable {
     public var modelCalls: Int
     public var elapsedMs: Int
     public var schemaToolCalls: [SchemaToolCallTrace]
+    public var inspectionToolCalls: [DatabaseInspectionToolCallTrace]
 
     public init(
         stages: [TextToSQLStageResult],
         modelCalls: Int,
         elapsedMs: Int,
-        schemaToolCalls: [SchemaToolCallTrace] = []
+        schemaToolCalls: [SchemaToolCallTrace] = [],
+        inspectionToolCalls: [DatabaseInspectionToolCallTrace] = []
     ) {
         self.stages = stages
         self.modelCalls = modelCalls
         self.elapsedMs = elapsedMs
         self.schemaToolCalls = schemaToolCalls
+        self.inspectionToolCalls = inspectionToolCalls
     }
 
     private enum CodingKeys: String, CodingKey {
@@ -168,6 +171,7 @@ public struct TextToSQLTrace: Codable, Equatable, Sendable {
         case modelCalls
         case elapsedMs
         case schemaToolCalls
+        case inspectionToolCalls
     }
 
     public init(from decoder: any Decoder) throws {
@@ -178,6 +182,10 @@ public struct TextToSQLTrace: Codable, Equatable, Sendable {
         schemaToolCalls = try container.decodeIfPresent(
             [SchemaToolCallTrace].self,
             forKey: .schemaToolCalls
+        ) ?? []
+        inspectionToolCalls = try container.decodeIfPresent(
+            [DatabaseInspectionToolCallTrace].self,
+            forKey: .inspectionToolCalls
         ) ?? []
     }
 }
@@ -291,6 +299,7 @@ public struct TextToSQLPipeline: TextToSQLRunning {
                 config: request.config
             )
             trace.mergeSchemaToolCalls(generated.schemaToolCalls)
+            trace.mergeInspectionToolCalls(generated.inspectionToolCalls)
             trace.append(
                 .modelGeneration,
                 outcome: .success,
@@ -307,6 +316,7 @@ public struct TextToSQLPipeline: TextToSQLRunning {
             throw CancellationError()
         } catch {
             trace.mergeSchemaToolCalls(schemaToolCalls(from: error))
+            trace.mergeInspectionToolCalls(inspectionToolCalls(from: error))
             let failure = generationFailure(error, stage: .modelGeneration)
             trace.append(
                 .modelGeneration,
@@ -740,6 +750,7 @@ public struct TextToSQLPipeline: TextToSQLRunning {
                 config: request.config
             )
             trace.mergeSchemaToolCalls(generated.schemaToolCalls)
+            trace.mergeInspectionToolCalls(generated.inspectionToolCalls)
             generation = GeneratedSQLPostprocessor.enriched(
                 generated,
                 question: repairQuestionContext.question,
@@ -760,6 +771,7 @@ public struct TextToSQLPipeline: TextToSQLRunning {
             throw CancellationError()
         } catch {
             trace.mergeSchemaToolCalls(schemaToolCalls(from: error))
+            trace.mergeInspectionToolCalls(inspectionToolCalls(from: error))
             let failure = generationFailure(error, stage: .postgresVerificationRepair)
             trace.append(
                 .postgresVerificationRepair,
@@ -980,6 +992,7 @@ public struct TextToSQLPipeline: TextToSQLRunning {
                     config: request.config
                 )
                 trace.mergeSchemaToolCalls(generated.schemaToolCalls)
+                trace.mergeInspectionToolCalls(generated.inspectionToolCalls)
                 generation = GeneratedSQLPostprocessor.enriched(
                     generated,
                     question: repairQuestionContext.question,
@@ -999,6 +1012,7 @@ public struct TextToSQLPipeline: TextToSQLRunning {
                 throw CancellationError()
             } catch {
                 trace.mergeSchemaToolCalls(schemaToolCalls(from: error))
+                trace.mergeInspectionToolCalls(inspectionToolCalls(from: error))
                 let failure = generationFailure(error, stage: .validationRepair)
                 await record(
                     TextToSQLPipelineEvent(
@@ -1408,7 +1422,8 @@ public struct TextToSQLPipeline: TextToSQLRunning {
                     trace.stages.compactMap(\.modelCallCount).max() ?? 0
                 ),
                 elapsedMs: elapsedMilliseconds(since: started),
-                schemaToolCalls: trace.schemaToolCalls
+                schemaToolCalls: trace.schemaToolCalls,
+                inspectionToolCalls: trace.inspectionToolCalls
             ),
             events: events
         )
@@ -1433,6 +1448,7 @@ private struct TraceBuilder {
     private let schemaFingerprint: String
     var stages: [TextToSQLStageResult] = []
     var schemaToolCalls: [SchemaToolCallTrace] = []
+    var inspectionToolCalls: [DatabaseInspectionToolCallTrace] = []
 
     init(schema: DatabaseSchema) {
         self.schemaFingerprint = Self.fingerprint(schema)
@@ -1475,6 +1491,11 @@ private struct TraceBuilder {
     mutating func mergeSchemaToolCalls(_ traces: [SchemaToolCallTrace]) {
         guard !traces.isEmpty else { return }
         schemaToolCalls.append(contentsOf: traces)
+    }
+
+    mutating func mergeInspectionToolCalls(_ traces: [DatabaseInspectionToolCallTrace]) {
+        guard !traces.isEmpty else { return }
+        inspectionToolCalls.append(contentsOf: traces)
     }
 
     mutating func appendVerification(
@@ -1522,6 +1543,16 @@ private func schemaToolCalls(from error: any Error) -> [SchemaToolCallTrace] {
     }
     if case .schemaToolAgent(let failure)? = SQLGenerationFailure.typed(error) {
         return failure.schemaToolCalls
+    }
+    return []
+}
+
+private func inspectionToolCalls(from error: any Error) -> [DatabaseInspectionToolCallTrace] {
+    if let failure = error as? OpenRouterSchemaToolAgentFailure {
+        return failure.inspectionToolCalls
+    }
+    if case .schemaToolAgent(let failure)? = SQLGenerationFailure.typed(error) {
+        return failure.inspectionToolCalls
     }
     return []
 }

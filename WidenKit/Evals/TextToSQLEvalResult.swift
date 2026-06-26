@@ -57,6 +57,7 @@ public struct TextToSQLEvalMetrics: Codable, Equatable, Sendable {
     public var openRouterAgentLogicalTurnCount: Int?
     public var openRouterAgentHTTPAttemptCount: Int?
     public var openRouterSchemaToolCallCount: Int?
+    public var openRouterInspectionToolCallCount: Int?
     public var openRouterAgentTerminalOutcome: String?
     public var postgresVerificationStatus: SQLVerificationStatus?
     public var postgresVerificationSQLState: String?
@@ -103,6 +104,7 @@ public struct TextToSQLEvalMetrics: Codable, Equatable, Sendable {
         openRouterAgentLogicalTurnCount: Int? = nil,
         openRouterAgentHTTPAttemptCount: Int? = nil,
         openRouterSchemaToolCallCount: Int? = nil,
+        openRouterInspectionToolCallCount: Int? = nil,
         openRouterAgentTerminalOutcome: String? = nil,
         postgresVerificationStatus: SQLVerificationStatus? = nil,
         postgresVerificationSQLState: String? = nil,
@@ -148,6 +150,7 @@ public struct TextToSQLEvalMetrics: Codable, Equatable, Sendable {
         self.openRouterAgentLogicalTurnCount = openRouterAgentLogicalTurnCount
         self.openRouterAgentHTTPAttemptCount = openRouterAgentHTTPAttemptCount
         self.openRouterSchemaToolCallCount = openRouterSchemaToolCallCount
+        self.openRouterInspectionToolCallCount = openRouterInspectionToolCallCount
         self.openRouterAgentTerminalOutcome = openRouterAgentTerminalOutcome
         self.postgresVerificationStatus = postgresVerificationStatus
         self.postgresVerificationSQLState = postgresVerificationSQLState

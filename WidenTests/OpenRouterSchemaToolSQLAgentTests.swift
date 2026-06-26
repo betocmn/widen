@@ -344,6 +344,13 @@ struct OpenRouterSchemaToolSQLAgentTests {
         #expect(result.needsClarification)
         #expect(database.relationSizeCallCount == 1)
         #expect(result.schemaToolCalls.map(\.toolName) == ["search_schema"])
+        #expect(result.inspectionToolCalls.map(\.toolName) == [
+            DatabaseInspectionToolName.inspectRelationSize.rawValue,
+        ])
+        #expect(result.inspectionToolCalls.first?.callID == "size-1")
+        #expect(result.inspectionToolCalls.first?.tableID != nil)
+        #expect(result.inspectionToolCalls.first?.cloudShareable == true)
+        #expect(result.backendMetadata?.agentInspectionToolCallCount == 1)
     }
 
     @Test func terminalSQLBeforeSearchReceivesCorrection() async throws {

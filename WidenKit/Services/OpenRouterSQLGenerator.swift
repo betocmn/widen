@@ -106,6 +106,7 @@ public struct OpenRouterGenerationMetadata: Codable, Equatable, Sendable {
     public var agentLogicalTurnCount: Int?
     public var agentHTTPAttemptCount: Int?
     public var agentSchemaToolCallCount: Int?
+    public var agentInspectionToolCallCount: Int?
     public var agentTerminalOutcome: String?
     public var agentFinishReasons: [String]?
     public var agentCompletionIDs: [String]?
