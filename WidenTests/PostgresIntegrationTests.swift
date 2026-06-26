@@ -733,7 +733,7 @@ struct QueryExecutionIntegrationTests {
         }
     }
 
-    @Test func databaseInspectionReadsBoundedProfilesDistinctValuesAndDates() async throws {
+    @Test func databaseInspectionReadsBoundedProfilesDistinctValuesDatesAndTimes() async throws {
         try await withDatabase { config, service in
             try await runStatements(
                 [
@@ -745,16 +745,18 @@ struct QueryExecutionIntegrationTests {
                       state ticket_state NOT NULL,
                       opened_on DATE NOT NULL,
                       resolved_on DATE,
+                      starts_at TIME NOT NULL,
+                      reminder_at TIME WITH TIME ZONE NOT NULL,
                       email TEXT,
                       note TEXT
                     )
                     """,
                     """
-                    INSERT INTO tickets (status, state, opened_on, resolved_on, email, note) VALUES
-                    ('active', 'active', DATE '2026-01-01', NULL, 'alice@example.com', 'short'),
-                    ('active', 'active', DATE '2026-01-05', DATE '2026-01-07', 'bob@example.com', 'short'),
-                    ('disabled', 'disabled', DATE '2026-01-15', NULL, 'carla@example.com', 'short'),
-                    ('active', 'active', DATE '2026-01-20', DATE '2026-01-23', 'drew@example.com', 'short')
+                    INSERT INTO tickets (status, state, opened_on, resolved_on, starts_at, reminder_at, email, note) VALUES
+                    ('active', 'active', DATE '2026-01-01', NULL, TIME '09:30:00', TIME WITH TIME ZONE '09:30:00+02', 'alice@example.com', 'short'),
+                    ('active', 'active', DATE '2026-01-05', DATE '2026-01-07', TIME '09:30:00', TIME WITH TIME ZONE '09:30:00+02', 'bob@example.com', 'short'),
+                    ('disabled', 'disabled', DATE '2026-01-15', NULL, TIME '14:45:30.123456', TIME WITH TIME ZONE '14:45:30.123456-07', 'carla@example.com', 'short'),
+                    ('active', 'active', DATE '2026-01-20', DATE '2026-01-23', TIME '16:00:00', TIME WITH TIME ZONE '16:00:00+00', 'drew@example.com', 'short')
                     """,
                     "ANALYZE tickets",
                 ],
@@ -788,6 +790,14 @@ struct QueryExecutionIntegrationTests {
             let resolvedOn = try await inspectionHandle(
                 session,
                 .column(schema: "public", table: "tickets", name: "resolved_on")
+            )
+            let startsAt = try await inspectionHandle(
+                session,
+                .column(schema: "public", table: "tickets", name: "starts_at")
+            )
+            let reminderAt = try await inspectionHandle(
+                session,
+                .column(schema: "public", table: "tickets", name: "reminder_at")
             )
             let email = try await inspectionHandle(
                 session,
@@ -843,6 +853,30 @@ struct QueryExecutionIntegrationTests {
             #expect(enumPayloadText.contains("active"))
             #expect(enumPayloadText.contains("disabled"))
 
+            let timeDistinct = try await invokeInspection(
+                session,
+                id: "ticket-starts-at-distinct",
+                tool: .inspectDistinctValues,
+                arguments: ["table_id": .string(tickets), "column_id": .string(startsAt), "limit": 1]
+            )
+            #expect(timeDistinct.success)
+            let timeValue = try #require(timeDistinct.payload?["values"]?.arrayValue?.first?["value"])
+            #expect(timeValue["type"]?.stringValue == "time")
+            #expect(timeValue["value"]?.stringValue == "09:30:00")
+
+            let timeWithZoneDistinct = try await invokeInspection(
+                session,
+                id: "ticket-reminder-at-distinct",
+                tool: .inspectDistinctValues,
+                arguments: ["table_id": .string(tickets), "column_id": .string(reminderAt), "limit": 1]
+            )
+            #expect(timeWithZoneDistinct.success)
+            let timeWithZoneValue = try #require(
+                timeWithZoneDistinct.payload?["values"]?.arrayValue?.first?["value"]
+            )
+            #expect(timeWithZoneValue["type"]?.stringValue == "time_tz")
+            #expect(timeWithZoneValue["value"]?.stringValue?.contains("09:30:00") == true)
+
             let openedProfile = try await invokeInspection(
                 session,
                 id: "ticket-opened-profile",
@@ -895,6 +929,58 @@ struct QueryExecutionIntegrationTests {
             let trace = try #require(await session.tracesSnapshot().last)
             #expect(trace.redactionCount == 1)
             #expect(trace.valueCount == 0)
+        }
+    }
+
+    @Test func databaseInspectionSampleRowsMapLongStableIDsFromShortAliases() async throws {
+        try await withDatabase { config, service in
+            let tableName = "sample_rows_with_very_long_identifier_names"
+            let columnName = "column_name_with_more_than_sixty_three_alias_bytes"
+            try await runStatements(
+                [
+                    """
+                    CREATE TABLE "\(tableName)" (
+                      "\(columnName)" TEXT NOT NULL
+                    )
+                    """,
+                    """
+                    INSERT INTO "\(tableName)" ("\(columnName)") VALUES ('visible')
+                    """,
+                    "ANALYZE \"\(tableName)\"",
+                ],
+                on: config.database
+            )
+
+            let schema = try await SchemaIntrospectionService().loadSchema(using: service)
+            let policy = DatabaseInspectionPolicy.localDataInspection(
+                allowFullTableScans: true,
+                allowSampleRows: true
+            )
+            let session = try makeInspectionSession(schema: schema, policy: policy, service: service)
+            let table = try await inspectionHandle(
+                session,
+                .table(schema: "public", name: tableName)
+            )
+            let column = try await inspectionHandle(
+                session,
+                .column(schema: "public", table: tableName, name: columnName)
+            )
+
+            let result = try await invokeInspection(
+                session,
+                id: "long-alias-sample",
+                tool: .inspectSampleRows,
+                arguments: [
+                    "table_id": .string(table),
+                    "column_ids": .array([.string(column)]),
+                    "limit": 1,
+                ]
+            )
+
+            #expect(result.success)
+            let value = try #require(result.payload?["rows"]?.arrayValue?.first?[column])
+            #expect(value["type"]?.stringValue == "text")
+            #expect(value["value"]?.stringValue == "visible")
         }
     }
 
@@ -984,7 +1070,7 @@ struct QueryExecutionIntegrationTests {
                 allowFullTableScans: true,
                 allowSampleRows: true
             )
-            policy.statementTimeoutMilliseconds = 100
+            policy.statementTimeoutMilliseconds = 0
             let session = try makeInspectionSession(schema: schema, policy: policy, service: service)
             let view = try await inspectionHandle(
                 session,

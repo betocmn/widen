@@ -59,7 +59,7 @@ public enum DatabaseInspectionToolRegistry {
                         properties: [
                             "table_id": stringSchema(),
                             "column_id": stringSchema(),
-                            "limit": integerSchema(minimum: 1, maximum: policy.maximumDistinctValues),
+                            "limit": integerSchema(minimum: 1, maximum: policy.effectiveMaximumDistinctValues),
                         ]
                     )
                 )
@@ -78,9 +78,9 @@ public enum DatabaseInspectionToolRegistry {
                             "column_ids": arraySchema(
                                 items: stringSchema(),
                                 minItems: 1,
-                                maxItems: policy.maximumSampleColumns
+                                maxItems: policy.effectiveMaximumSampleColumns
                             ),
-                            "limit": integerSchema(minimum: 1, maximum: policy.maximumReturnedRows),
+                            "limit": integerSchema(minimum: 1, maximum: policy.effectiveMaximumReturnedRows),
                         ]
                     )
                 )
@@ -366,15 +366,15 @@ public struct DatabaseInspectionToolExecutor: Sendable {
         if policy.allowDistinctValuesInProfiles,
             includeDistinct,
             let distinctCount = aggregate.distinctCount,
-            distinctCount <= Int64(policy.lowCardinalityDistinctLimit)
+            distinctCount <= Int64(policy.effectiveLowCardinalityDistinctLimit)
         {
             let values = try await database.inspectDistinctValues(
                 table: resolved.table,
                 column: resolved.column,
-                limit: policy.maximumDistinctValues,
+                limit: policy.effectiveMaximumDistinctValues,
                 policy: policy
             )
-            let kept = Array(values.prefix(policy.maximumDistinctValues))
+            let kept = Array(values.prefix(policy.effectiveMaximumDistinctValues))
             truncated = values.count > kept.count
             valueCount += kept.filter { $0.value.containsDataValue }.count
             payload["distinct_values"] = .array(kept.map(distinctValueJSON))
@@ -418,8 +418,8 @@ public struct DatabaseInspectionToolExecutor: Sendable {
         let requestedLimit = try optionalInt(
             arguments,
             key: "limit",
-            defaultValue: policy.maximumDistinctValues,
-            range: 1...policy.maximumDistinctValues
+            defaultValue: policy.effectiveMaximumDistinctValues,
+            range: 1...policy.effectiveMaximumDistinctValues
         )
         guard isSafeDistinctScalar(resolved.column) else {
             throw DatabaseInspectionError(
@@ -455,7 +455,7 @@ public struct DatabaseInspectionToolExecutor: Sendable {
             policy: policy
         )
         guard let distinctCount = aggregate.distinctCount,
-            distinctCount <= Int64(policy.lowCardinalityDistinctLimit)
+            distinctCount <= Int64(policy.effectiveLowCardinalityDistinctLimit)
         else {
             throw DatabaseInspectionError.policy(
                 "Column is not known to be low-cardinality.",
@@ -519,9 +519,9 @@ public struct DatabaseInspectionToolExecutor: Sendable {
         guard let values = arguments["column_ids"]?.arrayValue else {
             throw missingOrTyped(arguments, key: "column_ids", expected: "array")
         }
-        guard (1...policy.maximumSampleColumns).contains(values.count) else {
+        guard (1...policy.effectiveMaximumSampleColumns).contains(values.count) else {
             throw DatabaseInspectionError.range(
-                "column_ids must contain 1...\(policy.maximumSampleColumns) handles.",
+                "column_ids must contain 1...\(policy.effectiveMaximumSampleColumns) handles.",
                 argument: "column_ids"
             )
         }
@@ -552,8 +552,8 @@ public struct DatabaseInspectionToolExecutor: Sendable {
         let limit = try optionalInt(
             arguments,
             key: "limit",
-            defaultValue: min(5, policy.maximumReturnedRows),
-            range: 1...policy.maximumReturnedRows
+            defaultValue: min(5, policy.effectiveMaximumReturnedRows),
+            range: 1...policy.effectiveMaximumReturnedRows
         )
         let sampleRows = try await database.inspectSampleRows(
             table: table.table,
@@ -841,7 +841,7 @@ public actor DatabaseInspectionToolSession {
     }
 
     private var remainingOutputBytes: Int {
-        max(0, policy.maximumSessionResultBytes - cumulativeOutputBytes)
+        max(0, policy.effectiveMaximumSessionResultBytes - cumulativeOutputBytes)
     }
 
     private func terminalSessionError() -> DatabaseInspectionError {
@@ -862,7 +862,7 @@ public actor DatabaseInspectionToolSession {
     ) throws -> DatabaseInspectionResult {
         var result = finalizedForRecord(result: input, started: started)
         var isTerminal = terminal
-        let effectiveBudget = min(policy.maximumResultBytes, remainingOutputBytes)
+        let effectiveBudget = min(policy.effectiveMaximumResultBytes, remainingOutputBytes)
         if result.outputByteCount > effectiveBudget {
             result = finalizedForRecord(
                 result:

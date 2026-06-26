@@ -96,6 +96,48 @@ struct DatabaseInspectionToolTests {
         #expect(sample.payload?["rows"]?.arrayValue?.count == 1)
     }
 
+    @Test func policyCapsAreReclampedAfterMutation() async throws {
+        var policy = DatabaseInspectionPolicy.localDataInspection(
+            allowFullTableScans: true,
+            allowSampleRows: true
+        )
+        policy.maximumReturnedRows = 1_000
+        policy.maximumDistinctValues = 1_000
+        policy.maximumSampleColumns = 1_000
+
+        let definitions = Dictionary(
+            uniqueKeysWithValues: DatabaseInspectionToolRegistry.definitions(policy: policy).map { ($0.name, $0) }
+        )
+        let distinctParameters = definitions[DatabaseInspectionToolName.inspectDistinctValues.rawValue]?.parameters
+        let sampleParameters = definitions[DatabaseInspectionToolName.inspectSampleRows.rawValue]?.parameters
+        #expect(distinctParameters?["properties"]?["limit"]?["maximum"]?.intValue == 20)
+        #expect(sampleParameters?["properties"]?["column_ids"]?["maxItems"]?.intValue == 8)
+        #expect(sampleParameters?["properties"]?["limit"]?["maximum"]?.intValue == 20)
+
+        let database = FakeInspectionDatabase()
+        let session = try makeSession(policy: policy, database: database)
+        let users = try await requireHandle(session, .table(schema: "public", name: "users"))
+        let status = try await requireHandle(session, .column(schema: "public", table: "users", name: "status"))
+
+        let distinct = try await invoke(
+            session,
+            id: "wide-distinct-limit",
+            tool: .inspectDistinctValues,
+            arguments: ["table_id": .string(users), "column_id": .string(status), "limit": 1_000]
+        )
+        #expect(distinct.error?.code == .argumentOutOfRange)
+        #expect(database.distinctValuesCallCount == 0)
+
+        let sample = try await invoke(
+            session,
+            id: "wide-sample-limit",
+            tool: .inspectSampleRows,
+            arguments: ["table_id": .string(users), "column_ids": [.string(status)], "limit": 1_000]
+        )
+        #expect(sample.error?.code == .argumentOutOfRange)
+        #expect(database.sampleRowsCallCount == 0)
+    }
+
     @Test func identifierQuotingEscapesEmbeddedQuotes() {
         #expect(PostgresService.quotedIdentifier(#"Sales "Data""#) == #""Sales ""Data""""#)
     }
@@ -543,6 +585,16 @@ struct DatabaseInspectionToolTests {
                 "non_finite_float": nonFiniteFloat,
             ])
         )
+    }
+
+    @Test func inspectedTimeValuesRemainTypedInJSON() {
+        let time = DatabaseInspectionValue.time("09:30:00").jsonValue
+        #expect(time["type"]?.stringValue == "time")
+        #expect(time["value"]?.stringValue == "09:30:00")
+
+        let timeWithZone = DatabaseInspectionValue.timeWithTimeZone("09:30:00+02").jsonValue
+        #expect(timeWithZone["type"]?.stringValue == "time_tz")
+        #expect(timeWithZone["value"]?.stringValue == "09:30:00+02")
     }
 
     @Test func traceOutputBytesMatchFinalizedReturnedResult() async throws {

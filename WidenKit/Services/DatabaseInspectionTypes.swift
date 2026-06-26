@@ -209,17 +209,19 @@ public struct DatabaseInspectionPolicy: Codable, Equatable, Sendable {
         self.allowDistinctValuesInProfiles = allowDistinctValuesInProfiles
         self.audience = audience
         self.maximumCallCount = maximumCallCount
-        self.maximumResultBytes = min(maximumResultBytes, 64_000)
-        self.maximumSessionResultBytes = min(maximumSessionResultBytes, 128_000)
-        self.maximumReturnedRows = min(max(maximumReturnedRows, 1), 20)
-        self.maximumDistinctValues = min(max(maximumDistinctValues, 1), 20)
-        self.maximumSampleColumns = min(max(maximumSampleColumns, 1), 8)
-        self.maximumTextCharacters = min(max(maximumTextCharacters, 1), 1_000)
-        self.maximumJSONCharacters = min(max(maximumJSONCharacters, 1), 2_000)
-        self.lowCardinalityDistinctLimit = min(max(lowCardinalityDistinctLimit, 1), 100)
-        self.statementTimeoutMilliseconds = min(max(statementTimeoutMilliseconds, 100), 10_000)
-        self.lockTimeoutMilliseconds = min(max(lockTimeoutMilliseconds, 50), 5_000)
-        self.idleTransactionTimeoutMilliseconds = min(max(idleTransactionTimeoutMilliseconds, 100), 15_000)
+        self.maximumResultBytes = Self.clampedMaximumResultBytes(maximumResultBytes)
+        self.maximumSessionResultBytes = Self.clampedMaximumSessionResultBytes(maximumSessionResultBytes)
+        self.maximumReturnedRows = Self.clampedMaximumReturnedRows(maximumReturnedRows)
+        self.maximumDistinctValues = Self.clampedMaximumDistinctValues(maximumDistinctValues)
+        self.maximumSampleColumns = Self.clampedMaximumSampleColumns(maximumSampleColumns)
+        self.maximumTextCharacters = Self.clampedMaximumTextCharacters(maximumTextCharacters)
+        self.maximumJSONCharacters = Self.clampedMaximumJSONCharacters(maximumJSONCharacters)
+        self.lowCardinalityDistinctLimit = Self.clampedLowCardinalityDistinctLimit(lowCardinalityDistinctLimit)
+        self.statementTimeoutMilliseconds = Self.clampedStatementTimeoutMilliseconds(statementTimeoutMilliseconds)
+        self.lockTimeoutMilliseconds = Self.clampedLockTimeoutMilliseconds(lockTimeoutMilliseconds)
+        self.idleTransactionTimeoutMilliseconds = Self.clampedIdleTransactionTimeoutMilliseconds(
+            idleTransactionTimeoutMilliseconds
+        )
         self.maximumArgumentsJSONBytes = maximumArgumentsJSONBytes
         self.maximumCallIDBytes = maximumCallIDBytes
         self.maximumToolNameBytes = maximumToolNameBytes
@@ -303,6 +305,94 @@ public struct DatabaseInspectionPolicy: Codable, Equatable, Sendable {
             searchable.contains(fragment.lowercased())
         }
     }
+
+    var effectiveMaximumResultBytes: Int {
+        Self.clampedMaximumResultBytes(maximumResultBytes)
+    }
+
+    var effectiveMaximumSessionResultBytes: Int {
+        Self.clampedMaximumSessionResultBytes(maximumSessionResultBytes)
+    }
+
+    var effectiveMaximumReturnedRows: Int {
+        Self.clampedMaximumReturnedRows(maximumReturnedRows)
+    }
+
+    var effectiveMaximumDistinctValues: Int {
+        Self.clampedMaximumDistinctValues(maximumDistinctValues)
+    }
+
+    var effectiveMaximumSampleColumns: Int {
+        Self.clampedMaximumSampleColumns(maximumSampleColumns)
+    }
+
+    var effectiveMaximumTextCharacters: Int {
+        Self.clampedMaximumTextCharacters(maximumTextCharacters)
+    }
+
+    var effectiveMaximumJSONCharacters: Int {
+        Self.clampedMaximumJSONCharacters(maximumJSONCharacters)
+    }
+
+    var effectiveLowCardinalityDistinctLimit: Int {
+        Self.clampedLowCardinalityDistinctLimit(lowCardinalityDistinctLimit)
+    }
+
+    var effectiveStatementTimeoutMilliseconds: Int {
+        Self.clampedStatementTimeoutMilliseconds(statementTimeoutMilliseconds)
+    }
+
+    var effectiveLockTimeoutMilliseconds: Int {
+        Self.clampedLockTimeoutMilliseconds(lockTimeoutMilliseconds)
+    }
+
+    var effectiveIdleTransactionTimeoutMilliseconds: Int {
+        Self.clampedIdleTransactionTimeoutMilliseconds(idleTransactionTimeoutMilliseconds)
+    }
+
+    private static func clampedMaximumResultBytes(_ value: Int) -> Int {
+        min(max(value, 1), 64_000)
+    }
+
+    private static func clampedMaximumSessionResultBytes(_ value: Int) -> Int {
+        min(max(value, 1), 128_000)
+    }
+
+    private static func clampedMaximumReturnedRows(_ value: Int) -> Int {
+        min(max(value, 1), 20)
+    }
+
+    private static func clampedMaximumDistinctValues(_ value: Int) -> Int {
+        min(max(value, 1), 20)
+    }
+
+    private static func clampedMaximumSampleColumns(_ value: Int) -> Int {
+        min(max(value, 1), 8)
+    }
+
+    private static func clampedMaximumTextCharacters(_ value: Int) -> Int {
+        min(max(value, 1), 1_000)
+    }
+
+    private static func clampedMaximumJSONCharacters(_ value: Int) -> Int {
+        min(max(value, 1), 2_000)
+    }
+
+    private static func clampedLowCardinalityDistinctLimit(_ value: Int) -> Int {
+        min(max(value, 1), 100)
+    }
+
+    private static func clampedStatementTimeoutMilliseconds(_ value: Int) -> Int {
+        min(max(value, 100), 10_000)
+    }
+
+    private static func clampedLockTimeoutMilliseconds(_ value: Int) -> Int {
+        min(max(value, 50), 5_000)
+    }
+
+    private static func clampedIdleTransactionTimeoutMilliseconds(_ value: Int) -> Int {
+        min(max(value, 100), 15_000)
+    }
 }
 
 public enum DatabaseInspectionValueKind: String, Codable, Equatable, Sendable {
@@ -313,6 +403,8 @@ public enum DatabaseInspectionValueKind: String, Codable, Equatable, Sendable {
     case float
     case uuid
     case date
+    case time
+    case timeWithTimeZone = "time_tz"
     case timestamp
     case timestampWithTimeZone = "timestamp_tz"
     case text
@@ -375,6 +467,14 @@ public struct DatabaseInspectionValue: Codable, Equatable, Sendable {
         DatabaseInspectionValue(kind: .date, stringValue: value)
     }
 
+    public static func time(_ value: String) -> Self {
+        DatabaseInspectionValue(kind: .time, stringValue: value)
+    }
+
+    public static func timeWithTimeZone(_ value: String) -> Self {
+        DatabaseInspectionValue(kind: .timeWithTimeZone, stringValue: value)
+    }
+
     public static func timestamp(_ value: String) -> Self {
         DatabaseInspectionValue(kind: .timestamp, stringValue: value)
     }
@@ -427,7 +527,7 @@ public struct DatabaseInspectionValue: Codable, Equatable, Sendable {
                     ? .number(floatValue)
                     : .string(String(describing: floatValue))
             }
-        case .decimal, .uuid, .date, .timestamp, .timestampWithTimeZone, .text, .json,
+        case .decimal, .uuid, .date, .time, .timeWithTimeZone, .timestamp, .timestampWithTimeZone, .text, .json,
             .unsupportedType:
             if let stringValue {
                 object["value"] = .string(stringValue)

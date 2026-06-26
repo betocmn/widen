@@ -403,9 +403,10 @@ public actor PostgresService: DatabaseInspectionQuerying {
     ) async throws -> [DatabaseDistinctValueRow] {
         guard let client else { throw AppError.notConnected }
         let logger = logger
-        let boundedLimit = min(max(limit, 0), policy.maximumDistinctValues) + 1
+        let boundedLimit = min(max(limit, 0), policy.effectiveMaximumDistinctValues) + 1
         let qualifiedTable = Self.qualifiedIdentifier(schema: table.schema, table: table.name)
         let columnSQL = Self.inspectionColumnExpression(for: column)
+        let preferredKind = Self.inspectionValueKind(for: column)
         let sql = """
             SELECT \(columnSQL) AS value, count(*)::bigint AS value_count
             FROM \(qualifiedTable)
@@ -424,7 +425,11 @@ public actor PostgresService: DatabaseInspectionQuerying {
                         let random = row.makeRandomAccess()
                         rows.append(
                             DatabaseDistinctValueRow(
-                                value: Self.inspectionValue(for: random["value"], policy: policy),
+                                value: Self.inspectionValue(
+                                    for: random["value"],
+                                    policy: policy,
+                                    preferredKind: preferredKind
+                                ),
                                 count: try? random["value_count"].decode(Int64.self)
                             )
                         )
@@ -451,20 +456,30 @@ public actor PostgresService: DatabaseInspectionQuerying {
     ) async throws -> [DatabaseSampleRow] {
         guard let client else { throw AppError.notConnected }
         let logger = logger
-        let boundedLimit = min(max(limit, 0), policy.maximumReturnedRows) + 1
+        let boundedLimit = min(max(limit, 0), policy.effectiveMaximumReturnedRows) + 1
         let qualifiedTable = Self.qualifiedIdentifier(schema: table.schema, table: table.name)
-        let selectedColumns = columns.prefix(policy.maximumSampleColumns)
+        let selectedColumns = Array(columns.prefix(policy.effectiveMaximumSampleColumns))
+        let selectedColumnReferences = selectedColumns.enumerated().map { offset, column in
+            let stableID = SchemaObjectID.column(
+                schema: column.tableSchema,
+                table: column.tableName,
+                name: column.name
+            ).stableString
+            return SampleColumnReference(
+                stableID: stableID,
+                alias: "__widen_sample_\(offset)",
+                preferredKind: Self.inspectionValueKind(for: column)
+            )
+        }
+        let sampleColumnByAlias = Dictionary(
+            uniqueKeysWithValues: selectedColumnReferences.map { ($0.alias, $0) }
+        )
         let selections: [String]
-        if selectedColumns.isEmpty {
+        if selectedColumnReferences.isEmpty {
             selections = ["1 AS \(Self.quotedIdentifier("__widen_sample_marker"))"]
         } else {
-            selections = selectedColumns.map { column in
-                let stableID = SchemaObjectID.column(
-                    schema: column.tableSchema,
-                    table: column.tableName,
-                    name: column.name
-                ).stableString
-                return "\(Self.inspectionColumnExpression(for: column)) AS \(Self.quotedIdentifier(stableID))"
+            selections = zip(selectedColumns, selectedColumnReferences).map { column, reference in
+                "\(Self.inspectionColumnExpression(for: column)) AS \(Self.quotedIdentifier(reference.alias))"
             }
         }
         let sql = """
@@ -482,7 +497,12 @@ public actor PostgresService: DatabaseInspectionQuerying {
                     for try await row in stream {
                         var values: [String: DatabaseInspectionValue] = [:]
                         for cell in row {
-                            values[cell.columnName] = Self.inspectionValue(for: cell, policy: policy)
+                            guard let reference = sampleColumnByAlias[cell.columnName] else { continue }
+                            values[reference.stableID] = Self.inspectionValue(
+                                for: cell,
+                                policy: policy,
+                                preferredKind: reference.preferredKind
+                            )
                         }
                         sampleRows.append(DatabaseSampleRow(valuesByColumnStableID: values))
                     }
@@ -570,6 +590,12 @@ public actor PostgresService: DatabaseInspectionQuerying {
 
     // MARK: - Configuration
 
+    private struct SampleColumnReference: Sendable {
+        var stableID: String
+        var alias: String
+        var preferredKind: DatabaseInspectionValueKind?
+    }
+
     private static let returningRowNumberColumn = "__widen_returning_row_number"
     private static let returningAffectedRowsColumn = "__widen_affected_rows"
 
@@ -608,16 +634,16 @@ public actor PostgresService: DatabaseInspectionQuerying {
         policy: DatabaseInspectionPolicy
     ) async throws {
         try await connection.query(
-            PostgresQuery(unsafeSQL: "SET LOCAL statement_timeout = '\(policy.statementTimeoutMilliseconds)ms'"),
+            PostgresQuery(unsafeSQL: "SET LOCAL statement_timeout = '\(policy.effectiveStatementTimeoutMilliseconds)ms'"),
             logger: logger
         )
         try await connection.query(
-            PostgresQuery(unsafeSQL: "SET LOCAL lock_timeout = '\(policy.lockTimeoutMilliseconds)ms'"),
+            PostgresQuery(unsafeSQL: "SET LOCAL lock_timeout = '\(policy.effectiveLockTimeoutMilliseconds)ms'"),
             logger: logger
         )
         try await connection.query(
             PostgresQuery(
-                unsafeSQL: "SET LOCAL idle_in_transaction_session_timeout = '\(policy.idleTransactionTimeoutMilliseconds)ms'"
+                unsafeSQL: "SET LOCAL idle_in_transaction_session_timeout = '\(policy.effectiveIdleTransactionTimeoutMilliseconds)ms'"
             ),
             logger: logger
         )
@@ -645,6 +671,18 @@ public actor PostgresService: DatabaseInspectionQuerying {
 
     private static func castsColumnToTextForInspection(_ column: ColumnInfo) -> Bool {
         column.valueConstraints?.contains { $0.kind == .enumValues } == true
+            || inspectionValueKind(for: column) != nil
+    }
+
+    private static func inspectionValueKind(for column: ColumnInfo) -> DatabaseInspectionValueKind? {
+        switch column.dataType.lowercased() {
+        case "time", "time without time zone":
+            .time
+        case "time with time zone", "timetz":
+            .timeWithTimeZone
+        default:
+            nil
+        }
     }
 
     private static func inspectionValue(
@@ -657,6 +695,16 @@ public actor PostgresService: DatabaseInspectionQuerying {
             return .unsupported(cell.dataType.description)
         }
         do {
+            if let preferredKind {
+                switch preferredKind {
+                case .time:
+                    return .time(try stringOrTimeString(for: cell))
+                case .timeWithTimeZone:
+                    return .timeWithTimeZone(try stringOrTimeWithTimeZoneString(for: cell))
+                default:
+                    break
+                }
+            }
             switch cell.dataType {
             case .bool:
                 return .boolean(try cell.decode(Bool.self))
@@ -676,19 +724,23 @@ public actor PostgresService: DatabaseInspectionQuerying {
                 return .uuid(try cell.decode(UUID.self).uuidString.lowercased())
             case .date:
                 return .date(dateOnlyFormatter.string(from: try cell.decode(Date.self)))
+            case .time:
+                return .time(try timeString(for: cell))
+            case .timetz:
+                return .timeWithTimeZone(try timeWithTimeZoneString(for: cell))
             case .timestamp:
                 return .timestamp(try localTimestampString(for: cell))
             case .timestamptz:
                 return .timestampWithTimeZone(try timestampWithTimeZoneString(for: cell))
             case .json, .jsonb:
-                return .json(try cell.decode(String.self), cap: policy.maximumJSONCharacters)
+                return .json(try cell.decode(String.self), cap: policy.effectiveMaximumJSONCharacters)
             case .text, .varchar, .bpchar, .name, .char, .unknown:
-                return .text(try cell.decode(String.self), cap: policy.maximumTextCharacters)
+                return .text(try cell.decode(String.self), cap: policy.effectiveMaximumTextCharacters)
             case .bytea:
                 return .unsupported("bytea")
             default:
                 if let value = try? cell.decode(String.self), isSafeDecodedTextType(cell.dataType.description) {
-                    return .text(value, cap: policy.maximumTextCharacters)
+                    return .text(value, cap: policy.effectiveMaximumTextCharacters)
                 }
                 return .unsupported(cell.dataType.description)
             }
@@ -700,6 +752,67 @@ public actor PostgresService: DatabaseInspectionQuerying {
     private static func isSafeDecodedTextType(_ typeName: String) -> Bool {
         let lowered = typeName.lowercased()
         return lowered.contains("enum") || lowered.contains("text") || lowered.contains("varchar")
+    }
+
+    private static func stringOrTimeString(for cell: PostgresCell) throws -> String {
+        if let value = try decodedTextString(for: cell) {
+            return value
+        }
+        return try timeString(for: cell)
+    }
+
+    private static func stringOrTimeWithTimeZoneString(for cell: PostgresCell) throws -> String {
+        if let value = try decodedTextString(for: cell) {
+            return value
+        }
+        return try timeWithTimeZoneString(for: cell)
+    }
+
+    private static func decodedTextString(for cell: PostgresCell) throws -> String? {
+        switch cell.dataType {
+        case .text, .varchar, .bpchar, .name, .char, .unknown:
+            return try cell.decode(String.self)
+        default:
+            return nil
+        }
+    }
+
+    private static func timeString(for cell: PostgresCell) throws -> String {
+        guard var bytes = cell.bytes, let microseconds = bytes.readInteger(as: Int64.self) else {
+            return "invalid"
+        }
+        return timeString(postgresMicroseconds: microseconds)
+    }
+
+    private static func timeWithTimeZoneString(for cell: PostgresCell) throws -> String {
+        guard var bytes = cell.bytes,
+            let microseconds = bytes.readInteger(as: Int64.self),
+            let timeZoneSecondsWest = bytes.readInteger(as: Int32.self)
+        else {
+            return "invalid"
+        }
+        return "\(timeString(postgresMicroseconds: microseconds))\(timeZoneOffsetString(secondsEast: -Int(timeZoneSecondsWest)))"
+    }
+
+    private static func timeString(postgresMicroseconds: Int64) -> String {
+        let microsecondsPerHour: Int64 = 3_600_000_000
+        let microsecondsPerMinute: Int64 = 60_000_000
+        let microsecondsPerSecond: Int64 = 1_000_000
+        let hours = postgresMicroseconds / microsecondsPerHour
+        let afterHours = postgresMicroseconds - hours * microsecondsPerHour
+        let minutes = afterHours / microsecondsPerMinute
+        let afterMinutes = afterHours - minutes * microsecondsPerMinute
+        let seconds = afterMinutes / microsecondsPerSecond
+        let micros = afterMinutes - seconds * microsecondsPerSecond
+        return String(format: "%02d:%02d:%02d.%06d", Int(hours), Int(minutes), Int(seconds), Int(micros))
+    }
+
+    private static func timeZoneOffsetString(secondsEast: Int) -> String {
+        let sign = secondsEast >= 0 ? "+" : "-"
+        let absolute = abs(secondsEast)
+        let hours = absolute / 3_600
+        let minutes = (absolute % 3_600) / 60
+        return String(format: "%@%02d:%02d", sign, hours, minutes)
     }
 
     private static func localTimestampString(for cell: PostgresCell) throws -> String {
