@@ -84,6 +84,8 @@ struct EvalRunSummary: Codable {
     var decisionMatches: EvalCountSummary
     var safetyValid: EvalCountSummary
     var schemaValid: EvalCountSummary
+    var postgresVerificationAttemptedPass: EvalCountSummary?
+    var postgresVerificationStatusCounts: [String: Int]?
     var forbiddenBindingViolationCount: Int
     var requiredTableCoverage: EvalAverageSummary
     var requiredColumnBindingCoverage: EvalAverageSummary
@@ -183,13 +185,46 @@ struct EvalRunner {
                             results.append(semanticSkip)
                         } else if let generator {
                             let prompt = promptText(for: backend, evalCase: evalCase, schema: schema)
+                            let verificationService: PostgresService?
+                            let verificationConnection: PostgresConnectionHandle?
+                            if let semanticPreparation,
+                                evalCase.expected.decision == .sql,
+                                let database = semanticPreparation.database(for: evalCase)
+                            {
+                                let service = PostgresService()
+                                do {
+                                    try await service.connect(
+                                        config: database.config,
+                                        password: database.executionPassword
+                                    )
+                                    verificationService = service
+                                    verificationConnection = PostgresConnectionHandle(postgres: service)
+                                } catch {
+                                    results.append(
+                                        semanticVerificationUnavailableResult(
+                                            evalCase: evalCase,
+                                            backend: backend,
+                                            model: backend == .cloud ? options.model : nil,
+                                            repeatIndex: repeatIndex,
+                                            message:
+                                                "PostgreSQL verification connection failed: \(error.localizedDescription)"
+                                        )
+                                    )
+                                    continue
+                                }
+                            } else {
+                                verificationService = nil
+                                verificationConnection = nil
+                            }
                             let runOptions = TextToSQLEvalRunOptions(
                                 backend: backend,
                                 model: backend == .cloud ? options.model : nil,
                                 repeatIndex: repeatIndex,
                                 estimatedInitialPromptCharacters: prompt.count,
                                 estimatedInitialPrompt: options.recordPrompts ? prompt : nil,
-                                caseTimeoutSeconds: options.caseTimeoutSeconds
+                                caseTimeoutSeconds: options.caseTimeoutSeconds,
+                                sqlVerifier: verificationConnection == nil ? nil : PostgresSQLVerifier(),
+                                verificationConnection: verificationConnection
                             )
                             print("Running \(evalCase.id) [\(backend.rawValue)] repeat \(repeatIndex)")
                             let staticResult = await TextToSQLEvalCaseRunner.run(
@@ -198,6 +233,9 @@ struct EvalRunner {
                                 generator: generator,
                                 options: runOptions
                             )
+                            if let verificationService {
+                                await verificationService.disconnect()
+                            }
                             if let semanticPreparation {
                                 let semanticResult = await semanticPreparation.annotate(
                                     staticResult,
@@ -234,6 +272,9 @@ struct EvalRunner {
             "WidenKit/Services/TextToSQLPipeline.swift",
             "WidenKit/Services/SQLGenerationFailure.swift",
             "WidenKit/Services/GeneratedSQLRepairSupport.swift",
+            "WidenKit/Services/GeneratedSQLVerifier.swift",
+            "WidenKit/Services/PostgresErrorMapper.swift",
+            "WidenKit/Services/PostgresService.swift",
         ] + (isOpenRouterSmoke ? ["WidenKit/Services/OpenRouterSQLGenerator.swift"] : [])
             + (options.cloudAgentMode == .tools ? [
                 "WidenKit/Services/OpenRouterSchemaToolSQLAgent.swift",
@@ -376,6 +417,10 @@ struct EvalRunner {
             )
         }
 
+        func database(for evalCase: TextToSQLEvalCase) -> TextToSQLSemanticProvisionedDatabase? {
+            databases[evalCase.schemaFixture]
+        }
+
         func annotate(
             _ result: TextToSQLEvalResult,
             evalCase: TextToSQLEvalCase
@@ -401,13 +446,19 @@ struct EvalRunner {
                 !candidateSQL.isEmpty,
                 result.metrics.safetyValid == true,
                 result.metrics.schemaValid == true,
+                result.metrics.postgresVerificationStatus == .passed,
                 let database = databases[evalCase.schemaFixture]
             else {
                 return result.withSemantic(
-                    status: .notApplicable,
+                    status: result.metrics.postgresVerificationStatus == .failed
+                        ? .candidateExecutionFailure
+                        : .notApplicable,
                     attempted: false,
                     endToEndPassed: false,
-                    comparisonMode: evalCase.expected.semantic?.comparisonMode
+                    comparisonMode: evalCase.expected.semantic?.comparisonMode,
+                    message: result.metrics.postgresVerificationStatus == .failed
+                        ? "PostgreSQL verification failed before semantic execution."
+                        : nil
                 )
             }
 
@@ -728,6 +779,35 @@ struct EvalRunner {
         )
     }
 
+    private func semanticVerificationUnavailableResult(
+        evalCase: TextToSQLEvalCase,
+        backend: TextToSQLEvalBackend,
+        model: String?,
+        repeatIndex: Int,
+        message: String
+    ) -> TextToSQLEvalResult {
+        TextToSQLEvalResult(
+            caseID: evalCase.id,
+            backend: backend,
+            model: model,
+            repeatIndex: repeatIndex,
+            status: .semanticEnvironmentUnavailable,
+            metrics: TextToSQLEvalMetrics(
+                backendAvailable: true,
+                transportSuccess: false,
+                structuredResponseParsed: false,
+                decisionMatches: false,
+                latencyMs: 0,
+                postgresVerificationStatus: .skippedNoConnection,
+                semanticExecutionAttempted: false,
+                semanticEnvironmentAvailable: false,
+                endToEndPassed: false,
+                semanticStatus: .semanticEnvironmentUnavailable
+            ),
+            diagnostics: TextToSQLEvalDiagnostics(errorMessage: message)
+        )
+    }
+
     private func summarize(
         _ results: [TextToSQLEvalResult],
         casesByID: [String: TextToSQLEvalCase]
@@ -766,6 +846,12 @@ struct EvalRunner {
         let decisionEvaluated = results.filter(\.metrics.structuredResponseParsed)
         let safetyValues = results.compactMap(\.metrics.safetyValid)
         let schemaValues = results.compactMap(\.metrics.schemaValid)
+        let postgresVerificationStatuses = results.compactMap(\.metrics.postgresVerificationStatus)
+        let postgresVerificationStatusCounts = postgresVerificationStatuses.reduce(
+            into: [String: Int]()
+        ) { counts, status in
+            counts[status.rawValue, default: 0] += 1
+        }
         let tableCoverageValues = results.compactMap(\.metrics.requiredTableCoverage)
         let columnCoverageValues = results.compactMap(\.metrics.requiredColumnBindingCoverage)
         let semanticResults = results.filter { $0.metrics.semanticStatus != nil }
@@ -875,6 +961,19 @@ struct EvalRunner {
                 count: schemaValues.filter { $0 }.count,
                 denominator: schemaValues.count
             ),
+            postgresVerificationAttemptedPass: {
+                let attempted = postgresVerificationStatuses.filter {
+                    $0 == .passed || $0 == .failed
+                }
+                guard !attempted.isEmpty else { return nil }
+                return EvalCountSummary(
+                    count: attempted.filter { $0 == .passed }.count,
+                    denominator: attempted.count
+                )
+            }(),
+            postgresVerificationStatusCounts: postgresVerificationStatuses.isEmpty
+                ? nil
+                : postgresVerificationStatusCounts,
             forbiddenBindingViolationCount: results.reduce(0) {
                 $0 + $1.metrics.forbiddenBindingViolations.count
             },

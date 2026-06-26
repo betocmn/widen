@@ -13,6 +13,8 @@ public struct TextToSQLRequest: Sendable {
     public var allowGroundingClarification: Bool
     public var validationRepairContext: TextToSQLRepairContext?
     public var eventSink: TextToSQLPipelineEventSink?
+    public var sqlVerifier: (any GeneratedSQLVerifying)?
+    public var verificationConnection: PostgresConnectionHandle?
 
     public init(
         question: String,
@@ -21,7 +23,9 @@ public struct TextToSQLRequest: Sendable {
         config: SQLGenerationConfig = SQLGenerationConfig(),
         allowGroundingClarification: Bool = true,
         validationRepairContext: TextToSQLRepairContext? = nil,
-        eventSink: TextToSQLPipelineEventSink? = nil
+        eventSink: TextToSQLPipelineEventSink? = nil,
+        sqlVerifier: (any GeneratedSQLVerifying)? = nil,
+        verificationConnection: PostgresConnectionHandle? = nil
     ) {
         self.question = question
         self.schema = schema
@@ -30,6 +34,8 @@ public struct TextToSQLRequest: Sendable {
         self.allowGroundingClarification = allowGroundingClarification
         self.validationRepairContext = validationRepairContext
         self.eventSink = eventSink
+        self.sqlVerifier = sqlVerifier
+        self.verificationConnection = verificationConnection
     }
 }
 
@@ -80,6 +86,8 @@ public enum TextToSQLStage: String, Codable, Equatable, Sendable {
     case canonicalization
     case safetyValidation
     case schemaValidation
+    case postgresVerification
+    case postgresVerificationRepair
     case validationRepair
     case finalDecision
 }
@@ -98,6 +106,7 @@ public enum TextToSQLFailureCategory: String, Codable, Equatable, Sendable {
     case modelGeneration
     case safetyValidation
     case schemaValidation
+    case postgresVerification
     case repeatedNoProgressRepair
     case cancellation
     case emptySQL
@@ -110,6 +119,8 @@ public struct TextToSQLPipelineFailure: Error, LocalizedError, Codable, Equatabl
     public var validationIssueIDs: [String]
     public var openRouterFailure: OpenRouterFailureDiagnostic?
     public var backendMetadata: OpenRouterGenerationMetadata?
+    public var databaseDiagnostic: DatabaseDiagnostic?
+    public var verificationStatus: SQLVerificationStatus?
 
     public init(
         stage: TextToSQLStage,
@@ -117,7 +128,9 @@ public struct TextToSQLPipelineFailure: Error, LocalizedError, Codable, Equatabl
         message: String,
         validationIssueIDs: [String] = [],
         openRouterFailure: OpenRouterFailureDiagnostic? = nil,
-        backendMetadata: OpenRouterGenerationMetadata? = nil
+        backendMetadata: OpenRouterGenerationMetadata? = nil,
+        databaseDiagnostic: DatabaseDiagnostic? = nil,
+        verificationStatus: SQLVerificationStatus? = nil
     ) {
         self.stage = stage
         self.category = category
@@ -125,6 +138,8 @@ public struct TextToSQLPipelineFailure: Error, LocalizedError, Codable, Equatabl
         self.validationIssueIDs = validationIssueIDs
         self.openRouterFailure = openRouterFailure
         self.backendMetadata = backendMetadata
+        self.databaseDiagnostic = databaseDiagnostic
+        self.verificationStatus = verificationStatus
     }
 
     public var errorDescription: String? { message }
@@ -177,6 +192,10 @@ public struct TextToSQLStageResult: Codable, Equatable, Sendable {
     public var canonicalizationFixes: [String]
     public var selectedTableNames: [String]
     public var schemaFingerprint: String?
+    public var verificationStatus: SQLVerificationStatus?
+    public var sqlState: String?
+    public var databaseDiagnosticKind: DatabaseDiagnosticKind?
+    public var verificationRepairAttempted: Bool?
 
     public init(
         stage: TextToSQLStage,
@@ -187,7 +206,11 @@ public struct TextToSQLStageResult: Codable, Equatable, Sendable {
         validationIssueIDs: [String] = [],
         canonicalizationFixes: [String] = [],
         selectedTableNames: [String] = [],
-        schemaFingerprint: String? = nil
+        schemaFingerprint: String? = nil,
+        verificationStatus: SQLVerificationStatus? = nil,
+        sqlState: String? = nil,
+        databaseDiagnosticKind: DatabaseDiagnosticKind? = nil,
+        verificationRepairAttempted: Bool? = nil
     ) {
         self.stage = stage
         self.outcome = outcome
@@ -198,6 +221,10 @@ public struct TextToSQLStageResult: Codable, Equatable, Sendable {
         self.canonicalizationFixes = canonicalizationFixes
         self.selectedTableNames = selectedTableNames
         self.schemaFingerprint = schemaFingerprint
+        self.verificationStatus = verificationStatus
+        self.sqlState = sqlState
+        self.databaseDiagnosticKind = databaseDiagnosticKind
+        self.verificationRepairAttempted = verificationRepairAttempted
     }
 }
 
@@ -211,6 +238,10 @@ public enum TextToSQLPipelineEventKind: String, Equatable, Sendable {
     case validationRepairRejected
     case validationRepairMissingSQL
     case validationRepairPassedValidation
+    case postgresVerificationFailed
+    case postgresVerificationRepairStarted
+    case postgresVerificationRepairRejected
+    case postgresVerificationRepairPassed
 }
 
 public struct TextToSQLPipelineEvent: Equatable, Sendable {
@@ -313,6 +344,7 @@ public struct TextToSQLPipeline: TextToSQLRunning {
             trace.append(.canonicalization, outcome: .skipped, since: Date())
             trace.append(.safetyValidation, outcome: .skipped, since: Date())
             trace.append(.schemaValidation, outcome: .skipped, since: Date())
+            trace.append(.postgresVerification, outcome: .skipped, since: Date())
             trace.append(.validationRepair, outcome: .skipped, since: Date())
             trace.append(.finalDecision, outcome: .success, since: Date())
             return finished(
@@ -336,6 +368,7 @@ public struct TextToSQLPipeline: TextToSQLRunning {
                 since: Date(),
                 failureCategory: .emptySQL
             )
+            trace.append(.postgresVerification, outcome: .skipped, since: Date())
             trace.append(
                 .finalDecision,
                 outcome: .failure,
@@ -358,12 +391,13 @@ public struct TextToSQLPipeline: TextToSQLRunning {
         )
 
         if validation.combined.isValid {
-            trace.append(.validationRepair, outcome: .skipped, since: Date())
-            trace.append(.finalDecision, outcome: .success, since: Date())
-            return finished(
-                decision: .sql(result.withPipelineSQL(generatedSQL)),
-                trace: trace,
-                events: events,
+            return try await finishVerifiedSQL(
+                request: request,
+                generation: result.withPipelineSQL(generatedSQL),
+                sql: generatedSQL,
+                validation: validation.combined,
+                trace: &trace,
+                events: &events,
                 started: started
             )
         }
@@ -384,18 +418,25 @@ public struct TextToSQLPipeline: TextToSQLRunning {
                 trace: &trace
             )
             if repairedValidation.combined.isValid {
-                trace.append(.validationRepair, outcome: .skipped, since: Date())
-                trace.append(.finalDecision, outcome: .success, since: Date())
-                return finished(
-                    decision: .sql(result.withPipelineSQL(repairedSQL)),
-                    trace: trace,
-                    events: events,
+                return try await finishVerifiedSQL(
+                    request: request,
+                    generation: result.withPipelineSQL(repairedSQL),
+                    sql: repairedSQL,
+                    validation: repairedValidation.combined,
+                    trace: &trace,
+                    events: &events,
                     started: started
                 )
             }
         }
 
         let firstError = AppError.validationFailed(validation.combined.errors).localizedDescription
+        trace.append(
+            .postgresVerification,
+            outcome: .skipped,
+            since: Date(),
+            verificationStatus: .skippedStaticValidationFailed
+        )
         let validationIssueIDs = validation.safety.errors.map {
             redactedIssueID(prefix: "safety", value: $0)
         } + validation.schema.issues.map(\.traceID)
@@ -435,6 +476,430 @@ public struct TextToSQLPipeline: TextToSQLRunning {
             events: events,
             started: started
         )
+    }
+
+    private func finishVerifiedSQL(
+        request: TextToSQLRequest,
+        generation: SQLGenerationResult,
+        sql: String,
+        validation: SQLValidationResult,
+        trace: inout TraceBuilder,
+        events: inout [TextToSQLPipelineEvent],
+        started: Date
+    ) async throws -> TextToSQLRun {
+        let verification = try await verifyGeneratedSQL(
+            sql: sql,
+            validation: validation,
+            request: request,
+            trace: &trace,
+            stage: .postgresVerification
+        )
+        if verification.passed || verification.status.isAcceptableSkip {
+            trace.append(.validationRepair, outcome: .skipped, since: Date())
+            trace.append(.finalDecision, outcome: .success, since: Date())
+            return finished(
+                decision: .sql(generation),
+                trace: trace,
+                events: events,
+                started: started
+            )
+        }
+
+        await record(
+            TextToSQLPipelineEvent(
+                kind: .postgresVerificationFailed,
+                stage: .postgresVerification,
+                title: "Generated SQL failed PostgreSQL verification.",
+                summary: verification.diagnostic?.kind.rawValue ?? verification.status.rawValue,
+                failureCategory: .postgresVerification
+            ),
+            request: request,
+            events: &events
+        )
+
+        guard verification.isRepairable else {
+            let failure = postgresVerificationFailure(
+                stage: .postgresVerification,
+                verification: verification
+            )
+            trace.append(
+                .validationRepair,
+                outcome: .skipped,
+                since: Date(),
+                verificationRepairAttempted: false
+            )
+            trace.append(
+                .finalDecision,
+                outcome: .failure,
+                since: Date(),
+                failureCategory: failure.category
+            )
+            return finished(
+                decision: .failed(failure),
+                trace: trace,
+                events: events,
+                started: started
+            )
+        }
+
+        let repairRun = try await runPostgresVerificationRepair(
+            request: request,
+            startingGeneration: generation,
+            startingSQL: sql,
+            verification: verification,
+            trace: &trace,
+            events: &events
+        )
+        trace.append(
+            .finalDecision,
+            outcome: repairRun.isSuccessful ? .success : .failure,
+            since: Date(),
+            failureCategory: repairRun.failureCategory
+        )
+        return finished(
+            decision: repairRun.decision,
+            trace: trace,
+            events: events,
+            started: started
+        )
+    }
+
+    private func verifyGeneratedSQL(
+        sql: String,
+        validation: SQLValidationResult,
+        request: TextToSQLRequest,
+        trace: inout TraceBuilder,
+        stage: TextToSQLStage,
+        started: Date = Date(),
+        modelCallCount: Int? = nil,
+        repairAttempted: Bool? = nil
+    ) async throws -> SQLVerificationResult {
+        guard !validation.kind.isWrite else {
+            let result = SQLVerificationResult.skipped(
+                .skippedNonRead,
+                message: "PostgreSQL verification is only run for generated read SQL."
+            )
+            trace.appendVerification(
+                stage,
+                result: result,
+                outcome: .skipped,
+                since: started,
+                modelCallCount: modelCallCount,
+                repairAttempted: repairAttempted
+            )
+            return result
+        }
+        guard let verifier = request.sqlVerifier else {
+            let result = SQLVerificationResult.skipped(
+                .notAvailable,
+                message: "No PostgreSQL verifier is available for this pipeline run."
+            )
+            trace.appendVerification(
+                stage,
+                result: result,
+                outcome: .skipped,
+                since: started,
+                modelCallCount: modelCallCount,
+                repairAttempted: repairAttempted
+            )
+            return result
+        }
+        guard let connection = request.verificationConnection else {
+            let result = SQLVerificationResult.skipped(
+                .skippedNoConnection,
+                message: "No live PostgreSQL connection is available for verification."
+            )
+            trace.appendVerification(
+                stage,
+                result: result,
+                outcome: .skipped,
+                since: started,
+                modelCallCount: modelCallCount,
+                repairAttempted: repairAttempted
+            )
+            return result
+        }
+
+        do {
+            let result = try await verifier.verify(
+                sql: sql,
+                connection: connection,
+                safetyMode: SQLSafetyMode(kind: validation.kind)
+            )
+            trace.appendVerification(
+                stage,
+                result: result,
+                outcome: result.passed ? .success : (result.status.isAcceptableSkip ? .skipped : .failure),
+                since: started,
+                modelCallCount: modelCallCount,
+                repairAttempted: repairAttempted
+            )
+            return result
+        } catch is CancellationError {
+            trace.append(
+                stage,
+                outcome: .failure,
+                since: started,
+                modelCallCount: modelCallCount,
+                failureCategory: .cancellation,
+                verificationRepairAttempted: repairAttempted
+            )
+            throw CancellationError()
+        } catch {
+            let result = thrownVerificationFailure(from: error, since: started)
+            trace.appendVerification(
+                stage,
+                result: result,
+                outcome: .failure,
+                since: started,
+                modelCallCount: modelCallCount,
+                repairAttempted: repairAttempted
+            )
+            return result
+        }
+    }
+
+    private func runPostgresVerificationRepair(
+        request: TextToSQLRequest,
+        startingGeneration: SQLGenerationResult,
+        startingSQL: String,
+        verification: SQLVerificationResult,
+        trace: inout TraceBuilder,
+        events: inout [TextToSQLPipelineEvent]
+    ) async throws -> RepairRun {
+        let repairQuestionContext = request.validationRepairContext
+            ?? TextToSQLRepairContext(
+                question: request.question,
+                recentQuestions: Array(request.context.recentQuestions.suffix(3)),
+                originalQuestion: request.context.originalQuestion ?? request.question,
+                conversationMessages: request.context.conversationMessages
+                    + [SQLConversationMessage(role: .user, text: request.question)]
+            )
+        let firstError = verificationFailureMessage(verification)
+        let diagnostic = verification.diagnostic
+        let allowRepairWrites = SQLSafetyValidator.validate(startingSQL).kind.isWrite
+        let forbiddenIdentifiers = GeneratedSQLRepairSupport.forbiddenIdentifiers(
+            sql: startingSQL,
+            error: firstError,
+            diagnostic: diagnostic,
+            schema: request.schema
+        )
+        var coordinator = GeneratedSQLRepairCoordinator(
+            failedSQL: startingSQL,
+            firstError: firstError,
+            diagnostic: diagnostic,
+            forbiddenIdentifiers: forbiddenIdentifiers,
+            repairConstraints: GeneratedSQLRepairSupport.repairConstraints(
+                forbiddenIdentifiers: forbiddenIdentifiers,
+                error: firstError
+            ),
+            maxModelCalls: 1
+        )
+
+        guard let repairMode = coordinator.beginNextAttempt() else {
+            let failure = postgresVerificationFailure(
+                stage: .postgresVerificationRepair,
+                verification: verification
+            )
+            return RepairRun(decision: .failed(failure), failureCategory: failure.category)
+        }
+
+        let stageStart = Date()
+        let repairContext = coordinator.repairContext(for: repairMode)
+        await record(
+            TextToSQLPipelineEvent(
+                kind: .postgresVerificationRepairStarted,
+                stage: .postgresVerificationRepair,
+                title: "PostgreSQL verification repair started.",
+                summary: "Verification repair attempt started."
+            ),
+            request: request,
+            events: &events
+        )
+        let context = SQLGenerationContext(
+            mode: repairMode,
+            recentQuestions: repairQuestionContext.recentQuestions,
+            originalQuestion: repairQuestionContext.originalQuestion,
+            conversationMessages: repairQuestionContext.conversationMessages,
+            currentSQL: repairContext.failedSQL,
+            lastRunError: coordinator.constraints.lastError,
+            repairContext: repairContext,
+            modelCallCount: GeneratedSQLRepairSupport.cumulativeModelCallCount(
+                after: startingGeneration,
+                attempt: 1
+            ),
+            confirmedSemanticBindings: request.context.confirmedSemanticBindings
+        )
+
+        let generation: SQLGenerationResult
+        do {
+            let generated = try await generator.generateSQL(
+                question: repairQuestionContext.question,
+                schema: request.schema,
+                context: context,
+                config: request.config
+            )
+            trace.mergeSchemaToolCalls(generated.schemaToolCalls)
+            generation = GeneratedSQLPostprocessor.enriched(
+                generated,
+                question: repairQuestionContext.question,
+                schema: request.schema,
+                databaseContext: request.config.databaseContext,
+                confirmedSemanticBindings: context.confirmedSemanticBindings,
+                allowGroundingClarification: request.allowGroundingClarification
+            )
+        } catch is CancellationError {
+            trace.append(
+                .postgresVerificationRepair,
+                outcome: .failure,
+                since: stageStart,
+                modelCallCount: context.modelCallCount,
+                failureCategory: .cancellation,
+                verificationRepairAttempted: true
+            )
+            throw CancellationError()
+        } catch {
+            trace.mergeSchemaToolCalls(schemaToolCalls(from: error))
+            let failure = generationFailure(error, stage: .postgresVerificationRepair)
+            trace.append(
+                .postgresVerificationRepair,
+                outcome: .failure,
+                since: stageStart,
+                modelCallCount: context.modelCallCount,
+                failureCategory: failure.category,
+                verificationRepairAttempted: true
+            )
+            return RepairRun(decision: .failed(failure), failureCategory: failure.category)
+        }
+
+        let evaluation = coordinator.evaluateCandidate(
+            generation,
+            mode: repairMode,
+            schema: request.schema,
+            allowWrites: allowRepairWrites
+        )
+
+        switch evaluation.outcome {
+        case .clarification:
+            guard let clarification = evaluation.message,
+                !clarification.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+            else {
+                let failure = repairFailure(
+                    attempts: coordinator.attempts,
+                    category: .repeatedNoProgressRepair,
+                    stage: .postgresVerificationRepair
+                )
+                trace.append(
+                    .postgresVerificationRepair,
+                    outcome: .failure,
+                    since: stageStart,
+                    modelCallCount: generation.generationCallCount,
+                    failureCategory: failure.category,
+                    verificationRepairAttempted: true
+                )
+                return RepairRun(decision: .failed(failure), failureCategory: failure.category)
+            }
+            trace.append(
+                .postgresVerificationRepair,
+                outcome: .success,
+                since: stageStart,
+                modelCallCount: generation.generationCallCount,
+                verificationRepairAttempted: true
+            )
+            return RepairRun(decision: .clarification(generation))
+
+        case .rejected(let reason):
+            let category = failureCategory(for: reason, evaluation: evaluation)
+            trace.append(
+                .postgresVerificationRepair,
+                outcome: .failure,
+                since: stageStart,
+                modelCallCount: generation.generationCallCount,
+                failureCategory: category,
+                verificationRepairAttempted: true
+            )
+            await record(
+                TextToSQLPipelineEvent(
+                    kind: .postgresVerificationRepairRejected,
+                    stage: .postgresVerificationRepair,
+                    title: "PostgreSQL verification repair was rejected.",
+                    summary: "Verification repair candidate was rejected.",
+                    failureCategory: category
+                ),
+                request: request,
+                events: &events
+            )
+            let failure = repairFailure(
+                attempts: coordinator.attempts,
+                category: category,
+                stage: .postgresVerificationRepair
+            )
+            return RepairRun(decision: .failed(failure), failureCategory: failure.category)
+
+        case .accepted:
+            break
+        }
+
+        guard let repairedSQL = evaluation.sql,
+            let repairedValidation = evaluation.validation
+        else {
+            let failure = repairFailure(
+                attempts: coordinator.attempts,
+                category: .modelGeneration,
+                stage: .postgresVerificationRepair
+            )
+            trace.append(
+                .postgresVerificationRepair,
+                outcome: .failure,
+                since: stageStart,
+                modelCallCount: generation.generationCallCount,
+                failureCategory: failure.category,
+                verificationRepairAttempted: true
+            )
+            return RepairRun(decision: .failed(failure), failureCategory: failure.category)
+        }
+
+        let repairedVerification = try await verifyGeneratedSQL(
+            sql: repairedSQL,
+            validation: repairedValidation,
+            request: request,
+            trace: &trace,
+            stage: .postgresVerificationRepair,
+            started: stageStart,
+            modelCallCount: generation.generationCallCount,
+            repairAttempted: true
+        )
+        guard repairedVerification.passed || repairedVerification.status.isAcceptableSkip else {
+            await record(
+                TextToSQLPipelineEvent(
+                    kind: .postgresVerificationRepairRejected,
+                    stage: .postgresVerificationRepair,
+                    title: "PostgreSQL verification repair failed.",
+                    summary: repairedVerification.diagnostic?.kind.rawValue
+                        ?? repairedVerification.status.rawValue,
+                    failureCategory: .postgresVerification
+                ),
+                request: request,
+                events: &events
+            )
+            let failure = postgresVerificationFailure(
+                stage: .postgresVerificationRepair,
+                verification: repairedVerification
+            )
+            return RepairRun(decision: .failed(failure), failureCategory: failure.category)
+        }
+
+        await record(
+            TextToSQLPipelineEvent(
+                kind: .postgresVerificationRepairPassed,
+                stage: .postgresVerificationRepair,
+                title: "PostgreSQL verification repair passed.",
+                summary: "Verification repair produced SQL accepted by PostgreSQL."
+            ),
+            request: request,
+            events: &events
+        )
+        return RepairRun(decision: .sql(generation.withPipelineSQL(repairedSQL)))
     }
 
     private func runValidationRepair(
@@ -685,23 +1150,62 @@ public struct TextToSQLPipeline: TextToSQLRunning {
                 return RepairRun(decision: .failed(failure), failureCategory: failure.category)
             }
 
-            trace.append(
-                .validationRepair,
-                outcome: .success,
-                since: stageStart,
-                modelCallCount: generation.generationCallCount
+            let candidateValidation = evaluation.validation
+                ?? GeneratedSQLValidator.validate(sql: generatedSQL, schema: request.schema)
+            let verification = try await verifyGeneratedSQL(
+                sql: generatedSQL,
+                validation: candidateValidation,
+                request: request,
+                trace: &trace,
+                stage: .postgresVerification
             )
+            if verification.passed || verification.status.isAcceptableSkip {
+                trace.append(
+                    .validationRepair,
+                    outcome: .success,
+                    since: stageStart,
+                    modelCallCount: generation.generationCallCount
+                )
+                await record(
+                    TextToSQLPipelineEvent(
+                        kind: .validationRepairPassedValidation,
+                        stage: .validationRepair,
+                        title: "\(repairLabel) passed validation.",
+                        summary: "Validation repair produced locally valid SQL."
+                    ),
+                    request: request,
+                    events: &events
+                )
+                return RepairRun(decision: .sql(generation.withPipelineSQL(generatedSQL)))
+            }
+
             await record(
                 TextToSQLPipelineEvent(
-                    kind: .validationRepairPassedValidation,
-                    stage: .validationRepair,
-                    title: "\(repairLabel) passed validation.",
-                    summary: "Validation repair produced locally valid SQL."
+                    kind: .postgresVerificationFailed,
+                    stage: .postgresVerification,
+                    title: "Repaired SQL failed PostgreSQL verification.",
+                    summary: verification.diagnostic?.kind.rawValue
+                        ?? verification.status.rawValue,
+                    failureCategory: .postgresVerification
                 ),
                 request: request,
                 events: &events
             )
-            return RepairRun(decision: .sql(generation.withPipelineSQL(generatedSQL)))
+            if verification.isRepairable {
+                return try await runPostgresVerificationRepair(
+                    request: request,
+                    startingGeneration: generation,
+                    startingSQL: generatedSQL,
+                    verification: verification,
+                    trace: &trace,
+                    events: &events
+                )
+            }
+            let failure = postgresVerificationFailure(
+                stage: .postgresVerification,
+                verification: verification
+            )
+            return RepairRun(decision: .failed(failure), failureCategory: failure.category)
         }
 
         let failure = repairFailure(
@@ -758,6 +1262,53 @@ public struct TextToSQLPipeline: TextToSQLRunning {
             safety,
             schemaValidation,
             GeneratedSQLValidator.combine(safety: safety, schemaValidation: schemaValidation)
+        )
+    }
+
+    private func postgresVerificationFailure(
+        stage: TextToSQLStage,
+        verification: SQLVerificationResult
+    ) -> TextToSQLPipelineFailure {
+        TextToSQLPipelineFailure(
+            stage: stage,
+            category: .postgresVerification,
+            message: verificationFailureMessage(verification),
+            databaseDiagnostic: verification.diagnostic,
+            verificationStatus: verification.status
+        )
+    }
+
+    private func verificationFailureMessage(_ verification: SQLVerificationResult) -> String {
+        if let diagnostic = verification.diagnostic {
+            return "PostgreSQL verification failed: \(diagnostic.displayMessage)"
+        }
+        if let message = verification.message?.trimmingCharacters(in: .whitespacesAndNewlines),
+            !message.isEmpty
+        {
+            return "PostgreSQL verification failed: \(message)"
+        }
+        return "PostgreSQL verification failed."
+    }
+
+    private func thrownVerificationFailure(
+        from error: any Error,
+        since started: Date
+    ) -> SQLVerificationResult {
+        if let appError = error as? AppError,
+            case .databaseFailed(let diagnostic) = appError
+        {
+            return .failed(
+                diagnostic: diagnostic,
+                elapsedMs: elapsedMilliseconds(since: started),
+                stage: .transaction,
+                message: diagnostic.displayMessage
+            )
+        }
+        return .failed(
+            diagnostic: nil,
+            elapsedMs: elapsedMilliseconds(since: started),
+            stage: .transaction,
+            message: error.localizedDescription
         )
     }
 
@@ -829,10 +1380,11 @@ public struct TextToSQLPipeline: TextToSQLRunning {
 
     private func repairFailure(
         attempts: [SQLRepairAttempt],
-        category: TextToSQLFailureCategory
+        category: TextToSQLFailureCategory,
+        stage: TextToSQLStage = .validationRepair
     ) -> TextToSQLPipelineFailure {
         TextToSQLPipelineFailure(
-            stage: .validationRepair,
+            stage: stage,
             category: category,
             message: GeneratedSQLRepairSupport.repairFailureMessage(
                 attempts: attempts,
@@ -890,23 +1442,32 @@ private struct TraceBuilder {
         _ stage: TextToSQLStage,
         outcome: TextToSQLStageOutcome,
         since started: Date,
+        elapsedMs: Int? = nil,
         modelCallCount: Int? = nil,
         failureCategory: TextToSQLFailureCategory? = nil,
         validationIssueIDs: [String] = [],
         canonicalizationFixes: [String] = [],
-        selectedTableNames: [String] = []
+        selectedTableNames: [String] = [],
+        verificationStatus: SQLVerificationStatus? = nil,
+        sqlState: String? = nil,
+        databaseDiagnosticKind: DatabaseDiagnosticKind? = nil,
+        verificationRepairAttempted: Bool? = nil
     ) {
         stages.append(
             TextToSQLStageResult(
                 stage: stage,
                 outcome: outcome,
-                elapsedMs: elapsedMilliseconds(since: started),
+                elapsedMs: elapsedMs ?? elapsedMilliseconds(since: started),
                 modelCallCount: modelCallCount,
                 failureCategory: failureCategory,
                 validationIssueIDs: validationIssueIDs,
                 canonicalizationFixes: canonicalizationFixes,
                 selectedTableNames: selectedTableNames,
-                schemaFingerprint: schemaFingerprint
+                schemaFingerprint: schemaFingerprint,
+                verificationStatus: verificationStatus,
+                sqlState: sqlState,
+                databaseDiagnosticKind: databaseDiagnosticKind,
+                verificationRepairAttempted: verificationRepairAttempted
             )
         )
     }
@@ -914,6 +1475,28 @@ private struct TraceBuilder {
     mutating func mergeSchemaToolCalls(_ traces: [SchemaToolCallTrace]) {
         guard !traces.isEmpty else { return }
         schemaToolCalls.append(contentsOf: traces)
+    }
+
+    mutating func appendVerification(
+        _ stage: TextToSQLStage,
+        result: SQLVerificationResult,
+        outcome: TextToSQLStageOutcome,
+        since started: Date,
+        modelCallCount: Int? = nil,
+        repairAttempted: Bool? = nil
+    ) {
+        append(
+            stage,
+            outcome: outcome,
+            since: started,
+            elapsedMs: result.elapsedMs,
+            modelCallCount: modelCallCount,
+            failureCategory: outcome == .failure ? .postgresVerification : nil,
+            verificationStatus: result.status,
+            sqlState: result.diagnostic?.sqlState,
+            databaseDiagnosticKind: result.diagnostic?.kind,
+            verificationRepairAttempted: repairAttempted
+        )
     }
 
     private static func fingerprint(_ schema: DatabaseSchema) -> String {
@@ -1039,4 +1622,29 @@ private func redactedIssueID(prefix: String, value: String) -> String {
         .map { String(format: "%02x", $0) }
         .joined()
     return "\(prefix):\(digest.prefix(16))"
+}
+
+private extension SQLVerificationStatus {
+    var isAcceptableSkip: Bool {
+        switch self {
+        case .notAvailable, .skippedNoConnection, .skippedNonRead:
+            return true
+        case .skippedStaticValidationFailed, .passed, .failed:
+            return false
+        }
+    }
+}
+
+private extension SQLVerificationResult {
+    var isRepairable: Bool {
+        guard status == .failed, let diagnostic else { return false }
+        switch diagnostic.kind {
+        case .missingRelation, .missingColumn, .ambiguousColumn, .syntaxError,
+            .groupingError, .datatypeMismatch, .undefinedFunction,
+            .invalidTextRepresentation:
+            return true
+        case .insufficientPrivilege, .timedOut, .cancelled, .other:
+            return false
+        }
+    }
 }

@@ -1,6 +1,6 @@
 import Foundation
 
-public struct TextToSQLEvalRunOptions: Equatable, Sendable {
+public struct TextToSQLEvalRunOptions: Sendable {
     public var backend: TextToSQLEvalBackend
     public var model: String?
     public var repeatIndex: Int
@@ -9,6 +9,8 @@ public struct TextToSQLEvalRunOptions: Equatable, Sendable {
     public var estimatedInitialPrompt: String?
     public var testOnlyDisableGroundingClarification: Bool
     public var caseTimeoutSeconds: Double?
+    public var sqlVerifier: (any GeneratedSQLVerifying)?
+    public var verificationConnection: PostgresConnectionHandle?
 
     public init(
         backend: TextToSQLEvalBackend,
@@ -18,7 +20,9 @@ public struct TextToSQLEvalRunOptions: Equatable, Sendable {
         estimatedInitialPromptCharacters: Int? = nil,
         estimatedInitialPrompt: String? = nil,
         testOnlyDisableGroundingClarification: Bool = false,
-        caseTimeoutSeconds: Double? = nil
+        caseTimeoutSeconds: Double? = nil,
+        sqlVerifier: (any GeneratedSQLVerifying)? = nil,
+        verificationConnection: PostgresConnectionHandle? = nil
     ) {
         self.backend = backend
         self.model = model
@@ -28,6 +32,8 @@ public struct TextToSQLEvalRunOptions: Equatable, Sendable {
         self.estimatedInitialPrompt = estimatedInitialPrompt
         self.testOnlyDisableGroundingClarification = testOnlyDisableGroundingClarification
         self.caseTimeoutSeconds = caseTimeoutSeconds
+        self.sqlVerifier = sqlVerifier
+        self.verificationConnection = verificationConnection
     }
 }
 
@@ -240,7 +246,9 @@ public enum TextToSQLEvalCaseRunner {
                         defaultRowLimit: options.defaultRowLimit,
                         databaseContext: evalCase.databaseContext ?? ""
                     ),
-                    allowGroundingClarification: !options.testOnlyDisableGroundingClarification
+                    allowGroundingClarification: !options.testOnlyDisableGroundingClarification,
+                    sqlVerifier: options.sqlVerifier,
+                    verificationConnection: options.verificationConnection
                 )
             )
             switch run.finalDecision {
@@ -391,6 +399,7 @@ public enum TextToSQLEvalCaseRunner {
         trace: TextToSQLTrace
     ) -> TextToSQLEvalResult {
         let backendMetadata = failure.backendMetadata
+        let verificationSnapshot = TextToSQLEvalScorer.postgresVerificationSnapshot(from: trace)
         return TextToSQLEvalResult(
             caseID: evalCase.id,
             backend: options.backend,
@@ -403,11 +412,15 @@ public enum TextToSQLEvalCaseRunner {
                     && failure.category != .backendUnavailable,
                 structuredResponseParsed: structuredResponseParsed(for: failure.category),
                 decisionMatches: false,
-                safetyValid: failure.category == .safetyValidation ? false : nil,
+                safetyValid: failure.category == .safetyValidation
+                    ? false
+                    : failure.category == .postgresVerification ? true : nil,
                 schemaValid: (
                     failure.category == .schemaValidation
                         || failure.category == .repeatedNoProgressRepair
-                ) ? false : nil,
+                )
+                    ? false
+                    : failure.category == .postgresVerification ? true : nil,
                 latencyMs: latencyMs,
                 modelCallCount: failureModelCallCount(
                     trace: trace,
@@ -426,10 +439,12 @@ public enum TextToSQLEvalCaseRunner {
                     ?? failure.openRouterFailure?.returnedModelID,
                 openRouterProviderName: backendMetadata?.providerName
                     ?? failure.openRouterFailure?.providerName
-            ).withOpenRouterAgentMetadata(backendMetadata, trace: trace),
+            ).withOpenRouterAgentMetadata(backendMetadata, trace: trace)
+                .withPostgresVerification(verificationSnapshot),
             diagnostics: TextToSQLEvalDiagnostics(
                 errorMessage: failure.localizedDescription,
-                openRouterFailure: failure.openRouterFailure
+                openRouterFailure: failure.openRouterFailure,
+                postgresVerificationDiagnostic: failure.databaseDiagnostic
             ),
             estimatedInitialPrompt: options.estimatedInitialPrompt,
             trace: trace
@@ -468,7 +483,7 @@ public enum TextToSQLEvalCaseRunner {
             .parseFailure
         case .modelGeneration, .cancellation, .emptySQL:
             .generationFailure
-        case .safetyValidation:
+        case .safetyValidation, .postgresVerification:
             .invalidSQL
         case .schemaValidation, .repeatedNoProgressRepair:
             .wrongSchemaObjects
@@ -477,7 +492,8 @@ public enum TextToSQLEvalCaseRunner {
 
     private static func structuredResponseParsed(for category: TextToSQLFailureCategory) -> Bool {
         switch category {
-        case .safetyValidation, .schemaValidation, .repeatedNoProgressRepair, .emptySQL:
+        case .safetyValidation, .schemaValidation, .postgresVerification,
+            .repeatedNoProgressRepair, .emptySQL:
             true
         case .backendUnavailable, .transport, .contextWindow, .structuredResponseParsing,
             .modelGeneration, .cancellation:
@@ -503,6 +519,7 @@ public enum TextToSQLEvalScorer {
             ? generation.generationCallCount
             : (trace?.modelCalls ?? generation.generationCallCount)
         let backendMetadata = generation.backendMetadata
+        let verificationSnapshot = postgresVerificationSnapshot(from: trace)
 
         if expected.decision == .clarify {
             let quality = clarificationQuality(
@@ -532,7 +549,8 @@ public enum TextToSQLEvalScorer {
                     openRouterRequestedModelID: backendMetadata?.requestedModelID,
                     openRouterReturnedModelID: backendMetadata?.returnedModelID,
                     openRouterProviderName: backendMetadata?.providerName
-                ).withOpenRouterAgentMetadata(backendMetadata, trace: trace),
+                ).withOpenRouterAgentMetadata(backendMetadata, trace: trace)
+                    .withPostgresVerification(verificationSnapshot),
                 diagnostics: TextToSQLEvalDiagnostics(),
                 generatedSQL: generation.sql.nilIfBlank,
                 clarificationQuestion: generation.clarificationQuestion,
@@ -568,7 +586,8 @@ public enum TextToSQLEvalScorer {
                     openRouterRequestedModelID: backendMetadata?.requestedModelID,
                     openRouterReturnedModelID: backendMetadata?.returnedModelID,
                     openRouterProviderName: backendMetadata?.providerName
-                ).withOpenRouterAgentMetadata(backendMetadata, trace: trace),
+                ).withOpenRouterAgentMetadata(backendMetadata, trace: trace)
+                    .withPostgresVerification(verificationSnapshot),
                 generatedSQL: generation.sql.nilIfBlank,
                 clarificationQuestion: generation.clarificationQuestion,
                 referencedTables: generation.referencedTables,
@@ -602,7 +621,8 @@ public enum TextToSQLEvalScorer {
                     openRouterRequestedModelID: backendMetadata?.requestedModelID,
                     openRouterReturnedModelID: backendMetadata?.returnedModelID,
                     openRouterProviderName: backendMetadata?.providerName
-                ).withOpenRouterAgentMetadata(backendMetadata, trace: trace),
+                ).withOpenRouterAgentMetadata(backendMetadata, trace: trace)
+                    .withPostgresVerification(verificationSnapshot),
                 diagnostics: TextToSQLEvalDiagnostics(safetyErrors: safety.errors),
                 generatedSQL: generation.sql.nilIfBlank,
                 referencedTables: generation.referencedTables,
@@ -680,7 +700,8 @@ public enum TextToSQLEvalScorer {
                 openRouterRequestedModelID: backendMetadata?.requestedModelID,
                 openRouterReturnedModelID: backendMetadata?.returnedModelID,
                 openRouterProviderName: backendMetadata?.providerName
-            ).withOpenRouterAgentMetadata(backendMetadata, trace: trace),
+            ).withOpenRouterAgentMetadata(backendMetadata, trace: trace)
+                    .withPostgresVerification(verificationSnapshot),
             diagnostics: TextToSQLEvalDiagnostics(
                 missingTables: missingTables,
                 missingColumnBindings: missingColumnBindings,
@@ -693,6 +714,23 @@ public enum TextToSQLEvalScorer {
             referencedColumnBindings: referencedColumnBindings,
             estimatedInitialPrompt: options.estimatedInitialPrompt,
             trace: trace
+        )
+    }
+
+    fileprivate static func postgresVerificationSnapshot(
+        from trace: TextToSQLTrace?
+    ) -> EvalPostgresVerificationSnapshot? {
+        let stages = trace?.stages.filter { $0.verificationStatus != nil } ?? []
+        guard let final = stages.last, let status = final.verificationStatus else { return nil }
+        return EvalPostgresVerificationSnapshot(
+            status: status,
+            sqlState: final.sqlState,
+            diagnosticKind: final.databaseDiagnosticKind,
+            elapsedMs: final.elapsedMs,
+            repairAttempted: stages.contains {
+                $0.verificationRepairAttempted == true
+                    || $0.stage == .postgresVerificationRepair
+            }
         )
     }
 
@@ -1045,6 +1083,14 @@ public enum TextToSQLEvalScorer {
     }
 }
 
+private struct EvalPostgresVerificationSnapshot {
+    var status: SQLVerificationStatus
+    var sqlState: String?
+    var diagnosticKind: DatabaseDiagnosticKind?
+    var elapsedMs: Int
+    var repairAttempted: Bool
+}
+
 private extension TextToSQLEvalMetrics {
     func withOpenRouterAgentMetadata(
         _ metadata: OpenRouterGenerationMetadata?,
@@ -1057,6 +1103,19 @@ private extension TextToSQLEvalMetrics {
         copy.openRouterSchemaToolCallCount = trace?.schemaToolCalls.nonEmptyCount
             ?? metadata?.agentSchemaToolCallCount
         copy.openRouterAgentTerminalOutcome = metadata?.agentTerminalOutcome
+        return copy
+    }
+
+    func withPostgresVerification(
+        _ snapshot: EvalPostgresVerificationSnapshot?
+    ) -> TextToSQLEvalMetrics {
+        guard let snapshot else { return self }
+        var copy = self
+        copy.postgresVerificationStatus = snapshot.status
+        copy.postgresVerificationSQLState = snapshot.sqlState
+        copy.postgresVerificationDiagnosticKind = snapshot.diagnosticKind
+        copy.postgresVerificationElapsedMs = snapshot.elapsedMs
+        copy.postgresVerificationRepairAttempted = snapshot.repairAttempted
         return copy
     }
 }

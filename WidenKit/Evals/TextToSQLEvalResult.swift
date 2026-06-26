@@ -58,6 +58,11 @@ public struct TextToSQLEvalMetrics: Codable, Equatable, Sendable {
     public var openRouterAgentHTTPAttemptCount: Int?
     public var openRouterSchemaToolCallCount: Int?
     public var openRouterAgentTerminalOutcome: String?
+    public var postgresVerificationStatus: SQLVerificationStatus?
+    public var postgresVerificationSQLState: String?
+    public var postgresVerificationDiagnosticKind: DatabaseDiagnosticKind?
+    public var postgresVerificationElapsedMs: Int?
+    public var postgresVerificationRepairAttempted: Bool?
     public var semanticExecutionAttempted: Bool?
     public var semanticEnvironmentAvailable: Bool?
     public var goldenExecutionSucceeded: Bool?
@@ -99,6 +104,11 @@ public struct TextToSQLEvalMetrics: Codable, Equatable, Sendable {
         openRouterAgentHTTPAttemptCount: Int? = nil,
         openRouterSchemaToolCallCount: Int? = nil,
         openRouterAgentTerminalOutcome: String? = nil,
+        postgresVerificationStatus: SQLVerificationStatus? = nil,
+        postgresVerificationSQLState: String? = nil,
+        postgresVerificationDiagnosticKind: DatabaseDiagnosticKind? = nil,
+        postgresVerificationElapsedMs: Int? = nil,
+        postgresVerificationRepairAttempted: Bool? = nil,
         semanticExecutionAttempted: Bool? = nil,
         semanticEnvironmentAvailable: Bool? = nil,
         goldenExecutionSucceeded: Bool? = nil,
@@ -139,6 +149,11 @@ public struct TextToSQLEvalMetrics: Codable, Equatable, Sendable {
         self.openRouterAgentHTTPAttemptCount = openRouterAgentHTTPAttemptCount
         self.openRouterSchemaToolCallCount = openRouterSchemaToolCallCount
         self.openRouterAgentTerminalOutcome = openRouterAgentTerminalOutcome
+        self.postgresVerificationStatus = postgresVerificationStatus
+        self.postgresVerificationSQLState = postgresVerificationSQLState
+        self.postgresVerificationDiagnosticKind = postgresVerificationDiagnosticKind
+        self.postgresVerificationElapsedMs = postgresVerificationElapsedMs
+        self.postgresVerificationRepairAttempted = postgresVerificationRepairAttempted
         self.semanticExecutionAttempted = semanticExecutionAttempted
         self.semanticEnvironmentAvailable = semanticEnvironmentAvailable
         self.goldenExecutionSucceeded = goldenExecutionSucceeded
@@ -175,6 +190,9 @@ public struct TextToSQLEvalDiagnostics: Codable, Equatable, Sendable {
     public var openRouterRetryAfterSeconds: Double?
     public var openRouterSuggestedWaitSeconds: Double?
     public var openRouterAttemptCount: Int?
+    public var postgresVerificationSQLState: String?
+    public var postgresVerificationDiagnosticKind: DatabaseDiagnosticKind?
+    public var postgresVerificationMessage: String?
 
     public init(
         missingTables: [String] = [],
@@ -183,7 +201,8 @@ public struct TextToSQLEvalDiagnostics: Codable, Equatable, Sendable {
         safetyErrors: [String] = [],
         schemaErrors: [String] = [],
         errorMessage: String? = nil,
-        openRouterFailure: OpenRouterFailureDiagnostic? = nil
+        openRouterFailure: OpenRouterFailureDiagnostic? = nil,
+        postgresVerificationDiagnostic: DatabaseDiagnostic? = nil
     ) {
         self.missingTables = missingTables
         self.missingColumnBindings = missingColumnBindings
@@ -203,6 +222,9 @@ public struct TextToSQLEvalDiagnostics: Codable, Equatable, Sendable {
         self.openRouterRetryAfterSeconds = openRouterFailure?.retryAfterSeconds
         self.openRouterSuggestedWaitSeconds = openRouterFailure?.suggestedWaitSeconds
         self.openRouterAttemptCount = openRouterFailure?.attemptCount
+        self.postgresVerificationSQLState = postgresVerificationDiagnostic?.sqlState
+        self.postgresVerificationDiagnosticKind = postgresVerificationDiagnostic?.kind
+        self.postgresVerificationMessage = postgresVerificationDiagnostic?.message
     }
 }
 

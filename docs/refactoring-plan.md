@@ -37,7 +37,7 @@ PR 2 + PR 4 + PR 6
   └── PR 7 ✅ — Cloud tool-using SQL agent                  [done 2026-06-25]
 
 PR 2 + PR 3
-  └── PR 8 — PostgreSQL verification and one repair        [parallel with PR 7]
+  └── PR 8 ✅ — PostgreSQL verification and one repair        [done 2026-06-26]
 
 PR 6 + PR 8
   └── PR 9 — Optional data-inspection tools
@@ -829,7 +829,7 @@ The live tools-mode results are safe to keep behind the disabled feature flag, b
 
 ---
 
-# PR 8 — Verify SQL with PostgreSQL and allow one repair
+# PR 8 ✅ — Verify SQL with PostgreSQL and allow one repair [done 2026-06-26]
 
 Suggested title:
 
@@ -888,6 +888,50 @@ verification latency
 * Exactly one repair is permitted.
 * Repeated SQL terminates immediately.
 * Permission/connection/timeout failures do not trigger model repair.
+
+Completed on 2026-06-26.
+
+Implementation notes:
+
+* Added a separate `GeneratedSQLVerifying` service and production `PostgresSQLVerifier` that verifies generated read SQL through `PREPARE` inside a short-lived read-only transaction with local timeouts and deterministic session settings, then always deallocates and rolls back.
+* Preserved structured PostgreSQL diagnostics, including SQLSTATE, severity, detail/hint, position, relation/column/type/constraint fields, and debug server fields when available.
+* Integrated verification into the generated SQL pipeline after deterministic repair and static validation, with trace stages for PostgreSQL verification and one verification repair.
+* Limited verification repair to exactly one model call for repairable database diagnostics and stopped without repair for permission, connection, cancellation, and timeout failures.
+* Wired live connected app sessions to pass a verification-capable connection handle; missing verifier or connection is recorded as a skipped verification result.
+* Extended WidenEval metrics, reports, and seeded DB semantic runs so PostgreSQL verification is reported separately and must pass before semantic execution can count as end-to-end success.
+* Added fake-verifier pipeline tests for pass/fail/repair/skip/cancellation/nonrepairable behavior, schema-tool trace preservation, and Preseason regressions, plus gated Postgres integration coverage for real `PREPARE` SQLSTATE failures and non-execution behavior.
+
+Cleanup pass (pre-merge review feedback):
+
+* Routed verification-repair failures through `repairFailure(... stage: .postgresVerificationRepair)` so rejected/no-progress verification-repair candidates report `.postgresVerificationRepair` instead of `.validationRepair`, with a deterministic pipeline test for the rejected-candidate path.
+* Extended the one-shot PostgreSQL verification repair to validation-repair output: when validation repair produces locally valid SQL that fails verification with a repairable diagnostic, the pipeline now invokes `runPostgresVerificationRepair` once instead of failing immediately.
+* Aligned the verifier session `DateStyle`/`IntervalStyle` with the seeded semantic executor (`ISO, YMD` / `iso_8601`) so verification parses date/interval literals under the same rules as execution.
+* Rejected PostgreSQL bind placeholders (e.g. `$1`) before accepting verification, since `PREPARE` would accept a parameterized statement that the no-bind execution path cannot run; the diagnostic is repairable so the model can inline the value.
+* Updated WidenEval report scope text to distinguish static evals without a verifier, static evals with a verifier, and seeded semantic evals that run PostgreSQL verification before semantic execution.
+* Added `GeneratedSQLVerifier.swift`, `PostgresErrorMapper.swift`, and `PostgresService.swift` to the eval scorer source hashes so manifests stay comparable now that verification can change the final decision.
+* Split the PostgreSQL verification summary metric into an attempted pass rate (`passed / (passed + failed)`) alongside the full status-count table, so a non-DB run no longer reads as `0/N` verification passed.
+
+Verification:
+
+```text
+make project
+make test
+make test-db
+make eval-db-local REPEAT=3
+make eval-db-cloud MODEL=openai/gpt-5.5 REPEAT=3
+make eval-db-cloud-agent MODEL=openai/gpt-5.5 REPEAT=3
+```
+
+Results:
+
+```text
+make project: project generation succeeded.
+make test: 747 tests in 42 suites passed.
+make test-db: 31 tests in 3 suites passed.
+make eval-db-local REPEAT=3: 60 results; static-shape 20.0%; semantic end-to-end 20.0%; overall end-to-end 12/60 (20.0%); PostgreSQL verification attempted pass rate 9/9; status counts passed=9, failed=0, skippedStaticValidationFailed=30.
+make eval-db-cloud MODEL=openai/gpt-5.5 REPEAT=3: 60 results; backend available 60/60; transport success 60/60; static-shape 35.0%; semantic end-to-end 23.3%; overall end-to-end 14/60 (23.3%); PostgreSQL verification attempted pass rate 12/12; status counts passed=12, failed=0, skippedStaticValidationFailed=8.
+make eval-db-cloud-agent MODEL=openai/gpt-5.5 REPEAT=3: 60 results; backend available 60/60; transport success 60/60; static-shape 30.0%; semantic end-to-end 20.0%; overall end-to-end 12/60 (20.0%); PostgreSQL verification attempted pass rate 12/12; status counts passed=12, failed=0, skippedStaticValidationFailed=0.
+```
 
 ---
 

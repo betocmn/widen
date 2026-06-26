@@ -109,6 +109,10 @@ enum EvalReporter {
         }
 
         lines += statusCountSection(title: "Status Counts", summary: run.summary)
+        lines += postgresVerificationStatusCountSection(
+            title: "PostgreSQL Verification Status Counts",
+            summary: run.summary
+        )
         lines += openRouterSection(results: run.results)
         lines += semanticStatusCountSection(title: "Semantic Status Counts", summary: run.summary)
         lines += staticSemanticCrossTabSection(title: "Static/Semantic Cross-Tab", summary: run.summary)
@@ -121,6 +125,10 @@ enum EvalReporter {
                 )
                 lines += semanticStatusCountSection(
                     title: "\(backend.rawValue.capitalized) Semantic Status Counts",
+                    summary: summary
+                )
+                lines += postgresVerificationStatusCountSection(
+                    title: "\(backend.rawValue.capitalized) PostgreSQL Verification Status Counts",
                     summary: summary
                 )
                 lines += staticSemanticCrossTabSection(
@@ -138,12 +146,12 @@ enum EvalReporter {
             "",
             "## Per Case",
             "",
-            "| Case | Backend | Repeat | Static Status | Semantic Status | Semantic Result | Diagnostics |",
-            "| --- | --- | ---: | --- | --- | --- | --- |",
+            "| Case | Backend | Repeat | Static Status | PostgreSQL Verification | Semantic Status | Semantic Result | Diagnostics |",
+            "| --- | --- | ---: | --- | --- | --- | --- | --- |",
         ]
         for result in run.results.sorted(by: resultSort) {
             lines.append(
-                "| \(tableCell(result.caseID)) | \(tableCell(result.backend.rawValue)) | \(result.repeatIndex) | \(tableCell(result.status.rawValue)) | \(tableCell(result.metrics.semanticStatus?.rawValue ?? "-")) | \(semanticSummary(result)) | \(diagnosticsSummary(result)) |"
+                "| \(tableCell(result.caseID)) | \(tableCell(result.backend.rawValue)) | \(result.repeatIndex) | \(tableCell(result.status.rawValue)) | \(tableCell(result.metrics.postgresVerificationStatus?.rawValue ?? "-")) | \(tableCell(result.metrics.semanticStatus?.rawValue ?? "-")) | \(semanticSummary(result)) | \(diagnosticsSummary(result)) |"
             )
         }
 
@@ -161,11 +169,25 @@ enum EvalReporter {
             return "**Evaluation scope:** The smoke run invokes the shared production text-to-SQL pipeline only to exercise OpenRouter transport, request-mode selection, structured-response parsing, retry accounting, and safe provider diagnostics. It does not establish SQL semantic accuracy."
         }
 
+        let verificationAttempted = postgresVerificationAttempted(in: run.summary)
+
         if run.manifest.evaluationMode.contains("seeded-postgres-semantic") {
-            return "**Evaluation scope:** The eval invokes the shared production text-to-SQL pipeline through local validation and validation-only repair, keeps the static-shape score, then independently executes eligible final SQL decisions against seeded PostgreSQL fixtures for semantic result-set grading."
+            let verificationClause = verificationAttempted
+                ? "through local validation and PostgreSQL verification, "
+                : "through local validation, "
+            return "**Evaluation scope:** The eval invokes the shared production text-to-SQL pipeline \(verificationClause)keeps the static-shape score, then independently executes eligible final SQL decisions against seeded PostgreSQL fixtures for semantic result-set grading."
         }
 
-        return "**Evaluation scope:** The eval invokes the shared production text-to-SQL pipeline through local validation and validation-only repair, then applies a static-shape score to the final decision. It does not establish result-set or semantic correctness."
+        let verificationClause = verificationAttempted
+            ? "through local validation and PostgreSQL verification, "
+            : "through local validation and validation-only repair, "
+        return "**Evaluation scope:** The eval invokes the shared production text-to-SQL pipeline \(verificationClause)then applies a static-shape score to the final decision. It does not establish result-set or semantic correctness."
+    }
+
+    private static func postgresVerificationAttempted(in summary: EvalRunSummary) -> Bool {
+        guard let counts = summary.postgresVerificationStatusCounts else { return false }
+        return (counts[SQLVerificationStatus.passed.rawValue, default: 0]
+            + counts[SQLVerificationStatus.failed.rawValue, default: 0]) > 0
     }
 
     private static func summarySection(title: String, summary: EvalRunSummary) -> [String] {
@@ -207,6 +229,7 @@ enum EvalReporter {
             "| Decision matches | \(count(summary.decisionMatches)) |",
             "| Safety valid | \(count(summary.safetyValid, suffix: " evaluated")) |",
             "| Schema valid | \(count(summary.schemaValid, suffix: " evaluated")) |",
+            "| PostgreSQL verification attempted pass rate | \(summary.postgresVerificationAttemptedPass.map { count($0) } ?? "-") |",
             "| Forbidden binding violations | \(summary.forbiddenBindingViolationCount) |",
             "| Average required-table coverage | \(average(summary.requiredTableCoverage, suffix: " SQL results evaluated")) |",
             "| Average required-column coverage | \(average(summary.requiredColumnBindingCoverage, suffix: " SQL results evaluated")) |",
@@ -242,6 +265,24 @@ enum EvalReporter {
         ]
         for status in TextToSQLEvalCaseStatus.allCases {
             lines.append("| \(status.rawValue) | \(summary.statusCounts[status.rawValue, default: 0]) |")
+        }
+        return lines
+    }
+
+    private static func postgresVerificationStatusCountSection(
+        title: String,
+        summary: EvalRunSummary
+    ) -> [String] {
+        guard let counts = summary.postgresVerificationStatusCounts else { return [] }
+        var lines = [
+            "",
+            "## \(title)",
+            "",
+            "| Status | Count |",
+            "| --- | ---: |",
+        ]
+        for status in SQLVerificationStatus.allCases {
+            lines.append("| \(status.rawValue) | \(counts[status.rawValue, default: 0]) |")
         }
         return lines
     }
@@ -542,6 +583,16 @@ enum EvalReporter {
         }
         if let category = result.diagnostics.openRouterFailureCategory {
             parts.append("openrouter: \(category)")
+        }
+        if let kind = result.diagnostics.postgresVerificationDiagnosticKind
+            ?? result.metrics.postgresVerificationDiagnosticKind
+        {
+            parts.append("postgres: \(kind.rawValue)")
+        }
+        if let sqlState = result.diagnostics.postgresVerificationSQLState
+            ?? result.metrics.postgresVerificationSQLState
+        {
+            parts.append("sqlstate: \(sqlState)")
         }
         if let mode = result.metrics.openRouterStructuredOutputMode {
             parts.append("mode: \(mode)")
