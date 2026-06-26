@@ -28,6 +28,7 @@ make eval-all MODEL=openai/gpt-5.5
 make eval-case CASE=preseason.top-wins-defined BACKEND=local
 make eval-db-local
 make eval-db-cloud MODEL=openai/gpt-5.5
+make eval-release MODEL=openai/gpt-5.5
 make eval-db-case CASE=preseason.top-wins-defined BACKEND=local
 make eval-retrieval
 make eval-retrieval RETRIEVER=index
@@ -55,6 +56,7 @@ variable. Do not commit API keys, prompts, or raw model output.
 --output <directory>
 --record-prompts
 --fail-under <percentage>
+--release-gate-version <version>
 --semantic-db
 --retriever legacy|index|both
 ```
@@ -120,6 +122,20 @@ SQL semantic pass rate, clarification pass rate, semantic environment
 availability, static/semantic cross-tabs, stable result digests, and concise
 mismatch categories. They do not include raw result rows. Detailed synthetic
 diffs, if added later, must stay under `.eval-results/`.
+
+## Release Gate
+
+`make eval-release MODEL=<model>` is the PR 12 release gate. It runs
+`Evals/suites/text-to-sql-v1.json` with `--backend cloud`, `--cloud-agent tools`,
+`--semantic-db`, and `--repeat 3`. The normal `.eval-results/<timestamp>/`
+artifacts are written, then `docs/evals/<CFBundleShortVersionString>.md` is
+written with the gate result.
+
+The gate exits nonzero unless all thresholds pass: 60 total results, at least
+90% end-to-end semantic pass rate, 100% evaluated safety validity, 100%
+evaluated schema validity, 100% clarification decision accuracy, at least 95%
+transport reliability, and zero repeated repair fingerprint/no-progress repair
+failures.
 
 ## Schema Retrieval Evals
 

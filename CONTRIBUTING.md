@@ -1,8 +1,8 @@
 # Contributing
 
-Thanks for helping improve Widen. This project is early, local-first, and
-privacy-sensitive, so contributions should preserve the central promise: Widen
-helps draft SQL, but the user stays in control of every query that runs.
+Thanks for helping improve Widen. This project is early and privacy-sensitive,
+so contributions should preserve the central promise: Widen helps draft SQL,
+but the user stays in control of every query that runs.
 
 ## Good First Areas
 
@@ -22,8 +22,9 @@ problem, proposed behavior, and any tradeoffs.
 
 Requirements:
 
-- macOS 26 or later.
-- Xcode 26, or override `DEVELOPER_DIR` if your Xcode lives somewhere else.
+- macOS 14 or later to run the app.
+- Xcode 26 to build from source, or override `DEVELOPER_DIR` if your Xcode
+  lives somewhere else.
 - XcodeGen for regenerating the committed project from `project.yml`.
 - PostgreSQL only if you want to run integration tests or try the sample
   database.
@@ -37,6 +38,7 @@ make build     # build the Debug app
 make test      # unit tests
 make test-db   # unit + local Postgres integration tests
 make run       # build and launch Widen.app
+make eval-release MODEL=openai/gpt-5.5  # PR 12 text-to-SQL release gate
 ```
 
 The committed `Widen.xcodeproj` is generated. Edit `project.yml`, run
@@ -52,19 +54,24 @@ Run the narrowest test set that covers your change:
 - Database behavior changes should run `make test-db` when you have local
   PostgreSQL available.
 - Foundation Models behavior should run `make test-fm` only on an eligible Mac
-  with Apple Intelligence enabled.
+  with macOS 26+, Apple Intelligence enabled, and local model support.
+- Text-to-SQL release changes should run `make eval-release MODEL=<model>` when
+  the OpenRouter and local PostgreSQL eval environment is available.
 
 If you cannot run an expected test locally, say that in the pull request.
 
 ## Safety And Privacy Rules
 
-- Do not persist database passwords, API keys, query results, or model prompts
-  outside their current storage boundaries.
+- Do not persist database passwords, API keys, query results, inspected data
+  values, or model prompts outside their current storage boundaries.
 - Keep passwords and API keys in the macOS Keychain.
 - Keep generated SQL reviewable before execution.
 - Keep SQL validation deterministic and covered by tests.
 - Do not add analytics, telemetry, crash reporting, or network calls without a
   visible user-facing reason and README/privacy documentation.
+- Cloud text-to-SQL may send the question and allowed schema metadata to the
+  selected provider. Inspected data values require explicit per-connection
+  cloud data inspection opt-in.
 - Prefer read-only database guidance in docs and examples.
 
 ## Pull Request Checklist
