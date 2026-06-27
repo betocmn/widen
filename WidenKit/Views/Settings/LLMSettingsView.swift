@@ -63,7 +63,7 @@ struct LLMSettingsView: View {
                         isOn: $appState.openRouterSchemaToolAgentEnabled
                     )
                     Text(
-                        "Enabled by default. This is Widen's release-gated OpenRouter path: the model receives schema metadata through bounded tools. Data values are queried and sent only when cloud data inspection is enabled for the connection. Turn this off only to fall back to the legacy one-shot OpenRouter generator."
+                        "Enabled by default. This is Widen's current OpenRouter schema-tool path. It is still being evaluated; see docs/evals for the current release-gate status. Data values are queried and sent only when cloud data inspection is enabled for the connection. Turn this off only to fall back to the legacy one-shot OpenRouter generator."
                     )
                     .font(.callout)
                     .foregroundStyle(.secondary)

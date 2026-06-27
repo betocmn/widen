@@ -297,6 +297,10 @@ It runs the 20-case suite three times against the same OpenRouter schema-tool
 path used by the default product experience, with seeded Postgres semantic
 grading. It writes the normal `.eval-results/` artifacts, writes
 `docs/evals/<version>.md`, and exits nonzero unless the release thresholds pass.
+Cloud/OpenRouter is the default text-to-SQL path, but text-to-SQL remains beta
+and should not be described as production-ready until that gate passes. Manual
+SQL editing, schema browsing, and normal database work remain supported
+independently of AI backend configuration.
 
 ## Development notes and caveats
 

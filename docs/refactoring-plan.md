@@ -1157,7 +1157,7 @@ Only start this after eval evidence from PR 7 and PR 11.
 
 * Isolate `FoundationModels` imports behind availability and conditional compilation.
 * Lower the deployment target to the oldest macOS version supported by the rest of Widen’s dependencies.
-* Cloud becomes the recommended/default text-to-SQL backend.
+* Cloud/OpenRouter becomes the default text-to-SQL backend.
 * Local appears only on eligible macOS 26 hardware.
 * Preserve a fully local mode for users who prioritize privacy over capability.
 * Add clear privacy descriptions before sending schema metadata or data values to cloud services.
@@ -1189,6 +1189,9 @@ docs/evals/<release-version>.md
 ```
 
 Do not publish the text-to-SQL feature as production-ready until the gate passes.
+Until then, text-to-SQL remains beta even though Cloud/OpenRouter is the default
+AI path. Manual SQL editing, schema browsing, and normal database work are
+supported independently of AI backend configuration.
 
 Completion notes:
 
