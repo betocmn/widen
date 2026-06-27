@@ -748,11 +748,19 @@ public enum TextToSQLEvalScorer {
         else { return false }
         let candidateTokens = Set(normalizedTokens(in: text))
         guard !candidateTokens.isEmpty else { return false }
-        return configuredConcepts.contains { concept in
+        let mentionsExpectedConcept = configuredConcepts.contains { concept in
             let conceptTokens = normalizedTokens(in: concept)
             return !conceptTokens.isEmpty && conceptTokens.contains { candidateTokens.contains($0) }
         }
+        guard mentionsExpectedConcept else { return false }
+        return !candidateTokens.isDisjoint(with: databaseDecisionTokens)
     }
+
+    private static let databaseDecisionTokens: Set<String> = [
+        "metric", "definition", "define", "count", "counting", "sum", "average",
+        "relationship", "join", "path", "status", "filter", "value", "time", "date",
+        "field", "column", "table", "event", "occurrence", "row", "rows", "window",
+    ]
 
     private static func normalizedTokens(in value: String) -> [String] {
         value
@@ -1105,6 +1113,7 @@ private extension TextToSQLEvalMetrics {
         copy.openRouterInspectionToolCallCount = trace?.inspectionToolCalls.nonEmptyCount
             ?? metadata?.agentInspectionToolCallCount
         copy.openRouterAgentTerminalOutcome = metadata?.agentTerminalOutcome
+        copy.openRouterAgentDiagnostics = metadata?.agentDiagnostics
         return copy
     }
 

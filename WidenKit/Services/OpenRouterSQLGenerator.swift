@@ -85,6 +85,71 @@ public struct OpenRouterModelMetadata: Codable, Identifiable, Equatable, Sendabl
     }
 }
 
+public enum OpenRouterSchemaToolAppRejectionReason: String, Codable, Equatable, Sendable {
+    case uninspectedObject
+    case invalidSQL
+    case unsupportedAction
+    case malformedTerminal
+    case budgetExhausted
+    case clarificationRejected
+}
+
+public struct OpenRouterSchemaToolEvidenceSummary: Codable, Equatable, Sendable {
+    public var searched: Bool
+    public var describedTableIDs: [String]
+    public var exposedColumnIDs: [String]
+    public var exposedForeignKeyPathIDs: [String]
+    public var inspectedConstraintToolUsed: Bool
+    public var inspectedValueToolUsed: Bool
+
+    public init(
+        searched: Bool = false,
+        describedTableIDs: [String] = [],
+        exposedColumnIDs: [String] = [],
+        exposedForeignKeyPathIDs: [String] = [],
+        inspectedConstraintToolUsed: Bool = false,
+        inspectedValueToolUsed: Bool = false
+    ) {
+        self.searched = searched
+        self.describedTableIDs = describedTableIDs
+        self.exposedColumnIDs = exposedColumnIDs
+        self.exposedForeignKeyPathIDs = exposedForeignKeyPathIDs
+        self.inspectedConstraintToolUsed = inspectedConstraintToolUsed
+        self.inspectedValueToolUsed = inspectedValueToolUsed
+    }
+}
+
+public struct OpenRouterSchemaToolAgentDiagnostics: Codable, Equatable, Sendable {
+    public var logicalTurnCount: Int?
+    public var terminalToolSeen: Bool
+    public var terminalAction: String?
+    public var terminalValidationFailureReason: String?
+    public var triedSchemaToolsAfterTerminal: Bool
+    public var producedProseInsteadOfTools: Bool
+    public var schemaEvidence: OpenRouterSchemaToolEvidenceSummary
+    public var appSideRejectionReason: OpenRouterSchemaToolAppRejectionReason?
+
+    public init(
+        logicalTurnCount: Int? = nil,
+        terminalToolSeen: Bool = false,
+        terminalAction: String? = nil,
+        terminalValidationFailureReason: String? = nil,
+        triedSchemaToolsAfterTerminal: Bool = false,
+        producedProseInsteadOfTools: Bool = false,
+        schemaEvidence: OpenRouterSchemaToolEvidenceSummary = OpenRouterSchemaToolEvidenceSummary(),
+        appSideRejectionReason: OpenRouterSchemaToolAppRejectionReason? = nil
+    ) {
+        self.logicalTurnCount = logicalTurnCount
+        self.terminalToolSeen = terminalToolSeen
+        self.terminalAction = terminalAction
+        self.terminalValidationFailureReason = terminalValidationFailureReason
+        self.triedSchemaToolsAfterTerminal = triedSchemaToolsAfterTerminal
+        self.producedProseInsteadOfTools = producedProseInsteadOfTools
+        self.schemaEvidence = schemaEvidence
+        self.appSideRejectionReason = appSideRejectionReason
+    }
+}
+
 public struct OpenRouterGenerationMetadata: Codable, Equatable, Sendable {
     public var requestedModelID: String
     public var returnedModelID: String?
@@ -113,6 +178,7 @@ public struct OpenRouterGenerationMetadata: Codable, Equatable, Sendable {
     public var agentRequestIDs: [String]?
     public var agentReturnedModelIDs: [String]?
     public var agentProviderNames: [String]?
+    public var agentDiagnostics: OpenRouterSchemaToolAgentDiagnostics?
 }
 
 public struct OpenRouterFailureDiagnostic: Codable, Equatable, Sendable {
