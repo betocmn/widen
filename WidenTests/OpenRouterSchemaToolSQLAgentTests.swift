@@ -679,7 +679,8 @@ struct OpenRouterSchemaToolSQLAgentTests {
             schema: schema,
             context: SQLGenerationContext(),
             config: SQLGenerationConfig(
-                databaseContext: "Each evaluation with a non-null winner_id records one win."
+                databaseContext:
+                    "Each evaluation paid at checkout with a non-null winner_id records one win."
             )
         )
 
@@ -687,6 +688,61 @@ struct OpenRouterSchemaToolSQLAgentTests {
         #expect(result.clarificationQuestion == "Which date should define the time window?")
         #expect(result.backendMetadata?.agentTerminalOutcome == "clarify")
         #expect(result.backendMetadata?.agentDiagnostics?.terminalValidationFailureReason == nil)
+    }
+
+    @Test func contextResolvedClarificationFailsAfterCorrectionBudgetIsSpent() async throws {
+        let schema = Self.makePreseasonSchema()
+        let chatTransport = ScriptedTransport { request, index in
+            switch index {
+            case 1:
+                return Self.assistantText("I need to inspect the schema first.")
+            case 2:
+                let body = try Self.requestBodyText(request)
+                #expect(body.contains("Finish by calling submit_text_to_sql_result exactly once"))
+                return Self.assistantToolCalls([
+                    Self.toolCall(id: "search-after-prose", name: "search_schema", arguments: [
+                        "query": "preseason winner wins",
+                        "limit": 4,
+                    ]),
+                ])
+            case 3:
+                let evaluations = try Self.tableHandle(
+                    named: #""public"."preseason_match_evaluation""#,
+                    in: request
+                )
+                let tools = try Self.tableHandle(named: #""public"."preseason_tool""#, in: request)
+                return Self.assistantToolCalls([
+                    Self.toolCall(id: "describe-after-prose", name: "describe_tables", arguments: [
+                        "table_ids": [evaluations, tools],
+                    ]),
+                ])
+            case 4:
+                return Self.assistantToolCalls([
+                    Self.terminalClarification(
+                        id: "terminal-context-after-budget",
+                        question: "What column, condition, or table defines wins for this question?"
+                    ),
+                ])
+            default:
+                throw URLError(.badServerResponse)
+            }
+        }
+        let agent = makeAgent(schema: schema, chatTransport: chatTransport)
+
+        do {
+            _ = try await agent.generateSQL(
+                question: "Which tools have the most wins in the last two weeks?",
+                schema: schema,
+                context: SQLGenerationContext(),
+                config: SQLGenerationConfig(
+                    databaseContext:
+                        "Each evaluation with a non-null winner_id records one win. Use evaluation createdAt as the time of the win."
+                )
+            )
+            Issue.record("Expected context-resolved clarification failure")
+        } catch let failure as OpenRouterSchemaToolAgentFailure {
+            #expect(failure.category == .terminalResultMalformed)
+        }
     }
 
     @Test func unrelatedDatabaseContextPreservesEvidenceClarificationFallback() async throws {

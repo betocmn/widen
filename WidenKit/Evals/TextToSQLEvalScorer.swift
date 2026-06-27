@@ -755,6 +755,7 @@ public enum TextToSQLEvalScorer {
         guard mentionsExpectedConcept else { return false }
         return !candidateTokens.isDisjoint(with: databaseDecisionTokens)
             || containsSchemaIdentifierEvidence(text)
+            || containsBusinessMetricAlternative(candidateTokens, configuredConcepts: configuredConcepts)
     }
 
     private static let databaseDecisionTokens: Set<String> = [
@@ -771,6 +772,16 @@ public enum TextToSQLEvalScorer {
             of: qualifiedIdentifierPattern,
             options: [.regularExpression, .caseInsensitive]
         ) != nil
+    }
+
+    private static func containsBusinessMetricAlternative(
+        _ candidateTokens: Set<String>,
+        configuredConcepts: [String]
+    ) -> Bool {
+        let configuredTokens = Set(configuredConcepts.flatMap { normalizedTokens(in: $0) })
+        let matched = candidateTokens.intersection(configuredTokens)
+        guard matched.count >= 2 else { return false }
+        return !candidateTokens.isDisjoint(with: ["mean", "means", "or", "should"])
     }
 
     private static func normalizedTokens(in value: String) -> [String] {

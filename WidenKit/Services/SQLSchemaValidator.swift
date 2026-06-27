@@ -2068,7 +2068,15 @@ public enum GeneratedSQLPostprocessor {
     private static func sqlMentionsAnchor(_ sql: String, anchor: String) -> Bool {
         guard anchor.count >= 10 else { return false }
         let datePrefix = String(anchor.prefix(10))
-        return sql.range(of: datePrefix, options: [.caseInsensitive]) != nil
+        guard sql.range(of: datePrefix, options: [.caseInsensitive]) != nil else { return false }
+        guard let timeRange = anchor.range(
+            of: #"\b\d{1,2}:\d{2}"#,
+            options: [.regularExpression]
+        ) else {
+            return true
+        }
+        let timePrefix = String(anchor[timeRange])
+        return sql.range(of: timePrefix, options: [.caseInsensitive]) != nil
     }
 
     private static func usesMovingCurrentTime(_ sql: String) -> Bool {

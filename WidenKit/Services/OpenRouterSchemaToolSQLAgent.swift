@@ -427,21 +427,26 @@ public final class OpenRouterSchemaToolSQLAgent: SQLGenerator, Sendable {
                             databaseContext,
                             question: question,
                             clarification: terminalResult.clarificationQuestion
-                        ),
-                            malformedTerminalCorrections < configuration.maximumMalformedTerminalCorrections
-                        {
-                            malformedTerminalCorrections += 1
+                        ) {
                             diagnostics.appSideRejectionReason = .clarificationRejected
                             diagnostics.terminalValidationFailureReason = "databaseContextClarificationRejected"
-                            messages.append(
-                                toolErrorResponse(
-                                    call: terminal,
-                                    code: "database_context_authoritative",
-                                    message: "Database context already defines the business meaning needed for this question. Produce SQL from inspected schema."
+                            if malformedTerminalCorrections < configuration.maximumMalformedTerminalCorrections {
+                                malformedTerminalCorrections += 1
+                                messages.append(
+                                    toolErrorResponse(
+                                        call: terminal,
+                                        code: "database_context_authoritative",
+                                        message: "Database context already defines the business meaning needed for this question. Produce SQL from inspected schema."
+                                    )
                                 )
+                                messages.append(correction(Self.strictTerminalCorrection))
+                                continue
+                            }
+                            throw await agentFailure(
+                                .terminalResultMalformed,
+                                "The model asked for clarification even though database context answered it.",
+                                session: session
                             )
-                            messages.append(correction(Self.strictTerminalCorrection))
-                            continue
                         }
                         try await checkStaleSnapshot(expected: initialFingerprint)
                         let finalTerminalResult: TerminalResult
@@ -1217,7 +1222,7 @@ public final class OpenRouterSchemaToolSQLAgent: SQLGenerator, Sendable {
     ]
 
     private static let databaseContextTemporalTokens: Set<String> = [
-        "at", "created", "date", "dated", "ended", "ending", "occurred", "scheduled",
+        "created", "date", "dated", "ended", "ending", "occurred", "scheduled",
         "time", "timestamp", "timestamps", "updated", "window",
     ]
 

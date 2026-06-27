@@ -492,6 +492,40 @@ struct TextToSQLEvalTests {
         #expect(result.metrics.clarificationQuality == true)
     }
 
+    @Test func businessMetricAlternativeClarificationPassesQualityScoring() async {
+        let evalCase = TextToSQLEvalCase(
+            id: "commerce.best-customers",
+            schemaFixture: "commerce",
+            question: "Who are our best customers?",
+            expected: TextToSQLEvalExpectation(
+                decision: .clarify,
+                clarificationMustMentionAny: ["metric", "revenue", "spend", "orders", "best"]
+            )
+        )
+        let generator = StaticGenerator(
+            result: SQLGenerationResult(
+                sql: "",
+                explanation: "Needs a database decision.",
+                assumptions: [],
+                referencedTables: [],
+                confidence: 0.2,
+                riskLevel: .medium,
+                needsClarification: true,
+                clarificationQuestion: "Should best customers mean highest revenue or largest spend?"
+            )
+        )
+
+        let result = await TextToSQLEvalCaseRunner.run(
+            evalCase: evalCase,
+            schema: makeCommerceSchema(),
+            generator: generator,
+            options: TextToSQLEvalRunOptions(backend: .cloud, model: "test/model")
+        )
+
+        #expect(result.status == .passed)
+        #expect(result.metrics.clarificationQuality == true)
+    }
+
     @Test func currentClarificationCasesRequireConcreteDatabaseDecision() async {
         let cases: [(TextToSQLEvalCase, good: String, bad: String)] = [
             (
