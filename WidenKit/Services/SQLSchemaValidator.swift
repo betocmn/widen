@@ -959,7 +959,7 @@ public enum SQLSchemaValidator {
             scopeSources: scopeSources,
             schemaIndex: schemaIndex
         )
-        guard let temporalColumn = columns.first(where: isDateOrTimeColumn) else { return }
+        guard let temporalColumn = columns.first(where: { Self.isDateOrTimeColumn($0) }) else { return }
         let key = "\(temporalColumn.id):\(identifier.displayName.lowercased())"
         guard reported.insert(key).inserted else { return }
 
@@ -2077,8 +2077,13 @@ public enum GeneratedSQLPostprocessor {
         }
 
         let options = clarificationOptions(for: first, schema: schema, referencedTables: referencedTables)
-        let clarificationQuestion =
-            "What column, condition, or table defines \"\(first.term)\" for this question?"
+        let clarificationQuestion = clarificationQuestion(
+            for: first,
+            question: question,
+            schema: schema,
+            referencedTables: referencedTables,
+            databaseContext: databaseContext
+        )
         let pending = PendingClarification(
             concept: first,
             originalQuestion: question,
@@ -2087,6 +2092,141 @@ public enum GeneratedSQLPostprocessor {
             evidence: first.evidence
         )
         return SQLGroundingEvaluation(concepts: concepts, pendingClarification: pending)
+    }
+
+    private static func clarificationQuestion(
+        for concept: SQLGroundingConcept,
+        question: String,
+        schema: DatabaseSchema,
+        referencedTables: [String],
+        databaseContext: String
+    ) -> String {
+        if let winner = winnerMetricClarification(
+            for: concept,
+            question: question,
+            schema: schema,
+            referencedTables: referencedTables
+        ) {
+            return winner
+        }
+        if let time = timeFieldClarification(
+            question: question,
+            schema: schema,
+            referencedTables: referencedTables,
+            databaseContext: databaseContext
+        ) {
+            return time
+        }
+        return "What column, condition, or table defines \"\(concept.term)\" for this question?"
+    }
+
+    private static func winnerMetricClarification(
+        for concept: SQLGroundingConcept,
+        question: String,
+        schema: DatabaseSchema,
+        referencedTables: [String]
+    ) -> String? {
+        let termTokens = Set(SchemaIndex.tokens(in: concept.term))
+        guard !termTokens.isDisjoint(with: ["win", "wins", "winner"]) else { return nil }
+
+        let referenced = Set(referencedTables.map { $0.lowercased() })
+        let tables = schema.tables.filter { table in
+            referenced.isEmpty || referenced.contains(table.qualifiedName.lowercased())
+        }
+        for table in tables.sorted(by: { $0.qualifiedName < $1.qualifiedName }) {
+            guard let winnerColumn = table.columns.first(where: {
+                $0.name.lowercased().contains("winner")
+            }) else { continue }
+            let columnPath = "\(table.qualifiedName).\(winnerColumn.name)"
+            let relationship = foreignKeyTarget(
+                schema: schema,
+                sourceTable: table,
+                sourceColumn: winnerColumn.name
+            )
+            let relationshipText = relationship.map { " joining to \($0)" } ?? ""
+            let timeText = timeWindowSuffix(question: question, table: table)
+            return "I found \(columnPath)\(relationshipText). Should \(concept.term) mean counting rows where that column is not null\(timeText)?"
+        }
+        return nil
+    }
+
+    private static func foreignKeyTarget(
+        schema: DatabaseSchema,
+        sourceTable: TableInfo,
+        sourceColumn: String
+    ) -> String? {
+        for foreignKey in schema.foreignKeyConstraints
+            where foreignKey.sourceSchema == sourceTable.schema
+                && foreignKey.sourceTable == sourceTable.name
+        {
+            if foreignKey.columnPairs.contains(where: {
+                $0.sourceColumn.caseInsensitiveCompare(sourceColumn) == .orderedSame
+            }) {
+                return "\(foreignKey.targetSchema).\(foreignKey.targetTable)"
+            }
+        }
+        return nil
+    }
+
+    private static func timeWindowSuffix(question: String, table: TableInfo) -> String {
+        let tokens = Set(SchemaIndex.tokens(in: question))
+        guard !tokens.isDisjoint(with: ["last", "recent", "day", "days", "week", "weeks", "month", "months"])
+        else { return "" }
+        guard let column = table.columns.first(where: { Self.isDateOrTimeColumn($0) }) else { return "" }
+        return " and use \(table.qualifiedName).\(column.name) for the time window"
+    }
+
+    private static func isDateOrTimeColumn(_ column: ColumnInfo) -> Bool {
+        let type = column.dataType.lowercased()
+        return type.contains("timestamp")
+            || type.contains("date")
+            || type.contains("time")
+            || type.contains("interval")
+    }
+
+    private static func timeFieldClarification(
+        question: String,
+        schema: DatabaseSchema,
+        referencedTables: [String],
+        databaseContext: String
+    ) -> String? {
+        let tokens = Set(SchemaIndex.tokens(in: question))
+        guard !tokens.isDisjoint(with: ["last", "recent", "day", "days", "week", "weeks", "month", "months"])
+        else { return nil }
+        let referenced = Set(referencedTables.map { $0.lowercased() })
+        let dateColumns = schema.tables
+            .filter { referenced.isEmpty || referenced.contains($0.qualifiedName.lowercased()) }
+            .flatMap { table in
+                table.columns
+                    .filter { Self.isDateOrTimeColumn($0) }
+                    .map { (table: table, column: $0, display: "\(table.qualifiedName).\($0.name)") }
+            }
+            .sorted { $0.display < $1.display }
+        if databaseContextNamesSingleTimeField(databaseContext, dateColumns: dateColumns) {
+            return nil
+        }
+        let columns = dateColumns.map(\.display).prefix(4)
+        guard !columns.isEmpty else { return nil }
+        return "Which date should define the time window: \(columns.joined(separator: ", "))?"
+    }
+
+    private static func databaseContextNamesSingleTimeField(
+        _ databaseContext: String,
+        dateColumns: [(table: TableInfo, column: ColumnInfo, display: String)]
+    ) -> Bool {
+        let contextTokens = Set(SchemaIndex.tokens(in: databaseContext))
+        guard !contextTokens.isEmpty else { return false }
+        let matches = dateColumns.filter { candidate in
+            let columnTokens = SchemaIndex.tokens(in: candidate.column.name)
+            guard columnTokens.contains(where: {
+                tokenSet(contextTokens, containsRelatedTo: $0)
+            }) else { return false }
+            let tableTokens = SchemaIndex.tokens(in: candidate.table.name)
+            return tableTokens.contains(where: {
+                tokenSet(contextTokens, containsRelatedTo: $0)
+            })
+        }
+        return matches.count == 1
     }
 
     private static func notRequiredConcepts(_ question: String) -> [SQLGroundingConcept] {
@@ -2709,7 +2849,7 @@ public enum GeneratedSQLPostprocessor {
         "a", "about", "above", "after", "again", "all", "also", "am", "an", "and", "any",
         "are", "as", "at", "back", "be", "been", "before", "being", "between", "bottom",
         "but", "by", "can", "could", "current", "day", "days", "did", "do", "does", "each",
-        "for", "from", "get", "getting", "give", "got", "group", "had", "has", "have", "he",
+        "anchor", "ending", "for", "from", "get", "getting", "give", "got", "group", "had", "has", "have", "he",
         "her", "here", "him", "his", "hour", "hours", "how", "i", "in", "into", "is", "it",
         "last", "latest", "least", "limit", "list", "me", "minute", "minutes", "month",
         "months", "most", "my", "newest", "next", "not", "of", "oldest", "on", "or", "our",
@@ -2717,7 +2857,9 @@ public enum GeneratedSQLPostprocessor {
         "sort", "placed", "that", "the", "their", "them", "then", "there", "these", "they", "this",
         "those", "to", "today", "top", "under", "up", "us", "was", "we", "week", "weeks",
         "were", "what", "when", "where", "which", "who", "whom", "whose", "why", "with",
-        "would", "year", "years", "you", "your",
+        "timestamp", "utc", "would", "year", "years", "you", "your",
+        "zero", "one", "two", "three", "four", "five", "six", "seven", "eight", "nine",
+        "ten", "eleven", "twelve",
     ]
 }
 

@@ -1313,6 +1313,123 @@ struct SQLSchemaValidatorTests {
         #expect(enriched.referencedTables == ["public.users"])
     }
 
+    @Test func groundingClarificationNamesWinnerAndTimeCandidates() {
+        func column(
+            table: String,
+            name: String,
+            type: String,
+            nullable: Bool = false,
+            ordinal: Int
+        ) -> ColumnInfo {
+            ColumnInfo(
+                tableSchema: "public",
+                tableName: table,
+                name: name,
+                dataType: type,
+                isNullable: nullable,
+                ordinalPosition: ordinal
+            )
+        }
+        let schema = DatabaseSchema(
+            schemas: [SchemaInfo(name: "public")],
+            tables: [
+                TableInfo(
+                    schema: "public",
+                    name: "preseason_match_evaluation",
+                    type: .baseTable,
+                    columns: [
+                        column(table: "preseason_match_evaluation", name: "winner_id", type: "uuid", nullable: true, ordinal: 1),
+                        column(table: "preseason_match_evaluation", name: "createdAt", type: "timestamp with time zone", ordinal: 2),
+                    ]
+                ),
+                TableInfo(
+                    schema: "public",
+                    name: "preseason_tool",
+                    type: .baseTable,
+                    columns: [
+                        column(table: "preseason_tool", name: "id", type: "uuid", ordinal: 1),
+                        column(table: "preseason_tool", name: "name", type: "text", ordinal: 2),
+                    ]
+                ),
+            ],
+            foreignKeyConstraints: [
+                SchemaForeignKeyConstraintInfo(
+                    constraintName: "preseason_match_evaluation_winner_id_fkey",
+                    sourceSchema: "public",
+                    sourceTable: "preseason_match_evaluation",
+                    targetSchema: "public",
+                    targetTable: "preseason_tool",
+                    columnPairs: [
+                        SchemaForeignKeyColumnPair(
+                            sourceColumn: "winner_id",
+                            targetColumn: "id",
+                            ordinalPosition: 1
+                        ),
+                    ]
+                ),
+            ]
+        )
+        let generation = SQLGenerationResult(
+            sql: """
+                SELECT t.name, COUNT(*) AS wins
+                FROM public.preseason_match_evaluation AS e
+                JOIN public.preseason_tool AS t ON e.winner_id = t.id
+                WHERE e.winner_id IS NOT NULL
+                GROUP BY t.name
+                """,
+            explanation: "Counts winners.",
+            assumptions: [],
+            referencedTables: [],
+            confidence: 1,
+            riskLevel: .low,
+            needsClarification: false,
+            clarificationQuestion: nil
+        )
+
+        let enriched = GeneratedSQLPostprocessor.enriched(
+            generation,
+            question: "Tools with the most wins in the last two weeks",
+            schema: schema,
+            databaseContext: ""
+        )
+
+        #expect(enriched.needsClarification)
+        #expect(enriched.clarificationQuestion?.contains("winner_id") == true)
+        #expect(enriched.clarificationQuestion?.contains("createdAt") == true)
+    }
+
+    @Test func explicitWinnerContextDoesNotClarifyDurationWords() {
+        let generation = SQLGenerationResult(
+            sql: """
+                SELECT t.name, t.slug, COUNT(*) AS wins
+                FROM public.preseason_match_evaluation AS e
+                JOIN public.preseason_tool AS t ON e.winner_id = t.id
+                WHERE e.winner_id IS NOT NULL
+                  AND e."createdAt" >= NOW() - INTERVAL '14 days'
+                GROUP BY t.name, t.slug
+                ORDER BY COUNT(*) DESC
+                """,
+            explanation: "Counts winning evaluations by tool.",
+            assumptions: [],
+            referencedTables: [],
+            confidence: 1,
+            riskLevel: .low,
+            needsClarification: false,
+            clarificationQuestion: nil
+        )
+
+        let enriched = GeneratedSQLPostprocessor.enriched(
+            generation,
+            question: "Which tools have the most wins in the two weeks ending 2026-06-24 12:00 UTC?",
+            schema: makePreseasonWinnerSchema(),
+            databaseContext:
+                "Each evaluation with a non-null winner_id records one win. Use the evaluation createdAt timestamp and treat the evaluation anchor as 2026-06-24 12:00 UTC."
+        )
+
+        #expect(!enriched.needsClarification)
+        #expect(enriched.sql.contains(#"e."createdAt" >= NOW() - INTERVAL '14 days'"#))
+    }
+
     @Test func possessiveSuffixDoesNotBecomeUnsupportedGroundingConcept() {
         let generation = SQLGenerationResult(
             sql: """
@@ -2411,6 +2528,66 @@ struct SQLSchemaValidatorTests {
                 )
             ],
             foreignKeys: []
+        )
+    }
+
+    private func makePreseasonWinnerSchema() -> DatabaseSchema {
+        func column(
+            table: String,
+            name: String,
+            type: String,
+            nullable: Bool = false,
+            ordinal: Int
+        ) -> ColumnInfo {
+            ColumnInfo(
+                tableSchema: "public",
+                tableName: table,
+                name: name,
+                dataType: type,
+                isNullable: nullable,
+                ordinalPosition: ordinal
+            )
+        }
+        return DatabaseSchema(
+            schemas: [SchemaInfo(name: "public")],
+            tables: [
+                TableInfo(
+                    schema: "public",
+                    name: "preseason_match_evaluation",
+                    type: .baseTable,
+                    columns: [
+                        column(table: "preseason_match_evaluation", name: "winner_id", type: "uuid", nullable: true, ordinal: 1),
+                        column(table: "preseason_match_evaluation", name: "createdAt", type: "timestamp with time zone", ordinal: 2),
+                    ]
+                ),
+                TableInfo(
+                    schema: "public",
+                    name: "preseason_tool",
+                    type: .baseTable,
+                    columns: [
+                        column(table: "preseason_tool", name: "id", type: "uuid", ordinal: 1),
+                        column(table: "preseason_tool", name: "name", type: "text", ordinal: 2),
+                        column(table: "preseason_tool", name: "slug", type: "text", ordinal: 3),
+                        column(table: "preseason_tool", name: "createdAt", type: "timestamp with time zone", ordinal: 4),
+                    ]
+                ),
+            ],
+            foreignKeyConstraints: [
+                SchemaForeignKeyConstraintInfo(
+                    constraintName: "preseason_match_evaluation_winner_id_fkey",
+                    sourceSchema: "public",
+                    sourceTable: "preseason_match_evaluation",
+                    targetSchema: "public",
+                    targetTable: "preseason_tool",
+                    columnPairs: [
+                        SchemaForeignKeyColumnPair(
+                            sourceColumn: "winner_id",
+                            targetColumn: "id",
+                            ordinalPosition: 1
+                        ),
+                    ]
+                ),
+            ]
         )
     }
 

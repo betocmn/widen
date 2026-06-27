@@ -408,15 +408,180 @@ struct OpenRouterSchemaToolSQLAgentTests {
         #expect(result.backendMetadata?.agentDiagnostics?.schemaEvidence.describedTableIDs.count == 2)
     }
 
-    @Test func preseasonTopWinsDefinedCanReturnValidatedSQLFromDatabaseContext() async throws {
+    @Test func inspectedAmbiguityFallsBackToClarificationWhenToolBudgetIsExhausted() async throws {
+        let schema = Self.makePreseasonSchema()
+        let chatTransport = ScriptedTransport { request, index in
+            switch index {
+            case 1:
+                return Self.assistantToolCalls([
+                    Self.toolCall(id: "search-budget", name: "search_schema", arguments: [
+                        "query": "preseason winner wins",
+                        "limit": 4,
+                    ]),
+                ])
+            case 2:
+                let evaluations = try Self.tableHandle(
+                    named: #""public"."preseason_match_evaluation""#,
+                    in: request
+                )
+                let tools = try Self.tableHandle(named: #""public"."preseason_tool""#, in: request)
+                return Self.assistantToolCalls([
+                    Self.toolCall(id: "describe-budget", name: "describe_tables", arguments: [
+                        "table_ids": [evaluations, tools],
+                    ]),
+                ])
+            case 3:
+                return Self.assistantToolCalls([
+                    Self.toolCall(id: "over-budget", name: "search_schema", arguments: [
+                        "query": "extra preseason metadata",
+                        "limit": 4,
+                    ]),
+                ])
+            default:
+                throw URLError(.badServerResponse)
+            }
+        }
+        let agent = makeAgent(
+            schema: schema,
+            chatTransport: chatTransport,
+            configuration: OpenRouterSchemaToolSQLAgentConfiguration(maximumSchemaToolCalls: 2)
+        )
+
+        let result = try await agent.generateSQL(
+            question: "Tools with the most wins in the last two weeks",
+            schema: schema,
+            context: SQLGenerationContext(),
+            config: SQLGenerationConfig()
+        )
+
+        #expect(result.needsClarification)
+        #expect(result.clarificationQuestion?.contains("winner_id") == true)
+        #expect(result.backendMetadata?.agentTerminalOutcome == "clarify_fallback")
+        #expect(result.backendMetadata?.agentDiagnostics?.appSideRejectionReason == .clarificationRejected)
+    }
+
+    @Test func genericInspectedClarificationIsReplacedWithEvidenceQuestion() async throws {
+        let schema = Self.makePreseasonSchema()
+        let chatTransport = ScriptedTransport { request, index in
+            switch index {
+            case 1:
+                return Self.assistantToolCalls([
+                    Self.toolCall(id: "search-generic", name: "search_schema", arguments: [
+                        "query": "preseason winner wins",
+                        "limit": 4,
+                    ]),
+                ])
+            case 2:
+                let evaluations = try Self.tableHandle(
+                    named: #""public"."preseason_match_evaluation""#,
+                    in: request
+                )
+                let tools = try Self.tableHandle(named: #""public"."preseason_tool""#, in: request)
+                return Self.assistantToolCalls([
+                    Self.toolCall(id: "describe-generic", name: "describe_tables", arguments: [
+                        "table_ids": [evaluations, tools],
+                    ]),
+                ])
+            case 3:
+                return Self.assistantToolCalls([
+                    Self.terminalClarification(
+                        id: "terminal-generic",
+                        question: "What column, condition, or table defines wins for this question?"
+                    ),
+                ])
+            default:
+                throw URLError(.badServerResponse)
+            }
+        }
+        let agent = makeAgent(schema: schema, chatTransport: chatTransport)
+
+        let result = try await agent.generateSQL(
+            question: "Tools with the most wins in the last two weeks",
+            schema: schema,
+            context: SQLGenerationContext(),
+            config: SQLGenerationConfig()
+        )
+
+        #expect(result.needsClarification)
+        #expect(result.clarificationQuestion?.contains("winner_id") == true)
+        #expect(result.backendMetadata?.agentTerminalOutcome == "clarify_fallback")
+    }
+
+    @Test func databaseContextRejectsGenericClarificationBeforeSQL() async throws {
         let schema = Self.makePreseasonSchema()
         let sql = """
-            SELECT t.id, t.name, t.slug, COUNT(*) AS wins
+            SELECT t.id, t.name, COUNT(*) AS wins
             FROM public.preseason_match_evaluation AS e
             JOIN public.preseason_tool AS t ON e.winner_id = t.id
             WHERE e.winner_id IS NOT NULL
               AND e."createdAt" >= NOW() - INTERVAL '14 days'
-            GROUP BY t.id, t.name, t.slug
+            GROUP BY t.id, t.name
+            ORDER BY COUNT(*) DESC
+            LIMIT 100
+            """
+        let chatTransport = ScriptedTransport { request, index in
+            switch index {
+            case 1:
+                return Self.assistantToolCalls([
+                    Self.toolCall(id: "search-context-generic", name: "search_schema", arguments: [
+                        "query": "preseason winner wins",
+                        "limit": 4,
+                    ]),
+                ])
+            case 2:
+                let evaluations = try Self.tableHandle(
+                    named: #""public"."preseason_match_evaluation""#,
+                    in: request
+                )
+                let tools = try Self.tableHandle(named: #""public"."preseason_tool""#, in: request)
+                return Self.assistantToolCalls([
+                    Self.toolCall(id: "describe-context-generic", name: "describe_tables", arguments: [
+                        "table_ids": [evaluations, tools],
+                    ]),
+                ])
+            case 3:
+                return Self.assistantToolCalls([
+                    Self.terminalClarification(
+                        id: "terminal-context-generic",
+                        question: "What column, condition, or table defines wins for this question?"
+                    ),
+                ])
+            case 4:
+                let body = try Self.requestBodyText(request)
+                #expect(body.contains("database_context_authoritative"))
+                return Self.assistantToolCalls([
+                    Self.terminalSQL(id: "terminal-context-sql", sql: sql),
+                ])
+            default:
+                throw URLError(.badServerResponse)
+            }
+        }
+        let agent = makeAgent(schema: schema, chatTransport: chatTransport)
+
+        let result = try await agent.generateSQL(
+            question: "Which tools have the most wins in the last two weeks?",
+            schema: schema,
+            context: SQLGenerationContext(),
+            config: SQLGenerationConfig(
+                databaseContext:
+                    "Each evaluation with a non-null winner_id records one win. Use evaluation createdAt as the time of the win."
+            )
+        )
+
+        #expect(!result.needsClarification)
+        #expect(result.sql.contains("e.winner_id IS NOT NULL"))
+        #expect(result.backendMetadata?.agentDiagnostics?.terminalValidationFailureReason == "databaseContextClarificationRejected")
+    }
+
+    @Test func preseasonTopWinsDefinedCanReturnValidatedSQLFromDatabaseContext() async throws {
+        let schema = Self.makePreseasonSchema()
+        let sql = """
+            SELECT t.id, t.name, COUNT(*) AS wins
+            FROM public.preseason_match_evaluation AS e
+            JOIN public.preseason_tool AS t ON e.winner_id = t.id
+            WHERE e.winner_id IS NOT NULL
+              AND e."createdAt" >= NOW() - INTERVAL '14 days'
+            GROUP BY t.id, t.name
             ORDER BY COUNT(*) DESC
             LIMIT 100
             """
@@ -448,6 +613,9 @@ struct OpenRouterSchemaToolSQLAgentTests {
                 let body = try Self.requestBodyText(request)
                 #expect(body.contains("Each evaluation with a non-null winner_id records one win"))
                 #expect(body.contains("Database context supplied by the user is authoritative"))
+                #expect(body.contains("project and group by the entity table's stable id plus one human-readable label"))
+                #expect(body.contains("SELECT t.id, t.name instead of renaming them"))
+                #expect(body.contains("COUNT(*) AS wins"))
                 return Self.assistantToolCalls([
                     Self.terminalSQL(id: "terminal-defined", sql: sql),
                 ])
@@ -468,6 +636,8 @@ struct OpenRouterSchemaToolSQLAgentTests {
         )
 
         #expect(result.needsClarification == false)
+        #expect(result.sql.contains("SELECT t.id, t.name"))
+        #expect(!result.sql.contains("t.slug"))
         #expect(result.sql.contains("JOIN public.preseason_tool AS t ON e.winner_id = t.id"))
         #expect(result.sql.contains("e.winner_id IS NOT NULL"))
         #expect(result.sql.contains(#"e."createdAt" >= NOW() - INTERVAL '14 days'"#))

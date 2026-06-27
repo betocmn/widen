@@ -11,7 +11,7 @@ public struct OpenRouterSchemaToolSQLAgentConfiguration: Equatable, Sendable {
     public var wallClockTimeoutSeconds: TimeInterval
 
     public init(
-        maximumSchemaToolCalls: Int = 4,
+        maximumSchemaToolCalls: Int = 6,
         maximumRepairSchemaToolCalls: Int = 2,
         maximumModelTurns: Int = 6,
         maximumMalformedTerminalCorrections: Int = 1,
@@ -422,14 +422,48 @@ public final class OpenRouterSchemaToolSQLAgent: SQLGenerator, Sendable {
                                 session: session
                             )
                         }
+                        let databaseContext = config.databaseContext.trimmingCharacters(in: .whitespacesAndNewlines)
+                        if !databaseContext.isEmpty,
+                            Self.isGenericClarification(terminalResult.clarificationQuestion),
+                            malformedTerminalCorrections < configuration.maximumMalformedTerminalCorrections
+                        {
+                            malformedTerminalCorrections += 1
+                            diagnostics.appSideRejectionReason = .clarificationRejected
+                            diagnostics.terminalValidationFailureReason = "databaseContextClarificationRejected"
+                            messages.append(
+                                toolErrorResponse(
+                                    call: terminal,
+                                    code: "database_context_authoritative",
+                                    message: "Database context already defines the business meaning needed for this question. Produce SQL from inspected schema."
+                                )
+                            )
+                            messages.append(correction(Self.strictTerminalCorrection))
+                            continue
+                        }
                         try await checkStaleSnapshot(expected: initialFingerprint)
-                        aggregate.terminalOutcome = "clarify"
+                        let finalTerminalResult: TerminalResult
+                        if databaseContext.isEmpty,
+                            Self.isGenericClarification(terminalResult.clarificationQuestion),
+                            let fallbackQuestion = evidence.fallbackClarificationQuestion(for: question)
+                        {
+                            finalTerminalResult = TerminalResult(
+                                action: .clarify,
+                                sql: "",
+                                clarificationQuestion: fallbackQuestion
+                            )
+                            diagnostics.appSideRejectionReason = .clarificationRejected
+                            diagnostics.terminalValidationFailureReason = "genericClarificationReplaced"
+                            aggregate.terminalOutcome = "clarify_fallback"
+                        } else {
+                            finalTerminalResult = terminalResult
+                            aggregate.terminalOutcome = "clarify"
+                        }
                         aggregate.agentDiagnostics = diagnostics.snapshot(
                             evidence: evidence,
                             inspectionToolCalls: await inspectionSession?.tracesSnapshot() ?? []
                         )
                         return try await finalResult(
-                            terminalResult,
+                            finalTerminalResult,
                             schema: schema,
                             context: context,
                             aggregate: aggregate,
@@ -1108,13 +1142,31 @@ public final class OpenRouterSchemaToolSQLAgent: SQLGenerator, Sendable {
     ) -> Bool {
         switch category {
         case .terminalResultMissing, .terminalResultMalformed, .mixedTerminalAndSchemaCalls,
-            .malformedToolCall:
+            .malformedToolCall, .schemaToolCallBudgetExhausted, .schemaToolByteBudgetExhausted:
             true
-        case .unsupportedTools, .repeatedToolCallNoProgress, .schemaToolCallBudgetExhausted,
-            .schemaToolByteBudgetExhausted, .modelTurnBudgetExhausted, .safetyValidation,
-            .uninspectedSchemaObjects, .staleSchemaSnapshot, .cancellation, .openRouterRequestFailure:
+        case .unsupportedTools, .repeatedToolCallNoProgress, .modelTurnBudgetExhausted,
+            .safetyValidation, .uninspectedSchemaObjects, .staleSchemaSnapshot, .cancellation,
+            .openRouterRequestFailure:
             false
         }
+    }
+
+    private static func isGenericClarification(_ question: String) -> Bool {
+        let lower = question
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+            .lowercased()
+        if lower.isEmpty { return true }
+        let genericFragments = [
+            "can you clarify",
+            "could you clarify",
+            "what do you mean",
+            "please provide more context",
+            "what column, condition, or table defines",
+            "what column or table defines",
+            "which column defines",
+            "which table defines",
+        ]
+        return genericFragments.contains { lower.contains($0) }
     }
 
     private func checkStaleSnapshot(expected: String) async throws {
@@ -1223,8 +1275,12 @@ public final class OpenRouterSchemaToolSQLAgent: SQLGenerator, Sendable {
         - never use MySQL functions such as CURDATE(), DATE_SUB(), DAY(timestamp_column), or unquoted interval units like INTERVAL 7 DAY;
         - use only exact SQL identifiers returned by tools;
         - preserve quoted identifiers exactly;
+        - when ranking or counting entities, project and group by the entity table's stable id plus one human-readable label; prefer name over slug, and include slug only when the user asks for slugs or no name/title label exists;
+        - keep entity identity output column names canonical, for example SELECT t.id, t.name instead of renaming them to tool_id or tool_name;
+        - alias aggregate metrics with the user's metric term when clear, for example COUNT(*) AS wins for a wins question;
         - do not infer business meaning from connectivity alone;
         - do not ask for clarification when database context already defines the needed metric, row/event, time column, and relationship;
+        - relative time phrases such as "last two weeks" define the time window; do not ask what the number means when the time unit is present;
         - ask one concise clarification question when a required meaning remains ambiguous.
 
         Finish only by calling submit_text_to_sql_result.
