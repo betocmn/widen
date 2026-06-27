@@ -2046,7 +2046,9 @@ public enum GeneratedSQLPostprocessor {
         let anchorBeforeDatePattern =
             #"(?i)\b(?:ending|ends|ended|as\s+of|as-of|through|until|anchor|anchored|relative\s+to)\b[\s\S]{0,80}("#
                 + timestampPattern + #")"#
-        if let range = text.range(of: anchorBeforeDatePattern, options: [.regularExpression]) {
+        if let range = text.range(of: anchorBeforeDatePattern, options: [.regularExpression]),
+            relativeWindowPhrasePrecedesAnchor(in: text, anchorRange: range)
+        {
             let snippet = String(text[range])
             if let match = snippet.range(of: timestampPattern, options: [.regularExpression]) {
                 return String(snippet[match])
@@ -2055,13 +2057,31 @@ public enum GeneratedSQLPostprocessor {
         let dateBeforeAnchorPattern =
             #"(?i)("# + timestampPattern
                 + #")[\s\S]{0,80}\b(?:window\s+ending|window\s+anchor|as\s+of|as-of|anchor|anchored)\b"#
-        if let range = text.range(of: dateBeforeAnchorPattern, options: [.regularExpression]) {
+        if let range = text.range(of: dateBeforeAnchorPattern, options: [.regularExpression]),
+            relativeWindowPhrasePrecedesAnchor(in: text, anchorRange: range)
+        {
             let snippet = String(text[range])
             if let match = snippet.range(of: timestampPattern, options: [.regularExpression]) {
                 return String(snippet[match])
             }
         }
         return nil
+    }
+
+    private static func relativeWindowPhrasePrecedesAnchor(
+        in text: String,
+        anchorRange: Range<String.Index>
+    ) -> Bool {
+        let start = text.index(anchorRange.lowerBound, offsetBy: -120, limitedBy: text.startIndex)
+            ?? text.startIndex
+        let prefix = String(text[start..<anchorRange.lowerBound])
+        let quantifier =
+            #"(?:\d+|one|two|three|four|five|six|seven|eight|nine|ten|eleven|twelve)"#
+        let durationPattern =
+            #"(?i)\b(?:(?:last|past|previous|prior|rolling|recent)\s+)?"#
+                + quantifier
+                + #"\s+(?:minute|minutes|hour|hours|day|days|week|weeks|month|months|year|years)\b"#
+        return prefix.range(of: durationPattern, options: .regularExpression) != nil
     }
 
     private static func usesMovingCurrentTime(_ sql: String) -> Bool {
@@ -2869,15 +2889,26 @@ public enum GeneratedSQLPostprocessor {
     private static func meaningfulRequestWords(_ question: String) -> [String] {
         let words = rawWords(in: question)
         var seen = Set<String>()
-        return words.filter { word in
+        return words.enumerated().compactMap { index, word in
             let variants = SchemaIndex.tokens(in: word)
-            guard variants.contains(where: { !$0.allSatisfy(\.isNumber) }) else { return false }
-            guard !variants.contains(where: requestStopWords.contains) else { return false }
-            guard !variants.contains(where: genericVerbStopWords.contains) else { return false }
-            guard !variants.contains(where: metricOperatorStopWords.contains) else { return false }
-            guard !variants.contains(where: comparisonOperatorStopWords.contains) else { return false }
-            return seen.insert(word).inserted
+            guard variants.contains(where: { !$0.allSatisfy(\.isNumber) }) else { return nil }
+            guard !variants.contains(where: requestStopWords.contains) else { return nil }
+            guard !variants.contains(where: genericVerbStopWords.contains) else { return nil }
+            guard !variants.contains(where: metricOperatorStopWords.contains) else { return nil }
+            guard !variants.contains(where: comparisonOperatorStopWords.contains) else { return nil }
+            if variants.contains(where: durationNumberWords.contains),
+                isDurationQuantity(at: index, in: words)
+            {
+                return nil
+            }
+            return seen.insert(word).inserted ? word : nil
         }
+    }
+
+    private static func isDurationQuantity(at index: Int, in words: [String]) -> Bool {
+        guard words.indices.contains(index + 1) else { return false }
+        let nextTokens = Set(SchemaIndex.tokens(in: words[index + 1]))
+        return !nextTokens.isDisjoint(with: durationUnitWords)
     }
 
     private static func rawWords(in text: String) -> [String] {
@@ -2948,8 +2979,16 @@ public enum GeneratedSQLPostprocessor {
         "those", "to", "today", "top", "under", "up", "us", "was", "we", "week", "weeks",
         "were", "what", "when", "where", "which", "who", "whom", "whose", "why", "with",
         "timestamp", "utc", "would", "year", "years", "you", "your",
-        "zero", "one", "two", "three", "four", "five", "six", "seven", "eight", "nine",
+    ]
+
+    private static let durationNumberWords: Set<String> = [
+        "one", "two", "three", "four", "five", "six", "seven", "eight", "nine",
         "ten", "eleven", "twelve",
+    ]
+
+    private static let durationUnitWords: Set<String> = [
+        "day", "days", "hour", "hours", "minute", "minutes", "month", "months",
+        "week", "weeks", "year", "years",
     ]
 }
 

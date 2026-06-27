@@ -1201,18 +1201,65 @@ public final class OpenRouterSchemaToolSQLAgent: SQLGenerator, Sendable {
         let clarificationTokens = rawClarificationTokens
             .subtracting(databaseContextAuthorityStopWords)
         guard !clarificationTokens.isEmpty else { return false }
-        let hasDefinitionSignal = !Set(SchemaIndex.tokens(in: databaseContext))
-            .isDisjoint(with: databaseContextDefinitionTokens)
-        guard hasDefinitionSignal else { return false }
+        let definitionScopes = Self.databaseContextDefinitionScopes(in: databaseContext)
+        guard !definitionScopes.isEmpty else { return false }
         if Self.isTimeWindowClarification(rawClarificationTokens) {
-            return !rawContextTokens.isDisjoint(with: databaseContextTemporalTokens)
-                && Self.databaseContextContainsConcreteTemporalField(databaseContext)
+            return definitionScopes.contains { scope in
+                !scope.rawTokens.isDisjoint(with: databaseContextTemporalTokens)
+                    && Self.databaseContextContainsConcreteTemporalField(scope.text)
+            }
         }
-        let hasClarificationOverlap = !clarificationTokens.isDisjoint(with: contextTokens)
-        if hasClarificationOverlap { return true }
-        let questionTokens = Set(SchemaIndex.tokens(in: question))
-            .subtracting(databaseContextAuthorityStopWords)
-        return !clarificationTokens.intersection(questionTokens).isDisjoint(with: contextTokens)
+        return definitionScopes.contains { scope in
+            let scopedContextTokens = scope.tokens.intersection(contextTokens)
+            let overlap = clarificationTokens.intersection(scopedContextTokens)
+            if scope.hasStrongDefinitionSignal {
+                return !overlap.isEmpty
+            }
+            return overlap.count >= 2
+        }
+    }
+
+    private static func databaseContextDefinitionScopes(
+        in databaseContext: String
+    ) -> [DatabaseContextDefinitionScope] {
+        Self.databaseContextDefinitionSegments(in: databaseContext)
+            .compactMap { segment -> DatabaseContextDefinitionScope? in
+                let text = segment.trimmingCharacters(in: .whitespacesAndNewlines)
+                guard !text.isEmpty else { return nil }
+                let rawTokens = Set(SchemaIndex.tokens(in: text))
+                let hasStrongSignal = !rawTokens.isDisjoint(with: databaseContextStrongDefinitionTokens)
+                let hasUseSignal = !rawTokens.isDisjoint(with: databaseContextUseDefinitionTokens)
+                guard hasStrongSignal || hasUseSignal else { return nil }
+                return DatabaseContextDefinitionScope(
+                    text: text,
+                    rawTokens: rawTokens,
+                    tokens: rawTokens.subtracting(databaseContextAuthorityStopWords),
+                    hasStrongDefinitionSignal: hasStrongSignal
+                )
+            }
+    }
+
+    private static func databaseContextDefinitionSegments(in databaseContext: String) -> [String] {
+        var segments: [String] = []
+        var current = ""
+        var index = databaseContext.startIndex
+        while index < databaseContext.endIndex {
+            let character = databaseContext[index]
+            let nextIndex = databaseContext.index(after: index)
+            let nextCharacter = nextIndex < databaseContext.endIndex ? databaseContext[nextIndex] : nil
+            let endsSentence =
+                character == "\n" || character == ";"
+                    || (character == "." && (nextCharacter == nil || nextCharacter?.isWhitespace == true))
+            if endsSentence {
+                segments.append(current)
+                current = ""
+            } else {
+                current.append(character)
+            }
+            index = nextIndex
+        }
+        segments.append(current)
+        return segments
     }
 
     private static func isTimeWindowClarification(_ tokens: Set<String>) -> Bool {
@@ -1232,10 +1279,21 @@ public final class OpenRouterSchemaToolSQLAgent: SQLGenerator, Sendable {
         return databaseContext.range(of: camelTemporalIdentifier, options: [.regularExpression]) != nil
     }
 
-    private static let databaseContextDefinitionTokens: Set<String> = [
+    private struct DatabaseContextDefinitionScope {
+        var text: String
+        var rawTokens: Set<String>
+        var tokens: Set<String>
+        var hasStrongDefinitionSignal: Bool
+    }
+
+    private static let databaseContextStrongDefinitionTokens: Set<String> = [
         "active", "count", "counts", "counting", "define", "defines", "definition",
         "mean", "means", "metric", "non", "null", "paid", "record", "records",
-        "resolved", "status", "unresolved", "use", "uses", "where", "when",
+        "resolved", "status", "unresolved", "where", "when",
+    ]
+
+    private static let databaseContextUseDefinitionTokens: Set<String> = [
+        "use", "uses",
     ]
 
     private static let databaseContextTemporalTokens: Set<String> = [
@@ -1247,7 +1305,7 @@ public final class OpenRouterSchemaToolSQLAgent: SQLGenerator, Sendable {
         "a", "an", "and", "are", "as", "at", "be", "by", "for", "from", "in",
         "is", "it", "of", "on", "or", "the", "this", "to", "utc", "timestamp",
         "timestamps", "time", "date", "which", "what", "column", "condition",
-        "table",
+        "table", "question",
     ]
 
     private func checkStaleSnapshot(expected: String) async throws {
@@ -1831,7 +1889,7 @@ private struct SchemaToolEvidenceLedger {
         guard let term = candidates.first else { return nil }
         let columns = exposedColumns
             .filter { column in
-                let lower = column.lowercased()
+                let lower = Self.lastSQLPathComponent(column)?.lowercased() ?? column.lowercased()
                 return candidates.contains { lower.contains($0) }
             }
             .sorted()
@@ -2101,18 +2159,26 @@ private struct SchemaToolEvidenceLedger {
     }
 
     private static func isDateOrTimeColumn(path: String, object: [String: JSONValue]) -> Bool {
-        let searchable = [
-            path,
+        let typeText = [
             object["data_type"]?.stringValue ?? "",
             object["udt_name"]?.stringValue ?? "",
             object["type"]?.stringValue ?? "",
         ].joined(separator: " ").lowercased()
-        return searchable.contains("timestamp")
-            || searchable.contains("date")
-            || searchable.contains("time")
-            || searchable.contains("created")
-            || searchable.contains("updated")
-            || searchable.contains("_at")
+        if typeText.contains("timestamp") || typeText.contains("date") || typeText.contains("time") {
+            return true
+        }
+
+        guard let columnName = lastSQLPathComponent(path) else { return false }
+        let lower = columnName.lowercased()
+        if lower.hasSuffix("_at")
+            || lower.hasSuffix("_date")
+            || lower.hasSuffix("_time")
+            || lower.hasSuffix("_timestamp")
+        {
+            return true
+        }
+        let camelTemporalSuffix = #"(?:At|Date|Time|Timestamp)$"#
+        return columnName.range(of: camelTemporalSuffix, options: .regularExpression) != nil
     }
 
     private static func normalizedTokens(in value: String) -> [String] {

@@ -564,7 +564,7 @@ struct OpenRouterSchemaToolSQLAgentTests {
             context: SQLGenerationContext(),
             config: SQLGenerationConfig(
                 databaseContext:
-                    "Each evaluation with a non-null winner_id records one win. Use evaluation createdAt as the time of the win."
+                    "Each evaluation with a non-null winner_id records one win. Use preseason_match_evaluation.createdAt as the time of the win."
             )
         )
 
@@ -690,6 +690,54 @@ struct OpenRouterSchemaToolSQLAgentTests {
         #expect(result.backendMetadata?.agentDiagnostics?.terminalValidationFailureReason == nil)
     }
 
+    @Test func unrelatedContextDefinitionDoesNotRejectSpecificClarification() async throws {
+        let schema = Self.makeSchema()
+        let clarification = "Which priority or impact metric defines important users?"
+        let chatTransport = ScriptedTransport { request, index in
+            switch index {
+            case 1:
+                return Self.assistantToolCalls([
+                    Self.toolCall(id: "search-context-priority", name: "search_schema", arguments: [
+                        "query": "users priority impact",
+                        "limit": 4,
+                    ]),
+                ])
+            case 2:
+                let users = try Self.tableHandle(named: #""public"."users""#, in: request)
+                return Self.assistantToolCalls([
+                    Self.toolCall(id: "describe-context-priority", name: "describe_tables", arguments: [
+                        "table_ids": [users],
+                    ]),
+                ])
+            case 3:
+                return Self.assistantToolCalls([
+                    Self.terminalClarification(
+                        id: "terminal-context-priority",
+                        question: clarification
+                    ),
+                ])
+            default:
+                throw URLError(.badServerResponse)
+            }
+        }
+        let agent = makeAgent(schema: schema, chatTransport: chatTransport)
+
+        let result = try await agent.generateSQL(
+            question: "Show important users",
+            schema: schema,
+            context: SQLGenerationContext(),
+            config: SQLGenerationConfig(
+                databaseContext: "Use priority for display sorting. Paid means status = 'paid'."
+            )
+        )
+
+        #expect(result.needsClarification)
+        #expect(result.clarificationQuestion == clarification)
+        #expect(result.backendMetadata?.agentTerminalOutcome == "clarify")
+        #expect(result.backendMetadata?.agentDiagnostics?.terminalValidationFailureReason == nil)
+        #expect(chatTransport.requests.count == 3)
+    }
+
     @Test func contextResolvedClarificationFailsAfterCorrectionBudgetIsSpent() async throws {
         let schema = Self.makePreseasonSchema()
         let chatTransport = ScriptedTransport { request, index in
@@ -792,6 +840,95 @@ struct OpenRouterSchemaToolSQLAgentTests {
         #expect(result.clarificationQuestion?.contains("not null") == true)
         #expect(result.backendMetadata?.agentTerminalOutcome == "clarify_fallback")
         #expect(result.backendMetadata?.agentDiagnostics?.terminalValidationFailureReason == "genericClarificationReplaced")
+    }
+
+    @Test func fallbackTimeClarificationDoesNotOfferAuditUserColumns() async throws {
+        let schema = Self.makeAuditTimeSchema()
+        let chatTransport = ScriptedTransport { request, index in
+            switch index {
+            case 1:
+                return Self.assistantToolCalls([
+                    Self.toolCall(id: "search-audit-time", name: "search_schema", arguments: [
+                        "query": "orders created_at updated_at created_by updated_by",
+                        "limit": 4,
+                    ]),
+                ])
+            case 2:
+                let orders = try Self.tableHandle(named: #""public"."orders""#, in: request)
+                return Self.assistantToolCalls([
+                    Self.toolCall(id: "describe-audit-time", name: "describe_tables", arguments: [
+                        "table_ids": [orders],
+                    ]),
+                ])
+            case 3:
+                return Self.assistantText("I found several audit columns and need to ask.")
+            case 4:
+                let body = try Self.requestBodyText(request)
+                #expect(body.contains("Finish by calling submit_text_to_sql_result exactly once"))
+                return Self.assistantText("The date choice is still ambiguous.")
+            default:
+                throw URLError(.badServerResponse)
+            }
+        }
+        let agent = makeAgent(schema: schema, chatTransport: chatTransport)
+
+        let result = try await agent.generateSQL(
+            question: "Show orders updated in the last week",
+            schema: schema,
+            context: SQLGenerationContext(),
+            config: SQLGenerationConfig()
+        )
+
+        #expect(result.needsClarification)
+        #expect(result.clarificationQuestion?.contains("created_at") == true)
+        #expect(result.clarificationQuestion?.contains("updated_at") == true)
+        #expect(result.clarificationQuestion?.contains("created_by") == false)
+        #expect(result.clarificationQuestion?.contains("updated_by") == false)
+        #expect(result.backendMetadata?.agentTerminalOutcome == "clarify_fallback")
+    }
+
+    @Test func fallbackMetricClarificationDoesNotMatchTableNameTokens() async throws {
+        let schema = Self.makeOrdersSummarySchema()
+        let chatTransport = ScriptedTransport { request, index in
+            switch index {
+            case 1:
+                return Self.assistantToolCalls([
+                    Self.toolCall(id: "search-recent-orders", name: "search_schema", arguments: [
+                        "query": "recent orders",
+                        "limit": 4,
+                    ]),
+                ])
+            case 2:
+                let orders = try Self.tableHandle(named: #""public"."orders""#, in: request)
+                return Self.assistantToolCalls([
+                    Self.toolCall(id: "describe-recent-orders", name: "describe_tables", arguments: [
+                        "table_ids": [orders],
+                    ]),
+                ])
+            case 3:
+                return Self.assistantText("I need to answer but have no terminal call.")
+            case 4:
+                return Self.assistantText("Still no terminal call.")
+            default:
+                throw URLError(.badServerResponse)
+            }
+        }
+        let agent = makeAgent(schema: schema, chatTransport: chatTransport)
+
+        do {
+            _ = try await agent.generateSQL(
+                question: "Show recent orders",
+                schema: schema,
+                context: SQLGenerationContext(),
+                config: SQLGenerationConfig()
+            )
+            Issue.record("Expected missing terminal failure without metric fallback")
+        } catch let failure as OpenRouterSchemaToolAgentFailure {
+            #expect(failure.category == .terminalResultMissing)
+            #expect(failure.schemaToolCalls.map(\.callID) == [
+                "search-recent-orders", "describe-recent-orders",
+            ])
+        }
     }
 
     @Test func preseasonTopWinsDefinedCanReturnValidatedSQLFromDatabaseContext() async throws {
@@ -2519,6 +2656,43 @@ struct OpenRouterSchemaToolSQLAgentTests {
                             targetColumn: "id",
                             ordinalPosition: 1
                         ),
+                    ]
+                ),
+            ]
+        )
+    }
+
+    private static func makeAuditTimeSchema() -> DatabaseSchema {
+        DatabaseSchema(
+            schemas: [SchemaInfo(name: "public")],
+            tables: [
+                TableInfo(
+                    schema: "public",
+                    name: "orders",
+                    type: .baseTable,
+                    columns: [
+                        column("orders", "id", type: "integer", ordinal: 1),
+                        column("orders", "created_by", type: "uuid", ordinal: 2),
+                        column("orders", "updated_by", type: "uuid", ordinal: 3),
+                        column("orders", "created_at", type: "timestamp with time zone", ordinal: 4),
+                        column("orders", "updated_at", type: "timestamp with time zone", ordinal: 5),
+                    ]
+                ),
+            ]
+        )
+    }
+
+    private static func makeOrdersSummarySchema() -> DatabaseSchema {
+        DatabaseSchema(
+            schemas: [SchemaInfo(name: "public")],
+            tables: [
+                TableInfo(
+                    schema: "public",
+                    name: "orders",
+                    type: .baseTable,
+                    columns: [
+                        column("orders", "id", type: "integer", ordinal: 1),
+                        column("orders", "total_cents", type: "integer", ordinal: 2),
                     ]
                 ),
             ]

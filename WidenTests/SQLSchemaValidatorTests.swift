@@ -1598,6 +1598,34 @@ struct SQLSchemaValidatorTests {
         #expect(enriched.sql.contains("NOW() - INTERVAL '7 days'"))
     }
 
+    @Test func fixedUntilPredicateDoesNotAnchorSeparateMovingWindow() {
+        let generation = SQLGenerationResult(
+            sql: """
+                SELECT id
+                FROM public.jobs
+                WHERE started_at < TIMESTAMPTZ '2026-01-01 00:00:00+00'
+                  AND finished_at >= NOW() - INTERVAL '7 days'
+                """,
+            explanation: "Finds jobs created before the fixed cutoff and updated recently.",
+            assumptions: [],
+            referencedTables: [],
+            confidence: 1,
+            riskLevel: .low,
+            needsClarification: false,
+            clarificationQuestion: nil
+        )
+
+        let enriched = GeneratedSQLPostprocessor.enriched(
+            generation,
+            question: "Which jobs were created until 2026-01-01 and updated in the last 7 days?",
+            schema: makeIntervalSchema(),
+            databaseContext: ""
+        )
+
+        #expect(!enriched.needsClarification)
+        #expect(enriched.sql.contains("NOW() - INTERVAL '7 days'"))
+    }
+
     @Test func timeFieldClarificationExcludesIntervalColumns() {
         let generation = SQLGenerationResult(
             sql: """
@@ -1868,6 +1896,55 @@ struct SQLSchemaValidatorTests {
         #expect(!enriched.needsClarification)
         #expect(enriched.sql == "SELECT id FROM public.users WHERE age > 30")
         #expect(enriched.clarificationQuestion == nil)
+    }
+
+    @Test func numberWordsRemainGroundingTermsForCountFilters() {
+        let zeroOrders = SQLGenerationResult(
+            sql: "SELECT id FROM public.users",
+            explanation: "Lists users.",
+            assumptions: [],
+            referencedTables: [],
+            confidence: 1,
+            riskLevel: .low,
+            needsClarification: false,
+            clarificationQuestion: nil
+        )
+        let oneOrder = SQLGenerationResult(
+            sql: """
+                SELECT users.id
+                FROM public.users
+                WHERE EXISTS (
+                  SELECT 1
+                  FROM public.orders
+                  WHERE orders.user_id = users.id
+                )
+                """,
+            explanation: "Lists users with at least one order.",
+            assumptions: [],
+            referencedTables: [],
+            confidence: 1,
+            riskLevel: .low,
+            needsClarification: false,
+            clarificationQuestion: nil
+        )
+
+        let zeroEnriched = GeneratedSQLPostprocessor.enriched(
+            zeroOrders,
+            question: "show users with zero orders",
+            schema: makeUsersOrdersSchema(),
+            databaseContext: ""
+        )
+        let oneEnriched = GeneratedSQLPostprocessor.enriched(
+            oneOrder,
+            question: "show users with one order",
+            schema: makeUsersOrdersSchema(),
+            databaseContext: ""
+        )
+
+        #expect(zeroEnriched.needsClarification)
+        #expect(zeroEnriched.pendingClarification?.concept.term == "zero")
+        #expect(oneEnriched.needsClarification)
+        #expect(oneEnriched.pendingClarification?.concept.term == "one")
     }
 
     @Test func generatedWriteRequiresGroundingForUnsupportedLiteral() {
