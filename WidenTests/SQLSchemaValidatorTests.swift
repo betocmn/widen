@@ -1398,6 +1398,48 @@ struct SQLSchemaValidatorTests {
         #expect(enriched.clarificationQuestion?.contains("createdAt") == true)
     }
 
+    @Test func winnerClarificationOffersMultipleTimeFieldsInsteadOfPickingFirst() {
+        var schema = makePreseasonWinnerSchema()
+        schema.tables[0].columns.append(
+            ColumnInfo(
+                tableSchema: "public",
+                tableName: "preseason_match_evaluation",
+                name: "evaluatedAt",
+                dataType: "timestamp with time zone",
+                isNullable: false,
+                ordinalPosition: 3
+            ))
+        let generation = SQLGenerationResult(
+            sql: """
+                SELECT t.name, COUNT(*) AS wins
+                FROM public.preseason_match_evaluation AS e
+                JOIN public.preseason_tool AS t ON e.winner_id = t.id
+                WHERE e.winner_id IS NOT NULL
+                GROUP BY t.name
+                """,
+            explanation: "Counts winners.",
+            assumptions: [],
+            referencedTables: [],
+            confidence: 1,
+            riskLevel: .low,
+            needsClarification: false,
+            clarificationQuestion: nil
+        )
+
+        let enriched = GeneratedSQLPostprocessor.enriched(
+            generation,
+            question: "Tools with the most wins in the last two weeks",
+            schema: schema,
+            databaseContext: ""
+        )
+
+        #expect(enriched.needsClarification)
+        #expect(enriched.clarificationQuestion?.contains("which date field should define the time window") == true)
+        #expect(enriched.clarificationQuestion?.contains("createdAt") == true)
+        #expect(enriched.clarificationQuestion?.contains("evaluatedAt") == true)
+        #expect(enriched.clarificationQuestion?.contains("use public.preseason_match_evaluation.createdAt") == false)
+    }
+
     @Test func anchoredWinnerContextRequiresExplicitAnchorInsteadOfMovingNow() {
         let generation = SQLGenerationResult(
             sql: """
@@ -1488,6 +1530,34 @@ struct SQLSchemaValidatorTests {
 
         #expect(!enriched.needsClarification)
         #expect(enriched.sql.contains("NOW() - INTERVAL '7 days'"))
+    }
+
+    @Test func timeFieldClarificationExcludesIntervalColumns() {
+        let generation = SQLGenerationResult(
+            sql: """
+                SELECT id
+                FROM public.jobs
+                """,
+            explanation: "Lists jobs.",
+            assumptions: [],
+            referencedTables: [],
+            confidence: 1,
+            riskLevel: .low,
+            needsClarification: false,
+            clarificationQuestion: nil
+        )
+
+        let enriched = GeneratedSQLPostprocessor.enriched(
+            generation,
+            question: "Which jobs ran in the last 7 days?",
+            schema: makeIntervalSchema(),
+            databaseContext: ""
+        )
+
+        #expect(enriched.needsClarification)
+        #expect(enriched.clarificationQuestion?.contains("finished_at") == true)
+        #expect(enriched.clarificationQuestion?.contains("started_at") == true)
+        #expect(enriched.clarificationQuestion?.contains("duration") == false)
     }
 
     @Test func possessiveSuffixDoesNotBecomeUnsupportedGroundingConcept() {

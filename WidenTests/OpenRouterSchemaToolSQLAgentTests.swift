@@ -639,6 +639,56 @@ struct OpenRouterSchemaToolSQLAgentTests {
         #expect(result.backendMetadata?.agentDiagnostics?.terminalValidationFailureReason == "databaseContextClarificationRejected")
     }
 
+    @Test func metricOnlyDatabaseContextDoesNotRejectTimeClarification() async throws {
+        let schema = Self.makePreseasonSchema()
+        let chatTransport = ScriptedTransport { request, index in
+            switch index {
+            case 1:
+                return Self.assistantToolCalls([
+                    Self.toolCall(id: "search-context-metric-only", name: "search_schema", arguments: [
+                        "query": "preseason winner wins",
+                        "limit": 4,
+                    ]),
+                ])
+            case 2:
+                let evaluations = try Self.tableHandle(
+                    named: #""public"."preseason_match_evaluation""#,
+                    in: request
+                )
+                let tools = try Self.tableHandle(named: #""public"."preseason_tool""#, in: request)
+                return Self.assistantToolCalls([
+                    Self.toolCall(id: "describe-context-metric-only", name: "describe_tables", arguments: [
+                        "table_ids": [evaluations, tools],
+                    ]),
+                ])
+            case 3:
+                return Self.assistantToolCalls([
+                    Self.terminalClarification(
+                        id: "terminal-context-metric-only",
+                        question: "Which date should define the time window?"
+                    ),
+                ])
+            default:
+                throw URLError(.badServerResponse)
+            }
+        }
+        let agent = makeAgent(schema: schema, chatTransport: chatTransport)
+
+        let result = try await agent.generateSQL(
+            question: "Which tools have the most wins in the last two weeks?",
+            schema: schema,
+            context: SQLGenerationContext(),
+            config: SQLGenerationConfig(
+                databaseContext: "Each evaluation with a non-null winner_id records one win."
+            )
+        )
+
+        #expect(result.needsClarification)
+        #expect(result.clarificationQuestion == "Which date should define the time window?")
+        #expect(result.backendMetadata?.agentTerminalOutcome == "clarify")
+        #expect(result.backendMetadata?.agentDiagnostics?.terminalValidationFailureReason == nil)
+    }
+
     @Test func unrelatedDatabaseContextPreservesEvidenceClarificationFallback() async throws {
         let schema = Self.makePreseasonSchema()
         let chatTransport = ScriptedTransport { request, index in

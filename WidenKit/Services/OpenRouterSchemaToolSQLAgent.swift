@@ -1185,22 +1185,40 @@ public final class OpenRouterSchemaToolSQLAgent: SQLGenerator, Sendable {
         question: String,
         clarification: String
     ) -> Bool {
-        let contextTokens = Set(SchemaIndex.tokens(in: databaseContext))
+        let rawContextTokens = Set(SchemaIndex.tokens(in: databaseContext))
+        let contextTokens = rawContextTokens
             .subtracting(databaseContextAuthorityStopWords)
         guard !contextTokens.isEmpty else { return false }
-        let requestTokens = Set(SchemaIndex.tokens(in: question + " " + clarification))
+        let rawClarificationTokens = Set(SchemaIndex.tokens(in: clarification))
+        let clarificationTokens = rawClarificationTokens
             .subtracting(databaseContextAuthorityStopWords)
-        guard !requestTokens.isEmpty else { return false }
-        let hasRelevantOverlap = !requestTokens.isDisjoint(with: contextTokens)
+        guard !clarificationTokens.isEmpty else { return false }
         let hasDefinitionSignal = !Set(SchemaIndex.tokens(in: databaseContext))
             .isDisjoint(with: databaseContextDefinitionTokens)
-        return hasRelevantOverlap && hasDefinitionSignal
+        guard hasDefinitionSignal else { return false }
+        if Self.isTimeWindowClarification(rawClarificationTokens) {
+            return !rawContextTokens.isDisjoint(with: databaseContextTemporalTokens)
+        }
+        let hasClarificationOverlap = !clarificationTokens.isDisjoint(with: contextTokens)
+        if hasClarificationOverlap { return true }
+        let questionTokens = Set(SchemaIndex.tokens(in: question))
+            .subtracting(databaseContextAuthorityStopWords)
+        return !clarificationTokens.intersection(questionTokens).isDisjoint(with: contextTokens)
+    }
+
+    private static func isTimeWindowClarification(_ tokens: Set<String>) -> Bool {
+        !tokens.isDisjoint(with: ["date", "time", "window", "timestamp", "timestamps"])
     }
 
     private static let databaseContextDefinitionTokens: Set<String> = [
         "active", "count", "counts", "counting", "define", "defines", "definition",
         "mean", "means", "metric", "non", "null", "paid", "record", "records",
         "resolved", "status", "unresolved", "use", "uses", "where", "when",
+    ]
+
+    private static let databaseContextTemporalTokens: Set<String> = [
+        "at", "created", "date", "dated", "ended", "ending", "occurred", "scheduled",
+        "time", "timestamp", "timestamps", "updated", "window",
     ]
 
     private static let databaseContextAuthorityStopWords: Set<String> = [

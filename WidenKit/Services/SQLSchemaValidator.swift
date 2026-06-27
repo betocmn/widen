@@ -2253,7 +2253,15 @@ public enum GeneratedSQLPostprocessor {
         let tokens = Set(SchemaIndex.tokens(in: question))
         guard !tokens.isDisjoint(with: ["last", "recent", "day", "days", "week", "weeks", "month", "months"])
         else { return "" }
-        guard let column = table.columns.first(where: { Self.isDateOrTimeColumn($0) }) else { return "" }
+        let columns = table.columns.filter { Self.isDateOrTimeColumn($0) }
+        guard columns.count == 1, let column = columns.first else {
+            guard columns.count > 1 else { return "" }
+            let choices = columns
+                .prefix(4)
+                .map { "\(table.qualifiedName).\($0.name)" }
+                .joined(separator: ", ")
+            return " and which date field should define the time window: \(choices)"
+        }
         return " and use \(table.qualifiedName).\(column.name) for the time window"
     }
 
@@ -2262,7 +2270,6 @@ public enum GeneratedSQLPostprocessor {
         return type.contains("timestamp")
             || type.contains("date")
             || type.contains("time")
-            || type.contains("interval")
     }
 
     private static func timeFieldClarification(
