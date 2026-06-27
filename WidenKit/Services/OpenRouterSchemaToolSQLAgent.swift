@@ -299,7 +299,10 @@ public final class OpenRouterSchemaToolSQLAgent: SQLGenerator, Sendable {
                     if malformedTerminalCorrections < configuration.maximumMalformedTerminalCorrections {
                         malformedTerminalCorrections += 1
                         messages.append(OpenRouterToolChatMessage(role: .assistant, content: parsed.content))
-                        messages.append(correction(Self.strictTerminalCorrection))
+                        let guidance = evidence.hasSuccessfulSearch
+                            ? Self.strictTerminalCorrection
+                            : Self.schemaSearchCorrection
+                        messages.append(correction(guidance))
                         continue
                     }
                     throw await agentFailure(.terminalResultMissing, "The model did not call a terminal tool.", session: session)
@@ -1203,6 +1206,7 @@ public final class OpenRouterSchemaToolSQLAgent: SQLGenerator, Sendable {
         guard hasDefinitionSignal else { return false }
         if Self.isTimeWindowClarification(rawClarificationTokens) {
             return !rawContextTokens.isDisjoint(with: databaseContextTemporalTokens)
+                && Self.databaseContextContainsConcreteTemporalField(databaseContext)
         }
         let hasClarificationOverlap = !clarificationTokens.isDisjoint(with: contextTokens)
         if hasClarificationOverlap { return true }
@@ -1213,6 +1217,19 @@ public final class OpenRouterSchemaToolSQLAgent: SQLGenerator, Sendable {
 
     private static func isTimeWindowClarification(_ tokens: Set<String>) -> Bool {
         !tokens.isDisjoint(with: ["date", "time", "window", "timestamp", "timestamps"])
+    }
+
+    private static func databaseContextContainsConcreteTemporalField(_ databaseContext: String) -> Bool {
+        let snakeTemporalIdentifier =
+            #"\b[a-z][a-z0-9]*(?:_at|_date|_time|_timestamp)\b"#
+        if databaseContext.range(
+            of: snakeTemporalIdentifier,
+            options: [.regularExpression, .caseInsensitive]
+        ) != nil {
+            return true
+        }
+        let camelTemporalIdentifier = #"\b[a-z][A-Za-z0-9]*(?:At|Date|Time|Timestamp)\b"#
+        return databaseContext.range(of: camelTemporalIdentifier, options: [.regularExpression]) != nil
     }
 
     private static let databaseContextDefinitionTokens: Set<String> = [
@@ -1321,6 +1338,8 @@ public final class OpenRouterSchemaToolSQLAgent: SQLGenerator, Sendable {
 
     fileprivate static let strictTerminalCorrection =
         "Finish by calling submit_text_to_sql_result exactly once. Use action='sql' only if you can produce validated SQL from inspected schema. Otherwise use action='clarify' with one concise database-specific question."
+    fileprivate static let schemaSearchCorrection =
+        "Call search_schema before finishing. After inspecting schema, call submit_text_to_sql_result exactly once. Use action='sql' only if you can produce validated SQL from inspected schema. Otherwise use action='clarify' with one concise database-specific question."
 
     private static let instructions = """
         You are Widen's PostgreSQL schema-discovery and SQL agent.

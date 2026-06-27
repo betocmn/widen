@@ -2021,8 +2021,7 @@ public enum GeneratedSQLPostprocessor {
     ) -> PendingClarification? {
         let source = question + "\n" + databaseContext
         guard let anchor = explicitWindowAnchor(in: source),
-            usesMovingCurrentTime(sql),
-            !sqlMentionsAnchor(sql, anchor: anchor)
+            usesMovingCurrentTime(sql)
         else { return nil }
         let concept = SQLGroundingConcept(
             term: "time window anchor",
@@ -2063,20 +2062,6 @@ public enum GeneratedSQLPostprocessor {
             }
         }
         return nil
-    }
-
-    private static func sqlMentionsAnchor(_ sql: String, anchor: String) -> Bool {
-        guard anchor.count >= 10 else { return false }
-        let datePrefix = String(anchor.prefix(10))
-        guard sql.range(of: datePrefix, options: [.caseInsensitive]) != nil else { return false }
-        guard let timeRange = anchor.range(
-            of: #"\b\d{1,2}:\d{2}"#,
-            options: [.regularExpression]
-        ) else {
-            return true
-        }
-        let timePrefix = String(anchor[timeRange])
-        return sql.range(of: timePrefix, options: [.caseInsensitive]) != nil
     }
 
     private static func usesMovingCurrentTime(_ sql: String) -> Bool {
@@ -2198,12 +2183,14 @@ public enum GeneratedSQLPostprocessor {
         ) {
             return winner
         }
-        if let time = timeFieldClarification(
-            question: question,
-            schema: schema,
-            referencedTables: referencedTables,
-            databaseContext: databaseContext
-        ) {
+        if concept.kind == .time,
+            let time = timeFieldClarification(
+                question: question,
+                schema: schema,
+                referencedTables: referencedTables,
+                databaseContext: databaseContext
+            )
+        {
             return time
         }
         return "What column, condition, or table defines \"\(concept.term)\" for this question?"
@@ -2357,6 +2344,13 @@ public enum GeneratedSQLPostprocessor {
         let tokens = Set(SchemaIndex.tokens(in: term))
         if !tokens.intersection(["status", "active", "inactive", "paid", "refunded"]).isEmpty {
             return .filter
+        }
+        let temporalTerms: Set<String> = [
+            "date", "time", "window", "ran", "run", "occurred", "created", "updated",
+            "started", "finished", "completed", "ended",
+        ]
+        if !tokens.intersection(temporalTerms).isEmpty {
+            return .time
         }
         if hasMetricIntent(question) {
             return .businessTerm

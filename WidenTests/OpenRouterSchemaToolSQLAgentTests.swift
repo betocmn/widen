@@ -680,7 +680,7 @@ struct OpenRouterSchemaToolSQLAgentTests {
             context: SQLGenerationContext(),
             config: SQLGenerationConfig(
                 databaseContext:
-                    "Each evaluation paid at checkout with a non-null winner_id records one win."
+                    "Each evaluation paid at checkout with a non-null winner_id records one win. Timestamps are stored in UTC."
             )
         )
 
@@ -698,7 +698,7 @@ struct OpenRouterSchemaToolSQLAgentTests {
                 return Self.assistantText("I need to inspect the schema first.")
             case 2:
                 let body = try Self.requestBodyText(request)
-                #expect(body.contains("Finish by calling submit_text_to_sql_result exactly once"))
+                #expect(body.contains("Call search_schema before finishing"))
                 return Self.assistantToolCalls([
                     Self.toolCall(id: "search-after-prose", name: "search_schema", arguments: [
                         "query": "preseason winner wins",

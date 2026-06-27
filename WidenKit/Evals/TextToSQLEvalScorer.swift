@@ -754,7 +754,7 @@ public enum TextToSQLEvalScorer {
         }
         guard mentionsExpectedConcept else { return false }
         return !candidateTokens.isDisjoint(with: databaseDecisionTokens)
-            || containsSchemaIdentifierEvidence(text)
+            || containsSchemaIdentifierEvidence(text, candidateTokens: candidateTokens)
             || containsBusinessMetricAlternative(candidateTokens, configuredConcepts: configuredConcepts)
     }
 
@@ -765,14 +765,29 @@ public enum TextToSQLEvalScorer {
         "rows", "window", "priority", "impact", "frequency", "usage", "null", "nonnull",
     ]
 
-    private static func containsSchemaIdentifierEvidence(_ value: String) -> Bool {
-        if value.contains("_") { return true }
+    private static func containsSchemaIdentifierEvidence(
+        _ value: String,
+        candidateTokens: Set<String>
+    ) -> Bool {
+        guard !candidateTokens.isDisjoint(with: schemaIdentifierDecisionTokens) else { return false }
+        if value.range(
+            of: #"\b[a-z][a-z0-9]*_[a-z0-9_]*\b"#,
+            options: [.regularExpression, .caseInsensitive]
+        ) != nil {
+            return true
+        }
         let qualifiedIdentifierPattern = #"\b[a-z][a-z0-9]*\.[a-z][a-z0-9_]*\b"#
         return value.range(
             of: qualifiedIdentifierPattern,
             options: [.regularExpression, .caseInsensitive]
         ) != nil
     }
+
+    private static let schemaIdentifierDecisionTokens: Set<String> = [
+        "should", "use", "uses", "using", "define", "defines", "count", "counting",
+        "where", "whether", "which", "null", "nonnull", "non", "status", "filter",
+        "relationship", "join", "path", "field", "column",
+    ]
 
     private static func containsBusinessMetricAlternative(
         _ candidateTokens: Set<String>,

@@ -458,6 +458,40 @@ struct TextToSQLEvalTests {
         #expect(result.metrics.clarificationQuality == true)
     }
 
+    @Test func genericUnderscoredClarificationFailsQualityScoring() async {
+        let evalCase = TextToSQLEvalCase(
+            id: "preseason.top-wins-ambiguous",
+            schemaFixture: "preseason",
+            question: "Tools with the most wins in the last two weeks",
+            expected: TextToSQLEvalExpectation(
+                decision: .clarify,
+                clarificationMustMentionAny: ["win", "winner"]
+            )
+        )
+        let generator = StaticGenerator(
+            result: SQLGenerationResult(
+                sql: "",
+                explanation: "Needs a database decision.",
+                assumptions: [],
+                referencedTables: [],
+                confidence: 0.2,
+                riskLevel: .medium,
+                needsClarification: true,
+                clarificationQuestion: "What do you mean by winner_id?"
+            )
+        )
+
+        let result = await TextToSQLEvalCaseRunner.run(
+            evalCase: evalCase,
+            schema: makeCommerceSchema(),
+            generator: generator,
+            options: TextToSQLEvalRunOptions(backend: .cloud, model: "test/model")
+        )
+
+        #expect(result.status == .wrongDecision)
+        #expect(result.metrics.clarificationQuality == false)
+    }
+
     @Test func measureSpecificClarificationPassesQualityScoring() async {
         let evalCase = TextToSQLEvalCase(
             id: "openrouter.clarification",
