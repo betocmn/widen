@@ -5,6 +5,7 @@
 
     /// Structured output schema for the on-device model. Mirrors
     /// `SQLGenerationResult`, with guides keeping the model inside the rails.
+    @available(macOS 26.0, *)
     @Generable(description: "A single safe PostgreSQL statement answering the user's question.")
     struct GeneratedSQLResponse {
         @Guide(
@@ -43,6 +44,7 @@
         var clarificationQuestion: String?
     }
 
+    @available(macOS 26.0, *)
     @Generable(description: "Schema search queries needed before SQL generation.")
     struct GeneratedSchemaDiscoveryResponse {
         @Guide(
@@ -54,6 +56,7 @@
         var reason: String
     }
 
+    @available(macOS 26.0, *)
     struct LocalSQLDecision: Equatable, Sendable {
         enum Action: String, Equatable, Sendable {
             case generateSQL
@@ -82,6 +85,7 @@
 
     /// Generates SQL with Apple's on-device Foundation Model. Local-only: no
     /// network, no external LLM APIs.
+    @available(macOS 26.0, *)
     public final class FoundationModelsSQLGenerator: ConstrainedLocalSQLGenerator, Sendable {
         private static let maxModelCalls = GeneratedSQLRepairSupport.constrainedLocalModelCallBudget
         private static let maxDetailedSchemaTables = 4

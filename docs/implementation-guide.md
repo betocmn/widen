@@ -38,8 +38,9 @@ Apple's `FoundationModels` framework when building with the macOS 26 SDK.
 
 ## Build And Runtime Assumptions
 
-The project requires Xcode 26 because Foundation Models is only available in
-the macOS 26 SDK, and the app deployment target is macOS 26.0. The Makefile
+The app deployment target is macOS 14.0. The project still requires Xcode 26
+for source builds because optional Foundation Models and Liquid Glass code are
+compiled behind availability checks against the macOS 26 SDK. The Makefile
 exports:
 
 ```sh
@@ -55,6 +56,7 @@ make run       # build and open Debug app
 make test      # unit tests, gated integration tests skipped
 make test-db   # unit + local PostgreSQL integration tests
 make test-fm   # unit + Foundation Models smoke test
+make eval-release MODEL=openai/gpt-5.5  # PR 12 release gate
 ```
 
 The app is ad-hoc signed for local development and App Sandbox is disabled in
@@ -80,11 +82,12 @@ DEVELOPER_DIR=/Applications/Xcode-beta.app/Contents/Developer \
 ```
 
 All PCC symbols live behind `#if compiler(>=6.4) && canImport(FoundationModels)`
-(compile gate) plus `#available(macOS 27.0, *)` (runtime gate). The deployment
-target stays macOS 26.0: a 27-SDK build still runs on macOS 26 and reports PCC
-as unavailable there. Everything outside `PrivateCloudComputeSQLGenerator.swift`
-reaches PCC only through the always-compiled `PCCSupport` facade — keep it that
-way, or Xcode 26 builds break.
+(compile gate) plus `#available(macOS 27.0, *)` (runtime gate). The app target
+stays macOS 14.0: a 27-SDK build still runs on older supported macOS releases
+and reports PCC as unavailable below macOS 27. Everything outside
+`PrivateCloudComputeSQLGenerator.swift` reaches PCC only through the
+always-compiled `PCCSupport` facade — keep it that way, or Xcode 26 builds
+break.
 
 ## Runtime Object Graph
 
@@ -108,9 +111,11 @@ The central object is `AppState` in `WidenKit/App/AppState.swift`.
 It also exposes `sqlGenerator` and `titleGenerator`, which choose:
 
 - The mock implementations when the developer toggle is enabled.
-- The selected cloud provider when Cloud mode is ready.
+- The selected cloud provider when Cloud mode is ready. Fresh preferences
+  default to Cloud.
 - `FoundationModelsSQLGenerator` / `FoundationModelsTitleGenerator` when Local
-  mode is eligible and Apple's on-device model is ready.
+  mode is visible on eligible macOS 26+ hosts and Apple's on-device model is
+  ready.
 - `UnavailableSQLGenerator` for an unavailable selected SQL backend, while
   session titles fall back to the deterministic local title generator.
 
@@ -460,12 +465,12 @@ public protocol SQLGenerator: Sendable {
 }
 ```
 
-There are four implementations:
+There are five implementations:
 
 - `MockSQLGenerator`: deterministic development fallback returning a safe
   `SELECT 1 AS test_value` query.
-- `FoundationModelsSQLGenerator`: real local generation using Apple's
-  Foundation Models framework.
+- `FoundationModelsSQLGenerator`: optional local generation using Apple's
+  Foundation Models framework on eligible macOS 26+ Apple Silicon Macs.
 - `OpenRouterSQLGenerator`: cloud generation through OpenRouter's
   OpenAI-compatible chat-completions API, with the user's API key and chosen
   model (`OpenRouterCatalog` curates the picker; any custom ID works). Strict
@@ -473,21 +478,30 @@ There are four implementations:
   `response_format` for models that reject it, and a 60,000-character schema
   budget. HTTP goes through the injectable `HTTPTransport` seam so tests stub
   the network.
-- `PrivateCloudComputeSQLGenerator`: Apple's server-side foundation model on
-  Private Cloud Compute (announced WWDC 2026) — the same session and
-  `@Generable` shape as the local generator with a 24,000-character schema
-  budget. Compile-gated to the macOS 27 SDK and runtime-gated to macOS 27;
-  see "Dual toolchains" above and "Cloud backend selection" below.
+- `OpenRouterSchemaToolSQLAgent`: the default OpenRouter path for connected
+  sessions. It uses OpenRouter tool calls to inspect bounded schema metadata
+  from host-controlled schema tools, then submits the final text-to-SQL result.
+  The legacy one-shot OpenRouter generator remains available when no
+  connection/schema context exists or when explicitly disabled.
+- `PrivateCloudComputeSQLGenerator`: planned Apple cloud model support. It is
+  compile-gated to the required Apple SDK and runtime-gated to the required OS;
+  until that support is actually available, `PCCSupport` reports it as
+  unavailable and the default cloud path remains OpenRouter.
 
 ### Cloud backend selection
 
-`AppState.sqlGenerator` picks the backend: mock wins, then the selected cloud
-provider when `aiBackendMode == .cloud` and `cloudBackendStatus == .ready`, or
-the local model only when `LocalLLMEligibility` is ready. An unusable selection
-returns `UnavailableSQLGenerator` so production never silently swaps to another
-backend. `modelAvailabilityMessage` explains the selected backend problem in
-the chat banner and Settings › LLM. Session titles use the on-device generator
-when available, otherwise the deterministic fallback.
+`AppState` picks the backend: mock wins, then the selected cloud provider when
+`aiBackendMode == .cloud` and `cloudBackendStatus == .ready`, or the local model
+only when `LocalLLMEligibility` is visible and ready. Fresh preferences default
+`aiBackendMode` to `.cloud`, `cloudProvider` to `.openRouter`,
+`openRouterModelID` to `openai/gpt-5.5`, and the OpenRouter schema-tool agent
+to enabled. Connected sessions call `AppState.sqlGenerator(connectionID:schema:)`
+so the default OpenRouter path is the same schema-tool agent exercised by
+`make eval-release`. An unusable selection returns `UnavailableSQLGenerator` so
+production never silently swaps to another backend. `modelAvailabilityMessage`
+explains the selected backend problem in the chat banner and Settings › LLM.
+Session titles use the on-device generator when available, otherwise the
+deterministic fallback.
 
 Preferences and secrets:
 
@@ -496,13 +510,16 @@ Preferences and secrets:
 | Backend mode (`local`/`cloud`) | UserDefaults | `WidenAIBackendMode` |
 | Cloud provider (`applePCC`/`openRouter`) | UserDefaults | `WidenCloudAIProvider` |
 | OpenRouter model ID | UserDefaults | `WidenOpenRouterModelID` |
+| OpenRouter schema-tool agent enabled | UserDefaults | `WidenOpenRouterSchemaToolAgentEnabled` |
 | OpenRouter API key | Keychain, service `Widen` | `openrouter-api-key` |
 
 The UI surface is the Settings › LLM tab (`LLMSettingsView`) plus the
-`AIBackendToggle` toolbar segmented control, which chooses local/cloud and
-opens Settings › LLM when the cloud backend needs setup. Local selection goes
-through `AppState.requestAIBackendMode(_:)`; users without Apple Intelligence
-or a ready local model get an alert instead of a silent mode switch.
+`AIBackendToggle` toolbar segmented control, which chooses Cloud/Local when
+Local is visible and opens Settings › LLM when the cloud backend needs setup.
+Local is hidden on older or unsupported hosts, preserved when explicitly stored
+and eligible, and blocked through `AppState.requestAIBackendMode(_:)` when the
+host cannot run it. First launch does not show local-model compatibility alerts
+while Cloud is selected, so database browsing and manual SQL remain available.
 
 ### Private Cloud Compute entitlement and signing
 
@@ -519,7 +536,9 @@ there), and build with Xcode 27+.
 What cannot be verified on a macOS 26 machine: actual PCC generation, the
 quota UI, and entitlement behavior. The PCC path is exercised only to its
 availability checks; everything reports through
-`PCCSupport.availabilityMessage`.
+`PCCSupport.availabilityMessage`. User-facing copy should not promise a date;
+it should say Apple cloud model support is planned when Apple's required OS and
+SDK support is available.
 
 `FoundationModelsSQLGenerator` is conditionally compiled with:
 
@@ -527,9 +546,11 @@ availability checks; everything reports through
 #if canImport(FoundationModels)
 ```
 
-It checks `SystemLanguageModel.default.availability` before each generation.
-If unavailable, it throws `AppError.modelUnavailable` with user-readable
-guidance.
+Its declarations and call sites are also guarded with macOS 26 availability.
+Older macOS hosts receive `LocalLLMEligibility.osUnsupported` and never
+instantiate Foundation Models types. When available, the generator checks
+`SystemLanguageModel.default.availability` before each generation. If
+unavailable, it throws `AppError.modelUnavailable` with user-readable guidance.
 
 The real generator uses structured output:
 
@@ -742,11 +763,11 @@ Key views:
 Appearance: the `"WidenAppearance"` AppStorage key (`AppearancePreference`)
 drives `.preferredColorScheme` on the window and Settings roots. The detail
 toolbar sun/moon button flips to the opposite of the effective scheme; the
-"System" reset lives in Settings › General. Liquid Glass styling (`.glassEffect`,
-`.buttonStyle(.glass)/.glassProminent`) is used for the composer, primary
-buttons, user chat bubbles, and the error banner; the toolbar breadcrumb,
-sidebar, inspector, transcript bubbles, and results grid intentionally keep
-plain system materials.
+"System" reset lives in Settings › General. Liquid Glass styling is routed
+through `AdaptiveGlass.swift`: it uses native glass on macOS 26+ and regular
+macOS material/button styles on older supported releases. The toolbar
+breadcrumb, sidebar, inspector, transcript bubbles, and results grid
+intentionally keep plain system materials.
 
 Keyboard behavior:
 
@@ -888,8 +909,8 @@ Add per-session state:
 - Execution always applies a statement timeout.
 - Queries without LIMIT are capped with the configured default row limit.
 - System schemas are excluded from prompt context.
-- Foundation Models availability failures are user-readable and do not block
-  manual SQL usage.
+- Foundation Models availability failures are user-readable, hidden on
+  unsupported hosts, and do not block schema browsing or manual SQL usage.
 - Tests should cover safety-policy changes before behavior is broadened.
 
 ## Files To Read First

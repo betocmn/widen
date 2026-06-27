@@ -14,7 +14,7 @@ As part of this rebuild, you may find stuff you might want to clean/delete as we
 
 Use a **native Swift command-line eval runner** as the source of truth.
 
-This is simpler than introducing an external eval framework because it can call the exact same `FoundationModelsSQLGenerator`, `OpenRouterSQLGenerator`, schema code, and validators used by Widen. The current project already requires Xcode 26 and macOS 26 for Foundation Models, so the runner can share that build environment.
+This is simpler than introducing an external eval framework because it can call the exact same `FoundationModelsSQLGenerator`, `OpenRouterSQLGenerator`, schema code, and validators used by Widen. The current project uses the Xcode 26 SDK for optional Foundation Models support while keeping the app deployment target on macOS 14.0.
 
 Promptfoo is a reasonable optional reporting layer later: it is open source/MIT licensed, has a CLI, supports custom providers, retries, filtering, and exports. However, wrapping Widen’s Swift/local-model execution in Node during the first PR adds unnecessary integration risk. ([GitHub][1])
 
@@ -46,7 +46,7 @@ PR 2 + PR 5 + PR 6
   └── PR 11 ✅ — Constrained local-model path              [complete 2026-06-26]
 
 PR 7 + PR 8 + PR 11 + eval evidence
-  └── PR 12 — Backend defaults, older macOS, release gate
+  └── PR 12 ✅ — Backend defaults, older macOS, release gate [done 2026-06-26]
 ```
 
 ---
@@ -790,7 +790,7 @@ Implementation notes:
 
 * Added an experimental OpenRouter-only `OpenRouterSchemaToolSQLAgent` separate from the legacy one-shot `OpenRouterSQLGenerator`.
 * Added OpenRouter tool-chat protocol support, terminal `submit_text_to_sql_result`, schema-tool evidence checks, typed agent failures, and aggregate agent metadata.
-* Added the persisted `experimentalCloudSchemaAgentEnabled` preference under OpenRouter Advanced / Experimental settings. Default remains false.
+* Added the persisted `experimentalCloudSchemaAgentEnabled` preference under OpenRouter advanced settings. Default remained false for PR 7; PR 12 later promoted the OpenRouter schema-tool agent to the default connected-session cloud path.
 * App construction now uses a connection-aware generator path so connection ID, selected schemas, schema fingerprint, schema-tool session factory, and search index store stay host-controlled.
 * Added `WidenEval --cloud-agent legacy|tools` plus `make eval-cloud-agent`, `make eval-db-cloud-agent`, and `make eval-cloud-agent-case`.
 * Added deterministic scripted OpenRouter tests for the happy path, multiple schema calls, terminal-before-search correction, mixed terminal/schema rejection, unsupported-tool-model legacy selection, prompt injection exclusion from the initial request, and pipeline trace merging.
@@ -1143,7 +1143,7 @@ The local Foundation Models backend was available for the final eval runs. The c
 
 ---
 
-# PR 12 — Backend defaults, older macOS, and release gate
+# PR 12 ✅ — Backend defaults, older macOS, and release gate
 
 Suggested title:
 
@@ -1157,7 +1157,7 @@ Only start this after eval evidence from PR 7 and PR 11.
 
 * Isolate `FoundationModels` imports behind availability and conditional compilation.
 * Lower the deployment target to the oldest macOS version supported by the rest of Widen’s dependencies.
-* Cloud becomes the recommended/default text-to-SQL backend.
+* Cloud/OpenRouter becomes the default text-to-SQL backend.
 * Local appears only on eligible macOS 26 hardware.
 * Preserve a fully local mode for users who prioritize privacy over capability.
 * Add clear privacy descriptions before sending schema metadata or data values to cloud services.
@@ -1189,6 +1189,18 @@ docs/evals/<release-version>.md
 ```
 
 Do not publish the text-to-SQL feature as production-ready until the gate passes.
+Until then, text-to-SQL remains beta even though Cloud/OpenRouter is the default
+AI path. Manual SQL editing, schema browsing, and normal database work are
+supported independently of AI backend configuration.
+
+Completion notes:
+
+* Lowered the app deployment target and `LSMinimumSystemVersion` to macOS 14.0 while keeping Foundation Models and Liquid Glass behind macOS 26 availability gates.
+* Made OpenRouter Cloud the default backend for fresh installs (`aiBackendMode = .cloud`, `cloudProvider = .openRouter`, model `openai/gpt-5.5`), kept Local available only on eligible macOS 26+ Apple Silicon hosts, and prevented Local compatibility alerts from blocking normal browsing/manual SQL when Cloud is selected.
+* Promoted the OpenRouter schema-tool agent to the default connected-session product path so `make eval-release` tests the same path users get by default.
+* Added `make eval-release MODEL=<model>` as the PR 12 release gate with versioned summaries in `docs/evals/<release-version>.md`.
+* Updated privacy/default-backend docs to describe cloud schema metadata, optional inspected data values, and optional local mode.
+* Ran `make eval-release MODEL=openai/gpt-5.5`; the gate wrote `docs/evals/0.1.0.md` and failed the current production-ready threshold on semantic accuracy and clarification decisions.
 
 ---
 
@@ -1207,7 +1219,7 @@ When only one agent is working:
 8. PR 8 — PostgreSQL verification
 9. PR 9 ✅ — Optional data inspection
 10. PR 11 ✅ — Experimental local path
-11. PR 12 — Platform/default-backend decision
+11. PR 12 ✅ — Platform/default-backend decision
 12. PR 10 ⏸️ — Embedding experiment           [deferred 2026-06-26 — revisit after PR 12 and real app/eval testing]
 ```
 

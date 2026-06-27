@@ -57,7 +57,7 @@ struct SQLCardView: View {
                     controller.runQuery(appState: appState)
                 }
             }
-            .buttonStyle(.glassProminent)
+            .widenGlassButtonStyle(prominent: true)
             .hoverBrightness()
             .keyboardShortcut(.return, modifiers: .command)
             .disabled(runDisabled)

@@ -1,7 +1,7 @@
 name: Widen
 options:
   deploymentTarget:
-    macOS: "26.0"
+    macOS: "14.0"
   createIntermediateGroups: true
 
 packages:
@@ -19,7 +19,7 @@ settings:
     GENERATE_INFOPLIST_FILE: YES
     BUNDLE_ID_PREFIX: com.github.betocmn.widen
     SPARKLE_PUBLIC_ED_KEY: ""
-    MACOSX_DEPLOYMENT_TARGET: "26.0"
+    MACOSX_DEPLOYMENT_TARGET: "14.0"
   configs:
     Debug:
       CODE_SIGN_IDENTITY: "-"
@@ -59,7 +59,7 @@ targets:
         CFBundleDisplayName: Widen
         CFBundleShortVersionString: "0.1.0"
         CFBundleVersion: "1"
-        LSMinimumSystemVersion: "26.0"
+        LSMinimumSystemVersion: "14.0"
         LSApplicationCategoryType: public.app-category.developer-tools
         NSPrincipalClass: NSApplication
         NSHumanReadableCopyright: "Widen — Postgres GUI"

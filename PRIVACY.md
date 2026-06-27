@@ -4,25 +4,34 @@ Widen is designed to run without a Widen-hosted backend, accounts, analytics,
 or telemetry. This document explains what data is stored locally and what can
 leave your Mac.
 
-## Default Local Mode
+## Default Cloud Mode
 
-In local mode, Widen uses Apple's on-device Foundation Model when available.
-Your database schema, questions, generated SQL, query results, connection
-settings, and sessions stay on your Mac except for the PostgreSQL connection
-you configure.
+Fresh installs default text-to-SQL generation to Cloud mode with OpenRouter and
+Widen's schema-tool agent. Widen has no hosted backend of its own; cloud
+requests go directly from your Mac to the provider you configure in
+Settings > LLM.
 
-## Cloud Mode
+Cloud mode sends the question and allowed schema metadata to the selected
+provider so it can draft SQL. Schema metadata includes table names, column
+names, comments, constraints, enum/check values, and foreign-key structure.
+Prompt context can also include saved database context, recent conversation
+context, the current SQL being revised, and the last validation or database
+error being repaired. Those fields can include literals you typed and
+database-returned error details.
 
-If you choose a cloud model, Widen sends prompt context to the selected
-provider so it can draft SQL. That prompt can include your question, relevant
-schema context, saved database context, recent conversation context, the
-current SQL being revised, and the last validation or database error being
-repaired. Those fields can include literals you typed and database-returned
-error details. Query result tables and database credentials are not sent to the
-model provider by Widen.
+Inspected data values are sent to a cloud provider only when cloud data
+inspection is explicitly enabled for that connection. Query result tables and
+database credentials are not sent to the model provider by Widen.
 
-Cloud mode is opt-in and uses credentials you provide. Review the provider's
-own privacy and data-use terms before enabling it.
+Cloud mode uses credentials you provide. Review the provider's own privacy and
+data-use terms before enabling it.
+
+## Optional Local Mode
+
+On eligible macOS 26+ Apple Silicon Macs, Widen can use Apple's on-device
+Foundation Model. In local mode, your database schema, questions, generated
+SQL, query results, connection settings, and sessions stay on your Mac except
+for the PostgreSQL connection you configure.
 
 ## Local Storage
 
@@ -54,7 +63,7 @@ service.
 Depending on your settings, Widen can make these network connections:
 
 - PostgreSQL servers you configure.
-- The selected cloud model provider, only when cloud generation is enabled.
+- The selected cloud model provider when cloud generation is used.
 - GitHub Releases for Sparkle update checks in signed release builds.
 
 Widen does not include analytics, telemetry, or a Widen-operated backend.
@@ -64,8 +73,8 @@ Widen does not include analytics, telemetry, or a Widen-operated backend.
 - Use a read-only Postgres role when you only need analysis.
 - Avoid connecting production databases until you have reviewed the SQL safety
   model and are comfortable with the app's behavior.
-- Treat schema names, table names, column names, and sample values as sensitive
-  when using cloud generation.
+- Treat schema names, table names, column names, and inspected data values as
+  sensitive when using cloud generation.
 - Review saved database context, current SQL, and recent errors before using
   cloud generation on sensitive databases.
 - Delete `~/Library/Application Support/Widen/generation.log` when you no

@@ -20,26 +20,11 @@ struct LLMSettingsView: View {
         @Bindable var appState = appState
 
         Form {
-            Section("On-Device — Experimental") {
-                LabeledContent("Model", value: Self.localModelName)
-                Text(localModelDescription)
-                .font(.callout)
-                .foregroundStyle(.secondary)
-                if let message = appState.localModelAvailabilityMessage {
-                    Label(message, systemImage: "exclamationmark.triangle")
-                        .font(.callout)
-                        .foregroundStyle(.orange)
-                } else {
-                    Label("The on-device model is ready.", systemImage: "checkmark.circle")
-                        .font(.callout)
-                        .foregroundStyle(.secondary)
-                }
-            }
-
             Section("Cloud LLM") {
                 Picker("Provider", selection: $appState.cloudProvider) {
                     ForEach(CloudAIProvider.allCases) { provider in
                         Text(provider.displayName).tag(provider)
+                            .disabled(provider == .applePCC && !PCCSupport.isRuntimeSupported)
                     }
                 }
                 switch appState.cloudProvider {
@@ -48,16 +33,37 @@ struct LLMSettingsView: View {
                 case .openRouter:
                     openRouterConfiguration
                 }
+                Text(cloudPrivacyDescription)
+                    .font(.callout)
+                    .foregroundStyle(.secondary)
+            }
+
+            if appState.isLocalBackendVisible {
+                Section("On-Device — Experimental") {
+                    LabeledContent("Model", value: Self.localModelName)
+                    Text(localModelDescription)
+                    .font(.callout)
+                    .foregroundStyle(.secondary)
+                    if let message = appState.localModelAvailabilityMessage {
+                        Label(message, systemImage: "exclamationmark.triangle")
+                            .font(.callout)
+                            .foregroundStyle(.orange)
+                    } else {
+                        Label("The on-device model is ready.", systemImage: "checkmark.circle")
+                            .font(.callout)
+                            .foregroundStyle(.secondary)
+                    }
+                }
             }
 
             if appState.cloudProvider == .openRouter {
-                Section("OpenRouter Advanced / Experimental") {
+                Section("OpenRouter Advanced") {
                     Toggle(
                         "Use schema-tool SQL agent",
-                        isOn: $appState.experimentalCloudSchemaAgentEnabled
+                        isOn: $appState.openRouterSchemaToolAgentEnabled
                     )
                     Text(
-                        "Experimental and disabled by default. When enabled, OpenRouter receives only schema metadata through bounded tools; no row data is queried or sent. The selected model ID is preserved, and unsupported tool models use the legacy one-shot OpenRouter generator before any agent request."
+                        "Enabled by default. This is Widen's current OpenRouter schema-tool path. It is still being evaluated; see docs/evals for the current release-gate status. Data values are queried and sent only when cloud data inspection is enabled for the connection. Turn this off only to fall back to the legacy one-shot OpenRouter generator."
                     )
                     .font(.callout)
                     .foregroundStyle(.secondary)
@@ -75,7 +81,9 @@ struct LLMSettingsView: View {
 
             Section {
                 Text(
-                    "Switch between Local and Cloud with the toggle in the toolbar. Cloud models are used for SQL generation only; session titles use the on-device model when available, otherwise a local deterministic fallback."
+                    appState.isLocalBackendVisible
+                        ? "Switch between Cloud and Local with the toggle in the toolbar. Cloud is the default for text-to-SQL; session titles use the on-device model when available, otherwise a local deterministic fallback."
+                        : "Cloud is the text-to-SQL backend on this Mac. You can still browse schemas and run SQL manually without configuring a cloud model."
                 )
                 .font(.callout)
                 .foregroundStyle(.secondary)
@@ -112,6 +120,10 @@ struct LLMSettingsView: View {
         }
     }
 
+    private var cloudPrivacyDescription: String {
+        "Cloud SQL generation sends the question and allowed schema metadata to the selected provider. Inspected data values are sent only for connections where cloud data inspection is explicitly enabled."
+    }
+
     @ViewBuilder
     private var pccConfiguration: some View {
         switch appState.cloudBackendStatus {
@@ -141,7 +153,7 @@ struct LLMSettingsView: View {
                 .foregroundStyle(.orange)
         }
         Text(
-            "Apple's server-side foundation model, announced at WWDC 2026. Requires macOS 27, Apple Intelligence, and a build signed with Apple's Private Cloud Compute entitlement."
+            "Apple cloud model support is planned when Apple's required OS and SDK support is available. This option remains unavailable unless the app is compiled with that support and the current Mac can run it."
         )
         .font(.callout)
         .foregroundStyle(.secondary)

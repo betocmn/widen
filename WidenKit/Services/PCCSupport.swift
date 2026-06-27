@@ -30,12 +30,12 @@ public enum PCCSupport {
         #if compiler(>=6.4) && canImport(FoundationModels)
             guard #available(macOS 27.0, *) else {
                 return
-                    "Apple Private Cloud Compute requires macOS 27. Use OpenRouter on this Mac instead."
+                    "Apple cloud model support is planned when Apple's required OS and SDK support is available. Use OpenRouter on this Mac instead."
             }
             return PrivateCloudComputeSQLGenerator.availabilityMessage
         #else
             return
-                "This build was made with the macOS 26 SDK and does not include Private Cloud Compute. Use OpenRouter instead."
+                "Apple cloud model support is planned when Apple's required OS and SDK support is available. This build does not include it; use OpenRouter instead."
         #endif
     }
 

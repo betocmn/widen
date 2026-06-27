@@ -17,6 +17,7 @@ MODEL ?= openai/gpt-5.5
 BACKEND ?= local
 RETRIEVER ?= both
 CLOUD_AGENT ?= tools
+RELEASE_VERSION ?= $(shell /usr/libexec/PlistBuddy -c 'Print CFBundleShortVersionString' Widen/Info.plist 2>/dev/null || echo 0.1.0)
 EVAL_ARGS := --suite Evals/suites/text-to-sql-v1.json
 ifdef CASE
 EVAL_ARGS += --case $(CASE)
@@ -34,7 +35,7 @@ ifdef FAIL_UNDER
 EVAL_ARGS += --fail-under $(FAIL_UNDER)
 endif
 
-.PHONY: project build test test-db test-fm eval-build eval-local eval-cloud eval-cloud-agent eval-all eval-case eval-cloud-agent-case eval-retrieval eval-retrieval-case eval-schema-tools eval-inspection-tools eval-db-local eval-db-cloud eval-db-cloud-agent eval-db-case eval-openrouter-smoke setup run run-conductor release release-mac xcode clean
+.PHONY: project build test test-db test-fm eval-build eval-local eval-cloud eval-cloud-agent eval-all eval-case eval-cloud-agent-case eval-retrieval eval-retrieval-case eval-schema-tools eval-inspection-tools eval-db-local eval-db-cloud eval-db-cloud-agent eval-release eval-db-case eval-openrouter-smoke setup run run-conductor release release-mac xcode clean
 
 ## Regenerate Widen.xcodeproj from project.yml
 project:
@@ -143,6 +144,11 @@ eval-db-cloud: eval-build
 eval-db-cloud-agent: eval-build
 	@set -a; if [ -f .env.eval.local ]; then . ./.env.eval.local; fi; set +a; \
 	$(EVAL) --backend cloud --model "$(MODEL)" --cloud-agent "$(CLOUD_AGENT)" --semantic-db $(EVAL_ARGS)
+
+## Run the PR 12 text-to-SQL release gate
+eval-release: eval-build
+	@set -a; if [ -f .env.eval.local ]; then . ./.env.eval.local; fi; set +a; \
+	$(EVAL) --backend cloud --model "$(MODEL)" --cloud-agent tools --suite Evals/suites/text-to-sql-v1.json --semantic-db --repeat 3 --release-gate-version "$(RELEASE_VERSION)"
 
 ## Run one seeded Postgres semantic eval case
 eval-db-case: eval-build

@@ -22,13 +22,15 @@ struct AIBackendToggle: View {
                 .foregroundStyle(.secondary)
                 .accessibilityHidden(true)
             HStack(spacing: 2) {
-                CapsuleSegmentButton(
-                    icon: "shield.lefthalf.filled",
-                    title: "On-Device — Experimental",
-                    isSelected: appState.aiBackendMode == .local,
-                    help: localHelp
-                ) {
-                    select(.local)
+                if appState.isLocalBackendVisible {
+                    CapsuleSegmentButton(
+                        icon: "shield.lefthalf.filled",
+                        title: "On-Device — Experimental",
+                        isSelected: appState.aiBackendMode == .local,
+                        help: localHelp
+                    ) {
+                        select(.local)
+                    }
                 }
                 CapsuleSegmentButton(
                     icon: isCloudBroken ? "exclamationmark.icloud.fill" : "cloud.fill",
@@ -69,7 +71,7 @@ struct AIBackendToggle: View {
     private var cloudHelp: String {
         switch appState.cloudBackendStatus {
         case .ready:
-            "Generate SQL with \(appState.cloudProvider == .applePCC ? CloudAIProvider.applePCC.displayName : "\(OpenRouterCatalog.displayName(for: appState.openRouterModelID)) via OpenRouter"). Only your question and the relevant schema are sent to that provider — your database connection and query results never leave this Mac."
+            "Generate SQL with \(appState.cloudProvider == .applePCC ? CloudAIProvider.applePCC.displayName : "\(OpenRouterCatalog.displayName(for: appState.openRouterModelID)) via OpenRouter"). Cloud sends your question and allowed schema metadata; inspected data values are sent only when this connection enables cloud data inspection."
         case .notConfigured(let message), .unavailable(let message):
             "\(message) Click to open Settings › LLM. This switch only picks the LLM used for SQL generation."
         }

@@ -98,6 +98,7 @@ struct EvalRunSummary: Codable {
     var totalAgentModelTurns: Int?
     var totalAgentHTTPAttempts: Int?
     var toolBudgetFailureCount: Int?
+    var repeatedNoProgressRepairCount: Int
     var averageEstimatedInitialPromptCharacters: Double?
     var maxEstimatedInitialPromptCharacters: Int?
 }
@@ -702,7 +703,10 @@ struct EvalRunner {
         switch backend {
         case .local:
             #if canImport(FoundationModels)
-                return FoundationModelsSQLGenerator()
+                if #available(macOS 26.0, *) {
+                    return FoundationModelsSQLGenerator()
+                }
+                return nil
             #else
                 return nil
             #endif
@@ -719,7 +723,10 @@ struct EvalRunner {
         switch backend {
         case .local:
             #if canImport(FoundationModels)
-                return FoundationModelsSQLGenerator.availabilityMessage
+                if #available(macOS 26.0, *) {
+                    return FoundationModelsSQLGenerator.availabilityMessage
+                }
+                return "Foundation Models requires macOS 26 or later."
             #else
                 return "Foundation Models is not available in this build."
             #endif
@@ -846,6 +853,11 @@ struct EvalRunner {
                                 || $0.errorCode == .resultBudgetExceeded
                         } == true
                 )
+        }
+        let repeatedNoProgressRepairs = results.filter { result in
+            result.trace?.stages.contains {
+                $0.failureCategory == .repeatedNoProgressRepair
+            } == true
         }
         let promptEstimateValues = results.compactMap(\.metrics.estimatedInitialPromptCharacters)
         let backendAvailableValues = results.map(\.metrics.backendAvailable)
@@ -1004,6 +1016,7 @@ struct EvalRunner {
             toolBudgetFailureCount: schemaToolCalls.isEmpty && inspectionToolCalls.isEmpty
                 ? nil
                 : toolBudgetFailures.count,
+            repeatedNoProgressRepairCount: repeatedNoProgressRepairs.count,
             averageEstimatedInitialPromptCharacters: promptEstimateValues.isEmpty
                 ? nil
                 : Double(promptEstimateValues.reduce(0, +)) / Double(promptEstimateValues.count),

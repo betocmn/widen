@@ -684,12 +684,14 @@ struct MockConnectionDetailsParserTests {
     @Suite("FoundationModelsConnectionParser helpers")
     struct FoundationModelsConnectionParserHelperTests {
         @Test func sslMentionAcceptsTLS() {
+            guard #available(macOS 26.0, *) else { return }
             #expect(FoundationModelsConnectionParser.mentionsSSLSetting(in: "TLS required"))
             #expect(FoundationModelsConnectionParser.mentionsSSLSetting(in: "sslmode=require"))
             #expect(!FoundationModelsConnectionParser.mentionsSSLSetting(in: "use a password"))
         }
 
         @Test func deterministicKeyValuesCanClearModelPassword() {
+            guard #available(macOS 26.0, *) else { return }
             let modelDetails = ParsedConnectionDetails(host: "model-host", password: "old-password")
             let deterministicDetails = FoundationModelsConnectionParser.deterministicDetails(
                 in:

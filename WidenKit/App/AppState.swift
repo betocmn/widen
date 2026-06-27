@@ -124,7 +124,7 @@ public final class AppState {
     public var aiBackendMode: AIBackendMode =
         AIBackendMode(
             rawValue: UserDefaults.standard.string(forKey: AppState.aiBackendModeKey) ?? "")
-        ?? .local
+        ?? .cloud
     {
         didSet { UserDefaults.standard.set(aiBackendMode.rawValue, forKey: Self.aiBackendModeKey) }
     }
@@ -153,20 +153,33 @@ public final class AppState {
     }
     private static let openRouterModelIDKey = "WidenOpenRouterModelID"
 
-    /// Experimental OpenRouter-only schema-tool agent. Disabled by default;
-    /// the legacy one-shot OpenRouter generator remains the production path.
-    public var experimentalCloudSchemaAgentEnabled: Bool =
-        UserDefaults.standard.bool(forKey: AppState.experimentalCloudSchemaAgentEnabledKey)
+    /// OpenRouter's default generation path for connected database sessions.
+    /// It lets the model inspect bounded schema metadata through tools instead
+    /// of sending one large one-shot schema prompt.
+    public var openRouterSchemaToolAgentEnabled: Bool =
+        AppState.loadOpenRouterSchemaToolAgentEnabled()
     {
         didSet {
             UserDefaults.standard.set(
-                experimentalCloudSchemaAgentEnabled,
-                forKey: Self.experimentalCloudSchemaAgentEnabledKey
+                openRouterSchemaToolAgentEnabled,
+                forKey: Self.openRouterSchemaToolAgentEnabledKey
             )
         }
     }
-    private static let experimentalCloudSchemaAgentEnabledKey =
+    private static let openRouterSchemaToolAgentEnabledKey =
+        "WidenOpenRouterSchemaToolAgentEnabled"
+    private static let legacyExperimentalCloudSchemaAgentEnabledKey =
         "WidenExperimentalCloudSchemaAgentEnabled"
+
+    private static func loadOpenRouterSchemaToolAgentEnabled() -> Bool {
+        if UserDefaults.standard.object(forKey: openRouterSchemaToolAgentEnabledKey) != nil {
+            return UserDefaults.standard.bool(forKey: openRouterSchemaToolAgentEnabledKey)
+        }
+        if UserDefaults.standard.object(forKey: legacyExperimentalCloudSchemaAgentEnabledKey) != nil {
+            return UserDefaults.standard.bool(forKey: legacyExperimentalCloudSchemaAgentEnabledKey)
+        }
+        return true
+    }
 
     /// Test seam, mirrors `titleGeneratorOverride`: `.some(value)` replaces
     /// the Keychain lookup, including `.some(nil)` to force "no key stored".
@@ -247,8 +260,8 @@ public final class AppState {
     }
 
     /// Connection-aware generation path used by live database sessions. The
-    /// experimental cloud schema-tool agent needs host-controlled connection
-    /// and schema scope; callers without that context keep using `sqlGenerator`.
+    /// OpenRouter schema-tool agent needs host-controlled connection and schema
+    /// scope; callers without that context keep using `sqlGenerator`.
     public func sqlGenerator(
         connectionID: UUID,
         schema: DatabaseSchema
@@ -282,7 +295,7 @@ public final class AppState {
             switch cloudProvider {
             case .openRouter:
                 if let key = openRouterAPIKey, !key.isEmpty {
-                    if experimentalCloudSchemaAgentEnabled,
+                    if openRouterSchemaToolAgentEnabled,
                         let connectionID,
                         let schema
                     {
@@ -317,12 +330,17 @@ public final class AppState {
         }
 
         let localStatus = localLLMEligibility
+        guard localStatus.canShowLocalBackendOption else {
+            return UnavailableSQLGenerator(message: localStatus.message)
+        }
         guard localStatus.isReady else {
             return UnavailableSQLGenerator(message: localStatus.message)
         }
 
         #if canImport(FoundationModels)
-            return FoundationModelsSQLGenerator()
+            if #available(macOS 26.0, *) {
+                return FoundationModelsSQLGenerator()
+            }
         #else
             return UnavailableSQLGenerator(
                 message: LocalLLMEligibility.sdkUnavailable(
@@ -380,7 +398,7 @@ public final class AppState {
         if let titleGeneratorOverride { return titleGeneratorOverride }
         if useMockAI { return MockTitleGenerator() }
         #if canImport(FoundationModels)
-            if localLLMEligibility.isReady {
+            if #available(macOS 26.0, *), localLLMEligibility.isReady {
                 return FoundationModelsTitleGenerator()
             }
         #endif
@@ -394,7 +412,7 @@ public final class AppState {
     public var connectionDetailsParser: (any ConnectionDetailsParsing)? {
         if useMockAI { return MockConnectionDetailsParser() }
         #if canImport(FoundationModels)
-            if localLLMEligibility.isReady {
+            if #available(macOS 26.0, *), localLLMEligibility.isReady {
                 return FoundationModelsConnectionParser()
             }
         #endif
@@ -435,6 +453,10 @@ public final class AppState {
 
     public var localLLMEligibility: LocalLLMEligibility {
         localLLMEligibilityOverride ?? LocalLLMEligibilityChecker.status()
+    }
+
+    public var isLocalBackendVisible: Bool {
+        localLLMEligibility.canShowLocalBackendOption
     }
 
     public let connectionStore: ConnectionStore
@@ -509,10 +531,14 @@ public final class AppState {
 
         UserDefaults.standard.removeObject(forKey: Self.selectedSessionKey)
         sidebarSelection = nil
+        if aiBackendMode == .local && !isLocalBackendVisible {
+            aiBackendMode = .cloud
+        }
         checkLocalLLMEligibilityForInstallIfNeeded()
     }
 
     public func checkLocalLLMEligibilityForInstallIfNeeded() {
+        guard aiBackendMode == .local else { return }
         let status = localLLMEligibility
         guard !status.isReady else { return }
         guard !UserDefaults.standard.bool(forKey: Self.didShowInstallLLMCompatibilityAlertKey)
@@ -527,6 +553,10 @@ public final class AppState {
         switch mode {
         case .local:
             let status = localLLMEligibility
+            guard status.canShowLocalBackendOption else {
+                llmCompatibilityAlert = compatibilityAlert(for: status)
+                return false
+            }
             guard status.isReady else {
                 llmCompatibilityAlert = compatibilityAlert(for: status)
                 return false

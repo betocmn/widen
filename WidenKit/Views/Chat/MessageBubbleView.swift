@@ -61,9 +61,7 @@ struct MessageBubbleView: View {
     private var bubble: some View {
         if message.role == .user {
             content
-                .glassEffect(
-                    .regular.tint(Color.accentColor.opacity(0.35)),
-                    in: .rect(cornerRadius: 14))
+                .widenTintedGlassEffect(Color.accentColor.opacity(0.35), cornerRadius: 14)
         } else {
             content
                 .background(.regularMaterial, in: RoundedRectangle(cornerRadius: 14))
