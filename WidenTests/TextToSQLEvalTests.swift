@@ -458,6 +458,40 @@ struct TextToSQLEvalTests {
         #expect(result.metrics.clarificationQuality == true)
     }
 
+    @Test func measureSpecificClarificationPassesQualityScoring() async {
+        let evalCase = TextToSQLEvalCase(
+            id: "openrouter.clarification",
+            schemaFixture: "commerce",
+            question: "Which products perform best?",
+            expected: TextToSQLEvalExpectation(
+                decision: .clarify,
+                clarificationMustMentionAny: ["measure", "performance"]
+            )
+        )
+        let generator = StaticGenerator(
+            result: SQLGenerationResult(
+                sql: "",
+                explanation: "Needs a database decision.",
+                assumptions: [],
+                referencedTables: [],
+                confidence: 0.2,
+                riskLevel: .medium,
+                needsClarification: true,
+                clarificationQuestion: "Which performance measure should I use?"
+            )
+        )
+
+        let result = await TextToSQLEvalCaseRunner.run(
+            evalCase: evalCase,
+            schema: makeCommerceSchema(),
+            generator: generator,
+            options: TextToSQLEvalRunOptions(backend: .cloud, model: "test/model")
+        )
+
+        #expect(result.status == .passed)
+        #expect(result.metrics.clarificationQuality == true)
+    }
+
     @Test func currentClarificationCasesRequireConcreteDatabaseDecision() async {
         let cases: [(TextToSQLEvalCase, good: String, bad: String)] = [
             (

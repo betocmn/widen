@@ -1462,6 +1462,34 @@ struct SQLSchemaValidatorTests {
         #expect(enriched.sql.contains("2026-06-24 12:00:00+00"))
     }
 
+    @Test func nonAnchorDatePredicateDoesNotClarifyMovingWindow() {
+        let generation = SQLGenerationResult(
+            sql: """
+                SELECT id
+                FROM public.jobs
+                WHERE started_at < TIMESTAMPTZ '2026-01-01 00:00:00+00'
+                  AND finished_at >= NOW() - INTERVAL '7 days'
+                """,
+            explanation: "Finds jobs matching the fixed start cutoff and recent finish window.",
+            assumptions: [],
+            referencedTables: [],
+            confidence: 1,
+            riskLevel: .low,
+            needsClarification: false,
+            clarificationQuestion: nil
+        )
+
+        let enriched = GeneratedSQLPostprocessor.enriched(
+            generation,
+            question: "Which jobs started before 2026-01-01 and finished in the last 7 days?",
+            schema: makeIntervalSchema(),
+            databaseContext: ""
+        )
+
+        #expect(!enriched.needsClarification)
+        #expect(enriched.sql.contains("NOW() - INTERVAL '7 days'"))
+    }
+
     @Test func possessiveSuffixDoesNotBecomeUnsupportedGroundingConcept() {
         let generation = SQLGenerationResult(
             sql: """

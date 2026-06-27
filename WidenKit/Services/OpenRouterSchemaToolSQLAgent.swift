@@ -428,7 +428,6 @@ public final class OpenRouterSchemaToolSQLAgent: SQLGenerator, Sendable {
                             question: question,
                             clarification: terminalResult.clarificationQuestion
                         ),
-                            Self.isGenericClarification(terminalResult.clarificationQuestion),
                             malformedTerminalCorrections < configuration.maximumMalformedTerminalCorrections
                         {
                             malformedTerminalCorrections += 1
@@ -446,8 +445,12 @@ public final class OpenRouterSchemaToolSQLAgent: SQLGenerator, Sendable {
                         }
                         try await checkStaleSnapshot(expected: initialFingerprint)
                         let finalTerminalResult: TerminalResult
-                        if databaseContext.isEmpty,
-                            Self.isGenericClarification(terminalResult.clarificationQuestion),
+                        if Self.isGenericClarification(terminalResult.clarificationQuestion),
+                            !Self.databaseContextResolvesClarification(
+                                databaseContext,
+                                question: question,
+                                clarification: terminalResult.clarificationQuestion
+                            ),
                             let fallbackQuestion = evidence.fallbackClarificationQuestion(for: question)
                         {
                             finalTerminalResult = TerminalResult(
@@ -834,8 +837,12 @@ public final class OpenRouterSchemaToolSQLAgent: SQLGenerator, Sendable {
         diagnostics: OpenRouterSchemaToolAgentDiagnosticState
     ) async throws -> SQLGenerationResult? {
         guard Self.canFallbackToInspectedClarification(failure.category),
-            databaseContext.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty,
-            let question = evidence.fallbackClarificationQuestion(for: question)
+            let fallbackQuestion = evidence.fallbackClarificationQuestion(for: question),
+            !Self.databaseContextResolvesClarification(
+                databaseContext,
+                question: question,
+                clarification: fallbackQuestion
+            )
         else { return nil }
         var fallbackAggregate = aggregate
         var fallbackDiagnostics = diagnostics
@@ -847,7 +854,7 @@ public final class OpenRouterSchemaToolSQLAgent: SQLGenerator, Sendable {
             inspectionToolCalls: await inspectionSession?.tracesSnapshot() ?? []
         )
         return try await finalResult(
-            TerminalResult(action: .clarify, sql: "", clarificationQuestion: question),
+            TerminalResult(action: .clarify, sql: "", clarificationQuestion: fallbackQuestion),
             schema: schema,
             context: context,
             aggregate: fallbackAggregate,

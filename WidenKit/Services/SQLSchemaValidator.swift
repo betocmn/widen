@@ -2020,8 +2020,9 @@ public enum GeneratedSQLPostprocessor {
         databaseContext: String
     ) -> PendingClarification? {
         let source = question + "\n" + databaseContext
-        guard let anchor = explicitTimestampAnchor(in: source),
-            usesMovingCurrentTime(sql)
+        guard let anchor = explicitWindowAnchor(in: source),
+            usesMovingCurrentTime(sql),
+            !sqlMentionsAnchor(sql, anchor: anchor)
         else { return nil }
         let concept = SQLGroundingConcept(
             term: "time window anchor",
@@ -2040,11 +2041,34 @@ public enum GeneratedSQLPostprocessor {
         )
     }
 
-    private static func explicitTimestampAnchor(in text: String) -> String? {
-        let pattern =
+    private static func explicitWindowAnchor(in text: String) -> String? {
+        let timestampPattern =
             #"\b\d{4}-\d{2}-\d{2}(?:[ T]\d{1,2}:\d{2}(?::\d{2})?(?:\s*(?:UTC|Z|[+-]\d{2}:?\d{2}))?)?\b"#
-        return text.range(of: pattern, options: [.regularExpression, .caseInsensitive])
-            .map { String(text[$0]) }
+        let anchorBeforeDatePattern =
+            #"(?i)\b(?:ending|ends|ended|as\s+of|as-of|through|until|anchor|anchored|relative\s+to)\b[\s\S]{0,80}("#
+                + timestampPattern + #")"#
+        if let range = text.range(of: anchorBeforeDatePattern, options: [.regularExpression]) {
+            let snippet = String(text[range])
+            if let match = snippet.range(of: timestampPattern, options: [.regularExpression]) {
+                return String(snippet[match])
+            }
+        }
+        let dateBeforeAnchorPattern =
+            #"(?i)("# + timestampPattern
+                + #")[\s\S]{0,80}\b(?:window\s+ending|window\s+anchor|as\s+of|as-of|anchor|anchored)\b"#
+        if let range = text.range(of: dateBeforeAnchorPattern, options: [.regularExpression]) {
+            let snippet = String(text[range])
+            if let match = snippet.range(of: timestampPattern, options: [.regularExpression]) {
+                return String(snippet[match])
+            }
+        }
+        return nil
+    }
+
+    private static func sqlMentionsAnchor(_ sql: String, anchor: String) -> Bool {
+        guard anchor.count >= 10 else { return false }
+        let datePrefix = String(anchor.prefix(10))
+        return sql.range(of: datePrefix, options: [.caseInsensitive]) != nil
     }
 
     private static func usesMovingCurrentTime(_ sql: String) -> Bool {

@@ -573,7 +573,73 @@ struct OpenRouterSchemaToolSQLAgentTests {
         #expect(result.backendMetadata?.agentDiagnostics?.terminalValidationFailureReason == "databaseContextClarificationRejected")
     }
 
-    @Test func unrelatedDatabaseContextDoesNotRejectClarification() async throws {
+    @Test func databaseContextRejectsSpecificClarificationBeforeSQL() async throws {
+        let schema = Self.makePreseasonSchema()
+        let sql = """
+            SELECT t.id, t.name, COUNT(*) AS wins
+            FROM public.preseason_match_evaluation AS e
+            JOIN public.preseason_tool AS t ON e.winner_id = t.id
+            WHERE e.winner_id IS NOT NULL
+              AND e."createdAt" >= NOW() - INTERVAL '14 days'
+            GROUP BY t.id, t.name
+            ORDER BY COUNT(*) DESC
+            LIMIT 100
+            """
+        let chatTransport = ScriptedTransport { request, index in
+            switch index {
+            case 1:
+                return Self.assistantToolCalls([
+                    Self.toolCall(id: "search-context-specific", name: "search_schema", arguments: [
+                        "query": "preseason winner wins",
+                        "limit": 4,
+                    ]),
+                ])
+            case 2:
+                let evaluations = try Self.tableHandle(
+                    named: #""public"."preseason_match_evaluation""#,
+                    in: request
+                )
+                let tools = try Self.tableHandle(named: #""public"."preseason_tool""#, in: request)
+                return Self.assistantToolCalls([
+                    Self.toolCall(id: "describe-context-specific", name: "describe_tables", arguments: [
+                        "table_ids": [evaluations, tools],
+                    ]),
+                ])
+            case 3:
+                return Self.assistantToolCalls([
+                    Self.terminalClarification(
+                        id: "terminal-context-specific",
+                        question: "Which date should define the time window?"
+                    ),
+                ])
+            case 4:
+                let body = try Self.requestBodyText(request)
+                #expect(body.contains("database_context_authoritative"))
+                return Self.assistantToolCalls([
+                    Self.terminalSQL(id: "terminal-context-specific-sql", sql: sql),
+                ])
+            default:
+                throw URLError(.badServerResponse)
+            }
+        }
+        let agent = makeAgent(schema: schema, chatTransport: chatTransport)
+
+        let result = try await agent.generateSQL(
+            question: "Which tools have the most wins in the last two weeks?",
+            schema: schema,
+            context: SQLGenerationContext(),
+            config: SQLGenerationConfig(
+                databaseContext:
+                    "Each evaluation with a non-null winner_id records one win. Use evaluation createdAt as the time of the win."
+            )
+        )
+
+        #expect(!result.needsClarification)
+        #expect(result.sql.contains(#"e."createdAt" >= NOW() - INTERVAL '14 days'"#))
+        #expect(result.backendMetadata?.agentDiagnostics?.terminalValidationFailureReason == "databaseContextClarificationRejected")
+    }
+
+    @Test func unrelatedDatabaseContextPreservesEvidenceClarificationFallback() async throws {
         let schema = Self.makePreseasonSchema()
         let chatTransport = ScriptedTransport { request, index in
             switch index {
@@ -616,9 +682,10 @@ struct OpenRouterSchemaToolSQLAgentTests {
         )
 
         #expect(result.needsClarification)
-        #expect(result.clarificationQuestion == "Which column defines wins?")
-        #expect(result.backendMetadata?.agentTerminalOutcome == "clarify")
-        #expect(result.backendMetadata?.agentDiagnostics?.terminalValidationFailureReason == nil)
+        #expect(result.clarificationQuestion?.contains("winner_id") == true)
+        #expect(result.clarificationQuestion?.contains("not null") == true)
+        #expect(result.backendMetadata?.agentTerminalOutcome == "clarify_fallback")
+        #expect(result.backendMetadata?.agentDiagnostics?.terminalValidationFailureReason == "genericClarificationReplaced")
     }
 
     @Test func preseasonTopWinsDefinedCanReturnValidatedSQLFromDatabaseContext() async throws {

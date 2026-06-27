@@ -758,10 +758,10 @@ public enum TextToSQLEvalScorer {
     }
 
     private static let databaseDecisionTokens: Set<String> = [
-        "metric", "definition", "define", "count", "counting", "sum", "average",
-        "relationship", "join", "path", "status", "filter", "value", "time", "date",
-        "field", "column", "table", "event", "occurrence", "row", "rows", "window",
-        "null", "nonnull",
+        "metric", "measure", "performance", "definition", "define", "count", "counting",
+        "sum", "average", "relationship", "join", "path", "status", "filter", "value",
+        "time", "date", "field", "column", "table", "event", "occurrence", "row",
+        "rows", "window", "priority", "impact", "frequency", "usage", "null", "nonnull",
     ]
 
     private static func containsSchemaIdentifierEvidence(_ value: String) -> Bool {
