@@ -1969,6 +1969,25 @@ public enum GeneratedSQLPostprocessor {
         let schemaValidation = SQLSchemaValidator.validate(sql: sql, against: schema)
         copy.referencedTables = schemaValidation.referencedTables
         if !schemaValidation.hasDefiniteErrors {
+            if allowGroundingClarification,
+                let pending = anchoredWindowClarification(
+                    question: question,
+                    sql: sql,
+                    databaseContext: databaseContext
+                )
+            {
+                copy.sql = ""
+                copy.explanation = pending.question
+                copy.needsClarification = true
+                copy.clarificationQuestion = pending.question
+                copy.clarificationOptions = pending.options
+                copy.pendingClarificationID = pending.id
+                copy.pendingClarification = pending
+                copy.groundingConcepts = [pending.concept]
+                copy.confidence = min(copy.confidence, 0.2)
+                copy.riskLevel = .medium
+                return copy
+            }
             let grounding = groundingEvaluation(
                 question: question,
                 sql: sql,
@@ -1993,6 +2012,44 @@ public enum GeneratedSQLPostprocessor {
             }
         }
         return copy
+    }
+
+    private static func anchoredWindowClarification(
+        question: String,
+        sql: String,
+        databaseContext: String
+    ) -> PendingClarification? {
+        let source = question + "\n" + databaseContext
+        guard let anchor = explicitTimestampAnchor(in: source),
+            usesMovingCurrentTime(sql)
+        else { return nil }
+        let concept = SQLGroundingConcept(
+            term: "time window anchor",
+            kind: .time,
+            state: .ambiguous,
+            required: true,
+            evidence: [anchor]
+        )
+        let question =
+            "Should the time window use the explicit anchor \(anchor) instead of the current time?"
+        return PendingClarification(
+            concept: concept,
+            originalQuestion: source,
+            question: question,
+            evidence: [anchor]
+        )
+    }
+
+    private static func explicitTimestampAnchor(in text: String) -> String? {
+        let pattern =
+            #"\b\d{4}-\d{2}-\d{2}(?:[ T]\d{1,2}:\d{2}(?::\d{2})?(?:\s*(?:UTC|Z|[+-]\d{2}:?\d{2}))?)?\b"#
+        return text.range(of: pattern, options: [.regularExpression, .caseInsensitive])
+            .map { String(text[$0]) }
+    }
+
+    private static func usesMovingCurrentTime(_ sql: String) -> Bool {
+        let pattern = #"\bnow\s*\(\s*\)|\bcurrent_date\b|\bcurrent_timestamp\b|\blocaltimestamp\b"#
+        return sql.range(of: pattern, options: [.regularExpression, .caseInsensitive]) != nil
     }
 
     public static func groundingEvaluation(

@@ -423,7 +423,11 @@ public final class OpenRouterSchemaToolSQLAgent: SQLGenerator, Sendable {
                             )
                         }
                         let databaseContext = config.databaseContext.trimmingCharacters(in: .whitespacesAndNewlines)
-                        if !databaseContext.isEmpty,
+                        if Self.databaseContextResolvesClarification(
+                            databaseContext,
+                            question: question,
+                            clarification: terminalResult.clarificationQuestion
+                        ),
                             Self.isGenericClarification(terminalResult.clarificationQuestion),
                             malformedTerminalCorrections < configuration.maximumMalformedTerminalCorrections
                         {
@@ -1168,6 +1172,36 @@ public final class OpenRouterSchemaToolSQLAgent: SQLGenerator, Sendable {
         ]
         return genericFragments.contains { lower.contains($0) }
     }
+
+    private static func databaseContextResolvesClarification(
+        _ databaseContext: String,
+        question: String,
+        clarification: String
+    ) -> Bool {
+        let contextTokens = Set(SchemaIndex.tokens(in: databaseContext))
+            .subtracting(databaseContextAuthorityStopWords)
+        guard !contextTokens.isEmpty else { return false }
+        let requestTokens = Set(SchemaIndex.tokens(in: question + " " + clarification))
+            .subtracting(databaseContextAuthorityStopWords)
+        guard !requestTokens.isEmpty else { return false }
+        let hasRelevantOverlap = !requestTokens.isDisjoint(with: contextTokens)
+        let hasDefinitionSignal = !Set(SchemaIndex.tokens(in: databaseContext))
+            .isDisjoint(with: databaseContextDefinitionTokens)
+        return hasRelevantOverlap && hasDefinitionSignal
+    }
+
+    private static let databaseContextDefinitionTokens: Set<String> = [
+        "active", "count", "counts", "counting", "define", "defines", "definition",
+        "mean", "means", "metric", "non", "null", "paid", "record", "records",
+        "resolved", "status", "unresolved", "use", "uses", "where", "when",
+    ]
+
+    private static let databaseContextAuthorityStopWords: Set<String> = [
+        "a", "an", "and", "are", "as", "at", "be", "by", "for", "from", "in",
+        "is", "it", "of", "on", "or", "the", "this", "to", "utc", "timestamp",
+        "timestamps", "time", "date", "which", "what", "column", "condition",
+        "table",
+    ]
 
     private func checkStaleSnapshot(expected: String) async throws {
         guard let currentSchemaFingerprint else { return }

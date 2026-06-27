@@ -187,6 +187,11 @@ enum TextToSQLReleaseGateReporter {
                 return normalized == "public.preseason_match_evaluation.tool_a_id"
                     || normalized == "public.preseason_match_evaluation.tool_b_id"
             }
+            || result.diagnostics.schemaErrors.contains {
+                let normalized = $0.lowercased()
+                return normalized.contains("public.preseason_match_evaluation")
+                    && (normalized.contains("tool_a_id") || normalized.contains("tool_b_id"))
+            }
     }
 
     private static func quotedTimestampCheck(_ result: TextToSQLEvalResult) -> String {
@@ -300,7 +305,7 @@ enum TextToSQLReleaseTriageReporter {
         casesByID: [String: TextToSQLEvalCase]
     ) -> String {
         let failed = run.results
-            .filter { $0.status != .passed }
+            .filter(Self.isTriageFailure)
             .map { TriageRow(result: $0, evalCase: casesByID[$0.caseID]) }
         let grouped = Dictionary(grouping: failed, by: \.category)
 
@@ -358,6 +363,18 @@ enum TextToSQLReleaseTriageReporter {
             "",
         ]
         return lines.joined(separator: "\n")
+    }
+
+    private static func isTriageFailure(_ result: TextToSQLEvalResult) -> Bool {
+        if result.status != .passed { return true }
+        if result.metrics.endToEndPassed == false { return true }
+        switch result.metrics.semanticStatus {
+        case .resultMismatch, .candidateExecutionFailure, .goldenFixtureFailure,
+            .resultLimitExceeded, .semanticEnvironmentUnavailable, .fixtureInvalid:
+            return true
+        case .passed, .notApplicable, nil:
+            return false
+        }
     }
 
     private struct TriageRow {

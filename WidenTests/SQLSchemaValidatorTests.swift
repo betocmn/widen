@@ -1398,7 +1398,7 @@ struct SQLSchemaValidatorTests {
         #expect(enriched.clarificationQuestion?.contains("createdAt") == true)
     }
 
-    @Test func explicitWinnerContextDoesNotClarifyDurationWords() {
+    @Test func anchoredWinnerContextRequiresExplicitAnchorInsteadOfMovingNow() {
         let generation = SQLGenerationResult(
             sql: """
                 SELECT t.name, t.slug, COUNT(*) AS wins
@@ -1426,8 +1426,40 @@ struct SQLSchemaValidatorTests {
                 "Each evaluation with a non-null winner_id records one win. Use the evaluation createdAt timestamp and treat the evaluation anchor as 2026-06-24 12:00 UTC."
         )
 
+        #expect(enriched.needsClarification)
+        #expect(enriched.clarificationQuestion?.contains("2026-06-24 12:00 UTC") == true)
+    }
+
+    @Test func explicitWinnerContextDoesNotClarifyDurationWordsWhenAnchorIsUsed() {
+        let generation = SQLGenerationResult(
+            sql: """
+                SELECT t.name, t.slug, COUNT(*) AS wins
+                FROM public.preseason_match_evaluation AS e
+                JOIN public.preseason_tool AS t ON e.winner_id = t.id
+                WHERE e.winner_id IS NOT NULL
+                  AND e."createdAt" >= CAST('2026-06-24 12:00:00+00' AS TIMESTAMPTZ) - INTERVAL '14 days'
+                GROUP BY t.name, t.slug
+                ORDER BY COUNT(*) DESC
+                """,
+            explanation: "Counts winning evaluations by tool.",
+            assumptions: [],
+            referencedTables: [],
+            confidence: 1,
+            riskLevel: .low,
+            needsClarification: false,
+            clarificationQuestion: nil
+        )
+
+        let enriched = GeneratedSQLPostprocessor.enriched(
+            generation,
+            question: "Which tools have the most wins in the two weeks ending 2026-06-24 12:00 UTC?",
+            schema: makePreseasonWinnerSchema(),
+            databaseContext:
+                "Each evaluation with a non-null winner_id records one win. Use the evaluation createdAt timestamp and treat the evaluation anchor as 2026-06-24 12:00 UTC."
+        )
+
         #expect(!enriched.needsClarification)
-        #expect(enriched.sql.contains(#"e."createdAt" >= NOW() - INTERVAL '14 days'"#))
+        #expect(enriched.sql.contains("2026-06-24 12:00:00+00"))
     }
 
     @Test func possessiveSuffixDoesNotBecomeUnsupportedGroundingConcept() {

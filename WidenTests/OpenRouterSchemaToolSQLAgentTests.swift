@@ -573,6 +573,54 @@ struct OpenRouterSchemaToolSQLAgentTests {
         #expect(result.backendMetadata?.agentDiagnostics?.terminalValidationFailureReason == "databaseContextClarificationRejected")
     }
 
+    @Test func unrelatedDatabaseContextDoesNotRejectClarification() async throws {
+        let schema = Self.makePreseasonSchema()
+        let chatTransport = ScriptedTransport { request, index in
+            switch index {
+            case 1:
+                return Self.assistantToolCalls([
+                    Self.toolCall(id: "search-unrelated-context", name: "search_schema", arguments: [
+                        "query": "preseason winner wins",
+                        "limit": 4,
+                    ]),
+                ])
+            case 2:
+                let evaluations = try Self.tableHandle(
+                    named: #""public"."preseason_match_evaluation""#,
+                    in: request
+                )
+                let tools = try Self.tableHandle(named: #""public"."preseason_tool""#, in: request)
+                return Self.assistantToolCalls([
+                    Self.toolCall(id: "describe-unrelated-context", name: "describe_tables", arguments: [
+                        "table_ids": [evaluations, tools],
+                    ]),
+                ])
+            case 3:
+                return Self.assistantToolCalls([
+                    Self.terminalClarification(
+                        id: "terminal-unrelated-context",
+                        question: "Which column defines wins?"
+                    ),
+                ])
+            default:
+                throw URLError(.badServerResponse)
+            }
+        }
+        let agent = makeAgent(schema: schema, chatTransport: chatTransport)
+
+        let result = try await agent.generateSQL(
+            question: "Tools with the most wins in the last two weeks",
+            schema: schema,
+            context: SQLGenerationContext(),
+            config: SQLGenerationConfig(databaseContext: "Timestamps are stored in UTC.")
+        )
+
+        #expect(result.needsClarification)
+        #expect(result.clarificationQuestion == "Which column defines wins?")
+        #expect(result.backendMetadata?.agentTerminalOutcome == "clarify")
+        #expect(result.backendMetadata?.agentDiagnostics?.terminalValidationFailureReason == nil)
+    }
+
     @Test func preseasonTopWinsDefinedCanReturnValidatedSQLFromDatabaseContext() async throws {
         let schema = Self.makePreseasonSchema()
         let sql = """

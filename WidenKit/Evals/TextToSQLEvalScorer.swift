@@ -754,13 +754,24 @@ public enum TextToSQLEvalScorer {
         }
         guard mentionsExpectedConcept else { return false }
         return !candidateTokens.isDisjoint(with: databaseDecisionTokens)
+            || containsSchemaIdentifierEvidence(text)
     }
 
     private static let databaseDecisionTokens: Set<String> = [
         "metric", "definition", "define", "count", "counting", "sum", "average",
         "relationship", "join", "path", "status", "filter", "value", "time", "date",
         "field", "column", "table", "event", "occurrence", "row", "rows", "window",
+        "null", "nonnull",
     ]
+
+    private static func containsSchemaIdentifierEvidence(_ value: String) -> Bool {
+        if value.contains("_") { return true }
+        let qualifiedIdentifierPattern = #"\b[a-z][a-z0-9]*\.[a-z][a-z0-9_]*\b"#
+        return value.range(
+            of: qualifiedIdentifierPattern,
+            options: [.regularExpression, .caseInsensitive]
+        ) != nil
+    }
 
     private static func normalizedTokens(in value: String) -> [String] {
         value
