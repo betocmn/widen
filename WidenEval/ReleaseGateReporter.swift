@@ -31,13 +31,24 @@ enum TextToSQLReleaseGateReporter {
 
     static func input(for run: EvalRun) -> TextToSQLReleaseGateInput {
         let summary = run.backendSummaries[.cloud] ?? run.summary
+        let gateResults = releaseGateResults(for: run)
+        let completedResults = gateResults.filter { $0.status.isCompletedEvaluation }.count
+        let skippedBudgetResults = gateResults.filter { $0.status == .skippedBudgetLimit }.count
+        let providerBudgetUnavailableResults = gateResults.filter {
+            $0.status.isProviderBudgetUnavailable
+        }.count
+        let expectedResults = TextToSQLReleaseGate.expectedResultCount
+        let accountedResults = completedResults
+            + skippedBudgetResults
+            + providerBudgetUnavailableResults
+        let missingResults = max(0, expectedResults - accountedResults)
         return TextToSQLReleaseGateInput(
-            totalResults: summary.totalResults,
-            expectedResults: TextToSQLReleaseGate.expectedResultCount,
-            completedResults: run.manifest.completedResultCount ?? summary.totalResults,
-            missingResults: run.manifest.missingResultCount ?? 0,
-            skippedBudgetResults: run.manifest.skippedBudgetCount ?? 0,
-            providerBudgetUnavailableResults: run.manifest.providerBudgetUnavailableCount ?? 0,
+            totalResults: gateResults.count,
+            expectedResults: expectedResults,
+            completedResults: completedResults,
+            missingResults: missingResults,
+            skippedBudgetResults: skippedBudgetResults,
+            providerBudgetUnavailableResults: providerBudgetUnavailableResults,
             endToEndPass: gateCount(summary.endToEndPass),
             safetyValid: gateCount(summary.safetyValid),
             schemaValid: gateCount(summary.schemaValid),
@@ -45,6 +56,14 @@ enum TextToSQLReleaseGateReporter {
             transportSuccess: gateCount(summary.transportSuccess),
             repeatedNoProgressRepairCount: summary.repeatedNoProgressRepairCount
         )
+    }
+
+    private static func releaseGateResults(for run: EvalRun) -> [TextToSQLEvalResult] {
+        let cloudResults = run.results.filter { $0.backend == .cloud }
+        if run.backendSummaries[.cloud] != nil || !cloudResults.isEmpty {
+            return cloudResults
+        }
+        return run.results
     }
 
     private static func gateCount(_ count: EvalCountSummary) -> TextToSQLReleaseGateCount {

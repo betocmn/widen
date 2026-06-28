@@ -517,14 +517,20 @@ struct EvalRunner {
     }
 
     private mutating func applyResumeDefaults(from previousRun: EvalPreviousRun) throws {
-        options.suitePath = previousRun.manifest.suitePath
-        guard let backendMode = EvalBackendMode(rawValue: previousRun.manifest.backendMode) else {
-            throw EvalRunnerError.invalidResumeRun(
-                "Previous run has unknown backend mode \(previousRun.manifest.backendMode)."
-            )
+        if !options.explicitOptions.contains(.suitePath) {
+            options.suitePath = previousRun.manifest.suitePath
         }
-        options.backendMode = backendMode
-        if let cloudAgentMode = previousRun.manifest.cloudAgentMode {
+        if !options.explicitOptions.contains(.backendMode) {
+            guard let backendMode = EvalBackendMode(rawValue: previousRun.manifest.backendMode) else {
+                throw EvalRunnerError.invalidResumeRun(
+                    "Previous run has unknown backend mode \(previousRun.manifest.backendMode)."
+                )
+            }
+            options.backendMode = backendMode
+        }
+        if let cloudAgentMode = previousRun.manifest.cloudAgentMode,
+            !options.explicitOptions.contains(.cloudAgentMode)
+        {
             guard let mode = EvalCloudAgentMode(rawValue: cloudAgentMode) else {
                 throw EvalRunnerError.invalidResumeRun(
                     "Previous run has unknown cloud-agent mode \(cloudAgentMode)."
@@ -532,13 +538,21 @@ struct EvalRunner {
             }
             options.cloudAgentMode = mode
         }
-        if let model = previousRun.manifest.model {
+        if let model = previousRun.manifest.model, !options.explicitOptions.contains(.model) {
             options.model = model
         }
-        options.repeatCount = previousRun.manifest.repeatCount
-        options.caseTimeoutSeconds = previousRun.manifest.caseTimeoutSeconds
-        options.semanticDatabase = previousRun.manifest.semanticDatabaseEnabled
-        if options.releaseGateVersion == nil {
+        if !options.explicitOptions.contains(.repeatCount) {
+            options.repeatCount = previousRun.manifest.repeatCount
+        }
+        if !options.explicitOptions.contains(.caseTimeoutSeconds) {
+            options.caseTimeoutSeconds = previousRun.manifest.caseTimeoutSeconds
+        }
+        if !options.explicitOptions.contains(.semanticDatabase) {
+            options.semanticDatabase = previousRun.manifest.semanticDatabaseEnabled
+        }
+        if options.releaseGateVersion == nil,
+            !options.explicitOptions.contains(.releaseGateVersion)
+        {
             options.releaseGateVersion = previousRun.manifest.releaseGateVersion
         }
     }

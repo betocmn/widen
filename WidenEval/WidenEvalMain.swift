@@ -181,6 +181,17 @@ enum EvalCloudAgentMode: String {
     case tools
 }
 
+enum EvalExplicitOption: Hashable {
+    case backendMode
+    case cloudAgentMode
+    case model
+    case suitePath
+    case repeatCount
+    case caseTimeoutSeconds
+    case releaseGateVersion
+    case semanticDatabase
+}
+
 struct EvalCLIOptions {
     var backendMode: EvalBackendMode = .local
     var cloudAgentMode: EvalCloudAgentMode = .legacy
@@ -209,6 +220,7 @@ struct EvalCLIOptions {
     var maxHTTPAttempts: Int?
     var maxCompletedResults: Int?
     var stopBeforeProviderLimit = false
+    var explicitOptions: Set<EvalExplicitOption> = []
     var showHelp = false
 
     static let helpText = """
@@ -263,16 +275,20 @@ struct EvalCLIOptions {
                     throw EvalCLIError.invalidValue(argument, value)
                 }
                 options.backendMode = backend
+                options.explicitOptions.insert(.backendMode)
             case "--cloud-agent":
                 let value = try nextValue(after: argument)
                 guard let mode = EvalCloudAgentMode(rawValue: value) else {
                     throw EvalCLIError.invalidValue(argument, value)
                 }
                 options.cloudAgentMode = mode
+                options.explicitOptions.insert(.cloudAgentMode)
             case "--model":
                 options.model = try nextValue(after: argument)
+                options.explicitOptions.insert(.model)
             case "--suite":
                 options.suitePath = try nextValue(after: argument)
+                options.explicitOptions.insert(.suitePath)
             case "--case":
                 let value = try nextValue(after: argument)
                 if options.caseID == nil {
@@ -285,12 +301,14 @@ struct EvalCLIOptions {
                     throw EvalCLIError.invalidValue(argument, value)
                 }
                 options.repeatCount = repeatCount
+                options.explicitOptions.insert(.repeatCount)
             case "--case-timeout-seconds":
                 let value = try nextValue(after: argument)
                 guard let timeout = Double(value), timeout.isFinite, timeout > 0 else {
                     throw EvalCLIError.invalidValue(argument, value)
                 }
                 options.caseTimeoutSeconds = timeout
+                options.explicitOptions.insert(.caseTimeoutSeconds)
             case "--output":
                 options.outputDirectory = try nextValue(after: argument)
             case "--record-prompts":
@@ -303,6 +321,7 @@ struct EvalCLIOptions {
                 options.failUnder = failUnder
             case "--release-gate-version":
                 options.releaseGateVersion = try nextValue(after: argument)
+                options.explicitOptions.insert(.releaseGateVersion)
             case "--triage-release":
                 options.releaseTriageInputPath = try nextValue(after: argument)
             case "--write-release-triage":
@@ -351,6 +370,7 @@ struct EvalCLIOptions {
                 options.stopBeforeProviderLimit = true
             case "--semantic-db":
                 options.semanticDatabase = true
+                options.explicitOptions.insert(.semanticDatabase)
             case "--retriever":
                 let value = try nextValue(after: argument)
                 guard let retriever = SchemaRetrievalMode(rawValue: value) else {
