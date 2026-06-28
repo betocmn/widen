@@ -2044,7 +2044,7 @@ public enum GeneratedSQLPostprocessor {
         let timestampPattern =
             #"\b\d{4}-\d{2}-\d{2}(?:[ T]\d{1,2}:\d{2}(?::\d{2})?(?:\s*(?:UTC|Z|[+-]\d{2}:?\d{2}))?)?\b"#
         let anchorBeforeDatePattern =
-            #"(?i)\b(?:ending|ends|ended|as\s+of|as-of|through|until|anchor|anchored|relative\s+to)\b[\s\S]{0,80}("#
+            #"(?i)\b(?:ending|ends|ended|starting|starts|started|start|as\s+of|as-of|through|until|anchor|anchored|relative\s+to)\b[\s\S]{0,80}("#
                 + timestampPattern + #")"#
         if let range = text.range(of: anchorBeforeDatePattern, options: [.regularExpression]),
             relativeWindowPhrasePrecedesAnchor(in: text, anchorRange: range)
@@ -2056,7 +2056,7 @@ public enum GeneratedSQLPostprocessor {
         }
         let dateBeforeAnchorPattern =
             #"(?i)("# + timestampPattern
-                + #")[\s\S]{0,80}\b(?:window\s+ending|window\s+anchor|as\s+of|as-of|anchor|anchored)\b"#
+                + #")[\s\S]{0,80}\b(?:window\s+ending|window\s+starting|window\s+start|window\s+anchor|as\s+of|as-of|anchor|anchored)\b"#
         if let range = text.range(of: dateBeforeAnchorPattern, options: [.regularExpression]),
             relativeWindowPhrasePrecedesAnchor(in: text, anchorRange: range)
         {
@@ -2081,7 +2081,12 @@ public enum GeneratedSQLPostprocessor {
             #"(?i)\b(?:(?:last|past|previous|prior|rolling|recent)\s+)?"#
                 + quantifier
                 + #"\s+(?:minute|minutes|hour|hours|day|days|week|weeks|month|months|year|years)\b"#
-        return prefix.range(of: durationPattern, options: .regularExpression) != nil
+        if prefix.range(of: durationPattern, options: .regularExpression) != nil {
+            return true
+        }
+        let singularAnchoredUnitPattern =
+            #"(?i)\b(?:the|this)\s+(?:minute|hour|day|week|month|year)\b"#
+        return prefix.range(of: singularAnchoredUnitPattern, options: .regularExpression) != nil
     }
 
     private static func usesMovingCurrentTime(_ sql: String) -> Bool {

@@ -1213,9 +1213,15 @@ public final class OpenRouterSchemaToolSQLAgent: SQLGenerator, Sendable {
             let scopedContextTokens = scope.tokens.intersection(contextTokens)
             let overlap = clarificationTokens.intersection(scopedContextTokens)
             if scope.hasStrongDefinitionSignal {
-                return !overlap.isEmpty
+                return Self.hasBusinessSpecificDefinitionOverlap(overlap)
             }
             return overlap.count >= 2
+        }
+    }
+
+    private static func hasBusinessSpecificDefinitionOverlap(_ tokens: Set<String>) -> Bool {
+        tokens.contains { token in
+            !databaseContextGenericDefinitionOverlapTokens.contains(token)
         }
     }
 
@@ -1300,6 +1306,15 @@ public final class OpenRouterSchemaToolSQLAgent: SQLGenerator, Sendable {
         "created", "date", "dated", "ended", "ending", "occurred", "scheduled",
         "time", "timestamp", "timestamps", "updated", "window",
     ]
+
+    private static let databaseContextGenericDefinitionOverlapTokens: Set<String> = {
+        let tokens = [
+            "column", "columns", "condition", "conditions", "field", "fields",
+            "filter", "filters", "status", "statuses", "table", "tables", "value",
+            "values",
+        ]
+        return Set(tokens.flatMap { SchemaIndex.tokens(in: $0) })
+    }()
 
     private static let databaseContextAuthorityStopWords: Set<String> = [
         "a", "an", "and", "are", "as", "at", "be", "by", "for", "from", "in",

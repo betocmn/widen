@@ -1626,6 +1626,61 @@ struct SQLSchemaValidatorTests {
         #expect(enriched.sql.contains("NOW() - INTERVAL '7 days'"))
     }
 
+    @Test func fixedStartingWindowWithMovingCurrentTimeClarifies() {
+        let generation = SQLGenerationResult(
+            sql: """
+                SELECT id
+                FROM public.jobs
+                WHERE finished_at >= CURRENT_DATE
+                  AND finished_at < CURRENT_DATE + INTERVAL '30 days'
+                """,
+            explanation: "Finds jobs finishing in the next 30 days.",
+            assumptions: [],
+            referencedTables: [],
+            confidence: 1,
+            riskLevel: .low,
+            needsClarification: false,
+            clarificationQuestion: nil
+        )
+
+        let enriched = GeneratedSQLPostprocessor.enriched(
+            generation,
+            question: "Which jobs finish in the 30 days starting 2026-06-24?",
+            schema: makeIntervalSchema(),
+            databaseContext: ""
+        )
+
+        #expect(enriched.needsClarification)
+        #expect(enriched.clarificationQuestion?.contains("2026-06-24") == true)
+    }
+
+    @Test func singularWeekEndingWindowWithMovingCurrentTimeClarifies() {
+        let generation = SQLGenerationResult(
+            sql: """
+                SELECT id
+                FROM public.jobs
+                WHERE finished_at >= NOW() - INTERVAL '7 days'
+                """,
+            explanation: "Finds jobs finished in the last week.",
+            assumptions: [],
+            referencedTables: [],
+            confidence: 1,
+            riskLevel: .low,
+            needsClarification: false,
+            clarificationQuestion: nil
+        )
+
+        let enriched = GeneratedSQLPostprocessor.enriched(
+            generation,
+            question: "Which jobs finished in the week ending 2026-06-24 12:00 UTC?",
+            schema: makeIntervalSchema(),
+            databaseContext: ""
+        )
+
+        #expect(enriched.needsClarification)
+        #expect(enriched.clarificationQuestion?.contains("2026-06-24 12:00 UTC") == true)
+    }
+
     @Test func timeFieldClarificationExcludesIntervalColumns() {
         let generation = SQLGenerationResult(
             sql: """

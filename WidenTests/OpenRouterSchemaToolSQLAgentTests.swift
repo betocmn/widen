@@ -738,6 +738,54 @@ struct OpenRouterSchemaToolSQLAgentTests {
         #expect(chatTransport.requests.count == 3)
     }
 
+    @Test func genericStatusOverlapDoesNotResolveDifferentBusinessClarification() async throws {
+        let schema = Self.makeSchema()
+        let clarification = "Which status defines active users?"
+        let chatTransport = ScriptedTransport { request, index in
+            switch index {
+            case 1:
+                return Self.assistantToolCalls([
+                    Self.toolCall(id: "search-active-status", name: "search_schema", arguments: [
+                        "query": "users active status",
+                        "limit": 4,
+                    ]),
+                ])
+            case 2:
+                let users = try Self.tableHandle(named: #""public"."users""#, in: request)
+                return Self.assistantToolCalls([
+                    Self.toolCall(id: "describe-active-status", name: "describe_tables", arguments: [
+                        "table_ids": [users],
+                    ]),
+                ])
+            case 3:
+                return Self.assistantToolCalls([
+                    Self.terminalClarification(
+                        id: "terminal-active-status",
+                        question: clarification
+                    ),
+                ])
+            default:
+                throw URLError(.badServerResponse)
+            }
+        }
+        let agent = makeAgent(schema: schema, chatTransport: chatTransport)
+
+        let result = try await agent.generateSQL(
+            question: "Show active users",
+            schema: schema,
+            context: SQLGenerationContext(),
+            config: SQLGenerationConfig(
+                databaseContext: "Paid means status = 'paid'."
+            )
+        )
+
+        #expect(result.needsClarification)
+        #expect(result.clarificationQuestion == clarification)
+        #expect(result.backendMetadata?.agentTerminalOutcome == "clarify")
+        #expect(result.backendMetadata?.agentDiagnostics?.terminalValidationFailureReason == nil)
+        #expect(chatTransport.requests.count == 3)
+    }
+
     @Test func contextResolvedClarificationFailsAfterCorrectionBudgetIsSpent() async throws {
         let schema = Self.makePreseasonSchema()
         let chatTransport = ScriptedTransport { request, index in
