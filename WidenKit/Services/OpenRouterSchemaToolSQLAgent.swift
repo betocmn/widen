@@ -665,6 +665,7 @@ public final class OpenRouterSchemaToolSQLAgent: SQLGenerator, Sendable {
                         diagnostics.recordSQLIntentCoverage(intentCoverage)
                         switch intentCoverage.decision {
                         case .covered:
+                            diagnostics.clearResolvedIntentCoverageRejection()
                             break
                         case .needsCorrection:
                             diagnostics.appSideRejectionReason = .intentCoverageRejected
@@ -1670,6 +1671,15 @@ private struct OpenRouterSchemaToolAgentDiagnosticState {
         sqlIntentCoverageMismatchCategory = result.semanticMismatchCategory
         if !result.unresolvedDecisionKinds.isEmpty {
             unresolvedDecisionKinds = result.unresolvedDecisionKinds.map(\.rawValue)
+        }
+    }
+
+    mutating func clearResolvedIntentCoverageRejection() {
+        if appSideRejectionReason == .intentCoverageRejected {
+            appSideRejectionReason = nil
+        }
+        if terminalValidationFailureReason == "intentCoverageFailed" {
+            terminalValidationFailureReason = nil
         }
     }
 

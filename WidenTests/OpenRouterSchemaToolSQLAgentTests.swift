@@ -1137,6 +1137,8 @@ struct OpenRouterSchemaToolSQLAgentTests {
         #expect(result.backendMetadata?.agentDiagnostics?.sqlIntentCoverageDecision == "covered")
         #expect(result.backendMetadata?.agentDiagnostics?.intentCoverageCorrectionAttempted == true)
         #expect(result.backendMetadata?.agentDiagnostics?.intentCoverageCorrectionSucceeded == true)
+        #expect(result.backendMetadata?.agentDiagnostics?.appSideRejectionReason == nil)
+        #expect(result.backendMetadata?.agentDiagnostics?.terminalValidationFailureReason == nil)
     }
 
     @Test func schemaCallsAfterSufficientEvidenceReceiveTerminalRequiredCorrection() async throws {
