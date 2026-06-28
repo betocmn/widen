@@ -47,6 +47,7 @@ PR 2 + PR 5 + PR 6
 
 PR 7 + PR 8 + PR 11 + eval evidence
   └── PR 12 ✅ — Backend defaults, older macOS, release gate [done 2026-06-26]
+      └── PR 13 — Release-gate triage and schema-tool agent fixes
 ```
 
 ---
@@ -1204,6 +1205,64 @@ Completion notes:
 
 ---
 
+# PR 13 — Release-gate triage and schema-tool agent fixes
+
+Suggested title:
+
+```text
+fix: triage and improve cloud schema-tool agent release gate failures
+```
+
+Start from latest `main` after PR 48 and use the PR 12 release gate as the source of truth.
+
+## Goal
+
+Add redacted release-gate triage artifacts and fix the highest-impact cloud schema-tool agent failures without changing backend defaults, eval goldens, seeded semantic data, embeddings, local Foundation Models behavior, or database-inspection privacy policy.
+
+Current PR 12 baseline:
+
+```text
+release gate fails
+semantic pass rate: 11/60
+clarification decision accuracy: 5/12
+transport reliability: 60/60
+preseason.top-wins-ambiguous: generationFailure in all repeats
+preseason.top-wins-defined: wrongDecision in all repeats
+```
+
+## Implementation
+
+* Add `make eval-release-triage MODEL=<model>` or `WidenEval --triage-release <run.json>` to generate `.eval-results/<timestamp>/triage.md`, with an optional sanitized `docs/evals/0.1.0-triage.md`.
+* Group failures by stable stage/reason categories, not localized error strings, and include per-case redacted fields for decisions, validation status, terminal action, schema-tool usage, inspected objects, safe SQL references, and repeated/no-progress repair.
+* Extend schema-tool agent traces with backward-compatible diagnostics: turn counts, terminal-tool behavior, schema evidence ledger summary, app-side rejection reason, and terminal validation failure reason.
+* Add deterministic regression tests for `preseason.top-wins-ambiguous` and `preseason.top-wins-defined`, plus generic database-context cases that prove explicit metric/event/time/relationship context is authoritative enough to generate SQL.
+* Add one strict correction turn for missing/malformed/mixed terminal results or prose-only model responses, then return a typed failure without fallback one-shot generation.
+* Add a deterministic clarification fallback when inspected evidence identifies an unresolved metric, relationship, filter, or time-field choice but no SQL is accepted.
+* Improve terminal SQL rejection recovery for uninspected valid objects and invalid column ownership without adding a general repair loop.
+* Tighten clarification quality scoring so expected-clarification cases must mention a concrete unresolved database decision.
+* Extend release-gate reporting/tests to call out the historical Preseason regressions and generic SQL validity checks around quoted timestamps, timestamp-vs-interval comparisons, invalid bindings, and repeated repairs.
+
+## Acceptance
+
+Required before closing PR 13:
+
+```text
+make test passes
+release-gate triage report is generated
+preseason.top-wins-ambiguous clarifies correctly in 3/3 repeats
+preseason.top-wins-defined passes semantic DB eval in 3/3 repeats
+clarification decision accuracy improves from 5/12 to at least 9/12
+end-to-end semantic pass rate improves above 11/60
+transport reliability stays at or above 95%
+safety and schema validity stay at 100% for evaluated SQL
+repeated/no-progress repair count remains zero
+no raw prompts, API keys, result rows, or full schemas are committed
+```
+
+If the target numbers are not met, commit the triage report and focused test results, and keep docs clear that text-to-SQL remains not production-ready.
+
+---
+
 # Recommended implementation order for one coding agent
 
 When only one agent is working:
@@ -1220,7 +1279,8 @@ When only one agent is working:
 9. PR 9 ✅ — Optional data inspection
 10. PR 11 ✅ — Experimental local path
 11. PR 12 ✅ — Platform/default-backend decision
-12. PR 10 ⏸️ — Embedding experiment           [deferred 2026-06-26 — revisit after PR 12 and real app/eval testing]
+12. PR 13 — Release-gate triage and schema-tool agent fixes
+13. PR 10 ⏸️ — Embedding experiment           [deferred 2026-06-26 — revisit after PR 12 and real app/eval testing]
 ```
 
 The key discipline is to run the same 20 cases after every PR and reject changes that merely move failures from one stage to another.

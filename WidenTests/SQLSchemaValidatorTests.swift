@@ -1313,6 +1313,484 @@ struct SQLSchemaValidatorTests {
         #expect(enriched.referencedTables == ["public.users"])
     }
 
+    @Test func groundingClarificationNamesWinnerAndTimeCandidates() {
+        func column(
+            table: String,
+            name: String,
+            type: String,
+            nullable: Bool = false,
+            ordinal: Int
+        ) -> ColumnInfo {
+            ColumnInfo(
+                tableSchema: "public",
+                tableName: table,
+                name: name,
+                dataType: type,
+                isNullable: nullable,
+                ordinalPosition: ordinal
+            )
+        }
+        let schema = DatabaseSchema(
+            schemas: [SchemaInfo(name: "public")],
+            tables: [
+                TableInfo(
+                    schema: "public",
+                    name: "preseason_match_evaluation",
+                    type: .baseTable,
+                    columns: [
+                        column(table: "preseason_match_evaluation", name: "winner_id", type: "uuid", nullable: true, ordinal: 1),
+                        column(table: "preseason_match_evaluation", name: "createdAt", type: "timestamp with time zone", ordinal: 2),
+                    ]
+                ),
+                TableInfo(
+                    schema: "public",
+                    name: "preseason_tool",
+                    type: .baseTable,
+                    columns: [
+                        column(table: "preseason_tool", name: "id", type: "uuid", ordinal: 1),
+                        column(table: "preseason_tool", name: "name", type: "text", ordinal: 2),
+                    ]
+                ),
+            ],
+            foreignKeyConstraints: [
+                SchemaForeignKeyConstraintInfo(
+                    constraintName: "preseason_match_evaluation_winner_id_fkey",
+                    sourceSchema: "public",
+                    sourceTable: "preseason_match_evaluation",
+                    targetSchema: "public",
+                    targetTable: "preseason_tool",
+                    columnPairs: [
+                        SchemaForeignKeyColumnPair(
+                            sourceColumn: "winner_id",
+                            targetColumn: "id",
+                            ordinalPosition: 1
+                        ),
+                    ]
+                ),
+            ]
+        )
+        let generation = SQLGenerationResult(
+            sql: """
+                SELECT t.name, COUNT(*) AS wins
+                FROM public.preseason_match_evaluation AS e
+                JOIN public.preseason_tool AS t ON e.winner_id = t.id
+                WHERE e.winner_id IS NOT NULL
+                GROUP BY t.name
+                """,
+            explanation: "Counts winners.",
+            assumptions: [],
+            referencedTables: [],
+            confidence: 1,
+            riskLevel: .low,
+            needsClarification: false,
+            clarificationQuestion: nil
+        )
+
+        let enriched = GeneratedSQLPostprocessor.enriched(
+            generation,
+            question: "Tools with the most wins in the last two weeks",
+            schema: schema,
+            databaseContext: ""
+        )
+
+        #expect(enriched.needsClarification)
+        #expect(enriched.clarificationQuestion?.contains("winner_id") == true)
+        #expect(enriched.clarificationQuestion?.contains("createdAt") == true)
+    }
+
+    @Test func winnerClarificationOffersMultipleTimeFieldsInsteadOfPickingFirst() {
+        var schema = makePreseasonWinnerSchema()
+        schema.tables[0].columns.append(
+            ColumnInfo(
+                tableSchema: "public",
+                tableName: "preseason_match_evaluation",
+                name: "evaluatedAt",
+                dataType: "timestamp with time zone",
+                isNullable: false,
+                ordinalPosition: 3
+            ))
+        let generation = SQLGenerationResult(
+            sql: """
+                SELECT t.name, COUNT(*) AS wins
+                FROM public.preseason_match_evaluation AS e
+                JOIN public.preseason_tool AS t ON e.winner_id = t.id
+                WHERE e.winner_id IS NOT NULL
+                GROUP BY t.name
+                """,
+            explanation: "Counts winners.",
+            assumptions: [],
+            referencedTables: [],
+            confidence: 1,
+            riskLevel: .low,
+            needsClarification: false,
+            clarificationQuestion: nil
+        )
+
+        let enriched = GeneratedSQLPostprocessor.enriched(
+            generation,
+            question: "Tools with the most wins in the last two weeks",
+            schema: schema,
+            databaseContext: ""
+        )
+
+        #expect(enriched.needsClarification)
+        #expect(enriched.clarificationQuestion?.contains("which date field should define the time window") == true)
+        #expect(enriched.clarificationQuestion?.contains("createdAt") == true)
+        #expect(enriched.clarificationQuestion?.contains("evaluatedAt") == true)
+        #expect(enriched.clarificationQuestion?.contains("use public.preseason_match_evaluation.createdAt") == false)
+    }
+
+    @Test func anchoredWinnerContextRequiresExplicitAnchorInsteadOfMovingNow() {
+        let generation = SQLGenerationResult(
+            sql: """
+                SELECT t.name, t.slug, COUNT(*) AS wins
+                FROM public.preseason_match_evaluation AS e
+                JOIN public.preseason_tool AS t ON e.winner_id = t.id
+                WHERE e.winner_id IS NOT NULL
+                  AND e."createdAt" >= NOW() - INTERVAL '14 days'
+                GROUP BY t.name, t.slug
+                ORDER BY COUNT(*) DESC
+                """,
+            explanation: "Counts winning evaluations by tool.",
+            assumptions: [],
+            referencedTables: [],
+            confidence: 1,
+            riskLevel: .low,
+            needsClarification: false,
+            clarificationQuestion: nil
+        )
+
+        let enriched = GeneratedSQLPostprocessor.enriched(
+            generation,
+            question: "Which tools have the most wins in the two weeks ending 2026-06-24 12:00 UTC?",
+            schema: makePreseasonWinnerSchema(),
+            databaseContext:
+                "Each evaluation with a non-null winner_id records one win. Use the evaluation createdAt timestamp and treat the evaluation anchor as 2026-06-24 12:00 UTC."
+        )
+
+        #expect(enriched.needsClarification)
+        #expect(enriched.clarificationQuestion?.contains("2026-06-24 12:00 UTC") == true)
+    }
+
+    @Test func anchoredWinnerContextRequiresFullAnchorTimeNotJustDate() {
+        let generation = SQLGenerationResult(
+            sql: """
+                SELECT t.name, t.slug, COUNT(*) AS wins
+                FROM public.preseason_match_evaluation AS e
+                JOIN public.preseason_tool AS t ON e.winner_id = t.id
+                WHERE e.winner_id IS NOT NULL
+                  AND e."createdAt" >= NOW() - INTERVAL '14 days'
+                  AND e."createdAt" < DATE '2026-06-24'
+                GROUP BY t.name, t.slug
+                ORDER BY COUNT(*) DESC
+                """,
+            explanation: "Counts winning evaluations by tool.",
+            assumptions: [],
+            referencedTables: [],
+            confidence: 1,
+            riskLevel: .low,
+            needsClarification: false,
+            clarificationQuestion: nil
+        )
+
+        let enriched = GeneratedSQLPostprocessor.enriched(
+            generation,
+            question: "Which tools have the most wins in the two weeks ending 2026-06-24 12:00 UTC?",
+            schema: makePreseasonWinnerSchema(),
+            databaseContext:
+                "Each evaluation with a non-null winner_id records one win. Use the evaluation createdAt timestamp and treat the evaluation anchor as 2026-06-24 12:00 UTC."
+        )
+
+        #expect(enriched.needsClarification)
+        #expect(enriched.clarificationQuestion?.contains("2026-06-24 12:00 UTC") == true)
+    }
+
+    @Test func anchoredWinnerContextRejectsMovingLowerBoundEvenWithAnchoredUpperBound() {
+        let generation = SQLGenerationResult(
+            sql: """
+                SELECT t.name, t.slug, COUNT(*) AS wins
+                FROM public.preseason_match_evaluation AS e
+                JOIN public.preseason_tool AS t ON e.winner_id = t.id
+                WHERE e.winner_id IS NOT NULL
+                  AND e."createdAt" >= NOW() - INTERVAL '14 days'
+                  AND e."createdAt" < CAST('2026-06-24 12:00:00+00' AS TIMESTAMPTZ)
+                GROUP BY t.name, t.slug
+                ORDER BY COUNT(*) DESC
+                """,
+            explanation: "Counts winning evaluations by tool.",
+            assumptions: [],
+            referencedTables: [],
+            confidence: 1,
+            riskLevel: .low,
+            needsClarification: false,
+            clarificationQuestion: nil
+        )
+
+        let enriched = GeneratedSQLPostprocessor.enriched(
+            generation,
+            question: "Which tools have the most wins in the two weeks ending 2026-06-24 12:00 UTC?",
+            schema: makePreseasonWinnerSchema(),
+            databaseContext:
+                "Each evaluation with a non-null winner_id records one win. Use the evaluation createdAt timestamp and treat the evaluation anchor as 2026-06-24 12:00 UTC."
+        )
+
+        #expect(enriched.needsClarification)
+        #expect(enriched.clarificationQuestion?.contains("2026-06-24 12:00 UTC") == true)
+    }
+
+    @Test func explicitWinnerContextDoesNotClarifyDurationWordsWhenAnchorIsUsed() {
+        let generation = SQLGenerationResult(
+            sql: """
+                SELECT t.name, t.slug, COUNT(*) AS wins
+                FROM public.preseason_match_evaluation AS e
+                JOIN public.preseason_tool AS t ON e.winner_id = t.id
+                WHERE e.winner_id IS NOT NULL
+                  AND e."createdAt" >= CAST('2026-06-24 12:00:00+00' AS TIMESTAMPTZ) - INTERVAL '14 days'
+                GROUP BY t.name, t.slug
+                ORDER BY COUNT(*) DESC
+                """,
+            explanation: "Counts winning evaluations by tool.",
+            assumptions: [],
+            referencedTables: [],
+            confidence: 1,
+            riskLevel: .low,
+            needsClarification: false,
+            clarificationQuestion: nil
+        )
+
+        let enriched = GeneratedSQLPostprocessor.enriched(
+            generation,
+            question: "Which tools have the most wins in the two weeks ending 2026-06-24 12:00 UTC?",
+            schema: makePreseasonWinnerSchema(),
+            databaseContext:
+                "Each evaluation with a non-null winner_id records one win. Use the evaluation createdAt timestamp and treat the evaluation anchor as 2026-06-24 12:00 UTC."
+        )
+
+        #expect(!enriched.needsClarification)
+        #expect(enriched.sql.contains("2026-06-24 12:00:00+00"))
+    }
+
+    @Test func nonAnchorDatePredicateDoesNotClarifyMovingWindow() {
+        let generation = SQLGenerationResult(
+            sql: """
+                SELECT id
+                FROM public.jobs
+                WHERE started_at < TIMESTAMPTZ '2026-01-01 00:00:00+00'
+                  AND finished_at >= NOW() - INTERVAL '7 days'
+                """,
+            explanation: "Finds jobs matching the fixed start cutoff and recent finish window.",
+            assumptions: [],
+            referencedTables: [],
+            confidence: 1,
+            riskLevel: .low,
+            needsClarification: false,
+            clarificationQuestion: nil
+        )
+
+        let enriched = GeneratedSQLPostprocessor.enriched(
+            generation,
+            question: "Which jobs started before 2026-01-01 and finished in the last 7 days?",
+            schema: makeIntervalSchema(),
+            databaseContext: ""
+        )
+
+        #expect(!enriched.needsClarification)
+        #expect(enriched.sql.contains("NOW() - INTERVAL '7 days'"))
+    }
+
+    @Test func fixedUntilPredicateDoesNotAnchorSeparateMovingWindow() {
+        let generation = SQLGenerationResult(
+            sql: """
+                SELECT id
+                FROM public.jobs
+                WHERE started_at < TIMESTAMPTZ '2026-01-01 00:00:00+00'
+                  AND finished_at >= NOW() - INTERVAL '7 days'
+                """,
+            explanation: "Finds jobs created before the fixed cutoff and updated recently.",
+            assumptions: [],
+            referencedTables: [],
+            confidence: 1,
+            riskLevel: .low,
+            needsClarification: false,
+            clarificationQuestion: nil
+        )
+
+        let enriched = GeneratedSQLPostprocessor.enriched(
+            generation,
+            question: "Which jobs were created until 2026-01-01 and updated in the last 7 days?",
+            schema: makeIntervalSchema(),
+            databaseContext: ""
+        )
+
+        #expect(!enriched.needsClarification)
+        #expect(enriched.sql.contains("NOW() - INTERVAL '7 days'"))
+    }
+
+    @Test func unrelatedContextAnchorDoesNotClarifyMovingQuestionWindow() {
+        let generation = SQLGenerationResult(
+            sql: """
+                SELECT id
+                FROM public.jobs
+                WHERE finished_at >= NOW() - INTERVAL '7 days'
+                """,
+            explanation: "Finds recently finished jobs.",
+            assumptions: [],
+            referencedTables: [],
+            confidence: 1,
+            riskLevel: .low,
+            needsClarification: false,
+            clarificationQuestion: nil
+        )
+
+        let enriched = GeneratedSQLPostprocessor.enriched(
+            generation,
+            question: "Which jobs finished in the last 7 days?",
+            schema: makeIntervalSchema(),
+            databaseContext: "The backfill ran as of 2026-01-01."
+        )
+
+        #expect(!enriched.needsClarification)
+        #expect(enriched.sql.contains("NOW() - INTERVAL '7 days'"))
+    }
+
+    @Test func fixedStartingWindowWithMovingCurrentTimeClarifies() {
+        let generation = SQLGenerationResult(
+            sql: """
+                SELECT id
+                FROM public.jobs
+                WHERE finished_at >= CURRENT_DATE
+                  AND finished_at < CURRENT_DATE + INTERVAL '30 days'
+                """,
+            explanation: "Finds jobs finishing in the next 30 days.",
+            assumptions: [],
+            referencedTables: [],
+            confidence: 1,
+            riskLevel: .low,
+            needsClarification: false,
+            clarificationQuestion: nil
+        )
+
+        let enriched = GeneratedSQLPostprocessor.enriched(
+            generation,
+            question: "Which jobs finish in the 30 days starting 2026-06-24?",
+            schema: makeIntervalSchema(),
+            databaseContext: ""
+        )
+
+        #expect(enriched.needsClarification)
+        #expect(enriched.clarificationQuestion?.contains("2026-06-24") == true)
+    }
+
+    @Test func singularWeekEndingWindowWithMovingCurrentTimeClarifies() {
+        let generation = SQLGenerationResult(
+            sql: """
+                SELECT id
+                FROM public.jobs
+                WHERE finished_at >= NOW() - INTERVAL '7 days'
+                """,
+            explanation: "Finds jobs finished in the last week.",
+            assumptions: [],
+            referencedTables: [],
+            confidence: 1,
+            riskLevel: .low,
+            needsClarification: false,
+            clarificationQuestion: nil
+        )
+
+        let enriched = GeneratedSQLPostprocessor.enriched(
+            generation,
+            question: "Which jobs finished in the week ending 2026-06-24 12:00 UTC?",
+            schema: makeIntervalSchema(),
+            databaseContext: ""
+        )
+
+        #expect(enriched.needsClarification)
+        #expect(enriched.clarificationQuestion?.contains("2026-06-24 12:00 UTC") == true)
+    }
+
+    @Test func timeFieldClarificationExcludesIntervalColumns() {
+        let generation = SQLGenerationResult(
+            sql: """
+                SELECT id
+                FROM public.jobs
+                """,
+            explanation: "Lists jobs.",
+            assumptions: [],
+            referencedTables: [],
+            confidence: 1,
+            riskLevel: .low,
+            needsClarification: false,
+            clarificationQuestion: nil
+        )
+
+        let enriched = GeneratedSQLPostprocessor.enriched(
+            generation,
+            question: "Which jobs ran in the last 7 days?",
+            schema: makeIntervalSchema(),
+            databaseContext: ""
+        )
+
+        #expect(enriched.needsClarification)
+        #expect(enriched.clarificationQuestion?.contains("finished_at") == true)
+        #expect(enriched.clarificationQuestion?.contains("started_at") == true)
+        #expect(enriched.clarificationQuestion?.contains("duration") == false)
+    }
+
+    @Test func columnOnlyTimeFieldContextSuppressesTimeClarification() {
+        let generation = SQLGenerationResult(
+            sql: """
+                SELECT id
+                FROM public.jobs
+                WHERE finished_at >= NOW() - INTERVAL '7 days'
+                """,
+            explanation: "Lists recently finished jobs.",
+            assumptions: [],
+            referencedTables: [],
+            confidence: 1,
+            riskLevel: .low,
+            needsClarification: false,
+            clarificationQuestion: nil
+        )
+
+        let enriched = GeneratedSQLPostprocessor.enriched(
+            generation,
+            question: "Which jobs finished in the last 7 days?",
+            schema: makeIntervalSchema(),
+            databaseContext: "Use finished_at for time windows."
+        )
+
+        #expect(!enriched.needsClarification)
+        #expect(enriched.sql.contains("finished_at >= NOW() - INTERVAL '7 days'"))
+    }
+
+    @Test func filterClarificationAsksAboutBusinessTermBeforeTimeFields() {
+        let generation = SQLGenerationResult(
+            sql: """
+                SELECT id
+                FROM public.jobs
+                WHERE started_at >= NOW() - INTERVAL '7 days'
+                """,
+            explanation: "Lists recent jobs.",
+            assumptions: [],
+            referencedTables: [],
+            confidence: 1,
+            riskLevel: .low,
+            needsClarification: false,
+            clarificationQuestion: nil
+        )
+
+        let enriched = GeneratedSQLPostprocessor.enriched(
+            generation,
+            question: "Which paid jobs ran last week?",
+            schema: makeIntervalSchema(),
+            databaseContext: ""
+        )
+
+        #expect(enriched.needsClarification)
+        #expect(enriched.clarificationQuestion?.contains(#"defines "paid""#) == true)
+        #expect(enriched.clarificationQuestion?.contains("which date field should define") == false)
+    }
+
     @Test func possessiveSuffixDoesNotBecomeUnsupportedGroundingConcept() {
         let generation = SQLGenerationResult(
             sql: """
@@ -1527,6 +2005,55 @@ struct SQLSchemaValidatorTests {
         #expect(!enriched.needsClarification)
         #expect(enriched.sql == "SELECT id FROM public.users WHERE age > 30")
         #expect(enriched.clarificationQuestion == nil)
+    }
+
+    @Test func numberWordsRemainGroundingTermsForCountFilters() {
+        let zeroOrders = SQLGenerationResult(
+            sql: "SELECT id FROM public.users",
+            explanation: "Lists users.",
+            assumptions: [],
+            referencedTables: [],
+            confidence: 1,
+            riskLevel: .low,
+            needsClarification: false,
+            clarificationQuestion: nil
+        )
+        let oneOrder = SQLGenerationResult(
+            sql: """
+                SELECT users.id
+                FROM public.users
+                WHERE EXISTS (
+                  SELECT 1
+                  FROM public.orders
+                  WHERE orders.user_id = users.id
+                )
+                """,
+            explanation: "Lists users with at least one order.",
+            assumptions: [],
+            referencedTables: [],
+            confidence: 1,
+            riskLevel: .low,
+            needsClarification: false,
+            clarificationQuestion: nil
+        )
+
+        let zeroEnriched = GeneratedSQLPostprocessor.enriched(
+            zeroOrders,
+            question: "show users with zero orders",
+            schema: makeUsersOrdersSchema(),
+            databaseContext: ""
+        )
+        let oneEnriched = GeneratedSQLPostprocessor.enriched(
+            oneOrder,
+            question: "show users with one order",
+            schema: makeUsersOrdersSchema(),
+            databaseContext: ""
+        )
+
+        #expect(zeroEnriched.needsClarification)
+        #expect(zeroEnriched.pendingClarification?.concept.term == "zero")
+        #expect(oneEnriched.needsClarification)
+        #expect(oneEnriched.pendingClarification?.concept.term == "one")
     }
 
     @Test func generatedWriteRequiresGroundingForUnsupportedLiteral() {
@@ -2411,6 +2938,66 @@ struct SQLSchemaValidatorTests {
                 )
             ],
             foreignKeys: []
+        )
+    }
+
+    private func makePreseasonWinnerSchema() -> DatabaseSchema {
+        func column(
+            table: String,
+            name: String,
+            type: String,
+            nullable: Bool = false,
+            ordinal: Int
+        ) -> ColumnInfo {
+            ColumnInfo(
+                tableSchema: "public",
+                tableName: table,
+                name: name,
+                dataType: type,
+                isNullable: nullable,
+                ordinalPosition: ordinal
+            )
+        }
+        return DatabaseSchema(
+            schemas: [SchemaInfo(name: "public")],
+            tables: [
+                TableInfo(
+                    schema: "public",
+                    name: "preseason_match_evaluation",
+                    type: .baseTable,
+                    columns: [
+                        column(table: "preseason_match_evaluation", name: "winner_id", type: "uuid", nullable: true, ordinal: 1),
+                        column(table: "preseason_match_evaluation", name: "createdAt", type: "timestamp with time zone", ordinal: 2),
+                    ]
+                ),
+                TableInfo(
+                    schema: "public",
+                    name: "preseason_tool",
+                    type: .baseTable,
+                    columns: [
+                        column(table: "preseason_tool", name: "id", type: "uuid", ordinal: 1),
+                        column(table: "preseason_tool", name: "name", type: "text", ordinal: 2),
+                        column(table: "preseason_tool", name: "slug", type: "text", ordinal: 3),
+                        column(table: "preseason_tool", name: "createdAt", type: "timestamp with time zone", ordinal: 4),
+                    ]
+                ),
+            ],
+            foreignKeyConstraints: [
+                SchemaForeignKeyConstraintInfo(
+                    constraintName: "preseason_match_evaluation_winner_id_fkey",
+                    sourceSchema: "public",
+                    sourceTable: "preseason_match_evaluation",
+                    targetSchema: "public",
+                    targetTable: "preseason_tool",
+                    columnPairs: [
+                        SchemaForeignKeyColumnPair(
+                            sourceColumn: "winner_id",
+                            targetColumn: "id",
+                            ordinalPosition: 1
+                        ),
+                    ]
+                ),
+            ]
         )
     }
 

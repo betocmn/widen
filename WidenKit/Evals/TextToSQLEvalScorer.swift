@@ -748,10 +748,55 @@ public enum TextToSQLEvalScorer {
         else { return false }
         let candidateTokens = Set(normalizedTokens(in: text))
         guard !candidateTokens.isEmpty else { return false }
-        return configuredConcepts.contains { concept in
+        let mentionsExpectedConcept = configuredConcepts.contains { concept in
             let conceptTokens = normalizedTokens(in: concept)
             return !conceptTokens.isEmpty && conceptTokens.contains { candidateTokens.contains($0) }
         }
+        guard mentionsExpectedConcept else { return false }
+        return !candidateTokens.isDisjoint(with: databaseDecisionTokens)
+            || containsSchemaIdentifierEvidence(text, candidateTokens: candidateTokens)
+            || containsBusinessMetricAlternative(candidateTokens, configuredConcepts: configuredConcepts)
+    }
+
+    private static let databaseDecisionTokens: Set<String> = [
+        "metric", "measure", "performance", "definition", "define", "count", "counting",
+        "sum", "average", "relationship", "join", "path", "status", "filter", "value",
+        "time", "date", "field", "column", "table", "event", "occurrence", "row",
+        "rows", "window", "priority", "impact", "frequency", "usage", "null", "nonnull",
+    ]
+
+    private static func containsSchemaIdentifierEvidence(
+        _ value: String,
+        candidateTokens: Set<String>
+    ) -> Bool {
+        guard !candidateTokens.isDisjoint(with: schemaIdentifierDecisionTokens) else { return false }
+        if value.range(
+            of: #"\b[a-z][a-z0-9]*_[a-z0-9_]*\b"#,
+            options: [.regularExpression, .caseInsensitive]
+        ) != nil {
+            return true
+        }
+        let qualifiedIdentifierPattern = #"\b[a-z][a-z0-9]*\.[a-z][a-z0-9_]*\b"#
+        return value.range(
+            of: qualifiedIdentifierPattern,
+            options: [.regularExpression, .caseInsensitive]
+        ) != nil
+    }
+
+    private static let schemaIdentifierDecisionTokens: Set<String> = [
+        "should", "use", "uses", "using", "define", "defines", "count", "counting",
+        "where", "whether", "which", "null", "nonnull", "non", "status", "filter",
+        "relationship", "join", "path", "field", "column",
+    ]
+
+    private static func containsBusinessMetricAlternative(
+        _ candidateTokens: Set<String>,
+        configuredConcepts: [String]
+    ) -> Bool {
+        let configuredTokens = Set(configuredConcepts.flatMap { normalizedTokens(in: $0) })
+        let matched = candidateTokens.intersection(configuredTokens)
+        guard matched.count >= 2 else { return false }
+        return !candidateTokens.isDisjoint(with: ["mean", "means", "or", "should"])
     }
 
     private static func normalizedTokens(in value: String) -> [String] {
@@ -1105,6 +1150,7 @@ private extension TextToSQLEvalMetrics {
         copy.openRouterInspectionToolCallCount = trace?.inspectionToolCalls.nonEmptyCount
             ?? metadata?.agentInspectionToolCallCount
         copy.openRouterAgentTerminalOutcome = metadata?.agentTerminalOutcome
+        copy.openRouterAgentDiagnostics = metadata?.agentDiagnostics
         return copy
     }
 

@@ -18,6 +18,18 @@ enum WidenEvalMain {
 
             await GenerationLog.shared.setEnabled(options.recordPrompts)
 
+            if let releaseTriageInputPath = options.releaseTriageInputPath {
+                let triageOutput = try TextToSQLReleaseTriageReporter.writeExisting(
+                    runJSONPath: releaseTriageInputPath,
+                    copyVersion: options.releaseTriageVersion
+                )
+                print("Release gate triage: \(triageOutput.triage.path)")
+                if let copied = triageOutput.copiedSummary {
+                    print("Copied sanitized triage summary: \(copied.path)")
+                }
+                return
+            }
+
             if options.inspectionTools {
                 let runner = DatabaseInspectionEvalRunner(options: options)
                 let run = try await runner.run()
@@ -83,6 +95,17 @@ enum WidenEvalMain {
                     version: releaseGateVersion
                 )
                 print("Release gate summary: \(gateOutput.summary.path)")
+                if options.writeReleaseTriage {
+                    let triageOutput = try TextToSQLReleaseTriageReporter.write(
+                        run: run,
+                        evalOutput: output,
+                        copyVersion: options.releaseTriageVersion
+                    )
+                    print("Release gate triage: \(triageOutput.triage.path)")
+                    if let copied = triageOutput.copiedSummary {
+                        print("Copied sanitized triage summary: \(copied.path)")
+                    }
+                }
                 if !gateOutput.evaluation.passed {
                     fputs(
                         "Text-to-SQL release gate failed: \(gateOutput.evaluation.failureMessages.joined(separator: "; "))\n",
@@ -161,6 +184,9 @@ struct EvalCLIOptions {
     var retrieverMode: SchemaRetrievalMode?
     var schemaTools = false
     var inspectionTools = false
+    var releaseTriageInputPath: String?
+    var writeReleaseTriage = false
+    var releaseTriageVersion: String?
     var showHelp = false
 
     static let helpText = """
@@ -178,6 +204,9 @@ struct EvalCLIOptions {
           --record-prompts
           --fail-under <percentage>
           --release-gate-version <version>
+          --triage-release <run.json path>
+          --write-release-triage
+          --release-triage-version <version>
           --semantic-db
           --retriever legacy|index|both
           --schema-tools
@@ -240,6 +269,12 @@ struct EvalCLIOptions {
                 options.failUnder = failUnder
             case "--release-gate-version":
                 options.releaseGateVersion = try nextValue(after: argument)
+            case "--triage-release":
+                options.releaseTriageInputPath = try nextValue(after: argument)
+            case "--write-release-triage":
+                options.writeReleaseTriage = true
+            case "--release-triage-version":
+                options.releaseTriageVersion = try nextValue(after: argument)
             case "--semantic-db":
                 options.semanticDatabase = true
             case "--retriever":

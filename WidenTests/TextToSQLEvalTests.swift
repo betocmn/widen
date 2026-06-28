@@ -424,6 +424,241 @@ struct TextToSQLEvalTests {
         #expect(result.metrics.clarificationQuality == false)
     }
 
+    @Test func identifierSpecificClarificationPassesQualityScoring() async {
+        let evalCase = TextToSQLEvalCase(
+            id: "preseason.top-wins-ambiguous",
+            schemaFixture: "preseason",
+            question: "Tools with the most wins in the last two weeks",
+            expected: TextToSQLEvalExpectation(
+                decision: .clarify,
+                clarificationMustMentionAny: ["win", "winner"]
+            )
+        )
+        let generator = StaticGenerator(
+            result: SQLGenerationResult(
+                sql: "",
+                explanation: "Needs a database decision.",
+                assumptions: [],
+                referencedTables: [],
+                confidence: 0.2,
+                riskLevel: .medium,
+                needsClarification: true,
+                clarificationQuestion: "Should wins use non-null winner_id?"
+            )
+        )
+
+        let result = await TextToSQLEvalCaseRunner.run(
+            evalCase: evalCase,
+            schema: makeCommerceSchema(),
+            generator: generator,
+            options: TextToSQLEvalRunOptions(backend: .cloud, model: "test/model")
+        )
+
+        #expect(result.status == .passed)
+        #expect(result.metrics.clarificationQuality == true)
+    }
+
+    @Test func genericUnderscoredClarificationFailsQualityScoring() async {
+        let evalCase = TextToSQLEvalCase(
+            id: "preseason.top-wins-ambiguous",
+            schemaFixture: "preseason",
+            question: "Tools with the most wins in the last two weeks",
+            expected: TextToSQLEvalExpectation(
+                decision: .clarify,
+                clarificationMustMentionAny: ["win", "winner"]
+            )
+        )
+        let generator = StaticGenerator(
+            result: SQLGenerationResult(
+                sql: "",
+                explanation: "Needs a database decision.",
+                assumptions: [],
+                referencedTables: [],
+                confidence: 0.2,
+                riskLevel: .medium,
+                needsClarification: true,
+                clarificationQuestion: "What do you mean by winner_id?"
+            )
+        )
+
+        let result = await TextToSQLEvalCaseRunner.run(
+            evalCase: evalCase,
+            schema: makeCommerceSchema(),
+            generator: generator,
+            options: TextToSQLEvalRunOptions(backend: .cloud, model: "test/model")
+        )
+
+        #expect(result.status == .wrongDecision)
+        #expect(result.metrics.clarificationQuality == false)
+    }
+
+    @Test func measureSpecificClarificationPassesQualityScoring() async {
+        let evalCase = TextToSQLEvalCase(
+            id: "openrouter.clarification",
+            schemaFixture: "commerce",
+            question: "Which products perform best?",
+            expected: TextToSQLEvalExpectation(
+                decision: .clarify,
+                clarificationMustMentionAny: ["measure", "performance"]
+            )
+        )
+        let generator = StaticGenerator(
+            result: SQLGenerationResult(
+                sql: "",
+                explanation: "Needs a database decision.",
+                assumptions: [],
+                referencedTables: [],
+                confidence: 0.2,
+                riskLevel: .medium,
+                needsClarification: true,
+                clarificationQuestion: "Which performance measure should I use?"
+            )
+        )
+
+        let result = await TextToSQLEvalCaseRunner.run(
+            evalCase: evalCase,
+            schema: makeCommerceSchema(),
+            generator: generator,
+            options: TextToSQLEvalRunOptions(backend: .cloud, model: "test/model")
+        )
+
+        #expect(result.status == .passed)
+        #expect(result.metrics.clarificationQuality == true)
+    }
+
+    @Test func businessMetricAlternativeClarificationPassesQualityScoring() async {
+        let evalCase = TextToSQLEvalCase(
+            id: "commerce.best-customers",
+            schemaFixture: "commerce",
+            question: "Who are our best customers?",
+            expected: TextToSQLEvalExpectation(
+                decision: .clarify,
+                clarificationMustMentionAny: ["metric", "revenue", "spend", "orders", "best"]
+            )
+        )
+        let generator = StaticGenerator(
+            result: SQLGenerationResult(
+                sql: "",
+                explanation: "Needs a database decision.",
+                assumptions: [],
+                referencedTables: [],
+                confidence: 0.2,
+                riskLevel: .medium,
+                needsClarification: true,
+                clarificationQuestion: "Should best customers mean highest revenue or largest spend?"
+            )
+        )
+
+        let result = await TextToSQLEvalCaseRunner.run(
+            evalCase: evalCase,
+            schema: makeCommerceSchema(),
+            generator: generator,
+            options: TextToSQLEvalRunOptions(backend: .cloud, model: "test/model")
+        )
+
+        #expect(result.status == .passed)
+        #expect(result.metrics.clarificationQuality == true)
+    }
+
+    @Test func currentClarificationCasesRequireConcreteDatabaseDecision() async {
+        let cases: [(TextToSQLEvalCase, good: String, bad: String)] = [
+            (
+                TextToSQLEvalCase(
+                    id: "commerce.best-customers",
+                    schemaFixture: "commerce",
+                    question: "Who are our best customers?",
+                    expected: TextToSQLEvalExpectation(
+                        decision: .clarify,
+                        clarificationMustMentionAny: ["metric", "revenue", "spend", "orders", "best"]
+                    )
+                ),
+                "Which metric should define best customers: revenue, spend, or order count?",
+                "What do you mean by best?"
+            ),
+            (
+                TextToSQLEvalCase(
+                    id: "support.important-cluster",
+                    schemaFixture: "support",
+                    question: "What is our most important feedback cluster?",
+                    expected: TextToSQLEvalExpectation(
+                        decision: .clarify,
+                        clarificationMustMentionAny: ["important", "priority", "impact", "frequency"]
+                    )
+                ),
+                "Which metric should define important clusters: priority, impact, or frequency?",
+                "What do you mean by important?"
+            ),
+            (
+                TextToSQLEvalCase(
+                    id: "saas.healthy-accounts",
+                    schemaFixture: "saas",
+                    question: "Which accounts are healthy?",
+                    expected: TextToSQLEvalExpectation(
+                        decision: .clarify,
+                        clarificationMustMentionAny: ["healthy", "health", "status", "usage"]
+                    )
+                ),
+                "Which status or usage filter should define healthy accounts?",
+                "What do you mean by healthy?"
+            ),
+            (
+                TextToSQLEvalCase(
+                    id: "preseason.top-wins-ambiguous",
+                    schemaFixture: "preseason",
+                    question: "Tools with the most wins in the last two weeks",
+                    expected: TextToSQLEvalExpectation(
+                        decision: .clarify,
+                        clarificationMustMentionAny: ["win", "winner", "status", "decision", "date", "time"]
+                    )
+                ),
+                "Should wins mean counting rows where winner_id is not null, and which date field sets the time window?",
+                "What do you mean by wins?"
+            ),
+        ]
+
+        for (evalCase, good, bad) in cases {
+            let goodResult = await TextToSQLEvalCaseRunner.run(
+                evalCase: evalCase,
+                schema: makeCommerceSchema(),
+                generator: StaticGenerator(
+                    result: SQLGenerationResult(
+                        sql: "",
+                        explanation: "Needs a database decision.",
+                        assumptions: [],
+                        referencedTables: [],
+                        confidence: 0.2,
+                        riskLevel: .medium,
+                        needsClarification: true,
+                        clarificationQuestion: good
+                    )
+                ),
+                options: TextToSQLEvalRunOptions(backend: .cloud, model: "test/model")
+            )
+            #expect(goodResult.status == .passed)
+            #expect(goodResult.metrics.clarificationQuality == true)
+
+            let badResult = await TextToSQLEvalCaseRunner.run(
+                evalCase: evalCase,
+                schema: makeCommerceSchema(),
+                generator: StaticGenerator(
+                    result: SQLGenerationResult(
+                        sql: "",
+                        explanation: "Generic clarification.",
+                        assumptions: [],
+                        referencedTables: [],
+                        confidence: 0.2,
+                        riskLevel: .medium,
+                        needsClarification: true,
+                        clarificationQuestion: bad
+                    )
+                ),
+                options: TextToSQLEvalRunOptions(backend: .cloud, model: "test/model")
+            )
+            #expect(badResult.status == .wrongDecision)
+            #expect(badResult.metrics.clarificationQuality == false)
+        }
+    }
+
     @Test func evalRunnerUsesProductionGroundingByDefault() async {
         let evalCase = TextToSQLEvalCase(
             id: "commerce.active-customers",
