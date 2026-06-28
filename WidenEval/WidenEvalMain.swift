@@ -184,6 +184,8 @@ enum EvalCloudAgentMode: String {
 enum EvalExplicitOption: Hashable {
     case backendMode
     case cloudAgentMode
+    case schemaAgentClarificationCorrectionMode
+    case schemaAgentIntentCoverageMode
     case model
     case suitePath
     case repeatCount
@@ -195,6 +197,9 @@ enum EvalExplicitOption: Hashable {
 struct EvalCLIOptions {
     var backendMode: EvalBackendMode = .local
     var cloudAgentMode: EvalCloudAgentMode = .legacy
+    var schemaAgentClarificationCorrectionMode: SchemaToolAgentClarificationCorrectionMode =
+        .diagnosticsOnly
+    var schemaAgentIntentCoverageMode: SchemaToolAgentIntentCoverageMode = .diagnosticsOnly
     var model: String = "openai/gpt-5.5"
     var suitePath: String = "Evals/suites/text-to-sql-v1.json"
     var caseID: String?
@@ -229,6 +234,8 @@ struct EvalCLIOptions {
         Options:
           --backend local|cloud|both
           --cloud-agent legacy|tools
+          --schema-agent-clarification-correction disabled|diagnostics|experimental
+          --schema-agent-intent-coverage disabled|diagnostics|reject-only|experimental
           --model <openrouter-model-id>
           --suite <path>
           --case <case-id>
@@ -283,6 +290,20 @@ struct EvalCLIOptions {
                 }
                 options.cloudAgentMode = mode
                 options.explicitOptions.insert(.cloudAgentMode)
+            case "--schema-agent-clarification-correction":
+                let value = try nextValue(after: argument)
+                guard let mode = Self.clarificationCorrectionMode(from: value) else {
+                    throw EvalCLIError.invalidValue(argument, value)
+                }
+                options.schemaAgentClarificationCorrectionMode = mode
+                options.explicitOptions.insert(.schemaAgentClarificationCorrectionMode)
+            case "--schema-agent-intent-coverage":
+                let value = try nextValue(after: argument)
+                guard let mode = Self.intentCoverageMode(from: value) else {
+                    throw EvalCLIError.invalidValue(argument, value)
+                }
+                options.schemaAgentIntentCoverageMode = mode
+                options.explicitOptions.insert(.schemaAgentIntentCoverageMode)
             case "--model":
                 options.model = try nextValue(after: argument)
                 options.explicitOptions.insert(.model)
@@ -394,6 +415,40 @@ struct EvalCLIOptions {
             throw EvalCLIError.resumeSelectionWithoutRun
         }
         return options
+    }
+
+    private static func clarificationCorrectionMode(
+        from value: String
+    ) -> SchemaToolAgentClarificationCorrectionMode? {
+        switch value {
+        case "disabled":
+            return .disabled
+        case "diagnostics", "diagnostics-only", "diagnosticsOnly":
+            return .diagnosticsOnly
+        case "experimental", "correct-over-clarification-experimental",
+            "correctOverClarificationExperimental":
+            return .correctOverClarificationExperimental
+        default:
+            return nil
+        }
+    }
+
+    private static func intentCoverageMode(
+        from value: String
+    ) -> SchemaToolAgentIntentCoverageMode? {
+        switch value {
+        case "disabled":
+            return .disabled
+        case "diagnostics", "diagnostics-only", "diagnosticsOnly":
+            return .diagnosticsOnly
+        case "reject-only", "rejectOnlyExperimental", "reject-only-experimental":
+            return .rejectOnlyExperimental
+        case "experimental", "correct-and-retry-experimental",
+            "correctAndRetryExperimental":
+            return .correctAndRetryExperimental
+        default:
+            return nil
+        }
     }
 }
 

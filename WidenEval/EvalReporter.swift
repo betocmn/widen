@@ -11,7 +11,11 @@ struct EvalOutputPaths {
 
 enum EvalReporter {
     static func write(run: EvalRun, options: EvalCLIOptions) throws -> EvalOutputPaths {
-        let directory = outputDirectory(base: options.outputDirectory)
+        let directory = run.outputDirectory ?? outputDirectory(base: options.outputDirectory)
+        return try write(run: run, to: directory)
+    }
+
+    static func write(run: EvalRun, to directory: URL) throws -> EvalOutputPaths {
         try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
 
         let paths = EvalOutputPaths(
@@ -81,6 +85,8 @@ enum EvalReporter {
             "| Finished | \(tableCell(run.manifest.finishedAt)) |",
             "| Backend | \(tableCell(run.manifest.backendMode)) |",
             "| Cloud agent | \(tableCell(run.manifest.cloudAgentMode ?? "-")) |",
+            "| Schema agent clarification correction | \(tableCell(run.manifest.schemaAgentClarificationCorrectionMode ?? "-")) |",
+            "| Schema agent intent coverage | \(tableCell(run.manifest.schemaAgentIntentCoverageMode ?? "-")) |",
             "| Model | \(tableCell(run.manifest.model ?? "-")) |",
             "| OS | \(tableCell(run.manifest.osVersion)) |",
             "| Architecture | \(tableCell(run.manifest.architecture)) |",

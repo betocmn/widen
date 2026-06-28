@@ -2000,6 +2000,14 @@ public enum GeneratedSQLPostprocessor {
             if allowGroundingClarification,
                 let pending = grounding.pendingClarification
             {
+                if schemaToolEvidenceAllowsSQL(
+                    question: question,
+                    databaseContext: databaseContext,
+                    schemaValidation: schemaValidation,
+                    generation: generation
+                ) {
+                    return copy
+                }
                 copy.sql = ""
                 copy.explanation = pending.question
                 copy.needsClarification = true
@@ -2012,6 +2020,41 @@ public enum GeneratedSQLPostprocessor {
             }
         }
         return copy
+    }
+
+    private static func schemaToolEvidenceAllowsSQL(
+        question: String,
+        databaseContext: String,
+        schemaValidation: SQLSchemaValidationResult,
+        generation: SQLGenerationResult
+    ) -> Bool {
+        guard let diagnostics = generation.backendMetadata?.agentDiagnostics,
+            diagnostics.terminalToolSeen,
+            diagnostics.terminalAction == "sql",
+            diagnostics.appSideRejectionReason == nil,
+            [
+                SchemaToolAgentIntentCoverageMode.rejectOnlyExperimental.rawValue,
+                SchemaToolAgentIntentCoverageMode.correctAndRetryExperimental.rawValue,
+            ].contains(diagnostics.intentCoverageMode),
+            !schemaValidation.referencedTables.isEmpty
+        else {
+            return false
+        }
+        let evidence = diagnostics.schemaEvidence
+        let describedTables = Set(evidence.describedTableIDs.map { $0.lowercased() })
+        guard !describedTables.isEmpty else { return false }
+        guard schemaValidation.referencedTables.allSatisfy({ table in
+            describedTables.contains(table.lowercased())
+        }) else {
+            return false
+        }
+        let coverage = SchemaToolAgentSQLIntentCoveragePolicy.evaluate(
+            question: question,
+            databaseContext: databaseContext,
+            evidence: evidence,
+            sql: generation.sql
+        )
+        return coverage.decision == .covered
     }
 
     private static func anchoredWindowClarification(

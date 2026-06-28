@@ -100,6 +100,8 @@ enum TextToSQLReleaseGateReporter {
             "| Finished | \(tableCell(run.manifest.finishedAt)) |",
             "| Backend | \(tableCell(run.manifest.backendMode)) |",
             "| Cloud agent | \(tableCell(run.manifest.cloudAgentMode ?? "-")) |",
+            "| Schema agent clarification correction | \(tableCell(run.manifest.schemaAgentClarificationCorrectionMode ?? "-")) |",
+            "| Schema agent intent coverage | \(tableCell(run.manifest.schemaAgentIntentCoverageMode ?? "-")) |",
             "| Model | \(tableCell(run.manifest.model ?? "-")) |",
             "| Repeats | \(run.manifest.repeatCount) |",
             "| Results | \(input.totalResults) |",
@@ -383,6 +385,8 @@ enum TextToSQLReleaseTriageReporter {
             "| Finished | \(tableCell(run.manifest.finishedAt)) |",
             "| Backend | \(tableCell(run.manifest.backendMode)) |",
             "| Cloud agent | \(tableCell(run.manifest.cloudAgentMode ?? "-")) |",
+            "| Schema agent clarification correction | \(tableCell(run.manifest.schemaAgentClarificationCorrectionMode ?? "-")) |",
+            "| Schema agent intent coverage | \(tableCell(run.manifest.schemaAgentIntentCoverageMode ?? "-")) |",
             "| Model | \(tableCell(run.manifest.model ?? "-")) |",
             "| Results | \(run.results.count) |",
             "| Complete | \(completeness.isComplete ? "Yes" : "No") |",
@@ -412,8 +416,8 @@ enum TextToSQLReleaseTriageReporter {
                 "",
                 "## \(category.rawValue)",
                 "",
-                "| Case | Repeat | Expected | Actual | Status | Semantic | Verification | Terminal | Schema Tools | Described | Inspected Objects | SQL Tables | Repeated Repair |",
-                "| --- | ---: | --- | --- | --- | --- | --- | --- | ---: | ---: | --- | --- | --- |",
+                "| Case | Repeat | Expected | Actual | Status | Semantic | Verification | Terminal | Policy | Mismatch | Schema Tools | Described | Inspected Objects | SQL Tables | Repeated Repair |",
+                "| --- | ---: | --- | --- | --- | --- | --- | --- | --- | --- | ---: | ---: | --- | --- | --- |",
             ]
             for row in rows {
                 lines.append(row.markdownRow)
@@ -683,6 +687,8 @@ enum TextToSQLReleaseTriageReporter {
             let terminal = diagnostics?.terminalAction
                 ?? result.metrics.openRouterAgentTerminalOutcome
                 ?? "-"
+            let policy = Self.policySummary(diagnostics)
+            let mismatch = Self.semanticMismatchSummary(result, evalCase: evalCase)
             let schemaToolCalls = result.metrics.openRouterSchemaToolCallCount
                 ?? result.trace?.schemaToolCalls.count
                 ?? 0
@@ -698,12 +704,68 @@ enum TextToSQLReleaseTriageReporter {
                 tableCell(result.metrics.semanticStatus?.rawValue ?? "-"),
                 tableCell(result.metrics.postgresVerificationStatus?.rawValue ?? "-"),
                 tableCell(terminal),
+                tableCell(policy),
+                tableCell(mismatch),
                 String(schemaToolCalls),
                 String(described),
                 tableCell(inspectedObjects.isEmpty ? "-" : inspectedObjects),
                 tableCell(sqlTables.isEmpty ? "-" : sqlTables),
                 repeatedNoProgressRepair(result) ? "Yes" : "No",
             ].joined(separator: " | ").withMarkdownTablePipes
+        }
+
+        private static func policySummary(
+            _ diagnostics: OpenRouterSchemaToolAgentDiagnostics?
+        ) -> String {
+            guard let diagnostics,
+                !diagnostics.clarificationPolicyDecision.isEmpty
+            else { return "-" }
+            var parts = [diagnostics.clarificationPolicyDecision]
+            if diagnostics.evidenceSufficientForSQL {
+                parts.append("evidence sufficient")
+            }
+            if diagnostics.overClarificationCorrectionAttempted {
+                parts.append(
+                    diagnostics.overClarificationCorrectionSucceeded
+                        ? "correction succeeded"
+                        : "correction attempted"
+                )
+            }
+            if !diagnostics.unresolvedDecisionKinds.isEmpty {
+                parts.append("unresolved: " + diagnostics.unresolvedDecisionKinds.joined(separator: ","))
+            }
+            if !diagnostics.sqlIntentCoverageDecision.isEmpty {
+                parts.append("intent: " + diagnostics.sqlIntentCoverageDecision)
+            }
+            if diagnostics.intentCoverageCorrectionAttempted {
+                parts.append(
+                    diagnostics.intentCoverageCorrectionSucceeded
+                        ? "intent correction succeeded"
+                        : "intent correction attempted"
+                )
+            }
+            return parts.joined(separator: "; ")
+        }
+
+        private static func semanticMismatchSummary(
+            _ result: TextToSQLEvalResult,
+            evalCase: TextToSQLEvalCase?
+        ) -> String {
+            guard result.metrics.semanticStatus == .resultMismatch else { return "-" }
+            if let category = result.metrics.openRouterAgentDiagnostics?.sqlIntentCoverageMismatchCategory,
+                !category.isEmpty,
+                category != "unknown mismatch"
+            {
+                return category
+            }
+            let diagnostics = result.metrics.openRouterAgentDiagnostics
+            return SchemaToolAgentSQLIntentCoveragePolicy.semanticMismatchCategory(
+                question: evalCase?.question ?? "",
+                databaseContext: evalCase?.databaseContext ?? "",
+                evidence: diagnostics?.schemaEvidence ?? OpenRouterSchemaToolEvidenceSummary(),
+                sql: result.generatedSQL ?? "",
+                comparatorMismatchCategory: result.metrics.semanticMismatchCategory
+            )
         }
 
         static func sort(_ lhs: TriageRow, _ rhs: TriageRow) -> Bool {

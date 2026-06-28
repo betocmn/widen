@@ -270,6 +270,8 @@ public struct TextToSQLEvalResumeCompatibilityManifest: Equatable, Sendable {
     public var model: String?
     public var backendMode: String
     public var cloudAgentMode: String?
+    public var schemaAgentClarificationCorrectionMode: String?
+    public var schemaAgentIntentCoverageMode: String?
     public var semanticDatabaseEnabled: Bool
     public var scorerSourceHash: String
     public var semanticComparatorSourceHash: String?
@@ -284,6 +286,8 @@ public struct TextToSQLEvalResumeCompatibilityManifest: Equatable, Sendable {
         model: String?,
         backendMode: String,
         cloudAgentMode: String?,
+        schemaAgentClarificationCorrectionMode: String? = nil,
+        schemaAgentIntentCoverageMode: String? = nil,
         semanticDatabaseEnabled: Bool,
         scorerSourceHash: String,
         semanticComparatorSourceHash: String?,
@@ -297,6 +301,8 @@ public struct TextToSQLEvalResumeCompatibilityManifest: Equatable, Sendable {
         self.model = model
         self.backendMode = backendMode
         self.cloudAgentMode = cloudAgentMode
+        self.schemaAgentClarificationCorrectionMode = schemaAgentClarificationCorrectionMode
+        self.schemaAgentIntentCoverageMode = schemaAgentIntentCoverageMode
         self.semanticDatabaseEnabled = semanticDatabaseEnabled
         self.scorerSourceHash = scorerSourceHash
         self.semanticComparatorSourceHash = semanticComparatorSourceHash
@@ -355,6 +361,18 @@ public enum TextToSQLEvalResumeCompatibility {
             "cloud agent",
             previous.cloudAgentMode ?? "-",
             current.cloudAgentMode ?? "-",
+            issues: &issues
+        )
+        compare(
+            "schema agent clarification correction mode",
+            previous.schemaAgentClarificationCorrectionMode ?? "-",
+            current.schemaAgentClarificationCorrectionMode ?? "-",
+            issues: &issues
+        )
+        compare(
+            "schema agent intent coverage mode",
+            previous.schemaAgentIntentCoverageMode ?? "-",
+            current.schemaAgentIntentCoverageMode ?? "-",
             issues: &issues
         )
         compare(

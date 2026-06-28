@@ -1929,6 +1929,35 @@ struct SQLSchemaValidatorTests {
         #expect(enriched.referencedTables == ["public.users"])
     }
 
+    @Test func diagnosticsOnlySchemaToolEvidenceDoesNotSuppressGroundingClarification() {
+        let generation = SQLGenerationResult(
+            sql: "SELECT COUNT(*) FROM public.users WHERE status = 'active'",
+            explanation: "Counts active users.",
+            assumptions: [],
+            referencedTables: [],
+            confidence: 1,
+            riskLevel: .low,
+            needsClarification: false,
+            clarificationQuestion: nil,
+            backendMetadata: schemaToolSQLMetadata(
+                describedTableIDs: ["public.users"],
+                exposedColumnIDs: ["public.users.id", "public.users.status"]
+            )
+        )
+
+        let enriched = GeneratedSQLPostprocessor.enriched(
+            generation,
+            question: "how many active users do we have?",
+            schema: makeUsersUnconstrainedStatusSchema(),
+            databaseContext: ""
+        )
+
+        #expect(enriched.needsClarification)
+        #expect(enriched.sql.isEmpty)
+        #expect(enriched.clarificationQuestion?.contains("\"active\"") == true)
+        #expect(enriched.referencedTables == ["public.users"])
+    }
+
     @Test func nonMetricFilterTermsStillRequireGrounding() {
         let generation = SQLGenerationResult(
             sql: "SELECT id FROM public.users WHERE status = 'active'",
@@ -2123,6 +2152,34 @@ struct SQLSchemaValidatorTests {
             question: "how many active users do we have?",
             schema: makeUsersUnconstrainedStatusSchema(),
             databaseContext: "Active users are users whose status is active."
+        )
+
+        #expect(!enriched.needsClarification)
+        #expect(enriched.sql == generation.sql)
+    }
+
+    @Test func experimentalSchemaToolEvidenceSuppressesGroundingClarificationForAnswerableStatusFilter() {
+        let generation = SQLGenerationResult(
+            sql: "SELECT COUNT(*) FROM public.users WHERE status = 'active'",
+            explanation: "Counts active users.",
+            assumptions: [],
+            referencedTables: [],
+            confidence: 1,
+            riskLevel: .low,
+            needsClarification: false,
+            clarificationQuestion: nil,
+            backendMetadata: schemaToolSQLMetadata(
+                describedTableIDs: ["public.users"],
+                exposedColumnIDs: ["public.users.id", "public.users.status"],
+                intentCoverageMode: .correctAndRetryExperimental
+            )
+        )
+
+        let enriched = GeneratedSQLPostprocessor.enriched(
+            generation,
+            question: "how many active users do we have?",
+            schema: makeUsersUnconstrainedStatusSchema(),
+            databaseContext: ""
         )
 
         #expect(!enriched.needsClarification)
@@ -2502,6 +2559,34 @@ struct SQLSchemaValidatorTests {
             ],
             foreignKeys: []
         )
+    }
+
+    private func schemaToolSQLMetadata(
+        describedTableIDs: [String],
+        exposedColumnIDs: [String],
+        exposedForeignKeyPathIDs: [String] = [],
+        intentCoverageMode: SchemaToolAgentIntentCoverageMode = .diagnosticsOnly
+    ) -> OpenRouterGenerationMetadata {
+        var metadata = OpenRouterGenerationMetadata(
+            requestedModelID: "test/model",
+            structuredOutputMode: .promptOnlyJSON,
+            requestCount: 1,
+            retryCount: 0
+        )
+        metadata.agentSelectionReason = "tools"
+        metadata.agentTerminalOutcome = "sql"
+        metadata.agentDiagnostics = OpenRouterSchemaToolAgentDiagnostics(
+            terminalToolSeen: true,
+            terminalAction: "sql",
+            schemaEvidence: OpenRouterSchemaToolEvidenceSummary(
+                searched: true,
+                describedTableIDs: describedTableIDs,
+                exposedColumnIDs: exposedColumnIDs,
+                exposedForeignKeyPathIDs: exposedForeignKeyPathIDs
+            ),
+            intentCoverageMode: intentCoverageMode.rawValue
+        )
+        return metadata
     }
 
     private func makeUsersOrdersStatusSchema() -> DatabaseSchema {

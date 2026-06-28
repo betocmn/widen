@@ -271,6 +271,25 @@ struct TextToSQLEvalRunPlanningTests {
         #expect(text.contains("--resume-run \"$(RESUME)\" --resume-missing"))
     }
 
+    @Test func makefileKeepsExperimentalSchemaAgentFlagsFocused() throws {
+        let testFile = URL(fileURLWithPath: #filePath)
+        let makefile = testFile
+            .deletingLastPathComponent()
+            .deletingLastPathComponent()
+            .appendingPathComponent("Makefile")
+        let text = try String(contentsOf: makefile, encoding: .utf8)
+
+        let releaseRecipe = try #require(Self.makefileRecipe(named: "eval-release", in: text))
+        #expect(!releaseRecipe.contains("--schema-agent-clarification-correction"))
+        #expect(!releaseRecipe.contains("--schema-agent-intent-coverage"))
+
+        let focusedRecipe = try #require(
+            Self.makefileRecipe(named: "eval-release-overclarification", in: text)
+        )
+        #expect(focusedRecipe.contains("--schema-agent-clarification-correction experimental"))
+        #expect(focusedRecipe.contains("--schema-agent-intent-coverage experimental"))
+    }
+
     @Test func cloudResumeSourceHashesIncludeOpenRouterGenerator() throws {
         let testFile = URL(fileURLWithPath: #filePath)
         let evalRunner = testFile
@@ -281,6 +300,18 @@ struct TextToSQLEvalRunPlanningTests {
 
         #expect(source.contains("\"WidenKit/Services/OpenRouterSQLGenerator.swift\""))
         #expect(source.contains("options.backendMode.backends.contains(.cloud)"))
+    }
+
+    private static func makefileRecipe(named target: String, in text: String) -> String? {
+        let lines = text.split(separator: "\n", omittingEmptySubsequences: false)
+            .map(String.init)
+        guard let start = lines.firstIndex(where: { $0 == "\(target): eval-build" }) else {
+            return nil
+        }
+        let recipeLines = lines[(start + 1)...].prefix { line in
+            line.hasPrefix("\t") || line.isEmpty
+        }
+        return recipeLines.joined(separator: "\n")
     }
 
     private static func expectedKeys(

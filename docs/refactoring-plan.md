@@ -1542,6 +1542,93 @@ bucket.
 
 ---
 
+# PR 16 — Reduce schema-tool over-clarification
+
+Implemented a schema-tool clarification policy that rejects generic
+clarifications, treats explicit database context as authoritative, sends one
+strict correction when evidence is sufficient for SQL, records redacted policy
+trace fields, and preserves concrete ambiguity clarifications. Also added the
+focused over-clarification release helper and policy/agent/postprocessor tests.
+
+Before/after against the full release gate:
+
+| Metric | PR 51 baseline | PR 16 run |
+| --- | ---: | ---: |
+| End-to-end semantic pass | 20/60 | 24/60 |
+| Clarification decision accuracy | 10/12 | 10/12 |
+| Expected SQL, got clarification | 28 | 3 |
+| Tool budget exhausted | 7 | 9 |
+
+Preseason historical status stayed green: `top-wins-ambiguous` clarified 3/3,
+`top-wins-defined` semantically passed 3/3, and invalid tool A/B binding stayed
+at 0.
+
+PR 16 did not make text-to-SQL production-ready. The full gate still failed:
+semantic end-to-end reached 24/60, below the 30/60 PR target and the release
+threshold, and tool-budget failures increased. The next largest bucket is now
+semantic result mismatch (24 results), followed by tool budget exhausted (9).
+
+Sanitized artifacts were updated in `docs/evals/0.1.0.md` and
+`docs/evals/0.1.0-triage.md`.
+
+## PR 52 — Diagnostics-only schema-tool policy infrastructure
+
+PR 52 merged diagnostics-only. Experimental correction modes remain disabled by
+default and are not production behavior. It keeps the answerability policy, SQL
+intent coverage policy, redacted trace fields, semantic mismatch categories, and
+triage columns, but default production behavior is conservative: both new
+schema-tool enforcement modes default to diagnostics only. The default
+OpenRouter schema-tool path records policy decisions without forcing
+clarification into SQL and without running the SQL intent-correction loop.
+
+The focused over-clarification helper explicitly enables the experimental
+correction modes. Those modes still do one strict correction for missing
+deterministic intent such as status predicates, anti-join/null semantics,
+aggregates, group/order/limit shape, anchored date windows, database-context
+filters, or obvious projection/unit requirements. Eval artifacts are now written
+before the first model call and after each result, with per-case progress
+heartbeats so a stalled run leaves partial output.
+
+Local verification passed:
+
+```text
+make project
+make test
+```
+
+Latest completed focused experimental over-clarification run:
+`.eval-results/20260628-124309-188` at commit `dce4f4d`, with
+`clarificationCorrectionMode=correctOverClarificationExperimental` and
+`intentCoverageMode=correctAndRetryExperimental`.
+
+| Metric | Full PR 16 gate | PR 52 focused experimental |
+| --- | ---: | ---: |
+| Scope | 60 | 30 |
+| End-to-end semantic pass | 24/60 | 11/30 |
+| Clarification decision accuracy | 10/12 | n/a |
+| Expected SQL, got clarification | 3 | 3 |
+| Semantic result mismatch | 24 | 5 triage / 6 semantic status |
+| Tool budget exhausted | 9 | 3 triage / 2 summary |
+| Model/tool protocol failure | 0 | 6 |
+| Repeated/no-progress repair | 0 | 0 |
+| Transport reliability | 60/60 | 30/30 |
+
+Previous focused Preseason status remained semantically green:
+`top-wins-ambiguous` clarified 3/3, `top-wins-defined` semantically passed 3/3,
+and invalid tool A/B binding stayed at 0. One `top-wins-defined` repeat still
+had a static schema-object failure despite semantic equivalence.
+
+This run completed without the previous no-artifact stall, but it does not meet
+the behavior-changing acceptance gate. PR 52 merged for diagnostics, traces,
+tests, and artifact hardening only. The current largest focused buckets are
+model/tool protocol no-progress after intent correction, semantic projection and
+row-order mismatches, residual `support.average-first-response` clarification,
+and tool budget exhaustion on saas status/filter cases. The next production fix
+should not be more force-SQL pressure; it should target stable query-plan and
+SQL-shape generation, or deterministic synthesis for common patterns.
+
+---
+
 # Recommended implementation order for one coding agent
 
 When only one agent is working:
@@ -1561,7 +1648,8 @@ When only one agent is working:
 12. PR 13 — Release-gate triage and schema-tool agent fixes
 13. PR 14 — Resumable, budget-aware release-gate evals
 14. PR 15 — Release-gate baseline and triage docs
-15. PR 10 ⏸️ — Embedding experiment           [deferred 2026-06-26 — revisit after PR 12 and real app/eval testing]
+15. PR 16 — Schema-tool over-clarification policy
+16. PR 10 ⏸️ — Embedding experiment           [deferred 2026-06-26 — revisit after PR 12 and real app/eval testing]
 ```
 
 The key discipline is to run the same 20 cases after every PR and reject changes that merely move failures from one stage to another.

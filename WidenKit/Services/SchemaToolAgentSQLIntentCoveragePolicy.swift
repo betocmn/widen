@@ -1,0 +1,770 @@
+import Foundation
+
+public enum SchemaToolAgentSQLIntentCoverageDecision: String, Codable, Equatable, Sendable {
+    case covered
+    case needsCorrection
+    case mustClarify
+}
+
+public struct SchemaToolAgentSQLIntentCoverageResult: Equatable, Sendable {
+    public var decision: SchemaToolAgentSQLIntentCoverageDecision
+    public var reason: String
+    public var missingSignals: [String]
+    public var unresolvedDecisionKinds: [SchemaToolAgentUnresolvedDecisionKind]
+    public var clarificationQuestion: String?
+    public var semanticMismatchCategory: String
+
+    public init(
+        decision: SchemaToolAgentSQLIntentCoverageDecision,
+        reason: String,
+        missingSignals: [String] = [],
+        unresolvedDecisionKinds: [SchemaToolAgentUnresolvedDecisionKind] = [],
+        clarificationQuestion: String? = nil,
+        semanticMismatchCategory: String = "unknown mismatch"
+    ) {
+        self.decision = decision
+        self.reason = reason
+        self.missingSignals = missingSignals
+        self.unresolvedDecisionKinds = unresolvedDecisionKinds
+        self.clarificationQuestion = clarificationQuestion
+        self.semanticMismatchCategory = semanticMismatchCategory
+    }
+}
+
+public enum SchemaToolAgentSQLIntentCoveragePolicy {
+    public static func evaluate(
+        question: String,
+        databaseContext: String,
+        evidence: OpenRouterSchemaToolEvidenceSummary,
+        sql: String
+    ) -> SchemaToolAgentSQLIntentCoverageResult {
+        let signals = IntentSignals(
+            question: question,
+            databaseContext: databaseContext,
+            evidence: evidence,
+            sql: sql
+        )
+
+        if signals.hasProtectedMetricAmbiguity {
+            return SchemaToolAgentSQLIntentCoverageResult(
+                decision: .mustClarify,
+                reason: "question contains a metric term that database context does not define",
+                unresolvedDecisionKinds: [.metric],
+                clarificationQuestion: signals.metricClarificationQuestion,
+                semanticMismatchCategory: "missing required filter"
+            )
+        }
+
+        var missing: [String] = []
+        var categories: [String] = []
+
+        for status in signals.statusTokens.sorted() {
+            guard signals.evidenceSupportsStatus(status) else { continue }
+            if !signals.sqlIncludesStatusPredicate(for: status) {
+                missing.append("predicate for \(status)")
+                categories.append(status == "active" || status == "verified"
+                    ? "wrong status/boolean predicate"
+                    : "missing required filter")
+            }
+        }
+
+        if signals.requiresPersonEmailProjection,
+            !signals.sqlIncludesColumn("email")
+        {
+            missing.append("email projection for person/customer entity")
+            categories.append("wrong projected columns")
+        }
+
+        if signals.requiresGroupedPersonMetricEmailLabel,
+            signals.sqlIncludesColumn("name"),
+            !signals.questionAsksForName
+        {
+            missing.append("use email instead of name for grouped person/customer metric")
+            categories.append("wrong projected columns")
+        }
+
+        if signals.requiresCentsUnitPreservation {
+            if signals.sqlScalesCentsToCurrency {
+                missing.append("preserve cents unit instead of dividing by 100")
+                categories.append("wrong aggregate")
+            }
+            if !signals.sqlHasCentsAggregateAlias {
+                missing.append("cents-valued aggregate alias")
+                categories.append("wrong projected columns")
+            }
+        }
+
+        if signals.requiresActiveExpiringStatusPredicate,
+            !signals.sqlIncludesStatusPredicate(for: "active")
+        {
+            missing.append("active status predicate for expiring rows")
+            categories.append("missing required filter")
+        }
+
+        if signals.requiresCountAlias, !signals.sqlHasCountAlias {
+            missing.append("count aggregate alias containing count")
+            categories.append("wrong projected columns")
+        }
+
+        if signals.requiresFeedbackCountAlias, !signals.sqlHasFeedbackCountAlias {
+            missing.append("feedback count alias")
+            categories.append("wrong projected columns")
+        }
+
+        if signals.requiresSeatCountAlias, !signals.sqlHasSeatCountAlias {
+            missing.append("seat count alias such as used_seats or seat_count")
+            categories.append("wrong projected columns")
+        }
+
+        for projection in signals.unrequestedProjectionColumns {
+            missing.append("remove unrequested projection \(projection)")
+            categories.append("wrong projected columns")
+        }
+
+        if signals.requiresActiveMembershipFromContext,
+            !signals.sqlIncludesActiveMembershipPredicate()
+        {
+            missing.append("active membership predicate from database context")
+            categories.append("wrong status/boolean predicate")
+        }
+
+        if let lastSeenDate = signals.activeUserLastSeenAnchor,
+            !signals.sqlIncludesColumn("last_seen_at") || !signals.sqlContainsDateLiteral(lastSeenDate)
+        {
+            missing.append("last_seen_at predicate from database context")
+            categories.append("missing anchored date window")
+        }
+
+        if signals.requiresSeatUsageActiveMembership {
+            if !signals.sqlIncludesAggregateCount {
+                missing.append("membership count for seat usage")
+                categories.append("missing aggregate")
+            }
+            if !signals.sqlIncludesActiveMembershipPredicate() {
+                missing.append("active membership predicate for seat usage")
+                categories.append("wrong status/boolean predicate")
+            }
+        }
+
+        if signals.requiresAntiJoin, !signals.sqlIncludesAntiJoin {
+            missing.append("anti-join or NOT EXISTS for missing rows")
+            categories.append("missing anti-join/null filter")
+        }
+
+        if signals.requiresAverage {
+            if !signals.sqlIncludesAverage {
+                missing.append("AVG aggregate")
+                categories.append("missing aggregate")
+            }
+            if signals.requiresFirstResponseDifference,
+                !signals.sqlIncludesColumn("created_at") || !signals.sqlIncludesColumn("first_response_at")
+            {
+                missing.append("created_at and first_response_at for response time")
+                categories.append("wrong aggregate")
+            }
+        }
+
+        if signals.requiresGroupBy, !signals.sqlIncludesGroupBy {
+            missing.append("GROUP BY for requested grouping")
+            categories.append("missing group by")
+        }
+
+        if signals.requiresTopCount {
+            if !signals.sqlIncludesAggregateCount {
+                missing.append("aggregate count for top/frequent request")
+                categories.append("missing aggregate")
+            }
+            if !signals.sqlIncludesGroupBy {
+                missing.append("GROUP BY for top/frequent request")
+                categories.append("missing group by")
+            }
+            if !signals.sqlIncludesDescendingOrder {
+                missing.append("descending ORDER BY for top/frequent request")
+                categories.append("missing order/limit")
+            }
+            if !signals.topRequestAllowsAllRows, !signals.sqlIncludesLimit {
+                missing.append("LIMIT for top/frequent request")
+                categories.append("missing order/limit")
+            }
+        }
+
+        if let anchor = signals.explicitAnchor {
+            if signals.sqlUsesMovingCurrentTime {
+                missing.append("explicit date/time anchor instead of moving current time")
+                categories.append("moving current-time used for anchored question")
+            } else if !signals.sqlContainsAnchor(anchor) {
+                missing.append("explicit date/time anchor \(anchor.display)")
+                categories.append("missing anchored date window")
+            }
+        }
+
+        if missing.isEmpty {
+            return SchemaToolAgentSQLIntentCoverageResult(
+                decision: .covered,
+                reason: "terminal SQL covers deterministic intent signals",
+                semanticMismatchCategory: "unknown mismatch"
+            )
+        }
+
+        return SchemaToolAgentSQLIntentCoverageResult(
+            decision: .needsCorrection,
+            reason: "terminal SQL missed deterministic intent signals",
+            missingSignals: Array(Set(missing)).sorted(),
+            semanticMismatchCategory: dominantCategory(categories)
+        )
+    }
+
+    public static func semanticMismatchCategory(
+        question: String,
+        databaseContext: String,
+        evidence: OpenRouterSchemaToolEvidenceSummary,
+        sql: String,
+        comparatorMismatchCategory: String?
+    ) -> String {
+        let coverage = evaluate(
+            question: question,
+            databaseContext: databaseContext,
+            evidence: evidence,
+            sql: sql
+        )
+        if coverage.decision == .needsCorrection {
+            return coverage.semanticMismatchCategory
+        }
+        switch comparatorMismatchCategory {
+        case "missingCandidateColumn", "unexpectedExtraColumns", "ambiguousCandidateColumn":
+            return "wrong projected columns"
+        case "orderedRowMismatch":
+            return "row order mismatch"
+        default:
+            return "unknown mismatch"
+        }
+    }
+
+    private static func dominantCategory(_ categories: [String]) -> String {
+        guard !categories.isEmpty else { return "unknown mismatch" }
+        let counts = Dictionary(grouping: categories, by: { $0 }).mapValues(\.count)
+        return counts.sorted { lhs, rhs in
+            if lhs.value != rhs.value { return lhs.value > rhs.value }
+            return lhs.key < rhs.key
+        }.first?.key ?? "unknown mismatch"
+    }
+
+    private struct IntentSignals {
+        var question: String
+        var databaseContext: String
+        var evidence: OpenRouterSchemaToolEvidenceSummary
+        var sql: String
+
+        private var questionTokens: Set<String> { Set(Self.tokens(in: question)) }
+        private var contextTokens: Set<String> { Set(Self.tokens(in: databaseContext)) }
+        private var combinedTokens: Set<String> { questionTokens.union(contextTokens) }
+        private var lowerQuestion: String { question.lowercased() }
+        private var lowerContext: String { databaseContext.lowercased() }
+        private var lowerSQL: String { sql.lowercased() }
+        private var columnNames: Set<String> {
+            Set(evidence.exposedColumnIDs.compactMap(Self.lastSQLPathComponent).map { $0.lowercased() })
+        }
+        private var selectExpressions: [String] {
+            Self.topLevelSelectExpressions(in: lowerSQL)
+        }
+
+        var statusTokens: Set<String> {
+            combinedTokens.intersection(Self.statusPhraseTokens)
+        }
+
+        var questionAsksForName: Bool {
+            questionTokens.contains("name") || questionTokens.contains("named")
+        }
+
+        var hasProtectedMetricAmbiguity: Bool {
+            questionTokens.intersection(Self.protectedMetricTerms).isEmpty == false
+                && !contextDefinesMetric
+        }
+
+        var metricClarificationQuestion: String {
+            if questionTokens.contains("healthy") {
+                return "Which metric should define healthy accounts?"
+            }
+            if questionTokens.contains("important") {
+                return "Which metric should define important feedback clusters?"
+            }
+            if questionTokens.contains("win") || questionTokens.contains("wins") {
+                return "Which metric should define wins?"
+            }
+            return "Which metric should define this request?"
+        }
+
+        var contextDefinesMetric: Bool {
+            let tokens = contextTokens
+            return !tokens.intersection(Self.metricDefinitionTokens).isEmpty
+                || lowerContext.contains(" means ")
+                || lowerContext.contains(" is ")
+                || lowerContext.contains(" records ")
+                || lowerContext.contains(" count ")
+        }
+
+        var requiresPersonEmailProjection: Bool {
+            columnNames.contains("email")
+                && !questionTokens.intersection(Self.personEntityTokens).isEmpty
+        }
+
+        var requiresGroupedPersonMetricEmailLabel: Bool {
+            requiresPersonEmailProjection
+                && sqlIncludesAggregateCountOrSum
+                && sqlIncludesGroupBy
+        }
+
+        var requiresCentsUnitPreservation: Bool {
+            let mentionsMoneyMetric = !questionTokens.intersection(Self.moneyMetricTokens).isEmpty
+                || !contextTokens.intersection(Self.moneyMetricTokens).isEmpty
+            return mentionsMoneyMetric
+                && columnNames.contains { $0.hasSuffix("_cents") }
+                && sqlAggregatesCentsColumn
+                && !combinedTokens.contains("dollars")
+                && !combinedTokens.contains("usd")
+        }
+
+        var sqlAggregatesCentsColumn: Bool {
+            lowerSQL.range(
+                of: #"\b(sum|avg)\s*\([^)]*_cents\b"#,
+                options: .regularExpression
+            ) != nil
+        }
+
+        var sqlScalesCentsToCurrency: Bool {
+            lowerSQL.range(of: #"/\s*100(?:\.0)?\b"#, options: .regularExpression) != nil
+        }
+
+        var sqlHasCentsAggregateAlias: Bool {
+            lowerSQL.range(
+                of: #"\b(sum|avg)\s*\([^)]*_cents[^)]*\)[^,]*\bas\s+\"?[a-z0-9_]*cents\"?\b"#,
+                options: .regularExpression
+            ) != nil
+        }
+
+        var requiresCountAlias: Bool {
+            questionTokens.contains("count")
+                || questionTokens.contains("frequent")
+        }
+
+        var sqlHasCountAlias: Bool {
+            lowerSQL.range(
+                of: #"\bcount\s*\([^)]*\)\s+as\s+\"?[a-z0-9_]*count[a-z0-9_]*\"?\b"#,
+                options: .regularExpression
+            ) != nil
+        }
+
+        var requiresFeedbackCountAlias: Bool {
+            questionTokens.contains("feedback")
+                && questionTokens.contains("frequent")
+                && lowerSQL.range(of: #"\bcount\s*\("#, options: .regularExpression) != nil
+        }
+
+        var sqlHasFeedbackCountAlias: Bool {
+            lowerSQL.range(
+                of: #"\bcount\s*\([^)]*\)\s+as\s+\"?(?:feedback_count|count)\"?\b"#,
+                options: .regularExpression
+            ) != nil
+        }
+
+        var requiresSeatCountAlias: Bool {
+            questionTokens.contains("seats")
+                && sqlIncludesAggregateCount
+        }
+
+        var sqlHasSeatCountAlias: Bool {
+            lowerSQL.range(
+                of: #"\bcount\s*\([^)]*\)\s+as\s+\"?(?:used_seats|[a-z0-9_]*seat_count[a-z0-9_]*)\"?\b"#,
+                options: .regularExpression
+            ) != nil
+        }
+
+        var unrequestedProjectionColumns: [String] {
+            var unrequested: [String] = []
+            if isAnchoredExpiringEntityList,
+                selectListIncludesColumn("created_at"),
+                !questionTokens.contains("created")
+            {
+                unrequested.append("created_at")
+            }
+            if isAnchoredExpiringEntityList,
+                selectListIncludesColumn("name"),
+                !questionAsksForName
+            {
+                unrequested.append("name")
+            }
+            if isAverageByCountryOnly {
+                for column in ["id", "name", "email"] where selectListIncludesColumn(column) {
+                    unrequested.append(column)
+                }
+            }
+            if isNullableMissingRelationshipList,
+                selectListIncludesColumn("cluster_id"),
+                !lowerQuestion.contains("cluster id")
+            {
+                unrequested.append("cluster_id")
+            }
+            return unrequested
+        }
+
+        var isAnchoredExpiringEntityList: Bool {
+            questionTokens.contains("expiring")
+                && explicitAnchor != nil
+                && columnNames.contains("expires_at")
+        }
+
+        var requiresActiveExpiringStatusPredicate: Bool {
+            isAnchoredExpiringEntityList && columnNames.contains("status")
+        }
+
+        var isAverageByCountryOnly: Bool {
+            requiresAverage
+                && questionTokens.contains("country")
+                && columnNames.contains("country")
+                && selectListIncludesColumn("country")
+        }
+
+        var isNullableMissingRelationshipList: Bool {
+            requiresAntiJoin
+                && questionTokens.contains("cluster")
+                && columnNames.contains("cluster_id")
+        }
+
+        var requiresActiveMembershipFromContext: Bool {
+            lowerContext.contains("active membership")
+                || lowerContext.contains("active organization membership")
+                || lowerContext.contains("active organization memberships")
+        }
+
+        var requiresSeatUsageActiveMembership: Bool {
+            lowerContext.contains("seat usage")
+                && lowerContext.contains("active")
+                && lowerContext.contains("membership")
+        }
+
+        var activeUserLastSeenAnchor: String? {
+            guard lowerContext.contains("active user") || lowerQuestion.contains("active user") else {
+                return nil
+            }
+            guard lowerContext.contains("last_seen_at") else { return nil }
+            return Self.firstDateLiteral(in: databaseContext)
+        }
+
+        var requiresAntiJoin: Bool {
+            questionTokens.contains("without")
+                || questionTokens.contains("never")
+                || lowerQuestion.range(of: #"\bno\s+[a-z0-9_]+"#, options: .regularExpression) != nil
+        }
+
+        var sqlIncludesAntiJoin: Bool {
+            lowerSQL.contains("not exists")
+                || (lowerSQL.contains("left join") && lowerSQL.contains(" is null"))
+                || lowerSQL.range(
+                    of: #"\b[a-z0-9_]*_id\b\s+is\s+null\b"#,
+                    options: .regularExpression
+                ) != nil
+        }
+
+        var requiresAverage: Bool {
+            !questionTokens.intersection(["average", "avg", "mean"]).isEmpty
+                || !contextTokens.intersection(["average", "avg", "mean"]).isEmpty
+        }
+
+        var sqlIncludesAverage: Bool {
+            lowerSQL.range(of: #"\bavg\s*\("#, options: .regularExpression) != nil
+        }
+
+        var requiresFirstResponseDifference: Bool {
+            (lowerQuestion.contains("first-response") || lowerQuestion.contains("first response"))
+                && lowerQuestion.contains("time")
+                && columnNames.contains("created_at")
+                && columnNames.contains("first_response_at")
+        }
+
+        var requiresGroupBy: Bool {
+            lowerQuestion.contains(" grouped by ")
+                || questionTokens.contains("per")
+                || (questionTokens.contains("by") && !requiresTopCount)
+        }
+
+        var sqlIncludesGroupBy: Bool {
+            lowerSQL.contains("group by")
+        }
+
+        var requiresTopCount: Bool {
+            questionTokens.contains("frequent")
+                || questionTokens.contains("top")
+                || (questionTokens.contains("most") && !isRecencyRequest)
+        }
+
+        var isRecencyRequest: Bool {
+            lowerQuestion.contains("most recent")
+                || lowerQuestion.contains("latest")
+        }
+
+        var topRequestAllowsAllRows: Bool {
+            lowerQuestion.contains("all ")
+                || lowerQuestion.contains("every ")
+        }
+
+        var sqlIncludesAggregateCount: Bool {
+            lowerSQL.range(of: #"\b(count|sum|avg|min|max)\s*\("#, options: .regularExpression) != nil
+        }
+
+        var sqlIncludesAggregateCountOrSum: Bool {
+            lowerSQL.range(of: #"\b(count|sum)\s*\("#, options: .regularExpression) != nil
+        }
+
+        var sqlIncludesDescendingOrder: Bool {
+            lowerSQL.contains("order by") && lowerSQL.contains(" desc")
+        }
+
+        var sqlIncludesLimit: Bool {
+            lowerSQL.range(of: #"\blimit\s+\d+\b"#, options: .regularExpression) != nil
+        }
+
+        var explicitAnchor: ExplicitAnchor? {
+            [question, databaseContext]
+                .compactMap(Self.firstExplicitAnchor)
+                .first
+        }
+
+        var sqlUsesMovingCurrentTime: Bool {
+            lowerSQL.contains("now()")
+                || lowerSQL.contains("current_date")
+                || lowerSQL.contains("current_timestamp")
+                || lowerSQL.contains("localtimestamp")
+        }
+
+        func evidenceSupportsStatus(_ status: String) -> Bool {
+            columnNames.contains("status")
+                || columnNames.contains("state")
+                || columnNames.contains(status)
+                || columnNames.contains("is_\(status)")
+                || columnNames.contains("\(status)_at")
+                || columnNames.contains("\(status)_date")
+                || columnNames.contains("\(status)_on")
+                || (status == "unresolved" && columnNames.contains("resolved_at"))
+                || (status == "active" && columnNames.contains("last_seen_at"))
+        }
+
+        func sqlIncludesStatusPredicate(for status: String) -> Bool {
+            if columnNames.contains("status") || columnNames.contains("state") {
+                if lowerSQL.range(
+                    of: #"\b(status|state)\b\s*(=|<>|!=|in|not\s+in|like|is)\b"#,
+                    options: .regularExpression
+                ) != nil {
+                    if status == "unresolved" {
+                        return lowerSQL.contains("unresolved")
+                            || lowerSQL.contains("resolved")
+                            || lowerSQL.contains("open")
+                    }
+                    return lowerSQL.contains(status)
+                }
+            }
+            if sqlIncludesBooleanPredicate(column: "is_\(status)") { return true }
+            if sqlIncludesBooleanPredicate(column: status) { return true }
+            if status == "unresolved" {
+                return lowerSQL.range(
+                    of: #"\bresolved_at\b\s+is\s+null\b"#,
+                    options: .regularExpression
+                ) != nil
+            }
+            if sqlIncludesColumn("\(status)_at") || sqlIncludesColumn("\(status)_date") {
+                return lowerSQL.range(
+                    of: #"\b"# + NSRegularExpression.escapedPattern(for: status) + #"(?:_at|_date|_on)\b\s+is\s+not\s+null\b"#,
+                    options: .regularExpression
+                ) != nil
+            }
+            return false
+        }
+
+        func sqlIncludesActiveMembershipPredicate() -> Bool {
+            sqlIncludesStatusPredicate(for: "active")
+                || sqlIncludesBooleanPredicate(column: "is_active")
+                || sqlIncludesBooleanPredicate(column: "active")
+        }
+
+        func sqlIncludesBooleanPredicate(column: String) -> Bool {
+            let escaped = NSRegularExpression.escapedPattern(for: column)
+            let patterns = [
+                #"\b"# + escaped + #"\b\s*=\s*(true|1)\b"#,
+                #"\b"# + escaped + #"\b\s+is\s+true\b"#,
+                #"\b"# + escaped + #"\b\s+is\s+not\s+false\b"#,
+                #"\bwhere\b[\s\S]*\b"# + escaped + #"\b(?!\s*,)"#,
+                #"\band\b[\s\S]*\b"# + escaped + #"\b(?!\s*,)"#,
+            ]
+            return patterns.contains { pattern in
+                lowerSQL.range(of: pattern, options: .regularExpression) != nil
+            }
+        }
+
+        func sqlIncludesColumn(_ column: String) -> Bool {
+            lowerSQL.range(
+                of: #"\b"# + NSRegularExpression.escapedPattern(for: column.lowercased()) + #"\b"#,
+                options: .regularExpression
+            ) != nil
+        }
+
+        func selectListIncludesColumn(_ column: String) -> Bool {
+            let escaped = NSRegularExpression.escapedPattern(for: column.lowercased())
+            return selectExpressions.contains { expression in
+                expression.range(of: #"\b"# + escaped + #"\b"#, options: .regularExpression) != nil
+            }
+        }
+
+        func sqlContainsDateLiteral(_ date: String) -> Bool {
+            lowerSQL.contains(date.lowercased())
+        }
+
+        func sqlContainsAnchor(_ anchor: ExplicitAnchor) -> Bool {
+            guard lowerSQL.contains(anchor.date) else { return false }
+            guard let time = anchor.time else { return true }
+            return lowerSQL.contains(time)
+                || lowerSQL.contains(time.dropLastSecondsIfZero)
+        }
+
+        private static func firstExplicitAnchor(in value: String) -> ExplicitAnchor? {
+            guard let match = value.range(
+                of: #"\b\d{4}-\d{2}-\d{2}(?:[ T]\d{2}:\d{2}(?::\d{2})?(?:\s*UTC|Z|[+-]\d{2}:?\d{2})?)?\b"#,
+                options: [.regularExpression, .caseInsensitive]
+            ) else { return nil }
+            let display = String(value[match])
+            let date = String(display.prefix(10)).lowercased()
+            let timeMatch = display.range(
+                of: #"\d{2}:\d{2}(?::\d{2})?"#,
+                options: .regularExpression
+            )
+            return ExplicitAnchor(
+                display: display,
+                date: date,
+                time: timeMatch.map { String(display[$0]).lowercased() }
+            )
+        }
+
+        private static func firstDateLiteral(in value: String) -> String? {
+            value.range(of: #"\b\d{4}-\d{2}-\d{2}\b"#, options: .regularExpression)
+                .map { String(value[$0]).lowercased() }
+        }
+
+        private static func topLevelSelectExpressions(in sql: String) -> [String] {
+            guard let selectRange = sql.range(of: #"\bselect\b"#, options: .regularExpression) else {
+                return []
+            }
+            var index = selectRange.upperBound
+            var depth = 0
+            var quote: Character?
+            var fromStart: String.Index?
+            while index < sql.endIndex {
+                let character = sql[index]
+                if let activeQuote = quote {
+                    if character == activeQuote { quote = nil }
+                    index = sql.index(after: index)
+                    continue
+                }
+                if character == "'" || character == "\"" {
+                    quote = character
+                    index = sql.index(after: index)
+                    continue
+                }
+                if character == "(" {
+                    depth += 1
+                } else if character == ")" {
+                    depth = max(0, depth - 1)
+                } else if depth == 0,
+                    sql[index...].range(of: #"^\s+from\b"#, options: .regularExpression) != nil
+                {
+                    fromStart = index
+                    break
+                }
+                index = sql.index(after: index)
+            }
+            guard let fromStart else { return [] }
+            let selectList = String(sql[selectRange.upperBound..<fromStart])
+            return splitTopLevelCommaList(selectList)
+        }
+
+        private static func splitTopLevelCommaList(_ value: String) -> [String] {
+            var expressions: [String] = []
+            var start = value.startIndex
+            var index = value.startIndex
+            var depth = 0
+            var quote: Character?
+            while index < value.endIndex {
+                let character = value[index]
+                if let activeQuote = quote {
+                    if character == activeQuote { quote = nil }
+                    index = value.index(after: index)
+                    continue
+                }
+                if character == "'" || character == "\"" {
+                    quote = character
+                    index = value.index(after: index)
+                    continue
+                }
+                if character == "(" {
+                    depth += 1
+                } else if character == ")" {
+                    depth = max(0, depth - 1)
+                } else if character == ",", depth == 0 {
+                    expressions.append(String(value[start..<index]).trimmingCharacters(in: .whitespacesAndNewlines))
+                    start = value.index(after: index)
+                }
+                index = value.index(after: index)
+            }
+            expressions.append(String(value[start...]).trimmingCharacters(in: .whitespacesAndNewlines))
+            return expressions.filter { !$0.isEmpty }
+        }
+
+        private static func tokens(in value: String) -> [String] {
+            value
+                .replacingOccurrences(
+                    of: #"([a-z0-9])([A-Z])"#,
+                    with: "$1 $2",
+                    options: .regularExpression
+                )
+                .lowercased()
+                .split { !$0.isLetter && !$0.isNumber }
+                .map(String.init)
+        }
+
+        private static func lastSQLPathComponent(_ value: String) -> String? {
+            value.split(separator: ".").last.map(String.init)
+        }
+
+        private static let statusPhraseTokens: Set<String> = [
+            "active", "failed", "paid", "resolved", "unresolved", "verified",
+        ]
+
+        private static let protectedMetricTerms: Set<String> = [
+            "best", "healthy", "important", "win", "winner", "wins",
+        ]
+
+        private static let metricDefinitionTokens: Set<String> = [
+            "count", "counts", "define", "defines", "mean", "means", "metric",
+            "record", "records", "revenue", "usage", "win", "wins",
+        ]
+
+        private static let personEntityTokens: Set<String> = [
+            "account", "accounts", "customer", "customers", "person", "people",
+            "user", "users",
+        ]
+
+        private static let moneyMetricTokens: Set<String> = [
+            "amount", "average", "avg", "order", "orders", "paid", "revenue",
+            "spend", "total", "value",
+        ]
+    }
+
+    private struct ExplicitAnchor: Equatable {
+        var display: String
+        var date: String
+        var time: String?
+    }
+}
+
+private extension String {
+    var dropLastSecondsIfZero: String {
+        hasSuffix(":00") ? String(dropLast(3)) : self
+    }
+}
