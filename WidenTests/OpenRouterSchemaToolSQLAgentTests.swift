@@ -460,6 +460,61 @@ struct OpenRouterSchemaToolSQLAgentTests {
         #expect(result.backendMetadata?.agentDiagnostics?.appSideRejectionReason == .clarificationRejected)
     }
 
+    @Test func fallbackSkipsContextResolvedWinnerAndAsksTimeField() async throws {
+        let schema = Self.makePreseasonSchema()
+        let chatTransport = ScriptedTransport { request, index in
+            switch index {
+            case 1:
+                return Self.assistantToolCalls([
+                    Self.toolCall(id: "search-skip-resolved", name: "search_schema", arguments: [
+                        "query": "preseason winner wins createdAt updatedAt",
+                        "limit": 4,
+                    ]),
+                ])
+            case 2:
+                let evaluations = try Self.tableHandle(
+                    named: #""public"."preseason_match_evaluation""#,
+                    in: request
+                )
+                let tools = try Self.tableHandle(named: #""public"."preseason_tool""#, in: request)
+                return Self.assistantToolCalls([
+                    Self.toolCall(id: "describe-skip-resolved", name: "describe_tables", arguments: [
+                        "table_ids": [evaluations, tools],
+                    ]),
+                ])
+            case 3:
+                return Self.assistantToolCalls([
+                    Self.toolCall(id: "over-budget-skip-resolved", name: "search_schema", arguments: [
+                        "query": "extra preseason metadata",
+                        "limit": 4,
+                    ]),
+                ])
+            default:
+                throw URLError(.badServerResponse)
+            }
+        }
+        let agent = makeAgent(
+            schema: schema,
+            chatTransport: chatTransport,
+            configuration: OpenRouterSchemaToolSQLAgentConfiguration(maximumSchemaToolCalls: 2)
+        )
+
+        let result = try await agent.generateSQL(
+            question: "Tools with the most wins in the last two weeks",
+            schema: schema,
+            context: SQLGenerationContext(),
+            config: SQLGenerationConfig(
+                databaseContext: "Each evaluation with a non-null winner_id records one win."
+            )
+        )
+
+        #expect(result.needsClarification)
+        #expect(result.clarificationQuestion?.contains("Which date should define the time window") == true)
+        #expect(result.clarificationQuestion?.contains("createdAt") == true)
+        #expect(result.clarificationQuestion?.contains("updatedAt") == true)
+        #expect(result.backendMetadata?.agentTerminalOutcome == "clarify_fallback")
+    }
+
     @Test func genericInspectedClarificationIsReplacedWithEvidenceQuestion() async throws {
         let schema = Self.makePreseasonSchema()
         let chatTransport = ScriptedTransport { request, index in
@@ -784,6 +839,53 @@ struct OpenRouterSchemaToolSQLAgentTests {
         #expect(result.backendMetadata?.agentTerminalOutcome == "clarify")
         #expect(result.backendMetadata?.agentDiagnostics?.terminalValidationFailureReason == nil)
         #expect(chatTransport.requests.count == 3)
+    }
+
+    @Test func temporalContextForDifferentEntityDoesNotRejectTimeClarification() async throws {
+        let schema = Self.makeAuditTimeSchema()
+        let clarification = "Which date should define the time window?"
+        let chatTransport = ScriptedTransport { request, index in
+            switch index {
+            case 1:
+                return Self.assistantToolCalls([
+                    Self.toolCall(id: "search-order-time-context", name: "search_schema", arguments: [
+                        "query": "orders created_at updated_at",
+                        "limit": 4,
+                    ]),
+                ])
+            case 2:
+                let orders = try Self.tableHandle(named: #""public"."orders""#, in: request)
+                return Self.assistantToolCalls([
+                    Self.toolCall(id: "describe-order-time-context", name: "describe_tables", arguments: [
+                        "table_ids": [orders],
+                    ]),
+                ])
+            case 3:
+                return Self.assistantToolCalls([
+                    Self.terminalClarification(
+                        id: "terminal-order-time-context",
+                        question: clarification
+                    ),
+                ])
+            default:
+                throw URLError(.badServerResponse)
+            }
+        }
+        let agent = makeAgent(schema: schema, chatTransport: chatTransport)
+
+        let result = try await agent.generateSQL(
+            question: "Show orders updated in the last week",
+            schema: schema,
+            context: SQLGenerationContext(),
+            config: SQLGenerationConfig(
+                databaseContext: "Use users.created_at for user windows."
+            )
+        )
+
+        #expect(result.needsClarification)
+        #expect(result.clarificationQuestion == clarification)
+        #expect(result.backendMetadata?.agentTerminalOutcome == "clarify")
+        #expect(result.backendMetadata?.agentDiagnostics?.terminalValidationFailureReason == nil)
     }
 
     @Test func contextResolvedClarificationFailsAfterCorrectionBudgetIsSpent() async throws {
@@ -2677,7 +2779,13 @@ struct OpenRouterSchemaToolSQLAgentTests {
                             type: "timestamp with time zone",
                             ordinal: 3
                         ),
-                        column("preseason_match_evaluation", "batch_id", type: "uuid", ordinal: 4),
+                        column(
+                            "preseason_match_evaluation",
+                            "updatedAt",
+                            type: "timestamp with time zone",
+                            ordinal: 4
+                        ),
+                        column("preseason_match_evaluation", "batch_id", type: "uuid", ordinal: 5),
                     ]
                 ),
                 TableInfo(

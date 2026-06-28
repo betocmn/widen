@@ -2019,9 +2019,11 @@ public enum GeneratedSQLPostprocessor {
         sql: String,
         databaseContext: String
     ) -> PendingClarification? {
-        let source = question + "\n" + databaseContext
-        guard let anchor = explicitWindowAnchor(in: source),
-            usesMovingCurrentTime(sql)
+        let sources = [question, databaseContext].filter {
+            !$0.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+        }
+        guard usesMovingCurrentTime(sql),
+            let anchor = sources.compactMap({ explicitWindowAnchor(in: $0) }).first
         else { return nil }
         let concept = SQLGroundingConcept(
             term: "time window anchor",
@@ -2034,7 +2036,7 @@ public enum GeneratedSQLPostprocessor {
             "Should the time window use the explicit anchor \(anchor) instead of the current time?"
         return PendingClarification(
             concept: concept,
-            originalQuestion: source,
+            originalQuestion: sources.joined(separator: "\n"),
             question: question,
             evidence: [anchor]
         )
@@ -2326,15 +2328,56 @@ public enum GeneratedSQLPostprocessor {
         guard !contextTokens.isEmpty else { return false }
         let matches = dateColumns.filter { candidate in
             let columnTokens = SchemaIndex.tokens(in: candidate.column.name)
+                .filter { !timeFieldColumnTokenStopWords.contains($0) }
             guard columnTokens.contains(where: {
                 tokenSet(contextTokens, containsRelatedTo: $0)
             }) else { return false }
+            if let owners = qualifiedOwnersForColumn(candidate.column.name, in: databaseContext),
+                !owners.isEmpty
+            {
+                let tableTokens = SchemaIndex.tokens(in: candidate.table.name)
+                return owners.contains { owner in
+                    tableTokens.contains { tableToken in
+                        tokenSet(Set(SchemaIndex.tokens(in: owner)), containsRelatedTo: tableToken)
+                    }
+                }
+            }
             let tableTokens = SchemaIndex.tokens(in: candidate.table.name)
-            return tableTokens.contains(where: {
+            let contextMentionsCandidateTable = tableTokens.contains(where: {
                 tokenSet(contextTokens, containsRelatedTo: $0)
             })
+            return contextMentionsCandidateTable || dateColumns.count == 1
+                || !contextContainsQualifiedIdentifier(databaseContext)
         }
         return matches.count == 1
+    }
+
+    private static let timeFieldColumnTokenStopWords: Set<String> = [
+        "at", "date", "time", "timestamp",
+    ]
+
+    private static func qualifiedOwnersForColumn(_ column: String, in text: String) -> Set<String>? {
+        let escapedColumn = NSRegularExpression.escapedPattern(for: column)
+        let pattern =
+            #"(?i)\b(?:[a-z_][a-z0-9_]*\s*\.\s*)?([a-z_][a-z0-9_]*)\s*\.\s*\"?"#
+                + escapedColumn + #"\"?\b"#
+        guard let regex = try? NSRegularExpression(pattern: pattern) else { return nil }
+        let range = NSRange(text.startIndex..<text.endIndex, in: text)
+        var owners = Set<String>()
+        for match in regex.matches(in: text, range: range) {
+            guard match.numberOfRanges > 1,
+                let ownerRange = Range(match.range(at: 1), in: text)
+            else { continue }
+            owners.insert(String(text[ownerRange]))
+        }
+        return owners
+    }
+
+    private static func contextContainsQualifiedIdentifier(_ text: String) -> Bool {
+        text.range(
+            of: #"(?i)\b[a-z_][a-z0-9_]*\s*\.\s*\"?[a-z_][a-z0-9_]*\"?\b"#,
+            options: .regularExpression
+        ) != nil
     }
 
     private static func notRequiredConcepts(_ question: String) -> [SQLGroundingConcept] {

@@ -1626,6 +1626,33 @@ struct SQLSchemaValidatorTests {
         #expect(enriched.sql.contains("NOW() - INTERVAL '7 days'"))
     }
 
+    @Test func unrelatedContextAnchorDoesNotClarifyMovingQuestionWindow() {
+        let generation = SQLGenerationResult(
+            sql: """
+                SELECT id
+                FROM public.jobs
+                WHERE finished_at >= NOW() - INTERVAL '7 days'
+                """,
+            explanation: "Finds recently finished jobs.",
+            assumptions: [],
+            referencedTables: [],
+            confidence: 1,
+            riskLevel: .low,
+            needsClarification: false,
+            clarificationQuestion: nil
+        )
+
+        let enriched = GeneratedSQLPostprocessor.enriched(
+            generation,
+            question: "Which jobs finished in the last 7 days?",
+            schema: makeIntervalSchema(),
+            databaseContext: "The backfill ran as of 2026-01-01."
+        )
+
+        #expect(!enriched.needsClarification)
+        #expect(enriched.sql.contains("NOW() - INTERVAL '7 days'"))
+    }
+
     @Test func fixedStartingWindowWithMovingCurrentTimeClarifies() {
         let generation = SQLGenerationResult(
             sql: """
@@ -1707,6 +1734,33 @@ struct SQLSchemaValidatorTests {
         #expect(enriched.clarificationQuestion?.contains("finished_at") == true)
         #expect(enriched.clarificationQuestion?.contains("started_at") == true)
         #expect(enriched.clarificationQuestion?.contains("duration") == false)
+    }
+
+    @Test func columnOnlyTimeFieldContextSuppressesTimeClarification() {
+        let generation = SQLGenerationResult(
+            sql: """
+                SELECT id
+                FROM public.jobs
+                WHERE finished_at >= NOW() - INTERVAL '7 days'
+                """,
+            explanation: "Lists recently finished jobs.",
+            assumptions: [],
+            referencedTables: [],
+            confidence: 1,
+            riskLevel: .low,
+            needsClarification: false,
+            clarificationQuestion: nil
+        )
+
+        let enriched = GeneratedSQLPostprocessor.enriched(
+            generation,
+            question: "Which jobs finished in the last 7 days?",
+            schema: makeIntervalSchema(),
+            databaseContext: "Use finished_at for time windows."
+        )
+
+        #expect(!enriched.needsClarification)
+        #expect(enriched.sql.contains("finished_at >= NOW() - INTERVAL '7 days'"))
     }
 
     @Test func filterClarificationAsksAboutBusinessTermBeforeTimeFields() {

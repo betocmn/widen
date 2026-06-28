@@ -459,7 +459,14 @@ public final class OpenRouterSchemaToolSQLAgent: SQLGenerator, Sendable {
                                 question: question,
                                 clarification: terminalResult.clarificationQuestion
                             ),
-                            let fallbackQuestion = evidence.fallbackClarificationQuestion(for: question)
+                            let fallbackQuestion = evidence.fallbackClarificationQuestions(for: question)
+                                .first(where: {
+                                    !Self.databaseContextResolvesClarification(
+                                        databaseContext,
+                                        question: question,
+                                        clarification: $0
+                                    )
+                                })
                         {
                             finalTerminalResult = TerminalResult(
                                 action: .clarify,
@@ -845,12 +852,13 @@ public final class OpenRouterSchemaToolSQLAgent: SQLGenerator, Sendable {
         diagnostics: OpenRouterSchemaToolAgentDiagnosticState
     ) async throws -> SQLGenerationResult? {
         guard Self.canFallbackToInspectedClarification(failure.category),
-            let fallbackQuestion = evidence.fallbackClarificationQuestion(for: question),
-            !Self.databaseContextResolvesClarification(
-                databaseContext,
-                question: question,
-                clarification: fallbackQuestion
-            )
+            let fallbackQuestion = evidence.fallbackClarificationQuestions(for: question).first(where: {
+                !Self.databaseContextResolvesClarification(
+                    databaseContext,
+                    question: question,
+                    clarification: $0
+                )
+            })
         else { return nil }
         var fallbackAggregate = aggregate
         var fallbackDiagnostics = diagnostics
@@ -870,7 +878,6 @@ public final class OpenRouterSchemaToolSQLAgent: SQLGenerator, Sendable {
             inspectionSession: inspectionSession
         )
     }
-
     private func makeDatabaseInspectionSession(
         snapshot: SchemaSearchSnapshot
     ) throws -> DatabaseInspectionToolSession? {
@@ -1204,9 +1211,14 @@ public final class OpenRouterSchemaToolSQLAgent: SQLGenerator, Sendable {
         let definitionScopes = Self.databaseContextDefinitionScopes(in: databaseContext)
         guard !definitionScopes.isEmpty else { return false }
         if Self.isTimeWindowClarification(rawClarificationTokens) {
+            let questionTokens = Set(SchemaIndex.tokens(in: question))
             return definitionScopes.contains { scope in
                 !scope.rawTokens.isDisjoint(with: databaseContextTemporalTokens)
                     && Self.databaseContextContainsConcreteTemporalField(scope.text)
+                    && Self.databaseContextTemporalScopeMatchesQuestion(
+                        scope,
+                        questionTokens: questionTokens
+                    )
             }
         }
         return definitionScopes.contains { scope in
@@ -1223,6 +1235,18 @@ public final class OpenRouterSchemaToolSQLAgent: SQLGenerator, Sendable {
         tokens.contains { token in
             !databaseContextGenericDefinitionOverlapTokens.contains(token)
         }
+    }
+
+    private static func databaseContextTemporalScopeMatchesQuestion(
+        _ scope: DatabaseContextDefinitionScope,
+        questionTokens: Set<String>
+    ) -> Bool {
+        let scopeSpecific = scope.tokens.subtracting(databaseContextTemporalRelevanceStopWords)
+        if scopeSpecific.isEmpty {
+            return true
+        }
+        let questionSpecific = questionTokens.subtracting(databaseContextTemporalRelevanceStopWords)
+        return !scopeSpecific.isDisjoint(with: questionSpecific)
     }
 
     private static func databaseContextDefinitionScopes(
@@ -1303,8 +1327,9 @@ public final class OpenRouterSchemaToolSQLAgent: SQLGenerator, Sendable {
     ]
 
     private static let databaseContextTemporalTokens: Set<String> = [
-        "created", "date", "dated", "ended", "ending", "occurred", "scheduled",
-        "time", "timestamp", "timestamps", "updated", "window",
+        "created", "date", "dated", "ended", "ending", "finish", "finished",
+        "occurred", "scheduled", "start", "started", "starts", "time", "timestamp",
+        "timestamps", "updated", "window", "windows",
     ]
 
     private static let databaseContextGenericDefinitionOverlapTokens: Set<String> = {
@@ -1322,6 +1347,18 @@ public final class OpenRouterSchemaToolSQLAgent: SQLGenerator, Sendable {
         "timestamps", "time", "date", "which", "what", "column", "condition",
         "table", "question",
     ]
+
+    private static let databaseContextTemporalRelevanceStopWords: Set<String> =
+        databaseContextAuthorityStopWords
+        .union(databaseContextTemporalTokens)
+        .union(databaseContextGenericDefinitionOverlapTokens)
+        .union(databaseContextStrongDefinitionTokens)
+        .union(databaseContextUseDefinitionTokens)
+        .union([
+            "day", "days", "hour", "hours", "last", "minute", "minutes", "month",
+            "months", "one", "past", "previous", "recent", "rolling", "seven", "six",
+            "ten", "three", "two", "week", "weeks", "year", "years",
+        ])
 
     private func checkStaleSnapshot(expected: String) async throws {
         guard let currentSchemaFingerprint else { return }
@@ -1843,17 +1880,25 @@ private struct SchemaToolEvidenceLedger {
     }
 
     func fallbackClarificationQuestion(for question: String) -> String? {
-        guard hasSuccessfulSearch, !describedTables.isEmpty else { return nil }
+        fallbackClarificationQuestions(for: question).first
+    }
+
+    func fallbackClarificationQuestions(for question: String) -> [String] {
+        guard hasSuccessfulSearch, !describedTables.isEmpty else { return [] }
+        var questions: [String] = []
         if let winner = winnerAmbiguityQuestion(for: question) {
-            return winner
+            questions.append(winner)
         }
         if let time = timeFieldAmbiguityQuestion(for: question) {
-            return time
+            questions.append(time)
         }
         if let relationship = relationshipAmbiguityQuestion(for: question) {
-            return relationship
+            questions.append(relationship)
         }
-        return metricAmbiguityQuestion(for: question)
+        if let metric = metricAmbiguityQuestion(for: question) {
+            questions.append(metric)
+        }
+        return questions
     }
 
     private func winnerAmbiguityQuestion(for question: String) -> String? {
