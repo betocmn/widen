@@ -48,6 +48,7 @@ PR 2 + PR 5 + PR 6
 PR 7 + PR 8 + PR 11 + eval evidence
   └── PR 12 ✅ — Backend defaults, older macOS, release gate [done 2026-06-26]
       └── PR 13 — Release-gate triage and schema-tool agent fixes
+          └── PR 14 — Resumable, budget-aware release-gate evals
 ```
 
 ---
@@ -1263,6 +1264,186 @@ If the target numbers are not met, commit the triage report and focused test res
 
 ---
 
+# PR 14 — Resumable, budget-aware release-gate evals
+
+Suggested title:
+
+```text
+test: make release-gate evals resumable and budget-aware
+```
+
+Start from latest `main` after PR 49.
+
+## Goal
+
+Make the OpenRouter release-gate workflow practical to run repeatedly without
+wasting provider credits. PR 49 improved the agent and added triage, but the
+full `make eval-release` run hit the provider key's total limit after only 8
+evaluated results. Before another accuracy pass, make the release gate
+resumable, partial-run aware, and cost/budget visible.
+
+## Do not change
+
+* Production prompts.
+* Schema-tool agent behavior.
+* SQL validation or repair.
+* Eval fixture goldens.
+* Seeded DB data.
+* Backend defaults.
+* Local Foundation Models behavior.
+* Privacy policy.
+* Release-gate thresholds.
+
+## Implementation
+
+Add resumable eval CLI support:
+
+```text
+--resume-run <path-to-run-directory-or-run.json>
+--resume-missing
+--resume-failed
+--resume-case-status <status[,status...]>
+```
+
+Resuming loads the previous `run.json` manifest and `cases.jsonl`, validates
+compatibility, writes a new run directory, records `parentRunID`/`resumedFrom`,
+preserves repeat indexes exactly, reuses compatible results, and reruns only
+missing, failed, or explicitly selected statuses.
+
+Compatibility checks must include:
+
+* Suite name, version, and hash.
+* Schema fixture hashes.
+* Model ID.
+* Backend.
+* Cloud-agent mode.
+* Semantic DB setting.
+* Scorer/evaluator source hashes.
+* Selected release-gate version when applicable.
+
+Add budget controls:
+
+```text
+--max-cloud-cost-usd <decimal>
+--max-http-attempts <int>
+--max-completed-results <int>
+--stop-before-provider-limit
+```
+
+Budget stops should stop cleanly, write all normal artifacts for partial runs,
+avoid classifying budget stops as transport/model failures, and make release
+gate runs fail incomplete when fewer than the expected results were evaluated.
+
+Update eval and release-gate reporting to show:
+
+* Complete versus partial status.
+* Expected results.
+* Actual completed results.
+* Missing result count.
+* Skipped budget count.
+* `resumedFrom`, if any.
+
+Release-gate failures should say:
+
+```text
+Release gate incomplete: only X/Y expected results were evaluated.
+```
+
+Keep incomplete-run failures separate from normal threshold failures.
+
+Add focused commands:
+
+```makefile
+make eval-release-preseason MODEL=openai/gpt-5.5
+make eval-release-resume MODEL=openai/gpt-5.5 RESUME=<path>
+```
+
+The preseason command runs only:
+
+```text
+preseason.top-wins-ambiguous
+preseason.top-wins-defined
+```
+
+with cloud backend, schema-tool agent, semantic DB grading, `--repeat 3`, and
+release triage output.
+
+The resume command runs:
+
+```text
+WidenEval --resume-run "$(RESUME)" --resume-missing --release-gate-version "$(RELEASE_VERSION)" --write-release-triage
+```
+
+When OpenRouter returns structured credits, payment, or provider-limit failures,
+classify them distinctly from generic generation or transport failures and make
+the eval summary state that provider budget was unavailable.
+
+For incomplete triage reports:
+
+* Show categories for evaluated failures.
+* Add a "Not Evaluated" section listing missing case IDs and repeats.
+* Highlight historical Preseason cases separately even if only one ran.
+* Do not imply pass/fail for cases that were not run.
+
+## Tests
+
+Add deterministic tests for:
+
+* Loading a previous run and reusing compatible results.
+* Rejecting resume with changed suite hash.
+* Rejecting resume with changed model, backend, or cloud-agent mode.
+* Rerunning only missing cases.
+* Rerunning only failed cases.
+* Preserving repeat indexes.
+* Writing a new run directory.
+* Release gate failing as incomplete when fewer than 60 expected results exist.
+* Triage working on partial runs.
+* Budget stops not becoming transport failures.
+* Provider-limit classification being distinct.
+* Makefile command behavior where testable.
+
+Use fake eval results and fake generators. Unit tests must not require
+OpenRouter.
+
+## Manual verification
+
+Run:
+
+```text
+make project
+make test
+```
+
+Then, if OpenRouter and Postgres env is available:
+
+```text
+make eval-release-preseason MODEL=openai/gpt-5.5
+```
+
+If that succeeds, run:
+
+```text
+make eval-release MODEL=openai/gpt-5.5
+```
+
+If it stops early due provider budget, immediately test resume:
+
+```text
+make eval-release-resume MODEL=openai/gpt-5.5 RESUME=<previous-run-dir>
+```
+
+## Acceptance
+
+* Release-gate evals can resume missing cases without rerunning completed cases.
+* Partial runs are clearly labeled incomplete.
+* Provider budget/credit failures are distinct from transport/model failures.
+* Triage reports work for complete and partial runs.
+* Focused Preseason release command exists.
+* No production text-to-SQL behavior changes.
+* `make test` passes.
+
+---
+
 # Recommended implementation order for one coding agent
 
 When only one agent is working:
@@ -1280,7 +1461,8 @@ When only one agent is working:
 10. PR 11 ✅ — Experimental local path
 11. PR 12 ✅ — Platform/default-backend decision
 12. PR 13 — Release-gate triage and schema-tool agent fixes
-13. PR 10 ⏸️ — Embedding experiment           [deferred 2026-06-26 — revisit after PR 12 and real app/eval testing]
+13. PR 14 — Resumable, budget-aware release-gate evals
+14. PR 10 ⏸️ — Embedding experiment           [deferred 2026-06-26 — revisit after PR 12 and real app/eval testing]
 ```
 
 The key discipline is to run the same 20 cases after every PR and reject changes that merely move failures from one stage to another.
