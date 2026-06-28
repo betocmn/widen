@@ -247,10 +247,12 @@ public struct TextToSQLEvalBudgetState: Equatable, Sendable {
         if let cost = result.metrics.estimatedCloudCostUSD {
             cloudCostUSD += Decimal(cost)
         }
-        if let attempts = result.metrics.openRouterAgentHTTPAttemptCount
-            ?? result.diagnostics.openRouterAttemptCount
-            ?? result.metrics.modelCallCount
-        {
+        let attemptCounts = [
+            result.metrics.modelCallCount,
+            result.metrics.openRouterAgentHTTPAttemptCount,
+            result.diagnostics.openRouterAttemptCount,
+        ].compactMap { $0 }
+        if let attempts = attemptCounts.max() {
             httpAttempts += attempts
         }
     }
@@ -341,10 +343,10 @@ public enum TextToSQLEvalResumeCompatibility {
         compare("suite name", previous.suiteName, current.suiteName, issues: &issues)
         compare("suite version", previous.suiteVersion, current.suiteVersion, issues: &issues)
         compare("suite file hash", previous.suiteFileHash, current.suiteFileHash, issues: &issues)
-        compare(
+        compareMatchingHashes(
             "schema fixture hashes",
-            canonical(previous.schemaFixtureHashes),
-            canonical(current.schemaFixtureHashes),
+            previous.schemaFixtureHashes,
+            current.schemaFixtureHashes,
             issues: &issues
         )
         compare("model", previous.model ?? "-", current.model ?? "-", issues: &issues)
@@ -373,10 +375,10 @@ public enum TextToSQLEvalResumeCompatibility {
             current.semanticComparatorSourceHash ?? "-",
             issues: &issues
         )
-        compare(
+        compareMatchingHashes(
             "semantic setup fixture hashes",
-            canonical(previous.setupFixtureHashes ?? [:]),
-            canonical(current.setupFixtureHashes ?? [:]),
+            previous.setupFixtureHashes ?? [:],
+            current.setupFixtureHashes ?? [:],
             issues: &issues
         )
 
@@ -410,8 +412,15 @@ public enum TextToSQLEvalResumeCompatibility {
         )
     }
 
-    private static func canonical(_ dictionary: [String: String]) -> String {
-        dictionary.keys.sorted().map { "\($0)=\(dictionary[$0] ?? "")" }.joined(separator: ",")
+    private static func compareMatchingHashes(
+        _ field: String,
+        _ previous: [String: String],
+        _ current: [String: String],
+        issues: inout [TextToSQLEvalResumeCompatibilityIssue]
+    ) {
+        for key in Set(previous.keys).intersection(current.keys).sorted() {
+            compare("\(field)[\(key)]", previous[key] ?? "", current[key] ?? "", issues: &issues)
+        }
     }
 }
 

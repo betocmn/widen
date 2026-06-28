@@ -8,6 +8,7 @@ public struct OpenRouterSchemaToolSQLAgentConfiguration: Equatable, Sendable {
     public var maximumMalformedTerminalCorrections: Int
     public var maximumRepeatedToolCorrections: Int
     public var maximumHTTPAttempts: Int
+    public var countCapabilityLookupHTTPAttempts: Bool
     public var wallClockTimeoutSeconds: TimeInterval
 
     public init(
@@ -17,6 +18,7 @@ public struct OpenRouterSchemaToolSQLAgentConfiguration: Equatable, Sendable {
         maximumMalformedTerminalCorrections: Int = 1,
         maximumRepeatedToolCorrections: Int = 1,
         maximumHTTPAttempts: Int = 12,
+        countCapabilityLookupHTTPAttempts: Bool = false,
         wallClockTimeoutSeconds: TimeInterval = 90
     ) {
         self.maximumSchemaToolCalls = maximumSchemaToolCalls
@@ -25,6 +27,7 @@ public struct OpenRouterSchemaToolSQLAgentConfiguration: Equatable, Sendable {
         self.maximumMalformedTerminalCorrections = maximumMalformedTerminalCorrections
         self.maximumRepeatedToolCorrections = maximumRepeatedToolCorrections
         self.maximumHTTPAttempts = maximumHTTPAttempts
+        self.countCapabilityLookupHTTPAttempts = countCapabilityLookupHTTPAttempts
         self.wallClockTimeoutSeconds = wallClockTimeoutSeconds
     }
 
@@ -197,10 +200,37 @@ public final class OpenRouterSchemaToolSQLAgent: SQLGenerator, Sendable {
         context: SQLGenerationContext,
         config: SQLGenerationConfig
     ) async throws -> SQLGenerationResult {
-        let capabilities = await catalogService.capabilitiesForGeneration(
-            apiKey: apiKey,
-            modelID: model
-        )
+        var aggregate = OpenRouterAgentMetadataAccumulator(requestedModelID: model)
+        let capabilities: OpenRouterModelCapabilities
+        if configuration.countCapabilityLookupHTTPAttempts {
+            let lookup = await catalogService.capabilitiesForGeneration(
+                apiKey: apiKey,
+                modelID: model,
+                maximumHTTPRequests: configuration.maximumHTTPAttempts
+            )
+            aggregate.httpAttemptCount += lookup.httpRequestCount
+            capabilities = lookup.capabilities
+        } else {
+            capabilities = await catalogService.capabilitiesForGeneration(
+                apiKey: apiKey,
+                modelID: model
+            )
+        }
+        if configuration.countCapabilityLookupHTTPAttempts,
+            aggregate.httpAttemptCount >= configuration.maximumHTTPAttempts
+        {
+            var metadata = aggregate.metadata(
+                contextModelCallCount: context.modelCallCount,
+                schemaToolCalls: [],
+                inspectionToolCalls: []
+            )
+            metadata.agentSelectionReason = "tools"
+            throw OpenRouterSchemaToolAgentFailure(
+                category: .modelTurnBudgetExhausted,
+                message: "The schema-tool agent exhausted its OpenRouter HTTP-attempt budget.",
+                backendMetadata: metadata
+            )
+        }
         if !capabilities.supportsTools,
             Self.canUseLegacyForKnownUnsupportedTools(capabilities)
         {
@@ -211,6 +241,14 @@ public final class OpenRouterSchemaToolSQLAgent: SQLGenerator, Sendable {
                 config: config
             )
             result.backendMetadata?.agentSelectionReason = "legacy_unsupported_tools"
+            if configuration.countCapabilityLookupHTTPAttempts, aggregate.httpAttemptCount > 0 {
+                result.generationCallCount = (result.generationCallCount ?? 0)
+                    + aggregate.httpAttemptCount
+                if var metadata = result.backendMetadata {
+                    metadata.requestCount += aggregate.httpAttemptCount
+                    result.backendMetadata = metadata
+                }
+            }
             return result
         }
 
@@ -225,7 +263,6 @@ public final class OpenRouterSchemaToolSQLAgent: SQLGenerator, Sendable {
         let inspectionSession = try makeDatabaseInspectionSession(snapshot: snapshot)
         var evidence = SchemaToolEvidenceLedger(schema: schema)
         var diagnostics = OpenRouterSchemaToolAgentDiagnosticState()
-        var aggregate = OpenRouterAgentMetadataAccumulator(requestedModelID: model)
         var seenProviderCallIDs = Set<String>()
         var seenToolSignatures = Set<String>()
         var malformedTerminalCorrections = 0
@@ -677,6 +714,9 @@ public final class OpenRouterSchemaToolSQLAgent: SQLGenerator, Sendable {
                         attempt: attempt,
                         noContentRetries: max(0, noContentRetries - 1)
                     ) {
+                        guard aggregate.httpAttemptCount < configuration.maximumHTTPAttempts else {
+                            throw failure.withAttemptCount(attempt)
+                        }
                         attempt += 1
                         aggregate.retryCount += 1
                         try await sleep(delay, deadline: deadline)
@@ -705,6 +745,9 @@ public final class OpenRouterSchemaToolSQLAgent: SQLGenerator, Sendable {
                     attempt: attempt,
                     noContentRetries: noContentRetries
                 ) {
+                    guard aggregate.httpAttemptCount < configuration.maximumHTTPAttempts else {
+                        throw failure.withAttemptCount(attempt)
+                    }
                     attempt += 1
                     aggregate.retryCount += 1
                     try await sleep(delay, deadline: deadline)

@@ -38,6 +38,42 @@ struct TextToSQLEvalRunPlanningTests {
         }
     }
 
+    @Test func compatibilityAllowsSelectedFixtureSubset() throws {
+        var previous = Self.compatibility()
+        previous.schemaFixtureHashes = [
+            "commerce": "commerce-hash",
+            "preseason": "preseason-hash",
+        ]
+        previous.setupFixtureHashes = [
+            "commerce": "commerce-setup-hash",
+            "preseason": "preseason-setup-hash",
+        ]
+        var current = previous
+        current.schemaFixtureHashes = ["preseason": "preseason-hash"]
+        current.setupFixtureHashes = ["preseason": "preseason-setup-hash"]
+
+        try TextToSQLEvalResumeCompatibility.validate(previous: previous, current: current)
+    }
+
+    @Test func compatibilityRejectsChangedSharedFixtureHash() {
+        var previous = Self.compatibility()
+        previous.schemaFixtureHashes = [
+            "commerce": "commerce-hash",
+            "preseason": "preseason-hash",
+        ]
+        var current = previous
+        current.schemaFixtureHashes = ["preseason": "changed"]
+
+        do {
+            try TextToSQLEvalResumeCompatibility.validate(previous: previous, current: current)
+            Issue.record("Expected compatibility rejection.")
+        } catch let error as TextToSQLEvalResumeCompatibilityError {
+            #expect(error.issues.map(\.field).contains("schema fixture hashes[preseason]"))
+        } catch {
+            Issue.record("Unexpected error: \(error)")
+        }
+    }
+
     @Test func compatibilityRejectsChangedModelBackendAndCloudAgent() {
         var current = Self.compatibility()
         current.model = "other/model"
@@ -201,6 +237,26 @@ struct TextToSQLEvalRunPlanningTests {
         #expect(state.stopReasonBeforeNextResult(backend: .cloud) == "Eval OpenRouter HTTP-attempt budget reached (2/2).")
     }
 
+    @Test func httpBudgetUsesCumulativeModelCallsForRepairedAgentResults() {
+        let reused = [
+            Self.result(
+                caseID: "case.a",
+                repeatIndex: 1,
+                status: .passed,
+                modelCallCount: 3,
+                openRouterHTTPAttempts: 1
+            ),
+        ]
+
+        let state = TextToSQLEvalBudgetState(
+            limits: TextToSQLEvalBudgetLimits(maxHTTPAttempts: 3),
+            seedResults: reused
+        )
+
+        #expect(state.httpAttempts == 3)
+        #expect(state.stopReasonBeforeNextResult(backend: .cloud) == "Eval OpenRouter HTTP-attempt budget reached (3/3).")
+    }
+
     @Test func makefileContainsFocusedReleaseCommands() throws {
         let testFile = URL(fileURLWithPath: #filePath)
         let makefile = testFile
@@ -235,6 +291,7 @@ struct TextToSQLEvalRunPlanningTests {
         repeatIndex: Int,
         status: TextToSQLEvalCaseStatus,
         endToEndPassed: Bool? = nil,
+        modelCallCount: Int? = nil,
         openRouterHTTPAttempts: Int? = nil
     ) -> TextToSQLEvalResult {
         TextToSQLEvalResult(
@@ -249,6 +306,7 @@ struct TextToSQLEvalRunPlanningTests {
                 structuredResponseParsed: status == .passed,
                 decisionMatches: status == .passed,
                 latencyMs: 1,
+                modelCallCount: modelCallCount,
                 openRouterAgentHTTPAttemptCount: openRouterHTTPAttempts,
                 endToEndPassed: endToEndPassed
             )

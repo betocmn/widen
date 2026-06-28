@@ -45,6 +45,11 @@ public struct OpenRouterModelCapabilities: Codable, Equatable, Sendable {
     }
 }
 
+struct OpenRouterModelCapabilitiesLookup: Equatable, Sendable {
+    var capabilities: OpenRouterModelCapabilities
+    var httpRequestCount: Int
+}
+
 public struct OpenRouterPricing: Codable, Equatable, Sendable {
     public var prompt: String?
     public var completion: String?
@@ -645,6 +650,22 @@ actor OpenRouterModelCatalogService {
         return metadata.capabilities
     }
 
+    func capabilitiesForGeneration(
+        apiKey: String,
+        modelID: String,
+        maximumHTTPRequests: Int?
+    ) async -> OpenRouterModelCapabilitiesLookup {
+        let result = await metadataWithUsage(
+            apiKey: apiKey,
+            modelID: modelID,
+            maximumHTTPRequests: maximumHTTPRequests
+        )
+        return OpenRouterModelCapabilitiesLookup(
+            capabilities: result.metadata?.capabilities ?? .conservative(),
+            httpRequestCount: result.httpRequestCount
+        )
+    }
+
     func invalidate(apiKey: String? = nil, modelID: String? = nil) {
         loadDiskCacheIfNeeded()
         if let apiKey {
@@ -700,6 +721,56 @@ actor OpenRouterModelCatalogService {
             }
             throw error
         }
+    }
+
+    private func metadataWithUsage(
+        apiKey: String,
+        modelID: String,
+        maximumHTTPRequests: Int?
+    ) async -> (metadata: OpenRouterModelMetadata?, httpRequestCount: Int) {
+        var httpRequestCount = 0
+        do {
+            let shouldRequestCatalog = catalogLookupWillRequestHTTP(
+                apiKey: apiKey,
+                forceRefresh: false
+            )
+            if shouldRequestCatalog {
+                guard maximumHTTPRequests.map({ httpRequestCount < $0 }) ?? true else {
+                    return (nil, httpRequestCount)
+                }
+                httpRequestCount += 1
+            }
+            let catalog = try await catalog(apiKey: apiKey, forceRefresh: false)
+            if let model = Self.find(modelID, in: catalog.models) {
+                return (model, httpRequestCount)
+            }
+            guard maximumHTTPRequests.map({ httpRequestCount < $0 }) ?? true else {
+                return (nil, httpRequestCount)
+            }
+            httpRequestCount += 1
+            if let single = try await fetchSingleModel(apiKey: apiKey, modelID: modelID) {
+                merge(single, apiKey: apiKey)
+                return (single, httpRequestCount)
+            }
+            return (nil, httpRequestCount)
+        } catch is CancellationError {
+            return (nil, httpRequestCount)
+        } catch {
+            return (
+                staleCatalog(apiKey: apiKey)
+                    .map(staleCatalogWithSource)
+                    .flatMap { Self.find(modelID, in: $0.models) },
+                httpRequestCount
+            )
+        }
+    }
+
+    private func catalogLookupWillRequestHTTP(apiKey: String, forceRefresh: Bool) -> Bool {
+        guard !forceRefresh else { return true }
+        let key = Self.apiKeyFingerprint(apiKey)
+        loadDiskCacheIfNeeded()
+        guard let cached = memoryCache[key], isFresh(cached) else { return true }
+        return false
     }
 
     private func refreshValue(

@@ -1727,6 +1727,7 @@ private struct EvalCloudSchemaToolSQLGenerator: SQLGenerator, Sendable {
                 configuration.maximumHTTPAttempts,
                 max(1, maximumHTTPAttempts)
             )
+            configuration.countCapabilityLookupHTTPAttempts = true
         }
         return configuration
     }
