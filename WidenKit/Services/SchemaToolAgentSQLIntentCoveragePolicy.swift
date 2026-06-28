@@ -68,6 +68,47 @@ public enum SchemaToolAgentSQLIntentCoveragePolicy {
             }
         }
 
+        if signals.requiresPersonEmailProjection,
+            !signals.sqlIncludesColumn("email")
+        {
+            missing.append("email projection for person/customer entity")
+            categories.append("wrong projected columns")
+        }
+
+        if signals.requiresGroupedPersonMetricEmailLabel,
+            signals.sqlIncludesColumn("name"),
+            !signals.questionAsksForName
+        {
+            missing.append("use email instead of name for grouped person/customer metric")
+            categories.append("wrong projected columns")
+        }
+
+        if signals.requiresCentsUnitPreservation {
+            if signals.sqlScalesCentsToCurrency {
+                missing.append("preserve cents unit instead of dividing by 100")
+                categories.append("wrong aggregate")
+            }
+            if !signals.sqlHasCentsAggregateAlias {
+                missing.append("cents-valued aggregate alias")
+                categories.append("wrong projected columns")
+            }
+        }
+
+        if signals.requiresCountAlias, !signals.sqlHasCountAlias {
+            missing.append("count aggregate alias containing count")
+            categories.append("wrong projected columns")
+        }
+
+        if signals.requiresSeatCountAlias, !signals.sqlHasSeatCountAlias {
+            missing.append("seat count alias such as used_seats or seat_count")
+            categories.append("wrong projected columns")
+        }
+
+        for projection in signals.unrequestedProjectionColumns {
+            missing.append("remove unrequested projection \(projection)")
+            categories.append("wrong projected columns")
+        }
+
         if signals.requiresActiveMembershipFromContext,
             !signals.sqlIncludesActiveMembershipPredicate()
         {
@@ -211,9 +252,16 @@ public enum SchemaToolAgentSQLIntentCoveragePolicy {
         private var columnNames: Set<String> {
             Set(evidence.exposedColumnIDs.compactMap(Self.lastSQLPathComponent).map { $0.lowercased() })
         }
+        private var selectExpressions: [String] {
+            Self.topLevelSelectExpressions(in: lowerSQL)
+        }
 
         var statusTokens: Set<String> {
             combinedTokens.intersection(Self.statusPhraseTokens)
+        }
+
+        var questionAsksForName: Bool {
+            questionTokens.contains("name") || questionTokens.contains("named")
         }
 
         var hasProtectedMetricAmbiguity: Bool {
@@ -241,6 +289,79 @@ public enum SchemaToolAgentSQLIntentCoveragePolicy {
                 || lowerContext.contains(" is ")
                 || lowerContext.contains(" records ")
                 || lowerContext.contains(" count ")
+        }
+
+        var requiresPersonEmailProjection: Bool {
+            columnNames.contains("email")
+                && !questionTokens.intersection(Self.personEntityTokens).isEmpty
+        }
+
+        var requiresGroupedPersonMetricEmailLabel: Bool {
+            requiresPersonEmailProjection
+                && sqlIncludesAggregateCountOrSum
+                && sqlIncludesGroupBy
+        }
+
+        var requiresCentsUnitPreservation: Bool {
+            let mentionsMoneyMetric = !questionTokens.intersection(Self.moneyMetricTokens).isEmpty
+                || !contextTokens.intersection(Self.moneyMetricTokens).isEmpty
+            return mentionsMoneyMetric
+                && columnNames.contains { $0.hasSuffix("_cents") }
+                && !combinedTokens.contains("dollars")
+                && !combinedTokens.contains("usd")
+        }
+
+        var sqlScalesCentsToCurrency: Bool {
+            lowerSQL.range(of: #"/\s*100(?:\.0)?\b"#, options: .regularExpression) != nil
+        }
+
+        var sqlHasCentsAggregateAlias: Bool {
+            lowerSQL.range(
+                of: #"\b(sum|avg)\s*\([^)]*_cents[^)]*\)[^,]*\bas\s+\"?[a-z0-9_]*cents\"?\b"#,
+                options: .regularExpression
+            ) != nil
+        }
+
+        var requiresCountAlias: Bool {
+            questionTokens.contains("count")
+                || questionTokens.contains("frequent")
+        }
+
+        var sqlHasCountAlias: Bool {
+            lowerSQL.range(
+                of: #"\bcount\s*\([^)]*\)\s+as\s+\"?[a-z0-9_]*count[a-z0-9_]*\"?\b"#,
+                options: .regularExpression
+            ) != nil
+        }
+
+        var requiresSeatCountAlias: Bool {
+            questionTokens.contains("seats")
+                && sqlIncludesAggregateCount
+        }
+
+        var sqlHasSeatCountAlias: Bool {
+            lowerSQL.range(
+                of: #"\bcount\s*\([^)]*\)\s+as\s+\"?(?:used_seats|[a-z0-9_]*seat_count[a-z0-9_]*)\"?\b"#,
+                options: .regularExpression
+            ) != nil
+        }
+
+        var unrequestedProjectionColumns: [String] {
+            guard isAnchoredExpiringEntityList else { return [] }
+            var unrequested: [String] = []
+            if selectListIncludesColumn("created_at"), !questionTokens.contains("created") {
+                unrequested.append("created_at")
+            }
+            if selectListIncludesColumn("name"), !questionAsksForName {
+                unrequested.append("name")
+            }
+            return unrequested
+        }
+
+        var isAnchoredExpiringEntityList: Bool {
+            questionTokens.contains("expiring")
+                && explicitAnchor != nil
+                && columnNames.contains("expires_at")
         }
 
         var requiresActiveMembershipFromContext: Bool {
@@ -272,6 +393,10 @@ public enum SchemaToolAgentSQLIntentCoveragePolicy {
         var sqlIncludesAntiJoin: Bool {
             lowerSQL.contains("not exists")
                 || (lowerSQL.contains("left join") && lowerSQL.contains(" is null"))
+                || lowerSQL.range(
+                    of: #"\b[a-z0-9_]*_id\b\s+is\s+null\b"#,
+                    options: .regularExpression
+                ) != nil
         }
 
         var requiresAverage: Bool {
@@ -318,6 +443,10 @@ public enum SchemaToolAgentSQLIntentCoveragePolicy {
 
         var sqlIncludesAggregateCount: Bool {
             lowerSQL.range(of: #"\b(count|sum|avg|min|max)\s*\("#, options: .regularExpression) != nil
+        }
+
+        var sqlIncludesAggregateCountOrSum: Bool {
+            lowerSQL.range(of: #"\b(count|sum)\s*\("#, options: .regularExpression) != nil
         }
 
         var sqlIncludesDescendingOrder: Bool {
@@ -411,6 +540,13 @@ public enum SchemaToolAgentSQLIntentCoveragePolicy {
             ) != nil
         }
 
+        func selectListIncludesColumn(_ column: String) -> Bool {
+            let escaped = NSRegularExpression.escapedPattern(for: column.lowercased())
+            return selectExpressions.contains { expression in
+                expression.range(of: #"\b"# + escaped + #"\b"#, options: .regularExpression) != nil
+            }
+        }
+
         func sqlContainsDateLiteral(_ date: String) -> Bool {
             lowerSQL.contains(date.lowercased())
         }
@@ -445,6 +581,75 @@ public enum SchemaToolAgentSQLIntentCoveragePolicy {
                 .map { String(value[$0]).lowercased() }
         }
 
+        private static func topLevelSelectExpressions(in sql: String) -> [String] {
+            guard let selectRange = sql.range(of: #"\bselect\b"#, options: .regularExpression) else {
+                return []
+            }
+            var index = selectRange.upperBound
+            var depth = 0
+            var quote: Character?
+            var fromStart: String.Index?
+            while index < sql.endIndex {
+                let character = sql[index]
+                if let activeQuote = quote {
+                    if character == activeQuote { quote = nil }
+                    index = sql.index(after: index)
+                    continue
+                }
+                if character == "'" || character == "\"" {
+                    quote = character
+                    index = sql.index(after: index)
+                    continue
+                }
+                if character == "(" {
+                    depth += 1
+                } else if character == ")" {
+                    depth = max(0, depth - 1)
+                } else if depth == 0,
+                    sql[index...].range(of: #"^\s+from\b"#, options: .regularExpression) != nil
+                {
+                    fromStart = index
+                    break
+                }
+                index = sql.index(after: index)
+            }
+            guard let fromStart else { return [] }
+            let selectList = String(sql[selectRange.upperBound..<fromStart])
+            return splitTopLevelCommaList(selectList)
+        }
+
+        private static func splitTopLevelCommaList(_ value: String) -> [String] {
+            var expressions: [String] = []
+            var start = value.startIndex
+            var index = value.startIndex
+            var depth = 0
+            var quote: Character?
+            while index < value.endIndex {
+                let character = value[index]
+                if let activeQuote = quote {
+                    if character == activeQuote { quote = nil }
+                    index = value.index(after: index)
+                    continue
+                }
+                if character == "'" || character == "\"" {
+                    quote = character
+                    index = value.index(after: index)
+                    continue
+                }
+                if character == "(" {
+                    depth += 1
+                } else if character == ")" {
+                    depth = max(0, depth - 1)
+                } else if character == ",", depth == 0 {
+                    expressions.append(String(value[start..<index]).trimmingCharacters(in: .whitespacesAndNewlines))
+                    start = value.index(after: index)
+                }
+                index = value.index(after: index)
+            }
+            expressions.append(String(value[start...]).trimmingCharacters(in: .whitespacesAndNewlines))
+            return expressions.filter { !$0.isEmpty }
+        }
+
         private static func tokens(in value: String) -> [String] {
             value
                 .replacingOccurrences(
@@ -472,6 +677,16 @@ public enum SchemaToolAgentSQLIntentCoveragePolicy {
         private static let metricDefinitionTokens: Set<String> = [
             "count", "counts", "define", "defines", "mean", "means", "metric",
             "record", "records", "revenue", "usage", "win", "wins",
+        ]
+
+        private static let personEntityTokens: Set<String> = [
+            "account", "accounts", "customer", "customers", "person", "people",
+            "user", "users",
+        ]
+
+        private static let moneyMetricTokens: Set<String> = [
+            "amount", "average", "avg", "order", "orders", "paid", "revenue",
+            "spend", "total", "value",
         ]
     }
 

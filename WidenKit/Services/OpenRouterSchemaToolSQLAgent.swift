@@ -1542,6 +1542,7 @@ public final class OpenRouterSchemaToolSQLAgent: SQLGenerator, Sendable {
         - when ranking or counting entities, project and group by the entity table's stable id plus one human-readable label; prefer name over slug, and include slug only when the user asks for slugs or no name/title label exists;
         - keep entity identity output column names canonical, for example SELECT t.id, t.name instead of renaming them to tool_id or tool_name;
         - alias aggregate metrics with the user's metric term when clear, for example COUNT(*) AS wins for a wins question;
+        - preserve projection intent: for person/customer/user entities include email when inspected, keep money `_cents` aggregates in cents with a `_cents` alias unless dollars are requested, and use count-like aliases for COUNT metrics;
         - preserve requested intent in SQL: status/boolean filters, anti-joins for missing rows, AVG for averages, GROUP BY for per/by requests, count/order/limit for top/frequent requests, and explicit date anchors from the question or database context;
         - never replace an explicit date/time anchor with NOW(), CURRENT_DATE, or other moving current-time expressions;
         - do not infer business meaning from connectivity alone;

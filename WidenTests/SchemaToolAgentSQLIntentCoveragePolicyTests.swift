@@ -31,7 +31,7 @@ struct SchemaToolAgentSQLIntentCoveragePolicyTests {
                 "public.orders.total_cents",
             ]),
             sql: """
-                SELECT customer_id, SUM(total_cents) AS paid_revenue
+                SELECT customer_id, SUM(total_cents) AS paid_revenue_cents
                 FROM public.orders
                 WHERE status = 'paid'
                 GROUP BY customer_id
@@ -109,7 +109,134 @@ struct SchemaToolAgentSQLIntentCoveragePolicyTests {
             question: question,
             evidence: evidence,
             sql: """
-                SELECT c.country, AVG(o.total_cents) AS average_order_value
+                SELECT c.country, AVG(o.total_cents) AS average_order_value_cents
+                FROM public.customers AS c
+                JOIN public.orders AS o ON o.customer_id = c.id
+                WHERE o.status = 'paid'
+                GROUP BY c.country
+                """
+        )
+
+        #expect(covered.decision == .covered)
+    }
+
+    @Test func personEntityRequiresEmailProjectionWhenKnown() {
+        let missing = evaluate(
+            question: "Which customers have never placed an order?",
+            evidence: evidence(columns: [
+                "public.customers.id",
+                "public.customers.email",
+                "public.customers.name",
+                "public.orders.customer_id",
+            ]),
+            sql: """
+                SELECT c.id, c.name
+                FROM public.customers AS c
+                WHERE NOT EXISTS (
+                    SELECT 1 FROM public.orders AS o WHERE o.customer_id = c.id
+                )
+                """
+        )
+
+        #expect(missing.decision == .needsCorrection)
+        #expect(missing.missingSignals.contains("email projection for person/customer entity"))
+
+        let covered = evaluate(
+            question: "Which customers have never placed an order?",
+            evidence: evidence(columns: [
+                "public.customers.id",
+                "public.customers.email",
+                "public.customers.name",
+                "public.orders.customer_id",
+            ]),
+            sql: """
+                SELECT c.id, c.email, c.name
+                FROM public.customers AS c
+                WHERE NOT EXISTS (
+                    SELECT 1 FROM public.orders AS o WHERE o.customer_id = c.id
+                )
+                """
+        )
+
+        #expect(covered.decision == .covered)
+    }
+
+    @Test func groupedPersonMetricPrefersEmailLabelOverName() {
+        let missing = evaluate(
+            question: "Show total paid revenue per customer",
+            evidence: evidence(columns: [
+                "public.customers.id",
+                "public.customers.email",
+                "public.customers.name",
+                "public.orders.customer_id",
+                "public.orders.status",
+                "public.orders.total_cents",
+            ]),
+            sql: """
+                SELECT c.id, c.name, SUM(o.total_cents) AS paid_revenue_cents
+                FROM public.customers AS c
+                JOIN public.orders AS o ON o.customer_id = c.id
+                WHERE o.status = 'paid'
+                GROUP BY c.id, c.name
+                """
+        )
+
+        #expect(missing.decision == .needsCorrection)
+        #expect(missing.missingSignals.contains("email projection for person/customer entity"))
+        #expect(missing.missingSignals.contains("use email instead of name for grouped person/customer metric"))
+
+        let covered = evaluate(
+            question: "Show total paid revenue per customer",
+            evidence: evidence(columns: [
+                "public.customers.id",
+                "public.customers.email",
+                "public.customers.name",
+                "public.orders.customer_id",
+                "public.orders.status",
+                "public.orders.total_cents",
+            ]),
+            sql: """
+                SELECT c.id, c.email, SUM(o.total_cents) AS paid_revenue_cents
+                FROM public.customers AS c
+                JOIN public.orders AS o ON o.customer_id = c.id
+                WHERE o.status = 'paid'
+                GROUP BY c.id, c.email
+                """
+        )
+
+        #expect(covered.decision == .covered)
+    }
+
+    @Test func centsMoneyAggregateMustPreserveUnitAndAlias() {
+        let missing = evaluate(
+            question: "Average paid order value by customer country",
+            evidence: evidence(columns: [
+                "public.customers.country",
+                "public.orders.status",
+                "public.orders.total_cents",
+            ]),
+            sql: """
+                SELECT c.country, AVG(o.total_cents / 100.0) AS average_paid_order_value
+                FROM public.customers AS c
+                JOIN public.orders AS o ON o.customer_id = c.id
+                WHERE o.status = 'paid'
+                GROUP BY c.country
+                """
+        )
+
+        #expect(missing.decision == .needsCorrection)
+        #expect(missing.missingSignals.contains("preserve cents unit instead of dividing by 100"))
+        #expect(missing.missingSignals.contains("cents-valued aggregate alias"))
+
+        let covered = evaluate(
+            question: "Average paid order value by customer country",
+            evidence: evidence(columns: [
+                "public.customers.country",
+                "public.orders.status",
+                "public.orders.total_cents",
+            ]),
+            sql: """
+                SELECT c.country, AVG(o.total_cents) AS average_paid_order_value_cents
                 FROM public.customers AS c
                 JOIN public.orders AS o ON o.customer_id = c.id
                 WHERE o.status = 'paid'
@@ -154,6 +281,49 @@ struct SchemaToolAgentSQLIntentCoveragePolicyTests {
         #expect(covered.decision == .covered)
     }
 
+    @Test func anchoredExpiringListRejectsUnrequestedCreatedAtProjection() {
+        let missing = evaluate(
+            question: "Subscriptions expiring in the 30 days starting 2026-06-24",
+            evidence: evidence(columns: [
+                "public.subscription.id",
+                "public.subscription.organization_id",
+                "public.subscription.status",
+                "public.subscription.expires_at",
+                "public.subscription.created_at",
+            ]),
+            sql: """
+                SELECT id, organization_id, status, expires_at, created_at
+                FROM public.subscription
+                WHERE expires_at >= DATE '2026-06-24'
+                  AND expires_at < DATE '2026-06-24' + INTERVAL '30 days'
+                LIMIT 100
+                """
+        )
+
+        #expect(missing.decision == .needsCorrection)
+        #expect(missing.missingSignals.contains("remove unrequested projection created_at"))
+
+        let covered = evaluate(
+            question: "Subscriptions expiring in the 30 days starting 2026-06-24",
+            evidence: evidence(columns: [
+                "public.subscription.id",
+                "public.subscription.organization_id",
+                "public.subscription.status",
+                "public.subscription.expires_at",
+                "public.subscription.created_at",
+            ]),
+            sql: """
+                SELECT id, organization_id, status, expires_at
+                FROM public.subscription
+                WHERE expires_at >= DATE '2026-06-24'
+                  AND expires_at < DATE '2026-06-24' + INTERVAL '30 days'
+                LIMIT 100
+                """
+        )
+
+        #expect(covered.decision == .covered)
+    }
+
     @Test func activeUsersByOrgRequiresContextPredicates() {
         let question = "Active users by organization"
         let context = "An active user is a user with active membership and last_seen_at on or after 2026-06-01."
@@ -191,6 +361,49 @@ struct SchemaToolAgentSQLIntentCoveragePolicyTests {
                 WHERE m.active = TRUE
                   AND u.last_seen_at >= DATE '2026-06-01'
                 GROUP BY m.organization_id
+                """
+        )
+
+        #expect(covered.decision == .covered)
+    }
+
+    @Test func seatUsageRequiresSeatCountAlias() {
+        let question = "Organizations using more seats than purchased"
+        let context = "Seat usage is the count of active organization memberships."
+        let evidence = evidence(columns: [
+            "public.organization.id",
+            "public.organization.seats_purchased",
+            "public.organization_membership.organization_id",
+            "public.organization_membership.status",
+        ])
+        let missing = evaluate(
+            question: question,
+            databaseContext: context,
+            evidence: evidence,
+            sql: """
+                SELECT o.id, o.seats_purchased, COUNT(m.id) AS seat_usage
+                FROM public.organization AS o
+                JOIN public.organization_membership AS m ON m.organization_id = o.id
+                WHERE m.status = 'active'
+                GROUP BY o.id, o.seats_purchased
+                HAVING COUNT(m.id) > o.seats_purchased
+                """
+        )
+
+        #expect(missing.decision == .needsCorrection)
+        #expect(missing.missingSignals.contains("seat count alias such as used_seats or seat_count"))
+
+        let covered = evaluate(
+            question: question,
+            databaseContext: context,
+            evidence: evidence,
+            sql: """
+                SELECT o.id, o.seats_purchased, COUNT(m.id) AS used_seats
+                FROM public.organization AS o
+                JOIN public.organization_membership AS m ON m.organization_id = o.id
+                WHERE m.status = 'active'
+                GROUP BY o.id, o.seats_purchased
+                HAVING COUNT(m.id) > o.seats_purchased
                 """
         )
 
@@ -249,6 +462,7 @@ struct SchemaToolAgentSQLIntentCoveragePolicyTests {
 
         #expect(missing.decision == .needsCorrection)
         #expect(missing.missingSignals.contains("aggregate count for top/frequent request"))
+        #expect(missing.missingSignals.contains("count aggregate alias containing count"))
         #expect(missing.missingSignals.contains("descending ORDER BY for top/frequent request"))
         #expect(missing.missingSignals.contains("LIMIT for top/frequent request"))
 
@@ -262,6 +476,23 @@ struct SchemaToolAgentSQLIntentCoveragePolicyTests {
                 GROUP BY c.id, c.name
                 ORDER BY feedback_count DESC
                 LIMIT 1
+                """
+        )
+
+        #expect(covered.decision == .covered)
+    }
+
+    @Test func nullableForeignKeyWithoutPatternIsCoveredByNullFilter() {
+        let covered = evaluate(
+            question: "Show feedback items without a cluster",
+            evidence: evidence(columns: [
+                "public.feedback_item.id",
+                "public.feedback_item.cluster_id",
+            ]),
+            sql: """
+                SELECT id
+                FROM public.feedback_item
+                WHERE cluster_id IS NULL
                 """
         )
 
