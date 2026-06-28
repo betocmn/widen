@@ -1271,6 +1271,12 @@ struct TextToSQLPipelineTests {
             SQLGenerationFailure.structuredResponseParsing("Bad JSON."),
             TextToSQLFailureCategory.structuredResponseParsing
         ),
+        (
+            SQLGenerationFailure.httpBudgetExhausted(
+                OpenRouterHTTPAttemptBudgetExhausted(message: "HTTP budget exhausted.")
+            ),
+            TextToSQLFailureCategory.httpBudgetExhausted
+        ),
         (SQLGenerationFailure.generation("Refused."), TextToSQLFailureCategory.modelGeneration),
     ])
     func typedGeneratorFailuresRemainDistinct(

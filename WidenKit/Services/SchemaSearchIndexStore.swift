@@ -78,6 +78,10 @@ public actor SchemaSearchIndexStore {
         inFlightBuilds.removeAll()
     }
 
+    func inFlightBuildCount() -> Int {
+        inFlightBuilds.count
+    }
+
     private func finishBuild(
         _ build: InFlightSchemaIndexBuild,
         cacheID: String

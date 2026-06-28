@@ -8,6 +8,7 @@ public struct OpenRouterSchemaToolSQLAgentConfiguration: Equatable, Sendable {
     public var maximumMalformedTerminalCorrections: Int
     public var maximumRepeatedToolCorrections: Int
     public var maximumHTTPAttempts: Int
+    public var countCapabilityLookupHTTPAttempts: Bool
     public var wallClockTimeoutSeconds: TimeInterval
 
     public init(
@@ -17,6 +18,7 @@ public struct OpenRouterSchemaToolSQLAgentConfiguration: Equatable, Sendable {
         maximumMalformedTerminalCorrections: Int = 1,
         maximumRepeatedToolCorrections: Int = 1,
         maximumHTTPAttempts: Int = 12,
+        countCapabilityLookupHTTPAttempts: Bool = false,
         wallClockTimeoutSeconds: TimeInterval = 90
     ) {
         self.maximumSchemaToolCalls = maximumSchemaToolCalls
@@ -25,6 +27,7 @@ public struct OpenRouterSchemaToolSQLAgentConfiguration: Equatable, Sendable {
         self.maximumMalformedTerminalCorrections = maximumMalformedTerminalCorrections
         self.maximumRepeatedToolCorrections = maximumRepeatedToolCorrections
         self.maximumHTTPAttempts = maximumHTTPAttempts
+        self.countCapabilityLookupHTTPAttempts = countCapabilityLookupHTTPAttempts
         self.wallClockTimeoutSeconds = wallClockTimeoutSeconds
     }
 
@@ -39,6 +42,7 @@ public struct OpenRouterSchemaToolAgentFailure: Error, LocalizedError, Equatable
         case repeatedToolCallNoProgress
         case schemaToolCallBudgetExhausted
         case schemaToolByteBudgetExhausted
+        case httpAttemptBudgetExhausted
         case modelTurnBudgetExhausted
         case terminalResultMissing
         case terminalResultMalformed
@@ -83,6 +87,8 @@ public struct OpenRouterSchemaToolAgentFailure: Error, LocalizedError, Equatable
         case .malformedToolCall, .mixedTerminalAndSchemaCalls, .terminalResultMissing,
             .terminalResultMalformed, .modelTurnBudgetExhausted:
             .structuredResponseParsing
+        case .httpAttemptBudgetExhausted:
+            .httpBudgetExhausted
         case .safetyValidation:
             .safetyValidation
         case .repeatedToolCallNoProgress, .uninspectedSchemaObjects:
@@ -197,20 +203,95 @@ public final class OpenRouterSchemaToolSQLAgent: SQLGenerator, Sendable {
         context: SQLGenerationContext,
         config: SQLGenerationConfig
     ) async throws -> SQLGenerationResult {
-        let capabilities = await catalogService.capabilitiesForGeneration(
-            apiKey: apiKey,
-            modelID: model
-        )
+        var aggregate = OpenRouterAgentMetadataAccumulator(requestedModelID: model)
+        let capabilities: OpenRouterModelCapabilities
+        if configuration.countCapabilityLookupHTTPAttempts {
+            let lookup = await catalogService.capabilitiesForGeneration(
+                apiKey: apiKey,
+                modelID: model,
+                maximumHTTPRequests: configuration.maximumHTTPAttempts
+            )
+            aggregate.httpAttemptCount += lookup.httpRequestCount
+            capabilities = lookup.capabilities
+        } else {
+            capabilities = await catalogService.capabilitiesForGeneration(
+                apiKey: apiKey,
+                modelID: model
+            )
+        }
+        if configuration.countCapabilityLookupHTTPAttempts,
+            aggregate.httpAttemptCount >= configuration.maximumHTTPAttempts
+        {
+            var metadata = aggregate.metadata(
+                contextModelCallCount: context.modelCallCount,
+                schemaToolCalls: [],
+                inspectionToolCalls: []
+            )
+            metadata.agentSelectionReason = "tools"
+            throw OpenRouterSchemaToolAgentFailure(
+                category: .httpAttemptBudgetExhausted,
+                message: "The schema-tool agent exhausted its OpenRouter HTTP-attempt budget.",
+                backendMetadata: metadata
+            )
+        }
         if !capabilities.supportsTools,
             Self.canUseLegacyForKnownUnsupportedTools(capabilities)
         {
-            var result = try await legacyGenerator.generateSQL(
-                question: question,
-                schema: schema,
-                context: context,
-                config: config
-            )
+            let fallbackGenerator: any SQLGenerator
+            if configuration.countCapabilityLookupHTTPAttempts {
+                fallbackGenerator = OpenRouterSQLGenerator(
+                    apiKey: apiKey,
+                    model: model,
+                    transport: transport,
+                    catalogService: catalogService,
+                    requestBuilder: OpenRouterRequestBuilder(endpoint: requestBuilder.endpoint),
+                    retryPolicy: OpenRouterRetryPolicy(
+                        maxAttempts: max(
+                            1,
+                            configuration.maximumHTTPAttempts - aggregate.httpAttemptCount
+                        )
+                    ),
+                    countCapabilityLookupHTTPAttempts: false,
+                    preResolvedCapabilities: capabilities
+                )
+            } else {
+                fallbackGenerator = legacyGenerator
+            }
+            let fallbackResult: SQLGenerationResult
+            do {
+                fallbackResult = try await fallbackGenerator.generateSQL(
+                    question: question,
+                    schema: schema,
+                    context: context,
+                    config: config
+                )
+            } catch let failure as OpenRouterFailure
+                where configuration.countCapabilityLookupHTTPAttempts
+                    && aggregate.httpAttemptCount > 0
+            {
+                throw failure.withAttemptCount(
+                    failure.diagnostic.attemptCount + aggregate.httpAttemptCount
+                )
+            } catch var failure as OpenRouterHTTPAttemptBudgetExhausted
+                where configuration.countCapabilityLookupHTTPAttempts
+                    && aggregate.httpAttemptCount > 0
+            {
+                if var metadata = failure.backendMetadata {
+                    metadata.requestCount += aggregate.httpAttemptCount
+                    failure.backendMetadata = metadata
+                }
+                throw failure
+            }
+            var result = fallbackResult
             result.backendMetadata?.agentSelectionReason = "legacy_unsupported_tools"
+            if configuration.countCapabilityLookupHTTPAttempts, aggregate.httpAttemptCount > 0 {
+                result.generationCallCount = (result.generationCallCount ?? 0)
+                    + aggregate.httpAttemptCount
+                if var metadata = result.backendMetadata {
+                    metadata.requestCount += aggregate.httpAttemptCount
+                    result.backendMetadata = metadata
+                }
+            }
             return result
         }
 
@@ -225,7 +306,6 @@ public final class OpenRouterSchemaToolSQLAgent: SQLGenerator, Sendable {
         let inspectionSession = try makeDatabaseInspectionSession(snapshot: snapshot)
         var evidence = SchemaToolEvidenceLedger(schema: schema)
         var diagnostics = OpenRouterSchemaToolAgentDiagnosticState()
-        var aggregate = OpenRouterAgentMetadataAccumulator(requestedModelID: model)
         var seenProviderCallIDs = Set<String>()
         var seenToolSignatures = Set<String>()
         var malformedTerminalCorrections = 0
@@ -651,7 +731,7 @@ public final class OpenRouterSchemaToolSQLAgent: SQLGenerator, Sendable {
             try checkDeadline(deadline)
             guard aggregate.httpAttemptCount < configuration.maximumHTTPAttempts else {
                 throw OpenRouterSchemaToolAgentFailure(
-                    category: .modelTurnBudgetExhausted,
+                    category: .httpAttemptBudgetExhausted,
                     message: "The schema-tool agent exhausted its OpenRouter HTTP-attempt budget."
                 )
             }
@@ -677,6 +757,9 @@ public final class OpenRouterSchemaToolSQLAgent: SQLGenerator, Sendable {
                         attempt: attempt,
                         noContentRetries: max(0, noContentRetries - 1)
                     ) {
+                        guard aggregate.httpAttemptCount < configuration.maximumHTTPAttempts else {
+                            throw failure.withAttemptCount(attempt)
+                        }
                         attempt += 1
                         aggregate.retryCount += 1
                         try await sleep(delay, deadline: deadline)
@@ -705,6 +788,9 @@ public final class OpenRouterSchemaToolSQLAgent: SQLGenerator, Sendable {
                     attempt: attempt,
                     noContentRetries: noContentRetries
                 ) {
+                    guard aggregate.httpAttemptCount < configuration.maximumHTTPAttempts else {
+                        throw failure.withAttemptCount(attempt)
+                    }
                     attempt += 1
                     aggregate.retryCount += 1
                     try await sleep(delay, deadline: deadline)
@@ -1170,9 +1256,9 @@ public final class OpenRouterSchemaToolSQLAgent: SQLGenerator, Sendable {
         case .terminalResultMissing, .terminalResultMalformed, .mixedTerminalAndSchemaCalls,
             .malformedToolCall, .schemaToolCallBudgetExhausted, .schemaToolByteBudgetExhausted:
             true
-        case .unsupportedTools, .repeatedToolCallNoProgress, .modelTurnBudgetExhausted,
-            .safetyValidation, .uninspectedSchemaObjects, .staleSchemaSnapshot, .cancellation,
-            .openRouterRequestFailure:
+        case .unsupportedTools, .repeatedToolCallNoProgress, .httpAttemptBudgetExhausted,
+            .modelTurnBudgetExhausted, .safetyValidation, .uninspectedSchemaObjects,
+            .staleSchemaSnapshot, .cancellation, .openRouterRequestFailure:
             false
         }
     }
@@ -1537,6 +1623,7 @@ private struct OpenRouterSchemaToolAgentDiagnosticState {
         if appSideRejectionReason != nil { return }
         switch category {
         case .schemaToolCallBudgetExhausted, .schemaToolByteBudgetExhausted,
+            .httpAttemptBudgetExhausted,
             .modelTurnBudgetExhausted:
             appSideRejectionReason = .budgetExhausted
         case .terminalResultMalformed, .terminalResultMissing, .mixedTerminalAndSchemaCalls,

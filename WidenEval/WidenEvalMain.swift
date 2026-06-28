@@ -88,6 +88,7 @@ enum WidenEvalMain {
             print("Wrote eval results to \(output.directory.path)")
             print("Summary: \(output.summary.path)")
 
+            var wroteReleaseTriage = false
             if let releaseGateVersion = options.releaseGateVersion {
                 let gateOutput = try TextToSQLReleaseGateReporter.write(
                     run: run,
@@ -101,6 +102,7 @@ enum WidenEvalMain {
                         evalOutput: output,
                         copyVersion: options.releaseTriageVersion
                     )
+                    wroteReleaseTriage = true
                     print("Release gate triage: \(triageOutput.triage.path)")
                     if let copied = triageOutput.copiedSummary {
                         print("Copied sanitized triage summary: \(copied.path)")
@@ -112,6 +114,17 @@ enum WidenEvalMain {
                         stderr
                     )
                     exit(1)
+                }
+            }
+            if options.writeReleaseTriage, !wroteReleaseTriage {
+                let triageOutput = try TextToSQLReleaseTriageReporter.write(
+                    run: run,
+                    evalOutput: output,
+                    copyVersion: options.releaseTriageVersion
+                )
+                print("Release gate triage: \(triageOutput.triage.path)")
+                if let copied = triageOutput.copiedSummary {
+                    print("Copied sanitized triage summary: \(copied.path)")
                 }
             }
 
@@ -168,12 +181,24 @@ enum EvalCloudAgentMode: String {
     case tools
 }
 
+enum EvalExplicitOption: Hashable {
+    case backendMode
+    case cloudAgentMode
+    case model
+    case suitePath
+    case repeatCount
+    case caseTimeoutSeconds
+    case releaseGateVersion
+    case semanticDatabase
+}
+
 struct EvalCLIOptions {
     var backendMode: EvalBackendMode = .local
     var cloudAgentMode: EvalCloudAgentMode = .legacy
     var model: String = "openai/gpt-5.5"
     var suitePath: String = "Evals/suites/text-to-sql-v1.json"
     var caseID: String?
+    var caseIDs: [String] = []
     var repeatCount: Int = 1
     var caseTimeoutSeconds: Double = 120
     var outputDirectory: String = ".eval-results"
@@ -187,6 +212,15 @@ struct EvalCLIOptions {
     var releaseTriageInputPath: String?
     var writeReleaseTriage = false
     var releaseTriageVersion: String?
+    var resumeRunPath: String?
+    var resumeMissing = false
+    var resumeFailed = false
+    var resumeCaseStatuses: Set<TextToSQLEvalCaseStatus> = []
+    var maxCloudCostUSD: Decimal?
+    var maxHTTPAttempts: Int?
+    var maxCompletedResults: Int?
+    var stopBeforeProviderLimit = false
+    var explicitOptions: Set<EvalExplicitOption> = []
     var showHelp = false
 
     static let helpText = """
@@ -207,6 +241,14 @@ struct EvalCLIOptions {
           --triage-release <run.json path>
           --write-release-triage
           --release-triage-version <version>
+          --resume-run <path-to-run-directory-or-run.json>
+          --resume-missing
+          --resume-failed
+          --resume-case-status <status[,status...]>
+          --max-cloud-cost-usd <decimal>
+          --max-http-attempts <int>
+          --max-completed-results <int>
+          --stop-before-provider-limit
           --semantic-db
           --retriever legacy|index|both
           --schema-tools
@@ -233,30 +275,40 @@ struct EvalCLIOptions {
                     throw EvalCLIError.invalidValue(argument, value)
                 }
                 options.backendMode = backend
+                options.explicitOptions.insert(.backendMode)
             case "--cloud-agent":
                 let value = try nextValue(after: argument)
                 guard let mode = EvalCloudAgentMode(rawValue: value) else {
                     throw EvalCLIError.invalidValue(argument, value)
                 }
                 options.cloudAgentMode = mode
+                options.explicitOptions.insert(.cloudAgentMode)
             case "--model":
                 options.model = try nextValue(after: argument)
+                options.explicitOptions.insert(.model)
             case "--suite":
                 options.suitePath = try nextValue(after: argument)
+                options.explicitOptions.insert(.suitePath)
             case "--case":
-                options.caseID = try nextValue(after: argument)
+                let value = try nextValue(after: argument)
+                if options.caseID == nil {
+                    options.caseID = value
+                }
+                options.caseIDs.append(value)
             case "--repeat":
                 let value = try nextValue(after: argument)
                 guard let repeatCount = Int(value), repeatCount > 0 else {
                     throw EvalCLIError.invalidValue(argument, value)
                 }
                 options.repeatCount = repeatCount
+                options.explicitOptions.insert(.repeatCount)
             case "--case-timeout-seconds":
                 let value = try nextValue(after: argument)
                 guard let timeout = Double(value), timeout.isFinite, timeout > 0 else {
                     throw EvalCLIError.invalidValue(argument, value)
                 }
                 options.caseTimeoutSeconds = timeout
+                options.explicitOptions.insert(.caseTimeoutSeconds)
             case "--output":
                 options.outputDirectory = try nextValue(after: argument)
             case "--record-prompts":
@@ -269,14 +321,56 @@ struct EvalCLIOptions {
                 options.failUnder = failUnder
             case "--release-gate-version":
                 options.releaseGateVersion = try nextValue(after: argument)
+                options.explicitOptions.insert(.releaseGateVersion)
             case "--triage-release":
                 options.releaseTriageInputPath = try nextValue(after: argument)
             case "--write-release-triage":
                 options.writeReleaseTriage = true
             case "--release-triage-version":
                 options.releaseTriageVersion = try nextValue(after: argument)
+            case "--resume-run":
+                options.resumeRunPath = try nextValue(after: argument)
+            case "--resume-missing":
+                options.resumeMissing = true
+            case "--resume-failed":
+                options.resumeFailed = true
+            case "--resume-case-status":
+                let value = try nextValue(after: argument)
+                let statuses = value
+                    .split(separator: ",")
+                    .map { $0.trimmingCharacters(in: .whitespacesAndNewlines) }
+                guard !statuses.isEmpty else {
+                    throw EvalCLIError.invalidValue(argument, value)
+                }
+                for status in statuses {
+                    guard let parsed = TextToSQLEvalCaseStatus(rawValue: status) else {
+                        throw EvalCLIError.invalidValue(argument, status)
+                    }
+                    options.resumeCaseStatuses.insert(parsed)
+                }
+            case "--max-cloud-cost-usd":
+                let value = try nextValue(after: argument)
+                guard let budget = Decimal(string: value), budget >= 0 else {
+                    throw EvalCLIError.invalidValue(argument, value)
+                }
+                options.maxCloudCostUSD = budget
+            case "--max-http-attempts":
+                let value = try nextValue(after: argument)
+                guard let attempts = Int(value), attempts >= 0 else {
+                    throw EvalCLIError.invalidValue(argument, value)
+                }
+                options.maxHTTPAttempts = attempts
+            case "--max-completed-results":
+                let value = try nextValue(after: argument)
+                guard let results = Int(value), results >= 0 else {
+                    throw EvalCLIError.invalidValue(argument, value)
+                }
+                options.maxCompletedResults = results
+            case "--stop-before-provider-limit":
+                options.stopBeforeProviderLimit = true
             case "--semantic-db":
                 options.semanticDatabase = true
+                options.explicitOptions.insert(.semanticDatabase)
             case "--retriever":
                 let value = try nextValue(after: argument)
                 guard let retriever = SchemaRetrievalMode(rawValue: value) else {
@@ -294,6 +388,11 @@ struct EvalCLIOptions {
             }
         }
 
+        if options.resumeRunPath == nil,
+            options.resumeMissing || options.resumeFailed || !options.resumeCaseStatuses.isEmpty
+        {
+            throw EvalCLIError.resumeSelectionWithoutRun
+        }
         return options
     }
 }
@@ -302,6 +401,7 @@ enum EvalCLIError: LocalizedError {
     case missingValue(String)
     case invalidValue(String, String)
     case unknownArgument(String)
+    case resumeSelectionWithoutRun
 
     var errorDescription: String? {
         switch self {
@@ -311,6 +411,8 @@ enum EvalCLIError: LocalizedError {
             "Invalid value for \(flag): \(value)."
         case .unknownArgument(let argument):
             "Unknown argument: \(argument)."
+        case .resumeSelectionWithoutRun:
+            "Resume selection flags require --resume-run."
         }
     }
 }

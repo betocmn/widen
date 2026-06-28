@@ -896,6 +896,65 @@ struct TextToSQLEvalTests {
         #expect(result.metrics.transportSuccess == false)
     }
 
+    @Test func openRouterPaymentRequiredIsDistinctFromTransportFailure() async {
+        let evalCase = TextToSQLEvalCase(
+            id: "commerce.recent-orders",
+            schemaFixture: "commerce",
+            question: "Show the 10 most recent orders",
+            expected: TextToSQLEvalExpectation(decision: .sql)
+        )
+
+        let result = await TextToSQLEvalCaseRunner.run(
+            evalCase: evalCase,
+            schema: makeCommerceSchema(),
+            generator: ThrowingGenerator(
+                error: OpenRouterFailure(
+                    category: .paymentRequired,
+                    message: "Payment required.",
+                    httpStatus: 402,
+                    openRouterErrorType: "insufficient_credits",
+                    providerCode: "credits",
+                    requestedModelID: "test/model"
+                )
+            ),
+            options: TextToSQLEvalRunOptions(backend: .cloud, model: "test/model")
+        )
+
+        #expect(result.status == .paymentRequired)
+        #expect(result.metrics.backendAvailable == true)
+        #expect(result.metrics.transportSuccess == false)
+        #expect(result.diagnostics.openRouterFailureCategory == "paymentRequired")
+    }
+
+    @Test func openRouterProviderLimitIsDistinctFromTransportFailure() async {
+        let evalCase = TextToSQLEvalCase(
+            id: "commerce.recent-orders",
+            schemaFixture: "commerce",
+            question: "Show the 10 most recent orders",
+            expected: TextToSQLEvalExpectation(decision: .sql)
+        )
+
+        let result = await TextToSQLEvalCaseRunner.run(
+            evalCase: evalCase,
+            schema: makeCommerceSchema(),
+            generator: ThrowingGenerator(
+                error: OpenRouterFailure(
+                    category: .providerLimit,
+                    message: "Provider limit.",
+                    openRouterErrorType: "provider_limit_exceeded",
+                    providerCode: "provider_limit",
+                    requestedModelID: "test/model"
+                )
+            ),
+            options: TextToSQLEvalRunOptions(backend: .cloud, model: "test/model")
+        )
+
+        #expect(result.status == .providerLimit)
+        #expect(result.metrics.backendAvailable == true)
+        #expect(result.metrics.transportSuccess == false)
+        #expect(result.diagnostics.openRouterFailureCategory == "providerLimit")
+    }
+
     @Test func untypedGeneratorFailureBecomesGenerationFailure() async {
         let evalCase = TextToSQLEvalCase(
             id: "commerce.recent-orders",
@@ -915,6 +974,38 @@ struct TextToSQLEvalTests {
         #expect(result.metrics.backendAvailable == true)
         #expect(result.metrics.transportSuccess == true)
         #expect(result.metrics.structuredResponseParsed == false)
+    }
+
+    @Test func httpBudgetExhaustionBecomesSkippedBudgetLimit() async {
+        let evalCase = TextToSQLEvalCase(
+            id: "commerce.recent-orders",
+            schemaFixture: "commerce",
+            question: "Show the 10 most recent orders",
+            expected: TextToSQLEvalExpectation(decision: .sql)
+        )
+        let metadata = OpenRouterGenerationMetadata(
+            requestedModelID: "test/model",
+            structuredOutputMode: .promptOnlyJSON,
+            requestCount: 2,
+            retryCount: 0
+        )
+
+        let result = await TextToSQLEvalCaseRunner.run(
+            evalCase: evalCase,
+            schema: makeCommerceSchema(),
+            generator: ThrowingGenerator(
+                error: OpenRouterHTTPAttemptBudgetExhausted(
+                    message: "OpenRouter HTTP-attempt budget exhausted.",
+                    backendMetadata: metadata
+                )
+            ),
+            options: TextToSQLEvalRunOptions(backend: .cloud, model: "test/model")
+        )
+
+        #expect(result.status == .skippedBudgetLimit)
+        #expect(result.status.isCompletedEvaluation == false)
+        #expect(result.metrics.transportSuccess == false)
+        #expect(result.metrics.modelCallCount == 2)
     }
 
     @Test func cancellationFailureIsNotTransportFailure() async {
@@ -1241,11 +1332,11 @@ struct TextToSQLEvalTests {
 
         #expect(result.status == .generationFailure)
         #expect(result.metrics.modelCallCount == 2)
-        #expect(result.metrics.openRouterAgentHTTPAttemptCount == 1)
+        #expect(result.metrics.openRouterAgentHTTPAttemptCount == 2)
         #expect(result.metrics.openRouterSchemaToolCallCount == 1)
     }
 
-    @Test func evalMetricsPreferTraceSchemaToolCallTotal() {
+    @Test func evalMetricsPreferTraceAgentTotals() {
         let evalCase = TextToSQLEvalCase(
             id: "commerce.recent-orders",
             schemaFixture: "commerce",
@@ -1259,6 +1350,7 @@ struct TextToSQLEvalTests {
             retryCount: 0
         )
         metadata.agentSelectionReason = "tools"
+        metadata.agentHTTPAttemptCount = 1
         metadata.agentSchemaToolCallCount = 1
         let generation = SQLGenerationResult(
             sql: "SELECT id FROM public.orders LIMIT 100",
@@ -1290,6 +1382,7 @@ struct TextToSQLEvalTests {
         )
 
         #expect(result.metrics.openRouterSchemaToolCallCount == 2)
+        #expect(result.metrics.openRouterAgentHTTPAttemptCount == 2)
     }
 
     @Test func wrongSQLDecisionDoesNotInflateShapeCoverage() {
