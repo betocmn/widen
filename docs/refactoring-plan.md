@@ -1571,6 +1571,49 @@ semantic result mismatch (24 results), followed by tool budget exhausted (9).
 Sanitized artifacts were updated in `docs/evals/0.1.0.md` and
 `docs/evals/0.1.0-triage.md`.
 
+## PR 52 draft follow-up — Split answerability from SQL readiness
+
+Added deterministic SQL intent coverage so answerability no longer means final
+SQL readiness. Terminal SQL now gets one strict correction when it misses
+deterministic intent such as status predicates, anti-join/null semantics,
+aggregates, group/order/limit shape, anchored date windows, database-context
+filters, or obvious projection/unit requirements. The agent also stops
+additional schema-tool calls after sufficient evidence and records redacted
+intent-coverage trace fields and semantic mismatch categories.
+
+Local verification passed:
+
+```text
+make project
+make test
+```
+
+Latest completed focused over-clarification run:
+`.eval-results/20260628-115051-481` at commit `e0389c8`.
+
+| Metric | Full PR 16 gate | PR 52 focused run |
+| --- | ---: | ---: |
+| Scope | 60 | 30 |
+| End-to-end semantic pass | 24/60 | 8/30 |
+| Clarification decision accuracy | 10/12 | n/a |
+| Expected SQL, got clarification | 3 | 3 |
+| Semantic result mismatch | 24 | 10 |
+| Tool budget exhausted | 9 | 2 |
+| Model/tool protocol failure | 0 | 6 |
+| Repeated/no-progress repair | 0 | 0 |
+
+Focused Preseason status remained semantically green:
+`top-wins-ambiguous` clarified 3/3, `top-wins-defined` semantically passed 3/3,
+and invalid tool A/B binding stayed at 0. One `top-wins-defined` repeat still
+had a static schema-object failure despite semantic equivalence.
+
+A later focused rerun after projection-intent refinements was terminated after
+it produced no output or artifact directory, so no newer release count is
+recorded. PR 52 should stay draft. The next largest buckets are now model/tool
+protocol no-progress after intent correction, semantic projection mismatches,
+remaining `saas.expiring-subscriptions` anchored/status shape mismatches, and
+the `support.average-first-response` invalid-SQL-to-clarification fallback.
+
 ---
 
 # Recommended implementation order for one coding agent
