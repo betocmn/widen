@@ -49,6 +49,7 @@ PR 7 + PR 8 + PR 11 + eval evidence
   └── PR 12 ✅ — Backend defaults, older macOS, release gate [done 2026-06-26]
       └── PR 13 — Release-gate triage and schema-tool agent fixes
           └── PR 14 — Resumable, budget-aware release-gate evals
+              └── PR 15 — Release-gate baseline and triage docs
 ```
 
 ---
@@ -1444,6 +1445,103 @@ make eval-release-resume MODEL=openai/gpt-5.5 RESUME=<previous-run-dir>
 
 ---
 
+# PR 15 — Release-gate baseline and triage docs
+
+Suggested title:
+
+```text
+docs: complete release gate baseline and triage
+```
+
+Start from latest `main` after PR 50.
+
+## Goal
+
+Use the PR 14 resumable and budget-aware release-gate eval workflow to produce
+a current baseline for the default OpenRouter schema-tool path. This PR is
+evaluation/reporting only unless a tiny reporting bug blocks completion.
+
+## Scope
+
+Run `make project`, `make test`, and `make eval-build`; then run the focused
+Preseason gate before the full release gate:
+
+```text
+make eval-release-preseason MODEL=openai/gpt-5.5
+make eval-release MODEL=openai/gpt-5.5
+make eval-release-resume MODEL=openai/gpt-5.5 RESUME=<run-dir>
+```
+
+Resume incomplete runs without rerunning completed cases until the gate is
+complete, or until provider budget is unavailable.
+
+Commit only sanitized docs:
+
+```text
+docs/evals/0.1.0.md
+docs/evals/0.1.0-triage.md
+docs/refactoring-plan.md
+```
+
+Do not change production prompts, schema-tool behavior, SQL validation/repair,
+schema retrieval, eval goldens, seeded fixtures, backend defaults, local
+Foundation Models behavior, privacy settings, or embeddings. Do not commit raw
+run directories, prompts, model output, SQL with sensitive content, database
+rows, API keys, or local absolute paths.
+
+## Required report shape
+
+The release summary must show complete/incomplete status, expected/completed/
+missing results, budget/provider stops, semantic pass rate, clarification
+accuracy, safety/schema validity, transport reliability, and repeated repair
+count. Triage must group failures by stable category and explicitly list
+`preseason.top-wins-ambiguous` and `preseason.top-wins-defined` repeat status,
+semantic status, clarification/semantic result, repeated repair, invalid
+binding detection, and quoted timestamp check when SQL exists.
+
+If the gate remains incomplete, docs must say text-to-SQL is not production-ready
+and the next action is to resume when provider budget is available. If it
+completes, add the next failure bucket here for PR 16.
+
+## Acceptance
+
+* `make test` passes.
+* Focused Preseason and full release gates are complete, or clearly incomplete
+  only because provider budget is unavailable.
+* `docs/evals/0.1.0.md` is updated from the latest run.
+* `docs/evals/0.1.0-triage.md` is present if generated.
+* No raw prompts, keys, row values, local absolute paths, or production behavior
+  changes are committed.
+
+Completion notes:
+
+* `make project`, `make test`, and `make eval-build` passed on 2026-06-28.
+* Focused Preseason gate completed 6/6 results; full release gate completed
+  60/60 results with provider budget available.
+* Gate failed: semantic end-to-end 20/60 (33%); clarification decision accuracy
+  10/12 (83%); safety, schema validity, transport reliability, and repeated
+  repair checks passed.
+* Sanitized artifacts: `docs/evals/0.1.0.md` and
+  `docs/evals/0.1.0-triage.md`.
+
+## Next failure bucket
+
+Top category: wrong decision, expected SQL but got clarification (28 results).
+
+Affected case IDs: `commerce.average-order-value-country`,
+`commerce.customer-paid-revenue`, `commerce.customers-without-orders`,
+`saas.expiring-subscriptions`, `saas.overallocated-seats`,
+`saas.users-without-membership`, `support.average-first-response`,
+`support.frequent-feedback-cluster`, `support.unclustered-feedback`, and
+`support.unresolved-by-assignee`.
+
+Failures are mostly wrong decision. Secondary buckets are tool budget exhausted
+(7), semantic mismatch (4), and static schema failure (1). Text-to-SQL is not
+production-ready; PR 16 should start with the wrong-decision/over-clarification
+bucket.
+
+---
+
 # Recommended implementation order for one coding agent
 
 When only one agent is working:
@@ -1462,7 +1560,8 @@ When only one agent is working:
 11. PR 12 ✅ — Platform/default-backend decision
 12. PR 13 — Release-gate triage and schema-tool agent fixes
 13. PR 14 — Resumable, budget-aware release-gate evals
-14. PR 10 ⏸️ — Embedding experiment           [deferred 2026-06-26 — revisit after PR 12 and real app/eval testing]
+14. PR 15 — Release-gate baseline and triage docs
+15. PR 10 ⏸️ — Embedding experiment           [deferred 2026-06-26 — revisit after PR 12 and real app/eval testing]
 ```
 
 The key discipline is to run the same 20 cases after every PR and reject changes that merely move failures from one stage to another.
