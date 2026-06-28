@@ -1513,6 +1513,33 @@ completes, add the next failure bucket here for PR 16.
 * No raw prompts, keys, row values, local absolute paths, or production behavior
   changes are committed.
 
+Completion notes:
+
+* `make project`, `make test`, and `make eval-build` passed on 2026-06-28.
+* Focused Preseason gate completed 6/6 results; full release gate completed
+  60/60 results with provider budget available.
+* Gate failed: semantic end-to-end 20/60 (33%); clarification decision accuracy
+  10/12 (83%); safety, schema validity, transport reliability, and repeated
+  repair checks passed.
+* Sanitized artifacts: `docs/evals/0.1.0.md` and
+  `docs/evals/0.1.0-triage.md`.
+
+## Next failure bucket
+
+Top category: wrong decision, expected SQL but got clarification (28 results).
+
+Affected case IDs: `commerce.average-order-value-country`,
+`commerce.customer-paid-revenue`, `commerce.customers-without-orders`,
+`saas.expiring-subscriptions`, `saas.overallocated-seats`,
+`saas.users-without-membership`, `support.average-first-response`,
+`support.frequent-feedback-cluster`, `support.unclustered-feedback`, and
+`support.unresolved-by-assignee`.
+
+Failures are mostly wrong decision. Secondary buckets are tool budget exhausted
+(7), semantic mismatch (4), and static schema failure (1). Text-to-SQL is not
+production-ready; PR 16 should start with the wrong-decision/over-clarification
+bucket.
+
 ---
 
 # Recommended implementation order for one coding agent

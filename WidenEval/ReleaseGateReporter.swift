@@ -94,7 +94,7 @@ enum TextToSQLReleaseGateReporter {
             "| Evaluation mode | \(tableCell(run.manifest.evaluationMode)) |",
             "| Run ID | \(tableCell(run.manifest.runID ?? "-")) |",
             "| Parent run ID | \(tableCell(run.manifest.parentRunID ?? "-")) |",
-            "| Resumed from | \(tableCell(run.manifest.resumedFrom ?? "-")) |",
+            "| Resumed from | \(tableCell(manifestArtifactPath(run.manifest.resumedFrom))) |",
             "| Commit | \(tableCell(run.manifest.commitSHA)) |",
             "| Started | \(tableCell(run.manifest.startedAt)) |",
             "| Finished | \(tableCell(run.manifest.finishedAt)) |",
@@ -176,12 +176,12 @@ enum TextToSQLReleaseGateReporter {
             "",
             "These Preseason top-wins cases cover the historical failure class around column ownership, mixed-case timestamps, interval comparisons, and repeated/no-progress repair loops.",
             "",
-            "| Case | Repeat | Status | Semantic Status | Historical Check | Invalid Tool A/B Binding | Quoted Timestamp | Timestamp/Interval Type | Repeated/No-Progress Repair |",
-            "| --- | ---: | --- | --- | --- | --- | --- | --- | --- |",
+            "| Case | Repeat | Evaluation | Status | Semantic Status | Clarification/Semantic Result | Invalid Tool A/B Binding | Quoted Timestamp | Timestamp/Interval Type | Repeated/No-Progress Repair |",
+            "| --- | ---: | --- | --- | --- | --- | --- | --- | --- | --- |",
         ]
         for result in matches {
             lines.append(
-                "| \(tableCell(result.caseID)) | \(result.repeatIndex) | \(tableCell(result.status.rawValue)) | \(tableCell(result.metrics.semanticStatus?.rawValue ?? "-")) | \(historicalCorrectness(result)) | \(invalidToolABBinding(result) ? "Fail" : "Pass") | \(quotedTimestampCheck(result)) | \(timestampIntervalCheck(result)) | \(repeatedNoProgressRepair(result) ? "Fail" : "Pass") |"
+                "| \(tableCell(result.caseID)) | \(result.repeatIndex) | \(result.status.isCompletedEvaluation ? "Evaluated" : "Not evaluated") | \(tableCell(result.status.rawValue)) | \(tableCell(result.metrics.semanticStatus?.rawValue ?? "-")) | \(historicalResultDescription(result)) | \(invalidToolABBinding(result) ? "Fail" : "Pass") | \(quotedTimestampCheck(result)) | \(timestampIntervalCheck(result)) | \(repeatedNoProgressRepair(result) ? "Fail" : "Pass") |"
             )
         }
         return lines
@@ -201,6 +201,11 @@ enum TextToSQLReleaseGateReporter {
         return relative.isEmpty ? "." : String(relative)
     }
 
+    private static func manifestArtifactPath(_ path: String?) -> String {
+        guard let path else { return "-" }
+        return artifactPath(URL(fileURLWithPath: path))
+    }
+
     private static func resultSort(_ lhs: TextToSQLEvalResult, _ rhs: TextToSQLEvalResult) -> Bool {
         if lhs.caseID != rhs.caseID {
             return lhs.caseID < rhs.caseID
@@ -211,12 +216,14 @@ enum TextToSQLReleaseGateReporter {
         return lhs.repeatIndex < rhs.repeatIndex
     }
 
-    private static func historicalCorrectness(_ result: TextToSQLEvalResult) -> String {
+    private static func historicalResultDescription(_ result: TextToSQLEvalResult) -> String {
         if result.caseID == "preseason.top-wins-ambiguous" {
-            return result.status == .passed ? "Pass" : "Fail"
+            return result.status == .passed ? "Clarified correctly" : "Clarification failed"
         }
         if result.caseID == "preseason.top-wins-defined" {
-            return result.metrics.semanticStatus == .passed ? "Pass" : "Fail"
+            return result.metrics.semanticStatus == .passed
+                ? "Semantic DB eval passed"
+                : "Semantic DB eval failed"
         }
         return "-"
     }
@@ -383,7 +390,7 @@ enum TextToSQLReleaseTriageReporter {
             "| Missing results | \(completeness.missingResultCount) |",
             "| Skipped by budget | \(completeness.skippedBudgetCount) |",
             "| Provider budget unavailable | \(completeness.providerBudgetUnavailableCount) |",
-            "| Resumed from | \(tableCell(run.manifest.resumedFrom ?? "-")) |",
+            "| Resumed from | \(tableCell(artifactPath(run.manifest.resumedFrom))) |",
             "| Budget stop | \(tableCell(run.manifest.budgetStopReason ?? "-")) |",
             "| Failed results | \(failed.count) |",
             "",
@@ -500,26 +507,40 @@ enum TextToSQLReleaseTriageReporter {
             "",
             "## Historical Preseason Cases",
             "",
-            "| Case | Backend | Repeat | Evaluation | Status | Semantic | Notes |",
-            "| --- | --- | ---: | --- | --- | --- | --- |",
+            "| Case | Backend | Repeat | Evaluation | Status | Semantic Status | Clarification/Semantic Result | Repeated/No-Progress Repair | Invalid Tool A/B Binding | Quoted Timestamp | Notes |",
+            "| --- | --- | ---: | --- | --- | --- | --- | --- | --- | --- | --- |",
         ]
         for key in fallbackKeys.sorted(by: keySort) {
             guard historicalIDs.contains(key.caseID) else { continue }
             if let result = resultByKey[key], result.status.isCompletedEvaluation {
                 lines.append(
-                    "| \(tableCell(key.caseID)) | \(tableCell(key.backend.rawValue)) | \(key.repeatIndex) | Evaluated | \(tableCell(result.status.rawValue)) | \(tableCell(result.metrics.semanticStatus?.rawValue ?? "-")) | \(tableCell(historicalNote(result))) |"
+                    "| \(tableCell(key.caseID)) | \(tableCell(key.backend.rawValue)) | \(key.repeatIndex) | Evaluated | \(tableCell(result.status.rawValue)) | \(tableCell(result.metrics.semanticStatus?.rawValue ?? "-")) | \(historicalPreseasonResultDescription(result)) | \(repeatedNoProgressRepair(result) ? "Yes" : "No") | \(invalidToolABBinding(result) ? "Fail" : "Pass") | \(quotedTimestampCheck(result)) | \(tableCell(historicalNote(result))) |"
                 )
             } else if let result = resultByKey[key] {
                 lines.append(
-                    "| \(tableCell(key.caseID)) | \(tableCell(key.backend.rawValue)) | \(key.repeatIndex) | Not evaluated | \(tableCell(result.status.rawValue)) | \(tableCell(result.metrics.semanticStatus?.rawValue ?? "-")) | \(tableCell(result.diagnostics.errorMessage ?? result.status.notEvaluatedReason?.rawValue ?? "-")) |"
+                    "| \(tableCell(key.caseID)) | \(tableCell(key.backend.rawValue)) | \(key.repeatIndex) | Not evaluated | \(tableCell(result.status.rawValue)) | \(tableCell(result.metrics.semanticStatus?.rawValue ?? "-")) | Not evaluated | \(repeatedNoProgressRepair(result) ? "Yes" : "No") | \(invalidToolABBinding(result) ? "Fail" : "Pass") | \(quotedTimestampCheck(result)) | \(tableCell(result.diagnostics.errorMessage ?? result.status.notEvaluatedReason?.rawValue ?? "-")) |"
                 )
             } else {
                 lines.append(
-                    "| \(tableCell(key.caseID)) | \(tableCell(key.backend.rawValue)) | \(key.repeatIndex) | Not evaluated | - | - | missing |"
+                    "| \(tableCell(key.caseID)) | \(tableCell(key.backend.rawValue)) | \(key.repeatIndex) | Not evaluated | - | - | Not evaluated | - | - | - | missing |"
                 )
             }
         }
         return lines
+    }
+
+    private static func historicalPreseasonResultDescription(_ result: TextToSQLEvalResult)
+        -> String
+    {
+        if result.caseID == "preseason.top-wins-ambiguous" {
+            return result.status == .passed ? "Clarified correctly" : "Clarification failed"
+        }
+        if result.caseID == "preseason.top-wins-defined" {
+            return result.metrics.semanticStatus == .passed
+                ? "Semantic DB eval passed"
+                : "Semantic DB eval failed"
+        }
+        return "-"
     }
 
     private static func historicalNote(_ result: TextToSQLEvalResult) -> String {
@@ -537,6 +558,47 @@ enum TextToSQLReleaseTriageReporter {
             notes.append("semantic mismatch")
         }
         return notes.isEmpty ? "-" : notes.joined(separator: "; ")
+    }
+
+    private static func invalidToolABBinding(_ result: TextToSQLEvalResult) -> Bool {
+        let forbidden = Set(result.metrics.forbiddenBindingViolations.map { $0.lowercased() })
+        return forbidden.contains("public.preseason_match_evaluation.tool_a_id")
+            || forbidden.contains("public.preseason_match_evaluation.tool_b_id")
+            || result.referencedColumnBindings.contains {
+                let normalized = $0.lowercased()
+                return normalized == "public.preseason_match_evaluation.tool_a_id"
+                    || normalized == "public.preseason_match_evaluation.tool_b_id"
+            }
+            || result.diagnostics.schemaErrors.contains {
+                let normalized = $0.lowercased()
+                return normalized.contains("public.preseason_match_evaluation")
+                    && (normalized.contains("tool_a_id") || normalized.contains("tool_b_id"))
+            }
+    }
+
+    private static func quotedTimestampCheck(_ result: TextToSQLEvalResult) -> String {
+        guard let sql = result.generatedSQL,
+            sql.range(of: "createdAt", options: .caseInsensitive) != nil
+        else { return "-" }
+        let unquotedPattern = #"(?<!")\bcreatedAt\b(?!")"#
+        return sql.range(of: unquotedPattern, options: [.regularExpression, .caseInsensitive]) == nil
+            ? "Pass"
+            : "Fail"
+    }
+
+    private static func artifactPath(_ path: String?) -> String {
+        guard let path else { return "-" }
+        let currentDirectory = URL(fileURLWithPath: FileManager.default.currentDirectoryPath)
+            .standardizedFileURL
+        let artifact = URL(fileURLWithPath: path).standardizedFileURL
+        let directoryPath = currentDirectory.path
+        let artifactPath = artifact.path
+        guard artifactPath == directoryPath || artifactPath.hasPrefix(directoryPath + "/") else {
+            return artifact.lastPathComponent
+        }
+        let relative = artifactPath.dropFirst(directoryPath.count)
+            .trimmingCharacters(in: CharacterSet(charactersIn: "/"))
+        return relative.isEmpty ? "." : String(relative)
     }
 
     private static func expectedKeys(
