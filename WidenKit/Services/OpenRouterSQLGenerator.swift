@@ -134,6 +134,8 @@ public struct OpenRouterSchemaToolAgentDiagnostics: Codable, Equatable, Sendable
     public var producedProseInsteadOfTools: Bool
     public var schemaEvidence: OpenRouterSchemaToolEvidenceSummary
     public var appSideRejectionReason: OpenRouterSchemaToolAppRejectionReason?
+    public var clarificationCorrectionMode: String
+    public var intentCoverageMode: String
     public var clarificationPolicyDecision: String
     public var clarificationPolicyReason: String
     public var overClarificationCorrectionAttempted: Bool
@@ -157,6 +159,8 @@ public struct OpenRouterSchemaToolAgentDiagnostics: Codable, Equatable, Sendable
         producedProseInsteadOfTools: Bool = false,
         schemaEvidence: OpenRouterSchemaToolEvidenceSummary = OpenRouterSchemaToolEvidenceSummary(),
         appSideRejectionReason: OpenRouterSchemaToolAppRejectionReason? = nil,
+        clarificationCorrectionMode: String = "",
+        intentCoverageMode: String = "",
         clarificationPolicyDecision: String = "",
         clarificationPolicyReason: String = "",
         overClarificationCorrectionAttempted: Bool = false,
@@ -179,6 +183,8 @@ public struct OpenRouterSchemaToolAgentDiagnostics: Codable, Equatable, Sendable
         self.producedProseInsteadOfTools = producedProseInsteadOfTools
         self.schemaEvidence = schemaEvidence
         self.appSideRejectionReason = appSideRejectionReason
+        self.clarificationCorrectionMode = clarificationCorrectionMode
+        self.intentCoverageMode = intentCoverageMode
         self.clarificationPolicyDecision = clarificationPolicyDecision
         self.clarificationPolicyReason = clarificationPolicyReason
         self.overClarificationCorrectionAttempted = overClarificationCorrectionAttempted
@@ -203,6 +209,8 @@ public struct OpenRouterSchemaToolAgentDiagnostics: Codable, Equatable, Sendable
         case producedProseInsteadOfTools
         case schemaEvidence
         case appSideRejectionReason
+        case clarificationCorrectionMode
+        case intentCoverageMode
         case clarificationPolicyDecision
         case clarificationPolicyReason
         case overClarificationCorrectionAttempted
@@ -243,6 +251,14 @@ public struct OpenRouterSchemaToolAgentDiagnostics: Codable, Equatable, Sendable
             OpenRouterSchemaToolAppRejectionReason.self,
             forKey: .appSideRejectionReason
         )
+        clarificationCorrectionMode = try container.decodeIfPresent(
+            String.self,
+            forKey: .clarificationCorrectionMode
+        ) ?? ""
+        intentCoverageMode = try container.decodeIfPresent(
+            String.self,
+            forKey: .intentCoverageMode
+        ) ?? ""
         clarificationPolicyDecision = try container.decodeIfPresent(
             String.self,
             forKey: .clarificationPolicyDecision

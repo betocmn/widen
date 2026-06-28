@@ -2032,6 +2032,10 @@ public enum GeneratedSQLPostprocessor {
             diagnostics.terminalToolSeen,
             diagnostics.terminalAction == "sql",
             diagnostics.appSideRejectionReason == nil,
+            [
+                SchemaToolAgentIntentCoverageMode.rejectOnlyExperimental.rawValue,
+                SchemaToolAgentIntentCoverageMode.correctAndRetryExperimental.rawValue,
+            ].contains(diagnostics.intentCoverageMode),
             !schemaValidation.referencedTables.isEmpty
         else {
             return false

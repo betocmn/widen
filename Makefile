@@ -169,7 +169,7 @@ eval-release-preseason: eval-build
 ## Run focused release-gate over-clarification cases with triage output
 eval-release-overclarification: eval-build
 	@set -a; if [ -f .env.eval.local ]; then . ./.env.eval.local; fi; set +a; \
-	$(EVAL) --backend cloud --model "$(MODEL)" --cloud-agent tools --suite Evals/suites/text-to-sql-v1.json --case commerce.average-order-value-country --case commerce.customer-paid-revenue --case commerce.customers-without-orders --case saas.expiring-subscriptions --case saas.overallocated-seats --case saas.users-without-membership --case support.average-first-response --case support.frequent-feedback-cluster --case support.unclustered-feedback --case support.unresolved-by-assignee --semantic-db --repeat 3 --write-release-triage
+	$(EVAL) --backend cloud --model "$(MODEL)" --cloud-agent tools --schema-agent-clarification-correction experimental --schema-agent-intent-coverage experimental --suite Evals/suites/text-to-sql-v1.json --case commerce.average-order-value-country --case commerce.customer-paid-revenue --case commerce.customers-without-orders --case saas.expiring-subscriptions --case saas.overallocated-seats --case saas.users-without-membership --case support.average-first-response --case support.frequent-feedback-cluster --case support.unclustered-feedback --case support.unresolved-by-assignee --semantic-db --repeat 3 --write-release-triage
 
 ## Resume a previous release-gate run without rerunning completed cases
 eval-release-resume: eval-build

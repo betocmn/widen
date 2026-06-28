@@ -229,7 +229,11 @@ struct OpenRouterSchemaToolSQLAgentTests {
                 throw URLError(.badServerResponse)
             }
         }
-        let agent = makeAgent(schema: schema, chatTransport: chatTransport)
+        let agent = makeAgent(
+            schema: schema,
+            chatTransport: chatTransport,
+            configuration: Self.experimentalCorrectionConfiguration()
+        )
 
         let result = try await agent.generateSQL(
             question: "List users",
@@ -280,7 +284,11 @@ struct OpenRouterSchemaToolSQLAgentTests {
                 throw URLError(.badServerResponse)
             }
         }
-        let agent = makeAgent(schema: schema, chatTransport: chatTransport)
+        let agent = makeAgent(
+            schema: schema,
+            chatTransport: chatTransport,
+            configuration: Self.experimentalCorrectionConfiguration()
+        )
 
         let result = try await agent.generateSQL(
             question: "List users and check orders",
@@ -396,7 +404,11 @@ struct OpenRouterSchemaToolSQLAgentTests {
                 throw URLError(.badServerResponse)
             }
         }
-        let agent = makeAgent(schema: schema, chatTransport: chatTransport)
+        let agent = makeAgent(
+            schema: schema,
+            chatTransport: chatTransport,
+            configuration: Self.experimentalCorrectionConfiguration()
+        )
 
         let result = try await agent.generateSQL(
             question: "Tools with the most wins in the last two weeks",
@@ -555,7 +567,11 @@ struct OpenRouterSchemaToolSQLAgentTests {
                 throw URLError(.badServerResponse)
             }
         }
-        let agent = makeAgent(schema: schema, chatTransport: chatTransport)
+        let agent = makeAgent(
+            schema: schema,
+            chatTransport: chatTransport,
+            configuration: Self.experimentalCorrectionConfiguration()
+        )
 
         let result = try await agent.generateSQL(
             question: "Tools with the most wins in the last two weeks",
@@ -617,7 +633,11 @@ struct OpenRouterSchemaToolSQLAgentTests {
                 throw URLError(.badServerResponse)
             }
         }
-        let agent = makeAgent(schema: schema, chatTransport: chatTransport)
+        let agent = makeAgent(
+            schema: schema,
+            chatTransport: chatTransport,
+            configuration: Self.experimentalCorrectionConfiguration()
+        )
 
         let result = try await agent.generateSQL(
             question: "Which users have never placed an order?",
@@ -631,6 +651,60 @@ struct OpenRouterSchemaToolSQLAgentTests {
         #expect(result.backendMetadata?.agentDiagnostics?.clarificationPolicyDecision == "shouldAnswerWithSQL")
         #expect(result.backendMetadata?.agentDiagnostics?.overClarificationCorrectionAttempted == true)
         #expect(result.backendMetadata?.agentDiagnostics?.overClarificationCorrectionSucceeded == true)
+    }
+
+    @Test func defaultModeDiagnosesOverClarificationWithoutCorrecting() async throws {
+        let schema = Self.makeSchema()
+        let clarification = "Which relationship should I use between users and orders?"
+        let chatTransport = ScriptedTransport { request, index in
+            switch index {
+            case 1:
+                return Self.assistantToolCalls([
+                    Self.toolCall(id: "search-default-users", name: "search_schema", arguments: [
+                        "query": "users",
+                        "limit": 4,
+                    ]),
+                    Self.toolCall(id: "search-default-orders", name: "search_schema", arguments: [
+                        "query": "orders",
+                        "limit": 4,
+                    ]),
+                ])
+            case 2:
+                let users = try Self.tableHandle(named: #""public"."users""#, in: request)
+                let orders = try Self.tableHandle(named: #""public"."orders""#, in: request)
+                return Self.assistantToolCalls([
+                    Self.toolCall(id: "describe-default-users-orders", name: "describe_tables", arguments: [
+                        "table_ids": [users, orders],
+                    ]),
+                ])
+            case 3:
+                return Self.assistantToolCalls([
+                    Self.terminalClarification(
+                        id: "terminal-default-overclarify",
+                        question: clarification
+                    ),
+                ])
+            default:
+                throw URLError(.badServerResponse)
+            }
+        }
+        let agent = makeAgent(schema: schema, chatTransport: chatTransport)
+
+        let result = try await agent.generateSQL(
+            question: "Which users have never placed an order?",
+            schema: schema,
+            context: SQLGenerationContext(),
+            config: SQLGenerationConfig()
+        )
+
+        #expect(result.needsClarification)
+        #expect(result.clarificationQuestion == clarification)
+        #expect(chatTransport.requests.count == 3)
+        let diagnostics = try #require(result.backendMetadata?.agentDiagnostics)
+        #expect(diagnostics.clarificationCorrectionMode == "diagnosticsOnly")
+        #expect(diagnostics.intentCoverageMode == "diagnosticsOnly")
+        #expect(diagnostics.clarificationPolicyDecision == "shouldAnswerWithSQL")
+        #expect(diagnostics.overClarificationCorrectionAttempted == false)
     }
 
     @Test func genuineMetricAmbiguityRemainsClarification() async throws {
@@ -665,7 +739,11 @@ struct OpenRouterSchemaToolSQLAgentTests {
                 throw URLError(.badServerResponse)
             }
         }
-        let agent = makeAgent(schema: schema, chatTransport: chatTransport)
+        let agent = makeAgent(
+            schema: schema,
+            chatTransport: chatTransport,
+            configuration: Self.experimentalCorrectionConfiguration()
+        )
 
         let result = try await agent.generateSQL(
             question: "Who are our best customers?",
@@ -731,7 +809,11 @@ struct OpenRouterSchemaToolSQLAgentTests {
                 throw URLError(.badServerResponse)
             }
         }
-        let agent = makeAgent(schema: schema, chatTransport: chatTransport)
+        let agent = makeAgent(
+            schema: schema,
+            chatTransport: chatTransport,
+            configuration: Self.experimentalCorrectionConfiguration()
+        )
 
         let result = try await agent.generateSQL(
             question: "Which tools have the most wins in the last two weeks?",
@@ -800,7 +882,11 @@ struct OpenRouterSchemaToolSQLAgentTests {
                 throw URLError(.badServerResponse)
             }
         }
-        let agent = makeAgent(schema: schema, chatTransport: chatTransport)
+        let agent = makeAgent(
+            schema: schema,
+            chatTransport: chatTransport,
+            configuration: Self.experimentalCorrectionConfiguration()
+        )
 
         let result = try await agent.generateSQL(
             question: "Which tools have the most wins in the last two weeks?",
@@ -852,7 +938,11 @@ struct OpenRouterSchemaToolSQLAgentTests {
                 throw URLError(.badServerResponse)
             }
         }
-        let agent = makeAgent(schema: schema, chatTransport: chatTransport)
+        let agent = makeAgent(
+            schema: schema,
+            chatTransport: chatTransport,
+            configuration: Self.experimentalCorrectionConfiguration()
+        )
 
         let result = try await agent.generateSQL(
             question: "Which tools have the most wins in the last two weeks?",
@@ -900,7 +990,11 @@ struct OpenRouterSchemaToolSQLAgentTests {
                 throw URLError(.badServerResponse)
             }
         }
-        let agent = makeAgent(schema: schema, chatTransport: chatTransport)
+        let agent = makeAgent(
+            schema: schema,
+            chatTransport: chatTransport,
+            configuration: Self.experimentalCorrectionConfiguration()
+        )
 
         let result = try await agent.generateSQL(
             question: "Show important users",
@@ -948,7 +1042,11 @@ struct OpenRouterSchemaToolSQLAgentTests {
                 throw URLError(.badServerResponse)
             }
         }
-        let agent = makeAgent(schema: schema, chatTransport: chatTransport)
+        let agent = makeAgent(
+            schema: schema,
+            chatTransport: chatTransport,
+            configuration: Self.experimentalCorrectionConfiguration()
+        )
 
         let result = try await agent.generateSQL(
             question: "Show active users",
@@ -996,7 +1094,11 @@ struct OpenRouterSchemaToolSQLAgentTests {
                 throw URLError(.badServerResponse)
             }
         }
-        let agent = makeAgent(schema: schema, chatTransport: chatTransport)
+        let agent = makeAgent(
+            schema: schema,
+            chatTransport: chatTransport,
+            configuration: Self.experimentalCorrectionConfiguration()
+        )
 
         let result = try await agent.generateSQL(
             question: "Show orders updated in the last week",
@@ -1055,7 +1157,11 @@ struct OpenRouterSchemaToolSQLAgentTests {
                 throw URLError(.badServerResponse)
             }
         }
-        let agent = makeAgent(schema: schema, chatTransport: chatTransport)
+        let agent = makeAgent(
+            schema: schema,
+            chatTransport: chatTransport,
+            configuration: Self.experimentalCorrectionConfiguration()
+        )
 
         do {
             _ = try await agent.generateSQL(
@@ -1123,7 +1229,11 @@ struct OpenRouterSchemaToolSQLAgentTests {
                 throw URLError(.badServerResponse)
             }
         }
-        let agent = makeAgent(schema: schema, chatTransport: chatTransport)
+        let agent = makeAgent(
+            schema: schema,
+            chatTransport: chatTransport,
+            configuration: Self.experimentalCorrectionConfiguration()
+        )
 
         let result = try await agent.generateSQL(
             question: "Average first-response time over the 30 days ending 2026-06-24 12:00 UTC",
@@ -1199,7 +1309,11 @@ struct OpenRouterSchemaToolSQLAgentTests {
                 throw URLError(.badServerResponse)
             }
         }
-        let agent = makeAgent(schema: schema, chatTransport: chatTransport)
+        let agent = makeAgent(
+            schema: schema,
+            chatTransport: chatTransport,
+            configuration: Self.experimentalCorrectionConfiguration()
+        )
 
         let result = try await agent.generateSQL(
             question: "Which tools have the most wins in the last two weeks?",
@@ -1252,7 +1366,11 @@ struct OpenRouterSchemaToolSQLAgentTests {
                 throw URLError(.badServerResponse)
             }
         }
-        let agent = makeAgent(schema: schema, chatTransport: chatTransport)
+        let agent = makeAgent(
+            schema: schema,
+            chatTransport: chatTransport,
+            configuration: Self.experimentalCorrectionConfiguration()
+        )
 
         let result = try await agent.generateSQL(
             question: "Tools with the most wins in the last two weeks",
@@ -2832,6 +2950,26 @@ struct OpenRouterSchemaToolSQLAgentTests {
                 )
                 return try SchemaSearchIndexStore.cacheKey(for: snapshot).schemaFingerprint
             }
+        )
+    }
+
+    private static func experimentalCorrectionConfiguration(
+        maximumSchemaToolCalls: Int = 4,
+        maximumRepairSchemaToolCalls: Int = 2,
+        maximumModelTurns: Int = 6,
+        maximumHTTPAttempts: Int = 8,
+        wallClockTimeoutSeconds: TimeInterval = 10
+    ) -> OpenRouterSchemaToolSQLAgentConfiguration {
+        OpenRouterSchemaToolSQLAgentConfiguration(
+            maximumSchemaToolCalls: maximumSchemaToolCalls,
+            maximumRepairSchemaToolCalls: maximumRepairSchemaToolCalls,
+            maximumModelTurns: maximumModelTurns,
+            maximumMalformedTerminalCorrections: 1,
+            maximumRepeatedToolCorrections: 1,
+            maximumHTTPAttempts: maximumHTTPAttempts,
+            wallClockTimeoutSeconds: wallClockTimeoutSeconds,
+            clarificationCorrectionMode: .correctOverClarificationExperimental,
+            intentCoverageMode: .correctAndRetryExperimental
         )
     }
 

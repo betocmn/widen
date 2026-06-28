@@ -1929,7 +1929,7 @@ struct SQLSchemaValidatorTests {
         #expect(enriched.referencedTables == ["public.users"])
     }
 
-    @Test func schemaToolEvidenceSuppressesGroundingClarificationForAnswerableStatusFilter() {
+    @Test func diagnosticsOnlySchemaToolEvidenceDoesNotSuppressGroundingClarification() {
         let generation = SQLGenerationResult(
             sql: "SELECT COUNT(*) FROM public.users WHERE status = 'active'",
             explanation: "Counts active users.",
@@ -1952,8 +1952,9 @@ struct SQLSchemaValidatorTests {
             databaseContext: ""
         )
 
-        #expect(!enriched.needsClarification)
-        #expect(enriched.sql == "SELECT COUNT(*) FROM public.users WHERE status = 'active'")
+        #expect(enriched.needsClarification)
+        #expect(enriched.sql.isEmpty)
+        #expect(enriched.clarificationQuestion?.contains("\"active\"") == true)
         #expect(enriched.referencedTables == ["public.users"])
     }
 
@@ -2151,6 +2152,34 @@ struct SQLSchemaValidatorTests {
             question: "how many active users do we have?",
             schema: makeUsersUnconstrainedStatusSchema(),
             databaseContext: "Active users are users whose status is active."
+        )
+
+        #expect(!enriched.needsClarification)
+        #expect(enriched.sql == generation.sql)
+    }
+
+    @Test func experimentalSchemaToolEvidenceSuppressesGroundingClarificationForAnswerableStatusFilter() {
+        let generation = SQLGenerationResult(
+            sql: "SELECT COUNT(*) FROM public.users WHERE status = 'active'",
+            explanation: "Counts active users.",
+            assumptions: [],
+            referencedTables: [],
+            confidence: 1,
+            riskLevel: .low,
+            needsClarification: false,
+            clarificationQuestion: nil,
+            backendMetadata: schemaToolSQLMetadata(
+                describedTableIDs: ["public.users"],
+                exposedColumnIDs: ["public.users.id", "public.users.status"],
+                intentCoverageMode: .correctAndRetryExperimental
+            )
+        )
+
+        let enriched = GeneratedSQLPostprocessor.enriched(
+            generation,
+            question: "how many active users do we have?",
+            schema: makeUsersUnconstrainedStatusSchema(),
+            databaseContext: ""
         )
 
         #expect(!enriched.needsClarification)
@@ -2535,7 +2564,8 @@ struct SQLSchemaValidatorTests {
     private func schemaToolSQLMetadata(
         describedTableIDs: [String],
         exposedColumnIDs: [String],
-        exposedForeignKeyPathIDs: [String] = []
+        exposedForeignKeyPathIDs: [String] = [],
+        intentCoverageMode: SchemaToolAgentIntentCoverageMode = .diagnosticsOnly
     ) -> OpenRouterGenerationMetadata {
         var metadata = OpenRouterGenerationMetadata(
             requestedModelID: "test/model",
@@ -2553,7 +2583,8 @@ struct SQLSchemaValidatorTests {
                 describedTableIDs: describedTableIDs,
                 exposedColumnIDs: exposedColumnIDs,
                 exposedForeignKeyPathIDs: exposedForeignKeyPathIDs
-            )
+            ),
+            intentCoverageMode: intentCoverageMode.rawValue
         )
         return metadata
     }

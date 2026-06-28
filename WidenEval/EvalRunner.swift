@@ -12,6 +12,7 @@ struct EvalRun {
     var results: [TextToSQLEvalResult]
     var summary: EvalRunSummary
     var backendSummaries: [TextToSQLEvalBackend: EvalRunSummary]
+    var outputDirectory: URL? = nil
 }
 
 struct EvalRunManifest: Codable {
@@ -27,6 +28,8 @@ struct EvalRunManifest: Codable {
     var finishedAt: String
     var backendMode: String
     var cloudAgentMode: String?
+    var schemaAgentClarificationCorrectionMode: String?
+    var schemaAgentIntentCoverageMode: String?
     var model: String?
     var osVersion: String
     var architecture: String
@@ -227,6 +230,12 @@ struct EvalRunner {
             cloudAgentMode: options.backendMode.backends.contains(.cloud)
                 ? options.cloudAgentMode.rawValue
                 : nil,
+            schemaAgentClarificationCorrectionMode: options.usesCloudSchemaAgent
+                ? options.schemaAgentClarificationCorrectionMode.rawValue
+                : nil,
+            schemaAgentIntentCoverageMode: options.usesCloudSchemaAgent
+                ? options.schemaAgentIntentCoverageMode.rawValue
+                : nil,
             semanticDatabaseEnabled: options.semanticDatabase,
             scorerSourceHash: scorerSourceHash,
             semanticComparatorSourceHash: semanticComparatorSourceHash,
@@ -269,6 +278,96 @@ struct EvalRunner {
                 databaseDirectory: databaseDirectory
             )
         }
+        let outputDirectory = Self.outputDirectory(base: options.outputDirectory)
+        let runID = UUID().uuidString
+
+        func makeRun(finishedAt: String) -> EvalRun {
+            let summary = summarize(results, casesByID: casesByID)
+            let backendSummaries = Dictionary(
+                uniqueKeysWithValues: options.backendMode.backends.map { backend in
+                    (
+                        backend,
+                        summarize(results.filter { $0.backend == backend }, casesByID: casesByID)
+                    )
+                }
+            )
+            let completeness = TextToSQLEvalRunCompleteness.evaluate(
+                expectedKeys: expectedKeys,
+                results: results
+            )
+            let manifest = EvalRunManifest(
+                runID: runID,
+                parentRunID: resumeRun?.manifest.runID,
+                resumedFrom: resumeRun?.sourcePath,
+                suiteName: suite.name,
+                suiteVersion: suite.version,
+                suitePath: suiteURL.path,
+                evaluationMode: isOpenRouterSmoke
+                    ? "openrouter-transport-smoke"
+                    : options.semanticDatabase
+                    ? "production-pipeline-static-shape-plus-seeded-postgres-semantic"
+                    : "production-pipeline-static-shape",
+                commitSHA: Self.commitSHA(),
+                startedAt: startedAt,
+                finishedAt: finishedAt,
+                backendMode: options.backendMode.rawValue,
+                cloudAgentMode: options.backendMode.backends.contains(.cloud)
+                    ? options.cloudAgentMode.rawValue
+                    : nil,
+                schemaAgentClarificationCorrectionMode: options.usesCloudSchemaAgent
+                    ? options.schemaAgentClarificationCorrectionMode.rawValue
+                    : nil,
+                schemaAgentIntentCoverageMode: options.usesCloudSchemaAgent
+                    ? options.schemaAgentIntentCoverageMode.rawValue
+                    : nil,
+                model: options.backendMode == .local ? nil : options.model,
+                osVersion: ProcessInfo.processInfo.operatingSystemVersionString,
+                architecture: Self.architecture(),
+                caseCount: selectedCases.count,
+                selectedCaseIDs: selectedCases.map(\.id),
+                repeatCount: options.repeatCount,
+                caseTimeoutSeconds: options.caseTimeoutSeconds,
+                suiteFileHash: currentCompatibility.suiteFileHash,
+                scorerVersion: isOpenRouterSmoke
+                    ? "openrouter-transport-smoke-v1"
+                    : "production-pipeline-static-shape-v1",
+                scorerSourceHash: scorerSourceHash,
+                schemaFixtureHashes: currentCompatibility.schemaFixtureHashes,
+                semanticSuiteVersion: options.semanticDatabase ? Self.semanticSuiteVersion : nil,
+                semanticComparatorVersion: options.semanticDatabase
+                    ? TextToSQLSemanticComparator.version
+                    : nil,
+                semanticComparatorSourceHash: semanticComparatorSourceHash,
+                setupFixtureHashes: setupFixtureHashes,
+                negativeControlMetadataHash: negativeControlMetadataHash,
+                postgresServerVersion: semanticPreparation?.postgresServerVersion,
+                semanticSettings: options.semanticDatabase ? TextToSQLSemanticExecutor().settings : nil,
+                releaseGateVersion: options.releaseGateVersion,
+                expectedResultCount: completeness.expectedResultCount,
+                completedResultCount: completeness.completedResultCount,
+                missingResultCount: completeness.missingResultCount,
+                skippedBudgetCount: completeness.skippedBudgetCount,
+                providerBudgetUnavailableCount: completeness.providerBudgetUnavailableCount,
+                isComplete: completeness.isComplete,
+                budget: options.budgetManifest,
+                budgetStopReason: budgetStopReason
+            )
+            return EvalRun(
+                manifest: manifest,
+                results: results,
+                summary: summary,
+                backendSummaries: backendSummaries,
+                outputDirectory: outputDirectory
+            )
+        }
+
+        func writePartialArtifacts() throws {
+            let timestamp = ISO8601DateFormatter().string(from: Date())
+            _ = try EvalReporter.write(run: makeRun(finishedAt: timestamp), to: outputDirectory)
+        }
+
+        try writePartialArtifacts()
+        print("Eval artifacts: \(outputDirectory.path)")
 
         do {
             for key in keysToRun {
@@ -291,6 +390,7 @@ struct EvalRunner {
                             reason: reason
                         )
                     )
+                    try writePartialArtifacts()
                     continue
                 }
 
@@ -349,6 +449,7 @@ struct EvalRunner {
                             )
                             results.append(result)
                             budgetTracker.record(result)
+                            try writePartialArtifacts()
                             continue
                         }
                     } else {
@@ -365,8 +466,7 @@ struct EvalRunner {
                         sqlVerifier: verificationConnection == nil ? nil : PostgresSQLVerifier(),
                         verificationConnection: verificationConnection
                     )
-                    print("Running \(evalCase.id) [\(key.backend.rawValue)] repeat \(key.repeatIndex)")
-                    let staticResult = await TextToSQLEvalCaseRunner.run(
+                    let staticResult = await runCaseWithHeartbeat(
                         evalCase: evalCase,
                         schema: schema,
                         generator: generator,
@@ -397,6 +497,7 @@ struct EvalRunner {
                 if options.stopBeforeProviderLimit, result.status.isProviderBudgetUnavailable {
                     budgetStopReason = "OpenRouter provider budget was unavailable."
                 }
+                try writePartialArtifacts()
             }
             await semanticPreparation?.cleanup()
         } catch {
@@ -404,74 +505,7 @@ struct EvalRunner {
             throw error
         }
 
-        let finishedAt = ISO8601DateFormatter().string(from: Date())
-        let summary = summarize(results, casesByID: casesByID)
-        let backendSummaries = Dictionary(
-            uniqueKeysWithValues: options.backendMode.backends.map { backend in
-                (backend, summarize(results.filter { $0.backend == backend }, casesByID: casesByID))
-            }
-        )
-        let completeness = TextToSQLEvalRunCompleteness.evaluate(
-            expectedKeys: expectedKeys,
-            results: results
-        )
-        let manifest = EvalRunManifest(
-            runID: UUID().uuidString,
-            parentRunID: resumeRun?.manifest.runID,
-            resumedFrom: resumeRun?.sourcePath,
-            suiteName: suite.name,
-            suiteVersion: suite.version,
-            suitePath: suiteURL.path,
-            evaluationMode: isOpenRouterSmoke
-                ? "openrouter-transport-smoke"
-                : options.semanticDatabase
-                ? "production-pipeline-static-shape-plus-seeded-postgres-semantic"
-                : "production-pipeline-static-shape",
-            commitSHA: Self.commitSHA(),
-            startedAt: startedAt,
-            finishedAt: finishedAt,
-            backendMode: options.backendMode.rawValue,
-            cloudAgentMode: options.backendMode.backends.contains(.cloud)
-                ? options.cloudAgentMode.rawValue
-                : nil,
-            model: options.backendMode == .local ? nil : options.model,
-            osVersion: ProcessInfo.processInfo.operatingSystemVersionString,
-            architecture: Self.architecture(),
-            caseCount: selectedCases.count,
-            selectedCaseIDs: selectedCases.map(\.id),
-            repeatCount: options.repeatCount,
-            caseTimeoutSeconds: options.caseTimeoutSeconds,
-            suiteFileHash: currentCompatibility.suiteFileHash,
-            scorerVersion: isOpenRouterSmoke
-                ? "openrouter-transport-smoke-v1"
-                : "production-pipeline-static-shape-v1",
-            scorerSourceHash: scorerSourceHash,
-            schemaFixtureHashes: currentCompatibility.schemaFixtureHashes,
-            semanticSuiteVersion: options.semanticDatabase ? Self.semanticSuiteVersion : nil,
-            semanticComparatorVersion: options.semanticDatabase
-                ? TextToSQLSemanticComparator.version
-                : nil,
-            semanticComparatorSourceHash: semanticComparatorSourceHash,
-            setupFixtureHashes: setupFixtureHashes,
-            negativeControlMetadataHash: negativeControlMetadataHash,
-            postgresServerVersion: semanticPreparation?.postgresServerVersion,
-            semanticSettings: options.semanticDatabase ? TextToSQLSemanticExecutor().settings : nil,
-            releaseGateVersion: options.releaseGateVersion,
-            expectedResultCount: completeness.expectedResultCount,
-            completedResultCount: completeness.completedResultCount,
-            missingResultCount: completeness.missingResultCount,
-            skippedBudgetCount: completeness.skippedBudgetCount,
-            providerBudgetUnavailableCount: completeness.providerBudgetUnavailableCount,
-            isComplete: completeness.isComplete,
-            budget: options.budgetManifest,
-            budgetStopReason: budgetStopReason
-        )
-        return EvalRun(
-            manifest: manifest,
-            results: results,
-            summary: summary,
-            backendSummaries: backendSummaries
-        )
+        return makeRun(finishedAt: ISO8601DateFormatter().string(from: Date()))
     }
 
     private mutating func applyResumeDefaults(from previousRun: EvalPreviousRun) throws {
@@ -495,6 +529,18 @@ struct EvalRunner {
                 )
             }
             options.cloudAgentMode = mode
+        }
+        if let value = previousRun.manifest.schemaAgentClarificationCorrectionMode,
+            !options.explicitOptions.contains(.schemaAgentClarificationCorrectionMode),
+            let mode = SchemaToolAgentClarificationCorrectionMode(rawValue: value)
+        {
+            options.schemaAgentClarificationCorrectionMode = mode
+        }
+        if let value = previousRun.manifest.schemaAgentIntentCoverageMode,
+            !options.explicitOptions.contains(.schemaAgentIntentCoverageMode),
+            let mode = SchemaToolAgentIntentCoverageMode(rawValue: value)
+        {
+            options.schemaAgentIntentCoverageMode = mode
         }
         if let model = previousRun.manifest.model, !options.explicitOptions.contains(.model) {
             options.model = model
@@ -616,6 +662,8 @@ struct EvalRunner {
             + (options.cloudAgentMode == .tools ? [
                 "WidenKit/Services/OpenRouterSchemaToolSQLAgent.swift",
                 "WidenKit/Services/OpenRouterToolChatProtocol.swift",
+                "WidenKit/Services/SchemaToolAgentClarificationPolicy.swift",
+                "WidenKit/Services/SchemaToolAgentSQLIntentCoveragePolicy.swift",
                 "WidenKit/Services/SchemaToolSession.swift",
             ] : [])
     }
@@ -997,7 +1045,9 @@ struct EvalRunner {
                 return EvalCloudSchemaToolSQLGenerator(
                     apiKey: apiKey,
                     model: options.model,
-                    maximumHTTPAttempts: maximumHTTPAttempts
+                    maximumHTTPAttempts: maximumHTTPAttempts,
+                    clarificationCorrectionMode: options.schemaAgentClarificationCorrectionMode,
+                    intentCoverageMode: options.schemaAgentIntentCoverageMode
                 )
             }
             return OpenRouterSQLGenerator(
@@ -1007,6 +1057,42 @@ struct EvalRunner {
                 countCapabilityLookupHTTPAttempts: maximumHTTPAttempts != nil
             )
         }
+    }
+
+    private func runCaseWithHeartbeat(
+        evalCase: TextToSQLEvalCase,
+        schema: DatabaseSchema,
+        generator: any SQLGenerator,
+        options: TextToSQLEvalRunOptions
+    ) async -> TextToSQLEvalResult {
+        let started = Date()
+        let backend = options.backend.rawValue
+        let repeatIndex = options.repeatIndex
+        print(
+            "Running \(evalCase.id) [\(backend)] repeat \(repeatIndex) elapsed 0s"
+        )
+        let heartbeat = Task {
+            while !Task.isCancelled {
+                try? await Task.sleep(nanoseconds: 15_000_000_000)
+                guard !Task.isCancelled else { return }
+                let elapsed = Int(Date().timeIntervalSince(started).rounded())
+                print(
+                    "Heartbeat \(evalCase.id) [\(backend)] repeat \(repeatIndex) elapsed \(elapsed)s"
+                )
+            }
+        }
+        let result = await TextToSQLEvalCaseRunner.run(
+            evalCase: evalCase,
+            schema: schema,
+            generator: generator,
+            options: options
+        )
+        heartbeat.cancel()
+        let elapsed = Int(Date().timeIntervalSince(started).rounded())
+        print(
+            "Completed \(evalCase.id) [\(backend)] repeat \(repeatIndex) status \(result.status.rawValue) elapsed \(elapsed)s"
+        )
+        return result
     }
 
     private func backendUnavailableReason(for backend: TextToSQLEvalBackend) -> String? {
@@ -1462,6 +1548,20 @@ struct EvalRunner {
         return sha256(data)
     }
 
+    private static func outputDirectory(base: String) -> URL {
+        let timestamp = DateFormatter.evalTimestamp.string(from: Date())
+        let baseURL = URL(fileURLWithPath: base, isDirectory: true)
+            .appendingPathComponent(timestamp, isDirectory: true)
+        var candidate = baseURL
+        var suffix = 1
+        while FileManager.default.fileExists(atPath: candidate.path) {
+            candidate = URL(fileURLWithPath: base, isDirectory: true)
+                .appendingPathComponent("\(timestamp)-\(suffix)", isDirectory: true)
+            suffix += 1
+        }
+        return candidate
+    }
+
     private static func openRouterAPIKey() -> String? {
         let value = ProcessInfo.processInfo.environment["WIDEN_EVAL_OPENROUTER_API_KEY"]?
             .trimmingCharacters(in: .whitespacesAndNewlines)
@@ -1537,6 +1637,8 @@ private extension EvalRunManifest {
             model: model,
             backendMode: backendMode,
             cloudAgentMode: cloudAgentMode,
+            schemaAgentClarificationCorrectionMode: schemaAgentClarificationCorrectionMode,
+            schemaAgentIntentCoverageMode: schemaAgentIntentCoverageMode,
             semanticDatabaseEnabled: semanticDatabaseEnabled,
             scorerSourceHash: scorerSourceHash,
             semanticComparatorSourceHash: semanticComparatorSourceHash,
@@ -1547,6 +1649,10 @@ private extension EvalRunManifest {
 }
 
 private extension EvalCLIOptions {
+    var usesCloudSchemaAgent: Bool {
+        backendMode.backends.contains(.cloud) && cloudAgentMode == .tools
+    }
+
     var budgetLimits: TextToSQLEvalBudgetLimits {
         TextToSQLEvalBudgetLimits(
             maxCloudCostUSD: maxCloudCostUSD,
@@ -1696,6 +1802,8 @@ private struct EvalCloudSchemaToolSQLGenerator: SQLGenerator, Sendable {
     var apiKey: String
     var model: String
     var maximumHTTPAttempts: Int?
+    var clarificationCorrectionMode: SchemaToolAgentClarificationCorrectionMode
+    var intentCoverageMode: SchemaToolAgentIntentCoverageMode
 
     func generateSQL(
         question: String,
@@ -1725,6 +1833,8 @@ private struct EvalCloudSchemaToolSQLGenerator: SQLGenerator, Sendable {
 
     private func agentConfiguration() -> OpenRouterSchemaToolSQLAgentConfiguration {
         var configuration = OpenRouterSchemaToolSQLAgentConfiguration.default
+        configuration.clarificationCorrectionMode = clarificationCorrectionMode
+        configuration.intentCoverageMode = intentCoverageMode
         if let maximumHTTPAttempts {
             configuration.maximumHTTPAttempts = min(
                 configuration.maximumHTTPAttempts,
