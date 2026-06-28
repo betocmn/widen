@@ -164,6 +164,43 @@ struct TextToSQLEvalRunPlanningTests {
         })
     }
 
+    @Test func budgetStateSeedsReusableCompletedResults() {
+        let reused = [
+            Self.result(caseID: "case.a", repeatIndex: 1, status: .passed),
+            Self.result(caseID: "case.b", repeatIndex: 1, status: .passed),
+        ]
+
+        let state = TextToSQLEvalBudgetState(
+            limits: TextToSQLEvalBudgetLimits(maxCompletedResults: 2),
+            seedResults: reused
+        )
+
+        #expect(state.completedResults == 2)
+        #expect(state.stopReasonBeforeNextResult(backend: .cloud) == "Eval completed-result budget reached (2/2).")
+    }
+
+    @Test func httpBudgetStopsOnlyCloudAndReportsRemainingAttempts() {
+        let reused = [
+            Self.result(
+                caseID: "case.a",
+                repeatIndex: 1,
+                status: .passed,
+                openRouterHTTPAttempts: 2
+            ),
+        ]
+
+        let state = TextToSQLEvalBudgetState(
+            limits: TextToSQLEvalBudgetLimits(maxHTTPAttempts: 2),
+            seedResults: reused
+        )
+
+        #expect(state.httpAttempts == 2)
+        #expect(state.remainingHTTPAttempts(for: .cloud) == 0)
+        #expect(state.remainingHTTPAttempts(for: .local) == nil)
+        #expect(state.stopReasonBeforeNextResult(backend: .local) == nil)
+        #expect(state.stopReasonBeforeNextResult(backend: .cloud) == "Eval OpenRouter HTTP-attempt budget reached (2/2).")
+    }
+
     @Test func makefileContainsFocusedReleaseCommands() throws {
         let testFile = URL(fileURLWithPath: #filePath)
         let makefile = testFile
@@ -197,7 +234,8 @@ struct TextToSQLEvalRunPlanningTests {
         caseID: String,
         repeatIndex: Int,
         status: TextToSQLEvalCaseStatus,
-        endToEndPassed: Bool? = nil
+        endToEndPassed: Bool? = nil,
+        openRouterHTTPAttempts: Int? = nil
     ) -> TextToSQLEvalResult {
         TextToSQLEvalResult(
             caseID: caseID,
@@ -211,6 +249,7 @@ struct TextToSQLEvalRunPlanningTests {
                 structuredResponseParsed: status == .passed,
                 decisionMatches: status == .passed,
                 latencyMs: 1,
+                openRouterAgentHTTPAttemptCount: openRouterHTTPAttempts,
                 endToEndPassed: endToEndPassed
             )
         )

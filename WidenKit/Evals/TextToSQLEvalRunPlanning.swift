@@ -177,6 +177,89 @@ public enum TextToSQLEvalResumePlanner {
     }
 }
 
+public struct TextToSQLEvalBudgetLimits: Equatable, Sendable {
+    public var maxCloudCostUSD: Decimal?
+    public var maxHTTPAttempts: Int?
+    public var maxCompletedResults: Int?
+
+    public init(
+        maxCloudCostUSD: Decimal? = nil,
+        maxHTTPAttempts: Int? = nil,
+        maxCompletedResults: Int? = nil
+    ) {
+        self.maxCloudCostUSD = maxCloudCostUSD
+        self.maxHTTPAttempts = maxHTTPAttempts
+        self.maxCompletedResults = maxCompletedResults
+    }
+}
+
+public struct TextToSQLEvalBudgetState: Equatable, Sendable {
+    public var limits: TextToSQLEvalBudgetLimits
+    public private(set) var cloudCostUSD: Decimal
+    public private(set) var httpAttempts: Int
+    public private(set) var completedResults: Int
+
+    public init(
+        limits: TextToSQLEvalBudgetLimits,
+        seedResults: [TextToSQLEvalResult] = []
+    ) {
+        self.limits = limits
+        self.cloudCostUSD = 0
+        self.httpAttempts = 0
+        self.completedResults = 0
+        for result in seedResults {
+            record(result)
+        }
+    }
+
+    public func stopReasonBeforeNextResult(backend: TextToSQLEvalBackend) -> String? {
+        if let maxCompletedResults = limits.maxCompletedResults,
+            completedResults >= maxCompletedResults
+        {
+            return "Eval completed-result budget reached (\(completedResults)/\(maxCompletedResults))."
+        }
+        guard backend == .cloud else { return nil }
+        if let maxHTTPAttempts = limits.maxHTTPAttempts,
+            httpAttempts >= maxHTTPAttempts
+        {
+            return "Eval OpenRouter HTTP-attempt budget reached (\(httpAttempts)/\(maxHTTPAttempts))."
+        }
+        if let maxCloudCostUSD = limits.maxCloudCostUSD,
+            cloudCostUSD >= maxCloudCostUSD
+        {
+            return "Eval estimated cloud-cost budget reached ($\(Self.format(cloudCostUSD))/$\(Self.format(maxCloudCostUSD)))."
+        }
+        return nil
+    }
+
+    public func remainingHTTPAttempts(for backend: TextToSQLEvalBackend) -> Int? {
+        guard backend == .cloud, let maxHTTPAttempts = limits.maxHTTPAttempts else {
+            return nil
+        }
+        return Swift.max(0, maxHTTPAttempts - httpAttempts)
+    }
+
+    public mutating func record(_ result: TextToSQLEvalResult) {
+        if result.status.isCompletedEvaluation {
+            completedResults += 1
+        }
+        guard result.backend == .cloud else { return }
+        if let cost = result.metrics.estimatedCloudCostUSD {
+            cloudCostUSD += Decimal(cost)
+        }
+        if let attempts = result.metrics.openRouterAgentHTTPAttemptCount
+            ?? result.diagnostics.openRouterAttemptCount
+            ?? result.metrics.modelCallCount
+        {
+            httpAttempts += attempts
+        }
+    }
+
+    private static func format(_ value: Decimal) -> String {
+        NSDecimalNumber(decimal: value).stringValue
+    }
+}
+
 public struct TextToSQLEvalResumeCompatibilityManifest: Equatable, Sendable {
     public var suiteName: String
     public var suiteVersion: String

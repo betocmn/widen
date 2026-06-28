@@ -145,55 +145,6 @@ private struct EvalStoredRunFile: Codable {
 
 private struct EvalBackendRuntime {
     var unavailableReason: String?
-    var generator: (any SQLGenerator)?
-}
-
-private struct EvalBudgetTracker {
-    var maxCloudCostUSD: Decimal?
-    var maxHTTPAttempts: Int?
-    var maxCompletedResults: Int?
-    private(set) var cloudCostUSD: Decimal = 0
-    private(set) var httpAttempts = 0
-    private(set) var completedResults = 0
-
-    init(options: EvalCLIOptions) {
-        self.maxCloudCostUSD = options.maxCloudCostUSD
-        self.maxHTTPAttempts = options.maxHTTPAttempts
-        self.maxCompletedResults = options.maxCompletedResults
-    }
-
-    func stopReasonBeforeNextResult() -> String? {
-        if let maxCompletedResults, completedResults >= maxCompletedResults {
-            return "Eval completed-result budget reached (\(completedResults)/\(maxCompletedResults))."
-        }
-        if let maxHTTPAttempts, httpAttempts >= maxHTTPAttempts {
-            return "Eval OpenRouter HTTP-attempt budget reached (\(httpAttempts)/\(maxHTTPAttempts))."
-        }
-        if let maxCloudCostUSD, cloudCostUSD >= maxCloudCostUSD {
-            return "Eval estimated cloud-cost budget reached ($\(Self.format(cloudCostUSD))/$\(Self.format(maxCloudCostUSD)))."
-        }
-        return nil
-    }
-
-    mutating func record(_ result: TextToSQLEvalResult) {
-        if result.status.isCompletedEvaluation {
-            completedResults += 1
-        }
-        guard result.backend == .cloud else { return }
-        if let cost = result.metrics.estimatedCloudCostUSD {
-            cloudCostUSD += Decimal(cost)
-        }
-        if let attempts = result.metrics.openRouterAgentHTTPAttemptCount
-            ?? result.diagnostics.openRouterAttemptCount
-            ?? result.metrics.modelCallCount
-        {
-            httpAttempts += attempts
-        }
-    }
-
-    private static func format(_ value: Decimal) -> String {
-        NSDecimalNumber(decimal: value).stringValue
-    }
 }
 
 struct EvalRunner {
@@ -304,7 +255,10 @@ struct EvalRunner {
         var results = resumePlan?.reusableResults ?? []
         let keysToRun = resumePlan?.keysToRun ?? expectedKeys
         let casesByID = Dictionary(uniqueKeysWithValues: selectedCases.map { ($0.id, $0) })
-        var budgetTracker = EvalBudgetTracker(options: options)
+        var budgetTracker = TextToSQLEvalBudgetState(
+            limits: options.budgetLimits,
+            seedResults: results
+        )
         var budgetStopReason: String?
         var backendStates: [TextToSQLEvalBackend: EvalBackendRuntime] = [:]
         var semanticPreparation: SemanticPreparation?
@@ -325,7 +279,9 @@ struct EvalRunner {
                     throw EvalRunnerError.missingSchemaFixture(evalCase.schemaFixture)
                 }
 
-                if let reason = budgetStopReason ?? budgetTracker.stopReasonBeforeNextResult() {
+                if let reason = budgetStopReason ?? budgetTracker.stopReasonBeforeNextResult(
+                    backend: key.backend
+                ) {
                     budgetStopReason = reason
                     results.append(
                         skippedBudgetResult(
@@ -341,8 +297,7 @@ struct EvalRunner {
                 if backendStates[key.backend] == nil {
                     let unavailable = backendUnavailableReason(for: key.backend)
                     backendStates[key.backend] = EvalBackendRuntime(
-                        unavailableReason: unavailable,
-                        generator: unavailable == nil ? makeGenerator(for: key.backend) : nil
+                        unavailableReason: unavailable
                     )
                 }
                 let backendState = backendStates[key.backend]
@@ -364,7 +319,10 @@ struct EvalRunner {
                     )
                 {
                     result = semanticSkip
-                } else if let generator = backendState?.generator {
+                } else if let generator = makeGenerator(
+                    for: key.backend,
+                    maximumHTTPAttempts: budgetTracker.remainingHTTPAttempts(for: key.backend)
+                ) {
                     let prompt = promptText(for: key.backend, evalCase: evalCase, schema: schema)
                     let verificationService: PostgresService?
                     let verificationConnection: PostgresConnectionHandle?
@@ -1017,7 +975,10 @@ struct EvalRunner {
         }
     }
 
-    private func makeGenerator(for backend: TextToSQLEvalBackend) -> (any SQLGenerator)? {
+    private func makeGenerator(
+        for backend: TextToSQLEvalBackend,
+        maximumHTTPAttempts: Int?
+    ) -> (any SQLGenerator)? {
         switch backend {
         case .local:
             #if canImport(FoundationModels)
@@ -1034,13 +995,13 @@ struct EvalRunner {
                 return EvalCloudSchemaToolSQLGenerator(
                     apiKey: apiKey,
                     model: options.model,
-                    maximumHTTPAttempts: options.maxHTTPAttempts
+                    maximumHTTPAttempts: maximumHTTPAttempts
                 )
             }
             return OpenRouterSQLGenerator(
                 apiKey: apiKey,
                 model: options.model,
-                maximumHTTPAttempts: min(3, max(1, options.maxHTTPAttempts ?? 3))
+                maximumHTTPAttempts: maximumHTTPAttempts.map { min(3, max(1, $0)) } ?? 3
             )
         }
     }
@@ -1587,6 +1548,14 @@ private extension EvalRunManifest {
 }
 
 private extension EvalCLIOptions {
+    var budgetLimits: TextToSQLEvalBudgetLimits {
+        TextToSQLEvalBudgetLimits(
+            maxCloudCostUSD: maxCloudCostUSD,
+            maxHTTPAttempts: maxHTTPAttempts,
+            maxCompletedResults: maxCompletedResults
+        )
+    }
+
     var budgetManifest: EvalBudgetManifest? {
         guard maxCloudCostUSD != nil || maxHTTPAttempts != nil || maxCompletedResults != nil
             || stopBeforeProviderLimit
