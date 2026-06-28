@@ -180,8 +180,9 @@ enum TextToSQLReleaseGateReporter {
             "| --- | ---: | --- | --- | --- | --- | --- | --- | --- | --- |",
         ]
         for result in matches {
+            let evaluated = result.status.isCompletedEvaluation
             lines.append(
-                "| \(tableCell(result.caseID)) | \(result.repeatIndex) | \(result.status.isCompletedEvaluation ? "Evaluated" : "Not evaluated") | \(tableCell(result.status.rawValue)) | \(tableCell(result.metrics.semanticStatus?.rawValue ?? "-")) | \(historicalResultDescription(result)) | \(invalidToolABBinding(result) ? "Fail" : "Pass") | \(quotedTimestampCheck(result)) | \(timestampIntervalCheck(result)) | \(repeatedNoProgressRepair(result) ? "Fail" : "Pass") |"
+                "| \(tableCell(result.caseID)) | \(result.repeatIndex) | \(evaluated ? "Evaluated" : "Not evaluated") | \(tableCell(result.status.rawValue)) | \(tableCell(result.metrics.semanticStatus?.rawValue ?? "-")) | \(evaluated ? historicalResultDescription(result) : "Not evaluated") | \(evaluated ? (invalidToolABBinding(result) ? "Fail" : "Pass") : "-") | \(evaluated ? quotedTimestampCheck(result) : "-") | \(evaluated ? timestampIntervalCheck(result) : "-") | \(evaluated ? (repeatedNoProgressRepair(result) ? "Fail" : "Pass") : "-") |"
             )
         }
         return lines
@@ -518,7 +519,7 @@ enum TextToSQLReleaseTriageReporter {
                 )
             } else if let result = resultByKey[key] {
                 lines.append(
-                    "| \(tableCell(key.caseID)) | \(tableCell(key.backend.rawValue)) | \(key.repeatIndex) | Not evaluated | \(tableCell(result.status.rawValue)) | \(tableCell(result.metrics.semanticStatus?.rawValue ?? "-")) | Not evaluated | \(repeatedNoProgressRepair(result) ? "Yes" : "No") | \(invalidToolABBinding(result) ? "Fail" : "Pass") | \(quotedTimestampCheck(result)) | \(tableCell(result.diagnostics.errorMessage ?? result.status.notEvaluatedReason?.rawValue ?? "-")) |"
+                    "| \(tableCell(key.caseID)) | \(tableCell(key.backend.rawValue)) | \(key.repeatIndex) | Not evaluated | \(tableCell(result.status.rawValue)) | \(tableCell(result.metrics.semanticStatus?.rawValue ?? "-")) | Not evaluated | - | - | - | \(tableCell(result.diagnostics.errorMessage ?? result.status.notEvaluatedReason?.rawValue ?? "-")) |"
                 )
             } else {
                 lines.append(
