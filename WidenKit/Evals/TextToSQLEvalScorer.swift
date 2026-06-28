@@ -353,14 +353,23 @@ public enum TextToSQLEvalCaseRunner {
         let typed = SQLGenerationFailure.typed(error)
         let status = typed.map(status(for:)) ?? .transportFailure
         let openRouterDiagnostic: OpenRouterFailureDiagnostic?
+        let backendMetadata: OpenRouterGenerationMetadata?
+        let trace: TextToSQLTrace?
         if let typed, case .openRouter(let failure) = typed {
             openRouterDiagnostic = failure.diagnostic
+            backendMetadata = nil
+            trace = nil
         } else if let typed, case .schemaToolAgent(let failure) = typed {
             openRouterDiagnostic = failure.openRouterFailure?.diagnostic
+            backendMetadata = failure.backendMetadata
+            trace = agentFailureTrace(failure, latencyMs: latencyMs)
         } else {
             openRouterDiagnostic = nil
+            backendMetadata = nil
+            trace = nil
         }
         let providerBudgetUnavailable = openRouterDiagnostic?.category.isProviderBudgetUnavailable == true
+        let traceForCounts = trace ?? TextToSQLTrace(stages: [], modelCalls: 0, elapsedMs: latencyMs)
         let backendAvailable = providerBudgetUnavailable
             ? true
             : typed.map { $0.pipelineCategory != .backendUnavailable } ?? true
@@ -383,18 +392,30 @@ public enum TextToSQLEvalCaseRunner {
                 structuredResponseParsed: structuredParsed,
                 decisionMatches: false,
                 latencyMs: latencyMs,
-                modelCallCount: openRouterDiagnostic?.attemptCount,
+                modelCallCount: failureModelCallCount(
+                    trace: traceForCounts,
+                    openRouterFailure: openRouterDiagnostic,
+                    backendMetadata: backendMetadata
+                ),
                 estimatedInitialPromptCharacters: options.estimatedInitialPromptCharacters,
-                openRouterRetryCount: openRouterDiagnostic.map { max(0, $0.attemptCount - 1) },
-                openRouterRequestedModelID: openRouterDiagnostic?.requestedModelID,
-                openRouterReturnedModelID: openRouterDiagnostic?.returnedModelID,
-                openRouterProviderName: openRouterDiagnostic?.providerName
-            ),
+                tokenUsage: backendMetadata?.totalTokens,
+                estimatedCloudCostUSD: backendMetadata?.costUSD,
+                openRouterStructuredOutputMode: backendMetadata?.structuredOutputMode.rawValue,
+                openRouterRetryCount: backendMetadata?.retryCount
+                    ?? openRouterDiagnostic.map { max(0, $0.attemptCount - 1) },
+                openRouterRequestedModelID: backendMetadata?.requestedModelID
+                    ?? openRouterDiagnostic?.requestedModelID,
+                openRouterReturnedModelID: backendMetadata?.returnedModelID
+                    ?? openRouterDiagnostic?.returnedModelID,
+                openRouterProviderName: backendMetadata?.providerName
+                    ?? openRouterDiagnostic?.providerName
+            ).withOpenRouterAgentMetadata(backendMetadata, trace: trace),
             diagnostics: TextToSQLEvalDiagnostics(
                 errorMessage: error.localizedDescription,
                 openRouterFailure: openRouterDiagnostic
             ),
-            estimatedInitialPrompt: options.estimatedInitialPrompt
+            estimatedInitialPrompt: options.estimatedInitialPrompt,
+            trace: trace
         )
     }
 
@@ -479,6 +500,22 @@ public enum TextToSQLEvalCaseRunner {
         }
         guard trace.modelCalls > 0 else { return attemptCount }
         return trace.modelCalls + max(0, attemptCount - 1)
+    }
+
+    private static func agentFailureTrace(
+        _ failure: OpenRouterSchemaToolAgentFailure,
+        latencyMs: Int
+    ) -> TextToSQLTrace? {
+        guard !failure.schemaToolCalls.isEmpty || !failure.inspectionToolCalls.isEmpty else {
+            return nil
+        }
+        return TextToSQLTrace(
+            stages: [],
+            modelCalls: 0,
+            elapsedMs: latencyMs,
+            schemaToolCalls: failure.schemaToolCalls,
+            inspectionToolCalls: failure.inspectionToolCalls
+        )
     }
 
     private static func status(for failure: SQLGenerationFailure) -> TextToSQLEvalCaseStatus {

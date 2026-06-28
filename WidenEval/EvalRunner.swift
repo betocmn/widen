@@ -1091,11 +1091,7 @@ struct EvalRunner {
                 transportSuccess: false,
                 structuredResponseParsed: false,
                 decisionMatches: false,
-                latencyMs: 0,
-                semanticExecutionAttempted: options.semanticDatabase ? false : nil,
-                semanticEnvironmentAvailable: nil,
-                endToEndPassed: options.semanticDatabase ? false : nil,
-                semanticStatus: options.semanticDatabase ? .notApplicable : nil
+                latencyMs: 0
             ),
             diagnostics: TextToSQLEvalDiagnostics(errorMessage: reason)
         )

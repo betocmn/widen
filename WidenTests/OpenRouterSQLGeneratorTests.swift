@@ -695,6 +695,22 @@ struct OpenRouterSQLGeneratorTests {
                 message: nil
             ) == .providerLimit
         )
+        #expect(
+            OpenRouterFailure.category(
+                errorType: "rate_limit_exceeded",
+                providerCode: "provider_limit",
+                httpStatus: 429,
+                message: nil
+            ) == .providerLimit
+        )
+        #expect(
+            OpenRouterFailure.category(
+                errorType: "rate_limit_exceeded",
+                providerCode: "credits",
+                httpStatus: 429,
+                message: nil
+            ) == .paymentRequired
+        )
 
         #expect(
             OpenRouterFailure(category: .noContent, message: "empty").category == .noContent

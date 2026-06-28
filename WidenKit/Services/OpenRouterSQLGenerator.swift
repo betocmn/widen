@@ -290,6 +290,16 @@ public struct OpenRouterFailure: Error, LocalizedError, Equatable, Sendable {
         httpStatus: Int?,
         message: String?
     ) -> Category {
+        let code = providerCode?.lowercased()
+        switch code {
+        case "provider_limit", "provider_limit_exceeded", "provider_quota_exceeded":
+            return .providerLimit
+        case "payment_required", "insufficient_credits", "credits", "credits_exhausted":
+            return .paymentRequired
+        default:
+            break
+        }
+
         let type = errorType?.lowercased()
         switch type {
         case "authentication", "invalid_api_key":
@@ -332,16 +342,6 @@ public struct OpenRouterFailure: Error, LocalizedError, Equatable, Sendable {
             return .unsupportedFeature
         case "server", "unmapped":
             return .serverFailure
-        default:
-            break
-        }
-
-        let code = providerCode?.lowercased()
-        switch code {
-        case "provider_limit", "provider_limit_exceeded", "provider_quota_exceeded":
-            return .providerLimit
-        case "payment_required", "insufficient_credits", "credits", "credits_exhausted":
-            return .paymentRequired
         default:
             break
         }
