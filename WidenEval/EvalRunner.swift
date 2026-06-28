@@ -1031,9 +1031,17 @@ struct EvalRunner {
         case .cloud:
             guard let apiKey = Self.openRouterAPIKey() else { return nil }
             if options.cloudAgentMode == .tools {
-                return EvalCloudSchemaToolSQLGenerator(apiKey: apiKey, model: options.model)
+                return EvalCloudSchemaToolSQLGenerator(
+                    apiKey: apiKey,
+                    model: options.model,
+                    maximumHTTPAttempts: options.maxHTTPAttempts
+                )
             }
-            return OpenRouterSQLGenerator(apiKey: apiKey, model: options.model)
+            return OpenRouterSQLGenerator(
+                apiKey: apiKey,
+                model: options.model,
+                maximumHTTPAttempts: min(3, max(1, options.maxHTTPAttempts ?? 3))
+            )
         }
     }
 
@@ -1719,6 +1727,7 @@ private extension TextToSQLEvalResult {
 private struct EvalCloudSchemaToolSQLGenerator: SQLGenerator, Sendable {
     var apiKey: String
     var model: String
+    var maximumHTTPAttempts: Int?
 
     func generateSQL(
         question: String,
@@ -1735,7 +1744,8 @@ private struct EvalCloudSchemaToolSQLGenerator: SQLGenerator, Sendable {
             apiKey: apiKey,
             model: model,
             connectionID: connectionID,
-            selectedSchemas: selectedSchemas
+            selectedSchemas: selectedSchemas,
+            configuration: agentConfiguration()
         )
         return try await agent.generateSQL(
             question: question,
@@ -1743,6 +1753,17 @@ private struct EvalCloudSchemaToolSQLGenerator: SQLGenerator, Sendable {
             context: context,
             config: config
         )
+    }
+
+    private func agentConfiguration() -> OpenRouterSchemaToolSQLAgentConfiguration {
+        var configuration = OpenRouterSchemaToolSQLAgentConfiguration.default
+        if let maximumHTTPAttempts {
+            configuration.maximumHTTPAttempts = min(
+                configuration.maximumHTTPAttempts,
+                max(1, maximumHTTPAttempts)
+            )
+        }
+        return configuration
     }
 
     private func selectedSchemaSet(from schema: DatabaseSchema) -> [String] {

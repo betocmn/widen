@@ -734,6 +734,17 @@ struct OpenRouterSQLGeneratorTests {
         #expect(capped == nil)
     }
 
+    @Test func retryPolicyHonorsMaximumHTTPAttempts() {
+        let policy = OpenRouterRetryPolicy(maxAttempts: 1)
+        let failure = OpenRouterFailure(
+            category: .rateLimited,
+            message: "Retry later.",
+            httpStatus: 429
+        )
+
+        #expect(policy.retryDelay(for: failure, attempt: 1, noContentRetries: 0) == nil)
+    }
+
     @Test func retriesTransientFailuresAndCountsEveryAttempt() async throws {
         let transport = StubTransport([
             .success((catalogResponse(), response(url: Self.apiBase.appendingPathComponent("models/user"), status: 200))),

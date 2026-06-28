@@ -1011,15 +1011,21 @@ struct OpenRouterRequestBuilder: Sendable {
 }
 
 struct OpenRouterRetryPolicy: Sendable {
-    static let maxAttempts = 3
+    static let defaultMaxAttempts = 3
     static let retryAfterCap: TimeInterval = 15
+
+    var maxAttempts: Int
+
+    init(maxAttempts: Int = Self.defaultMaxAttempts) {
+        self.maxAttempts = max(1, maxAttempts)
+    }
 
     func retryDelay(
         for failure: OpenRouterFailure,
         attempt: Int,
         noContentRetries: Int
     ) -> TimeInterval? {
-        guard attempt < Self.maxAttempts else { return nil }
+        guard attempt < maxAttempts else { return nil }
         if failure.category == .noContent, noContentRetries >= 1 { return nil }
         guard isRetryable(failure.category) else { return nil }
         if let retryAfter = failure.diagnostic.retryAfterSeconds {
@@ -1718,19 +1724,21 @@ public final class OpenRouterSQLGenerator: SQLGenerator, Sendable {
     private let catalogService: OpenRouterModelCatalogService
     private let requestBuilder: OpenRouterRequestBuilder
     private let parser = OpenRouterResponseParser()
-    private let retryPolicy = OpenRouterRetryPolicy()
+    private let retryPolicy: OpenRouterRetryPolicy
 
     public init(
         apiKey: String,
         model: String,
         transport: any HTTPTransport = URLSessionTransport(),
-        endpoint: URL = URL(string: "https://openrouter.ai/api/v1/chat/completions")!
+        endpoint: URL = URL(string: "https://openrouter.ai/api/v1/chat/completions")!,
+        maximumHTTPAttempts: Int = 3
     ) {
         self.apiKey = apiKey
         self.model = model
         self.transport = transport
         self.catalogService = .shared
         self.requestBuilder = OpenRouterRequestBuilder(endpoint: endpoint)
+        self.retryPolicy = OpenRouterRetryPolicy(maxAttempts: maximumHTTPAttempts)
     }
 
     init(
@@ -1738,13 +1746,15 @@ public final class OpenRouterSQLGenerator: SQLGenerator, Sendable {
         model: String,
         transport: any HTTPTransport,
         catalogService: OpenRouterModelCatalogService,
-        requestBuilder: OpenRouterRequestBuilder
+        requestBuilder: OpenRouterRequestBuilder,
+        retryPolicy: OpenRouterRetryPolicy = OpenRouterRetryPolicy()
     ) {
         self.apiKey = apiKey
         self.model = model
         self.transport = transport
         self.catalogService = catalogService
         self.requestBuilder = requestBuilder
+        self.retryPolicy = retryPolicy
     }
 
     public func generateSQL(
