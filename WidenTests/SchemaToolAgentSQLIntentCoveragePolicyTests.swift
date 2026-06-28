@@ -161,6 +161,24 @@ struct SchemaToolAgentSQLIntentCoveragePolicyTests {
         #expect(covered.decision == .covered)
     }
 
+    @Test func scalarPersonAggregateDoesNotRequireEmailProjection() {
+        let covered = evaluate(
+            question: "How many active users do we have?",
+            evidence: evidence(columns: [
+                "public.users.id",
+                "public.users.email",
+                "public.users.status",
+            ]),
+            sql: """
+                SELECT COUNT(id) AS active_user_count
+                FROM public.users
+                WHERE status = 'active'
+                """
+        )
+
+        #expect(covered.decision == .covered)
+    }
+
     @Test func groupedPersonMetricPrefersEmailLabelOverName() {
         let missing = evaluate(
             question: "Show total paid revenue per customer",
@@ -275,6 +293,25 @@ struct SchemaToolAgentSQLIntentCoveragePolicyTests {
                 FROM public.subscription
                 WHERE expires_at >= DATE '2026-06-24'
                   AND expires_at < DATE '2026-06-24' + INTERVAL '30 days'
+                """
+        )
+
+        #expect(covered.decision == .covered)
+    }
+
+    @Test func unrelatedContextDateDoesNotRejectMovingCurrentDate() {
+        let covered = evaluate(
+            question: "Subscriptions expiring in the next 30 days",
+            databaseContext: "Database was migrated on 2026-06-24.",
+            evidence: evidence(columns: [
+                "public.subscription.id",
+                "public.subscription.expires_at",
+            ]),
+            sql: """
+                SELECT id
+                FROM public.subscription
+                WHERE expires_at >= CURRENT_DATE
+                  AND expires_at < CURRENT_DATE + INTERVAL '30 days'
                 """
         )
 
@@ -471,6 +508,23 @@ struct SchemaToolAgentSQLIntentCoveragePolicyTests {
         #expect(covered.decision == .covered)
     }
 
+    @Test func quotedStatusPredicateSatisfiesStatusCoverage() {
+        let covered = evaluate(
+            question: "Show active users",
+            evidence: evidence(columns: [
+                "public.users.id",
+                "public.users.Status",
+            ]),
+            sql: """
+                SELECT u.id
+                FROM public.users AS u
+                WHERE u."Status" = 'active'
+                """
+        )
+
+        #expect(covered.decision == .covered)
+    }
+
     @Test func frequentClusterRequiresCountOrderLimit() {
         let question = "What is the most frequent feedback cluster?"
         let evidence = evidence(columns: [
@@ -520,6 +574,61 @@ struct SchemaToolAgentSQLIntentCoveragePolicyTests {
                 GROUP BY c.id, c.name
                 ORDER BY feedback_count DESC
                 LIMIT 1
+                """
+        )
+
+        #expect(covered.decision == .covered)
+    }
+
+    @Test func topAllTimeStillRequiresLimit() {
+        let missing = evaluate(
+            question: "Top customers of all time",
+            evidence: evidence(columns: [
+                "public.orders.customer_id",
+            ]),
+            sql: """
+                SELECT customer_id, COUNT(*) AS order_count
+                FROM public.orders
+                GROUP BY customer_id
+                ORDER BY order_count DESC
+                """
+        )
+
+        #expect(missing.decision == .needsCorrection)
+        #expect(missing.missingSignals.contains("LIMIT for top/frequent request"))
+    }
+
+    @Test func unrelatedContextDoesNotDefineProtectedMetric() {
+        let missing = evaluate(
+            question: "Which accounts are healthy?",
+            databaseContext: "Data is refreshed nightly.",
+            evidence: evidence(columns: [
+                "public.accounts.id",
+            ]),
+            sql: """
+                SELECT id
+                FROM public.accounts
+                LIMIT 100
+                """
+        )
+
+        #expect(missing.decision == .mustClarify)
+        #expect(missing.unresolvedDecisionKinds.contains(.metric))
+    }
+
+    @Test func contextWithProtectedMetricDefinitionAllowsCoverageChecks() {
+        let covered = evaluate(
+            question: "Which accounts are healthy?",
+            databaseContext: "A healthy account is one with active status.",
+            evidence: evidence(columns: [
+                "public.accounts.id",
+                "public.accounts.status",
+            ]),
+            sql: """
+                SELECT id
+                FROM public.accounts
+                WHERE status = 'active'
+                LIMIT 100
                 """
         )
 
