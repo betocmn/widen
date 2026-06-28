@@ -315,13 +315,41 @@ struct SchemaToolAgentSQLIntentCoveragePolicyTests {
             sql: """
                 SELECT id, organization_id, status, expires_at
                 FROM public.subscription
-                WHERE expires_at >= DATE '2026-06-24'
+                WHERE status = 'active'
+                  AND expires_at >= DATE '2026-06-24'
                   AND expires_at < DATE '2026-06-24' + INTERVAL '30 days'
                 LIMIT 100
                 """
         )
 
         #expect(covered.decision == .covered)
+    }
+
+    @Test func averageByCountryRejectsUnrequestedEntityColumns() {
+        let missing = evaluate(
+            question: "Average paid order value by customer country",
+            evidence: evidence(columns: [
+                "public.customers.id",
+                "public.customers.email",
+                "public.customers.name",
+                "public.customers.country",
+                "public.orders.status",
+                "public.orders.total_cents",
+            ]),
+            sql: """
+                SELECT c.id, c.name, c.email, c.country,
+                       AVG(o.total_cents) AS average_paid_order_value_cents
+                FROM public.orders AS o
+                JOIN public.customers AS c ON o.customer_id = c.id
+                WHERE o.status = 'paid'
+                GROUP BY c.id, c.name, c.email, c.country
+                """
+        )
+
+        #expect(missing.decision == .needsCorrection)
+        #expect(missing.missingSignals.contains("remove unrequested projection id"))
+        #expect(missing.missingSignals.contains("remove unrequested projection name"))
+        #expect(missing.missingSignals.contains("remove unrequested projection email"))
     }
 
     @Test func activeUsersByOrgRequiresContextPredicates() {
@@ -466,6 +494,22 @@ struct SchemaToolAgentSQLIntentCoveragePolicyTests {
         #expect(missing.missingSignals.contains("descending ORDER BY for top/frequent request"))
         #expect(missing.missingSignals.contains("LIMIT for top/frequent request"))
 
+        let wrongAlias = evaluate(
+            question: question,
+            evidence: evidence,
+            sql: """
+                SELECT c.id, c.name, COUNT(i.id) AS feedback_item_count
+                FROM public.feedback_cluster AS c
+                JOIN public.feedback_item AS i ON i.cluster_id = c.id
+                GROUP BY c.id, c.name
+                ORDER BY feedback_item_count DESC
+                LIMIT 1
+                """
+        )
+
+        #expect(wrongAlias.decision == .needsCorrection)
+        #expect(wrongAlias.missingSignals.contains("feedback count alias"))
+
         let covered = evaluate(
             question: question,
             evidence: evidence,
@@ -497,6 +541,26 @@ struct SchemaToolAgentSQLIntentCoveragePolicyTests {
         )
 
         #expect(covered.decision == .covered)
+    }
+
+    @Test func nullableForeignKeyWithoutPatternRejectsMissingKeyProjection() {
+        let missing = evaluate(
+            question: "Show feedback items without a cluster",
+            evidence: evidence(columns: [
+                "public.feedback_item.id",
+                "public.feedback_item.body",
+                "public.feedback_item.created_at",
+                "public.feedback_item.cluster_id",
+            ]),
+            sql: """
+                SELECT id, body, created_at, cluster_id
+                FROM public.feedback_item
+                WHERE cluster_id IS NULL
+                """
+        )
+
+        #expect(missing.decision == .needsCorrection)
+        #expect(missing.missingSignals.contains("remove unrequested projection cluster_id"))
     }
 
     @Test func mostRecentDoesNotRequireAggregateTopCount() {

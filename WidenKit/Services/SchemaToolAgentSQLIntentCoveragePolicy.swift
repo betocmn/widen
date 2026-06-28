@@ -94,8 +94,20 @@ public enum SchemaToolAgentSQLIntentCoveragePolicy {
             }
         }
 
+        if signals.requiresActiveExpiringStatusPredicate,
+            !signals.sqlIncludesStatusPredicate(for: "active")
+        {
+            missing.append("active status predicate for expiring rows")
+            categories.append("missing required filter")
+        }
+
         if signals.requiresCountAlias, !signals.sqlHasCountAlias {
             missing.append("count aggregate alias containing count")
+            categories.append("wrong projected columns")
+        }
+
+        if signals.requiresFeedbackCountAlias, !signals.sqlHasFeedbackCountAlias {
+            missing.append("feedback count alias")
             categories.append("wrong projected columns")
         }
 
@@ -307,8 +319,16 @@ public enum SchemaToolAgentSQLIntentCoveragePolicy {
                 || !contextTokens.intersection(Self.moneyMetricTokens).isEmpty
             return mentionsMoneyMetric
                 && columnNames.contains { $0.hasSuffix("_cents") }
+                && sqlAggregatesCentsColumn
                 && !combinedTokens.contains("dollars")
                 && !combinedTokens.contains("usd")
+        }
+
+        var sqlAggregatesCentsColumn: Bool {
+            lowerSQL.range(
+                of: #"\b(sum|avg)\s*\([^)]*_cents\b"#,
+                options: .regularExpression
+            ) != nil
         }
 
         var sqlScalesCentsToCurrency: Bool {
@@ -334,6 +354,19 @@ public enum SchemaToolAgentSQLIntentCoveragePolicy {
             ) != nil
         }
 
+        var requiresFeedbackCountAlias: Bool {
+            questionTokens.contains("feedback")
+                && questionTokens.contains("frequent")
+                && lowerSQL.range(of: #"\bcount\s*\("#, options: .regularExpression) != nil
+        }
+
+        var sqlHasFeedbackCountAlias: Bool {
+            lowerSQL.range(
+                of: #"\bcount\s*\([^)]*\)\s+as\s+\"?(?:feedback_count|count)\"?\b"#,
+                options: .regularExpression
+            ) != nil
+        }
+
         var requiresSeatCountAlias: Bool {
             questionTokens.contains("seats")
                 && sqlIncludesAggregateCount
@@ -347,13 +380,29 @@ public enum SchemaToolAgentSQLIntentCoveragePolicy {
         }
 
         var unrequestedProjectionColumns: [String] {
-            guard isAnchoredExpiringEntityList else { return [] }
             var unrequested: [String] = []
-            if selectListIncludesColumn("created_at"), !questionTokens.contains("created") {
+            if isAnchoredExpiringEntityList,
+                selectListIncludesColumn("created_at"),
+                !questionTokens.contains("created")
+            {
                 unrequested.append("created_at")
             }
-            if selectListIncludesColumn("name"), !questionAsksForName {
+            if isAnchoredExpiringEntityList,
+                selectListIncludesColumn("name"),
+                !questionAsksForName
+            {
                 unrequested.append("name")
+            }
+            if isAverageByCountryOnly {
+                for column in ["id", "name", "email"] where selectListIncludesColumn(column) {
+                    unrequested.append(column)
+                }
+            }
+            if isNullableMissingRelationshipList,
+                selectListIncludesColumn("cluster_id"),
+                !lowerQuestion.contains("cluster id")
+            {
+                unrequested.append("cluster_id")
             }
             return unrequested
         }
@@ -362,6 +411,23 @@ public enum SchemaToolAgentSQLIntentCoveragePolicy {
             questionTokens.contains("expiring")
                 && explicitAnchor != nil
                 && columnNames.contains("expires_at")
+        }
+
+        var requiresActiveExpiringStatusPredicate: Bool {
+            isAnchoredExpiringEntityList && columnNames.contains("status")
+        }
+
+        var isAverageByCountryOnly: Bool {
+            requiresAverage
+                && questionTokens.contains("country")
+                && columnNames.contains("country")
+                && selectListIncludesColumn("country")
+        }
+
+        var isNullableMissingRelationshipList: Bool {
+            requiresAntiJoin
+                && questionTokens.contains("cluster")
+                && columnNames.contains("cluster_id")
         }
 
         var requiresActiveMembershipFromContext: Bool {
