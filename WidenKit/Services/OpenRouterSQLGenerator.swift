@@ -133,6 +133,13 @@ public struct OpenRouterSchemaToolAgentDiagnostics: Codable, Equatable, Sendable
     public var producedProseInsteadOfTools: Bool
     public var schemaEvidence: OpenRouterSchemaToolEvidenceSummary
     public var appSideRejectionReason: OpenRouterSchemaToolAppRejectionReason?
+    public var clarificationPolicyDecision: String
+    public var clarificationPolicyReason: String
+    public var overClarificationCorrectionAttempted: Bool
+    public var overClarificationCorrectionSucceeded: Bool
+    public var databaseContextFactsUsed: [String]
+    public var evidenceSufficientForSQL: Bool
+    public var unresolvedDecisionKinds: [String]
 
     public init(
         logicalTurnCount: Int? = nil,
@@ -142,7 +149,14 @@ public struct OpenRouterSchemaToolAgentDiagnostics: Codable, Equatable, Sendable
         triedSchemaToolsAfterTerminal: Bool = false,
         producedProseInsteadOfTools: Bool = false,
         schemaEvidence: OpenRouterSchemaToolEvidenceSummary = OpenRouterSchemaToolEvidenceSummary(),
-        appSideRejectionReason: OpenRouterSchemaToolAppRejectionReason? = nil
+        appSideRejectionReason: OpenRouterSchemaToolAppRejectionReason? = nil,
+        clarificationPolicyDecision: String = "",
+        clarificationPolicyReason: String = "",
+        overClarificationCorrectionAttempted: Bool = false,
+        overClarificationCorrectionSucceeded: Bool = false,
+        databaseContextFactsUsed: [String] = [],
+        evidenceSufficientForSQL: Bool = false,
+        unresolvedDecisionKinds: [String] = []
     ) {
         self.logicalTurnCount = logicalTurnCount
         self.terminalToolSeen = terminalToolSeen
@@ -152,6 +166,86 @@ public struct OpenRouterSchemaToolAgentDiagnostics: Codable, Equatable, Sendable
         self.producedProseInsteadOfTools = producedProseInsteadOfTools
         self.schemaEvidence = schemaEvidence
         self.appSideRejectionReason = appSideRejectionReason
+        self.clarificationPolicyDecision = clarificationPolicyDecision
+        self.clarificationPolicyReason = clarificationPolicyReason
+        self.overClarificationCorrectionAttempted = overClarificationCorrectionAttempted
+        self.overClarificationCorrectionSucceeded = overClarificationCorrectionSucceeded
+        self.databaseContextFactsUsed = databaseContextFactsUsed
+        self.evidenceSufficientForSQL = evidenceSufficientForSQL
+        self.unresolvedDecisionKinds = unresolvedDecisionKinds
+    }
+
+    private enum CodingKeys: String, CodingKey {
+        case logicalTurnCount
+        case terminalToolSeen
+        case terminalAction
+        case terminalValidationFailureReason
+        case triedSchemaToolsAfterTerminal
+        case producedProseInsteadOfTools
+        case schemaEvidence
+        case appSideRejectionReason
+        case clarificationPolicyDecision
+        case clarificationPolicyReason
+        case overClarificationCorrectionAttempted
+        case overClarificationCorrectionSucceeded
+        case databaseContextFactsUsed
+        case evidenceSufficientForSQL
+        case unresolvedDecisionKinds
+    }
+
+    public init(from decoder: any Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        logicalTurnCount = try container.decodeIfPresent(Int.self, forKey: .logicalTurnCount)
+        terminalToolSeen = try container.decodeIfPresent(Bool.self, forKey: .terminalToolSeen) ?? false
+        terminalAction = try container.decodeIfPresent(String.self, forKey: .terminalAction)
+        terminalValidationFailureReason = try container.decodeIfPresent(
+            String.self,
+            forKey: .terminalValidationFailureReason
+        )
+        triedSchemaToolsAfterTerminal = try container.decodeIfPresent(
+            Bool.self,
+            forKey: .triedSchemaToolsAfterTerminal
+        ) ?? false
+        producedProseInsteadOfTools = try container.decodeIfPresent(
+            Bool.self,
+            forKey: .producedProseInsteadOfTools
+        ) ?? false
+        schemaEvidence = try container.decodeIfPresent(
+            OpenRouterSchemaToolEvidenceSummary.self,
+            forKey: .schemaEvidence
+        ) ?? OpenRouterSchemaToolEvidenceSummary()
+        appSideRejectionReason = try container.decodeIfPresent(
+            OpenRouterSchemaToolAppRejectionReason.self,
+            forKey: .appSideRejectionReason
+        )
+        clarificationPolicyDecision = try container.decodeIfPresent(
+            String.self,
+            forKey: .clarificationPolicyDecision
+        ) ?? ""
+        clarificationPolicyReason = try container.decodeIfPresent(
+            String.self,
+            forKey: .clarificationPolicyReason
+        ) ?? ""
+        overClarificationCorrectionAttempted = try container.decodeIfPresent(
+            Bool.self,
+            forKey: .overClarificationCorrectionAttempted
+        ) ?? false
+        overClarificationCorrectionSucceeded = try container.decodeIfPresent(
+            Bool.self,
+            forKey: .overClarificationCorrectionSucceeded
+        ) ?? false
+        databaseContextFactsUsed = try container.decodeIfPresent(
+            [String].self,
+            forKey: .databaseContextFactsUsed
+        ) ?? []
+        evidenceSufficientForSQL = try container.decodeIfPresent(
+            Bool.self,
+            forKey: .evidenceSufficientForSQL
+        ) ?? false
+        unresolvedDecisionKinds = try container.decodeIfPresent(
+            [String].self,
+            forKey: .unresolvedDecisionKinds
+        ) ?? []
     }
 }
 

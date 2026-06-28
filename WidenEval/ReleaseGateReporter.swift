@@ -412,8 +412,8 @@ enum TextToSQLReleaseTriageReporter {
                 "",
                 "## \(category.rawValue)",
                 "",
-                "| Case | Repeat | Expected | Actual | Status | Semantic | Verification | Terminal | Schema Tools | Described | Inspected Objects | SQL Tables | Repeated Repair |",
-                "| --- | ---: | --- | --- | --- | --- | --- | --- | ---: | ---: | --- | --- | --- |",
+                "| Case | Repeat | Expected | Actual | Status | Semantic | Verification | Terminal | Policy | Schema Tools | Described | Inspected Objects | SQL Tables | Repeated Repair |",
+                "| --- | ---: | --- | --- | --- | --- | --- | --- | --- | ---: | ---: | --- | --- | --- |",
             ]
             for row in rows {
                 lines.append(row.markdownRow)
@@ -683,6 +683,7 @@ enum TextToSQLReleaseTriageReporter {
             let terminal = diagnostics?.terminalAction
                 ?? result.metrics.openRouterAgentTerminalOutcome
                 ?? "-"
+            let policy = Self.policySummary(diagnostics)
             let schemaToolCalls = result.metrics.openRouterSchemaToolCallCount
                 ?? result.trace?.schemaToolCalls.count
                 ?? 0
@@ -698,12 +699,36 @@ enum TextToSQLReleaseTriageReporter {
                 tableCell(result.metrics.semanticStatus?.rawValue ?? "-"),
                 tableCell(result.metrics.postgresVerificationStatus?.rawValue ?? "-"),
                 tableCell(terminal),
+                tableCell(policy),
                 String(schemaToolCalls),
                 String(described),
                 tableCell(inspectedObjects.isEmpty ? "-" : inspectedObjects),
                 tableCell(sqlTables.isEmpty ? "-" : sqlTables),
                 repeatedNoProgressRepair(result) ? "Yes" : "No",
             ].joined(separator: " | ").withMarkdownTablePipes
+        }
+
+        private static func policySummary(
+            _ diagnostics: OpenRouterSchemaToolAgentDiagnostics?
+        ) -> String {
+            guard let diagnostics,
+                !diagnostics.clarificationPolicyDecision.isEmpty
+            else { return "-" }
+            var parts = [diagnostics.clarificationPolicyDecision]
+            if diagnostics.evidenceSufficientForSQL {
+                parts.append("evidence sufficient")
+            }
+            if diagnostics.overClarificationCorrectionAttempted {
+                parts.append(
+                    diagnostics.overClarificationCorrectionSucceeded
+                        ? "correction succeeded"
+                        : "correction attempted"
+                )
+            }
+            if !diagnostics.unresolvedDecisionKinds.isEmpty {
+                parts.append("unresolved: " + diagnostics.unresolvedDecisionKinds.joined(separator: ","))
+            }
+            return parts.joined(separator: "; ")
         }
 
         static func sort(_ lhs: TriageRow, _ rhs: TriageRow) -> Bool {

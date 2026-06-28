@@ -2000,6 +2000,14 @@ public enum GeneratedSQLPostprocessor {
             if allowGroundingClarification,
                 let pending = grounding.pendingClarification
             {
+                if schemaToolEvidenceAllowsSQL(
+                    question: question,
+                    databaseContext: databaseContext,
+                    schemaValidation: schemaValidation,
+                    generation: generation
+                ) {
+                    return copy
+                }
                 copy.sql = ""
                 copy.explanation = pending.question
                 copy.needsClarification = true
@@ -2012,6 +2020,35 @@ public enum GeneratedSQLPostprocessor {
             }
         }
         return copy
+    }
+
+    private static func schemaToolEvidenceAllowsSQL(
+        question: String,
+        databaseContext: String,
+        schemaValidation: SQLSchemaValidationResult,
+        generation: SQLGenerationResult
+    ) -> Bool {
+        guard let diagnostics = generation.backendMetadata?.agentDiagnostics,
+            diagnostics.terminalToolSeen,
+            diagnostics.terminalAction == "sql",
+            diagnostics.appSideRejectionReason == nil,
+            !schemaValidation.referencedTables.isEmpty
+        else {
+            return false
+        }
+        let evidence = diagnostics.schemaEvidence
+        guard SchemaToolAgentClarificationPolicy.evidenceSufficientForSQL(
+            question: question,
+            databaseContext: databaseContext,
+            evidence: evidence
+        ) else {
+            return false
+        }
+        let describedTables = Set(evidence.describedTableIDs.map { $0.lowercased() })
+        guard !describedTables.isEmpty else { return false }
+        return schemaValidation.referencedTables.allSatisfy { table in
+            describedTables.contains(table.lowercased())
+        }
     }
 
     private static func anchoredWindowClarification(

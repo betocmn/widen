@@ -320,6 +320,9 @@ struct OpenRouterSchemaToolSQLAgentTests {
                         name: DatabaseInspectionToolName.inspectRelationSize.rawValue,
                         arguments: ["table_id": tableID]
                     ),
+                    Self.toolCall(id: "describe-1", name: "describe_tables", arguments: [
+                        "table_ids": [tableID],
+                    ]),
                 ])
             case 3:
                 let body = try Self.requestBodyText(request)
@@ -347,7 +350,7 @@ struct OpenRouterSchemaToolSQLAgentTests {
 
         #expect(result.needsClarification)
         #expect(database.relationSizeCallCount == 1)
-        #expect(result.schemaToolCalls.map(\.toolName) == ["search_schema"])
+        #expect(result.schemaToolCalls.map(\.toolName) == ["search_schema", "describe_tables"])
         #expect(result.inspectionToolCalls.map(\.toolName) == [
             DatabaseInspectionToolName.inspectRelationSize.rawValue,
         ])
@@ -566,6 +569,118 @@ struct OpenRouterSchemaToolSQLAgentTests {
         #expect(result.backendMetadata?.agentTerminalOutcome == "clarify_fallback")
     }
 
+    @Test func overClarificationWithSufficientEvidenceIsCorrectedToSQL() async throws {
+        let schema = Self.makeSchema()
+        let sql = """
+            SELECT u.id, u.name
+            FROM public.users AS u
+            LEFT JOIN public.orders AS o ON o.user_id = u.id
+            WHERE o.id IS NULL
+            LIMIT 100
+            """
+        let chatTransport = ScriptedTransport { request, index in
+            switch index {
+            case 1:
+                return Self.assistantToolCalls([
+                    Self.toolCall(id: "search-users-missing-orders", name: "search_schema", arguments: [
+                        "query": "users",
+                        "limit": 4,
+                    ]),
+                    Self.toolCall(id: "search-orders-missing-users", name: "search_schema", arguments: [
+                        "query": "orders",
+                        "limit": 4,
+                    ]),
+                ])
+            case 2:
+                let users = try Self.tableHandle(named: #""public"."users""#, in: request)
+                let orders = try Self.tableHandle(named: #""public"."orders""#, in: request)
+                return Self.assistantToolCalls([
+                    Self.toolCall(id: "describe-users-orders", name: "describe_tables", arguments: [
+                        "table_ids": [users, orders],
+                    ]),
+                ])
+            case 3:
+                return Self.assistantToolCalls([
+                    Self.terminalClarification(
+                        id: "terminal-overclarify-users-orders",
+                        question: "Which relationship should I use between users and orders?"
+                    ),
+                ])
+            case 4:
+                let body = try Self.requestBodyText(request)
+                #expect(body.contains("overcautious_clarification"))
+                #expect(body.contains("action='sql'"))
+                return Self.assistantToolCalls([
+                    Self.terminalSQL(id: "terminal-users-without-orders", sql: sql),
+                ])
+            default:
+                throw URLError(.badServerResponse)
+            }
+        }
+        let agent = makeAgent(schema: schema, chatTransport: chatTransport)
+
+        let result = try await agent.generateSQL(
+            question: "Which users have never placed an order?",
+            schema: schema,
+            context: SQLGenerationContext(),
+            config: SQLGenerationConfig()
+        )
+
+        #expect(!result.needsClarification)
+        #expect(result.sql.contains("LEFT JOIN public.orders"))
+        #expect(result.backendMetadata?.agentDiagnostics?.clarificationPolicyDecision == "shouldAnswerWithSQL")
+        #expect(result.backendMetadata?.agentDiagnostics?.overClarificationCorrectionAttempted == true)
+        #expect(result.backendMetadata?.agentDiagnostics?.overClarificationCorrectionSucceeded == true)
+    }
+
+    @Test func genuineMetricAmbiguityRemainsClarification() async throws {
+        let schema = Self.makeSchema()
+        let clarification = "Which metric should define best customers?"
+        let chatTransport = ScriptedTransport { request, index in
+            switch index {
+            case 1:
+                return Self.assistantToolCalls([
+                    Self.toolCall(id: "search-best-customers", name: "search_schema", arguments: [
+                        "query": "users",
+                        "limit": 4,
+                    ]),
+                    Self.toolCall(id: "search-best-orders", name: "search_schema", arguments: [
+                        "query": "orders",
+                        "limit": 4,
+                    ]),
+                ])
+            case 2:
+                let users = try Self.tableHandle(named: #""public"."users""#, in: request)
+                let orders = try Self.tableHandle(named: #""public"."orders""#, in: request)
+                return Self.assistantToolCalls([
+                    Self.toolCall(id: "describe-best-customers", name: "describe_tables", arguments: [
+                        "table_ids": [users, orders],
+                    ]),
+                ])
+            case 3:
+                return Self.assistantToolCalls([
+                    Self.terminalClarification(id: "terminal-best-customers", question: clarification),
+                ])
+            default:
+                throw URLError(.badServerResponse)
+            }
+        }
+        let agent = makeAgent(schema: schema, chatTransport: chatTransport)
+
+        let result = try await agent.generateSQL(
+            question: "Who are our best customers?",
+            schema: schema,
+            context: SQLGenerationContext(),
+            config: SQLGenerationConfig()
+        )
+
+        #expect(result.needsClarification)
+        #expect(result.clarificationQuestion == clarification)
+        #expect(result.backendMetadata?.agentDiagnostics?.clarificationPolicyDecision == "acceptableAmbiguity")
+        #expect(result.backendMetadata?.agentDiagnostics?.overClarificationCorrectionAttempted == false)
+        #expect(chatTransport.requests.count == 3)
+    }
+
     @Test func databaseContextRejectsGenericClarificationBeforeSQL() async throws {
         let schema = Self.makePreseasonSchema()
         let sql = """
@@ -607,7 +722,8 @@ struct OpenRouterSchemaToolSQLAgentTests {
                 ])
             case 4:
                 let body = try Self.requestBodyText(request)
-                #expect(body.contains("database_context_authoritative"))
+                #expect(body.contains("overcautious_clarification"))
+                #expect(body.contains("Do not ask the user to confirm facts already supplied"))
                 return Self.assistantToolCalls([
                     Self.terminalSQL(id: "terminal-context-sql", sql: sql),
                 ])
@@ -629,7 +745,9 @@ struct OpenRouterSchemaToolSQLAgentTests {
 
         #expect(!result.needsClarification)
         #expect(result.sql.contains("e.winner_id IS NOT NULL"))
-        #expect(result.backendMetadata?.agentDiagnostics?.terminalValidationFailureReason == "databaseContextClarificationRejected")
+        #expect(result.backendMetadata?.agentDiagnostics?.terminalValidationFailureReason == "asksForAlreadyKnownEvidence")
+        #expect(result.backendMetadata?.agentDiagnostics?.overClarificationCorrectionAttempted == true)
+        #expect(result.backendMetadata?.agentDiagnostics?.overClarificationCorrectionSucceeded == true)
     }
 
     @Test func databaseContextRejectsSpecificClarificationBeforeSQL() async throws {
@@ -673,7 +791,8 @@ struct OpenRouterSchemaToolSQLAgentTests {
                 ])
             case 4:
                 let body = try Self.requestBodyText(request)
-                #expect(body.contains("database_context_authoritative"))
+                #expect(body.contains("overcautious_clarification"))
+                #expect(body.contains("Do not ask the user to confirm facts already supplied"))
                 return Self.assistantToolCalls([
                     Self.terminalSQL(id: "terminal-context-specific-sql", sql: sql),
                 ])
@@ -695,7 +814,9 @@ struct OpenRouterSchemaToolSQLAgentTests {
 
         #expect(!result.needsClarification)
         #expect(result.sql.contains(#"e."createdAt" >= NOW() - INTERVAL '14 days'"#))
-        #expect(result.backendMetadata?.agentDiagnostics?.terminalValidationFailureReason == "databaseContextClarificationRejected")
+        #expect(result.backendMetadata?.agentDiagnostics?.terminalValidationFailureReason == "asksForAlreadyKnownEvidence")
+        #expect(result.backendMetadata?.agentDiagnostics?.overClarificationCorrectionAttempted == true)
+        #expect(result.backendMetadata?.agentDiagnostics?.overClarificationCorrectionSucceeded == true)
     }
 
     @Test func metricOnlyDatabaseContextDoesNotRejectTimeClarification() async throws {
@@ -892,36 +1013,41 @@ struct OpenRouterSchemaToolSQLAgentTests {
         #expect(result.backendMetadata?.agentDiagnostics?.terminalValidationFailureReason == nil)
     }
 
-    @Test func contextResolvedClarificationFailsAfterCorrectionBudgetIsSpent() async throws {
+    @Test func repeatedOverClarificationStopsWithTypedFailure() async throws {
         let schema = Self.makePreseasonSchema()
         let chatTransport = ScriptedTransport { request, index in
             switch index {
             case 1:
-                return Self.assistantText("I need to inspect the schema first.")
-            case 2:
-                let body = try Self.requestBodyText(request)
-                #expect(body.contains("Call search_schema before finishing"))
                 return Self.assistantToolCalls([
-                    Self.toolCall(id: "search-after-prose", name: "search_schema", arguments: [
+                    Self.toolCall(id: "search-before-overclarify", name: "search_schema", arguments: [
                         "query": "preseason winner wins",
                         "limit": 4,
                     ]),
                 ])
-            case 3:
+            case 2:
                 let evaluations = try Self.tableHandle(
                     named: #""public"."preseason_match_evaluation""#,
                     in: request
                 )
                 let tools = try Self.tableHandle(named: #""public"."preseason_tool""#, in: request)
                 return Self.assistantToolCalls([
-                    Self.toolCall(id: "describe-after-prose", name: "describe_tables", arguments: [
+                    Self.toolCall(id: "describe-before-overclarify", name: "describe_tables", arguments: [
                         "table_ids": [evaluations, tools],
                     ]),
                 ])
-            case 4:
+            case 3:
                 return Self.assistantToolCalls([
                     Self.terminalClarification(
-                        id: "terminal-context-after-budget",
+                        id: "terminal-overclarify-1",
+                        question: "What column, condition, or table defines wins for this question?"
+                    ),
+                ])
+            case 4:
+                let body = try Self.requestBodyText(request)
+                #expect(body.contains("overcautious_clarification"))
+                return Self.assistantToolCalls([
+                    Self.terminalClarification(
+                        id: "terminal-overclarify-2",
                         question: "What column, condition, or table defines wins for this question?"
                     ),
                 ])
@@ -941,9 +1067,12 @@ struct OpenRouterSchemaToolSQLAgentTests {
                         "Each evaluation with a non-null winner_id records one win. Use evaluation createdAt as the time of the win."
                 )
             )
-            Issue.record("Expected context-resolved clarification failure")
+            Issue.record("Expected repeated over-clarification failure")
         } catch let failure as OpenRouterSchemaToolAgentFailure {
-            #expect(failure.category == .terminalResultMalformed)
+            #expect(failure.category == .overcautiousClarificationNoProgress)
+            #expect(failure.backendMetadata?.agentDiagnostics?.overClarificationCorrectionAttempted == true)
+            #expect(failure.backendMetadata?.agentDiagnostics?.overClarificationCorrectionSucceeded == false)
+            #expect(chatTransport.requests.count == 4)
         }
     }
 

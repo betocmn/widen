@@ -46,6 +46,7 @@ public struct OpenRouterSchemaToolAgentFailure: Error, LocalizedError, Equatable
         case modelTurnBudgetExhausted
         case terminalResultMissing
         case terminalResultMalformed
+        case overcautiousClarificationNoProgress
         case safetyValidation
         case uninspectedSchemaObjects
         case staleSchemaSnapshot
@@ -93,7 +94,8 @@ public struct OpenRouterSchemaToolAgentFailure: Error, LocalizedError, Equatable
             .safetyValidation
         case .repeatedToolCallNoProgress, .uninspectedSchemaObjects:
             .schemaValidation
-        case .schemaToolCallBudgetExhausted, .schemaToolByteBudgetExhausted:
+        case .schemaToolCallBudgetExhausted, .schemaToolByteBudgetExhausted,
+            .overcautiousClarificationNoProgress:
             .modelGeneration
         case .staleSchemaSnapshot:
             .modelGeneration
@@ -311,6 +313,7 @@ public final class OpenRouterSchemaToolSQLAgent: SQLGenerator, Sendable {
         var malformedTerminalCorrections = 0
         var repeatedToolCorrections = 0
         var uninspectedSQLCorrections = 0
+        var overClarificationCorrections = 0
         let deadline = Date().addingTimeInterval(configuration.wallClockTimeoutSeconds)
 
         do {
@@ -506,42 +509,75 @@ public final class OpenRouterSchemaToolSQLAgent: SQLGenerator, Sendable {
                             )
                         }
                         let databaseContext = config.databaseContext.trimmingCharacters(in: .whitespacesAndNewlines)
-                        if Self.databaseContextResolvesClarification(
-                            databaseContext,
-                            question: question,
-                            clarification: terminalResult.clarificationQuestion
-                        ) {
+                        let inspectionTraces = await inspectionSession?.tracesSnapshot() ?? []
+                        let policyDecision = SchemaToolAgentClarificationPolicy.evaluate(
+                            originalQuestion: question,
+                            databaseContext: databaseContext,
+                            evidence: evidence.summary(inspectionToolCalls: inspectionTraces),
+                            terminalAction: terminalResult.action.rawValue,
+                            terminalClarificationQuestion: terminalResult.clarificationQuestion
+                        )
+                        diagnostics.recordClarificationPolicy(policyDecision)
+
+                        switch policyDecision.decision {
+                        case .asksForAlreadyKnownEvidence, .shouldAnswerWithSQL:
                             diagnostics.appSideRejectionReason = .clarificationRejected
-                            diagnostics.terminalValidationFailureReason = "databaseContextClarificationRejected"
+                            diagnostics.terminalValidationFailureReason = policyDecision.decision.rawValue
+                            if overClarificationCorrections < 1 {
+                                overClarificationCorrections += 1
+                                diagnostics.overClarificationCorrectionAttempted = true
+                                messages.append(
+                                    toolErrorResponse(
+                                        call: terminal,
+                                        code: "overcautious_clarification",
+                                        message: policyDecision.reason
+                                    )
+                                )
+                                messages.append(correction(Self.overClarificationCorrection))
+                                continue
+                            }
+                            throw await agentFailure(
+                                .overcautiousClarificationNoProgress,
+                                "The model repeated an overcautious clarification after correction.",
+                                session: session
+                            )
+                        case .insufficientSchemaEvidence:
+                            diagnostics.appSideRejectionReason = .clarificationRejected
+                            diagnostics.terminalValidationFailureReason = policyDecision.decision.rawValue
                             if malformedTerminalCorrections < configuration.maximumMalformedTerminalCorrections {
                                 malformedTerminalCorrections += 1
                                 messages.append(
                                     toolErrorResponse(
                                         call: terminal,
-                                        code: "database_context_authoritative",
-                                        message: "Database context already defines the business meaning needed for this question. Produce SQL from inspected schema."
+                                        code: "insufficient_schema_evidence",
+                                        message: "Describe the concrete tables and columns before asking for clarification."
                                     )
                                 )
-                                messages.append(correction(Self.strictTerminalCorrection))
+                                messages.append(correction(Self.schemaSearchCorrection))
                                 continue
                             }
                             throw await agentFailure(
                                 .terminalResultMalformed,
-                                "The model asked for clarification even though database context answered it.",
+                                "The model asked for clarification before collecting enough schema evidence.",
                                 session: session
                             )
+                        case .malformedClarification:
+                            diagnostics.appSideRejectionReason = .clarificationRejected
+                            diagnostics.terminalValidationFailureReason = policyDecision.decision.rawValue
+                            throw await agentFailure(
+                                .terminalResultMalformed,
+                                "The model submitted a malformed clarification.",
+                                session: session
+                            )
+                        case .genericClarification, .acceptableAmbiguity:
+                            break
                         }
                         try await checkStaleSnapshot(expected: initialFingerprint)
                         let finalTerminalResult: TerminalResult
-                        if Self.isGenericClarification(terminalResult.clarificationQuestion),
-                            !Self.databaseContextResolvesClarification(
-                                databaseContext,
-                                question: question,
-                                clarification: terminalResult.clarificationQuestion
-                            ),
+                        if policyDecision.decision == .genericClarification,
                             let fallbackQuestion = evidence.fallbackClarificationQuestions(for: question)
                                 .first(where: {
-                                    !Self.databaseContextResolvesClarification(
+                                    !SchemaToolAgentClarificationPolicy.databaseContextResolvesClarification(
                                         databaseContext,
                                         question: question,
                                         clarification: $0
@@ -556,6 +592,18 @@ public final class OpenRouterSchemaToolSQLAgent: SQLGenerator, Sendable {
                             diagnostics.appSideRejectionReason = .clarificationRejected
                             diagnostics.terminalValidationFailureReason = "genericClarificationReplaced"
                             aggregate.terminalOutcome = "clarify_fallback"
+                        } else if policyDecision.decision == .genericClarification {
+                            diagnostics.appSideRejectionReason = .clarificationRejected
+                            diagnostics.terminalValidationFailureReason = policyDecision.decision.rawValue
+                            throw await agentFailure(
+                                overClarificationCorrections > 0
+                                    ? .overcautiousClarificationNoProgress
+                                    : .terminalResultMalformed,
+                                overClarificationCorrections > 0
+                                    ? "The model repeated a generic clarification after correction."
+                                    : "The model asked a generic clarification without a concrete unresolved database decision.",
+                                session: session
+                            )
                         } else {
                             finalTerminalResult = terminalResult
                             aggregate.terminalOutcome = "clarify"
@@ -601,6 +649,9 @@ public final class OpenRouterSchemaToolSQLAgent: SQLGenerator, Sendable {
                             )
                         }
                         aggregate.terminalOutcome = "sql"
+                        if overClarificationCorrections > 0 {
+                            diagnostics.overClarificationCorrectionSucceeded = true
+                        }
                         aggregate.agentDiagnostics = diagnostics.snapshot(
                             evidence: evidence,
                             inspectionToolCalls: await inspectionSession?.tracesSnapshot() ?? []
@@ -654,6 +705,18 @@ public final class OpenRouterSchemaToolSQLAgent: SQLGenerator, Sendable {
                     }
                     if result.isSessionBudgetExceeded {
                         diagnostics.appSideRejectionReason = .budgetExhausted
+                        let inspectionTraces = await inspectionSession?.tracesSnapshot() ?? []
+                        let facts = SchemaToolAgentClarificationPolicy.evaluate(
+                            originalQuestion: question,
+                            databaseContext: config.databaseContext,
+                            evidence: evidence.summary(inspectionToolCalls: inspectionTraces),
+                            terminalAction: "clarify",
+                            terminalClarificationQuestion: "Which concrete database decision remains unresolved?"
+                        )
+                        if facts.evidenceSufficientForSQL {
+                            diagnostics.recordClarificationPolicy(facts)
+                            diagnostics.terminalValidationFailureReason = "budgetExhaustedAfterSufficientEvidence"
+                        }
                         throw await agentFailure(
                             .schemaToolCallBudgetExhausted,
                             "Schema or inspection tool call budget exhausted.",
@@ -939,7 +1002,7 @@ public final class OpenRouterSchemaToolSQLAgent: SQLGenerator, Sendable {
     ) async throws -> SQLGenerationResult? {
         guard Self.canFallbackToInspectedClarification(failure.category),
             let fallbackQuestion = evidence.fallbackClarificationQuestions(for: question).first(where: {
-                !Self.databaseContextResolvesClarification(
+                !SchemaToolAgentClarificationPolicy.databaseContextResolvesClarification(
                     databaseContext,
                     question: question,
                     clarification: $0
@@ -1257,194 +1320,12 @@ public final class OpenRouterSchemaToolSQLAgent: SQLGenerator, Sendable {
             .malformedToolCall, .schemaToolCallBudgetExhausted, .schemaToolByteBudgetExhausted:
             true
         case .unsupportedTools, .repeatedToolCallNoProgress, .httpAttemptBudgetExhausted,
-            .modelTurnBudgetExhausted, .safetyValidation, .uninspectedSchemaObjects,
-            .staleSchemaSnapshot, .cancellation, .openRouterRequestFailure:
+            .modelTurnBudgetExhausted, .overcautiousClarificationNoProgress,
+            .safetyValidation, .uninspectedSchemaObjects, .staleSchemaSnapshot,
+            .cancellation, .openRouterRequestFailure:
             false
         }
     }
-
-    private static func isGenericClarification(_ question: String) -> Bool {
-        let lower = question
-            .trimmingCharacters(in: .whitespacesAndNewlines)
-            .lowercased()
-        if lower.isEmpty { return true }
-        let genericFragments = [
-            "can you clarify",
-            "could you clarify",
-            "what do you mean",
-            "please provide more context",
-            "what column, condition, or table defines",
-            "what column or table defines",
-            "which column defines",
-            "which table defines",
-        ]
-        return genericFragments.contains { lower.contains($0) }
-    }
-
-    private static func databaseContextResolvesClarification(
-        _ databaseContext: String,
-        question: String,
-        clarification: String
-    ) -> Bool {
-        let rawContextTokens = Set(SchemaIndex.tokens(in: databaseContext))
-        let contextTokens = rawContextTokens
-            .subtracting(databaseContextAuthorityStopWords)
-        guard !contextTokens.isEmpty else { return false }
-        let rawClarificationTokens = Set(SchemaIndex.tokens(in: clarification))
-        let clarificationTokens = rawClarificationTokens
-            .subtracting(databaseContextAuthorityStopWords)
-        guard !clarificationTokens.isEmpty else { return false }
-        let definitionScopes = Self.databaseContextDefinitionScopes(in: databaseContext)
-        guard !definitionScopes.isEmpty else { return false }
-        if Self.isTimeWindowClarification(rawClarificationTokens) {
-            let questionTokens = Set(SchemaIndex.tokens(in: question))
-            return definitionScopes.contains { scope in
-                !scope.rawTokens.isDisjoint(with: databaseContextTemporalTokens)
-                    && Self.databaseContextContainsConcreteTemporalField(scope.text)
-                    && Self.databaseContextTemporalScopeMatchesQuestion(
-                        scope,
-                        questionTokens: questionTokens
-                    )
-            }
-        }
-        return definitionScopes.contains { scope in
-            let scopedContextTokens = scope.tokens.intersection(contextTokens)
-            let overlap = clarificationTokens.intersection(scopedContextTokens)
-            if scope.hasStrongDefinitionSignal {
-                return Self.hasBusinessSpecificDefinitionOverlap(overlap)
-            }
-            return overlap.count >= 2
-        }
-    }
-
-    private static func hasBusinessSpecificDefinitionOverlap(_ tokens: Set<String>) -> Bool {
-        tokens.contains { token in
-            !databaseContextGenericDefinitionOverlapTokens.contains(token)
-        }
-    }
-
-    private static func databaseContextTemporalScopeMatchesQuestion(
-        _ scope: DatabaseContextDefinitionScope,
-        questionTokens: Set<String>
-    ) -> Bool {
-        let scopeSpecific = scope.tokens.subtracting(databaseContextTemporalRelevanceStopWords)
-        if scopeSpecific.isEmpty {
-            return true
-        }
-        let questionSpecific = questionTokens.subtracting(databaseContextTemporalRelevanceStopWords)
-        return !scopeSpecific.isDisjoint(with: questionSpecific)
-    }
-
-    private static func databaseContextDefinitionScopes(
-        in databaseContext: String
-    ) -> [DatabaseContextDefinitionScope] {
-        Self.databaseContextDefinitionSegments(in: databaseContext)
-            .compactMap { segment -> DatabaseContextDefinitionScope? in
-                let text = segment.trimmingCharacters(in: .whitespacesAndNewlines)
-                guard !text.isEmpty else { return nil }
-                let rawTokens = Set(SchemaIndex.tokens(in: text))
-                let hasStrongSignal = !rawTokens.isDisjoint(with: databaseContextStrongDefinitionTokens)
-                let hasUseSignal = !rawTokens.isDisjoint(with: databaseContextUseDefinitionTokens)
-                guard hasStrongSignal || hasUseSignal else { return nil }
-                return DatabaseContextDefinitionScope(
-                    text: text,
-                    rawTokens: rawTokens,
-                    tokens: rawTokens.subtracting(databaseContextAuthorityStopWords),
-                    hasStrongDefinitionSignal: hasStrongSignal
-                )
-            }
-    }
-
-    private static func databaseContextDefinitionSegments(in databaseContext: String) -> [String] {
-        var segments: [String] = []
-        var current = ""
-        var index = databaseContext.startIndex
-        while index < databaseContext.endIndex {
-            let character = databaseContext[index]
-            let nextIndex = databaseContext.index(after: index)
-            let nextCharacter = nextIndex < databaseContext.endIndex ? databaseContext[nextIndex] : nil
-            let endsSentence =
-                character == "\n" || character == ";"
-                    || (character == "." && (nextCharacter == nil || nextCharacter?.isWhitespace == true))
-            if endsSentence {
-                segments.append(current)
-                current = ""
-            } else {
-                current.append(character)
-            }
-            index = nextIndex
-        }
-        segments.append(current)
-        return segments
-    }
-
-    private static func isTimeWindowClarification(_ tokens: Set<String>) -> Bool {
-        !tokens.isDisjoint(with: ["date", "time", "window", "timestamp", "timestamps"])
-    }
-
-    private static func databaseContextContainsConcreteTemporalField(_ databaseContext: String) -> Bool {
-        let snakeTemporalIdentifier =
-            #"\b[a-z][a-z0-9]*(?:_at|_date|_time|_timestamp)\b"#
-        if databaseContext.range(
-            of: snakeTemporalIdentifier,
-            options: [.regularExpression, .caseInsensitive]
-        ) != nil {
-            return true
-        }
-        let camelTemporalIdentifier = #"\b[a-z][A-Za-z0-9]*(?:At|Date|Time|Timestamp)\b"#
-        return databaseContext.range(of: camelTemporalIdentifier, options: [.regularExpression]) != nil
-    }
-
-    private struct DatabaseContextDefinitionScope {
-        var text: String
-        var rawTokens: Set<String>
-        var tokens: Set<String>
-        var hasStrongDefinitionSignal: Bool
-    }
-
-    private static let databaseContextStrongDefinitionTokens: Set<String> = [
-        "active", "count", "counts", "counting", "define", "defines", "definition",
-        "mean", "means", "metric", "non", "null", "paid", "record", "records",
-        "resolved", "status", "unresolved", "where", "when",
-    ]
-
-    private static let databaseContextUseDefinitionTokens: Set<String> = [
-        "use", "uses",
-    ]
-
-    private static let databaseContextTemporalTokens: Set<String> = [
-        "created", "date", "dated", "ended", "ending", "finish", "finished",
-        "occurred", "scheduled", "start", "started", "starts", "time", "timestamp",
-        "timestamps", "updated", "window", "windows",
-    ]
-
-    private static let databaseContextGenericDefinitionOverlapTokens: Set<String> = {
-        let tokens = [
-            "column", "columns", "condition", "conditions", "field", "fields",
-            "filter", "filters", "status", "statuses", "table", "tables", "value",
-            "values",
-        ]
-        return Set(tokens.flatMap { SchemaIndex.tokens(in: $0) })
-    }()
-
-    private static let databaseContextAuthorityStopWords: Set<String> = [
-        "a", "an", "and", "are", "as", "at", "be", "by", "for", "from", "in",
-        "is", "it", "of", "on", "or", "the", "this", "to", "utc", "timestamp",
-        "timestamps", "time", "date", "which", "what", "column", "condition",
-        "table", "question",
-    ]
-
-    private static let databaseContextTemporalRelevanceStopWords: Set<String> =
-        databaseContextAuthorityStopWords
-        .union(databaseContextTemporalTokens)
-        .union(databaseContextGenericDefinitionOverlapTokens)
-        .union(databaseContextStrongDefinitionTokens)
-        .union(databaseContextUseDefinitionTokens)
-        .union([
-            "day", "days", "hour", "hours", "last", "minute", "minutes", "month",
-            "months", "one", "past", "previous", "recent", "rolling", "seven", "six",
-            "ten", "three", "two", "week", "weeks", "year", "years",
-        ])
 
     private func checkStaleSnapshot(expected: String) async throws {
         guard let currentSchemaFingerprint else { return }
@@ -1536,6 +1417,8 @@ public final class OpenRouterSchemaToolSQLAgent: SQLGenerator, Sendable {
         "Finish by calling submit_text_to_sql_result exactly once. Use action='sql' only if you can produce validated SQL from inspected schema. Otherwise use action='clarify' with one concise database-specific question."
     fileprivate static let schemaSearchCorrection =
         "Call search_schema before finishing. After inspecting schema, call submit_text_to_sql_result exactly once. Use action='sql' only if you can produce validated SQL from inspected schema. Otherwise use action='clarify' with one concise database-specific question."
+    fileprivate static let overClarificationCorrection =
+        "The schema evidence and database context are sufficient to answer with SQL. Do not ask the user to confirm facts already supplied. Finish by calling submit_text_to_sql_result with action='sql'. Use only inspected tables, columns, and join paths. If a genuinely unresolved database decision remains, name that exact unresolved metric, relationship, status value, or time field."
 
     private static let instructions = """
         You are Widen's PostgreSQL schema-discovery and SQL agent.
@@ -1558,7 +1441,11 @@ public final class OpenRouterSchemaToolSQLAgent: SQLGenerator, Sendable {
         - keep entity identity output column names canonical, for example SELECT t.id, t.name instead of renaming them to tool_id or tool_name;
         - alias aggregate metrics with the user's metric term when clear, for example COUNT(*) AS wins for a wins question;
         - do not infer business meaning from connectivity alone;
-        - do not ask for clarification when database context already defines the needed metric, row/event, time column, and relationship;
+        - clarify only for a concrete unresolved database decision;
+        - do not ask for clarification when database context already defines the needed metric, row/event, filter, time column, or relationship;
+        - for ordinary SQL patterns such as count by group, average, left-join missing rows, explicit status filters, and explicit date windows, produce SQL once the needed tables, columns, and joins have been inspected;
+        - when the user says paid, active, failed, verified, or unresolved and inspected schema has a status, boolean, or date column that directly supports the phrase, use the inspected schema evidence rather than asking a generic question;
+        - if uncertain between multiple concrete status values, inspect constraints when available or ask one status-specific clarification;
         - relative time phrases such as "last two weeks" define the time window; do not ask what the number means when the time unit is present;
         - ask one concise clarification question when a required meaning remains ambiguous.
 
@@ -1618,6 +1505,13 @@ private struct OpenRouterSchemaToolAgentDiagnosticState {
     var triedSchemaToolsAfterTerminal = false
     var producedProseInsteadOfTools = false
     var appSideRejectionReason: OpenRouterSchemaToolAppRejectionReason?
+    var clarificationPolicyDecision = ""
+    var clarificationPolicyReason = ""
+    var overClarificationCorrectionAttempted = false
+    var overClarificationCorrectionSucceeded = false
+    var databaseContextFactsUsed: [String] = []
+    var evidenceSufficientForSQL = false
+    var unresolvedDecisionKinds: [String] = []
 
     mutating func recordFailureCategory(_ category: OpenRouterSchemaToolAgentFailure.Category) {
         if appSideRejectionReason != nil { return }
@@ -1635,10 +1529,22 @@ private struct OpenRouterSchemaToolAgentDiagnosticState {
             appSideRejectionReason = .uninspectedObject
         case .unsupportedTools:
             appSideRejectionReason = .unsupportedAction
+        case .overcautiousClarificationNoProgress:
+            appSideRejectionReason = .clarificationRejected
         case .repeatedToolCallNoProgress, .staleSchemaSnapshot, .cancellation,
             .openRouterRequestFailure:
             break
         }
+    }
+
+    mutating func recordClarificationPolicy(
+        _ result: SchemaToolAgentClarificationPolicyResult
+    ) {
+        clarificationPolicyDecision = result.decision.rawValue
+        clarificationPolicyReason = result.reason
+        databaseContextFactsUsed = result.databaseContextFactsUsed
+        evidenceSufficientForSQL = result.evidenceSufficientForSQL
+        unresolvedDecisionKinds = result.unresolvedDecisionKinds.map(\.rawValue)
     }
 
     func snapshot(
@@ -1653,7 +1559,14 @@ private struct OpenRouterSchemaToolAgentDiagnosticState {
             triedSchemaToolsAfterTerminal: triedSchemaToolsAfterTerminal,
             producedProseInsteadOfTools: producedProseInsteadOfTools,
             schemaEvidence: evidence.summary(inspectionToolCalls: inspectionToolCalls),
-            appSideRejectionReason: appSideRejectionReason
+            appSideRejectionReason: appSideRejectionReason,
+            clarificationPolicyDecision: clarificationPolicyDecision,
+            clarificationPolicyReason: clarificationPolicyReason,
+            overClarificationCorrectionAttempted: overClarificationCorrectionAttempted,
+            overClarificationCorrectionSucceeded: overClarificationCorrectionSucceeded,
+            databaseContextFactsUsed: databaseContextFactsUsed,
+            evidenceSufficientForSQL: evidenceSufficientForSQL,
+            unresolvedDecisionKinds: unresolvedDecisionKinds
         )
     }
 }
