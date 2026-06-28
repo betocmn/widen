@@ -2037,18 +2037,20 @@ public enum GeneratedSQLPostprocessor {
             return false
         }
         let evidence = diagnostics.schemaEvidence
-        guard SchemaToolAgentClarificationPolicy.evidenceSufficientForSQL(
-            question: question,
-            databaseContext: databaseContext,
-            evidence: evidence
-        ) else {
-            return false
-        }
         let describedTables = Set(evidence.describedTableIDs.map { $0.lowercased() })
         guard !describedTables.isEmpty else { return false }
-        return schemaValidation.referencedTables.allSatisfy { table in
+        guard schemaValidation.referencedTables.allSatisfy({ table in
             describedTables.contains(table.lowercased())
+        }) else {
+            return false
         }
+        let coverage = SchemaToolAgentSQLIntentCoveragePolicy.evaluate(
+            question: question,
+            databaseContext: databaseContext,
+            evidence: evidence,
+            sql: generation.sql
+        )
+        return coverage.decision == .covered
     }
 
     private static func anchoredWindowClarification(

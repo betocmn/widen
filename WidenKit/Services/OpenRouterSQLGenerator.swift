@@ -93,6 +93,7 @@ public struct OpenRouterModelMetadata: Codable, Identifiable, Equatable, Sendabl
 public enum OpenRouterSchemaToolAppRejectionReason: String, Codable, Equatable, Sendable {
     case uninspectedObject
     case invalidSQL
+    case intentCoverageRejected
     case unsupportedAction
     case malformedTerminal
     case budgetExhausted
@@ -140,6 +141,12 @@ public struct OpenRouterSchemaToolAgentDiagnostics: Codable, Equatable, Sendable
     public var databaseContextFactsUsed: [String]
     public var evidenceSufficientForSQL: Bool
     public var unresolvedDecisionKinds: [String]
+    public var sqlIntentCoverageDecision: String
+    public var sqlIntentCoverageReason: String
+    public var sqlIntentCoverageMissingSignals: [String]
+    public var sqlIntentCoverageMismatchCategory: String
+    public var intentCoverageCorrectionAttempted: Bool
+    public var intentCoverageCorrectionSucceeded: Bool
 
     public init(
         logicalTurnCount: Int? = nil,
@@ -156,7 +163,13 @@ public struct OpenRouterSchemaToolAgentDiagnostics: Codable, Equatable, Sendable
         overClarificationCorrectionSucceeded: Bool = false,
         databaseContextFactsUsed: [String] = [],
         evidenceSufficientForSQL: Bool = false,
-        unresolvedDecisionKinds: [String] = []
+        unresolvedDecisionKinds: [String] = [],
+        sqlIntentCoverageDecision: String = "",
+        sqlIntentCoverageReason: String = "",
+        sqlIntentCoverageMissingSignals: [String] = [],
+        sqlIntentCoverageMismatchCategory: String = "",
+        intentCoverageCorrectionAttempted: Bool = false,
+        intentCoverageCorrectionSucceeded: Bool = false
     ) {
         self.logicalTurnCount = logicalTurnCount
         self.terminalToolSeen = terminalToolSeen
@@ -173,6 +186,12 @@ public struct OpenRouterSchemaToolAgentDiagnostics: Codable, Equatable, Sendable
         self.databaseContextFactsUsed = databaseContextFactsUsed
         self.evidenceSufficientForSQL = evidenceSufficientForSQL
         self.unresolvedDecisionKinds = unresolvedDecisionKinds
+        self.sqlIntentCoverageDecision = sqlIntentCoverageDecision
+        self.sqlIntentCoverageReason = sqlIntentCoverageReason
+        self.sqlIntentCoverageMissingSignals = sqlIntentCoverageMissingSignals
+        self.sqlIntentCoverageMismatchCategory = sqlIntentCoverageMismatchCategory
+        self.intentCoverageCorrectionAttempted = intentCoverageCorrectionAttempted
+        self.intentCoverageCorrectionSucceeded = intentCoverageCorrectionSucceeded
     }
 
     private enum CodingKeys: String, CodingKey {
@@ -191,6 +210,12 @@ public struct OpenRouterSchemaToolAgentDiagnostics: Codable, Equatable, Sendable
         case databaseContextFactsUsed
         case evidenceSufficientForSQL
         case unresolvedDecisionKinds
+        case sqlIntentCoverageDecision
+        case sqlIntentCoverageReason
+        case sqlIntentCoverageMissingSignals
+        case sqlIntentCoverageMismatchCategory
+        case intentCoverageCorrectionAttempted
+        case intentCoverageCorrectionSucceeded
     }
 
     public init(from decoder: any Decoder) throws {
@@ -246,6 +271,30 @@ public struct OpenRouterSchemaToolAgentDiagnostics: Codable, Equatable, Sendable
             [String].self,
             forKey: .unresolvedDecisionKinds
         ) ?? []
+        sqlIntentCoverageDecision = try container.decodeIfPresent(
+            String.self,
+            forKey: .sqlIntentCoverageDecision
+        ) ?? ""
+        sqlIntentCoverageReason = try container.decodeIfPresent(
+            String.self,
+            forKey: .sqlIntentCoverageReason
+        ) ?? ""
+        sqlIntentCoverageMissingSignals = try container.decodeIfPresent(
+            [String].self,
+            forKey: .sqlIntentCoverageMissingSignals
+        ) ?? []
+        sqlIntentCoverageMismatchCategory = try container.decodeIfPresent(
+            String.self,
+            forKey: .sqlIntentCoverageMismatchCategory
+        ) ?? ""
+        intentCoverageCorrectionAttempted = try container.decodeIfPresent(
+            Bool.self,
+            forKey: .intentCoverageCorrectionAttempted
+        ) ?? false
+        intentCoverageCorrectionSucceeded = try container.decodeIfPresent(
+            Bool.self,
+            forKey: .intentCoverageCorrectionSucceeded
+        ) ?? false
     }
 }
 

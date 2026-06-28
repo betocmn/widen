@@ -39,6 +39,36 @@ public struct SchemaToolAgentClarificationPolicyResult: Equatable, Sendable {
     }
 }
 
+public enum SchemaToolAgentAnswerabilityPolicy {
+    public static func evaluate(
+        originalQuestion: String,
+        databaseContext: String,
+        evidence: OpenRouterSchemaToolEvidenceSummary,
+        terminalAction: String,
+        terminalClarificationQuestion: String
+    ) -> SchemaToolAgentClarificationPolicyResult {
+        SchemaToolAgentClarificationPolicy.evaluate(
+            originalQuestion: originalQuestion,
+            databaseContext: databaseContext,
+            evidence: evidence,
+            terminalAction: terminalAction,
+            terminalClarificationQuestion: terminalClarificationQuestion
+        )
+    }
+
+    public static func answerableWithSQL(
+        question: String,
+        databaseContext: String,
+        evidence: OpenRouterSchemaToolEvidenceSummary
+    ) -> Bool {
+        SchemaToolAgentClarificationPolicy.evidenceSufficientForSQL(
+            question: question,
+            databaseContext: databaseContext,
+            evidence: evidence
+        )
+    }
+}
+
 public enum SchemaToolAgentClarificationPolicy {
     public static func evaluate(
         originalQuestion: String,

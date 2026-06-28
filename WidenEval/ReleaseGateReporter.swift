@@ -412,8 +412,8 @@ enum TextToSQLReleaseTriageReporter {
                 "",
                 "## \(category.rawValue)",
                 "",
-                "| Case | Repeat | Expected | Actual | Status | Semantic | Verification | Terminal | Policy | Schema Tools | Described | Inspected Objects | SQL Tables | Repeated Repair |",
-                "| --- | ---: | --- | --- | --- | --- | --- | --- | --- | ---: | ---: | --- | --- | --- |",
+                "| Case | Repeat | Expected | Actual | Status | Semantic | Verification | Terminal | Policy | Mismatch | Schema Tools | Described | Inspected Objects | SQL Tables | Repeated Repair |",
+                "| --- | ---: | --- | --- | --- | --- | --- | --- | --- | --- | ---: | ---: | --- | --- | --- |",
             ]
             for row in rows {
                 lines.append(row.markdownRow)
@@ -684,6 +684,7 @@ enum TextToSQLReleaseTriageReporter {
                 ?? result.metrics.openRouterAgentTerminalOutcome
                 ?? "-"
             let policy = Self.policySummary(diagnostics)
+            let mismatch = Self.semanticMismatchSummary(result, evalCase: evalCase)
             let schemaToolCalls = result.metrics.openRouterSchemaToolCallCount
                 ?? result.trace?.schemaToolCalls.count
                 ?? 0
@@ -700,6 +701,7 @@ enum TextToSQLReleaseTriageReporter {
                 tableCell(result.metrics.postgresVerificationStatus?.rawValue ?? "-"),
                 tableCell(terminal),
                 tableCell(policy),
+                tableCell(mismatch),
                 String(schemaToolCalls),
                 String(described),
                 tableCell(inspectedObjects.isEmpty ? "-" : inspectedObjects),
@@ -728,7 +730,38 @@ enum TextToSQLReleaseTriageReporter {
             if !diagnostics.unresolvedDecisionKinds.isEmpty {
                 parts.append("unresolved: " + diagnostics.unresolvedDecisionKinds.joined(separator: ","))
             }
+            if !diagnostics.sqlIntentCoverageDecision.isEmpty {
+                parts.append("intent: " + diagnostics.sqlIntentCoverageDecision)
+            }
+            if diagnostics.intentCoverageCorrectionAttempted {
+                parts.append(
+                    diagnostics.intentCoverageCorrectionSucceeded
+                        ? "intent correction succeeded"
+                        : "intent correction attempted"
+                )
+            }
             return parts.joined(separator: "; ")
+        }
+
+        private static func semanticMismatchSummary(
+            _ result: TextToSQLEvalResult,
+            evalCase: TextToSQLEvalCase?
+        ) -> String {
+            guard result.metrics.semanticStatus == .resultMismatch else { return "-" }
+            if let category = result.metrics.openRouterAgentDiagnostics?.sqlIntentCoverageMismatchCategory,
+                !category.isEmpty,
+                category != "unknown mismatch"
+            {
+                return category
+            }
+            let diagnostics = result.metrics.openRouterAgentDiagnostics
+            return SchemaToolAgentSQLIntentCoveragePolicy.semanticMismatchCategory(
+                question: evalCase?.question ?? "",
+                databaseContext: evalCase?.databaseContext ?? "",
+                evidence: diagnostics?.schemaEvidence ?? OpenRouterSchemaToolEvidenceSummary(),
+                sql: result.generatedSQL ?? "",
+                comparatorMismatchCategory: result.metrics.semanticMismatchCategory
+            )
         }
 
         static func sort(_ lhs: TriageRow, _ rhs: TriageRow) -> Bool {

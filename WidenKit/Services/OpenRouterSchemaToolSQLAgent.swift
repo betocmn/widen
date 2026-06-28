@@ -47,6 +47,8 @@ public struct OpenRouterSchemaToolAgentFailure: Error, LocalizedError, Equatable
         case terminalResultMissing
         case terminalResultMalformed
         case overcautiousClarificationNoProgress
+        case intentCoverageNoProgress
+        case terminalRequiredAfterSufficientEvidenceNoProgress
         case safetyValidation
         case uninspectedSchemaObjects
         case staleSchemaSnapshot
@@ -95,7 +97,8 @@ public struct OpenRouterSchemaToolAgentFailure: Error, LocalizedError, Equatable
         case .repeatedToolCallNoProgress, .uninspectedSchemaObjects:
             .schemaValidation
         case .schemaToolCallBudgetExhausted, .schemaToolByteBudgetExhausted,
-            .overcautiousClarificationNoProgress:
+            .overcautiousClarificationNoProgress, .intentCoverageNoProgress,
+            .terminalRequiredAfterSufficientEvidenceNoProgress:
             .modelGeneration
         case .staleSchemaSnapshot:
             .modelGeneration
@@ -314,6 +317,9 @@ public final class OpenRouterSchemaToolSQLAgent: SQLGenerator, Sendable {
         var repeatedToolCorrections = 0
         var uninspectedSQLCorrections = 0
         var overClarificationCorrections = 0
+        var intentCoverageCorrections = 0
+        var terminalRequiredAfterSufficientEvidence = false
+        var terminalRequiredCorrections = 0
         let deadline = Date().addingTimeInterval(configuration.wallClockTimeoutSeconds)
 
         do {
@@ -510,7 +516,7 @@ public final class OpenRouterSchemaToolSQLAgent: SQLGenerator, Sendable {
                         }
                         let databaseContext = config.databaseContext.trimmingCharacters(in: .whitespacesAndNewlines)
                         let inspectionTraces = await inspectionSession?.tracesSnapshot() ?? []
-                        let policyDecision = SchemaToolAgentClarificationPolicy.evaluate(
+                        let policyDecision = SchemaToolAgentAnswerabilityPolicy.evaluate(
                             originalQuestion: question,
                             databaseContext: databaseContext,
                             evidence: evidence.summary(inspectionToolCalls: inspectionTraces),
@@ -525,6 +531,7 @@ public final class OpenRouterSchemaToolSQLAgent: SQLGenerator, Sendable {
                             diagnostics.terminalValidationFailureReason = policyDecision.decision.rawValue
                             if overClarificationCorrections < 1 {
                                 overClarificationCorrections += 1
+                                terminalRequiredAfterSufficientEvidence = true
                                 diagnostics.overClarificationCorrectionAttempted = true
                                 messages.append(
                                     toolErrorResponse(
@@ -648,9 +655,74 @@ public final class OpenRouterSchemaToolSQLAgent: SQLGenerator, Sendable {
                                 session: session
                             )
                         }
+                        let inspectionTraces = await inspectionSession?.tracesSnapshot() ?? []
+                        let intentCoverage = SchemaToolAgentSQLIntentCoveragePolicy.evaluate(
+                            question: question,
+                            databaseContext: config.databaseContext,
+                            evidence: evidence.summary(inspectionToolCalls: inspectionTraces),
+                            sql: terminalResult.sql
+                        )
+                        diagnostics.recordSQLIntentCoverage(intentCoverage)
+                        switch intentCoverage.decision {
+                        case .covered:
+                            break
+                        case .needsCorrection:
+                            diagnostics.appSideRejectionReason = .intentCoverageRejected
+                            diagnostics.terminalValidationFailureReason = "intentCoverageFailed"
+                            if intentCoverageCorrections < 1 {
+                                intentCoverageCorrections += 1
+                                terminalRequiredAfterSufficientEvidence = true
+                                diagnostics.intentCoverageCorrectionAttempted = true
+                                messages.append(
+                                    toolErrorResponse(
+                                        call: terminal,
+                                        code: "intent_coverage_failed",
+                                        message: intentCoverage.reason
+                                    )
+                                )
+                                messages.append(
+                                    correction(
+                                        Self.intentCoverageCorrection(
+                                            missingSignals: intentCoverage.missingSignals
+                                        )
+                                    )
+                                )
+                                continue
+                            }
+                            throw await agentFailure(
+                                .intentCoverageNoProgress,
+                                "The model repeated SQL that did not preserve requested intent.",
+                                session: session
+                            )
+                        case .mustClarify:
+                            let clarificationQuestion = intentCoverage.clarificationQuestion
+                                ?? evidence.fallbackClarificationQuestion(for: question)
+                                ?? "Which concrete database decision remains unresolved?"
+                            let finalTerminalResult = TerminalResult(
+                                action: .clarify,
+                                sql: "",
+                                clarificationQuestion: clarificationQuestion
+                            )
+                            aggregate.terminalOutcome = "clarify_fallback"
+                            aggregate.agentDiagnostics = diagnostics.snapshot(
+                                evidence: evidence,
+                                inspectionToolCalls: inspectionTraces
+                            )
+                            return try await finalResult(
+                                finalTerminalResult,
+                                schema: schema,
+                                context: context,
+                                aggregate: aggregate,
+                                session: session,
+                                inspectionSession: inspectionSession
+                            )
+                        }
                         aggregate.terminalOutcome = "sql"
                         if overClarificationCorrections > 0 {
                             diagnostics.overClarificationCorrectionSucceeded = true
+                        }
+                        if intentCoverageCorrections > 0 {
+                            diagnostics.intentCoverageCorrectionSucceeded = true
                         }
                         aggregate.agentDiagnostics = diagnostics.snapshot(
                             evidence: evidence,
@@ -665,6 +737,26 @@ public final class OpenRouterSchemaToolSQLAgent: SQLGenerator, Sendable {
                             inspectionSession: inspectionSession
                         )
                     }
+                }
+
+                if terminalRequiredAfterSufficientEvidence {
+                    messages.append(OpenRouterToolChatMessage(role: .assistant, toolCalls: toolCalls))
+                    appendToolErrorResponses(
+                        for: toolCalls,
+                        to: &messages,
+                        code: "terminal_required_after_sufficient_evidence",
+                        message: "Schema evidence is already sufficient for a terminal SQL answer or concrete clarification."
+                    )
+                    if terminalRequiredCorrections < 1 {
+                        terminalRequiredCorrections += 1
+                        messages.append(correction(Self.terminalRequiredAfterSufficientEvidenceCorrection))
+                        continue
+                    }
+                    throw await agentFailure(
+                        .terminalRequiredAfterSufficientEvidenceNoProgress,
+                        "The model kept using schema tools after evidence was sufficient for a terminal result.",
+                        session: session
+                    )
                 }
 
                 messages.append(OpenRouterToolChatMessage(role: .assistant, toolCalls: toolCalls))
@@ -706,7 +798,7 @@ public final class OpenRouterSchemaToolSQLAgent: SQLGenerator, Sendable {
                     if result.isSessionBudgetExceeded {
                         diagnostics.appSideRejectionReason = .budgetExhausted
                         let inspectionTraces = await inspectionSession?.tracesSnapshot() ?? []
-                        let facts = SchemaToolAgentClarificationPolicy.evaluate(
+                        let facts = SchemaToolAgentAnswerabilityPolicy.evaluate(
                             originalQuestion: question,
                             databaseContext: config.databaseContext,
                             evidence: evidence.summary(inspectionToolCalls: inspectionTraces),
@@ -1321,6 +1413,7 @@ public final class OpenRouterSchemaToolSQLAgent: SQLGenerator, Sendable {
             true
         case .unsupportedTools, .repeatedToolCallNoProgress, .httpAttemptBudgetExhausted,
             .modelTurnBudgetExhausted, .overcautiousClarificationNoProgress,
+            .intentCoverageNoProgress, .terminalRequiredAfterSufficientEvidenceNoProgress,
             .safetyValidation, .uninspectedSchemaObjects, .staleSchemaSnapshot,
             .cancellation, .openRouterRequestFailure:
             false
@@ -1419,6 +1512,15 @@ public final class OpenRouterSchemaToolSQLAgent: SQLGenerator, Sendable {
         "Call search_schema before finishing. After inspecting schema, call submit_text_to_sql_result exactly once. Use action='sql' only if you can produce validated SQL from inspected schema. Otherwise use action='clarify' with one concise database-specific question."
     fileprivate static let overClarificationCorrection =
         "The schema evidence and database context are sufficient to answer with SQL. Do not ask the user to confirm facts already supplied. Finish by calling submit_text_to_sql_result with action='sql'. Use only inspected tables, columns, and join paths. If a genuinely unresolved database decision remains, name that exact unresolved metric, relationship, status value, or time field."
+    fileprivate static let terminalRequiredAfterSufficientEvidenceCorrection =
+        "The schema evidence is already sufficient for a terminal result. Stop calling schema tools. Finish by calling submit_text_to_sql_result with action='sql', or action='clarify' only if you name one concrete unresolved database decision."
+
+    fileprivate static func intentCoverageCorrection(missingSignals: [String]) -> String {
+        let missing = missingSignals.isEmpty
+            ? "unspecified deterministic intent signal"
+            : missingSignals.joined(separator: ", ")
+        return "The SQL is syntactically valid but does not preserve the requested intent. Missing requirements: \(missing). Use only inspected schema objects and finish with submit_text_to_sql_result(action='sql'). Do not ask for clarification unless a concrete database decision is still unresolved."
+    }
 
     private static let instructions = """
         You are Widen's PostgreSQL schema-discovery and SQL agent.
@@ -1440,6 +1542,8 @@ public final class OpenRouterSchemaToolSQLAgent: SQLGenerator, Sendable {
         - when ranking or counting entities, project and group by the entity table's stable id plus one human-readable label; prefer name over slug, and include slug only when the user asks for slugs or no name/title label exists;
         - keep entity identity output column names canonical, for example SELECT t.id, t.name instead of renaming them to tool_id or tool_name;
         - alias aggregate metrics with the user's metric term when clear, for example COUNT(*) AS wins for a wins question;
+        - preserve requested intent in SQL: status/boolean filters, anti-joins for missing rows, AVG for averages, GROUP BY for per/by requests, count/order/limit for top/frequent requests, and explicit date anchors from the question or database context;
+        - never replace an explicit date/time anchor with NOW(), CURRENT_DATE, or other moving current-time expressions;
         - do not infer business meaning from connectivity alone;
         - clarify only for a concrete unresolved database decision;
         - do not ask for clarification when database context already defines the needed metric, row/event, filter, time column, or relationship;
@@ -1512,6 +1616,12 @@ private struct OpenRouterSchemaToolAgentDiagnosticState {
     var databaseContextFactsUsed: [String] = []
     var evidenceSufficientForSQL = false
     var unresolvedDecisionKinds: [String] = []
+    var sqlIntentCoverageDecision = ""
+    var sqlIntentCoverageReason = ""
+    var sqlIntentCoverageMissingSignals: [String] = []
+    var sqlIntentCoverageMismatchCategory = ""
+    var intentCoverageCorrectionAttempted = false
+    var intentCoverageCorrectionSucceeded = false
 
     mutating func recordFailureCategory(_ category: OpenRouterSchemaToolAgentFailure.Category) {
         if appSideRejectionReason != nil { return }
@@ -1529,8 +1639,11 @@ private struct OpenRouterSchemaToolAgentDiagnosticState {
             appSideRejectionReason = .uninspectedObject
         case .unsupportedTools:
             appSideRejectionReason = .unsupportedAction
-        case .overcautiousClarificationNoProgress:
+        case .overcautiousClarificationNoProgress,
+            .terminalRequiredAfterSufficientEvidenceNoProgress:
             appSideRejectionReason = .clarificationRejected
+        case .intentCoverageNoProgress:
+            appSideRejectionReason = .intentCoverageRejected
         case .repeatedToolCallNoProgress, .staleSchemaSnapshot, .cancellation,
             .openRouterRequestFailure:
             break
@@ -1545,6 +1658,18 @@ private struct OpenRouterSchemaToolAgentDiagnosticState {
         databaseContextFactsUsed = result.databaseContextFactsUsed
         evidenceSufficientForSQL = result.evidenceSufficientForSQL
         unresolvedDecisionKinds = result.unresolvedDecisionKinds.map(\.rawValue)
+    }
+
+    mutating func recordSQLIntentCoverage(
+        _ result: SchemaToolAgentSQLIntentCoverageResult
+    ) {
+        sqlIntentCoverageDecision = result.decision.rawValue
+        sqlIntentCoverageReason = result.reason
+        sqlIntentCoverageMissingSignals = result.missingSignals
+        sqlIntentCoverageMismatchCategory = result.semanticMismatchCategory
+        if !result.unresolvedDecisionKinds.isEmpty {
+            unresolvedDecisionKinds = result.unresolvedDecisionKinds.map(\.rawValue)
+        }
     }
 
     func snapshot(
@@ -1566,7 +1691,13 @@ private struct OpenRouterSchemaToolAgentDiagnosticState {
             overClarificationCorrectionSucceeded: overClarificationCorrectionSucceeded,
             databaseContextFactsUsed: databaseContextFactsUsed,
             evidenceSufficientForSQL: evidenceSufficientForSQL,
-            unresolvedDecisionKinds: unresolvedDecisionKinds
+            unresolvedDecisionKinds: unresolvedDecisionKinds,
+            sqlIntentCoverageDecision: sqlIntentCoverageDecision,
+            sqlIntentCoverageReason: sqlIntentCoverageReason,
+            sqlIntentCoverageMissingSignals: sqlIntentCoverageMissingSignals,
+            sqlIntentCoverageMismatchCategory: sqlIntentCoverageMismatchCategory,
+            intentCoverageCorrectionAttempted: intentCoverageCorrectionAttempted,
+            intentCoverageCorrectionSucceeded: intentCoverageCorrectionSucceeded
         )
     }
 }
@@ -1597,6 +1728,8 @@ private struct SchemaToolEvidenceLedger {
                 prefix = "Inspect the missing table or column with schema tools if budget remains."
             case .invalidSQL:
                 prefix = "Fix the invalid SQL binding using only owner candidates already exposed by schema tools."
+            case .intentCoverageRejected:
+                prefix = "Preserve the requested SQL intent before returning a terminal result."
             case .unsupportedAction, .malformedTerminal, .budgetExhausted, .clarificationRejected:
                 prefix = "Use schema tools and validator feedback before returning SQL."
             }
