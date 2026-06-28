@@ -200,6 +200,7 @@ public struct OpenRouterFailure: Error, LocalizedError, Equatable, Sendable {
     public enum Category: String, Codable, CaseIterable, Equatable, Sendable {
         case authentication
         case paymentRequired
+        case providerLimit
         case permissionDenied
         case guardrailBlocked
         case modelNotFound
@@ -262,7 +263,7 @@ public struct OpenRouterFailure: Error, LocalizedError, Equatable, Sendable {
 
     var pipelineCategory: TextToSQLFailureCategory {
         switch category {
-        case .authentication, .paymentRequired, .permissionDenied, .guardrailBlocked,
+        case .authentication, .paymentRequired, .providerLimit, .permissionDenied, .guardrailBlocked,
             .modelNotFound:
             .backendUnavailable
         case .networkTransport, .rateLimited, .providerOverloaded, .providerUnavailable, .timeout,
@@ -283,13 +284,20 @@ public struct OpenRouterFailure: Error, LocalizedError, Equatable, Sendable {
         return copy
     }
 
-    static func category(errorType: String?, httpStatus: Int?, message: String?) -> Category {
+    static func category(
+        errorType: String?,
+        providerCode: String? = nil,
+        httpStatus: Int?,
+        message: String?
+    ) -> Category {
         let type = errorType?.lowercased()
         switch type {
         case "authentication", "invalid_api_key":
             return .authentication
         case "payment_required", "insufficient_credits", "credits_exhausted":
             return .paymentRequired
+        case "provider_limit", "provider_limit_exceeded", "provider_quota_exceeded":
+            return .providerLimit
         case "model_not_found", "not_found":
             return .modelNotFound
         case "permission_denied":
@@ -324,6 +332,16 @@ public struct OpenRouterFailure: Error, LocalizedError, Equatable, Sendable {
             return .unsupportedFeature
         case "server", "unmapped":
             return .serverFailure
+        default:
+            break
+        }
+
+        let code = providerCode?.lowercased()
+        switch code {
+        case "provider_limit", "provider_limit_exceeded", "provider_quota_exceeded":
+            return .providerLimit
+        case "payment_required", "insufficient_credits", "credits", "credits_exhausted":
+            return .paymentRequired
         default:
             break
         }
@@ -374,6 +392,12 @@ public struct OpenRouterFailure: Error, LocalizedError, Equatable, Sendable {
         default:
             return .serverFailure
         }
+    }
+}
+
+extension OpenRouterFailure.Category {
+    var isProviderBudgetUnavailable: Bool {
+        self == .paymentRequired || self == .providerLimit
     }
 }
 
@@ -826,8 +850,8 @@ actor OpenRouterModelCatalogService {
             case .rateLimited, .providerOverloaded, .providerUnavailable, .timeout,
                 .networkTransport, .serverFailure:
                 return true
-            case .authentication, .paymentRequired, .permissionDenied, .guardrailBlocked,
-                .modelNotFound, .invalidRequest, .unsupportedFeature, .contextWindow,
+            case .authentication, .paymentRequired, .providerLimit, .permissionDenied,
+                .guardrailBlocked, .modelNotFound, .invalidRequest, .unsupportedFeature, .contextWindow,
                 .maxTokensExceeded, .contentPolicy, .refusal, .noContent,
                 .malformedStructuredResponse:
                 return false
@@ -1023,7 +1047,7 @@ struct OpenRouterRetryPolicy: Sendable {
         case .rateLimited, .providerOverloaded, .providerUnavailable, .timeout, .networkTransport,
             .serverFailure, .noContent:
             true
-        case .authentication, .paymentRequired, .permissionDenied, .guardrailBlocked,
+        case .authentication, .paymentRequired, .providerLimit, .permissionDenied, .guardrailBlocked,
             .modelNotFound, .invalidRequest, .unsupportedFeature, .contextWindow,
             .maxTokensExceeded, .contentPolicy, .refusal, .malformedStructuredResponse:
             false
@@ -1443,6 +1467,7 @@ struct OpenRouterResponseParser: Sendable {
         return OpenRouterFailure(
             category: OpenRouterFailure.category(
                 errorType: nil,
+                providerCode: nil,
                 httpStatus: response.statusCode,
                 message: message
             ),
@@ -1470,6 +1495,7 @@ struct OpenRouterResponseParser: Sendable {
         return OpenRouterFailure(
             category: OpenRouterFailure.category(
                 errorType: apiError.metadata?.errorType,
+                providerCode: apiError.metadata?.providerCode,
                 httpStatus: effectiveHTTPStatus,
                 message: message
             ),

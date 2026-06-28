@@ -652,6 +652,7 @@ struct OpenRouterSQLGeneratorTests {
         let cases: [(String?, Int?, String?, OpenRouterFailure.Category)] = [
             ("invalid_api_key", 400, nil, .authentication),
             ("insufficient_credits", 400, nil, .paymentRequired),
+            ("provider_limit_exceeded", 429, nil, .providerLimit),
             ("permission_denied", 403, nil, .permissionDenied),
             ("guardrail_blocked", 403, nil, .guardrailBlocked),
             ("model_not_found", 404, nil, .modelNotFound),
@@ -686,6 +687,14 @@ struct OpenRouterSQLGeneratorTests {
                     == category
             )
         }
+        #expect(
+            OpenRouterFailure.category(
+                errorType: nil,
+                providerCode: "provider_limit",
+                httpStatus: 400,
+                message: nil
+            ) == .providerLimit
+        )
 
         #expect(
             OpenRouterFailure(category: .noContent, message: "empty").category == .noContent

@@ -38,8 +38,16 @@ enum EvalReporter {
 
     private static func outputDirectory(base: String) -> URL {
         let timestamp = DateFormatter.evalTimestamp.string(from: Date())
-        return URL(fileURLWithPath: base, isDirectory: true)
+        let baseURL = URL(fileURLWithPath: base, isDirectory: true)
             .appendingPathComponent(timestamp, isDirectory: true)
+        var candidate = baseURL
+        var suffix = 1
+        while FileManager.default.fileExists(atPath: candidate.path) {
+            candidate = URL(fileURLWithPath: base, isDirectory: true)
+                .appendingPathComponent("\(timestamp)-\(suffix)", isDirectory: true)
+            suffix += 1
+        }
+        return candidate
     }
 
     private static func jsonLines(_ results: [TextToSQLEvalResult], to url: URL) throws {
@@ -65,6 +73,9 @@ enum EvalReporter {
             "| --- | --- |",
             "| Suite | \(tableCell("\(run.manifest.suiteName) v\(run.manifest.suiteVersion)")) |",
             "| Evaluation mode | \(tableCell(run.manifest.evaluationMode)) |",
+            "| Run ID | \(tableCell(run.manifest.runID ?? "-")) |",
+            "| Parent run ID | \(tableCell(run.manifest.parentRunID ?? "-")) |",
+            "| Resumed from | \(tableCell(run.manifest.resumedFrom ?? "-")) |",
             "| Commit | \(tableCell(run.manifest.commitSHA)) |",
             "| Started | \(tableCell(run.manifest.startedAt)) |",
             "| Finished | \(tableCell(run.manifest.finishedAt)) |",
@@ -76,6 +87,13 @@ enum EvalReporter {
             "| Cases | \(run.manifest.caseCount) |",
             "| Repeats | \(run.manifest.repeatCount) |",
             "| Case timeout | \(run.manifest.caseTimeoutSeconds) seconds |",
+            "| Complete | \(run.manifest.isComplete.map { $0 ? "Yes" : "No" } ?? "-") |",
+            "| Expected results | \(run.manifest.expectedResultCount.map(String.init) ?? "-") |",
+            "| Completed results | \(run.manifest.completedResultCount.map(String.init) ?? "-") |",
+            "| Missing results | \(run.manifest.missingResultCount.map(String.init) ?? "-") |",
+            "| Skipped by budget | \(run.manifest.skippedBudgetCount.map(String.init) ?? "-") |",
+            "| Provider budget unavailable | \(run.manifest.providerBudgetUnavailableCount.map(String.init) ?? "-") |",
+            "| Budget stop | \(tableCell(run.manifest.budgetStopReason ?? "-")) |",
             "",
             "## Baseline Compatibility Hashes",
             "",
@@ -335,6 +353,12 @@ enum EvalReporter {
             .reduce(0, +)
         let agentHTTPAttempts = openRouterResults.compactMap(\.metrics.openRouterAgentHTTPAttemptCount)
             .reduce(0, +)
+        let transportAttemptResults = openRouterResults.filter {
+            $0.status != .skippedBudgetLimit && !$0.status.isProviderBudgetUnavailable
+        }
+        let providerBudgetUnavailable = openRouterResults.filter {
+            $0.status.isProviderBudgetUnavailable
+        }.count
 
         var lines = [
             "",
@@ -342,8 +366,9 @@ enum EvalReporter {
             "",
             "| Metric | Value |",
             "| --- | --- |",
-            "| HTTP success | \(count(EvalCountSummary(count: openRouterResults.filter(\.metrics.transportSuccess).count, denominator: openRouterResults.count))) |",
-            "| Structured parse success | \(count(EvalCountSummary(count: openRouterResults.filter(\.metrics.structuredResponseParsed).count, denominator: openRouterResults.count))) |",
+            "| HTTP success | \(count(EvalCountSummary(count: transportAttemptResults.filter(\.metrics.transportSuccess).count, denominator: transportAttemptResults.count))) |",
+            "| Structured parse success | \(count(EvalCountSummary(count: transportAttemptResults.filter(\.metrics.structuredResponseParsed).count, denominator: transportAttemptResults.count))) |",
+            "| Provider budget unavailable | \(providerBudgetUnavailable) |",
             "| Typed provider failures | \(failureCounts.values.reduce(0, +)) |",
             "| Retry total | \(retryTotal) |",
             "| Retry average | \(retryAverage) |",

@@ -896,6 +896,65 @@ struct TextToSQLEvalTests {
         #expect(result.metrics.transportSuccess == false)
     }
 
+    @Test func openRouterPaymentRequiredIsDistinctFromTransportFailure() async {
+        let evalCase = TextToSQLEvalCase(
+            id: "commerce.recent-orders",
+            schemaFixture: "commerce",
+            question: "Show the 10 most recent orders",
+            expected: TextToSQLEvalExpectation(decision: .sql)
+        )
+
+        let result = await TextToSQLEvalCaseRunner.run(
+            evalCase: evalCase,
+            schema: makeCommerceSchema(),
+            generator: ThrowingGenerator(
+                error: OpenRouterFailure(
+                    category: .paymentRequired,
+                    message: "Payment required.",
+                    httpStatus: 402,
+                    openRouterErrorType: "insufficient_credits",
+                    providerCode: "credits",
+                    requestedModelID: "test/model"
+                )
+            ),
+            options: TextToSQLEvalRunOptions(backend: .cloud, model: "test/model")
+        )
+
+        #expect(result.status == .paymentRequired)
+        #expect(result.metrics.backendAvailable == true)
+        #expect(result.metrics.transportSuccess == false)
+        #expect(result.diagnostics.openRouterFailureCategory == "paymentRequired")
+    }
+
+    @Test func openRouterProviderLimitIsDistinctFromTransportFailure() async {
+        let evalCase = TextToSQLEvalCase(
+            id: "commerce.recent-orders",
+            schemaFixture: "commerce",
+            question: "Show the 10 most recent orders",
+            expected: TextToSQLEvalExpectation(decision: .sql)
+        )
+
+        let result = await TextToSQLEvalCaseRunner.run(
+            evalCase: evalCase,
+            schema: makeCommerceSchema(),
+            generator: ThrowingGenerator(
+                error: OpenRouterFailure(
+                    category: .providerLimit,
+                    message: "Provider limit.",
+                    openRouterErrorType: "provider_limit_exceeded",
+                    providerCode: "provider_limit",
+                    requestedModelID: "test/model"
+                )
+            ),
+            options: TextToSQLEvalRunOptions(backend: .cloud, model: "test/model")
+        )
+
+        #expect(result.status == .providerLimit)
+        #expect(result.metrics.backendAvailable == true)
+        #expect(result.metrics.transportSuccess == false)
+        #expect(result.diagnostics.openRouterFailureCategory == "providerLimit")
+    }
+
     @Test func untypedGeneratorFailureBecomesGenerationFailure() async {
         let evalCase = TextToSQLEvalCase(
             id: "commerce.recent-orders",

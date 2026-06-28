@@ -17,6 +17,9 @@ public enum TextToSQLEvalCaseStatus: String, Codable, CaseIterable, Equatable, S
     case generationFailure
     case evalTimeout
     case transportFailure
+    case paymentRequired
+    case providerLimit
+    case skippedBudgetLimit
     case parseFailure
     case backendUnavailable
 }

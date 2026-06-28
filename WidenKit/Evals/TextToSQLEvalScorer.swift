@@ -352,17 +352,24 @@ public enum TextToSQLEvalCaseRunner {
     ) -> TextToSQLEvalResult {
         let typed = SQLGenerationFailure.typed(error)
         let status = typed.map(status(for:)) ?? .transportFailure
-        let backendAvailable = typed.map { $0.pipelineCategory != .backendUnavailable } ?? true
-        let transportSuccess = typed.map {
-            $0.pipelineCategory != .transport
-                && $0.pipelineCategory != .backendUnavailable
-        } ?? false
         let openRouterDiagnostic: OpenRouterFailureDiagnostic?
         if let typed, case .openRouter(let failure) = typed {
             openRouterDiagnostic = failure.diagnostic
+        } else if let typed, case .schemaToolAgent(let failure) = typed {
+            openRouterDiagnostic = failure.openRouterFailure?.diagnostic
         } else {
             openRouterDiagnostic = nil
         }
+        let providerBudgetUnavailable = openRouterDiagnostic?.category.isProviderBudgetUnavailable == true
+        let backendAvailable = providerBudgetUnavailable
+            ? true
+            : typed.map { $0.pipelineCategory != .backendUnavailable } ?? true
+        let transportSuccess = providerBudgetUnavailable
+            ? false
+            : typed.map {
+                $0.pipelineCategory != .transport
+                    && $0.pipelineCategory != .backendUnavailable
+            } ?? false
         let structuredParsed = false
         return TextToSQLEvalResult(
             caseID: evalCase.id,
@@ -400,16 +407,23 @@ public enum TextToSQLEvalCaseRunner {
     ) -> TextToSQLEvalResult {
         let backendMetadata = failure.backendMetadata
         let verificationSnapshot = TextToSQLEvalScorer.postgresVerificationSnapshot(from: trace)
+        let providerBudgetUnavailable = failure.openRouterFailure?.category.isProviderBudgetUnavailable == true
         return TextToSQLEvalResult(
             caseID: evalCase.id,
             backend: options.backend,
             model: options.model,
             repeatIndex: options.repeatIndex,
-            status: status(for: failure.category),
+            status: failure.openRouterFailure
+                .flatMap { status(for: $0.category) }
+                ?? status(for: failure.category),
             metrics: TextToSQLEvalMetrics(
-                backendAvailable: failure.category != .backendUnavailable,
-                transportSuccess: failure.category != .transport
-                    && failure.category != .backendUnavailable,
+                backendAvailable: providerBudgetUnavailable
+                    ? true
+                    : failure.category != .backendUnavailable,
+                transportSuccess: providerBudgetUnavailable
+                    ? false
+                    : failure.category != .transport
+                        && failure.category != .backendUnavailable,
                 structuredResponseParsed: structuredResponseParsed(for: failure.category),
                 decisionMatches: false,
                 safetyValid: failure.category == .safetyValidation
@@ -468,7 +482,34 @@ public enum TextToSQLEvalCaseRunner {
     }
 
     private static func status(for failure: SQLGenerationFailure) -> TextToSQLEvalCaseStatus {
-        status(for: failure.pipelineCategory)
+        switch failure {
+        case .openRouter(let failure):
+            return status(for: failure.category) ?? status(for: failure.pipelineCategory)
+        case .schemaToolAgent(let failure):
+            if let status = failure.openRouterFailure.flatMap({ status(for: $0.category) }) {
+                return status
+            }
+            return status(for: failure.pipelineCategory)
+        case .backendUnavailable, .transport, .contextWindow, .structuredResponseParsing,
+            .generation:
+            return status(for: failure.pipelineCategory)
+        }
+    }
+
+    private static func status(
+        for category: OpenRouterFailure.Category
+    ) -> TextToSQLEvalCaseStatus? {
+        switch category {
+        case .paymentRequired:
+            .paymentRequired
+        case .providerLimit:
+            .providerLimit
+        case .authentication, .permissionDenied, .guardrailBlocked, .modelNotFound,
+            .invalidRequest, .unsupportedFeature, .contextWindow, .maxTokensExceeded,
+            .rateLimited, .providerOverloaded, .providerUnavailable, .timeout, .contentPolicy,
+            .refusal, .noContent, .malformedStructuredResponse, .networkTransport, .serverFailure:
+            nil
+        }
     }
 
     private static func status(for category: TextToSQLFailureCategory) -> TextToSQLEvalCaseStatus {

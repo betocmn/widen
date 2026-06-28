@@ -33,6 +33,11 @@ enum TextToSQLReleaseGateReporter {
         let summary = run.backendSummaries[.cloud] ?? run.summary
         return TextToSQLReleaseGateInput(
             totalResults: summary.totalResults,
+            expectedResults: TextToSQLReleaseGate.expectedResultCount,
+            completedResults: run.manifest.completedResultCount ?? summary.totalResults,
+            missingResults: run.manifest.missingResultCount ?? 0,
+            skippedBudgetResults: run.manifest.skippedBudgetCount ?? 0,
+            providerBudgetUnavailableResults: run.manifest.providerBudgetUnavailableCount ?? 0,
             endToEndPass: gateCount(summary.endToEndPass),
             safetyValid: gateCount(summary.safetyValid),
             schemaValid: gateCount(summary.schemaValid),
@@ -68,6 +73,9 @@ enum TextToSQLReleaseGateReporter {
             "| --- | --- |",
             "| Suite | \(tableCell("\(run.manifest.suiteName) v\(run.manifest.suiteVersion)")) |",
             "| Evaluation mode | \(tableCell(run.manifest.evaluationMode)) |",
+            "| Run ID | \(tableCell(run.manifest.runID ?? "-")) |",
+            "| Parent run ID | \(tableCell(run.manifest.parentRunID ?? "-")) |",
+            "| Resumed from | \(tableCell(run.manifest.resumedFrom ?? "-")) |",
             "| Commit | \(tableCell(run.manifest.commitSHA)) |",
             "| Started | \(tableCell(run.manifest.startedAt)) |",
             "| Finished | \(tableCell(run.manifest.finishedAt)) |",
@@ -76,6 +84,13 @@ enum TextToSQLReleaseGateReporter {
             "| Model | \(tableCell(run.manifest.model ?? "-")) |",
             "| Repeats | \(run.manifest.repeatCount) |",
             "| Results | \(input.totalResults) |",
+            "| Complete | \(input.completedResults == input.expectedResults ? "Yes" : "No") |",
+            "| Expected results | \(input.expectedResults) |",
+            "| Completed results | \(input.completedResults) |",
+            "| Missing results | \(input.missingResults) |",
+            "| Skipped by budget | \(input.skippedBudgetResults) |",
+            "| Provider budget unavailable | \(input.providerBudgetUnavailableResults) |",
+            "| Budget stop | \(tableCell(run.manifest.budgetStopReason ?? "-")) |",
             "",
             "## Gate Criteria",
             "",
@@ -89,13 +104,22 @@ enum TextToSQLReleaseGateReporter {
             )
         }
 
-        if !evaluation.failureMessages.isEmpty {
+        if !evaluation.incompleteFailureMessages.isEmpty {
             lines += [
                 "",
-                "## Failures",
+                "## Incomplete Run",
                 "",
             ]
-            lines += evaluation.failureMessages.map { "- \($0)" }
+            lines += evaluation.incompleteFailureMessages.map { "- \($0)" }
+        }
+
+        if !evaluation.thresholdFailureMessages.isEmpty {
+            lines += [
+                "",
+                "## Threshold Failures",
+                "",
+            ]
+            lines += evaluation.thresholdFailureMessages.map { "- \($0)" }
         }
 
         lines += historicalRegressionSection(results: run.results)
@@ -304,13 +328,20 @@ enum TextToSQLReleaseTriageReporter {
         run: EvalRun,
         casesByID: [String: TextToSQLEvalCase]
     ) -> String {
+        let expectedKeys = expectedKeys(for: run, casesByID: casesByID)
+        let completeness = TextToSQLEvalRunCompleteness.evaluate(
+            expectedKeys: expectedKeys,
+            results: run.results
+        )
         let failed = run.results
             .filter(Self.isTriageFailure)
             .map { TriageRow(result: $0, evalCase: casesByID[$0.caseID]) }
         let grouped = Dictionary(grouping: failed, by: \.category)
 
         var lines: [String] = [
-            "# Text-to-SQL Release Gate Triage",
+            completeness.isComplete
+                ? "# Text-to-SQL Release Gate Triage"
+                : "# Text-to-SQL Release Gate Triage (Partial)",
             "",
             "This report is redacted: it omits raw prompts, raw model output, result rows, API keys, and full schema dumps.",
             "",
@@ -327,6 +358,14 @@ enum TextToSQLReleaseTriageReporter {
             "| Cloud agent | \(tableCell(run.manifest.cloudAgentMode ?? "-")) |",
             "| Model | \(tableCell(run.manifest.model ?? "-")) |",
             "| Results | \(run.results.count) |",
+            "| Complete | \(completeness.isComplete ? "Yes" : "No") |",
+            "| Expected results | \(completeness.expectedResultCount) |",
+            "| Completed results | \(completeness.completedResultCount) |",
+            "| Missing results | \(completeness.missingResultCount) |",
+            "| Skipped by budget | \(completeness.skippedBudgetCount) |",
+            "| Provider budget unavailable | \(completeness.providerBudgetUnavailableCount) |",
+            "| Resumed from | \(tableCell(run.manifest.resumedFrom ?? "-")) |",
+            "| Budget stop | \(tableCell(run.manifest.budgetStopReason ?? "-")) |",
             "| Failed results | \(failed.count) |",
             "",
             "## Failure Categories",
@@ -354,6 +393,13 @@ enum TextToSQLReleaseTriageReporter {
             }
         }
 
+        lines += notEvaluatedSection(completeness: completeness)
+        lines += historicalPreseasonTriageSection(
+            run: run,
+            expectedKeys: expectedKeys,
+            completeness: completeness
+        )
+
         lines += [
             "",
             "## Notes",
@@ -366,6 +412,7 @@ enum TextToSQLReleaseTriageReporter {
     }
 
     private static func isTriageFailure(_ result: TextToSQLEvalResult) -> Bool {
+        guard result.status.isCompletedEvaluation else { return false }
         if result.status != .passed { return true }
         if result.metrics.endToEndPassed == false { return true }
         switch result.metrics.semanticStatus {
@@ -375,6 +422,158 @@ enum TextToSQLReleaseTriageReporter {
         case .passed, .notApplicable, nil:
             return false
         }
+    }
+
+    private static func notEvaluatedSection(
+        completeness: TextToSQLEvalRunCompleteness
+    ) -> [String] {
+        guard !completeness.notEvaluated.isEmpty else { return [] }
+        var lines = [
+            "",
+            "## Not Evaluated",
+            "",
+            "| Case | Backend | Repeat | Reason |",
+            "| --- | --- | ---: | --- |",
+        ]
+        for slot in completeness.notEvaluated.sorted(by: notEvaluatedSort) {
+            lines.append(
+                "| \(tableCell(slot.key.caseID)) | \(tableCell(slot.key.backend.rawValue)) | \(slot.key.repeatIndex) | \(tableCell(slot.reason.rawValue)) |"
+            )
+        }
+        return lines
+    }
+
+    private static func historicalPreseasonTriageSection(
+        run: EvalRun,
+        expectedKeys: [TextToSQLEvalResultKey],
+        completeness: TextToSQLEvalRunCompleteness
+    ) -> [String] {
+        let historicalIDs = [
+            "preseason.top-wins-ambiguous",
+            "preseason.top-wins-defined",
+        ]
+        let resultByKey = Dictionary(
+            run.results.map { (TextToSQLEvalResultKey(result: $0), $0) },
+            uniquingKeysWith: { _, newest in newest }
+        )
+        let expectedHistorical = expectedKeys.filter { historicalIDs.contains($0.caseID) }
+        let fallbackKeys: [TextToSQLEvalResultKey]
+        if expectedHistorical.isEmpty {
+            fallbackKeys = historicalIDs.flatMap { caseID in
+                (1...max(1, run.manifest.repeatCount)).map {
+                    TextToSQLEvalResultKey(caseID: caseID, backend: .cloud, repeatIndex: $0)
+                }
+            }
+        } else {
+            fallbackKeys = expectedHistorical
+        }
+
+        var lines = [
+            "",
+            "## Historical Preseason Cases",
+            "",
+            "| Case | Backend | Repeat | Evaluation | Status | Semantic | Notes |",
+            "| --- | --- | ---: | --- | --- | --- | --- |",
+        ]
+        for key in fallbackKeys.sorted(by: keySort) {
+            guard historicalIDs.contains(key.caseID) else { continue }
+            if let result = resultByKey[key], result.status.isCompletedEvaluation {
+                lines.append(
+                    "| \(tableCell(key.caseID)) | \(tableCell(key.backend.rawValue)) | \(key.repeatIndex) | Evaluated | \(tableCell(result.status.rawValue)) | \(tableCell(result.metrics.semanticStatus?.rawValue ?? "-")) | \(tableCell(historicalNote(result))) |"
+                )
+            } else if let result = resultByKey[key] {
+                lines.append(
+                    "| \(tableCell(key.caseID)) | \(tableCell(key.backend.rawValue)) | \(key.repeatIndex) | Not evaluated | \(tableCell(result.status.rawValue)) | \(tableCell(result.metrics.semanticStatus?.rawValue ?? "-")) | \(tableCell(result.diagnostics.errorMessage ?? result.status.notEvaluatedReason?.rawValue ?? "-")) |"
+                )
+            } else {
+                lines.append(
+                    "| \(tableCell(key.caseID)) | \(tableCell(key.backend.rawValue)) | \(key.repeatIndex) | Not evaluated | - | - | missing |"
+                )
+            }
+        }
+        return lines
+    }
+
+    private static func historicalNote(_ result: TextToSQLEvalResult) -> String {
+        var notes: [String] = []
+        if repeatedNoProgressRepair(result) {
+            notes.append("repeated/no-progress repair")
+        }
+        if result.metrics.forbiddenBindingViolations.contains(where: {
+            $0.localizedCaseInsensitiveContains("tool_a_id")
+                || $0.localizedCaseInsensitiveContains("tool_b_id")
+        }) {
+            notes.append("invalid tool A/B binding")
+        }
+        if result.metrics.semanticStatus == .resultMismatch {
+            notes.append("semantic mismatch")
+        }
+        return notes.isEmpty ? "-" : notes.joined(separator: "; ")
+    }
+
+    private static func expectedKeys(
+        for run: EvalRun,
+        casesByID: [String: TextToSQLEvalCase]
+    ) -> [TextToSQLEvalResultKey] {
+        let caseIDs: [String]
+        if let selected = run.manifest.selectedCaseIDs, !selected.isEmpty {
+            caseIDs = selected
+        } else if run.manifest.caseCount == casesByID.count {
+            caseIDs = casesByID.keys.sorted()
+        } else {
+            caseIDs = orderedUniqueCaseIDs(run.results)
+        }
+        let backends = backends(for: run.manifest.backendMode)
+        return backends.flatMap { backend in
+            caseIDs.flatMap { caseID in
+                (1...max(1, run.manifest.repeatCount)).map { repeatIndex in
+                    TextToSQLEvalResultKey(
+                        caseID: caseID,
+                        backend: backend,
+                        repeatIndex: repeatIndex
+                    )
+                }
+            }
+        }
+    }
+
+    private static func backends(for backendMode: String) -> [TextToSQLEvalBackend] {
+        switch backendMode {
+        case "local":
+            return [.local]
+        case "cloud":
+            return [.cloud]
+        case "both":
+            return [.local, .cloud]
+        default:
+            return [.cloud]
+        }
+    }
+
+    private static func orderedUniqueCaseIDs(_ results: [TextToSQLEvalResult]) -> [String] {
+        var seen: Set<String> = []
+        var ordered: [String] = []
+        for result in results where !seen.contains(result.caseID) {
+            seen.insert(result.caseID)
+            ordered.append(result.caseID)
+        }
+        return ordered
+    }
+
+    private static func notEvaluatedSort(
+        _ lhs: TextToSQLEvalNotEvaluatedSlot,
+        _ rhs: TextToSQLEvalNotEvaluatedSlot
+    ) -> Bool {
+        keySort(lhs.key, rhs.key)
+    }
+
+    private static func keySort(
+        _ lhs: TextToSQLEvalResultKey,
+        _ rhs: TextToSQLEvalResultKey
+    ) -> Bool {
+        if lhs.caseID != rhs.caseID { return lhs.caseID < rhs.caseID }
+        if lhs.backend != rhs.backend { return lhs.backend.rawValue < rhs.backend.rawValue }
+        return lhs.repeatIndex < rhs.repeatIndex
     }
 
     private struct TriageRow {

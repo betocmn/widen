@@ -16,7 +16,18 @@ public struct TextToSQLReleaseGateCount: Codable, Equatable, Sendable {
 }
 
 public struct TextToSQLReleaseGateInput: Codable, Equatable, Sendable {
-    public var totalResults: Int
+    public var totalResults: Int {
+        didSet {
+            if completedResults == oldValue {
+                completedResults = totalResults
+            }
+        }
+    }
+    public var expectedResults: Int
+    public var completedResults: Int
+    public var missingResults: Int
+    public var skippedBudgetResults: Int
+    public var providerBudgetUnavailableResults: Int
     public var endToEndPass: TextToSQLReleaseGateCount?
     public var safetyValid: TextToSQLReleaseGateCount
     public var schemaValid: TextToSQLReleaseGateCount
@@ -26,6 +37,11 @@ public struct TextToSQLReleaseGateInput: Codable, Equatable, Sendable {
 
     public init(
         totalResults: Int,
+        expectedResults: Int = TextToSQLReleaseGate.expectedResultCount,
+        completedResults: Int? = nil,
+        missingResults: Int = 0,
+        skippedBudgetResults: Int = 0,
+        providerBudgetUnavailableResults: Int = 0,
         endToEndPass: TextToSQLReleaseGateCount?,
         safetyValid: TextToSQLReleaseGateCount,
         schemaValid: TextToSQLReleaseGateCount,
@@ -34,6 +50,11 @@ public struct TextToSQLReleaseGateInput: Codable, Equatable, Sendable {
         repeatedNoProgressRepairCount: Int
     ) {
         self.totalResults = totalResults
+        self.expectedResults = expectedResults
+        self.completedResults = completedResults ?? totalResults
+        self.missingResults = missingResults
+        self.skippedBudgetResults = skippedBudgetResults
+        self.providerBudgetUnavailableResults = providerBudgetUnavailableResults
         self.endToEndPass = endToEndPass
         self.safetyValid = safetyValid
         self.schemaValid = schemaValid
@@ -77,6 +98,23 @@ public struct TextToSQLReleaseGateEvaluation: Codable, Equatable, Sendable {
     public var failureMessages: [String] {
         criteria
             .filter { !$0.passed }
+            .map { criterion in
+                if criterion.id == "result-count" {
+                    return criterion.label
+                }
+                return "\(criterion.label): observed \(criterion.observed), required \(criterion.required)"
+            }
+    }
+
+    public var incompleteFailureMessages: [String] {
+        criteria
+            .filter { !$0.passed && $0.id == "result-count" }
+            .map(\.label)
+    }
+
+    public var thresholdFailureMessages: [String] {
+        criteria
+            .filter { !$0.passed && $0.id != "result-count" }
             .map { "\($0.label): observed \($0.observed), required \($0.required)" }
     }
 }
@@ -88,11 +126,10 @@ public enum TextToSQLReleaseGate {
 
     public static func evaluate(_ input: TextToSQLReleaseGateInput) -> TextToSQLReleaseGateEvaluation {
         let criteria = [
-            exactIntCriterion(
+            completenessCriterion(
                 id: "result-count",
-                label: "20-case suite repeated 3 times",
-                observed: input.totalResults,
-                required: expectedResultCount
+                completed: input.completedResults,
+                expected: input.expectedResults
             ),
             rateCriterion(
                 id: "end-to-end",
@@ -143,6 +180,22 @@ public enum TextToSQLReleaseGate {
             observed: String(observed),
             required: String(required),
             passed: observed == required
+        )
+    }
+
+    private static func completenessCriterion(
+        id: String,
+        completed: Int,
+        expected: Int
+    ) -> TextToSQLReleaseGateCriterion {
+        TextToSQLReleaseGateCriterion(
+            id: id,
+            label: completed == expected
+                ? "Complete release-gate evaluation"
+                : "Release gate incomplete: only \(completed)/\(expected) expected results were evaluated.",
+            observed: "\(completed)/\(expected)",
+            required: "\(expected)/\(expected)",
+            passed: completed == expected
         )
     }
 
