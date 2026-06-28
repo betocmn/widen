@@ -854,7 +854,7 @@ struct SchemaSearchIndexTests {
         let task = Task {
             try await store.searcher(for: snapshot(schema))
         }
-        try await Task.sleep(nanoseconds: 30_000_000)
+        try await waitForInFlightBuild(in: store)
         await store.removeAllCachedSearchers()
 
         await #expect(throws: CancellationError.self) {
@@ -880,7 +880,7 @@ struct SchemaSearchIndexTests {
         let task = Task {
             try await store.searcher(for: snapshot(schema))
         }
-        try await Task.sleep(nanoseconds: 30_000_000)
+        try await waitForInFlightBuild(in: store)
         await store.removeAllCachedSearchers()
 
         await #expect(throws: CancellationError.self) {
@@ -930,6 +930,16 @@ struct SchemaSearchIndexTests {
                 fingerprint: "test"
             )
         )
+    }
+
+    private func waitForInFlightBuild(in store: SchemaSearchIndexStore) async throws {
+        for _ in 0..<500 {
+            if await store.inFlightBuildCount() > 0 {
+                return
+            }
+            try await Task.sleep(nanoseconds: 1_000_000)
+        }
+        throw SchemaSearchIndexTestError.inFlightBuildDidNotStart
     }
 
     private func snapshot(
@@ -1074,5 +1084,9 @@ struct SchemaSearchIndexTests {
     private func tempDirectory() -> URL {
         FileManager.default.temporaryDirectory
             .appendingPathComponent("widen-schema-search-\(UUID().uuidString)", isDirectory: true)
+    }
+
+    private enum SchemaSearchIndexTestError: Error {
+        case inFlightBuildDidNotStart
     }
 }
