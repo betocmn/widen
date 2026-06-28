@@ -767,6 +767,7 @@ public final class OpenRouterSchemaToolSQLAgent: SQLGenerator, Sendable {
                         aggregate.terminalOutcome = "sql"
                         if overClarificationCorrections > 0 {
                             diagnostics.overClarificationCorrectionSucceeded = true
+                            diagnostics.clearResolvedClarificationRejection()
                         }
                         if intentCoverageCorrections > 0 {
                             diagnostics.intentCoverageCorrectionSucceeded = true
@@ -1768,6 +1769,12 @@ private struct OpenRouterSchemaToolAgentDiagnosticState {
         }
         if terminalValidationFailureReason == "intentCoverageFailed" {
             terminalValidationFailureReason = nil
+        }
+    }
+
+    mutating func clearResolvedClarificationRejection() {
+        if appSideRejectionReason == .clarificationRejected {
+            appSideRejectionReason = nil
         }
     }
 

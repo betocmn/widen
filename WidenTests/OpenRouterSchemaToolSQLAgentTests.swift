@@ -658,6 +658,7 @@ struct OpenRouterSchemaToolSQLAgentTests {
         #expect(result.backendMetadata?.agentDiagnostics?.clarificationPolicyDecision == "shouldAnswerWithSQL")
         #expect(result.backendMetadata?.agentDiagnostics?.overClarificationCorrectionAttempted == true)
         #expect(result.backendMetadata?.agentDiagnostics?.overClarificationCorrectionSucceeded == true)
+        #expect(result.backendMetadata?.agentDiagnostics?.appSideRejectionReason == nil)
     }
 
     @Test func defaultModeDiagnosesOverClarificationWithoutCorrecting() async throws {
