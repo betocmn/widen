@@ -1571,15 +1571,22 @@ semantic result mismatch (24 results), followed by tool budget exhausted (9).
 Sanitized artifacts were updated in `docs/evals/0.1.0.md` and
 `docs/evals/0.1.0-triage.md`.
 
-## PR 52 draft follow-up — Split answerability from SQL readiness
+## PR 52 draft follow-up — Experimental diagnostics only by default
 
-Added deterministic SQL intent coverage so answerability no longer means final
-SQL readiness. Terminal SQL now gets one strict correction when it misses
+PR 52 remains draft. It now keeps the answerability policy, SQL intent coverage
+policy, redacted trace fields, semantic mismatch categories, and triage columns,
+but default production behavior is conservative: both new schema-tool enforcement
+modes default to diagnostics only. The default OpenRouter schema-tool path
+records policy decisions without forcing clarification into SQL and without
+running the SQL intent-correction loop.
+
+The focused over-clarification helper explicitly enables the experimental
+correction modes. Those modes still do one strict correction for missing
 deterministic intent such as status predicates, anti-join/null semantics,
 aggregates, group/order/limit shape, anchored date windows, database-context
-filters, or obvious projection/unit requirements. The agent also stops
-additional schema-tool calls after sufficient evidence and records redacted
-intent-coverage trace fields and semantic mismatch categories.
+filters, or obvious projection/unit requirements. Eval artifacts are now written
+before the first model call and after each result, with per-case progress
+heartbeats so a stalled run leaves partial output.
 
 Local verification passed:
 
@@ -1588,31 +1595,35 @@ make project
 make test
 ```
 
-Latest completed focused over-clarification run:
-`.eval-results/20260628-115051-481` at commit `e0389c8`.
+Latest completed focused experimental over-clarification run:
+`.eval-results/20260628-124309-188` at commit `dce4f4d`, with
+`clarificationCorrectionMode=correctOverClarificationExperimental` and
+`intentCoverageMode=correctAndRetryExperimental`.
 
-| Metric | Full PR 16 gate | PR 52 focused run |
+| Metric | Full PR 16 gate | PR 52 focused experimental |
 | --- | ---: | ---: |
 | Scope | 60 | 30 |
-| End-to-end semantic pass | 24/60 | 8/30 |
+| End-to-end semantic pass | 24/60 | 11/30 |
 | Clarification decision accuracy | 10/12 | n/a |
 | Expected SQL, got clarification | 3 | 3 |
-| Semantic result mismatch | 24 | 10 |
-| Tool budget exhausted | 9 | 2 |
+| Semantic result mismatch | 24 | 5 triage / 6 semantic status |
+| Tool budget exhausted | 9 | 3 triage / 2 summary |
 | Model/tool protocol failure | 0 | 6 |
 | Repeated/no-progress repair | 0 | 0 |
+| Transport reliability | 60/60 | 30/30 |
 
-Focused Preseason status remained semantically green:
+Previous focused Preseason status remained semantically green:
 `top-wins-ambiguous` clarified 3/3, `top-wins-defined` semantically passed 3/3,
 and invalid tool A/B binding stayed at 0. One `top-wins-defined` repeat still
 had a static schema-object failure despite semantic equivalence.
 
-A later focused rerun after projection-intent refinements was terminated after
-it produced no output or artifact directory, so no newer release count is
-recorded. PR 52 should stay draft. The next largest buckets are now model/tool
-protocol no-progress after intent correction, semantic projection mismatches,
-remaining `saas.expiring-subscriptions` anchored/status shape mismatches, and
-the `support.average-first-response` invalid-SQL-to-clarification fallback.
+This run completed without the previous no-artifact stall, but it does not meet
+the behavior-changing acceptance gate. The current largest focused buckets are
+model/tool protocol no-progress after intent correction, semantic projection and
+row-order mismatches, residual `support.average-first-response` clarification,
+and tool budget exhaustion on saas status/filter cases. The next production fix
+should not be more force-SQL pressure; it should target stable query-plan and
+SQL-shape generation, or deterministic synthesis for common patterns.
 
 ---
 
