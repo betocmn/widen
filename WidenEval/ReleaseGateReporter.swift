@@ -475,16 +475,25 @@ enum TextToSQLReleaseTriageReporter {
             run.results.map { (TextToSQLEvalResultKey(result: $0), $0) },
             uniquingKeysWith: { _, newest in newest }
         )
-        let expectedHistorical = expectedKeys.filter { historicalIDs.contains($0.caseID) }
-        let fallbackKeys: [TextToSQLEvalResultKey]
-        if expectedHistorical.isEmpty {
-            fallbackKeys = historicalIDs.flatMap { caseID in
-                (1...max(1, run.manifest.repeatCount)).map {
-                    TextToSQLEvalResultKey(caseID: caseID, backend: .cloud, repeatIndex: $0)
+        let historicalBackends = Set(
+            expectedKeys.map(\.backend)
+                + run.results
+                .filter { historicalIDs.contains($0.caseID) }
+                .map(\.backend)
+        )
+        let backends = historicalBackends.isEmpty
+            ? [TextToSQLEvalBackend.cloud]
+            : historicalBackends.sorted { $0.rawValue < $1.rawValue }
+        let fallbackKeys = backends.flatMap { backend in
+            historicalIDs.flatMap { caseID in
+                (1...max(1, run.manifest.repeatCount)).map { repeatIndex in
+                    TextToSQLEvalResultKey(
+                        caseID: caseID,
+                        backend: backend,
+                        repeatIndex: repeatIndex
+                    )
                 }
             }
-        } else {
-            fallbackKeys = expectedHistorical
         }
 
         var lines = [
