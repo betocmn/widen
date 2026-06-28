@@ -271,6 +271,18 @@ struct TextToSQLEvalRunPlanningTests {
         #expect(text.contains("--resume-run \"$(RESUME)\" --resume-missing"))
     }
 
+    @Test func cloudResumeSourceHashesIncludeOpenRouterGenerator() throws {
+        let testFile = URL(fileURLWithPath: #filePath)
+        let evalRunner = testFile
+            .deletingLastPathComponent()
+            .deletingLastPathComponent()
+            .appendingPathComponent("WidenEval/EvalRunner.swift")
+        let source = try String(contentsOf: evalRunner, encoding: .utf8)
+
+        #expect(source.contains("\"WidenKit/Services/OpenRouterSQLGenerator.swift\""))
+        #expect(source.contains("options.backendMode.backends.contains(.cloud)"))
+    }
+
     private static func expectedKeys(
         caseIDs: [String],
         repeats: Int

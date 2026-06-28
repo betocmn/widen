@@ -914,13 +914,75 @@ struct OpenRouterSQLGeneratorTests {
         )
     }
 
-    private func makeGenerator(transport: StubTransport, model: String = Self.modelID) -> OpenRouterSQLGenerator {
+    @Test func catalogLookupCanExhaustHTTPBudgetBeforeChatRequest() async throws {
+        let transport = StubTransport([
+            .success((catalogResponse(), response(url: Self.apiBase.appendingPathComponent("models/user"), status: 200)))
+        ])
+        let generator = makeGenerator(
+            transport: transport,
+            retryPolicy: OpenRouterRetryPolicy(maxAttempts: 1),
+            countCapabilityLookupHTTPAttempts: true
+        )
+
+        do {
+            _ = try await generator.generateSQL(
+                question: "List users",
+                schema: makeSchema(),
+                context: SQLGenerationContext(),
+                config: SQLGenerationConfig()
+            )
+            Issue.record("Expected HTTP-attempt budget exhaustion.")
+        } catch let failure as OpenRouterHTTPAttemptBudgetExhausted {
+            #expect(failure.backendMetadata?.requestCount == 1)
+            #expect(transport.requests.map { $0.url?.path } == ["/api/v1/models/user"])
+        }
+    }
+
+    @Test func catalogLookupCountsTowardLegacyFailureAttempts() async throws {
+        let transport = StubTransport([
+            .success((catalogResponse(), response(url: Self.apiBase.appendingPathComponent("models/user"), status: 200))),
+            .success((errorResponse(errorType: "rate_limit_exceeded"), response(url: Self.chatEndpoint, status: 429))),
+        ])
+        let generator = makeGenerator(
+            transport: transport,
+            retryPolicy: OpenRouterRetryPolicy(maxAttempts: 2),
+            countCapabilityLookupHTTPAttempts: true
+        )
+
+        do {
+            _ = try await generator.generateSQL(
+                question: "List users",
+                schema: makeSchema(),
+                context: SQLGenerationContext(),
+                config: SQLGenerationConfig()
+            )
+            Issue.record("Expected OpenRouter failure.")
+        } catch let failure as OpenRouterFailure {
+            #expect(failure.category == .rateLimited)
+            #expect(failure.diagnostic.attemptCount == 2)
+            #expect(
+                transport.requests.map { $0.url?.path } == [
+                    "/api/v1/models/user",
+                    "/api/v1/chat/completions",
+                ]
+            )
+        }
+    }
+
+    private func makeGenerator(
+        transport: StubTransport,
+        model: String = Self.modelID,
+        retryPolicy: OpenRouterRetryPolicy = OpenRouterRetryPolicy(),
+        countCapabilityLookupHTTPAttempts: Bool = false
+    ) -> OpenRouterSQLGenerator {
         OpenRouterSQLGenerator(
             apiKey: "test-key",
             model: model,
             transport: transport,
             catalogService: catalogService(transport: transport),
-            requestBuilder: OpenRouterRequestBuilder(endpoint: Self.chatEndpoint)
+            requestBuilder: OpenRouterRequestBuilder(endpoint: Self.chatEndpoint),
+            retryPolicy: retryPolicy,
+            countCapabilityLookupHTTPAttempts: countCapabilityLookupHTTPAttempts
         )
     }
 

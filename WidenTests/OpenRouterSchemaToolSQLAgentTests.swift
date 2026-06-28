@@ -1911,6 +1911,54 @@ struct OpenRouterSchemaToolSQLAgentTests {
         #expect(legacy.callCount == 1)
     }
 
+    @Test func unsupportedToolsFallbackUsesRemainingHTTPBudget() async throws {
+        let schema = Self.makeSchema()
+        let chatTransport = ScriptedHTTPTransport { request, _ in
+            (
+                Self.openRouterErrorResponse(),
+                HTTPURLResponse(
+                    url: request.url!,
+                    statusCode: 429,
+                    httpVersion: "HTTP/1.1",
+                    headerFields: ["Content-Type": "application/json"]
+                )!
+            )
+        }
+        let catalogTransport = ScriptedTransport { _, _ in
+            Self.catalogResponse(parameters: ["response_format", "structured_outputs"])
+        }
+        let agent = makeAgent(
+            schema: schema,
+            chatTransport: chatTransport,
+            catalogTransport: catalogTransport,
+            configuration: OpenRouterSchemaToolSQLAgentConfiguration(
+                maximumSchemaToolCalls: 4,
+                maximumRepairSchemaToolCalls: 2,
+                maximumModelTurns: 6,
+                maximumMalformedTerminalCorrections: 1,
+                maximumRepeatedToolCorrections: 1,
+                maximumHTTPAttempts: 2,
+                countCapabilityLookupHTTPAttempts: true,
+                wallClockTimeoutSeconds: 10
+            )
+        )
+
+        do {
+            _ = try await agent.generateSQL(
+                question: "List users",
+                schema: schema,
+                context: SQLGenerationContext(),
+                config: SQLGenerationConfig()
+            )
+            Issue.record("Expected fallback OpenRouter failure")
+        } catch let failure as OpenRouterFailure {
+            #expect(failure.category == .rateLimited)
+            #expect(failure.diagnostic.attemptCount == 2)
+            #expect(catalogTransport.requests.map { $0.url?.path } == ["/api/v1/models/user"])
+            #expect(chatTransport.requests.map { $0.url?.path } == ["/api/v1/chat/completions"])
+        }
+    }
+
     @Test func unknownToolCapabilitiesAttemptAgentInsteadOfLegacy() async throws {
         let schema = Self.makeSchema()
         let chatTransport = ScriptedTransport { request, index in
@@ -2376,7 +2424,7 @@ struct OpenRouterSchemaToolSQLAgentTests {
             )
             Issue.record("Expected HTTP-attempt budget failure")
         } catch let failure as OpenRouterSchemaToolAgentFailure {
-            #expect(failure.category == .modelTurnBudgetExhausted)
+            #expect(failure.category == .httpAttemptBudgetExhausted)
             #expect(failure.backendMetadata?.agentHTTPAttemptCount == 1)
             #expect(failure.backendMetadata?.requestCount == 1)
             #expect(catalogTransport.requests.map { $0.url?.path } == ["/api/v1/models/user"])

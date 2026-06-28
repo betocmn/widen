@@ -610,7 +610,9 @@ struct EvalRunner {
             "WidenKit/Services/GeneratedSQLVerifier.swift",
             "WidenKit/Services/PostgresErrorMapper.swift",
             "WidenKit/Services/PostgresService.swift",
-        ] + (isOpenRouterSmoke ? ["WidenKit/Services/OpenRouterSQLGenerator.swift"] : [])
+        ] + ((isOpenRouterSmoke || options.backendMode.backends.contains(.cloud))
+            ? ["WidenKit/Services/OpenRouterSQLGenerator.swift"]
+            : [])
             + (options.cloudAgentMode == .tools ? [
                 "WidenKit/Services/OpenRouterSchemaToolSQLAgent.swift",
                 "WidenKit/Services/OpenRouterToolChatProtocol.swift",
@@ -1001,7 +1003,8 @@ struct EvalRunner {
             return OpenRouterSQLGenerator(
                 apiKey: apiKey,
                 model: options.model,
-                maximumHTTPAttempts: maximumHTTPAttempts.map { min(3, max(1, $0)) } ?? 3
+                maximumHTTPAttempts: maximumHTTPAttempts.map { min(3, max(1, $0)) } ?? 3,
+                countCapabilityLookupHTTPAttempts: maximumHTTPAttempts != nil
             )
         }
     }

@@ -104,6 +104,7 @@ public enum TextToSQLFailureCategory: String, Codable, Equatable, Sendable {
     case contextWindow
     case structuredResponseParsing
     case modelGeneration
+    case httpBudgetExhausted
     case safetyValidation
     case schemaValidation
     case postgresVerification
@@ -1472,6 +1473,9 @@ public struct TextToSQLPipeline: TextToSQLRunning {
             if case .openRouter(let openRouterFailure) = failure {
                 openRouterDiagnostic = openRouterFailure.diagnostic
                 backendMetadata = nil
+            } else if case .httpBudgetExhausted(let budgetFailure) = failure {
+                openRouterDiagnostic = nil
+                backendMetadata = budgetFailure.backendMetadata
             } else if case .schemaToolAgent(let agentFailure) = failure,
                 let openRouterFailure = agentFailure.openRouterFailure
             {

@@ -1796,13 +1796,16 @@ public final class OpenRouterSQLGenerator: SQLGenerator, Sendable {
     private let requestBuilder: OpenRouterRequestBuilder
     private let parser = OpenRouterResponseParser()
     private let retryPolicy: OpenRouterRetryPolicy
+    private let countCapabilityLookupHTTPAttempts: Bool
+    private let preResolvedCapabilities: OpenRouterModelCapabilities?
 
     public init(
         apiKey: String,
         model: String,
         transport: any HTTPTransport = URLSessionTransport(),
         endpoint: URL = URL(string: "https://openrouter.ai/api/v1/chat/completions")!,
-        maximumHTTPAttempts: Int = 3
+        maximumHTTPAttempts: Int = 3,
+        countCapabilityLookupHTTPAttempts: Bool = false
     ) {
         self.apiKey = apiKey
         self.model = model
@@ -1810,6 +1813,8 @@ public final class OpenRouterSQLGenerator: SQLGenerator, Sendable {
         self.catalogService = .shared
         self.requestBuilder = OpenRouterRequestBuilder(endpoint: endpoint)
         self.retryPolicy = OpenRouterRetryPolicy(maxAttempts: maximumHTTPAttempts)
+        self.countCapabilityLookupHTTPAttempts = countCapabilityLookupHTTPAttempts
+        self.preResolvedCapabilities = nil
     }
 
     init(
@@ -1818,7 +1823,9 @@ public final class OpenRouterSQLGenerator: SQLGenerator, Sendable {
         transport: any HTTPTransport,
         catalogService: OpenRouterModelCatalogService,
         requestBuilder: OpenRouterRequestBuilder,
-        retryPolicy: OpenRouterRetryPolicy = OpenRouterRetryPolicy()
+        retryPolicy: OpenRouterRetryPolicy = OpenRouterRetryPolicy(),
+        countCapabilityLookupHTTPAttempts: Bool = false,
+        preResolvedCapabilities: OpenRouterModelCapabilities? = nil
     ) {
         self.apiKey = apiKey
         self.model = model
@@ -1826,6 +1833,8 @@ public final class OpenRouterSQLGenerator: SQLGenerator, Sendable {
         self.catalogService = catalogService
         self.requestBuilder = requestBuilder
         self.retryPolicy = retryPolicy
+        self.countCapabilityLookupHTTPAttempts = countCapabilityLookupHTTPAttempts
+        self.preResolvedCapabilities = preResolvedCapabilities
     }
 
     public func generateSQL(
@@ -1846,20 +1855,52 @@ public final class OpenRouterSQLGenerator: SQLGenerator, Sendable {
         )
         let prompt = bundle.prompt
         let started = Date()
-        let capabilities = await catalogService.capabilitiesForGeneration(
-            apiKey: apiKey,
-            modelID: model
-        )
+        let capabilityLookupHTTPAttempts: Int
+        let capabilities: OpenRouterModelCapabilities
+        if let preResolvedCapabilities {
+            capabilityLookupHTTPAttempts = 0
+            capabilities = preResolvedCapabilities
+        } else if countCapabilityLookupHTTPAttempts {
+            let lookup = await catalogService.capabilitiesForGeneration(
+                apiKey: apiKey,
+                modelID: model,
+                maximumHTTPRequests: retryPolicy.maxAttempts
+            )
+            capabilityLookupHTTPAttempts = lookup.httpRequestCount
+            capabilities = lookup.capabilities
+        } else {
+            capabilityLookupHTTPAttempts = 0
+            capabilities = await catalogService.capabilitiesForGeneration(
+                apiKey: apiKey,
+                modelID: model
+            )
+        }
+        if countCapabilityLookupHTTPAttempts,
+            capabilityLookupHTTPAttempts >= retryPolicy.maxAttempts
+        {
+            throw OpenRouterHTTPAttemptBudgetExhausted(
+                message: "OpenRouter HTTP-attempt budget exhausted before chat completion.",
+                backendMetadata: budgetMetadata(
+                    requestCount: capabilityLookupHTTPAttempts,
+                    capabilities: capabilities
+                )
+            )
+        }
+        let remainingHTTPAttempts = countCapabilityLookupHTTPAttempts
+            ? max(1, retryPolicy.maxAttempts - capabilityLookupHTTPAttempts)
+            : retryPolicy.maxAttempts
         do {
             let parsed = try await performRequest(
                 instructions: instructions,
                 prompt: prompt,
-                capabilities: capabilities
+                capabilities: capabilities,
+                maximumHTTPAttempts: remainingHTTPAttempts
             )
-            let callCount = max(1, context.modelCallCount) + max(0, parsed.metadata.requestCount - 1)
+            let requestCount = capabilityLookupHTTPAttempts + parsed.metadata.requestCount
+            let callCount = max(1, context.modelCallCount) + max(0, requestCount - 1)
             var result = parsed.result
             result.generationCallCount = callCount
-            result.backendMetadata?.requestCount = parsed.metadata.requestCount
+            result.backendMetadata?.requestCount = requestCount
             result.backendMetadata?.retryCount = parsed.metadata.retryCount
             await GenerationLog.shared.append(
                 prompt: prompt,
@@ -1876,6 +1917,9 @@ public final class OpenRouterSQLGenerator: SQLGenerator, Sendable {
         } catch is CancellationError {
             throw CancellationError()
         } catch let failure as OpenRouterFailure {
+            let recordedFailure = capabilityLookupHTTPAttempts > 0
+                ? failure.withAttemptCount(failure.diagnostic.attemptCount + capabilityLookupHTTPAttempts)
+                : failure
             if failure.category == .unsupportedFeature || failure.category == .invalidRequest {
                 await catalogService.invalidate(apiKey: apiKey, modelID: model)
             }
@@ -1887,10 +1931,11 @@ public final class OpenRouterSQLGenerator: SQLGenerator, Sendable {
                     phase: context.mode,
                     package: bundle.schemaPackage,
                     context: context,
-                    callCount: max(1, context.modelCallCount) + max(0, failure.diagnostic.attemptCount - 1),
+                    callCount: max(1, context.modelCallCount)
+                        + max(0, recordedFailure.diagnostic.attemptCount - 1),
                     stopReason: failure.category.rawValue
                 ))
-            throw failure
+            throw recordedFailure
         } catch {
             await GenerationLog.shared.append(
                 prompt: prompt,
@@ -1906,7 +1951,8 @@ public final class OpenRouterSQLGenerator: SQLGenerator, Sendable {
             throw OpenRouterFailure(
                 category: .networkTransport,
                 message: error.localizedDescription,
-                requestedModelID: model
+                requestedModelID: model,
+                attemptCount: max(1, capabilityLookupHTTPAttempts)
             )
         }
     }
@@ -1923,10 +1969,37 @@ public final class OpenRouterSQLGenerator: SQLGenerator, Sendable {
         return parsed.metadata
     }
 
+    private func budgetMetadata(
+        requestCount: Int,
+        capabilities: OpenRouterModelCapabilities
+    ) -> OpenRouterGenerationMetadata {
+        OpenRouterGenerationMetadata(
+            requestedModelID: model,
+            returnedModelID: nil,
+            providerName: nil,
+            completionID: nil,
+            requestID: nil,
+            structuredOutputMode: capabilities.supportsStructuredOutputs
+                ? .strictJSONSchema
+                : .promptOnlyJSON,
+            requestCount: requestCount,
+            retryCount: 0,
+            promptTokens: nil,
+            completionTokens: nil,
+            reasoningTokens: nil,
+            totalTokens: nil,
+            costUSD: nil,
+            serviceTier: nil,
+            finishReason: nil,
+            nativeFinishReason: nil
+        )
+    }
+
     private func performRequest(
         instructions: String,
         prompt: String,
-        capabilities: OpenRouterModelCapabilities
+        capabilities: OpenRouterModelCapabilities,
+        maximumHTTPAttempts: Int? = nil
     ) async throws -> OpenRouterResponseParser.ParsedResult {
         let built = try requestBuilder.build(
             apiKey: apiKey,
@@ -1935,13 +2008,22 @@ public final class OpenRouterSQLGenerator: SQLGenerator, Sendable {
             prompt: prompt,
             capabilities: capabilities
         )
-        return try await performBuiltRequest(built, requestedModelID: model)
+        return try await performBuiltRequest(
+            built,
+            requestedModelID: model,
+            maximumHTTPAttempts: maximumHTTPAttempts
+        )
     }
 
     private func performBuiltRequest(
         _ built: OpenRouterRequestBuilder.BuiltRequest,
-        requestedModelID: String
+        requestedModelID: String,
+        maximumHTTPAttempts: Int? = nil
     ) async throws -> OpenRouterResponseParser.ParsedResult {
+        let effectiveRetryPolicy = OpenRouterRetryPolicy(
+            maxAttempts: maximumHTTPAttempts.map { min(retryPolicy.maxAttempts, max(1, $0)) }
+                ?? retryPolicy.maxAttempts
+        )
         var attempt = 1
         var noContentRetries = 0
         while true {
@@ -1961,7 +2043,7 @@ public final class OpenRouterSQLGenerator: SQLGenerator, Sendable {
                 } catch var failure as OpenRouterFailure {
                     failure.diagnostic.retryAfterSeconds = retryAfter
                     if failure.category == .noContent { noContentRetries += 1 }
-                    if let delay = retryPolicy.retryDelay(
+                    if let delay = effectiveRetryPolicy.retryDelay(
                         for: failure,
                         attempt: attempt,
                         noContentRetries: max(0, noContentRetries - 1)
@@ -1984,7 +2066,7 @@ public final class OpenRouterSQLGenerator: SQLGenerator, Sendable {
                     throw CancellationError()
                 }
                 let failure = Self.map(error, requestedModelID: requestedModelID, attempt: attempt)
-                if let delay = retryPolicy.retryDelay(
+                if let delay = effectiveRetryPolicy.retryDelay(
                     for: failure,
                     attempt: attempt,
                     noContentRetries: noContentRetries
