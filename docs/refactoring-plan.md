@@ -1571,14 +1571,15 @@ semantic result mismatch (24 results), followed by tool budget exhausted (9).
 Sanitized artifacts were updated in `docs/evals/0.1.0.md` and
 `docs/evals/0.1.0-triage.md`.
 
-## PR 52 draft follow-up — Experimental diagnostics only by default
+## PR 52 — Diagnostics-only schema-tool policy infrastructure
 
-PR 52 remains draft. It now keeps the answerability policy, SQL intent coverage
-policy, redacted trace fields, semantic mismatch categories, and triage columns,
-but default production behavior is conservative: both new schema-tool enforcement
-modes default to diagnostics only. The default OpenRouter schema-tool path
-records policy decisions without forcing clarification into SQL and without
-running the SQL intent-correction loop.
+PR 52 merged diagnostics-only. Experimental correction modes remain disabled by
+default and are not production behavior. It keeps the answerability policy, SQL
+intent coverage policy, redacted trace fields, semantic mismatch categories, and
+triage columns, but default production behavior is conservative: both new
+schema-tool enforcement modes default to diagnostics only. The default
+OpenRouter schema-tool path records policy decisions without forcing
+clarification into SQL and without running the SQL intent-correction loop.
 
 The focused over-clarification helper explicitly enables the experimental
 correction modes. Those modes still do one strict correction for missing
@@ -1618,7 +1619,8 @@ and invalid tool A/B binding stayed at 0. One `top-wins-defined` repeat still
 had a static schema-object failure despite semantic equivalence.
 
 This run completed without the previous no-artifact stall, but it does not meet
-the behavior-changing acceptance gate. The current largest focused buckets are
+the behavior-changing acceptance gate. PR 52 merged for diagnostics, traces,
+tests, and artifact hardening only. The current largest focused buckets are
 model/tool protocol no-progress after intent correction, semantic projection and
 row-order mismatches, residual `support.average-first-response` clarification,
 and tool budget exhaustion on saas status/filter cases. The next production fix

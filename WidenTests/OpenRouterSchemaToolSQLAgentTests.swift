@@ -5,6 +5,13 @@ import Testing
 
 @Suite("OpenRouter schema tool SQL agent")
 struct OpenRouterSchemaToolSQLAgentTests {
+    @Test func defaultConfigurationUsesDiagnosticsOnlyPolicyModes() {
+        let configuration = OpenRouterSchemaToolSQLAgentConfiguration.default
+
+        #expect(configuration.clarificationCorrectionMode == .diagnosticsOnly)
+        #expect(configuration.intentCoverageMode == .diagnosticsOnly)
+    }
+
     private final class ScriptedTransport: HTTPTransport, @unchecked Sendable {
         typealias Handler = @Sendable (URLRequest, Int) throws -> Data
 
