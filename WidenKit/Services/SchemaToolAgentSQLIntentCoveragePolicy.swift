@@ -316,7 +316,13 @@ public enum SchemaToolAgentSQLIntentCoveragePolicy {
                         + #"\b[^.!?;\n]{0,60}\b(?:when|if|where|with|using|status|=)\b"#,
                     options: .regularExpression
                 ) != nil
-                return termBeforeDefinition || definitionBeforeTerm
+                let recordsTermDefinition = lowerContext.range(
+                    of: #"\b(?:records?|counts?|represents)\b[^.!?;\n]{0,60}\b(?:one|a|an|1)\s+"#
+                        + escaped
+                        + #"\b"#,
+                    options: .regularExpression
+                ) != nil
+                return termBeforeDefinition || definitionBeforeTerm || recordsTermDefinition
             }
         }
 
