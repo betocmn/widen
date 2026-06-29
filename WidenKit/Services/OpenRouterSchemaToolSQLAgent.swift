@@ -1775,6 +1775,7 @@ private struct OpenRouterSchemaToolAgentDiagnosticState {
     mutating func clearResolvedClarificationRejection() {
         if appSideRejectionReason == .clarificationRejected {
             appSideRejectionReason = nil
+            terminalValidationFailureReason = nil
         }
     }
 

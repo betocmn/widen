@@ -200,6 +200,26 @@ struct SchemaToolAgentSQLIntentCoveragePolicyTests {
         #expect(missing.missingSignals.contains("email projection for person/customer entity"))
     }
 
+    @Test func personListWithForeignKeyProjectionRequiresEmailProjection() {
+        let missing = evaluate(
+            question: "Which customers bought product X?",
+            evidence: evidence(columns: [
+                "public.customers.id",
+                "public.customers.email",
+                "public.orders.customer_id",
+                "public.orders.product_name",
+            ]),
+            sql: """
+                SELECT o.customer_id
+                FROM public.orders AS o
+                WHERE o.product_name = 'Product X'
+                """
+        )
+
+        #expect(missing.decision == .needsCorrection)
+        #expect(missing.missingSignals.contains("email projection for person/customer entity"))
+    }
+
     @Test func groupedPersonMetricPrefersEmailLabelOverName() {
         let missing = evaluate(
             question: "Show total paid revenue per customer",
@@ -763,6 +783,26 @@ struct SchemaToolAgentSQLIntentCoveragePolicyTests {
                 FROM public.orders
                 GROUP BY customer_id
                 ORDER BY lifetime_revenue_cents DESC
+                LIMIT 100
+                """
+        )
+
+        #expect(covered.decision == .covered)
+    }
+
+    @Test func contextMetricDefinitionForSubjectAllowsCoverageChecks() {
+        let covered = evaluate(
+            question: "Who are our best customers?",
+            databaseContext: "Use total revenue as the ranking metric for customers.",
+            evidence: evidence(columns: [
+                "public.orders.customer_id",
+                "public.orders.total_cents",
+            ]),
+            sql: """
+                SELECT customer_id, SUM(total_cents) AS total_revenue_cents
+                FROM public.orders
+                GROUP BY customer_id
+                ORDER BY total_revenue_cents DESC
                 LIMIT 100
                 """
         )

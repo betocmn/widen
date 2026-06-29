@@ -835,7 +835,7 @@ struct OpenRouterSchemaToolSQLAgentTests {
 
         #expect(!result.needsClarification)
         #expect(result.sql.contains("e.winner_id IS NOT NULL"))
-        #expect(result.backendMetadata?.agentDiagnostics?.terminalValidationFailureReason == "asksForAlreadyKnownEvidence")
+        #expect(result.backendMetadata?.agentDiagnostics?.terminalValidationFailureReason == nil)
         #expect(result.backendMetadata?.agentDiagnostics?.overClarificationCorrectionAttempted == true)
         #expect(result.backendMetadata?.agentDiagnostics?.overClarificationCorrectionSucceeded == true)
     }
@@ -908,7 +908,7 @@ struct OpenRouterSchemaToolSQLAgentTests {
 
         #expect(!result.needsClarification)
         #expect(result.sql.contains(#"e."createdAt" >= NOW() - INTERVAL '14 days'"#))
-        #expect(result.backendMetadata?.agentDiagnostics?.terminalValidationFailureReason == "asksForAlreadyKnownEvidence")
+        #expect(result.backendMetadata?.agentDiagnostics?.terminalValidationFailureReason == nil)
         #expect(result.backendMetadata?.agentDiagnostics?.overClarificationCorrectionAttempted == true)
         #expect(result.backendMetadata?.agentDiagnostics?.overClarificationCorrectionSucceeded == true)
     }
