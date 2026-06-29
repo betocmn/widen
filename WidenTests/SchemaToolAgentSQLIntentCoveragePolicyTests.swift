@@ -299,6 +299,26 @@ struct SchemaToolAgentSQLIntentCoveragePolicyTests {
         #expect(covered.decision == .covered)
     }
 
+    @Test func laterContextCurrentDateAnchorRejectsMovingCurrentDate() {
+        let missing = evaluate(
+            question: "Subscriptions expiring in the next 30 days",
+            databaseContext: "Database was migrated on 2026-06-24. Current date is 2026-06-29.",
+            evidence: evidence(columns: [
+                "public.subscription.id",
+                "public.subscription.expires_at",
+            ]),
+            sql: """
+                SELECT id
+                FROM public.subscription
+                WHERE expires_at >= CURRENT_DATE
+                  AND expires_at < CURRENT_DATE + INTERVAL '30 days'
+                """
+        )
+
+        #expect(missing.decision == .needsCorrection)
+        #expect(missing.missingSignals.contains("explicit date/time anchor instead of moving current time"))
+    }
+
     @Test func unrelatedContextDateDoesNotRejectMovingCurrentDate() {
         let covered = evaluate(
             question: "Subscriptions expiring in the next 30 days",
@@ -525,6 +545,23 @@ struct SchemaToolAgentSQLIntentCoveragePolicyTests {
         #expect(covered.decision == .covered)
     }
 
+    @Test func quotedEqualityStatusPredicateSatisfiesStatusCoverage() {
+        let covered = evaluate(
+            question: "Show total paid revenue",
+            evidence: evidence(columns: [
+                "public.orders.status",
+                "public.orders.total_cents",
+            ]),
+            sql: """
+                SELECT SUM(total_cents) AS paid_revenue_cents
+                FROM public.orders AS o
+                WHERE o."Status" = 'paid'
+                """
+        )
+
+        #expect(covered.decision == .covered)
+    }
+
     @Test func frequentClusterRequiresCountOrderLimit() {
         let question = "What is the most frequent feedback cluster?"
         let evidence = evidence(columns: [
@@ -620,6 +657,25 @@ struct SchemaToolAgentSQLIntentCoveragePolicyTests {
         let covered = evaluate(
             question: "Which accounts are healthy?",
             databaseContext: "A healthy account is one with active status.",
+            evidence: evidence(columns: [
+                "public.accounts.id",
+                "public.accounts.status",
+            ]),
+            sql: """
+                SELECT id
+                FROM public.accounts
+                WHERE status = 'active'
+                LIMIT 100
+                """
+        )
+
+        #expect(covered.decision == .covered)
+    }
+
+    @Test func contextWithVerbBeforeProtectedMetricDefinitionAllowsCoverageChecks() {
+        let covered = evaluate(
+            question: "Which accounts are healthy?",
+            databaseContext: "Accounts are healthy when status = 'active'.",
             evidence: evidence(columns: [
                 "public.accounts.id",
                 "public.accounts.status",

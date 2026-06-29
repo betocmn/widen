@@ -302,10 +302,17 @@ public enum SchemaToolAgentSQLIntentCoveragePolicy {
             return !tokens.intersection(Self.metricDefinitionTokens).isEmpty
                 || Self.protectedMetricTerms.contains { term in
                     let escaped = NSRegularExpression.escapedPattern(for: term)
-                    return lowerContext.range(
+                    let termBeforeDefinition = lowerContext.range(
                         of: #"\b"# + escaped + #"\b[\s\S]{0,40}\b(?:means|is|are)\b"#,
                         options: .regularExpression
                     ) != nil
+                    let definitionBeforeTerm = lowerContext.range(
+                        of: #"\b(?:means|is|are)\b[\s\S]{0,40}\b"#
+                            + escaped
+                            + #"\b[\s\S]{0,60}\b(?:when|if|where|with|using|status|=)\b"#,
+                        options: .regularExpression
+                    ) != nil
+                    return termBeforeDefinition || definitionBeforeTerm
                 }
         }
 
@@ -569,7 +576,7 @@ public enum SchemaToolAgentSQLIntentCoveragePolicy {
         func sqlIncludesStatusPredicate(for status: String) -> Bool {
             if columnNames.contains("status") || columnNames.contains("state") {
                 if lowerSQL.range(
-                    of: #""?\b(status|state)\b"?\s*(=|<>|!=|in|not\s+in|like|is)\b"#,
+                    of: #"(?:\b[a-z_][a-z0-9_]*\s*\.\s*)?"?\b(status|state)\b"?\s*(?:=|<>|!=|\bnot\s+in\b|\bin\b|\blike\b|\bis\b)"#,
                     options: .regularExpression
                 ) != nil {
                     if status == "unresolved" {
@@ -657,39 +664,59 @@ public enum SchemaToolAgentSQLIntentCoveragePolicy {
         }
 
         private static func firstExplicitAnchor(in value: String) -> ExplicitAnchor? {
-            guard let match = value.range(
-                of: #"\b\d{4}-\d{2}-\d{2}(?:[ T]\d{2}:\d{2}(?::\d{2})?(?:\s*UTC|Z|[+-]\d{2}:?\d{2})?)?\b"#,
-                options: [.regularExpression, .caseInsensitive]
-            ) else { return nil }
-            let display = String(value[match])
-            let date = String(display.prefix(10)).lowercased()
-            let timeMatch = display.range(
-                of: #"\d{2}:\d{2}(?::\d{2})?"#,
-                options: .regularExpression
-            )
-            return ExplicitAnchor(
-                display: display,
-                date: date,
-                time: timeMatch.map { String(display[$0]).lowercased() }
-            )
+            explicitAnchorMatches(in: value).first?.anchor
         }
 
         private static func firstContextExplicitAnchor(in value: String) -> ExplicitAnchor? {
-            guard let anchor = firstExplicitAnchor(in: value) else { return nil }
-            let lowerValue = value.lowercased()
-            guard let dateRange = lowerValue.range(of: anchor.date) else { return nil }
-            let prefixStart = lowerValue.index(
+            explicitAnchorMatches(in: value).first { match in
+                contextAnchorPhraseApplies(in: value, dateRange: match.range)
+            }?.anchor
+        }
+
+        private static func explicitAnchorMatches(
+            in value: String
+        ) -> [(anchor: ExplicitAnchor, range: Range<String.Index>)] {
+            guard let regex = try? NSRegularExpression(
+                pattern: #"\b\d{4}-\d{2}-\d{2}(?:[ T]\d{2}:\d{2}(?::\d{2})?(?:\s*UTC|Z|[+-]\d{2}:?\d{2})?)?\b"#,
+                options: [.caseInsensitive]
+            ) else { return [] }
+            let range = NSRange(value.startIndex..<value.endIndex, in: value)
+            return regex.matches(in: value, range: range).compactMap { match in
+                guard let valueRange = Range(match.range, in: value) else { return nil }
+                let display = String(value[valueRange])
+                let date = String(display.prefix(10)).lowercased()
+                let timeMatch = display.range(
+                    of: #"\d{2}:\d{2}(?::\d{2})?"#,
+                    options: .regularExpression
+                )
+                return (
+                    ExplicitAnchor(
+                        display: display,
+                        date: date,
+                        time: timeMatch.map { String(display[$0]).lowercased() }
+                    ),
+                    valueRange
+                )
+            }
+        }
+
+        private static func contextAnchorPhraseApplies(
+            in value: String,
+            dateRange: Range<String.Index>
+        ) -> Bool {
+            let prefixStart = value.index(
                 dateRange.lowerBound,
-                offsetBy: -min(48, lowerValue.distance(from: lowerValue.startIndex, to: dateRange.lowerBound)),
-                limitedBy: lowerValue.startIndex
-            ) ?? lowerValue.startIndex
-            let suffixEnd = lowerValue.index(
+                offsetBy: -min(72, value.distance(from: value.startIndex, to: dateRange.lowerBound)),
+                limitedBy: value.startIndex
+            ) ?? value.startIndex
+            let suffixEnd = value.index(
                 dateRange.upperBound,
-                offsetBy: min(24, lowerValue.distance(from: dateRange.upperBound, to: lowerValue.endIndex)),
-                limitedBy: lowerValue.endIndex
-            ) ?? lowerValue.endIndex
-            let nearby = String(lowerValue[prefixStart..<suffixEnd])
-            let anchorPhrases = [
+                offsetBy: min(32, value.distance(from: dateRange.upperBound, to: value.endIndex)),
+                limitedBy: value.endIndex
+            ) ?? value.endIndex
+            let prefix = String(value[prefixStart..<dateRange.lowerBound]).lowercased()
+            let suffix = String(value[dateRange.upperBound..<suffixEnd]).lowercased()
+            let prefixAnchorPhrases = [
                 "as of",
                 "current date",
                 "today",
@@ -699,7 +726,13 @@ public enum SchemaToolAgentSQLIntentCoveragePolicy {
                 "anchor",
                 "use",
             ]
-            return anchorPhrases.contains { nearby.contains($0) } ? anchor : nil
+            let suffixAnchorPhrases = [
+                "as current date",
+                "as the current date",
+                "as today",
+            ]
+            return prefixAnchorPhrases.contains { prefix.contains($0) }
+                || suffixAnchorPhrases.contains { suffix.contains($0) }
         }
 
         private static func firstDateLiteral(in value: String) -> String? {
