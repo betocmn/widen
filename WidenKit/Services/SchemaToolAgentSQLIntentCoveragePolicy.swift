@@ -306,7 +306,9 @@ public enum SchemaToolAgentSQLIntentCoveragePolicy {
                 || Self.protectedMetricTerms.contains { term in
                     let escaped = NSRegularExpression.escapedPattern(for: term)
                     let termBeforeDefinition = lowerContext.range(
-                        of: #"\b"# + escaped + #"\b[\s\S]{0,40}\b(?:means|is|are)\b"#,
+                        of: #"\b"#
+                            + escaped
+                            + #"\b[\s\S]{0,40}\b(?:means|is|are)\b[\s\S]{0,80}\b(?:when|if|where|with|using|status|active|paid|verified|=)\b"#,
                         options: .regularExpression
                     ) != nil
                     let definitionBeforeTerm = lowerContext.range(
@@ -374,7 +376,11 @@ public enum SchemaToolAgentSQLIntentCoveragePolicy {
         }
 
         var questionRequestsScalarPersonAggregate: Bool {
-            lowerQuestion.contains("how many")
+            let groupsByPersonEntity = lowerQuestion.range(
+                of: #"\b(?:per|by)\s+(?:account|accounts|customer|customers|person|people|user|users)\b"#,
+                options: .regularExpression
+            ) != nil
+            return (lowerQuestion.contains("how many") && !groupsByPersonEntity)
                 || (questionTokens.contains("count")
                     && !questionTokens.contains("by")
                     && !questionTokens.contains("per"))
@@ -574,7 +580,7 @@ public enum SchemaToolAgentSQLIntentCoveragePolicy {
                 options: .regularExpression
             ) != nil
                 || lowerQuestion.range(
-                    of: #"\b(?:all|every)\s+(?:accounts?|customers?|feedback\s+clusters?|organizations?|subscriptions?|tickets?|tools?|users?)\b"#,
+                    of: #"\b(?:all|every)\s+(?!time\b|day\b|week\b|month\b|quarter\b|year\b|date\b|period\b|range\b)[a-z][a-z0-9]*(?:\s+[a-z][a-z0-9]*){0,2}\b"#,
                     options: .regularExpression
                 ) != nil
                 || lowerQuestion.range(
@@ -760,7 +766,7 @@ public enum SchemaToolAgentSQLIntentCoveragePolicy {
                 #"\bstart\s+date\b"#,
                 #"\bon\s+or\s+after\b"#,
                 #"\banchor(?:\s+date)?\b"#,
-                #"\buse\b"#,
+                #"\buse\s+(?:the\s+)?(?:date\s+)?$"#,
             ]
             let suffixAnchorPatterns = [
                 #"\bas\s+(?:the\s+)?current\s+date\b"#,
