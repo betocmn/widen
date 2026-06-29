@@ -302,26 +302,28 @@ public enum SchemaToolAgentSQLIntentCoveragePolicy {
             guard !contextTokens.intersection(Self.protectedMetricTerms).isEmpty else {
                 return false
             }
-            return !contextTokens.intersection(Self.metricDefinitionTokens).isEmpty
-                || Self.protectedMetricTerms.contains { term in
-                    let escaped = NSRegularExpression.escapedPattern(for: term)
-                    let termBeforeDefinition = lowerContext.range(
-                        of: #"\b"#
-                            + escaped
-                            + #"\b[^.!?;\n]{0,40}\b(?:means|is|are)\b[^.!?;\n]{0,80}\b(?:when|if|where|with|using|status|active|paid|verified|=)\b"#,
-                        options: .regularExpression
-                    ) != nil
-                    let definitionBeforeTerm = lowerContext.range(
-                        of: #"\b(?:means|is|are)\b[^.!?;\n]{0,40}\b"#
-                            + escaped
-                            + #"\b[^.!?;\n]{0,60}\b(?:when|if|where|with|using|status|=)\b"#,
-                        options: .regularExpression
-                    ) != nil
-                    return termBeforeDefinition || definitionBeforeTerm
-                }
+            return Self.protectedMetricTerms.contains { term in
+                let escaped = NSRegularExpression.escapedPattern(for: term)
+                let termBeforeDefinition = lowerContext.range(
+                    of: #"\b"#
+                        + escaped
+                        + #"\b[^.!?;\n]{0,40}\b(?:means|is|are)\b[^.!?;\n]{0,80}\b(?:when|if|where|with|using|status|active|paid|verified|=)\b"#,
+                    options: .regularExpression
+                ) != nil
+                let definitionBeforeTerm = lowerContext.range(
+                    of: #"\b(?:means|is|are)\b[^.!?;\n]{0,40}\b"#
+                        + escaped
+                        + #"\b[^.!?;\n]{0,60}\b(?:when|if|where|with|using|status|=)\b"#,
+                    options: .regularExpression
+                ) != nil
+                return termBeforeDefinition || definitionBeforeTerm
+            }
         }
 
         var containsScopedMetricDefinition: Bool {
+            guard contextTokens.intersection(Self.protectedMetricTerms).isEmpty else {
+                return false
+            }
             let hasMetricCue = lowerContext.range(
                 of: #"\b(?:metric|ranking|rank|ranked|define|defines|defined)\b"#,
                 options: .regularExpression
@@ -340,7 +342,21 @@ public enum SchemaToolAgentSQLIntentCoveragePolicy {
             return Self.metricSubjectTokenGroups.contains { group in
                 !questionTokens.intersection(group).isEmpty
                     && !contextTokens.intersection(group).isEmpty
-            }
+            } || !Self.normalizedMetricSubjectTokens(questionTokens)
+                .intersection(Self.normalizedMetricSubjectTokens(contextTokens))
+                .isEmpty
+        }
+
+        var questionRequestsPersonEntityList: Bool {
+            !questionTokens.intersection(Self.personEntityTokens).isEmpty
+                && lowerQuestion.range(
+                    of: #"\b(?:find|list|which|who)\b"#,
+                    options: .regularExpression
+                ) != nil
+                || lowerQuestion.range(
+                    of: #"\bshow\s+(?:all\s+|every\s+|the\s+)?(?:account|accounts|customer|customers|person|people|user|users)\b"#,
+                    options: .regularExpression
+                ) != nil
         }
 
         var requiresPersonEmailProjection: Bool {
@@ -388,7 +404,8 @@ public enum SchemaToolAgentSQLIntentCoveragePolicy {
                 || (questionTokens.contains("count")
                     && !questionTokens.contains("by")
                     && !questionTokens.contains("per")
-                    && !countIsEntityAttribute)
+                    && !countIsEntityAttribute
+                    && !questionRequestsPersonEntityList)
         }
 
         var requiresCentsUnitPreservation: Bool {
@@ -579,17 +596,29 @@ public enum SchemaToolAgentSQLIntentCoveragePolicy {
                 || lowerQuestion.contains("latest")
         }
 
-        var topRequestAllowsAllRows: Bool {
+        var questionRequestsExplicitTopN: Bool {
             lowerQuestion.range(
+                of: #"\btop\s+(?:\d+|one|two|three|four|five|six|seven|eight|nine|ten)\b"#,
+                options: .regularExpression
+            ) != nil
+        }
+
+        var topRequestAllowsAllRows: Bool {
+            if lowerQuestion.range(
+                of: #"\bwithout\s+(?:a\s+)?limit\b"#,
+                options: .regularExpression
+            ) != nil {
+                return true
+            }
+            if questionRequestsExplicitTopN {
+                return false
+            }
+            return lowerQuestion.range(
                 of: #"\b(?:all|every)\s+(?:rows?|records?|results?)\b"#,
                 options: .regularExpression
             ) != nil
                 || lowerQuestion.range(
                     of: #"(^|\b(?:find|list|rank|return|show)\s+)(?:all|every)\s+(?!time\b|day\b|week\b|month\b|quarter\b|year\b|date\b|period\b|range\b)[a-z][a-z0-9]*(?:\s+[a-z][a-z0-9]*){0,2}\b"#,
-                    options: .regularExpression
-                ) != nil
-                || lowerQuestion.range(
-                    of: #"\bwithout\s+(?:a\s+)?limit\b"#,
                     options: .regularExpression
                 ) != nil
         }
@@ -878,6 +907,25 @@ public enum SchemaToolAgentSQLIntentCoveragePolicy {
             value.split(separator: ".").last.map(String.init)
         }
 
+        private static func normalizedMetricSubjectTokens(_ tokens: Set<String>) -> Set<String> {
+            tokens.reduce(into: Set<String>()) { normalizedTokens, token in
+                guard token.count > 2, !Self.metricSubjectStopTokens.contains(token) else {
+                    return
+                }
+                normalizedTokens.insert(Self.normalizedMetricSubjectToken(token))
+            }
+        }
+
+        private static func normalizedMetricSubjectToken(_ token: String) -> String {
+            if token.count > 4, token.hasSuffix("ies") {
+                return String(token.dropLast(3)) + "y"
+            }
+            if token.count > 3, token.hasSuffix("s"), !token.hasSuffix("ss") {
+                return String(token.dropLast())
+            }
+            return token
+        }
+
         private static let statusPhraseTokens: Set<String> = [
             "active", "failed", "paid", "resolved", "unresolved", "verified",
         ]
@@ -909,6 +957,19 @@ public enum SchemaToolAgentSQLIntentCoveragePolicy {
             ["ticket", "tickets"],
             ["subscription", "subscriptions"],
         ]
+
+        private static let metricSubjectStopTokens: Set<String> = Set([
+            "about", "after", "all", "also", "an", "and", "any", "are", "as",
+            "at", "be", "before", "by", "can", "each", "every", "find",
+            "for", "from", "has", "have", "highest", "in", "include",
+            "including", "into", "is", "least", "list", "lowest", "most",
+            "one", "our", "rank", "return", "show", "that", "the", "their",
+            "these", "this", "those", "to", "top", "use", "using", "what",
+            "when", "where", "which", "who", "with",
+        ])
+        .union(statusPhraseTokens)
+        .union(protectedMetricTerms)
+        .union(metricDefinitionTokens)
     }
 
     private struct ExplicitAnchor: Equatable {

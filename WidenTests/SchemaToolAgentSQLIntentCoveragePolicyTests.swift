@@ -179,6 +179,27 @@ struct SchemaToolAgentSQLIntentCoveragePolicyTests {
         #expect(covered.decision == .covered)
     }
 
+    @Test func whichPersonCountRankingRequiresEmailProjection() {
+        let missing = evaluate(
+            question: "Which customer has the highest order count?",
+            evidence: evidence(columns: [
+                "public.customers.id",
+                "public.customers.email",
+                "public.orders.customer_id",
+            ]),
+            sql: """
+                SELECT customer_id, COUNT(*) AS order_count
+                FROM public.orders
+                GROUP BY customer_id
+                ORDER BY order_count DESC
+                LIMIT 1
+                """
+        )
+
+        #expect(missing.decision == .needsCorrection)
+        #expect(missing.missingSignals.contains("email projection for person/customer entity"))
+    }
+
     @Test func personListWithDroppedIdentifiersRequiresEmailProjection() {
         let missing = evaluate(
             question: "Which customers have never placed an order?",
@@ -813,6 +834,25 @@ struct SchemaToolAgentSQLIntentCoveragePolicyTests {
         #expect(missing.missingSignals.contains("LIMIT for top/frequent request"))
     }
 
+    @Test func allTopNStillRequiresLimit() {
+        let missing = evaluate(
+            question: "Show all top 10 customers by revenue",
+            evidence: evidence(columns: [
+                "public.orders.customer_id",
+                "public.orders.total_cents",
+            ]),
+            sql: """
+                SELECT customer_id, SUM(total_cents) AS revenue_cents
+                FROM public.orders
+                GROUP BY customer_id
+                ORDER BY revenue_cents DESC
+                """
+        )
+
+        #expect(missing.decision == .needsCorrection)
+        #expect(missing.missingSignals.contains("LIMIT for top/frequent request"))
+    }
+
     @Test func everyEntityRankingDoesNotRequireLimit() {
         let covered = evaluate(
             question: "Show every customer by total spend, most to least",
@@ -871,6 +911,24 @@ struct SchemaToolAgentSQLIntentCoveragePolicyTests {
         let missing = evaluate(
             question: "Which accounts are healthy?",
             databaseContext: "Healthy accounts are shown first on the dashboard.",
+            evidence: evidence(columns: [
+                "public.accounts.id",
+            ]),
+            sql: """
+                SELECT id
+                FROM public.accounts
+                LIMIT 100
+                """
+        )
+
+        #expect(missing.decision == .mustClarify)
+        #expect(missing.unresolvedDecisionKinds.contains(.metric))
+    }
+
+    @Test func protectedMetricCueWithoutDefinitionStillClarifies() {
+        let missing = evaluate(
+            question: "Which accounts are healthy?",
+            databaseContext: "Healthy accounts rank first on the dashboard.",
             evidence: evidence(columns: [
                 "public.accounts.id",
             ]),
@@ -956,6 +1014,26 @@ struct SchemaToolAgentSQLIntentCoveragePolicyTests {
                 SELECT customer_id, SUM(total_cents) AS total_revenue_cents
                 FROM public.orders
                 GROUP BY customer_id
+                ORDER BY total_revenue_cents DESC
+                LIMIT 100
+                """
+        )
+
+        #expect(covered.decision == .covered)
+    }
+
+    @Test func contextMetricDefinitionForArbitrarySubjectAllowsCoverageChecks() {
+        let covered = evaluate(
+            question: "Who are the best products?",
+            databaseContext: "Rank products by total revenue.",
+            evidence: evidence(columns: [
+                "public.sales.product_id",
+                "public.sales.total_cents",
+            ]),
+            sql: """
+                SELECT product_id, SUM(total_cents) AS total_revenue_cents
+                FROM public.sales
+                GROUP BY product_id
                 ORDER BY total_revenue_cents DESC
                 LIMIT 100
                 """
