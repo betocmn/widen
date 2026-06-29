@@ -285,6 +285,28 @@ struct SchemaToolAgentSQLIntentCoveragePolicyTests {
         #expect(missing.missingSignals.contains("email projection for person/customer entity"))
     }
 
+    @Test func whoTopCustomersRequiresEmailProjection() {
+        let missing = evaluate(
+            question: "Who are our top customers by revenue?",
+            evidence: evidence(columns: [
+                "public.customers.id",
+                "public.customers.email",
+                "public.orders.customer_id",
+                "public.orders.total_cents",
+            ]),
+            sql: """
+                SELECT customer_id, SUM(total_cents) AS revenue_cents
+                FROM public.orders
+                GROUP BY customer_id
+                ORDER BY revenue_cents DESC
+                LIMIT 100
+                """
+        )
+
+        #expect(missing.decision == .needsCorrection)
+        #expect(missing.missingSignals.contains("email projection for person/customer entity"))
+    }
+
     @Test func centsMoneyAggregateMustPreserveUnitAndAlias() {
         let missing = evaluate(
             question: "Average paid order value by customer country",
@@ -396,6 +418,25 @@ struct SchemaToolAgentSQLIntentCoveragePolicyTests {
         )
 
         #expect(covered.decision == .covered)
+    }
+
+    @Test func contextWindowEndingDateRejectsMovingCurrentDate() {
+        let missing = evaluate(
+            question: "Subscriptions expiring in the reporting window",
+            databaseContext: "Use the reporting window ending 2026-06-24.",
+            evidence: evidence(columns: [
+                "public.subscription.id",
+                "public.subscription.expires_at",
+            ]),
+            sql: """
+                SELECT id
+                FROM public.subscription
+                WHERE expires_at < CURRENT_DATE
+                """
+        )
+
+        #expect(missing.decision == .needsCorrection)
+        #expect(missing.missingSignals.contains("explicit date/time anchor instead of moving current time"))
     }
 
     @Test func contextDateBeforeCurrentDateWordingRejectsMovingCurrentDate() {
@@ -877,6 +918,26 @@ struct SchemaToolAgentSQLIntentCoveragePolicyTests {
                 FROM public.orders
                 GROUP BY customer_id
                 ORDER BY total_revenue_cents DESC
+                LIMIT 100
+                """
+        )
+
+        #expect(covered.decision == .covered)
+    }
+
+    @Test func contextRankSpendDefinitionAllowsCoverageChecks() {
+        let covered = evaluate(
+            question: "Who are our best customers?",
+            databaseContext: "Rank customers by total spend.",
+            evidence: evidence(columns: [
+                "public.orders.customer_id",
+                "public.orders.total_cents",
+            ]),
+            sql: """
+                SELECT customer_id, SUM(total_cents) AS total_spend_cents
+                FROM public.orders
+                GROUP BY customer_id
+                ORDER BY total_spend_cents DESC
                 LIMIT 100
                 """
         )

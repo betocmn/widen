@@ -370,7 +370,7 @@ public enum SchemaToolAgentSQLIntentCoveragePolicy {
                 return true
             }
             return lowerQuestion.range(
-                of: #"\b(?:find|list|show|which)\b"#,
+                of: #"\b(?:find|list|show|which|who)\b"#,
                 options: .regularExpression
             ) != nil || requiresAntiJoin
         }
@@ -765,6 +765,7 @@ public enum SchemaToolAgentSQLIntentCoveragePolicy {
                 #"\bstarting\b"#,
                 #"\bstart\s+date\b"#,
                 #"\bon\s+or\s+after\b"#,
+                #"\b(?:reporting\s+)?window\s+ending\s*$"#,
                 #"\banchor(?:\s+date)?\b"#,
                 #"\buse\s+(?:the\s+)?(?:date\s+)?$"#,
             ]
@@ -882,7 +883,8 @@ public enum SchemaToolAgentSQLIntentCoveragePolicy {
 
         private static let metricDefinitionTokens: Set<String> = [
             "count", "counts", "define", "defines", "mean", "means", "metric",
-            "record", "records", "revenue", "usage", "win", "wins",
+            "rank", "ranked", "ranking", "ranks", "record", "records", "revenue",
+            "spend", "total", "usage", "win", "wins",
         ]
 
         private static let personEntityTokens: Set<String> = [
