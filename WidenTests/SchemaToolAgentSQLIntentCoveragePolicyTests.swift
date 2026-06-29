@@ -179,6 +179,27 @@ struct SchemaToolAgentSQLIntentCoveragePolicyTests {
         #expect(covered.decision == .covered)
     }
 
+    @Test func personListWithDroppedIdentifiersRequiresEmailProjection() {
+        let missing = evaluate(
+            question: "Which customers have never placed an order?",
+            evidence: evidence(columns: [
+                "public.customers.id",
+                "public.customers.email",
+                "public.orders.customer_id",
+            ]),
+            sql: """
+                SELECT COUNT(*) AS customer_count
+                FROM public.customers AS c
+                WHERE NOT EXISTS (
+                    SELECT 1 FROM public.orders AS o WHERE o.customer_id = c.id
+                )
+                """
+        )
+
+        #expect(missing.decision == .needsCorrection)
+        #expect(missing.missingSignals.contains("email projection for person/customer entity"))
+    }
+
     @Test func groupedPersonMetricPrefersEmailLabelOverName() {
         let missing = evaluate(
             question: "Show total paid revenue per customer",
@@ -317,6 +338,45 @@ struct SchemaToolAgentSQLIntentCoveragePolicyTests {
 
         #expect(missing.decision == .needsCorrection)
         #expect(missing.missingSignals.contains("explicit date/time anchor instead of moving current time"))
+    }
+
+    @Test func contextDateBeforeCurrentDateWordingRejectsMovingCurrentDate() {
+        let missing = evaluate(
+            question: "Subscriptions expiring in the next 30 days",
+            databaseContext: "2026-06-29 is the current date.",
+            evidence: evidence(columns: [
+                "public.subscription.id",
+                "public.subscription.expires_at",
+            ]),
+            sql: """
+                SELECT id
+                FROM public.subscription
+                WHERE expires_at >= CURRENT_DATE
+                  AND expires_at < CURRENT_DATE + INTERVAL '30 days'
+                """
+        )
+
+        #expect(missing.decision == .needsCorrection)
+        #expect(missing.missingSignals.contains("explicit date/time anchor instead of moving current time"))
+    }
+
+    @Test func useSubstringDoesNotSelectUnrelatedContextDateAnchor() {
+        let covered = evaluate(
+            question: "Subscriptions expiring in the next 30 days",
+            databaseContext: "Users table migrated on 2026-06-24. Current date is 2026-06-29.",
+            evidence: evidence(columns: [
+                "public.subscription.id",
+                "public.subscription.expires_at",
+            ]),
+            sql: """
+                SELECT id
+                FROM public.subscription
+                WHERE expires_at >= DATE '2026-06-29'
+                  AND expires_at < DATE '2026-06-29' + INTERVAL '30 days'
+                """
+        )
+
+        #expect(covered.decision == .covered)
     }
 
     @Test func unrelatedContextDateDoesNotRejectMovingCurrentDate() {
@@ -635,6 +695,24 @@ struct SchemaToolAgentSQLIntentCoveragePolicyTests {
         #expect(missing.missingSignals.contains("LIMIT for top/frequent request"))
     }
 
+    @Test func everyEntityRankingDoesNotRequireLimit() {
+        let covered = evaluate(
+            question: "Show every customer by total spend, most to least",
+            evidence: evidence(columns: [
+                "public.orders.customer_id",
+                "public.orders.total_cents",
+            ]),
+            sql: """
+                SELECT customer_id, SUM(total_cents) AS total_spend_cents
+                FROM public.orders
+                GROUP BY customer_id
+                ORDER BY total_spend_cents DESC
+                """
+        )
+
+        #expect(covered.decision == .covered)
+    }
+
     @Test func unrelatedContextDoesNotDefineProtectedMetric() {
         let missing = evaluate(
             question: "Which accounts are healthy?",
@@ -665,6 +743,26 @@ struct SchemaToolAgentSQLIntentCoveragePolicyTests {
                 SELECT id
                 FROM public.accounts
                 WHERE status = 'active'
+                LIMIT 100
+                """
+        )
+
+        #expect(covered.decision == .covered)
+    }
+
+    @Test func contextMetricDefinitionWithoutProtectedAdjectiveAllowsCoverageChecks() {
+        let covered = evaluate(
+            question: "Who are our best customers?",
+            databaseContext: "Use lifetime revenue as the customer ranking metric.",
+            evidence: evidence(columns: [
+                "public.orders.customer_id",
+                "public.orders.total_cents",
+            ]),
+            sql: """
+                SELECT customer_id, SUM(total_cents) AS lifetime_revenue_cents
+                FROM public.orders
+                GROUP BY customer_id
+                ORDER BY lifetime_revenue_cents DESC
                 LIMIT 100
                 """
         )

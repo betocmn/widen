@@ -295,11 +295,14 @@ public enum SchemaToolAgentSQLIntentCoveragePolicy {
         }
 
         var contextDefinesMetric: Bool {
-            let tokens = contextTokens
-            guard !tokens.intersection(Self.protectedMetricTerms).isEmpty else {
+            containsProtectedMetricDefinition || containsScopedMetricDefinition
+        }
+
+        var containsProtectedMetricDefinition: Bool {
+            guard !contextTokens.intersection(Self.protectedMetricTerms).isEmpty else {
                 return false
             }
-            return !tokens.intersection(Self.metricDefinitionTokens).isEmpty
+            return !contextTokens.intersection(Self.metricDefinitionTokens).isEmpty
                 || Self.protectedMetricTerms.contains { term in
                     let escaped = NSRegularExpression.escapedPattern(for: term)
                     let termBeforeDefinition = lowerContext.range(
@@ -316,10 +319,32 @@ public enum SchemaToolAgentSQLIntentCoveragePolicy {
                 }
         }
 
+        var containsScopedMetricDefinition: Bool {
+            let hasMetricCue = lowerContext.range(
+                of: #"\b(?:metric|ranking|rank|ranked|define|defines|defined)\b"#,
+                options: .regularExpression
+            ) != nil
+            return hasMetricCue
+                && !contextTokens.intersection(Self.metricDefinitionTokens).isEmpty
+                && questionAndContextShareMetricSubject
+        }
+
+        var questionAndContextShareMetricSubject: Bool {
+            if !questionTokens.intersection(Self.personEntityTokens).isEmpty,
+                !contextTokens.intersection(Self.personEntityTokens).isEmpty
+            {
+                return true
+            }
+            return Self.metricSubjectTokenGroups.contains { group in
+                !questionTokens.intersection(group).isEmpty
+                    && !contextTokens.intersection(group).isEmpty
+            }
+        }
+
         var requiresPersonEmailProjection: Bool {
             columnNames.contains("email")
                 && !questionTokens.intersection(Self.personEntityTokens).isEmpty
-                && resultSetProjectsPersonEntity
+                && questionRequestsPersonEntityResult
         }
 
         var requiresGroupedPersonMetricEmailLabel: Bool {
@@ -328,10 +353,31 @@ public enum SchemaToolAgentSQLIntentCoveragePolicy {
                 && sqlIncludesGroupBy
         }
 
-        var resultSetProjectsPersonEntity: Bool {
-            nonAggregateSelectListIncludesColumn("email")
-                || nonAggregateSelectListIncludesColumn("name")
-                || nonAggregateSelectListIncludesColumn("id")
+        var questionRequestsPersonEntityResult: Bool {
+            if questionRequestsScalarPersonAggregate { return false }
+            if lowerQuestion.range(
+                of: #"\bby\s+(?:country|org|organization|organizations)\b"#,
+                options: .regularExpression
+            ) != nil {
+                return false
+            }
+            if lowerQuestion.range(
+                of: #"\b(?:per|by)\s+(?:account|accounts|customer|customers|person|people|user|users)\b"#,
+                options: .regularExpression
+            ) != nil {
+                return true
+            }
+            return lowerQuestion.range(
+                of: #"\b(?:find|list|show|which)\b"#,
+                options: .regularExpression
+            ) != nil || requiresAntiJoin
+        }
+
+        var questionRequestsScalarPersonAggregate: Bool {
+            lowerQuestion.contains("how many")
+                || (questionTokens.contains("count")
+                    && !questionTokens.contains("by")
+                    && !questionTokens.contains("per"))
         }
 
         var requiresCentsUnitPreservation: Bool {
@@ -528,6 +574,10 @@ public enum SchemaToolAgentSQLIntentCoveragePolicy {
                 options: .regularExpression
             ) != nil
                 || lowerQuestion.range(
+                    of: #"\b(?:all|every)\s+(?:accounts?|customers?|feedback\s+clusters?|organizations?|subscriptions?|tickets?|tools?|users?)\b"#,
+                    options: .regularExpression
+                ) != nil
+                || lowerQuestion.range(
                     of: #"\bwithout\s+(?:a\s+)?limit\b"#,
                     options: .regularExpression
                 ) != nil
@@ -638,20 +688,6 @@ public enum SchemaToolAgentSQLIntentCoveragePolicy {
             }
         }
 
-        func nonAggregateSelectListIncludesColumn(_ column: String) -> Bool {
-            let escaped = NSRegularExpression.escapedPattern(for: column.lowercased())
-            return selectExpressions.contains { expression in
-                expression.range(
-                    of: #"\b(count|sum|avg|min|max)\s*\("#,
-                    options: .regularExpression
-                ) == nil
-                    && expression.range(
-                        of: #"\b"# + escaped + #"\b"#,
-                        options: .regularExpression
-                    ) != nil
-            }
-        }
-
         func sqlContainsDateLiteral(_ date: String) -> Bool {
             lowerSQL.contains(date.lowercased())
         }
@@ -716,23 +752,28 @@ public enum SchemaToolAgentSQLIntentCoveragePolicy {
             ) ?? value.endIndex
             let prefix = String(value[prefixStart..<dateRange.lowerBound]).lowercased()
             let suffix = String(value[dateRange.upperBound..<suffixEnd]).lowercased()
-            let prefixAnchorPhrases = [
-                "as of",
-                "current date",
-                "today",
-                "starting",
-                "start date",
-                "on or after",
-                "anchor",
-                "use",
+            let prefixAnchorPatterns = [
+                #"\bas\s+of\b"#,
+                #"\bcurrent\s+date(?:\s+is)?\b"#,
+                #"\btoday(?:\s+is)?\b"#,
+                #"\bstarting\b"#,
+                #"\bstart\s+date\b"#,
+                #"\bon\s+or\s+after\b"#,
+                #"\banchor(?:\s+date)?\b"#,
+                #"\buse\b"#,
             ]
-            let suffixAnchorPhrases = [
-                "as current date",
-                "as the current date",
-                "as today",
+            let suffixAnchorPatterns = [
+                #"\bas\s+(?:the\s+)?current\s+date\b"#,
+                #"\bas\s+today\b"#,
+                #"\bis\s+(?:the\s+)?current\s+date\b"#,
+                #"\btoday\b"#,
             ]
-            return prefixAnchorPhrases.contains { prefix.contains($0) }
-                || suffixAnchorPhrases.contains { suffix.contains($0) }
+            return prefixAnchorPatterns.contains {
+                prefix.range(of: $0, options: .regularExpression) != nil
+            }
+                || suffixAnchorPatterns.contains {
+                    suffix.range(of: $0, options: .regularExpression) != nil
+                }
         }
 
         private static func firstDateLiteral(in value: String) -> String? {
@@ -846,6 +887,14 @@ public enum SchemaToolAgentSQLIntentCoveragePolicy {
         private static let moneyMetricTokens: Set<String> = [
             "amount", "average", "avg", "order", "orders", "paid", "revenue",
             "spend", "total", "value",
+        ]
+
+        private static let metricSubjectTokenGroups: [Set<String>] = [
+            ["account", "accounts", "customer", "customers", "person", "people", "user", "users"],
+            ["cluster", "clusters", "feedback"],
+            ["tool", "tools"],
+            ["ticket", "tickets"],
+            ["subscription", "subscriptions"],
         ]
     }
 
