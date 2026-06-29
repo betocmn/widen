@@ -308,13 +308,13 @@ public enum SchemaToolAgentSQLIntentCoveragePolicy {
                     let termBeforeDefinition = lowerContext.range(
                         of: #"\b"#
                             + escaped
-                            + #"\b[\s\S]{0,40}\b(?:means|is|are)\b[\s\S]{0,80}\b(?:when|if|where|with|using|status|active|paid|verified|=)\b"#,
+                            + #"\b[^.!?;\n]{0,40}\b(?:means|is|are)\b[^.!?;\n]{0,80}\b(?:when|if|where|with|using|status|active|paid|verified|=)\b"#,
                         options: .regularExpression
                     ) != nil
                     let definitionBeforeTerm = lowerContext.range(
-                        of: #"\b(?:means|is|are)\b[\s\S]{0,40}\b"#
+                        of: #"\b(?:means|is|are)\b[^.!?;\n]{0,40}\b"#
                             + escaped
-                            + #"\b[\s\S]{0,60}\b(?:when|if|where|with|using|status|=)\b"#,
+                            + #"\b[^.!?;\n]{0,60}\b(?:when|if|where|with|using|status|=)\b"#,
                         options: .regularExpression
                     ) != nil
                     return termBeforeDefinition || definitionBeforeTerm
@@ -380,10 +380,15 @@ public enum SchemaToolAgentSQLIntentCoveragePolicy {
                 of: #"\b(?:per|by)\s+(?:account|accounts|customer|customers|person|people|user|users)\b"#,
                 options: .regularExpression
             ) != nil
+            let countIsEntityAttribute = lowerQuestion.range(
+                of: #"\b(?:with|including|and)\s+(?:their\s+)?[a-z0-9_\s-]{0,40}\b(?:count|counts)\b"#,
+                options: .regularExpression
+            ) != nil
             return (lowerQuestion.contains("how many") && !groupsByPersonEntity)
                 || (questionTokens.contains("count")
                     && !questionTokens.contains("by")
-                    && !questionTokens.contains("per"))
+                    && !questionTokens.contains("per")
+                    && !countIsEntityAttribute)
         }
 
         var requiresCentsUnitPreservation: Bool {
@@ -580,7 +585,7 @@ public enum SchemaToolAgentSQLIntentCoveragePolicy {
                 options: .regularExpression
             ) != nil
                 || lowerQuestion.range(
-                    of: #"\b(?:all|every)\s+(?!time\b|day\b|week\b|month\b|quarter\b|year\b|date\b|period\b|range\b)[a-z][a-z0-9]*(?:\s+[a-z][a-z0-9]*){0,2}\b"#,
+                    of: #"(^|\b(?:find|list|rank|return|show)\s+)(?:all|every)\s+(?!time\b|day\b|week\b|month\b|quarter\b|year\b|date\b|period\b|range\b)[a-z][a-z0-9]*(?:\s+[a-z][a-z0-9]*){0,2}\b"#,
                     options: .regularExpression
                 ) != nil
                 || lowerQuestion.range(

@@ -285,6 +285,25 @@ struct SchemaToolAgentSQLIntentCoveragePolicyTests {
         #expect(missing.missingSignals.contains("email projection for person/customer entity"))
     }
 
+    @Test func listCustomersWithOrderCountRequiresEmailProjection() {
+        let missing = evaluate(
+            question: "List customers with their order count",
+            evidence: evidence(columns: [
+                "public.customers.id",
+                "public.customers.email",
+                "public.orders.customer_id",
+            ]),
+            sql: """
+                SELECT customer_id, COUNT(*) AS order_count
+                FROM public.orders
+                GROUP BY customer_id
+                """
+        )
+
+        #expect(missing.decision == .needsCorrection)
+        #expect(missing.missingSignals.contains("email projection for person/customer entity"))
+    }
+
     @Test func whoTopCustomersRequiresEmailProjection() {
         let missing = evaluate(
             question: "Who are our top customers by revenue?",
@@ -866,6 +885,26 @@ struct SchemaToolAgentSQLIntentCoveragePolicyTests {
         #expect(missing.unresolvedDecisionKinds.contains(.metric))
     }
 
+    @Test func protectedMetricDefinitionDoesNotCrossSentenceBoundary() {
+        let missing = evaluate(
+            question: "Which accounts are healthy?",
+            databaseContext: "Healthy accounts are shown first. Paid accounts have status = 'paid'.",
+            evidence: evidence(columns: [
+                "public.accounts.id",
+                "public.accounts.status",
+            ]),
+            sql: """
+                SELECT id
+                FROM public.accounts
+                WHERE status = 'paid'
+                LIMIT 100
+                """
+        )
+
+        #expect(missing.decision == .mustClarify)
+        #expect(missing.unresolvedDecisionKinds.contains(.metric))
+    }
+
     @Test func contextWithProtectedMetricDefinitionAllowsCoverageChecks() {
         let covered = evaluate(
             question: "Which accounts are healthy?",
@@ -1017,6 +1056,42 @@ struct SchemaToolAgentSQLIntentCoveragePolicyTests {
         )
 
         #expect(covered.decision == .covered)
+    }
+
+    @Test func explicitAllEntityRankingDoesNotRequireLimit() {
+        let covered = evaluate(
+            question: "Show every product by total sales, most to least",
+            evidence: evidence(columns: [
+                "public.orders.product_id",
+                "public.orders.total_cents",
+            ]),
+            sql: """
+                SELECT product_id, SUM(total_cents) AS total_sales_cents
+                FROM public.orders
+                GROUP BY product_id
+                ORDER BY total_sales_cents DESC
+                """
+        )
+
+        #expect(covered.decision == .covered)
+    }
+
+    @Test func topNAcrossAllAccountsStillRequiresLimit() {
+        let missing = evaluate(
+            question: "Top 10 customers across all accounts",
+            evidence: evidence(columns: [
+                "public.orders.customer_id",
+            ]),
+            sql: """
+                SELECT customer_id, COUNT(*) AS order_count
+                FROM public.orders
+                GROUP BY customer_id
+                ORDER BY order_count DESC
+                """
+        )
+
+        #expect(missing.decision == .needsCorrection)
+        #expect(missing.missingSignals.contains("LIMIT for top/frequent request"))
     }
 
     @Test func verifiedToolsRequireVerifiedBooleanPredicate() {
