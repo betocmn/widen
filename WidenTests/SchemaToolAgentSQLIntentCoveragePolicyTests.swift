@@ -518,6 +518,25 @@ struct SchemaToolAgentSQLIntentCoveragePolicyTests {
         #expect(covered.decision == .covered)
     }
 
+    @Test func suffixTodayCueDoesNotSelectPreviousContextDate() {
+        let covered = evaluate(
+            question: "Subscriptions expiring in the next 30 days",
+            databaseContext: "Database migrated on 2026-06-24. Today is 2026-06-29.",
+            evidence: evidence(columns: [
+                "public.subscription.id",
+                "public.subscription.expires_at",
+            ]),
+            sql: """
+                SELECT id
+                FROM public.subscription
+                WHERE expires_at >= DATE '2026-06-29'
+                  AND expires_at < DATE '2026-06-29' + INTERVAL '30 days'
+                """
+        )
+
+        #expect(covered.decision == .covered)
+    }
+
     @Test func unrelatedContextDateDoesNotRejectMovingCurrentDate() {
         let covered = evaluate(
             question: "Subscriptions expiring in the next 30 days",
@@ -853,6 +872,25 @@ struct SchemaToolAgentSQLIntentCoveragePolicyTests {
         #expect(missing.missingSignals.contains("LIMIT for top/frequent request"))
     }
 
+    @Test func allSpelledOutTopNStillRequiresLimit() {
+        let missing = evaluate(
+            question: "Show all top twenty customers by revenue",
+            evidence: evidence(columns: [
+                "public.orders.customer_id",
+                "public.orders.total_cents",
+            ]),
+            sql: """
+                SELECT customer_id, SUM(total_cents) AS revenue_cents
+                FROM public.orders
+                GROUP BY customer_id
+                ORDER BY revenue_cents DESC
+                """
+        )
+
+        #expect(missing.decision == .needsCorrection)
+        #expect(missing.missingSignals.contains("LIMIT for top/frequent request"))
+    }
+
     @Test func everyEntityRankingDoesNotRequireLimit() {
         let covered = evaluate(
             question: "Show every customer by total spend, most to least",
@@ -1062,6 +1100,26 @@ struct SchemaToolAgentSQLIntentCoveragePolicyTests {
         #expect(covered.decision == .covered)
     }
 
+    @Test func protectedTermScopedRankDefinitionAllowsCoverageChecks() {
+        let covered = evaluate(
+            question: "Who are our best customers?",
+            databaseContext: "Best customers are ranked by total revenue.",
+            evidence: evidence(columns: [
+                "public.orders.customer_id",
+                "public.orders.total_cents",
+            ]),
+            sql: """
+                SELECT customer_id, SUM(total_cents) AS total_revenue_cents
+                FROM public.orders
+                GROUP BY customer_id
+                ORDER BY total_revenue_cents DESC
+                LIMIT 100
+                """
+        )
+
+        #expect(covered.decision == .covered)
+    }
+
     @Test func contextWithVerbBeforeProtectedMetricDefinitionAllowsCoverageChecks() {
         let covered = evaluate(
             question: "Which accounts are healthy?",
@@ -1169,6 +1227,25 @@ struct SchemaToolAgentSQLIntentCoveragePolicyTests {
                 SELECT id, country
                 FROM public.customers
                 ORDER BY country
+                """
+        )
+
+        #expect(missing.decision == .needsCorrection)
+        #expect(missing.missingSignals.contains("email projection for person/customer entity"))
+    }
+
+    @Test func bareCountryPersonEmailRequestRequiresEmailProjection() {
+        let missing = evaluate(
+            question: "Customers by country with their email",
+            evidence: evidence(columns: [
+                "public.customers.id",
+                "public.customers.email",
+                "public.customers.country",
+            ]),
+            sql: """
+                SELECT country, COUNT(*) AS customer_count
+                FROM public.customers
+                GROUP BY country
                 """
         )
 
@@ -1380,6 +1457,24 @@ struct SchemaToolAgentSQLIntentCoveragePolicyTests {
                 SELECT SUM(total_cents) AS paid_revenue_cents
                 FROM public.orders
                 WHERE status = 'failed'
+                """
+        )
+
+        #expect(missing.decision == .needsCorrection)
+        #expect(missing.missingSignals.contains("predicate for paid"))
+    }
+
+    @Test func statusPredicateDoesNotSubstringMatchRequestedStatus() {
+        let missing = evaluate(
+            question: "Show paid revenue",
+            evidence: evidence(columns: [
+                "public.orders.status",
+                "public.orders.total_cents",
+            ]),
+            sql: """
+                SELECT SUM(total_cents) AS paid_revenue_cents
+                FROM public.orders AS o
+                WHERE o."Status" = 'unpaid'
                 """
         )
 

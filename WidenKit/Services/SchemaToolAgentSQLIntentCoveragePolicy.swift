@@ -348,14 +348,20 @@ public enum SchemaToolAgentSQLIntentCoveragePolicy {
             else {
                 return false
             }
-            let relatedProtectedTerms = Self.relatedProtectedMetricTerms(for: questionProtectedTerms)
-            guard contextTokens.intersection(relatedProtectedTerms).isEmpty else {
-                return false
-            }
             let hasMetricCue = lowerContext.range(
                 of: #"\b(?:metric|ranking|rank|ranked|define|defines|defined)\b"#,
                 options: .regularExpression
             ) != nil
+            let mentionsProtectedTerm = !contextTokens
+                .intersection(Self.relatedProtectedMetricTerms(for: questionProtectedTerms))
+                .isEmpty
+            let hasScopedRankDefinition = lowerContext.range(
+                of: #"\b(?:rank|ranked|ranking|ranks)\b[^.!?;\n]{0,40}\bby\b[^.!?;\n]{0,80}\b(?:count|counts|revenue|spend|total|usage|win|wins)\b"#,
+                options: .regularExpression
+            ) != nil
+            if mentionsProtectedTerm {
+                return hasScopedRankDefinition && questionAndContextShareMetricSubject
+            }
             return hasMetricCue
                 && !contextTokens.intersection(Self.metricDefinitionTokens).isEmpty
                 && questionAndContextShareMetricSubject
@@ -401,6 +407,7 @@ public enum SchemaToolAgentSQLIntentCoveragePolicy {
 
         var questionRequestsPersonEntityResult: Bool {
             if questionRequestsScalarPersonAggregate { return false }
+            if questionExplicitlyRequestsPersonEmail { return true }
             if lowerQuestion.range(
                 of: #"\bby\s+(?:country|org|organization|organizations)\b"#,
                 options: .regularExpression
@@ -423,6 +430,14 @@ public enum SchemaToolAgentSQLIntentCoveragePolicy {
                 ) != nil
                 || requiresAntiJoin
                 || requiresTopCount
+        }
+
+        var questionExplicitlyRequestsPersonEmail: Bool {
+            !questionTokens.intersection(Self.personEntityTokens).isEmpty
+                && lowerQuestion.range(
+                    of: #"\b(?:e-?mail|e-?mails)\b"#,
+                    options: .regularExpression
+                ) != nil
         }
 
         var questionRequestsScalarPersonAggregate: Bool {
@@ -632,7 +647,7 @@ public enum SchemaToolAgentSQLIntentCoveragePolicy {
 
         var questionRequestsExplicitTopN: Bool {
             lowerQuestion.range(
-                of: #"\btop\s+(?:\d+|one|two|three|four|five|six|seven|eight|nine|ten)\b"#,
+                of: #"\btop\s+(?:\d+|one|two|three|four|five|six|seven|eight|nine|ten|eleven|twelve|thirteen|fourteen|fifteen|sixteen|seventeen|eighteen|nineteen|(?:twenty|thirty|forty|fifty|sixty|seventy|eighty|ninety)(?:[-\s]+(?:one|two|three|four|five|six|seven|eight|nine))?)\b"#,
                 options: .regularExpression
             ) != nil
         }
@@ -699,11 +714,15 @@ public enum SchemaToolAgentSQLIntentCoveragePolicy {
 
         func sqlIncludesStatusPredicate(for status: String) -> Bool {
             if columnNames.contains("status") || columnNames.contains("state") {
-                let acceptedValues = status == "unresolved"
-                    ? ["unresolved", "resolved", "open"]
+                let positiveValues: Set<String> = status == "unresolved"
+                    ? ["unresolved", "open"]
                     : [status]
-                let predicateValueMatches = sqlStatusPredicateComparisonValues.contains { value in
-                    acceptedValues.contains { value.contains($0) }
+                let negativeValues: Set<String> = status == "unresolved" ? ["resolved"] : []
+                let predicateValueMatches = sqlStatusPredicateComparisons.contains { comparison in
+                    comparison.matchesStatus(
+                        positiveValues: positiveValues,
+                        negativeValues: negativeValues
+                    )
                 }
                 if predicateValueMatches { return true }
             }
@@ -724,13 +743,21 @@ public enum SchemaToolAgentSQLIntentCoveragePolicy {
             return false
         }
 
-        var sqlStatusPredicateComparisonValues: [String] {
+        private var sqlStatusPredicateComparisons: [SQLStatusPredicateComparison] {
             guard let regex = try? NSRegularExpression(
-                pattern: #"(?:\b[a-z_][a-z0-9_]*\s*\.\s*)?"?\b(?:status|state)\b"?\s*(?:=|<>|!=|\bnot\s+in\b|\bin\b|\blike\b|\bis\b)\s*('[^']*'|"[^"]*"|\([^)]*\)|[a-z0-9_]+)"#
+                pattern: #"(?:\b[a-z_][a-z0-9_]*\s*\.\s*)?"?\b(?:status|state)\b"?\s*(=|<>|!=|\bnot\s+in\b|\bin\b|\blike\b|\bis\b)\s*('[^']*'|"[^"]*"|\([^)]*\)|[a-z0-9_]+)"#
             ) else { return [] }
             let range = NSRange(lowerSQL.startIndex..<lowerSQL.endIndex, in: lowerSQL)
             return regex.matches(in: lowerSQL, range: range).compactMap { match in
-                Range(match.range(at: 1), in: lowerSQL).map { String(lowerSQL[$0]) }
+                guard let operatorRange = Range(match.range(at: 1), in: lowerSQL),
+                    let valueRange = Range(match.range(at: 2), in: lowerSQL)
+                else {
+                    return nil
+                }
+                return SQLStatusPredicateComparison(
+                    operatorToken: Self.normalizedSQLComparisonOperator(String(lowerSQL[operatorRange])),
+                    values: Self.normalizedStatusPredicateValues(from: String(lowerSQL[valueRange]))
+                )
             }
         }
 
@@ -825,11 +852,13 @@ public enum SchemaToolAgentSQLIntentCoveragePolicy {
                 offsetBy: -min(72, value.distance(from: value.startIndex, to: dateRange.lowerBound)),
                 limitedBy: value.startIndex
             ) ?? value.startIndex
-            let suffixEnd = value.index(
+            let maxSuffixEnd = value.index(
                 dateRange.upperBound,
                 offsetBy: min(32, value.distance(from: dateRange.upperBound, to: value.endIndex)),
                 limitedBy: value.endIndex
             ) ?? value.endIndex
+            let suffixEnd = value[dateRange.upperBound..<maxSuffixEnd]
+                .firstIndex { ".!?;\n".contains($0) } ?? maxSuffixEnd
             let prefix = String(value[prefixStart..<dateRange.lowerBound]).lowercased()
             let suffix = String(value[dateRange.upperBound..<suffixEnd]).lowercased()
             let prefixAnchorPatterns = [
@@ -855,6 +884,38 @@ public enum SchemaToolAgentSQLIntentCoveragePolicy {
                 || suffixAnchorPatterns.contains {
                     suffix.range(of: $0, options: .regularExpression) != nil
                 }
+        }
+
+        private static func normalizedSQLComparisonOperator(_ value: String) -> String {
+            value.split(whereSeparator: \.isWhitespace).joined(separator: " ")
+        }
+
+        private static func normalizedStatusPredicateValues(from value: String) -> [String] {
+            let trimmed = value.trimmingCharacters(in: .whitespacesAndNewlines)
+            let valueBody: String
+            if trimmed.hasPrefix("("), trimmed.hasSuffix(")") {
+                valueBody = String(trimmed.dropFirst().dropLast())
+            } else {
+                valueBody = trimmed
+            }
+            guard let regex = try? NSRegularExpression(
+                pattern: #"'([^']*)'|"([^"]*)"|([a-z0-9_%.-]+)"#
+            ) else { return [] }
+            let range = NSRange(valueBody.startIndex..<valueBody.endIndex, in: valueBody)
+            return regex.matches(in: valueBody, range: range).compactMap { match in
+                for captureIndex in 1...3 {
+                    guard match.range(at: captureIndex).location != NSNotFound,
+                        let captureRange = Range(match.range(at: captureIndex), in: valueBody)
+                    else {
+                        continue
+                    }
+                    let normalized = String(valueBody[captureRange])
+                        .trimmingCharacters(in: .whitespacesAndNewlines)
+                        .lowercased()
+                    return normalized.isEmpty ? nil : normalized
+                }
+                return nil
+            }
         }
 
         private static func firstDateLiteral(in value: String) -> String? {
@@ -1027,6 +1088,27 @@ public enum SchemaToolAgentSQLIntentCoveragePolicy {
         .union(statusPhraseTokens)
         .union(protectedMetricTerms)
         .union(metricDefinitionTokens)
+
+        private struct SQLStatusPredicateComparison {
+            var operatorToken: String
+            var values: [String]
+
+            func matchesStatus(
+                positiveValues: Set<String>,
+                negativeValues: Set<String>
+            ) -> Bool {
+                switch operatorToken {
+                case "=", "is", "in", "like":
+                    return values.contains { positiveValues.contains($0) }
+                case "!=", "<>":
+                    return values.contains { negativeValues.contains($0) }
+                case "not in":
+                    return values.contains { negativeValues.contains($0) }
+                default:
+                    return false
+                }
+            }
+        }
     }
 
     private struct ExplicitAnchor: Equatable {
