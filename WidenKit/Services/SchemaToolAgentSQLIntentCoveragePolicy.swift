@@ -299,10 +299,12 @@ public enum SchemaToolAgentSQLIntentCoveragePolicy {
         }
 
         var containsProtectedMetricDefinition: Bool {
-            guard !contextTokens.intersection(Self.protectedMetricTerms).isEmpty else {
+            let questionProtectedTerms = questionTokens.intersection(Self.protectedMetricTerms)
+            let relevantTerms = Self.relatedProtectedMetricTerms(for: questionProtectedTerms)
+            guard !contextTokens.intersection(relevantTerms).isEmpty else {
                 return false
             }
-            return Self.protectedMetricTerms.contains { term in
+            return relevantTerms.contains { term in
                 let escaped = NSRegularExpression.escapedPattern(for: term)
                 let termBeforeDefinition = lowerContext.range(
                     of: #"\b"#
@@ -322,6 +324,12 @@ public enum SchemaToolAgentSQLIntentCoveragePolicy {
                         + #"\b\s*:\s*[^.!?;\n]{0,80}\b(?:when|if|where|with|using|status|is|not|null|true|false|count|counts|sum|=)\b"#,
                     options: .regularExpression
                 ) != nil
+                let termCountDefinition = lowerContext.range(
+                    of: #"\b"#
+                        + escaped
+                        + #"\b\s+(?:count|counts|total|totals)\b[^.!?;\n]{0,80}\b(?:when|if|where|with|using|status|null|true|false|=)\b"#,
+                    options: .regularExpression
+                ) != nil
                 let recordsTermDefinition = lowerContext.range(
                     of: #"\b(?:records?|counts?|represents?|stores?|tracks?|marks?|indicates?|denotes?)\b[^.!?;\n]{0,60}\b(?:one|a|an|1)\s+"#
                         + escaped
@@ -329,7 +337,7 @@ public enum SchemaToolAgentSQLIntentCoveragePolicy {
                     options: .regularExpression
                 ) != nil
                 return termBeforeDefinition || definitionBeforeTerm || colonDefinition
-                    || recordsTermDefinition
+                    || termCountDefinition || recordsTermDefinition
             }
         }
 
@@ -409,6 +417,10 @@ public enum SchemaToolAgentSQLIntentCoveragePolicy {
                 of: #"\b(?:find|list|show|which|who|what)\b"#,
                 options: .regularExpression
             ) != nil
+                || lowerQuestion.range(
+                    of: #"^\s*(?:all\s+|every\s+|our\s+|the\s+)?(?:account|accounts|customer|customers|person|people|user|users)\b"#,
+                    options: .regularExpression
+                ) != nil
                 || requiresAntiJoin
                 || requiresTopCount
         }
@@ -640,7 +652,7 @@ public enum SchemaToolAgentSQLIntentCoveragePolicy {
                 options: .regularExpression
             ) != nil
                 || lowerQuestion.range(
-                    of: #"(^|\b(?:find|list|rank|return|show)\s+)(?:all|every)\s+(?!time\b|day\b|week\b|month\b|quarter\b|year\b|date\b|period\b|range\b)[a-z][a-z0-9]*(?:\s+[a-z][a-z0-9]*){0,2}\b"#,
+                    of: #"(^|\b(?:find|list|rank|return|show|get|display|give\s+me)\s+)(?:all|every)\s+(?!time\b|day\b|week\b|month\b|quarter\b|year\b|date\b|period\b|range\b)[a-z][a-z0-9]*(?:\s+[a-z][a-z0-9]*){0,2}\b"#,
                     options: .regularExpression
                 ) != nil
         }
@@ -822,7 +834,7 @@ public enum SchemaToolAgentSQLIntentCoveragePolicy {
             let suffix = String(value[dateRange.upperBound..<suffixEnd]).lowercased()
             let prefixAnchorPatterns = [
                 #"\bas\s+of(?:\s+the)?\b[\s,:\-]*$"#,
-                #"\bcurrent\s+date(?:\s+is)?\b[\s,:\-]*$"#,
+                #"\bcurrent\s+date\b(?:\s+(?:for|of|in)\b[^.!?;\n]{0,30})?(?:\s+is)?[\s,:\-]*$"#,
                 #"\btoday(?:\s+is)?\b[\s,:\-]*$"#,
                 #"\bstarting(?:\s+(?:on|from))?\b[\s,:\-]*$"#,
                 #"\bstart\s+date(?:\s+is)?\b[\s,:\-]*$"#,
@@ -962,7 +974,7 @@ public enum SchemaToolAgentSQLIntentCoveragePolicy {
             "best", "healthy", "important", "win", "winner", "wins",
         ]
 
-        private static let rankingApplicableProtectedTerms: Set<String> = ["best"]
+        private static let rankingApplicableProtectedTerms: Set<String> = ["best", "important"]
 
         private static let protectedMetricTermFamilies: [Set<String>] = [
             ["best"],

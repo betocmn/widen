@@ -1216,6 +1216,122 @@ struct SchemaToolAgentSQLIntentCoveragePolicyTests {
         #expect(missing.missingSignals.contains("email projection for person/customer entity"))
     }
 
+    @Test func scopedRankingMetricDefinesImportantSubject() {
+        let covered = evaluate(
+            question: "What is our most important feedback cluster?",
+            databaseContext: "Rank feedback clusters by total feedback count.",
+            evidence: evidence(columns: [
+                "public.feedback_item.cluster_id",
+                "public.feedback_cluster.id",
+            ]),
+            sql: """
+                SELECT cluster_id, COUNT(*) AS feedback_count
+                FROM public.feedback_item
+                GROUP BY cluster_id
+                ORDER BY feedback_count DESC
+                LIMIT 1
+                """
+        )
+
+        #expect(covered.decision == .covered)
+    }
+
+    @Test func nounPhrasePersonRequestRequiresEmailProjection() {
+        let missing = evaluate(
+            question: "Customers with their order count",
+            evidence: evidence(columns: [
+                "public.customers.id",
+                "public.customers.email",
+                "public.orders.customer_id",
+            ]),
+            sql: """
+                SELECT customer_id, COUNT(*) AS order_count
+                FROM public.orders
+                GROUP BY customer_id
+                """
+        )
+
+        #expect(missing.decision == .needsCorrection)
+        #expect(missing.missingSignals.contains("email projection for person/customer entity"))
+    }
+
+    @Test func unrelatedProtectedDefinitionDoesNotSuppressClarification() {
+        let missing = evaluate(
+            question: "Which accounts are healthy?",
+            databaseContext: "A non-null winner_id stores a win.",
+            evidence: evidence(columns: [
+                "public.accounts.id",
+            ]),
+            sql: """
+                SELECT id
+                FROM public.accounts
+                LIMIT 100
+                """
+        )
+
+        #expect(missing.decision == .mustClarify)
+        #expect(missing.unresolvedDecisionKinds.contains(.metric))
+    }
+
+    @Test func countStyleProtectedMetricDefinitionAllowsCoverageChecks() {
+        let covered = evaluate(
+            question: "Which tools have the most wins?",
+            databaseContext: "Wins count evaluations where winner_id is not null.",
+            evidence: evidence(columns: [
+                "public.tool_run.tool_id",
+                "public.tool_run.winner_id",
+            ]),
+            sql: """
+                SELECT tool_id, COUNT(*) AS win_count
+                FROM public.tool_run
+                WHERE winner_id IS NOT NULL
+                GROUP BY tool_id
+                ORDER BY win_count DESC
+                LIMIT 10
+                """
+        )
+
+        #expect(covered.decision == .covered)
+    }
+
+    @Test func qualifiedCurrentDateAnchorRejectsMovingCurrentDate() {
+        let missing = evaluate(
+            question: "Subscriptions expiring in the next 30 days",
+            databaseContext: "The current date for this fixture is 2026-06-29.",
+            evidence: evidence(columns: [
+                "public.subscription.id",
+                "public.subscription.expires_at",
+            ]),
+            sql: """
+                SELECT id
+                FROM public.subscription
+                WHERE expires_at >= CURRENT_DATE
+                  AND expires_at < CURRENT_DATE + INTERVAL '30 days'
+                """
+        )
+
+        #expect(missing.decision == .needsCorrection)
+        #expect(missing.missingSignals.contains("explicit date/time anchor instead of moving current time"))
+    }
+
+    @Test func giveMeEveryEntityRankingDoesNotRequireLimit() {
+        let covered = evaluate(
+            question: "Give me every customer by total spend, most to least",
+            evidence: evidence(columns: [
+                "public.orders.customer_id",
+                "public.orders.total_cents",
+            ]),
+            sql: """
+                SELECT customer_id, SUM(total_cents) AS total_spend_cents
+                FROM public.orders
+                GROUP BY customer_id
+                ORDER BY total_spend_cents DESC
+                """
+        )
+
+        #expect(covered.decision == .covered)
+    }
+
     @Test func looseAsOfCueDoesNotSelectUnrelatedContextDate() {
         let covered = evaluate(
             question: "Subscriptions expiring in the next 30 days",
