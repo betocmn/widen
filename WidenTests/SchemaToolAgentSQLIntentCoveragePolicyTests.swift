@@ -1081,6 +1081,115 @@ struct SchemaToolAgentSQLIntentCoveragePolicyTests {
         #expect(covered.decision == .covered)
     }
 
+    @Test func conciseProtectedMetricDefinitionsAllowCoverageChecks() {
+        let question = "Which tools have the most wins?"
+        let evidence = evidence(columns: [
+            "public.tool_run.tool_id",
+            "public.tool_run.winner_id",
+        ])
+        let sql = """
+            SELECT tool_id, COUNT(*) AS win_count
+            FROM public.tool_run
+            WHERE winner_id IS NOT NULL
+            GROUP BY tool_id
+            ORDER BY win_count DESC
+            LIMIT 10
+            """
+
+        let colonDefinition = evaluate(
+            question: question,
+            databaseContext: "wins: winner_id is not null.",
+            evidence: evidence,
+            sql: sql
+        )
+
+        #expect(colonDefinition.decision == .covered)
+
+        let storesDefinition = evaluate(
+            question: question,
+            databaseContext: "A non-null winner_id stores a win.",
+            evidence: evidence,
+            sql: sql
+        )
+
+        #expect(storesDefinition.decision == .covered)
+    }
+
+    @Test func unrelatedProtectedTokenDoesNotBlockScopedMetricDefinition() {
+        let covered = evaluate(
+            question: "Who are our best customers?",
+            databaseContext: "The winner_id column tracks tournament outcomes. Rank customers by total revenue.",
+            evidence: evidence(columns: [
+                "public.orders.customer_id",
+                "public.orders.total_cents",
+            ]),
+            sql: """
+                SELECT customer_id, SUM(total_cents) AS total_revenue_cents
+                FROM public.orders
+                GROUP BY customer_id
+                ORDER BY total_revenue_cents DESC
+                LIMIT 100
+                """
+        )
+
+        #expect(covered.decision == .covered)
+    }
+
+    @Test func looseAsOfCueDoesNotSelectUnrelatedContextDate() {
+        let covered = evaluate(
+            question: "Subscriptions expiring in the next 30 days",
+            databaseContext: "As of nightly refresh, the database was migrated on 2026-06-24. Current date is 2026-06-29.",
+            evidence: evidence(columns: [
+                "public.subscription.id",
+                "public.subscription.expires_at",
+            ]),
+            sql: """
+                SELECT id
+                FROM public.subscription
+                WHERE expires_at >= DATE '2026-06-29'
+                  AND expires_at < DATE '2026-06-29' + INTERVAL '30 days'
+                """
+        )
+
+        #expect(covered.decision == .covered)
+
+        let missing = evaluate(
+            question: "Subscriptions expiring in the next 30 days",
+            databaseContext: "As of 2026-06-24, subscription data is complete.",
+            evidence: evidence(columns: [
+                "public.subscription.id",
+                "public.subscription.expires_at",
+            ]),
+            sql: """
+                SELECT id
+                FROM public.subscription
+                WHERE expires_at >= CURRENT_DATE
+                  AND expires_at < CURRENT_DATE + INTERVAL '30 days'
+                """
+        )
+
+        #expect(missing.decision == .needsCorrection)
+        #expect(missing.missingSignals.contains("explicit date/time anchor instead of moving current time"))
+    }
+
+    @Test func statusPredicateValueMustMatchRequestedStatus() {
+        let missing = evaluate(
+            question: "Show paid revenue",
+            evidence: evidence(columns: [
+                "public.orders.status",
+                "public.orders.total_cents",
+            ]),
+            sql: """
+                SELECT SUM(total_cents) AS paid_revenue_cents
+                FROM public.orders
+                WHERE status = 'failed'
+                """
+        )
+
+        #expect(missing.decision == .needsCorrection)
+        #expect(missing.missingSignals.contains("predicate for paid"))
+    }
+
     @Test func nullableForeignKeyWithoutPatternIsCoveredByNullFilter() {
         let covered = evaluate(
             question: "Show feedback items without a cluster",

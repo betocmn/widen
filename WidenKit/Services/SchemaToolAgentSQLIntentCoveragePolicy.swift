@@ -307,27 +307,36 @@ public enum SchemaToolAgentSQLIntentCoveragePolicy {
                 let termBeforeDefinition = lowerContext.range(
                     of: #"\b"#
                         + escaped
-                        + #"\b[^.!?;\n]{0,40}\b(?:means|is|are)\b[^.!?;\n]{0,80}\b(?:when|if|where|with|using|status|active|paid|verified|=)\b"#,
+                        + #"\b[^.!?;\n]{0,40}\b(?:means|is|are)\b[^.!?;\n]{0,80}\b(?:when|if|where|with|using|status|active|paid|verified|null|true|false|=)\b"#,
                     options: .regularExpression
                 ) != nil
                 let definitionBeforeTerm = lowerContext.range(
                     of: #"\b(?:means|is|are)\b[^.!?;\n]{0,40}\b"#
                         + escaped
-                        + #"\b[^.!?;\n]{0,60}\b(?:when|if|where|with|using|status|=)\b"#,
+                        + #"\b[^.!?;\n]{0,60}\b(?:when|if|where|with|using|status|null|true|false|=)\b"#,
+                    options: .regularExpression
+                ) != nil
+                let colonDefinition = lowerContext.range(
+                    of: #"\b"#
+                        + escaped
+                        + #"\b\s*:\s*[^.!?;\n]{0,80}\b(?:when|if|where|with|using|status|is|not|null|true|false|count|counts|sum|=)\b"#,
                     options: .regularExpression
                 ) != nil
                 let recordsTermDefinition = lowerContext.range(
-                    of: #"\b(?:records?|counts?|represents)\b[^.!?;\n]{0,60}\b(?:one|a|an|1)\s+"#
+                    of: #"\b(?:records?|counts?|represents?|stores?|tracks?|marks?|indicates?|denotes?)\b[^.!?;\n]{0,60}\b(?:one|a|an|1)\s+"#
                         + escaped
                         + #"\b"#,
                     options: .regularExpression
                 ) != nil
-                return termBeforeDefinition || definitionBeforeTerm || recordsTermDefinition
+                return termBeforeDefinition || definitionBeforeTerm || colonDefinition
+                    || recordsTermDefinition
             }
         }
 
         var containsScopedMetricDefinition: Bool {
-            guard contextTokens.intersection(Self.protectedMetricTerms).isEmpty else {
+            let questionProtectedTerms = questionTokens.intersection(Self.protectedMetricTerms)
+            let relatedProtectedTerms = Self.relatedProtectedMetricTerms(for: questionProtectedTerms)
+            guard contextTokens.intersection(relatedProtectedTerms).isEmpty else {
                 return false
             }
             let hasMetricCue = lowerContext.range(
@@ -671,17 +680,13 @@ public enum SchemaToolAgentSQLIntentCoveragePolicy {
 
         func sqlIncludesStatusPredicate(for status: String) -> Bool {
             if columnNames.contains("status") || columnNames.contains("state") {
-                if lowerSQL.range(
-                    of: #"(?:\b[a-z_][a-z0-9_]*\s*\.\s*)?"?\b(status|state)\b"?\s*(?:=|<>|!=|\bnot\s+in\b|\bin\b|\blike\b|\bis\b)"#,
-                    options: .regularExpression
-                ) != nil {
-                    if status == "unresolved" {
-                        return lowerSQL.contains("unresolved")
-                            || lowerSQL.contains("resolved")
-                            || lowerSQL.contains("open")
-                    }
-                    return lowerSQL.contains(status)
+                let acceptedValues = status == "unresolved"
+                    ? ["unresolved", "resolved", "open"]
+                    : [status]
+                let predicateValueMatches = sqlStatusPredicateComparisonValues.contains { value in
+                    acceptedValues.contains { value.contains($0) }
                 }
+                if predicateValueMatches { return true }
             }
             if sqlIncludesBooleanPredicate(column: "is_\(status)") { return true }
             if sqlIncludesBooleanPredicate(column: status) { return true }
@@ -698,6 +703,16 @@ public enum SchemaToolAgentSQLIntentCoveragePolicy {
                 ) != nil
             }
             return false
+        }
+
+        var sqlStatusPredicateComparisonValues: [String] {
+            guard let regex = try? NSRegularExpression(
+                pattern: #"(?:\b[a-z_][a-z0-9_]*\s*\.\s*)?"?\b(?:status|state)\b"?\s*(?:=|<>|!=|\bnot\s+in\b|\bin\b|\blike\b|\bis\b)\s*('[^']*'|"[^"]*"|\([^)]*\)|[a-z0-9_]+)"#
+            ) else { return [] }
+            let range = NSRange(lowerSQL.startIndex..<lowerSQL.endIndex, in: lowerSQL)
+            return regex.matches(in: lowerSQL, range: range).compactMap { match in
+                Range(match.range(at: 1), in: lowerSQL).map { String(lowerSQL[$0]) }
+            }
         }
 
         func sqlIncludesActiveMembershipPredicate() -> Bool {
@@ -799,14 +814,14 @@ public enum SchemaToolAgentSQLIntentCoveragePolicy {
             let prefix = String(value[prefixStart..<dateRange.lowerBound]).lowercased()
             let suffix = String(value[dateRange.upperBound..<suffixEnd]).lowercased()
             let prefixAnchorPatterns = [
-                #"\bas\s+of\b"#,
-                #"\bcurrent\s+date(?:\s+is)?\b"#,
-                #"\btoday(?:\s+is)?\b"#,
-                #"\bstarting\b"#,
-                #"\bstart\s+date\b"#,
-                #"\bon\s+or\s+after\b"#,
+                #"\bas\s+of(?:\s+the)?\b[\s,:\-]*$"#,
+                #"\bcurrent\s+date(?:\s+is)?\b[\s,:\-]*$"#,
+                #"\btoday(?:\s+is)?\b[\s,:\-]*$"#,
+                #"\bstarting(?:\s+(?:on|from))?\b[\s,:\-]*$"#,
+                #"\bstart\s+date(?:\s+is)?\b[\s,:\-]*$"#,
+                #"\bon\s+or\s+after\b[\s,:\-]*$"#,
                 #"\b(?:reporting\s+)?window\s+ending\s*$"#,
-                #"\banchor(?:\s+date)?\b"#,
+                #"\banchor(?:\s+date)?(?:\s+is)?\b[\s,:\-]*$"#,
                 #"\buse\s+(?:the\s+)?(?:date\s+)?$"#,
             ]
             let suffixAnchorPatterns = [
@@ -939,6 +954,21 @@ public enum SchemaToolAgentSQLIntentCoveragePolicy {
         private static let protectedMetricTerms: Set<String> = [
             "best", "healthy", "important", "win", "winner", "wins",
         ]
+
+        private static let protectedMetricTermFamilies: [Set<String>] = [
+            ["best"],
+            ["healthy"],
+            ["important"],
+            ["win", "winner", "wins"],
+        ]
+
+        private static func relatedProtectedMetricTerms(for terms: Set<String>) -> Set<String> {
+            terms.reduce(into: Set<String>()) { related, term in
+                related.formUnion(
+                    Self.protectedMetricTermFamilies.first { $0.contains(term) } ?? [term]
+                )
+            }
+        }
 
         private static let metricDefinitionTokens: Set<String> = [
             "count", "counts", "define", "defines", "mean", "means", "metric",
