@@ -335,6 +335,11 @@ public enum SchemaToolAgentSQLIntentCoveragePolicy {
 
         var containsScopedMetricDefinition: Bool {
             let questionProtectedTerms = questionTokens.intersection(Self.protectedMetricTerms)
+            guard !questionProtectedTerms.isEmpty,
+                questionProtectedTerms.isSubset(of: Self.rankingApplicableProtectedTerms)
+            else {
+                return false
+            }
             let relatedProtectedTerms = Self.relatedProtectedMetricTerms(for: questionProtectedTerms)
             guard contextTokens.intersection(relatedProtectedTerms).isEmpty else {
                 return false
@@ -391,7 +396,7 @@ public enum SchemaToolAgentSQLIntentCoveragePolicy {
             if lowerQuestion.range(
                 of: #"\bby\s+(?:country|org|organization|organizations)\b"#,
                 options: .regularExpression
-            ) != nil {
+            ) != nil, !questionRequestsPersonEntityList {
                 return false
             }
             if lowerQuestion.range(
@@ -401,9 +406,11 @@ public enum SchemaToolAgentSQLIntentCoveragePolicy {
                 return true
             }
             return lowerQuestion.range(
-                of: #"\b(?:find|list|show|which|who)\b"#,
+                of: #"\b(?:find|list|show|which|who|what)\b"#,
                 options: .regularExpression
-            ) != nil || requiresAntiJoin
+            ) != nil
+                || requiresAntiJoin
+                || requiresTopCount
         }
 
         var questionRequestsScalarPersonAggregate: Bool {
@@ -954,6 +961,8 @@ public enum SchemaToolAgentSQLIntentCoveragePolicy {
         private static let protectedMetricTerms: Set<String> = [
             "best", "healthy", "important", "win", "winner", "wins",
         ]
+
+        private static let rankingApplicableProtectedTerms: Set<String> = ["best"]
 
         private static let protectedMetricTermFamilies: [Set<String>] = [
             ["best"],

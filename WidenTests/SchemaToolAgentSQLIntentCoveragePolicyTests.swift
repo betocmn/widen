@@ -1135,6 +1135,87 @@ struct SchemaToolAgentSQLIntentCoveragePolicyTests {
         #expect(covered.decision == .covered)
     }
 
+    @Test func scopedRankingMetricDoesNotDefineUnrelatedProtectedTerm() {
+        let missing = evaluate(
+            question: "Which accounts are healthy?",
+            databaseContext: "Rank accounts by total spend.",
+            evidence: evidence(columns: [
+                "public.accounts.id",
+                "public.orders.account_id",
+                "public.orders.total_cents",
+            ]),
+            sql: """
+                SELECT account_id, SUM(total_cents) AS total_spend_cents
+                FROM public.orders
+                GROUP BY account_id
+                ORDER BY total_spend_cents DESC
+                LIMIT 100
+                """
+        )
+
+        #expect(missing.decision == .mustClarify)
+        #expect(missing.unresolvedDecisionKinds.contains(.metric))
+    }
+
+    @Test func entityListByCountryStillRequiresEmailProjection() {
+        let missing = evaluate(
+            question: "List customers by country with their email",
+            evidence: evidence(columns: [
+                "public.customers.id",
+                "public.customers.email",
+                "public.customers.country",
+            ]),
+            sql: """
+                SELECT id, country
+                FROM public.customers
+                ORDER BY country
+                """
+        )
+
+        #expect(missing.decision == .needsCorrection)
+        #expect(missing.missingSignals.contains("email projection for person/customer entity"))
+    }
+
+    @Test func bareTopPersonQueryRequiresEmailProjection() {
+        let missing = evaluate(
+            question: "Top customers of all time",
+            evidence: evidence(columns: [
+                "public.customers.id",
+                "public.customers.email",
+                "public.orders.customer_id",
+            ]),
+            sql: """
+                SELECT customer_id, COUNT(*) AS order_count
+                FROM public.orders
+                GROUP BY customer_id
+                ORDER BY order_count DESC
+                LIMIT 10
+                """
+        )
+
+        #expect(missing.decision == .needsCorrection)
+        #expect(missing.missingSignals.contains("email projection for person/customer entity"))
+    }
+
+    @Test func whatPersonStatusQueryRequiresEmailProjection() {
+        let missing = evaluate(
+            question: "What customers are active?",
+            evidence: evidence(columns: [
+                "public.customers.id",
+                "public.customers.email",
+                "public.customers.status",
+            ]),
+            sql: """
+                SELECT id
+                FROM public.customers
+                WHERE status = 'active'
+                """
+        )
+
+        #expect(missing.decision == .needsCorrection)
+        #expect(missing.missingSignals.contains("email projection for person/customer entity"))
+    }
+
     @Test func looseAsOfCueDoesNotSelectUnrelatedContextDate() {
         let covered = evaluate(
             question: "Subscriptions expiring in the next 30 days",
