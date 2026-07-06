@@ -1605,6 +1605,118 @@ struct SchemaToolAgentSQLIntentCoveragePolicyTests {
         #expect(covered.decision == .covered)
     }
 
+    @Test func adjectiveLedPersonListRequiresEmailProjection() {
+        let missing = evaluate(
+            question: "Active customers",
+            evidence: evidence(columns: [
+                "public.customers.id",
+                "public.customers.email",
+                "public.customers.status",
+            ]),
+            sql: """
+                SELECT id
+                FROM public.customers
+                WHERE status = 'active'
+                LIMIT 100
+                """
+        )
+
+        #expect(missing.decision == .needsCorrection)
+        #expect(missing.missingSignals.contains("email projection for person/customer entity"))
+    }
+
+    @Test func allOfTheEntityRankingDoesNotRequireLimit() {
+        let covered = evaluate(
+            question: "Return all of the customers by total spend, most to least",
+            evidence: evidence(columns: [
+                "public.orders.customer_id",
+                "public.orders.total_cents",
+            ]),
+            sql: """
+                SELECT customer_id, SUM(total_cents) AS total_spend_cents
+                FROM public.orders
+                GROUP BY customer_id
+                ORDER BY total_spend_cents DESC
+                """
+        )
+
+        #expect(covered.decision == .covered)
+    }
+
+    @Test func prefixLikeStatusPredicateCoversRequestedStatus() {
+        let covered = evaluate(
+            question: "Show paid revenue",
+            evidence: evidence(columns: [
+                "public.orders.status",
+                "public.orders.total_cents",
+            ]),
+            sql: """
+                SELECT SUM(total_cents) AS paid_revenue_cents
+                FROM public.orders
+                WHERE status LIKE 'paid%'
+                """
+        )
+
+        #expect(covered.decision == .covered)
+    }
+
+    @Test func rankingMentionWithoutConcreteMetricStillRequiresClarification() {
+        let missing = evaluate(
+            question: "Who are our best customers?",
+            databaseContext: "The customer ranking page shows customer profiles.",
+            evidence: evidence(columns: [
+                "public.orders.customer_id",
+                "public.orders.total_cents",
+            ]),
+            sql: """
+                SELECT customer_id, SUM(total_cents) AS revenue_cents
+                FROM public.orders
+                GROUP BY customer_id
+                ORDER BY revenue_cents DESC
+                LIMIT 100
+                """
+        )
+
+        #expect(missing.decision == .mustClarify)
+    }
+
+    @Test func contextAnchorAsPhraseProvidesExplicitAnchor() {
+        let covered = evaluate(
+            question: "Subscriptions expiring in the next 30 days",
+            databaseContext: "Treat the evaluation anchor as 2026-06-24.",
+            evidence: evidence(columns: [
+                "public.subscription.id",
+                "public.subscription.expires_at",
+            ]),
+            sql: """
+                SELECT id
+                FROM public.subscription
+                WHERE expires_at >= DATE '2026-06-24'
+                  AND expires_at < DATE '2026-06-24' + INTERVAL '30 days'
+                """
+        )
+
+        #expect(covered.decision == .covered)
+
+        let missing = evaluate(
+            question: "Subscriptions expiring in the next 30 days",
+            databaseContext: "Treat the evaluation anchor as 2026-06-24.",
+            evidence: evidence(columns: [
+                "public.subscription.id",
+                "public.subscription.expires_at",
+            ]),
+            sql: """
+                SELECT id
+                FROM public.subscription
+                WHERE expires_at >= CURRENT_DATE
+                  AND expires_at < CURRENT_DATE + INTERVAL '30 days'
+                """
+        )
+
+        #expect(missing.decision == .needsCorrection)
+        #expect(missing.missingSignals.contains("explicit date/time anchor instead of moving current time"))
+    }
+
     private func evaluate(
         question: String,
         databaseContext: String = "",

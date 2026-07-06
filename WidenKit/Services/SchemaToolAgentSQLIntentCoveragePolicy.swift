@@ -363,7 +363,7 @@ public enum SchemaToolAgentSQLIntentCoveragePolicy {
                 return hasScopedRankDefinition && questionAndContextShareMetricSubject
             }
             return hasMetricCue
-                && !contextTokens.intersection(Self.metricDefinitionTokens).isEmpty
+                && !contextTokens.intersection(Self.concreteMetricDefinitionTokens).isEmpty
                 && questionAndContextShareMetricSubject
         }
 
@@ -425,7 +425,7 @@ public enum SchemaToolAgentSQLIntentCoveragePolicy {
                 options: .regularExpression
             ) != nil
                 || lowerQuestion.range(
-                    of: #"^\s*(?:all\s+|every\s+|our\s+|the\s+)?(?:account|accounts|customer|customers|person|people|user|users)\b"#,
+                    of: #"^\s*(?:all\s+|every\s+|our\s+|the\s+)?(?!(?:average|avg|count|number|sum|total)\s)(?:[a-z][a-z-]*\s+)?(?:account|accounts|customer|customers|person|people|user|users)\b"#,
                     options: .regularExpression
                 ) != nil
                 || requiresAntiJoin
@@ -667,7 +667,7 @@ public enum SchemaToolAgentSQLIntentCoveragePolicy {
                 options: .regularExpression
             ) != nil
                 || lowerQuestion.range(
-                    of: #"(^|\b(?:find|list|rank|return|show|get|display|give\s+me)\s+)(?:all|every)\s+(?!time\b|day\b|week\b|month\b|quarter\b|year\b|date\b|period\b|range\b)[a-z][a-z0-9]*(?:\s+[a-z][a-z0-9]*){0,2}\b"#,
+                    of: #"(^|\b(?:find|list|rank|return|show|get|display|give\s+me)\s+)(?:all|every)\s+(?:of\s+(?:the\s+)?|the\s+)?(?!time\b|day\b|week\b|month\b|quarter\b|year\b|date\b|period\b|range\b)[a-z][a-z0-9]*(?:\s+[a-z][a-z0-9]*){0,2}\b"#,
                     options: .regularExpression
                 ) != nil
         }
@@ -869,7 +869,7 @@ public enum SchemaToolAgentSQLIntentCoveragePolicy {
                 #"\bstart\s+date(?:\s+is)?\b[\s,:\-]*$"#,
                 #"\bon\s+or\s+after\b[\s,:\-]*$"#,
                 #"\b(?:reporting\s+)?window\s+ending\s*$"#,
-                #"\banchor(?:\s+date)?(?:\s+is)?\b[\s,:\-]*$"#,
+                #"\banchor(?:\s+date)?(?:\s+(?:is|as))?\b[\s,:\-]*$"#,
                 #"\buse\s+(?:the\s+)?(?:date\s+)?$"#,
             ]
             let suffixAnchorPatterns = [
@@ -1058,6 +1058,11 @@ public enum SchemaToolAgentSQLIntentCoveragePolicy {
             "spend", "total", "usage", "win", "wins",
         ]
 
+        private static let concreteMetricDefinitionTokens: Set<String> = [
+            "count", "counts", "revenue", "spend", "total", "usage", "win",
+            "wins",
+        ]
+
         private static let personEntityTokens: Set<String> = [
             "account", "accounts", "customer", "customers", "person", "people",
             "user", "users",
@@ -1098,8 +1103,15 @@ public enum SchemaToolAgentSQLIntentCoveragePolicy {
                 negativeValues: Set<String>
             ) -> Bool {
                 switch operatorToken {
-                case "=", "is", "in", "like":
+                case "=", "is", "in":
                     return values.contains { positiveValues.contains($0) }
+                case "like":
+                    return values.contains { value in
+                        positiveValues.contains(value)
+                            || positiveValues.contains(
+                                value.trimmingCharacters(in: CharacterSet(charactersIn: "%"))
+                            )
+                    }
                 case "!=", "<>":
                     return values.contains { negativeValues.contains($0) }
                 case "not in":
