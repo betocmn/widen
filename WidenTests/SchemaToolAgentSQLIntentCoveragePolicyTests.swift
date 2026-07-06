@@ -1797,6 +1797,84 @@ struct SchemaToolAgentSQLIntentCoveragePolicyTests {
         #expect(covered.decision == .covered)
     }
 
+    @Test func equalsFormAnchorRejectsMovingCurrentDate() {
+        for context in ["Current date = 2026-06-29.", "Today = 2026-06-29."] {
+            let missing = evaluate(
+                question: "Subscriptions expiring in the next 30 days",
+                databaseContext: context,
+                evidence: evidence(columns: [
+                    "public.subscription.id",
+                    "public.subscription.expires_at",
+                ]),
+                sql: """
+                    SELECT id
+                    FROM public.subscription
+                    WHERE expires_at >= CURRENT_DATE
+                      AND expires_at < CURRENT_DATE + INTERVAL '30 days'
+                    """
+            )
+
+            #expect(missing.decision == .needsCorrection)
+            #expect(missing.missingSignals.contains("explicit date/time anchor instead of moving current time"))
+        }
+    }
+
+    @Test func haveMetricDefinitionAllowsCoverageChecks() {
+        let covered = evaluate(
+            question: "Which accounts are healthy?",
+            databaseContext: "Healthy accounts have status = 'active'.",
+            evidence: evidence(columns: [
+                "public.accounts.id",
+                "public.accounts.status",
+            ]),
+            sql: """
+                SELECT id
+                FROM public.accounts
+                WHERE status = 'active'
+                LIMIT 100
+                """
+        )
+
+        #expect(covered.decision == .covered)
+    }
+
+    @Test func braceArrayStatusPredicateCoversRequestedStatus() {
+        let covered = evaluate(
+            question: "Show paid revenue",
+            evidence: evidence(columns: [
+                "public.orders.status",
+                "public.orders.total_cents",
+            ]),
+            sql: """
+                SELECT SUM(total_cents) AS paid_revenue_cents
+                FROM public.orders
+                WHERE status = ANY('{paid,refunded}')
+                """
+        )
+
+        #expect(covered.decision == .covered)
+    }
+
+    @Test func incidentalContextOverlapStillRequiresClarification() {
+        let missing = evaluate(
+            question: "Who are our best customers in the last two weeks?",
+            databaseContext: "Rank products by revenue in the last two weeks.",
+            evidence: evidence(columns: [
+                "public.orders.customer_id",
+                "public.orders.total_cents",
+            ]),
+            sql: """
+                SELECT customer_id, SUM(total_cents) AS revenue_cents
+                FROM public.orders
+                GROUP BY customer_id
+                ORDER BY revenue_cents DESC
+                LIMIT 100
+                """
+        )
+
+        #expect(missing.decision == .mustClarify)
+    }
+
     private func evaluate(
         question: String,
         databaseContext: String = "",

@@ -309,7 +309,7 @@ public enum SchemaToolAgentSQLIntentCoveragePolicy {
                 let termBeforeDefinition = lowerContext.range(
                     of: #"\b"#
                         + escaped
-                        + #"\b[^.!?;\n]{0,40}\b(?:means|is|are)\b[^.!?;\n]{0,80}\b(?:when|if|where|with|using|status|active|paid|verified|null|true|false|=)\b"#,
+                        + #"\b[^.!?;\n]{0,40}\b(?:means|is|are|has|have)\b[^.!?;\n]{0,80}\b(?:when|if|where|with|using|status|active|paid|verified|null|true|false|=)\b"#,
                     options: .regularExpression
                 ) != nil
                 let definitionBeforeTerm = lowerContext.range(
@@ -873,14 +873,14 @@ public enum SchemaToolAgentSQLIntentCoveragePolicy {
             let prefix = String(value[prefixStart..<dateRange.lowerBound]).lowercased()
             let suffix = String(value[dateRange.upperBound..<suffixEnd]).lowercased()
             let prefixAnchorPatterns = [
-                #"\bas\s+of(?:\s+the)?\b[\s,:\-]*$"#,
-                #"\bcurrent\s+date\b(?:\s+(?:for|of|in)\b[^.!?;\n]{0,30})?(?:\s+is)?[\s,:\-]*$"#,
-                #"\btoday(?:\s+is)?\b[\s,:\-]*$"#,
-                #"\bstarting(?:\s+(?:on|from))?\b[\s,:\-]*$"#,
-                #"\bstart\s+date(?:\s+is)?\b[\s,:\-]*$"#,
-                #"\bon\s+or\s+after\b[\s,:\-]*$"#,
+                #"\bas\s+of(?:\s+the)?\b[\s,:=\-]*$"#,
+                #"\bcurrent\s+date\b(?:\s+(?:for|of|in)\b[^.!?;\n]{0,30})?(?:\s+is)?[\s,:=\-]*$"#,
+                #"\btoday(?:\s+is)?\b[\s,:=\-]*$"#,
+                #"\bstarting(?:\s+(?:on|from))?\b[\s,:=\-]*$"#,
+                #"\bstart\s+date(?:\s+is)?\b[\s,:=\-]*$"#,
+                #"\bon\s+or\s+after\b[\s,:=\-]*$"#,
                 #"\b(?:reporting\s+)?window\s+ending\s*$"#,
-                #"\banchor(?:\s+date)?(?:\s+(?:is|as))?\b[\s,:\-]*$"#,
+                #"\banchor(?:\s+date)?(?:\s+(?:is|as))?\b[\s,:=\-]*$"#,
                 #"\buse\s+(?:the\s+)?(?:date\s+)?$"#,
             ]
             let suffixAnchorPatterns = [
@@ -913,7 +913,7 @@ public enum SchemaToolAgentSQLIntentCoveragePolicy {
                 pattern: #"'([^']*)'|"([^"]*)"|([a-z0-9_%.-]+)"#
             ) else { return [] }
             let range = NSRange(valueBody.startIndex..<valueBody.endIndex, in: valueBody)
-            return regex.matches(in: valueBody, range: range).compactMap { match in
+            return regex.matches(in: valueBody, range: range).flatMap { match -> [String] in
                 for captureIndex in 1...3 {
                     guard match.range(at: captureIndex).location != NSNotFound,
                         let captureRange = Range(match.range(at: captureIndex), in: valueBody)
@@ -923,9 +923,18 @@ public enum SchemaToolAgentSQLIntentCoveragePolicy {
                     let normalized = String(valueBody[captureRange])
                         .trimmingCharacters(in: .whitespacesAndNewlines)
                         .lowercased()
-                    return normalized.isEmpty ? nil : normalized
+                    guard !normalized.isEmpty else { return [] }
+                    if normalized.hasPrefix("{"), normalized.hasSuffix("}") {
+                        return normalized.dropFirst().dropLast()
+                            .split(separator: ",")
+                            .map {
+                                $0.trimmingCharacters(in: CharacterSet(charactersIn: " \t\"'"))
+                            }
+                            .filter { !$0.isEmpty }
+                    }
+                    return [normalized]
                 }
-                return nil
+                return []
             }
         }
 
@@ -1094,12 +1103,17 @@ public enum SchemaToolAgentSQLIntentCoveragePolicy {
 
         private static let metricSubjectStopTokens: Set<String> = Set([
             "about", "after", "all", "also", "an", "and", "any", "are", "as",
-            "at", "be", "before", "by", "can", "each", "every", "find",
-            "for", "from", "has", "have", "highest", "in", "include",
-            "including", "into", "is", "least", "list", "lowest", "most",
-            "one", "our", "rank", "return", "show", "that", "the", "their",
-            "these", "this", "those", "to", "top", "use", "using", "what",
-            "when", "where", "which", "who", "with",
+            "at", "be", "before", "by", "can", "current", "date", "dates",
+            "day", "days", "each", "every", "find", "first", "five", "for",
+            "four", "from", "has", "have", "highest", "in", "include",
+            "including", "into", "is", "last", "least", "list", "lowest",
+            "month", "months", "most", "next", "one", "our", "past",
+            "period", "periods", "previous", "prior", "quarter", "quarters",
+            "rank", "recent", "return", "show", "that", "the", "their",
+            "these", "this", "those", "three", "time", "times", "to",
+            "today", "top", "two", "use", "using", "week", "weeks", "what",
+            "when", "where", "which", "who", "with", "year", "years",
+            "yesterday",
         ])
         .union(statusPhraseTokens)
         .union(protectedMetricTerms)
