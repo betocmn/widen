@@ -318,6 +318,12 @@ public enum SchemaToolAgentSQLIntentCoveragePolicy {
                         + #"\b[^.!?;\n]{0,60}\b(?:when|if|where|with|using|status|null|true|false|=)\b"#,
                     options: .regularExpression
                 ) != nil
+                let conditionBeforeTerm = lowerContext.range(
+                    of: #"\b(?:when|if|where|with|using|status|null|true|false|=)\b[^.!?;\n]{0,80}\b(?:means|is|are|counts?\s+as)\b[^.!?;\n]{0,40}\b"#
+                        + escaped
+                        + #"\b"#,
+                    options: .regularExpression
+                ) != nil
                 let colonDefinition = lowerContext.range(
                     of: #"\b"#
                         + escaped
@@ -336,8 +342,8 @@ public enum SchemaToolAgentSQLIntentCoveragePolicy {
                         + #"\b"#,
                     options: .regularExpression
                 ) != nil
-                return termBeforeDefinition || definitionBeforeTerm || colonDefinition
-                    || termCountDefinition || recordsTermDefinition
+                return termBeforeDefinition || definitionBeforeTerm || conditionBeforeTerm
+                    || colonDefinition || termCountDefinition || recordsTermDefinition
             }
         }
 
@@ -359,8 +365,13 @@ public enum SchemaToolAgentSQLIntentCoveragePolicy {
                 of: #"\b(?:rank|ranked|ranking|ranks)\b[^.!?;\n]{0,40}\bby\b[^.!?;\n]{0,80}\b(?:count|counts|revenue|spend|total|usage|win|wins)\b"#,
                 options: .regularExpression
             ) != nil
+            let hasUseAsMetricDefinition = lowerContext.range(
+                of: #"\buse[sd]?\b[^.!?;\n]{0,60}\b(?:count|counts|revenue|spend|total|usage|win|wins)\b[^.!?;\n]{0,60}\bas\b[^.!?;\n]{0,40}\bmetric\b"#,
+                options: .regularExpression
+            ) != nil
             if mentionsProtectedTerm {
-                return hasScopedRankDefinition && questionAndContextShareMetricSubject
+                return (hasScopedRankDefinition || hasUseAsMetricDefinition)
+                    && questionAndContextShareMetricSubject
             }
             return hasMetricCue
                 && !contextTokens.intersection(Self.concreteMetricDefinitionTokens).isEmpty
@@ -421,7 +432,7 @@ public enum SchemaToolAgentSQLIntentCoveragePolicy {
                 return true
             }
             return lowerQuestion.range(
-                of: #"\b(?:find|list|show|which|who|what)\b"#,
+                of: #"\b(?:find|list|show|get|return|display|give\s+me|which|who|what)\b"#,
                 options: .regularExpression
             ) != nil
                 || lowerQuestion.range(
@@ -745,7 +756,7 @@ public enum SchemaToolAgentSQLIntentCoveragePolicy {
 
         private var sqlStatusPredicateComparisons: [SQLStatusPredicateComparison] {
             guard let regex = try? NSRegularExpression(
-                pattern: #"(?:\b[a-z_][a-z0-9_]*\s*\.\s*)?"?\b(?:status|state)\b"?\s*(=|<>|!=|\bnot\s+in\b|\bin\b|\blike\b|\bis\b)\s*('[^']*'|"[^"]*"|\([^)]*\)|[a-z0-9_]+)"#
+                pattern: #"(?:\b[a-z_][a-z0-9_]*\s*\.\s*)?"?\b(?:status|state)\b"?\s*(=|<>|!=|\bnot\s+in\b|\bin\b|\blike\b|\bis\b)\s*('[^']*'|"[^"]*"|\([^)]*\)|(?:any|all)\s*\([^)]*\)|[a-z0-9_]+)"#
             ) else { return [] }
             let range = NSRange(lowerSQL.startIndex..<lowerSQL.endIndex, in: lowerSQL)
             return regex.matches(in: lowerSQL, range: range).compactMap { match in

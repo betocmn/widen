@@ -1717,6 +1717,86 @@ struct SchemaToolAgentSQLIntentCoveragePolicyTests {
         #expect(missing.missingSignals.contains("explicit date/time anchor instead of moving current time"))
     }
 
+    @Test func getPersonListRequiresEmailProjection() {
+        for question in ["Get active customers", "Return customers", "Display users"] {
+            let missing = evaluate(
+                question: question,
+                evidence: evidence(columns: [
+                    "public.customers.id",
+                    "public.customers.email",
+                    "public.customers.status",
+                ]),
+                sql: """
+                    SELECT id
+                    FROM public.customers
+                    WHERE status = 'active'
+                    LIMIT 100
+                    """
+            )
+
+            #expect(missing.decision == .needsCorrection)
+            #expect(missing.missingSignals.contains("email projection for person/customer entity"))
+        }
+    }
+
+    @Test func conditionBeforeProtectedTermDefinesMetric() {
+        let covered = evaluate(
+            question: "Which tools have the most wins?",
+            databaseContext: "An evaluation with a non-null winner_id is a win.",
+            evidence: evidence(columns: [
+                "public.tool_run.tool_id",
+                "public.tool_run.winner_id",
+            ]),
+            sql: """
+                SELECT tool_id, COUNT(*) AS win_count
+                FROM public.tool_run
+                WHERE winner_id IS NOT NULL
+                GROUP BY tool_id
+                ORDER BY win_count DESC
+                LIMIT 10
+                """
+        )
+
+        #expect(covered.decision == .covered)
+    }
+
+    @Test func anyArrayStatusPredicateCoversRequestedStatus() {
+        let covered = evaluate(
+            question: "Show paid revenue",
+            evidence: evidence(columns: [
+                "public.orders.status",
+                "public.orders.total_cents",
+            ]),
+            sql: """
+                SELECT SUM(total_cents) AS paid_revenue_cents
+                FROM public.orders
+                WHERE status = ANY(ARRAY['paid'])
+                """
+        )
+
+        #expect(covered.decision == .covered)
+    }
+
+    @Test func useAsMetricDefinitionWithProtectedTermAllowsCoverageChecks() {
+        let covered = evaluate(
+            question: "Who are our best customers?",
+            databaseContext: "For best customers, use lifetime revenue as the ranking metric.",
+            evidence: evidence(columns: [
+                "public.orders.customer_id",
+                "public.orders.total_cents",
+            ]),
+            sql: """
+                SELECT customer_id, SUM(total_cents) AS lifetime_revenue_cents
+                FROM public.orders
+                GROUP BY customer_id
+                ORDER BY lifetime_revenue_cents DESC
+                LIMIT 100
+                """
+        )
+
+        #expect(covered.decision == .covered)
+    }
+
     private func evaluate(
         question: String,
         databaseContext: String = "",
