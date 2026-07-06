@@ -1875,6 +1875,102 @@ struct SchemaToolAgentSQLIntentCoveragePolicyTests {
         #expect(missing.decision == .mustClarify)
     }
 
+    @Test func useAsMetricDefinitionForHealthyAllowsCoverageChecks() {
+        let covered = evaluate(
+            question: "Which accounts are healthy?",
+            databaseContext: "For healthy accounts, use status = 'active' as the metric.",
+            evidence: evidence(columns: [
+                "public.accounts.id",
+                "public.accounts.status",
+            ]),
+            sql: """
+                SELECT id
+                FROM public.accounts
+                WHERE status = 'active'
+                LIMIT 100
+                """
+        )
+
+        #expect(covered.decision == .covered)
+    }
+
+    @Test func foreignSubjectProtectedDefinitionStillRequiresClarification() {
+        let missing = evaluate(
+            question: "Which accounts are healthy?",
+            databaseContext: "Healthy products are active when status = 'active'.",
+            evidence: evidence(columns: [
+                "public.accounts.id",
+                "public.accounts.status",
+            ]),
+            sql: """
+                SELECT id
+                FROM public.accounts
+                WHERE status = 'active'
+                LIMIT 100
+                """
+        )
+
+        #expect(missing.decision == .mustClarify)
+    }
+
+    @Test func inlineTodayCueDoesNotSelectPrecedingDate() {
+        let missing = evaluate(
+            question: "Subscriptions expiring in the next 30 days",
+            databaseContext: "Database migrated on 2026-06-24 and today is 2026-06-29.",
+            evidence: evidence(columns: [
+                "public.subscription.id",
+                "public.subscription.expires_at",
+            ]),
+            sql: """
+                SELECT id
+                FROM public.subscription
+                WHERE expires_at >= DATE '2026-06-24'
+                  AND expires_at < DATE '2026-06-24' + INTERVAL '30 days'
+                """
+        )
+
+        #expect(missing.decision == .needsCorrection)
+
+        let covered = evaluate(
+            question: "Subscriptions expiring in the next 30 days",
+            databaseContext: "Database migrated on 2026-06-24 and today is 2026-06-29.",
+            evidence: evidence(columns: [
+                "public.subscription.id",
+                "public.subscription.expires_at",
+            ]),
+            sql: """
+                SELECT id
+                FROM public.subscription
+                WHERE expires_at >= DATE '2026-06-29'
+                  AND expires_at < DATE '2026-06-29' + INTERVAL '30 days'
+                """
+        )
+
+        #expect(covered.decision == .covered)
+    }
+
+    @Test func multiWordPersonListRequiresEmailProjection() {
+        for question in ["Active enterprise customers", "High value inactive users"] {
+            let missing = evaluate(
+                question: question,
+                evidence: evidence(columns: [
+                    "public.customers.id",
+                    "public.customers.email",
+                    "public.customers.status",
+                ]),
+                sql: """
+                    SELECT id
+                    FROM public.customers
+                    WHERE status = 'active'
+                    LIMIT 100
+                    """
+            )
+
+            #expect(missing.decision == .needsCorrection)
+            #expect(missing.missingSignals.contains("email projection for person/customer entity"))
+        }
+    }
+
     private func evaluate(
         question: String,
         databaseContext: String = "",

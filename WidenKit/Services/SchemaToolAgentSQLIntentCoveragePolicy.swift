@@ -342,16 +342,31 @@ public enum SchemaToolAgentSQLIntentCoveragePolicy {
                         + #"\b"#,
                     options: .regularExpression
                 ) != nil
-                return termBeforeDefinition || definitionBeforeTerm || conditionBeforeTerm
-                    || colonDefinition || termCountDefinition || recordsTermDefinition
+                let matchesDefinition = termBeforeDefinition || definitionBeforeTerm
+                    || conditionBeforeTerm || colonDefinition || termCountDefinition
+                    || recordsTermDefinition
+                guard matchesDefinition else { return false }
+                return !Self.protectedTermAttachesToForeignSubject(
+                    term: term,
+                    in: lowerContext,
+                    questionSubjects: Self.normalizedMetricSubjectTokens(questionTokens)
+                )
             }
         }
 
         var containsScopedMetricDefinition: Bool {
             let questionProtectedTerms = questionTokens.intersection(Self.protectedMetricTerms)
-            guard !questionProtectedTerms.isEmpty,
-                questionProtectedTerms.isSubset(of: Self.rankingApplicableProtectedTerms)
-            else {
+            guard !questionProtectedTerms.isEmpty else {
+                return false
+            }
+            let hasUseAsMetricDefinition = lowerContext.range(
+                of: #"\buse[sd]?\b[^.!?;\n]{0,60}\b(?:count|counts|revenue|spend|total|usage|win|wins|status|active|paid|verified|null|true|false)\b[^.!?;\n]{0,60}\bas\b[^.!?;\n]{0,40}\bmetric\b"#,
+                options: .regularExpression
+            ) != nil
+            if hasUseAsMetricDefinition, questionAndContextShareMetricSubject {
+                return true
+            }
+            guard questionProtectedTerms.isSubset(of: Self.rankingApplicableProtectedTerms) else {
                 return false
             }
             let hasMetricCue = lowerContext.range(
@@ -365,13 +380,8 @@ public enum SchemaToolAgentSQLIntentCoveragePolicy {
                 of: #"\b(?:rank|ranked|ranking|ranks)\b[^.!?;\n]{0,40}\bby\b[^.!?;\n]{0,80}\b(?:count|counts|revenue|spend|total|usage|win|wins)\b"#,
                 options: .regularExpression
             ) != nil
-            let hasUseAsMetricDefinition = lowerContext.range(
-                of: #"\buse[sd]?\b[^.!?;\n]{0,60}\b(?:count|counts|revenue|spend|total|usage|win|wins)\b[^.!?;\n]{0,60}\bas\b[^.!?;\n]{0,40}\bmetric\b"#,
-                options: .regularExpression
-            ) != nil
             if mentionsProtectedTerm {
-                return (hasScopedRankDefinition || hasUseAsMetricDefinition)
-                    && questionAndContextShareMetricSubject
+                return hasScopedRankDefinition && questionAndContextShareMetricSubject
             }
             return hasMetricCue
                 && !contextTokens.intersection(Self.concreteMetricDefinitionTokens).isEmpty
@@ -436,7 +446,7 @@ public enum SchemaToolAgentSQLIntentCoveragePolicy {
                 options: .regularExpression
             ) != nil
                 || lowerQuestion.range(
-                    of: #"^\s*(?:all\s+|every\s+|our\s+|the\s+)?(?!(?:average|avg|count|number|sum|total)\s)(?:[a-z][a-z-]*\s+)?(?:account|accounts|customer|customers|person|people|user|users)\b"#,
+                    of: #"^\s*(?:all\s+|every\s+|our\s+|the\s+)?(?:(?!(?:average|avg|count|number|sum|total)\s)[a-z][a-z-]*\s+){0,3}(?:account|accounts|customer|customers|person|people|user|users)\b"#,
                     options: .regularExpression
                 ) != nil
                 || requiresAntiJoin
@@ -884,10 +894,10 @@ public enum SchemaToolAgentSQLIntentCoveragePolicy {
                 #"\buse\s+(?:the\s+)?(?:date\s+)?$"#,
             ]
             let suffixAnchorPatterns = [
-                #"\bas\s+(?:the\s+)?current\s+date\b"#,
-                #"\bas\s+today\b"#,
-                #"\bis\s+(?:the\s+)?current\s+date\b"#,
-                #"\btoday\b"#,
+                #"^[\s,)\-]*as\s+(?:the\s+)?current\s+date\b"#,
+                #"^[\s,)\-]*as\s+today\b"#,
+                #"^[\s,)\-]*is\s+(?:the\s+)?current\s+date\b"#,
+                #"^[\s,)\-]*(?:is\s+)?today\b"#,
             ]
             return prefixAnchorPatterns.contains {
                 prefix.range(of: $0, options: .regularExpression) != nil
@@ -1063,6 +1073,32 @@ public enum SchemaToolAgentSQLIntentCoveragePolicy {
             ["important"],
             ["win", "winner", "wins"],
         ]
+
+        private static func protectedTermAttachesToForeignSubject(
+            term: String,
+            in context: String,
+            questionSubjects: Set<String>
+        ) -> Bool {
+            guard !questionSubjects.isEmpty else { return false }
+            let escaped = NSRegularExpression.escapedPattern(for: term)
+            guard let regex = try? NSRegularExpression(
+                pattern: #"\b"# + escaped + #"\b\s+([a-z][a-z0-9_-]*)"#
+            ) else { return false }
+            let range = NSRange(context.startIndex..<context.endIndex, in: context)
+            let followingSubjects = regex.matches(in: context, range: range)
+                .compactMap { match -> String? in
+                    guard let captureRange = Range(match.range(at: 1), in: context) else {
+                        return nil
+                    }
+                    let token = String(context[captureRange])
+                    guard token.count > 2, !metricSubjectStopTokens.contains(token) else {
+                        return nil
+                    }
+                    return normalizedMetricSubjectToken(token)
+                }
+            guard !followingSubjects.isEmpty else { return false }
+            return questionSubjects.isDisjoint(with: followingSubjects)
+        }
 
         private static func relatedProtectedMetricTerms(for terms: Set<String>) -> Set<String> {
             terms.reduce(into: Set<String>()) { related, term in
