@@ -378,7 +378,7 @@ public enum SchemaToolAgentSQLIntentCoveragePolicy {
                     ? sentenceTokens
                     : candidateSubjects
                 let hasUseAsMetricDefinition = sentence.range(
-                    of: #"\buse[sd]?\b[^.!?;\n]{0,60}\b(?:count|counts|revenue|spend|total|usage|win|wins|status|active|paid|verified|null|true|false)\b[^.!?;\n]{0,60}\bas\b[^.!?;\n]{0,40}\bmetric\b"#,
+                    of: #"\buse[sd]?\b[^.!?;\n]{1,80}\bas\b[^.!?;\n]{0,40}\bmetric\b"#,
                     options: .regularExpression
                 ) != nil
                 if hasUseAsMetricDefinition, sharesMetricSubject(with: sentenceSubjectTokens) {
@@ -544,7 +544,9 @@ public enum SchemaToolAgentSQLIntentCoveragePolicy {
                 of: #"\b(?:with|including|and)\s+(?:their\s+)?[a-z0-9_\s-]{0,40}\b(?:count|counts)\b"#,
                 options: .regularExpression
             ) != nil
-            return (lowerQuestion.contains("how many") && !groupsByPersonEntity)
+            return (lowerQuestion.contains("how many")
+                    && !groupsByPersonEntity
+                    && !questionRequestsPersonEntityList)
                 || (questionTokens.contains("count")
                     && !questionTokens.contains("by")
                     && !questionTokens.contains("per")
@@ -770,7 +772,7 @@ public enum SchemaToolAgentSQLIntentCoveragePolicy {
         var requiresScalarCountAggregate: Bool {
             guard !questionRequestsPersonEntityResult else { return false }
             return lowerQuestion.range(
-                of: #"\bhow\s+many\s+(?!days?\b|weeks?\b|months?\b|quarters?\b|years?\b|hours?\b|minutes?\b|seconds?\b)"#,
+                of: #"\b(?:how\s+many|number\s+of|count\s+of)\s+(?!days?\b|weeks?\b|months?\b|quarters?\b|years?\b|hours?\b|minutes?\b|seconds?\b)"#,
                 options: .regularExpression
             ) != nil
         }
@@ -780,7 +782,7 @@ public enum SchemaToolAgentSQLIntentCoveragePolicy {
             guard !expressions.isEmpty else {
                 return lowerSQL.range(of: #"\bcount\s*\("#, options: .regularExpression) != nil
             }
-            return expressions.allSatisfy { expression in
+            return expressions.contains { expression in
                 expression.range(
                     of: #"^\s*(?:\(\s*select\s+)?count\s*\("#,
                     options: .regularExpression
@@ -807,7 +809,13 @@ public enum SchemaToolAgentSQLIntentCoveragePolicy {
 
         var explicitAnchor: ExplicitAnchor? {
             Self.firstExplicitAnchor(in: question)
-                ?? Self.firstContextExplicitAnchor(in: databaseContext)
+                ?? Self.firstContextExplicitAnchor(
+                    in: databaseContext,
+                    prefersWindowBound: lowerQuestion.range(
+                        of: #"\b(?:reporting\s+)?window\b"#,
+                        options: .regularExpression
+                    ) != nil
+                )
         }
 
         var sqlUsesMovingCurrentTime: Bool {
@@ -927,15 +935,21 @@ public enum SchemaToolAgentSQLIntentCoveragePolicy {
             explicitAnchorMatches(in: value).first?.anchor
         }
 
-        private static func firstContextExplicitAnchor(in value: String) -> ExplicitAnchor? {
+        private static func firstContextExplicitAnchor(
+            in value: String,
+            prefersWindowBound: Bool = false
+        ) -> ExplicitAnchor? {
             let matches = explicitAnchorMatches(in: value)
-            let evaluationTimeAnchor = matches.first { match in
-                contextAnchorPhraseApplies(in: value, dateRange: match.range, tier: .evaluationTime)
-            }?.anchor
-            if let evaluationTimeAnchor { return evaluationTimeAnchor }
-            return matches.first { match in
-                contextAnchorPhraseApplies(in: value, dateRange: match.range, tier: .windowBound)
-            }?.anchor
+            let tiers: [ContextAnchorTier] = prefersWindowBound
+                ? [.windowBound, .evaluationTime]
+                : [.evaluationTime, .windowBound]
+            for tier in tiers {
+                let anchor = matches.first { match in
+                    contextAnchorPhraseApplies(in: value, dateRange: match.range, tier: tier)
+                }?.anchor
+                if let anchor { return anchor }
+            }
+            return nil
         }
 
         private static func explicitAnchorMatches(
@@ -1074,7 +1088,7 @@ public enum SchemaToolAgentSQLIntentCoveragePolicy {
         }
 
         private static func topLevelSelectExpressions(in sql: String) -> [String] {
-            guard let selectRange = sql.range(of: #"\bselect\b"#, options: .regularExpression) else {
+            guard let selectRange = topLevelSelectKeywordRange(in: sql) else {
                 return []
             }
             var index = selectRange.upperBound
@@ -1108,6 +1122,45 @@ public enum SchemaToolAgentSQLIntentCoveragePolicy {
             guard let fromStart else { return [] }
             let selectList = String(sql[selectRange.upperBound..<fromStart])
             return splitTopLevelCommaList(selectList)
+        }
+
+        private static func topLevelSelectKeywordRange(in sql: String) -> Range<String.Index>? {
+            var depth = 0
+            var quote: Character?
+            var index = sql.startIndex
+            while index < sql.endIndex {
+                let character = sql[index]
+                if let activeQuote = quote {
+                    if character == activeQuote { quote = nil }
+                    index = sql.index(after: index)
+                    continue
+                }
+                switch character {
+                case "'", "\"":
+                    quote = character
+                case "(":
+                    depth += 1
+                case ")":
+                    depth = max(0, depth - 1)
+                default:
+                    if depth == 0, character == "s" {
+                        let previousIsWordCharacter = index > sql.startIndex && {
+                            let previous = sql[sql.index(before: index)]
+                            return previous.isLetter || previous.isNumber || previous == "_"
+                        }()
+                        if !previousIsWordCharacter,
+                            let match = sql[index...].range(
+                                of: #"^select\b"#,
+                                options: .regularExpression
+                            )
+                        {
+                            return match
+                        }
+                    }
+                }
+                index = sql.index(after: index)
+            }
+            return nil
         }
 
         private static func splitTopLevelCommaList(_ value: String) -> [String] {

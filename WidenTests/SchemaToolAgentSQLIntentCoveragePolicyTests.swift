@@ -2523,6 +2523,151 @@ struct SchemaToolAgentSQLIntentCoveragePolicyTests {
         #expect(missing.missingSignals.contains("explicit date/time anchor instead of moving current time"))
     }
 
+    @Test func groupedHowManyAllowsDimensionAndCount() {
+        let covered = evaluate(
+            question: "How many users by country?",
+            evidence: evidence(columns: [
+                "public.users.id",
+                "public.users.country",
+            ]),
+            sql: """
+                SELECT country, COUNT(*) AS user_count
+                FROM public.users
+                GROUP BY country
+                """
+        )
+
+        #expect(covered.decision == .covered)
+    }
+
+    @Test func cteScalarCountSatisfiesHowMany() {
+        let covered = evaluate(
+            question: "How many active users do we have?",
+            evidence: evidence(columns: [
+                "public.users.id",
+                "public.users.status",
+            ]),
+            sql: """
+                WITH active AS (
+                    SELECT id
+                    FROM public.users
+                    WHERE status = 'active'
+                )
+                SELECT COUNT(*) AS active_user_count
+                FROM active
+                """
+        )
+
+        #expect(covered.decision == .covered)
+    }
+
+    @Test func reportingWindowQuestionPrefersWindowAnchor() {
+        let context = "Reporting window ending 2026-06-24. Current date is 2026-06-29."
+        let covered = evaluate(
+            question: "Subscriptions expiring in the reporting window",
+            databaseContext: context,
+            evidence: evidence(columns: [
+                "public.subscription.id",
+                "public.subscription.expires_at",
+            ]),
+            sql: """
+                SELECT id
+                FROM public.subscription
+                WHERE expires_at < DATE '2026-06-24'
+                """
+        )
+
+        #expect(covered.decision == .covered)
+
+        let missing = evaluate(
+            question: "Subscriptions expiring in the reporting window",
+            databaseContext: context,
+            evidence: evidence(columns: [
+                "public.subscription.id",
+                "public.subscription.expires_at",
+            ]),
+            sql: """
+                SELECT id
+                FROM public.subscription
+                WHERE expires_at < CURRENT_DATE
+                """
+        )
+
+        #expect(missing.decision == .needsCorrection)
+        #expect(missing.missingSignals.contains("explicit date/time anchor instead of moving current time"))
+    }
+
+    @Test func countAndListRequestKeepsEntityResult() {
+        let missing = evaluate(
+            question: "How many active users do we have? List the users.",
+            evidence: evidence(columns: [
+                "public.users.id",
+                "public.users.email",
+                "public.users.status",
+            ]),
+            sql: """
+                SELECT COUNT(*) AS active_user_count
+                FROM public.users
+                WHERE status = 'active'
+                """
+        )
+
+        #expect(missing.decision == .needsCorrection)
+        #expect(missing.missingSignals.contains("email projection for person/customer entity"))
+    }
+
+    @Test func numberOfScalarRequiresCountAggregate() {
+        let missing = evaluate(
+            question: "Number of active users",
+            evidence: evidence(columns: [
+                "public.users.id",
+                "public.users.status",
+            ]),
+            sql: """
+                SELECT id
+                FROM public.users
+                WHERE status = 'active'
+                """
+        )
+
+        #expect(missing.decision == .needsCorrection)
+        #expect(missing.missingSignals.contains("COUNT aggregate for how-many request"))
+
+        let covered = evaluate(
+            question: "Number of active users",
+            evidence: evidence(columns: [
+                "public.users.id",
+                "public.users.status",
+            ]),
+            sql: """
+                SELECT COUNT(*) AS active_user_count
+                FROM public.users
+                WHERE status = 'active'
+                """
+        )
+
+        #expect(covered.decision == .covered)
+    }
+
+    @Test func arbitraryMetricUseAsDefinitionAllowsCoverageChecks() {
+        let covered = evaluate(
+            question: "Which feedback clusters are important?",
+            databaseContext: "Use severity as the ranking metric for feedback clusters.",
+            evidence: evidence(columns: [
+                "public.feedback_cluster.id",
+                "public.feedback_cluster.severity",
+            ]),
+            sql: """
+                SELECT id
+                FROM public.feedback_cluster
+                ORDER BY severity DESC
+                LIMIT 100
+                """
+        )
+
+        #expect(covered.decision == .covered)
+    }
+
     private func evaluate(
         question: String,
         databaseContext: String = "",
