@@ -2107,6 +2107,66 @@ struct SchemaToolAgentSQLIntentCoveragePolicyTests {
         #expect(covered.decision == .covered)
     }
 
+    @Test func protectedTermMetricSentenceWithoutRankWordingAllowsCoverageChecks() {
+        let covered = evaluate(
+            question: "Who are our best customers?",
+            databaseContext: "Best customer metric is total spend.",
+            evidence: evidence(columns: [
+                "public.orders.customer_id",
+                "public.orders.total_cents",
+            ]),
+            sql: """
+                SELECT customer_id, SUM(total_cents) AS total_spend_cents
+                FROM public.orders
+                GROUP BY customer_id
+                ORDER BY total_spend_cents DESC
+                LIMIT 100
+                """
+        )
+
+        #expect(covered.decision == .covered)
+    }
+
+    @Test func personNounPhraseByCountryRequiresEmailProjection() {
+        for question in ["All customers by country", "Every customer by organization"] {
+            let missing = evaluate(
+                question: question,
+                evidence: evidence(columns: [
+                    "public.customers.id",
+                    "public.customers.email",
+                    "public.customers.country",
+                ]),
+                sql: """
+                    SELECT country, COUNT(*) AS customer_count
+                    FROM public.customers
+                    GROUP BY country
+                    """
+            )
+
+            #expect(missing.decision == .needsCorrection)
+            #expect(missing.missingSignals.contains("email projection for person/customer entity"))
+        }
+    }
+
+    @Test func qualifierSubjectDoesNotAdoptForeignProtectedDefinition() {
+        let missing = evaluate(
+            question: "Which accounts with products are healthy?",
+            databaseContext: "Healthy products are active when status = 'active'.",
+            evidence: evidence(columns: [
+                "public.accounts.id",
+                "public.accounts.status",
+            ]),
+            sql: """
+                SELECT id
+                FROM public.accounts
+                WHERE status = 'active'
+                LIMIT 100
+                """
+        )
+
+        #expect(missing.decision == .mustClarify)
+    }
+
     private func evaluate(
         question: String,
         databaseContext: String = "",

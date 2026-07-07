@@ -767,8 +767,8 @@ public final class OpenRouterSchemaToolSQLAgent: SQLGenerator, Sendable {
                         aggregate.terminalOutcome = "sql"
                         if overClarificationCorrections > 0 {
                             diagnostics.overClarificationCorrectionSucceeded = true
-                            diagnostics.clearResolvedClarificationRejection()
                         }
+                        diagnostics.clearResolvedClarificationRejection()
                         if intentCoverageCorrections > 0 {
                             diagnostics.intentCoverageCorrectionSucceeded = true
                         }

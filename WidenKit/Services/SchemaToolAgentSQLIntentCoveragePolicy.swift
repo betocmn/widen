@@ -349,7 +349,9 @@ public enum SchemaToolAgentSQLIntentCoveragePolicy {
                 return !Self.protectedTermAttachesToForeignSubject(
                     term: term,
                     in: lowerContext,
-                    questionSubjects: Self.normalizedMetricSubjectTokens(questionTokens)
+                    questionSubjects: Self.normalizedMetricSubjectTokens(
+                        questionProtectedSubjectTokens ?? questionTokens
+                    )
                 )
             }
         }
@@ -377,7 +379,9 @@ public enum SchemaToolAgentSQLIntentCoveragePolicy {
                         of: #"\b(?:rank|ranked|ranking|ranks)\b[^.!?;\n]{0,40}\bby\b[^.!?;\n]{0,80}\b(?:count|counts|revenue|spend|total|usage|win|wins)\b"#,
                         options: .regularExpression
                     ) != nil
-                    return hasScopedRankDefinition && sharesMetricSubject(with: sentenceTokens)
+                    if hasScopedRankDefinition, sharesMetricSubject(with: sentenceTokens) {
+                        return true
+                    }
                 }
                 let hasMetricCue = sentence.range(
                     of: #"\b(?:metric|ranking|rank|ranked|define|defines|defined)\b"#,
@@ -407,8 +411,12 @@ public enum SchemaToolAgentSQLIntentCoveragePolicy {
         private var questionProtectedSubjectTokens: Set<String>? {
             let protectedTerms = questionTokens.intersection(Self.protectedMetricTerms)
             guard !protectedTerms.isEmpty else { return nil }
+            let whHeadSubjects = Self.subjectTokens(
+                matching: #"^\s*(?:which|what|who)\b(?:\s+(?:are|is))?(?:\s+(?:our|the|all|any|my))?\s+([a-z][a-z-]*(?:\s+[a-z][a-z-]*)?)"#,
+                in: lowerQuestion
+            )
+            if !whHeadSubjects.isEmpty { return whHeadSubjects }
             var subjects = Set<String>()
-            let range = NSRange(lowerQuestion.startIndex..<lowerQuestion.endIndex, in: lowerQuestion)
             for term in protectedTerms {
                 let escaped = NSRegularExpression.escapedPattern(for: term)
                 let patterns = [
@@ -416,23 +424,27 @@ public enum SchemaToolAgentSQLIntentCoveragePolicy {
                     #"\b([a-z][a-z-]*)\s+(?:are|is)\s+(?:not\s+)?"# + escaped + #"\b"#,
                 ]
                 for pattern in patterns {
-                    guard let regex = try? NSRegularExpression(pattern: pattern) else { continue }
-                    for match in regex.matches(in: lowerQuestion, range: range) {
-                        guard let captureRange = Range(match.range(at: 1), in: lowerQuestion) else {
-                            continue
-                        }
-                        for word in lowerQuestion[captureRange].split(whereSeparator: \.isWhitespace) {
-                            let token = String(word)
-                            guard token.count > 2, !Self.metricSubjectStopTokens.contains(token)
-                            else {
-                                continue
-                            }
-                            subjects.insert(token)
-                        }
-                    }
+                    subjects.formUnion(Self.subjectTokens(matching: pattern, in: lowerQuestion))
                 }
             }
             return subjects.isEmpty ? nil : subjects
+        }
+
+        private static func subjectTokens(matching pattern: String, in value: String) -> Set<String> {
+            guard let regex = try? NSRegularExpression(pattern: pattern) else { return [] }
+            let range = NSRange(value.startIndex..<value.endIndex, in: value)
+            var subjects = Set<String>()
+            for match in regex.matches(in: value, range: range) {
+                guard let captureRange = Range(match.range(at: 1), in: value) else { continue }
+                for word in value[captureRange].split(whereSeparator: \.isWhitespace) {
+                    let token = String(word)
+                    guard token.count > 2, !metricSubjectStopTokens.contains(token) else {
+                        continue
+                    }
+                    subjects.insert(token)
+                }
+            }
+            return subjects
         }
 
         var questionRequestsPersonEntityList: Bool {
@@ -465,7 +477,7 @@ public enum SchemaToolAgentSQLIntentCoveragePolicy {
             if lowerQuestion.range(
                 of: #"\bby\s+(?:country|org|organization|organizations)\b"#,
                 options: .regularExpression
-            ) != nil, !questionRequestsPersonEntityList {
+            ) != nil, !questionRequestsPersonEntityList, !questionStartsWithPersonNounPhrase {
                 return false
             }
             if lowerQuestion.range(
@@ -478,12 +490,16 @@ public enum SchemaToolAgentSQLIntentCoveragePolicy {
                 of: #"\b(?:find|list|show|get|return|display|give\s+me|which|who|what)\b"#,
                 options: .regularExpression
             ) != nil
-                || lowerQuestion.range(
-                    of: #"^\s*(?:all\s+|every\s+|our\s+|the\s+)?(?:(?!(?:average|avg|count|number|sum|total)\s)[a-z][a-z-]*\s+){0,3}(?:account|accounts|customer|customers|person|people|user|users)\b"#,
-                    options: .regularExpression
-                ) != nil
+                || questionStartsWithPersonNounPhrase
                 || requiresAntiJoin
                 || requiresTopCount
+        }
+
+        var questionStartsWithPersonNounPhrase: Bool {
+            lowerQuestion.range(
+                of: #"^\s*(?:all\s+|every\s+|our\s+|the\s+)?(?:(?!(?:average|avg|count|number|sum|total)\s)[a-z][a-z-]*\s+){0,3}(?:account|accounts|customer|customers|person|people|user|users)\b"#,
+                options: .regularExpression
+            ) != nil
         }
 
         var questionExplicitlyRequestsPersonEmail: Bool {
