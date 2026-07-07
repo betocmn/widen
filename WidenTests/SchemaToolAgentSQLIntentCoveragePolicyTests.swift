@@ -2048,9 +2048,9 @@ struct SchemaToolAgentSQLIntentCoveragePolicyTests {
         #expect(missing.decision == .mustClarify)
     }
 
-    @Test func negativeStatusPredicateCoversRequestedStatus() {
+    @Test func negativeStatusPredicateDoesNotCoverRequestedStatus() {
         for predicate in ["status != 'unpaid'", "status NOT IN ('unpaid', 'refunded')"] {
-            let covered = evaluate(
+            let missing = evaluate(
                 question: "Show paid revenue",
                 evidence: evidence(columns: [
                     "public.orders.status",
@@ -2063,7 +2063,8 @@ struct SchemaToolAgentSQLIntentCoveragePolicyTests {
                     """
             )
 
-            #expect(covered.decision == .covered)
+            #expect(missing.decision == .needsCorrection)
+            #expect(missing.missingSignals.contains("predicate for paid"))
         }
     }
 
@@ -2444,6 +2445,82 @@ struct SchemaToolAgentSQLIntentCoveragePolicyTests {
         )
 
         #expect(covered.decision == .covered)
+    }
+
+    @Test func objectMentionDoesNotDefineRankedSubject() {
+        let missing = evaluate(
+            question: "Who are our best customers?",
+            databaseContext: "Rank products by total revenue from customers.",
+            evidence: evidence(columns: [
+                "public.orders.customer_id",
+                "public.orders.total_cents",
+            ]),
+            sql: """
+                SELECT customer_id, SUM(total_cents) AS total_revenue_cents
+                FROM public.orders
+                GROUP BY customer_id
+                ORDER BY total_revenue_cents DESC
+                LIMIT 100
+                """
+        )
+
+        #expect(missing.decision == .mustClarify)
+    }
+
+    @Test func windowCountDoesNotSatisfyScalarHowMany() {
+        let missing = evaluate(
+            question: "How many active users do we have?",
+            evidence: evidence(columns: [
+                "public.users.id",
+                "public.users.status",
+            ]),
+            sql: """
+                SELECT id, COUNT(*) OVER() AS active_user_count
+                FROM public.users
+                WHERE status = 'active'
+                """
+        )
+
+        #expect(missing.decision == .needsCorrection)
+        #expect(missing.missingSignals.contains("COUNT aggregate for how-many request"))
+    }
+
+    @Test func dateBeforeAnchorSuffixProvidesExplicitAnchor() {
+        let context = "Treat 2026-06-24 as the evaluation anchor."
+        let covered = evaluate(
+            question: "Subscriptions expiring in the next 30 days",
+            databaseContext: context,
+            evidence: evidence(columns: [
+                "public.subscription.id",
+                "public.subscription.expires_at",
+            ]),
+            sql: """
+                SELECT id
+                FROM public.subscription
+                WHERE expires_at >= DATE '2026-06-24'
+                  AND expires_at < DATE '2026-06-24' + INTERVAL '30 days'
+                """
+        )
+
+        #expect(covered.decision == .covered)
+
+        let missing = evaluate(
+            question: "Subscriptions expiring in the next 30 days",
+            databaseContext: context,
+            evidence: evidence(columns: [
+                "public.subscription.id",
+                "public.subscription.expires_at",
+            ]),
+            sql: """
+                SELECT id
+                FROM public.subscription
+                WHERE expires_at >= CURRENT_DATE
+                  AND expires_at < CURRENT_DATE + INTERVAL '30 days'
+                """
+        )
+
+        #expect(missing.decision == .needsCorrection)
+        #expect(missing.missingSignals.contains("explicit date/time anchor instead of moving current time"))
     }
 
     private func evaluate(

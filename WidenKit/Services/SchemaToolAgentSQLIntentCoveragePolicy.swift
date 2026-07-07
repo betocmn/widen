@@ -373,11 +373,15 @@ public enum SchemaToolAgentSQLIntentCoveragePolicy {
             let relevantTerms = Self.relatedProtectedMetricTerms(for: questionProtectedTerms)
             return Self.sentences(in: lowerContext).contains { sentence in
                 let sentenceTokens = Set(Self.tokens(in: sentence))
+                let candidateSubjects = Self.contextMetricSubjectCandidates(in: sentence)
+                let sentenceSubjectTokens = candidateSubjects.isEmpty
+                    ? sentenceTokens
+                    : candidateSubjects
                 let hasUseAsMetricDefinition = sentence.range(
                     of: #"\buse[sd]?\b[^.!?;\n]{0,60}\b(?:count|counts|revenue|spend|total|usage|win|wins|status|active|paid|verified|null|true|false)\b[^.!?;\n]{0,60}\bas\b[^.!?;\n]{0,40}\bmetric\b"#,
                     options: .regularExpression
                 ) != nil
-                if hasUseAsMetricDefinition, sharesMetricSubject(with: sentenceTokens) {
+                if hasUseAsMetricDefinition, sharesMetricSubject(with: sentenceSubjectTokens) {
                     return true
                 }
                 guard rankingApplicable else { return false }
@@ -386,7 +390,7 @@ public enum SchemaToolAgentSQLIntentCoveragePolicy {
                         of: #"\b(?:rank|ranked|ranking|ranks)\b[^.!?;\n]{0,40}\bby\b[^.!?;\n]{0,80}\b(?:count|counts|revenue|spend|total|usage|win|wins)\b"#,
                         options: .regularExpression
                     ) != nil
-                    if hasScopedRankDefinition, sharesMetricSubject(with: sentenceTokens) {
+                    if hasScopedRankDefinition, sharesMetricSubject(with: sentenceSubjectTokens) {
                         return true
                     }
                 }
@@ -396,7 +400,19 @@ public enum SchemaToolAgentSQLIntentCoveragePolicy {
                 ) != nil
                 return hasMetricCue
                     && !sentenceTokens.intersection(Self.concreteMetricDefinitionTokens).isEmpty
-                    && sharesMetricSubject(with: sentenceTokens)
+                    && sharesMetricSubject(with: sentenceSubjectTokens)
+            }
+        }
+
+        private static func contextMetricSubjectCandidates(in sentence: String) -> Set<String> {
+            let patterns = [
+                #"\brank(?:s|ed|ing)?\b\s+(?:the\s+|all\s+|every\s+)?([a-z][a-z-]*(?:\s+[a-z][a-z-]*)?)\s+by\b"#,
+                #"\b([a-z][a-z-]*)\s+(?:are|is)\s+ranked\b"#,
+                #"\bmetric\s+for\s+(?:the\s+|all\s+|every\s+)?([a-z][a-z-]*(?:\s+[a-z][a-z-]*)?)"#,
+                #"\b([a-z][a-z-]*)\s+ranking\s+metric\b"#,
+            ]
+            return patterns.reduce(into: Set<String>()) { candidates, pattern in
+                candidates.formUnion(subjectTokens(matching: pattern, in: sentence))
             }
         }
 
@@ -760,7 +776,17 @@ public enum SchemaToolAgentSQLIntentCoveragePolicy {
         }
 
         var sqlIncludesCountAggregate: Bool {
-            lowerSQL.range(of: #"\bcount\s*\("#, options: .regularExpression) != nil
+            let expressions = selectExpressions
+            guard !expressions.isEmpty else {
+                return lowerSQL.range(of: #"\bcount\s*\("#, options: .regularExpression) != nil
+            }
+            return expressions.allSatisfy { expression in
+                expression.range(
+                    of: #"^\s*(?:\(\s*select\s+)?count\s*\("#,
+                    options: .regularExpression
+                ) != nil
+                    && expression.range(of: #"\bover\s*\("#, options: .regularExpression) == nil
+            }
         }
 
         var sqlIncludesAggregateCount: Bool {
@@ -808,9 +834,7 @@ public enum SchemaToolAgentSQLIntentCoveragePolicy {
                 let positiveValues: Set<String> = status == "unresolved"
                     ? ["unresolved", "open"]
                     : [status]
-                let negativeValues: Set<String> = status == "unresolved"
-                    ? ["resolved"]
-                    : ["in\(status)", "un\(status)", "non\(status)", "non-\(status)", "not_\(status)"]
+                let negativeValues: Set<String> = status == "unresolved" ? ["resolved"] : []
                 let predicateValueMatches = sqlStatusPredicateComparisons.contains { comparison in
                     comparison.matchesStatus(
                         positiveValues: positiveValues,
@@ -980,6 +1004,7 @@ public enum SchemaToolAgentSQLIntentCoveragePolicy {
                 suffixAnchorPatterns = [
                     #"^[\s,)\-]*as\s+(?:the\s+)?current\s+date\b"#,
                     #"^[\s,)\-]*as\s+today\b"#,
+                    #"^[\s,)\-]*(?:as|is)\s+(?:the\s+)?(?:evaluation\s+)?anchor(?:\s+date)?\b"#,
                     #"^[\s,)\-]*is\s+(?:the\s+)?current\s+date\b"#,
                     #"^[\s,)\-]*(?:is\s+)?today\b"#,
                 ]
