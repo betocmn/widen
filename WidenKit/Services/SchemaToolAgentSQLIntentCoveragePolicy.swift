@@ -83,6 +83,13 @@ public enum SchemaToolAgentSQLIntentCoveragePolicy {
             categories.append("wrong projected columns")
         }
 
+        if signals.requiresScalarCountAggregate,
+            !signals.sqlIncludesCountAggregate
+        {
+            missing.append("COUNT aggregate for how-many request")
+            categories.append("wrong aggregate")
+        }
+
         if signals.requiresCentsUnitPreservation {
             if signals.sqlScalesCentsToCurrency {
                 missing.append("preserve cents unit instead of dividing by 100")
@@ -415,7 +422,9 @@ public enum SchemaToolAgentSQLIntentCoveragePolicy {
                 matching: #"^\s*(?:which|what|who)\b(?:\s+(?:are|is))?(?:\s+(?:our|the|all|any|my))?\s+([a-z][a-z-]*(?:\s+[a-z][a-z-]*)?)"#,
                 in: lowerQuestion
             )
-            if !whHeadSubjects.isEmpty { return whHeadSubjects }
+            if !whHeadSubjects.intersection(Self.knownMetricSubjectTokens).isEmpty {
+                return whHeadSubjects
+            }
             var subjects = Set<String>()
             for term in protectedTerms {
                 let escaped = NSRegularExpression.escapedPattern(for: term)
@@ -481,7 +490,7 @@ public enum SchemaToolAgentSQLIntentCoveragePolicy {
                 return false
             }
             if lowerQuestion.range(
-                of: #"\b(?:per|by|each)\s+(?:account|accounts|customer|customers|person|people|user|users)\b"#,
+                of: #"\b(?:per|by|each|every)\s+(?:account|accounts|customer|customers|person|people|user|users)\b"#,
                 options: .regularExpression
             ) != nil {
                 return true
@@ -512,7 +521,7 @@ public enum SchemaToolAgentSQLIntentCoveragePolicy {
 
         var questionRequestsScalarPersonAggregate: Bool {
             let groupsByPersonEntity = lowerQuestion.range(
-                of: #"\b(?:per|by|each)\s+(?:account|accounts|customer|customers|person|people|user|users)\b"#,
+                of: #"\b(?:per|by|each|every)\s+(?:account|accounts|customer|customers|person|people|user|users)\b"#,
                 options: .regularExpression
             ) != nil
             let countIsEntityAttribute = lowerQuestion.range(
@@ -742,6 +751,18 @@ public enum SchemaToolAgentSQLIntentCoveragePolicy {
                 ) != nil
         }
 
+        var requiresScalarCountAggregate: Bool {
+            guard !questionRequestsPersonEntityResult else { return false }
+            return lowerQuestion.range(
+                of: #"\bhow\s+many\s+(?!days?\b|weeks?\b|months?\b|quarters?\b|years?\b|hours?\b|minutes?\b|seconds?\b)"#,
+                options: .regularExpression
+            ) != nil
+        }
+
+        var sqlIncludesCountAggregate: Bool {
+            lowerSQL.range(of: #"\bcount\s*\("#, options: .regularExpression) != nil
+        }
+
         var sqlIncludesAggregateCount: Bool {
             lowerSQL.range(of: #"\b(count|sum|avg|min|max)\s*\("#, options: .regularExpression) != nil
         }
@@ -883,8 +904,13 @@ public enum SchemaToolAgentSQLIntentCoveragePolicy {
         }
 
         private static func firstContextExplicitAnchor(in value: String) -> ExplicitAnchor? {
-            explicitAnchorMatches(in: value).first { match in
-                contextAnchorPhraseApplies(in: value, dateRange: match.range)
+            let matches = explicitAnchorMatches(in: value)
+            let evaluationTimeAnchor = matches.first { match in
+                contextAnchorPhraseApplies(in: value, dateRange: match.range, tier: .evaluationTime)
+            }?.anchor
+            if let evaluationTimeAnchor { return evaluationTimeAnchor }
+            return matches.first { match in
+                contextAnchorPhraseApplies(in: value, dateRange: match.range, tier: .windowBound)
             }?.anchor
         }
 
@@ -915,9 +941,15 @@ public enum SchemaToolAgentSQLIntentCoveragePolicy {
             }
         }
 
+        private enum ContextAnchorTier {
+            case evaluationTime
+            case windowBound
+        }
+
         private static func contextAnchorPhraseApplies(
             in value: String,
-            dateRange: Range<String.Index>
+            dateRange: Range<String.Index>,
+            tier: ContextAnchorTier
         ) -> Bool {
             let prefixStart = value.index(
                 dateRange.lowerBound,
@@ -933,26 +965,35 @@ public enum SchemaToolAgentSQLIntentCoveragePolicy {
                 .firstIndex { ".!?;\n".contains($0) } ?? maxSuffixEnd
             let prefix = String(value[prefixStart..<dateRange.lowerBound]).lowercased()
             let suffix = String(value[dateRange.upperBound..<suffixEnd]).lowercased()
-            let prefixAnchorPatterns = [
-                #"\bas[\s-]+of(?:\s+the)?\b[\s,:=\-]*$"#,
-                #"\brelative\s+to\b[\s,:=\-]*$"#,
-                #"\bthrough\b[\s,:=\-]*$"#,
-                #"\buntil\b[\s,:=\-]*$"#,
-                #"\bcurrent\s+date\b(?:\s+(?:for|of|in)\b[^.!?;\n]{0,30})?(?:\s+is)?[\s,:=\-]*$"#,
-                #"\btoday(?:\s+is)?\b[\s,:=\-]*$"#,
-                #"\bstarting(?:\s+(?:on|from))?\b[\s,:=\-]*$"#,
-                #"\bstart\s+date(?:\s+is)?\b[\s,:=\-]*$"#,
-                #"\bon\s+or\s+after\b[\s,:=\-]*$"#,
-                #"\b(?:reporting\s+)?window\s+ending\s*$"#,
-                #"\banchor(?:\s+date)?(?:\s+(?:is|as))?\b[\s,:=\-]*$"#,
-                #"\buse\s+(?:the\s+)?(?:date\s+)?$"#,
-            ]
-            let suffixAnchorPatterns = [
-                #"^[\s,)\-]*as\s+(?:the\s+)?current\s+date\b"#,
-                #"^[\s,)\-]*as\s+today\b"#,
-                #"^[\s,)\-]*is\s+(?:the\s+)?current\s+date\b"#,
-                #"^[\s,)\-]*(?:is\s+)?today\b"#,
-            ]
+            let prefixAnchorPatterns: [String]
+            let suffixAnchorPatterns: [String]
+            switch tier {
+            case .evaluationTime:
+                prefixAnchorPatterns = [
+                    #"\bas[\s-]+of(?:\s+the)?\b[\s,:=\-]*$"#,
+                    #"\brelative\s+to\b[\s,:=\-]*$"#,
+                    #"\bcurrent\s+date\b(?:\s+(?:for|of|in)\b[^.!?;\n]{0,30})?(?:\s+is)?[\s,:=\-]*$"#,
+                    #"\btoday(?:\s+is)?\b[\s,:=\-]*$"#,
+                    #"\banchor(?:\s+date)?(?:\s+(?:is|as))?\b[\s,:=\-]*$"#,
+                    #"\buse\s+(?:the\s+)?(?:date\s+)?$"#,
+                ]
+                suffixAnchorPatterns = [
+                    #"^[\s,)\-]*as\s+(?:the\s+)?current\s+date\b"#,
+                    #"^[\s,)\-]*as\s+today\b"#,
+                    #"^[\s,)\-]*is\s+(?:the\s+)?current\s+date\b"#,
+                    #"^[\s,)\-]*(?:is\s+)?today\b"#,
+                ]
+            case .windowBound:
+                prefixAnchorPatterns = [
+                    #"\bthrough\b[\s,:=\-]*$"#,
+                    #"\buntil\b[\s,:=\-]*$"#,
+                    #"\bstarting(?:\s+(?:on|from))?\b[\s,:=\-]*$"#,
+                    #"\bstart\s+date(?:\s+is)?\b[\s,:=\-]*$"#,
+                    #"\bon\s+or\s+after\b[\s,:=\-]*$"#,
+                    #"\b(?:reporting\s+)?window\s+ending\s*$"#,
+                ]
+                suffixAnchorPatterns = []
+            }
             return prefixAnchorPatterns.contains {
                 prefix.range(of: $0, options: .regularExpression) != nil
             }
@@ -1089,7 +1130,27 @@ public enum SchemaToolAgentSQLIntentCoveragePolicy {
         }
 
         private static func sentences(in value: String) -> [String] {
-            value.split { ".!?;\n".contains($0) }.map(String.init)
+            var sentences: [String] = []
+            var current = ""
+            var index = value.startIndex
+            while index < value.endIndex {
+                let character = value[index]
+                let next = value.index(after: index)
+                let isPeriodInsideIdentifier = character == "."
+                    && next < value.endIndex
+                    && !value[next].isWhitespace
+                if "!?;\n".contains(character) || (character == "." && !isPeriodInsideIdentifier) {
+                    sentences.append(current)
+                    current = ""
+                } else {
+                    current.append(character)
+                }
+                index = next
+            }
+            sentences.append(current)
+            return sentences.filter {
+                !$0.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+            }
         }
 
         private static func lastSQLPathComponent(_ value: String) -> String? {
@@ -1123,12 +1184,14 @@ public enum SchemaToolAgentSQLIntentCoveragePolicy {
             "best", "healthy", "important", "win", "winner", "wins",
         ]
 
-        private static let rankingApplicableProtectedTerms: Set<String> = ["best", "important"]
+        private static let rankingApplicableProtectedTerms: Set<String> = [
+            "best", "important", "win", "winner", "wins",
+        ]
 
         private static let protectedMetricTermFamilies: [Set<String>] = [
             ["best"],
-            ["healthy"],
-            ["important"],
+            ["healthy", "health"],
+            ["important", "importance"],
             ["win", "winner", "wins"],
         ]
 
@@ -1140,22 +1203,26 @@ public enum SchemaToolAgentSQLIntentCoveragePolicy {
             guard !questionSubjects.isEmpty else { return false }
             let escaped = NSRegularExpression.escapedPattern(for: term)
             let patterns = [
-                #"\b"# + escaped + #"\b\s+([a-z][a-z0-9_-]*)"#,
+                #"\b"# + escaped + #"\b\s+([a-z][a-z0-9_-]*(?:\s+[a-z][a-z0-9_-]*){0,2})"#,
                 #"\b([a-z][a-z-]*)\s+(?:are|is)\s+(?:not\s+)?"# + escaped + #"\b"#,
             ]
             let range = NSRange(context.startIndex..<context.endIndex, in: context)
             let attachedSubjects = patterns.flatMap { pattern -> [String] in
                 guard let regex = try? NSRegularExpression(pattern: pattern) else { return [] }
                 return regex.matches(in: context, range: range)
-                    .compactMap { match -> String? in
+                    .flatMap { match -> [String] in
                         guard let captureRange = Range(match.range(at: 1), in: context) else {
-                            return nil
+                            return []
                         }
-                        let token = String(context[captureRange])
-                        guard token.count > 2, !metricSubjectStopTokens.contains(token) else {
-                            return nil
+                        var nounPhraseTokens: [String] = []
+                        for word in context[captureRange].split(whereSeparator: \.isWhitespace) {
+                            let token = String(word)
+                            guard token.count > 2, !metricSubjectStopTokens.contains(token) else {
+                                break
+                            }
+                            nounPhraseTokens.append(normalizedMetricSubjectToken(token))
                         }
-                        return normalizedMetricSubjectToken(token)
+                        return nounPhraseTokens
                     }
             }
             guard !attachedSubjects.isEmpty else { return false }
@@ -1198,6 +1265,9 @@ public enum SchemaToolAgentSQLIntentCoveragePolicy {
             ["ticket", "tickets"],
             ["subscription", "subscriptions"],
         ]
+
+        private static let knownMetricSubjectTokens: Set<String> = personEntityTokens
+            .union(metricSubjectTokenGroups.reduce(into: Set<String>()) { $0.formUnion($1) })
 
         private static let metricSubjectStopTokens: Set<String> = Set([
             "about", "after", "all", "also", "an", "and", "any", "are", "as",

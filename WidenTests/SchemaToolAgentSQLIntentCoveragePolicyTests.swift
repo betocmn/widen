@@ -2257,6 +2257,195 @@ struct SchemaToolAgentSQLIntentCoveragePolicyTests {
         }
     }
 
+    @Test func modifierLedWhQuestionStillFindsSubject() {
+        let covered = evaluate(
+            question: "Which high value customers are best?",
+            databaseContext: "Best customers are ranked by total revenue.",
+            evidence: evidence(columns: [
+                "public.orders.customer_id",
+                "public.orders.total_cents",
+            ]),
+            sql: """
+                SELECT customer_id, SUM(total_cents) AS total_revenue_cents
+                FROM public.orders
+                GROUP BY customer_id
+                ORDER BY total_revenue_cents DESC
+                LIMIT 100
+                """
+        )
+
+        #expect(covered.decision == .covered)
+    }
+
+    @Test func modifiedSubjectDefinitionAllowsCoverageChecks() {
+        let covered = evaluate(
+            question: "Which accounts are healthy?",
+            databaseContext: "Healthy enterprise accounts have status = 'active'.",
+            evidence: evidence(columns: [
+                "public.accounts.id",
+                "public.accounts.status",
+            ]),
+            sql: """
+                SELECT id
+                FROM public.accounts
+                WHERE status = 'active'
+                LIMIT 100
+                """
+        )
+
+        #expect(covered.decision == .covered)
+    }
+
+    @Test func forEveryUserGroupedCountRequiresEmailProjection() {
+        let missing = evaluate(
+            question: "How many orders for every user?",
+            evidence: evidence(columns: [
+                "public.users.id",
+                "public.users.email",
+                "public.orders.user_id",
+            ]),
+            sql: """
+                SELECT user_id, COUNT(*) AS order_count
+                FROM public.orders
+                GROUP BY user_id
+                """
+        )
+
+        #expect(missing.decision == .needsCorrection)
+        #expect(missing.missingSignals.contains("email projection for person/customer entity"))
+    }
+
+    @Test func qualifiedRankColumnDefinitionAllowsCoverageChecks() {
+        let covered = evaluate(
+            question: "Who are our best customers?",
+            databaseContext: "Rank customers by public.orders.total_cents.",
+            evidence: evidence(columns: [
+                "public.orders.customer_id",
+                "public.orders.total_cents",
+            ]),
+            sql: """
+                SELECT customer_id, SUM(total_cents) AS total_spend_cents
+                FROM public.orders
+                GROUP BY customer_id
+                ORDER BY total_spend_cents DESC
+                LIMIT 100
+                """
+        )
+
+        #expect(covered.decision == .covered)
+    }
+
+    @Test func windowStartDoesNotOverrideCurrentDateAnchor() {
+        let context = "Records starting 2026-06-24. Current date is 2026-06-29."
+        let covered = evaluate(
+            question: "Subscriptions expiring in the next 30 days",
+            databaseContext: context,
+            evidence: evidence(columns: [
+                "public.subscription.id",
+                "public.subscription.expires_at",
+            ]),
+            sql: """
+                SELECT id
+                FROM public.subscription
+                WHERE expires_at >= DATE '2026-06-29'
+                  AND expires_at < DATE '2026-06-29' + INTERVAL '30 days'
+                """
+        )
+
+        #expect(covered.decision == .covered)
+
+        let missing = evaluate(
+            question: "Subscriptions expiring in the next 30 days",
+            databaseContext: context,
+            evidence: evidence(columns: [
+                "public.subscription.id",
+                "public.subscription.expires_at",
+            ]),
+            sql: """
+                SELECT id
+                FROM public.subscription
+                WHERE expires_at >= CURRENT_DATE
+                  AND expires_at < CURRENT_DATE + INTERVAL '30 days'
+                """
+        )
+
+        #expect(missing.decision == .needsCorrection)
+        #expect(missing.missingSignals.contains("explicit date/time anchor instead of moving current time"))
+    }
+
+    @Test func winsRankingDefinitionAllowsCoverageChecks() {
+        let covered = evaluate(
+            question: "Which tools have the most wins?",
+            databaseContext: "Rank tools by total wins.",
+            evidence: evidence(columns: [
+                "public.tool_run.tool_id",
+                "public.tool_run.winner_id",
+            ]),
+            sql: """
+                SELECT tool_id, COUNT(*) AS win_count
+                FROM public.tool_run
+                WHERE winner_id IS NOT NULL
+                GROUP BY tool_id
+                ORDER BY win_count DESC
+                LIMIT 10
+                """
+        )
+
+        #expect(covered.decision == .covered)
+    }
+
+    @Test func scalarHowManyRequiresCountAggregate() {
+        let missing = evaluate(
+            question: "How many active users do we have?",
+            evidence: evidence(columns: [
+                "public.users.id",
+                "public.users.status",
+            ]),
+            sql: """
+                SELECT id
+                FROM public.users
+                WHERE status = 'active'
+                """
+        )
+
+        #expect(missing.decision == .needsCorrection)
+        #expect(missing.missingSignals.contains("COUNT aggregate for how-many request"))
+
+        let covered = evaluate(
+            question: "How many active users do we have?",
+            evidence: evidence(columns: [
+                "public.users.id",
+                "public.users.status",
+            ]),
+            sql: """
+                SELECT COUNT(*) AS active_user_count
+                FROM public.users
+                WHERE status = 'active'
+                """
+        )
+
+        #expect(covered.decision == .covered)
+    }
+
+    @Test func nounAliasMetricDefinitionAllowsCoverageChecks() {
+        let covered = evaluate(
+            question: "Which accounts are healthy?",
+            databaseContext: "Account health metric is active status.",
+            evidence: evidence(columns: [
+                "public.accounts.id",
+                "public.accounts.status",
+            ]),
+            sql: """
+                SELECT id
+                FROM public.accounts
+                WHERE status = 'active'
+                LIMIT 100
+                """
+        )
+
+        #expect(covered.decision == .covered)
+    }
+
     private func evaluate(
         question: String,
         databaseContext: String = "",
