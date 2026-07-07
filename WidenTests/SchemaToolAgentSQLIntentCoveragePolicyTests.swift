@@ -2067,6 +2067,46 @@ struct SchemaToolAgentSQLIntentCoveragePolicyTests {
         }
     }
 
+    @Test func foreignSubjectRankingSentenceStillRequiresClarification() {
+        let missing = evaluate(
+            question: "Who are our best customers?",
+            databaseContext: "Best products are ranked by total revenue. Customer records store profiles.",
+            evidence: evidence(columns: [
+                "public.orders.customer_id",
+                "public.orders.total_cents",
+            ]),
+            sql: """
+                SELECT customer_id, SUM(total_cents) AS total_revenue_cents
+                FROM public.orders
+                GROUP BY customer_id
+                ORDER BY total_revenue_cents DESC
+                LIMIT 100
+                """
+        )
+
+        #expect(missing.decision == .mustClarify)
+    }
+
+    @Test func rankingSentenceWithMatchingSubjectAllowsCoverageChecks() {
+        let covered = evaluate(
+            question: "Who are our best customers?",
+            databaseContext: "Products are listed separately. Rank customers by total revenue.",
+            evidence: evidence(columns: [
+                "public.orders.customer_id",
+                "public.orders.total_cents",
+            ]),
+            sql: """
+                SELECT customer_id, SUM(total_cents) AS total_revenue_cents
+                FROM public.orders
+                GROUP BY customer_id
+                ORDER BY total_revenue_cents DESC
+                LIMIT 100
+                """
+        )
+
+        #expect(covered.decision == .covered)
+    }
+
     private func evaluate(
         question: String,
         databaseContext: String = "",

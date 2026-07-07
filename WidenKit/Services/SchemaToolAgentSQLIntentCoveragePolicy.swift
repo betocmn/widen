@@ -359,47 +359,48 @@ public enum SchemaToolAgentSQLIntentCoveragePolicy {
             guard !questionProtectedTerms.isEmpty else {
                 return false
             }
-            let hasUseAsMetricDefinition = lowerContext.range(
-                of: #"\buse[sd]?\b[^.!?;\n]{0,60}\b(?:count|counts|revenue|spend|total|usage|win|wins|status|active|paid|verified|null|true|false)\b[^.!?;\n]{0,60}\bas\b[^.!?;\n]{0,40}\bmetric\b"#,
-                options: .regularExpression
-            ) != nil
-            if hasUseAsMetricDefinition, questionAndContextShareMetricSubject {
-                return true
+            let rankingApplicable = questionProtectedTerms
+                .isSubset(of: Self.rankingApplicableProtectedTerms)
+            let relevantTerms = Self.relatedProtectedMetricTerms(for: questionProtectedTerms)
+            return Self.sentences(in: lowerContext).contains { sentence in
+                let sentenceTokens = Set(Self.tokens(in: sentence))
+                let hasUseAsMetricDefinition = sentence.range(
+                    of: #"\buse[sd]?\b[^.!?;\n]{0,60}\b(?:count|counts|revenue|spend|total|usage|win|wins|status|active|paid|verified|null|true|false)\b[^.!?;\n]{0,60}\bas\b[^.!?;\n]{0,40}\bmetric\b"#,
+                    options: .regularExpression
+                ) != nil
+                if hasUseAsMetricDefinition, sharesMetricSubject(with: sentenceTokens) {
+                    return true
+                }
+                guard rankingApplicable else { return false }
+                if !sentenceTokens.intersection(relevantTerms).isEmpty {
+                    let hasScopedRankDefinition = sentence.range(
+                        of: #"\b(?:rank|ranked|ranking|ranks)\b[^.!?;\n]{0,40}\bby\b[^.!?;\n]{0,80}\b(?:count|counts|revenue|spend|total|usage|win|wins)\b"#,
+                        options: .regularExpression
+                    ) != nil
+                    return hasScopedRankDefinition && sharesMetricSubject(with: sentenceTokens)
+                }
+                let hasMetricCue = sentence.range(
+                    of: #"\b(?:metric|ranking|rank|ranked|define|defines|defined)\b"#,
+                    options: .regularExpression
+                ) != nil
+                return hasMetricCue
+                    && !sentenceTokens.intersection(Self.concreteMetricDefinitionTokens).isEmpty
+                    && sharesMetricSubject(with: sentenceTokens)
             }
-            guard questionProtectedTerms.isSubset(of: Self.rankingApplicableProtectedTerms) else {
-                return false
-            }
-            let hasMetricCue = lowerContext.range(
-                of: #"\b(?:metric|ranking|rank|ranked|define|defines|defined)\b"#,
-                options: .regularExpression
-            ) != nil
-            let mentionsProtectedTerm = !contextTokens
-                .intersection(Self.relatedProtectedMetricTerms(for: questionProtectedTerms))
-                .isEmpty
-            let hasScopedRankDefinition = lowerContext.range(
-                of: #"\b(?:rank|ranked|ranking|ranks)\b[^.!?;\n]{0,40}\bby\b[^.!?;\n]{0,80}\b(?:count|counts|revenue|spend|total|usage|win|wins)\b"#,
-                options: .regularExpression
-            ) != nil
-            if mentionsProtectedTerm {
-                return hasScopedRankDefinition && questionAndContextShareMetricSubject
-            }
-            return hasMetricCue
-                && !contextTokens.intersection(Self.concreteMetricDefinitionTokens).isEmpty
-                && questionAndContextShareMetricSubject
         }
 
-        var questionAndContextShareMetricSubject: Bool {
+        private func sharesMetricSubject(with segmentTokens: Set<String>) -> Bool {
             let subjectTokens = questionProtectedSubjectTokens ?? questionTokens
             if !subjectTokens.intersection(Self.personEntityTokens).isEmpty,
-                !contextTokens.intersection(Self.personEntityTokens).isEmpty
+                !segmentTokens.intersection(Self.personEntityTokens).isEmpty
             {
                 return true
             }
             return Self.metricSubjectTokenGroups.contains { group in
                 !subjectTokens.intersection(group).isEmpty
-                    && !contextTokens.intersection(group).isEmpty
+                    && !segmentTokens.intersection(group).isEmpty
             } || !Self.normalizedMetricSubjectTokens(subjectTokens)
-                .intersection(Self.normalizedMetricSubjectTokens(contextTokens))
+                .intersection(Self.normalizedMetricSubjectTokens(segmentTokens))
                 .isEmpty
         }
 
@@ -1066,6 +1067,10 @@ public enum SchemaToolAgentSQLIntentCoveragePolicy {
                 .lowercased()
                 .split { !$0.isLetter && !$0.isNumber }
                 .map(String.init)
+        }
+
+        private static func sentences(in value: String) -> [String] {
+            value.split { ".!?;\n".contains($0) }.map(String.init)
         }
 
         private static func lastSQLPathComponent(_ value: String) -> String? {
