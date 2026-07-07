@@ -389,17 +389,49 @@ public enum SchemaToolAgentSQLIntentCoveragePolicy {
         }
 
         var questionAndContextShareMetricSubject: Bool {
-            if !questionTokens.intersection(Self.personEntityTokens).isEmpty,
+            let subjectTokens = questionProtectedSubjectTokens ?? questionTokens
+            if !subjectTokens.intersection(Self.personEntityTokens).isEmpty,
                 !contextTokens.intersection(Self.personEntityTokens).isEmpty
             {
                 return true
             }
             return Self.metricSubjectTokenGroups.contains { group in
-                !questionTokens.intersection(group).isEmpty
+                !subjectTokens.intersection(group).isEmpty
                     && !contextTokens.intersection(group).isEmpty
-            } || !Self.normalizedMetricSubjectTokens(questionTokens)
+            } || !Self.normalizedMetricSubjectTokens(subjectTokens)
                 .intersection(Self.normalizedMetricSubjectTokens(contextTokens))
                 .isEmpty
+        }
+
+        private var questionProtectedSubjectTokens: Set<String>? {
+            let protectedTerms = questionTokens.intersection(Self.protectedMetricTerms)
+            guard !protectedTerms.isEmpty else { return nil }
+            var subjects = Set<String>()
+            let range = NSRange(lowerQuestion.startIndex..<lowerQuestion.endIndex, in: lowerQuestion)
+            for term in protectedTerms {
+                let escaped = NSRegularExpression.escapedPattern(for: term)
+                let patterns = [
+                    #"\b"# + escaped + #"\b\s+([a-z][a-z-]*(?:\s+[a-z][a-z-]*)?)"#,
+                    #"\b([a-z][a-z-]*)\s+(?:are|is)\s+(?:not\s+)?"# + escaped + #"\b"#,
+                ]
+                for pattern in patterns {
+                    guard let regex = try? NSRegularExpression(pattern: pattern) else { continue }
+                    for match in regex.matches(in: lowerQuestion, range: range) {
+                        guard let captureRange = Range(match.range(at: 1), in: lowerQuestion) else {
+                            continue
+                        }
+                        for word in lowerQuestion[captureRange].split(whereSeparator: \.isWhitespace) {
+                            let token = String(word)
+                            guard token.count > 2, !Self.metricSubjectStopTokens.contains(token)
+                            else {
+                                continue
+                            }
+                            subjects.insert(token)
+                        }
+                    }
+                }
+            }
+            return subjects.isEmpty ? nil : subjects
         }
 
         var questionRequestsPersonEntityList: Bool {
@@ -427,8 +459,8 @@ public enum SchemaToolAgentSQLIntentCoveragePolicy {
         }
 
         var questionRequestsPersonEntityResult: Bool {
-            if questionRequestsScalarPersonAggregate { return false }
             if questionExplicitlyRequestsPersonEmail { return true }
+            if questionRequestsScalarPersonAggregate { return false }
             if lowerQuestion.range(
                 of: #"\bby\s+(?:country|org|organization|organizations)\b"#,
                 options: .regularExpression
@@ -738,7 +770,9 @@ public enum SchemaToolAgentSQLIntentCoveragePolicy {
                 let positiveValues: Set<String> = status == "unresolved"
                     ? ["unresolved", "open"]
                     : [status]
-                let negativeValues: Set<String> = status == "unresolved" ? ["resolved"] : []
+                let negativeValues: Set<String> = status == "unresolved"
+                    ? ["resolved"]
+                    : ["in\(status)", "un\(status)", "non\(status)", "non-\(status)", "not_\(status)"]
                 let predicateValueMatches = sqlStatusPredicateComparisons.contains { comparison in
                     comparison.matchesStatus(
                         positiveValues: positiveValues,
@@ -766,7 +800,7 @@ public enum SchemaToolAgentSQLIntentCoveragePolicy {
 
         private var sqlStatusPredicateComparisons: [SQLStatusPredicateComparison] {
             guard let regex = try? NSRegularExpression(
-                pattern: #"(?:\b[a-z_][a-z0-9_]*\s*\.\s*)?"?\b(?:status|state)\b"?\s*(=|<>|!=|\bnot\s+in\b|\bin\b|\blike\b|\bis\b)\s*('[^']*'|"[^"]*"|\([^)]*\)|(?:any|all)\s*\([^)]*\)|[a-z0-9_]+)"#
+                pattern: #"(?:\b(?:lower|upper|trim|btrim)\s*\(\s*)?(?:\b[a-z_][a-z0-9_]*\s*\.\s*)?"?\b(?:status|state)\b"?(?:\s*::\s*[a-z_][a-z0-9_]*)?(?:\s*\))?\s*(=|<>|!=|\bnot\s+in\b|\bin\b|\blike\b|\bis\b)\s*('[^']*'|"[^"]*"|\([^)]*\)|(?:any|all)\s*\([^)]*\)|[a-z0-9_]+)"#
             ) else { return [] }
             let range = NSRange(lowerSQL.startIndex..<lowerSQL.endIndex, in: lowerSQL)
             return regex.matches(in: lowerSQL, range: range).compactMap { match in
@@ -1081,23 +1115,27 @@ public enum SchemaToolAgentSQLIntentCoveragePolicy {
         ) -> Bool {
             guard !questionSubjects.isEmpty else { return false }
             let escaped = NSRegularExpression.escapedPattern(for: term)
-            guard let regex = try? NSRegularExpression(
-                pattern: #"\b"# + escaped + #"\b\s+([a-z][a-z0-9_-]*)"#
-            ) else { return false }
+            let patterns = [
+                #"\b"# + escaped + #"\b\s+([a-z][a-z0-9_-]*)"#,
+                #"\b([a-z][a-z-]*)\s+(?:are|is)\s+(?:not\s+)?"# + escaped + #"\b"#,
+            ]
             let range = NSRange(context.startIndex..<context.endIndex, in: context)
-            let followingSubjects = regex.matches(in: context, range: range)
-                .compactMap { match -> String? in
-                    guard let captureRange = Range(match.range(at: 1), in: context) else {
-                        return nil
+            let attachedSubjects = patterns.flatMap { pattern -> [String] in
+                guard let regex = try? NSRegularExpression(pattern: pattern) else { return [] }
+                return regex.matches(in: context, range: range)
+                    .compactMap { match -> String? in
+                        guard let captureRange = Range(match.range(at: 1), in: context) else {
+                            return nil
+                        }
+                        let token = String(context[captureRange])
+                        guard token.count > 2, !metricSubjectStopTokens.contains(token) else {
+                            return nil
+                        }
+                        return normalizedMetricSubjectToken(token)
                     }
-                    let token = String(context[captureRange])
-                    guard token.count > 2, !metricSubjectStopTokens.contains(token) else {
-                        return nil
-                    }
-                    return normalizedMetricSubjectToken(token)
-                }
-            guard !followingSubjects.isEmpty else { return false }
-            return questionSubjects.isDisjoint(with: followingSubjects)
+            }
+            guard !attachedSubjects.isEmpty else { return false }
+            return questionSubjects.isDisjoint(with: attachedSubjects)
         }
 
         private static func relatedProtectedMetricTerms(for terms: Set<String>) -> Set<String> {

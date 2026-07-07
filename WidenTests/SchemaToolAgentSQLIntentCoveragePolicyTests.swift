@@ -1971,6 +1971,102 @@ struct SchemaToolAgentSQLIntentCoveragePolicyTests {
         }
     }
 
+    @Test func wrappedStatusPredicateCoversRequestedStatus() {
+        for predicate in ["LOWER(status) = 'paid'", "status::text = 'paid'"] {
+            let covered = evaluate(
+                question: "Show paid revenue",
+                evidence: evidence(columns: [
+                    "public.orders.status",
+                    "public.orders.total_cents",
+                ]),
+                sql: """
+                    SELECT SUM(total_cents) AS paid_revenue_cents
+                    FROM public.orders
+                    WHERE \(predicate)
+                    """
+            )
+
+            #expect(covered.decision == .covered)
+        }
+    }
+
+    @Test func scalarCountWithExplicitEmailStillRequiresEmailProjection() {
+        let missing = evaluate(
+            question: "How many active users, and what are their emails?",
+            evidence: evidence(columns: [
+                "public.users.id",
+                "public.users.email",
+                "public.users.status",
+            ]),
+            sql: """
+                SELECT COUNT(*) AS active_user_count
+                FROM public.users
+                WHERE status = 'active'
+                """
+        )
+
+        #expect(missing.decision == .needsCorrection)
+        #expect(missing.missingSignals.contains("email projection for person/customer entity"))
+    }
+
+    @Test func precedingForeignSubjectDefinitionStillRequiresClarification() {
+        let missing = evaluate(
+            question: "Which accounts are healthy?",
+            databaseContext: "Products are healthy when status = 'active'.",
+            evidence: evidence(columns: [
+                "public.accounts.id",
+                "public.accounts.status",
+            ]),
+            sql: """
+                SELECT id
+                FROM public.accounts
+                WHERE status = 'active'
+                LIMIT 100
+                """
+        )
+
+        #expect(missing.decision == .mustClarify)
+    }
+
+    @Test func incidentalLocationOverlapStillRequiresClarification() {
+        let missing = evaluate(
+            question: "Who are our best customers in Europe?",
+            databaseContext: "Rank products by revenue in Europe.",
+            evidence: evidence(columns: [
+                "public.orders.customer_id",
+                "public.orders.total_cents",
+            ]),
+            sql: """
+                SELECT customer_id, SUM(total_cents) AS revenue_cents
+                FROM public.orders
+                GROUP BY customer_id
+                ORDER BY revenue_cents DESC
+                LIMIT 100
+                """
+        )
+
+        #expect(missing.decision == .mustClarify)
+    }
+
+    @Test func negativeStatusPredicateCoversRequestedStatus() {
+        for predicate in ["status != 'unpaid'", "status NOT IN ('unpaid', 'refunded')"] {
+            let covered = evaluate(
+                question: "Show paid revenue",
+                evidence: evidence(columns: [
+                    "public.orders.status",
+                    "public.orders.total_cents",
+                ]),
+                sql: """
+                    SELECT SUM(total_cents) AS paid_revenue_cents
+                    FROM public.orders
+                    WHERE \(predicate)
+                    """
+            )
+
+            #expect(covered.decision == .covered)
+        }
+    }
+
     private func evaluate(
         question: String,
         databaseContext: String = "",
