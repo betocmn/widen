@@ -2167,6 +2167,96 @@ struct SchemaToolAgentSQLIntentCoveragePolicyTests {
         #expect(missing.decision == .mustClarify)
     }
 
+    @Test func forEachUserGroupedCountRequiresEmailProjection() {
+        let missing = evaluate(
+            question: "How many orders for each user?",
+            evidence: evidence(columns: [
+                "public.users.id",
+                "public.users.email",
+                "public.orders.user_id",
+            ]),
+            sql: """
+                SELECT user_id, COUNT(*) AS order_count
+                FROM public.orders
+                GROUP BY user_id
+                """
+        )
+
+        #expect(missing.decision == .needsCorrection)
+        #expect(missing.missingSignals.contains("email projection for person/customer entity"))
+    }
+
+    @Test func relativeAnchorFormsRejectMovingCurrentDate() {
+        for context in [
+            "Compute windows relative to 2026-06-24.",
+            "Report data through 2026-06-24.",
+            "Data is complete until 2026-06-24.",
+            "As-of 2026-06-24, subscription data is complete.",
+        ] {
+            let missing = evaluate(
+                question: "Subscriptions expiring in the next 30 days",
+                databaseContext: context,
+                evidence: evidence(columns: [
+                    "public.subscription.id",
+                    "public.subscription.expires_at",
+                ]),
+                sql: """
+                    SELECT id
+                    FROM public.subscription
+                    WHERE expires_at >= CURRENT_DATE
+                      AND expires_at < CURRENT_DATE + INTERVAL '30 days'
+                    """
+            )
+
+            #expect(missing.decision == .needsCorrection)
+            #expect(missing.missingSignals.contains("explicit date/time anchor instead of moving current time"))
+        }
+    }
+
+    @Test func hyphenatedTopNStillRequiresLimit() {
+        let missing = evaluate(
+            question: "Show all top-10 customers by revenue",
+            evidence: evidence(columns: [
+                "public.orders.customer_id",
+                "public.orders.total_cents",
+            ]),
+            sql: """
+                SELECT customer_id, SUM(total_cents) AS revenue_cents
+                FROM public.orders
+                GROUP BY customer_id
+                ORDER BY revenue_cents DESC
+                """
+        )
+
+        #expect(missing.decision == .needsCorrection)
+        #expect(missing.missingSignals.contains("LIMIT for top/frequent request"))
+    }
+
+    @Test func concreteMetricDefinitionsAllowCoverageChecks() {
+        for context in [
+            "Best customers means lifetime revenue.",
+            "Best customers are highest total spend.",
+        ] {
+            let covered = evaluate(
+                question: "Who are our best customers?",
+                databaseContext: context,
+                evidence: evidence(columns: [
+                    "public.orders.customer_id",
+                    "public.orders.total_cents",
+                ]),
+                sql: """
+                    SELECT customer_id, SUM(total_cents) AS metric_cents
+                    FROM public.orders
+                    GROUP BY customer_id
+                    ORDER BY metric_cents DESC
+                    LIMIT 100
+                    """
+            )
+
+            #expect(covered.decision == .covered)
+        }
+    }
+
     private func evaluate(
         question: String,
         databaseContext: String = "",

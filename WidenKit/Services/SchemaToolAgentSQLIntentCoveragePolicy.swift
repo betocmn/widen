@@ -309,7 +309,7 @@ public enum SchemaToolAgentSQLIntentCoveragePolicy {
                 let termBeforeDefinition = lowerContext.range(
                     of: #"\b"#
                         + escaped
-                        + #"\b[^.!?;\n]{0,40}\b(?:means|is|are|has|have)\b[^.!?;\n]{0,80}\b(?:when|if|where|with|using|status|active|paid|verified|null|true|false|=)\b"#,
+                        + #"\b[^.!?;\n]{0,40}\b(?:means|is|are|has|have)\b[^.!?;\n]{0,80}\b(?:when|if|where|with|using|status|active|paid|verified|null|true|false|count|counts|revenue|spend|total|usage|=)\b"#,
                     options: .regularExpression
                 ) != nil
                 let definitionBeforeTerm = lowerContext.range(
@@ -481,7 +481,7 @@ public enum SchemaToolAgentSQLIntentCoveragePolicy {
                 return false
             }
             if lowerQuestion.range(
-                of: #"\b(?:per|by)\s+(?:account|accounts|customer|customers|person|people|user|users)\b"#,
+                of: #"\b(?:per|by|each)\s+(?:account|accounts|customer|customers|person|people|user|users)\b"#,
                 options: .regularExpression
             ) != nil {
                 return true
@@ -512,7 +512,7 @@ public enum SchemaToolAgentSQLIntentCoveragePolicy {
 
         var questionRequestsScalarPersonAggregate: Bool {
             let groupsByPersonEntity = lowerQuestion.range(
-                of: #"\b(?:per|by)\s+(?:account|accounts|customer|customers|person|people|user|users)\b"#,
+                of: #"\b(?:per|by|each)\s+(?:account|accounts|customer|customers|person|people|user|users)\b"#,
                 options: .regularExpression
             ) != nil
             let countIsEntityAttribute = lowerQuestion.range(
@@ -717,7 +717,7 @@ public enum SchemaToolAgentSQLIntentCoveragePolicy {
 
         var questionRequestsExplicitTopN: Bool {
             lowerQuestion.range(
-                of: #"\btop\s+(?:\d+|one|two|three|four|five|six|seven|eight|nine|ten|eleven|twelve|thirteen|fourteen|fifteen|sixteen|seventeen|eighteen|nineteen|(?:twenty|thirty|forty|fifty|sixty|seventy|eighty|ninety)(?:[-\s]+(?:one|two|three|four|five|six|seven|eight|nine))?)\b"#,
+                of: #"\btop[-\s]+(?:\d+|one|two|three|four|five|six|seven|eight|nine|ten|eleven|twelve|thirteen|fourteen|fifteen|sixteen|seventeen|eighteen|nineteen|(?:twenty|thirty|forty|fifty|sixty|seventy|eighty|ninety)(?:[-\s]+(?:one|two|three|four|five|six|seven|eight|nine))?)\b"#,
                 options: .regularExpression
             ) != nil
         }
@@ -934,7 +934,10 @@ public enum SchemaToolAgentSQLIntentCoveragePolicy {
             let prefix = String(value[prefixStart..<dateRange.lowerBound]).lowercased()
             let suffix = String(value[dateRange.upperBound..<suffixEnd]).lowercased()
             let prefixAnchorPatterns = [
-                #"\bas\s+of(?:\s+the)?\b[\s,:=\-]*$"#,
+                #"\bas[\s-]+of(?:\s+the)?\b[\s,:=\-]*$"#,
+                #"\brelative\s+to\b[\s,:=\-]*$"#,
+                #"\bthrough\b[\s,:=\-]*$"#,
+                #"\buntil\b[\s,:=\-]*$"#,
                 #"\bcurrent\s+date\b(?:\s+(?:for|of|in)\b[^.!?;\n]{0,30})?(?:\s+is)?[\s,:=\-]*$"#,
                 #"\btoday(?:\s+is)?\b[\s,:=\-]*$"#,
                 #"\bstarting(?:\s+(?:on|from))?\b[\s,:=\-]*$"#,
