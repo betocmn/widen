@@ -2857,6 +2857,63 @@ struct SchemaToolAgentSQLIntentCoveragePolicyTests {
         #expect(covered.decision == .covered)
     }
 
+    @Test func sumCaseCountSatisfiesHowMany() {
+        let covered = evaluate(
+            question: "How many active users do we have?",
+            evidence: evidence(columns: [
+                "public.users.id",
+                "public.users.status",
+            ]),
+            sql: """
+                SELECT SUM(CASE WHEN status = 'active' THEN 1 ELSE 0 END) AS active_user_count
+                FROM public.users
+                """
+        )
+
+        #expect(covered.decision == .covered)
+    }
+
+    @Test func subjectlessRankHintAllowsCoverageChecks() {
+        let covered = evaluate(
+            question: "Who are our best customers?",
+            databaseContext: "Rank by total revenue.",
+            evidence: evidence(columns: [
+                "public.orders.customer_id",
+                "public.orders.total_cents",
+            ]),
+            sql: """
+                SELECT customer_id, SUM(total_cents) AS total_revenue_cents
+                FROM public.orders
+                GROUP BY customer_id
+                ORDER BY total_revenue_cents DESC
+                LIMIT 100
+                """
+        )
+
+        #expect(covered.decision == .covered)
+    }
+
+    @Test func pluralRecordsDefinitionAllowsCoverageChecks() {
+        let covered = evaluate(
+            question: "Which tools have the most wins?",
+            databaseContext: "winner_id records wins.",
+            evidence: evidence(columns: [
+                "public.tool_run.tool_id",
+                "public.tool_run.winner_id",
+            ]),
+            sql: """
+                SELECT tool_id, COUNT(*) AS win_count
+                FROM public.tool_run
+                WHERE winner_id IS NOT NULL
+                GROUP BY tool_id
+                ORDER BY win_count DESC
+                LIMIT 10
+                """
+        )
+
+        #expect(covered.decision == .covered)
+    }
+
     private func evaluate(
         question: String,
         databaseContext: String = "",

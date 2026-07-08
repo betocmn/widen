@@ -344,7 +344,7 @@ public enum SchemaToolAgentSQLIntentCoveragePolicy {
                     options: .regularExpression
                 ) != nil
                 let recordsTermDefinition = lowerContext.range(
-                    of: #"\b(?:records?|counts?|represents?|stores?|tracks?|marks?|indicates?|denotes?)\b[^.!?;\n]{0,60}\b(?:one|a|an|1)\s+"#
+                    of: #"\b(?:records?|counts?|represents?|stores?|tracks?|marks?|indicates?|denotes?)\b[^.!?;\n]{0,60}\b(?:(?:one|a|an|1)\s+)?"#
                         + escaped
                         + #"\b"#,
                     options: .regularExpression
@@ -377,11 +377,13 @@ public enum SchemaToolAgentSQLIntentCoveragePolicy {
                 let sentenceSubjectTokens = candidateSubjects.isEmpty
                     ? sentenceTokens
                     : candidateSubjects
+                let sentenceSharesSubject = Self.normalizedMetricSubjectTokens(sentenceTokens).isEmpty
+                    || sharesMetricSubject(with: sentenceSubjectTokens)
                 let hasUseAsMetricDefinition = sentence.range(
                     of: #"\buse[sd]?\b[^.!?;\n]{1,80}\bas\b[^.!?;\n]{0,40}\bmetric\b"#,
                     options: .regularExpression
                 ) != nil
-                if hasUseAsMetricDefinition, sharesMetricSubject(with: sentenceSubjectTokens) {
+                if hasUseAsMetricDefinition, sentenceSharesSubject {
                     return true
                 }
                 guard rankingApplicable else { return false }
@@ -390,14 +392,14 @@ public enum SchemaToolAgentSQLIntentCoveragePolicy {
                         of: #"\b(?:rank|ranked|ranking|ranks)\b[^.!?;\n]{0,40}\bby\b[^.!?;\n]{0,80}\b(?:count|counts|revenue|spend|total|usage|win|wins)\b"#,
                         options: .regularExpression
                     ) != nil
-                    if hasScopedRankDefinition, sharesMetricSubject(with: sentenceSubjectTokens) {
+                    if hasScopedRankDefinition, sentenceSharesSubject {
                         return true
                     }
                     let hasDirectUseDirective = sentence.range(
                         of: #"(?:^\s*|,\s*)use[sd]?\b\s+(?:the\s+)?[a-z]"#,
                         options: .regularExpression
                     ) != nil
-                    if hasDirectUseDirective, sharesMetricSubject(with: sentenceSubjectTokens) {
+                    if hasDirectUseDirective, sentenceSharesSubject {
                         return true
                     }
                 }
@@ -412,7 +414,7 @@ public enum SchemaToolAgentSQLIntentCoveragePolicy {
                 return hasMetricCue
                     && (hasMetricAssignment
                         || !sentenceTokens.intersection(Self.concreteMetricDefinitionTokens).isEmpty)
-                    && sharesMetricSubject(with: sentenceSubjectTokens)
+                    && sentenceSharesSubject
             }
         }
 
@@ -804,6 +806,10 @@ public enum SchemaToolAgentSQLIntentCoveragePolicy {
                 of: #"\bcount\s*\([^)]*\)(?!\s*(?:filter\s*\([^)]*\)\s*)?over\b)"#,
                 options: .regularExpression
             ) != nil
+                || lowerSQL.range(
+                    of: #"\bsum\s*\(\s*case\s+when\b"#,
+                    options: .regularExpression
+                ) != nil
         }
 
         var sqlIncludesAggregateCount: Bool {
