@@ -2668,6 +2668,104 @@ struct SchemaToolAgentSQLIntentCoveragePolicyTests {
         #expect(covered.decision == .covered)
     }
 
+    @Test func metricAssignmentDefinitionAllowsCoverageChecks() {
+        let covered = evaluate(
+            question: "Who are our best customers?",
+            databaseContext: "The customer ranking metric is average order value.",
+            evidence: evidence(columns: [
+                "public.orders.customer_id",
+                "public.orders.total_cents",
+            ]),
+            sql: """
+                SELECT customer_id, AVG(total_cents) AS average_order_value_cents
+                FROM public.orders
+                GROUP BY customer_id
+                ORDER BY average_order_value_cents DESC
+                LIMIT 100
+                """
+        )
+
+        #expect(covered.decision == .covered)
+    }
+
+    @Test func cteAliasedCountSatisfiesHowMany() {
+        let covered = evaluate(
+            question: "How many active users do we have?",
+            evidence: evidence(columns: [
+                "public.users.id",
+                "public.users.status",
+            ]),
+            sql: """
+                WITH counts AS (
+                    SELECT COUNT(*) AS n
+                    FROM public.users
+                    WHERE status = 'active'
+                )
+                SELECT n
+                FROM counts
+                """
+        )
+
+        #expect(covered.decision == .covered)
+    }
+
+    @Test func showMeAllRankingDoesNotRequireLimit() {
+        let covered = evaluate(
+            question: "Show me all customers by total spend, most to least",
+            evidence: evidence(columns: [
+                "public.orders.customer_id",
+                "public.orders.total_cents",
+            ]),
+            sql: """
+                SELECT customer_id, SUM(total_cents) AS total_spend_cents
+                FROM public.orders
+                GROUP BY customer_id
+                ORDER BY total_spend_cents DESC
+                """
+        )
+
+        #expect(covered.decision == .covered)
+    }
+
+    @Test func countAndNamesRequestKeepsEntityResult() {
+        let missing = evaluate(
+            question: "How many active users, and what are their names?",
+            evidence: evidence(columns: [
+                "public.users.id",
+                "public.users.name",
+                "public.users.email",
+                "public.users.status",
+            ]),
+            sql: """
+                SELECT COUNT(*) AS active_user_count
+                FROM public.users
+                WHERE status = 'active'
+                """
+        )
+
+        #expect(missing.decision == .needsCorrection)
+    }
+
+    @Test func evaluationDateAnchorRejectsMovingCurrentDate() {
+        let missing = evaluate(
+            question: "Subscriptions expiring in the next 30 days",
+            databaseContext: "Evaluation date: 2026-06-29.",
+            evidence: evidence(columns: [
+                "public.subscription.id",
+                "public.subscription.expires_at",
+            ]),
+            sql: """
+                SELECT id
+                FROM public.subscription
+                WHERE expires_at >= CURRENT_DATE
+                  AND expires_at < CURRENT_DATE + INTERVAL '30 days'
+                """
+        )
+
+        #expect(missing.decision == .needsCorrection)
+        #expect(missing.missingSignals.contains("explicit date/time anchor instead of moving current time"))
+    }
+
     private func evaluate(
         question: String,
         databaseContext: String = "",

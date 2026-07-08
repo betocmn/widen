@@ -280,7 +280,7 @@ public enum SchemaToolAgentSQLIntentCoveragePolicy {
         }
 
         var questionAsksForName: Bool {
-            questionTokens.contains("name") || questionTokens.contains("named")
+            !questionTokens.intersection(["name", "names", "named"]).isEmpty
         }
 
         var hasProtectedMetricAmbiguity: Bool {
@@ -398,8 +398,13 @@ public enum SchemaToolAgentSQLIntentCoveragePolicy {
                     of: #"\b(?:metric|ranking|rank|ranked|define|defines|defined)\b"#,
                     options: .regularExpression
                 ) != nil
+                let hasMetricAssignment = sentence.range(
+                    of: #"\bmetric\b\s*(?:is|=|:)\s*[a-z0-9]"#,
+                    options: .regularExpression
+                ) != nil
                 return hasMetricCue
-                    && !sentenceTokens.intersection(Self.concreteMetricDefinitionTokens).isEmpty
+                    && (hasMetricAssignment
+                        || !sentenceTokens.intersection(Self.concreteMetricDefinitionTokens).isEmpty)
                     && sharesMetricSubject(with: sentenceSubjectTokens)
             }
         }
@@ -498,6 +503,7 @@ public enum SchemaToolAgentSQLIntentCoveragePolicy {
 
         var questionRequestsPersonEntityResult: Bool {
             if questionExplicitlyRequestsPersonEmail { return true }
+            if questionExplicitlyRequestsPersonName { return true }
             if questionRequestsScalarPersonAggregate { return false }
             if lowerQuestion.range(
                 of: #"\bby\s+(?:country|org|organization|organizations)\b"#,
@@ -533,6 +539,11 @@ public enum SchemaToolAgentSQLIntentCoveragePolicy {
                     of: #"\b(?:e-?mail|e-?mails)\b"#,
                     options: .regularExpression
                 ) != nil
+        }
+
+        var questionExplicitlyRequestsPersonName: Bool {
+            !questionTokens.intersection(Self.personEntityTokens).isEmpty
+                && questionAsksForName
         }
 
         var questionRequestsScalarPersonAggregate: Bool {
@@ -764,7 +775,7 @@ public enum SchemaToolAgentSQLIntentCoveragePolicy {
                 options: .regularExpression
             ) != nil
                 || lowerQuestion.range(
-                    of: #"(^|\b(?:find|list|rank|return|show|get|display|give\s+me)\s+)(?:all|every)\s+(?:of\s+(?:the\s+)?|the\s+)?(?!time\b|day\b|week\b|month\b|quarter\b|year\b|date\b|period\b|range\b)[a-z][a-z0-9]*(?:\s+[a-z][a-z0-9]*){0,2}\b"#,
+                    of: #"(^|\b(?:find|list|rank|return|show|get|display|give)(?:\s+(?:me|us))?\s+)(?:all|every)\s+(?:of\s+(?:the\s+)?|the\s+)?(?!time\b|day\b|week\b|month\b|quarter\b|year\b|date\b|period\b|range\b)[a-z][a-z0-9]*(?:\s+[a-z][a-z0-9]*){0,2}\b"#,
                     options: .regularExpression
                 ) != nil
         }
@@ -778,17 +789,10 @@ public enum SchemaToolAgentSQLIntentCoveragePolicy {
         }
 
         var sqlIncludesCountAggregate: Bool {
-            let expressions = selectExpressions
-            guard !expressions.isEmpty else {
-                return lowerSQL.range(of: #"\bcount\s*\("#, options: .regularExpression) != nil
-            }
-            return expressions.contains { expression in
-                expression.range(
-                    of: #"^\s*(?:\(\s*select\s+)?count\s*\("#,
-                    options: .regularExpression
-                ) != nil
-                    && expression.range(of: #"\bover\s*\("#, options: .regularExpression) == nil
-            }
+            lowerSQL.range(
+                of: #"\bcount\s*\([^)]*\)(?!\s*over\b)"#,
+                options: .regularExpression
+            ) != nil
         }
 
         var sqlIncludesAggregateCount: Bool {
@@ -1011,6 +1015,7 @@ public enum SchemaToolAgentSQLIntentCoveragePolicy {
                     #"\bas[\s-]+of(?:\s+the)?\b[\s,:=\-]*$"#,
                     #"\brelative\s+to\b[\s,:=\-]*$"#,
                     #"\bcurrent\s+date\b(?:\s+(?:for|of|in)\b[^.!?;\n]{0,30})?(?:\s+is)?[\s,:=\-]*$"#,
+                    #"\b(?:evaluation|reference)\s+date\b(?:\s+is)?[\s,:=\-]*$"#,
                     #"\btoday(?:\s+is)?\b[\s,:=\-]*$"#,
                     #"\banchor(?:\s+date)?(?:\s+(?:is|as))?\b[\s,:=\-]*$"#,
                     #"\buse\s+(?:the\s+)?(?:date\s+)?$"#,
