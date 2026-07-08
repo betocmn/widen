@@ -2766,6 +2766,97 @@ struct SchemaToolAgentSQLIntentCoveragePolicyTests {
         #expect(missing.missingSignals.contains("explicit date/time anchor instead of moving current time"))
     }
 
+    @Test func filteredWindowCountDoesNotSatisfyScalarHowMany() {
+        let missing = evaluate(
+            question: "How many active users do we have?",
+            evidence: evidence(columns: [
+                "public.users.id",
+                "public.users.status",
+            ]),
+            sql: """
+                SELECT id, COUNT(*) FILTER (WHERE status = 'active') OVER () AS active_user_count
+                FROM public.users
+                WHERE status = 'active'
+                """
+        )
+
+        #expect(missing.decision == .needsCorrection)
+        #expect(missing.missingSignals.contains("COUNT aggregate for how-many request"))
+    }
+
+    @Test func whatIsNumberOfScalarRequiresCountAggregate() {
+        let missing = evaluate(
+            question: "What is the number of active users?",
+            evidence: evidence(columns: [
+                "public.users.id",
+                "public.users.status",
+            ]),
+            sql: """
+                SELECT id
+                FROM public.users
+                WHERE status = 'active'
+                """
+        )
+
+        #expect(missing.decision == .needsCorrection)
+        #expect(missing.missingSignals.contains("COUNT aggregate for how-many request"))
+
+        let covered = evaluate(
+            question: "What is the number of active users?",
+            evidence: evidence(columns: [
+                "public.users.id",
+                "public.users.status",
+            ]),
+            sql: """
+                SELECT COUNT(*) AS active_user_count
+                FROM public.users
+                WHERE status = 'active'
+                """
+        )
+
+        #expect(covered.decision == .covered)
+    }
+
+    @Test func groupedHowManyStillRequiresCount() {
+        let missing = evaluate(
+            question: "How many orders per user?",
+            evidence: evidence(columns: [
+                "public.users.id",
+                "public.users.email",
+                "public.orders.user_id",
+            ]),
+            sql: """
+                SELECT u.email
+                FROM public.users AS u
+                JOIN public.orders AS o ON o.user_id = u.id
+                GROUP BY u.email
+                """
+        )
+
+        #expect(missing.decision == .needsCorrection)
+        #expect(missing.missingSignals.contains("COUNT aggregate for how-many request"))
+    }
+
+    @Test func directUseDefinitionAllowsCoverageChecks() {
+        let covered = evaluate(
+            question: "Who are our best customers?",
+            databaseContext: "For best customers, use lifetime revenue.",
+            evidence: evidence(columns: [
+                "public.orders.customer_id",
+                "public.orders.total_cents",
+            ]),
+            sql: """
+                SELECT customer_id, SUM(total_cents) AS lifetime_revenue_cents
+                FROM public.orders
+                GROUP BY customer_id
+                ORDER BY lifetime_revenue_cents DESC
+                LIMIT 100
+                """
+        )
+
+        #expect(covered.decision == .covered)
+    }
+
     private func evaluate(
         question: String,
         databaseContext: String = "",

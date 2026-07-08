@@ -393,6 +393,13 @@ public enum SchemaToolAgentSQLIntentCoveragePolicy {
                     if hasScopedRankDefinition, sharesMetricSubject(with: sentenceSubjectTokens) {
                         return true
                     }
+                    let hasDirectUseDirective = sentence.range(
+                        of: #"(?:^\s*|,\s*)use[sd]?\b\s+(?:the\s+)?[a-z]"#,
+                        options: .regularExpression
+                    ) != nil
+                    if hasDirectUseDirective, sharesMetricSubject(with: sentenceSubjectTokens) {
+                        return true
+                    }
                 }
                 let hasMetricCue = sentence.range(
                     of: #"\b(?:metric|ranking|rank|ranked|define|defines|defined)\b"#,
@@ -555,7 +562,12 @@ public enum SchemaToolAgentSQLIntentCoveragePolicy {
                 of: #"\b(?:with|including|and)\s+(?:their\s+)?[a-z0-9_\s-]{0,40}\b(?:count|counts)\b"#,
                 options: .regularExpression
             ) != nil
-            return (lowerQuestion.contains("how many")
+            let hasScalarCountPhrase = lowerQuestion.contains("how many")
+                || lowerQuestion.range(
+                    of: #"\b(?:number|count)\s+of\b"#,
+                    options: .regularExpression
+                ) != nil
+            return (hasScalarCountPhrase
                     && !groupsByPersonEntity
                     && !questionRequestsPersonEntityList)
                 || (questionTokens.contains("count")
@@ -781,8 +793,7 @@ public enum SchemaToolAgentSQLIntentCoveragePolicy {
         }
 
         var requiresScalarCountAggregate: Bool {
-            guard !questionRequestsPersonEntityResult else { return false }
-            return lowerQuestion.range(
+            lowerQuestion.range(
                 of: #"\b(?:how\s+many|number\s+of|count\s+of)\s+(?!days?\b|weeks?\b|months?\b|quarters?\b|years?\b|hours?\b|minutes?\b|seconds?\b)"#,
                 options: .regularExpression
             ) != nil
@@ -790,7 +801,7 @@ public enum SchemaToolAgentSQLIntentCoveragePolicy {
 
         var sqlIncludesCountAggregate: Bool {
             lowerSQL.range(
-                of: #"\bcount\s*\([^)]*\)(?!\s*over\b)"#,
+                of: #"\bcount\s*\([^)]*\)(?!\s*(?:filter\s*\([^)]*\)\s*)?over\b)"#,
                 options: .regularExpression
             ) != nil
         }
