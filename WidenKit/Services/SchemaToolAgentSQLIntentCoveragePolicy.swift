@@ -396,7 +396,7 @@ public enum SchemaToolAgentSQLIntentCoveragePolicy {
                         return true
                     }
                     let hasDirectUseDirective = sentence.range(
-                        of: #"(?:^\s*|,\s*)use[sd]?\b\s+(?:the\s+)?[a-z]"#,
+                        of: #"(?:^\s*|,\s*)use[sd]?\b\s+(?:the\s+)?(?![^.!?;\n,]{0,40}\b(?:table|tables|view|views|schema|schemas|database|databases|dataset|datasets)\b)[a-z]"#,
                         options: .regularExpression
                     ) != nil
                     if hasDirectUseDirective, sentenceSharesSubject {
@@ -802,12 +802,36 @@ public enum SchemaToolAgentSQLIntentCoveragePolicy {
         }
 
         var sqlIncludesCountAggregate: Bool {
-            lowerSQL.range(
+            let countExpressionPattern =
+                #"^\s*(?:\(\s*select\s+)?(?:count\s*\([^)]*\)(?!\s*(?:filter\s*\([^)]*\)\s*)?over\b)|sum\s*\(\s*case\s+when\b)"#
+            let wholeSQLHasCount = lowerSQL.range(
                 of: #"\bcount\s*\([^)]*\)(?!\s*(?:filter\s*\([^)]*\)\s*)?over\b)"#,
                 options: .regularExpression
             ) != nil
                 || lowerSQL.range(
                     of: #"\bsum\s*\(\s*case\s+when\b"#,
+                    options: .regularExpression
+                ) != nil
+            let expressions = selectExpressions
+            guard !expressions.isEmpty else { return wholeSQLHasCount }
+            if expressions.contains(where: { expression in
+                expression.range(of: countExpressionPattern, options: .regularExpression) != nil
+            }) {
+                return true
+            }
+            guard expressions.count == 1 else { return false }
+            let bareColumn = expressions[0].trimmingCharacters(in: .whitespacesAndNewlines)
+            guard bareColumn.range(of: #"^[a-z_][a-z0-9_]*$"#, options: .regularExpression) != nil
+            else {
+                return false
+            }
+            let escaped = NSRegularExpression.escapedPattern(for: bareColumn)
+            return lowerSQL.range(
+                of: #"\bcount\s*\([^)]*\)\s*as\s+"# + escaped + #"\b"#,
+                options: .regularExpression
+            ) != nil
+                || lowerSQL.range(
+                    of: #"\bend\s*\)\s*as\s+"# + escaped + #"\b"#,
                     options: .regularExpression
                 ) != nil
         }
@@ -1326,7 +1350,12 @@ public enum SchemaToolAgentSQLIntentCoveragePolicy {
                     }
             }
             guard !attachedSubjects.isEmpty else { return false }
-            return questionSubjects.isDisjoint(with: attachedSubjects)
+            if !questionSubjects.isDisjoint(with: attachedSubjects) { return false }
+            let sharesSubjectGroup = metricSubjectTokenGroups.contains { group in
+                !group.intersection(questionSubjects).isEmpty
+                    && !group.intersection(Set(attachedSubjects)).isEmpty
+            }
+            return !sharesSubjectGroup
         }
 
         private static func relatedProtectedMetricTerms(for terms: Set<String>) -> Set<String> {

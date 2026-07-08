@@ -2914,6 +2914,65 @@ struct SchemaToolAgentSQLIntentCoveragePolicyTests {
         #expect(covered.decision == .covered)
     }
 
+    @Test func synonymSubjectDefinitionAllowsCoverageChecks() {
+        let covered = evaluate(
+            question: "Who are our best customers?",
+            databaseContext: "Best accounts means highest revenue.",
+            evidence: evidence(columns: [
+                "public.orders.customer_id",
+                "public.orders.total_cents",
+            ]),
+            sql: """
+                SELECT customer_id, SUM(total_cents) AS revenue_cents
+                FROM public.orders
+                GROUP BY customer_id
+                ORDER BY revenue_cents DESC
+                LIMIT 100
+                """
+        )
+
+        #expect(covered.decision == .covered)
+    }
+
+    @Test func subqueryCountDoesNotSatisfyHowMany() {
+        let missing = evaluate(
+            question: "How many users have orders?",
+            evidence: evidence(columns: [
+                "public.users.id",
+                "public.users.email",
+                "public.orders.user_id",
+            ]),
+            sql: """
+                SELECT u.id, u.email
+                FROM public.users AS u
+                WHERE (SELECT COUNT(*) FROM public.orders AS o WHERE o.user_id = u.id) > 0
+                """
+        )
+
+        #expect(missing.decision == .needsCorrection)
+        #expect(missing.missingSignals.contains("COUNT aggregate for how-many request"))
+    }
+
+    @Test func tableUseDirectiveDoesNotDefineMetric() {
+        let missing = evaluate(
+            question: "Who are our best customers?",
+            databaseContext: "For best customers, use the customers table.",
+            evidence: evidence(columns: [
+                "public.orders.customer_id",
+                "public.orders.total_cents",
+            ]),
+            sql: """
+                SELECT customer_id, SUM(total_cents) AS revenue_cents
+                FROM public.orders
+                GROUP BY customer_id
+                ORDER BY revenue_cents DESC
+                LIMIT 100
+                """
+        )
+
+        #expect(missing.decision == .mustClarify)
+    }
+
     private func evaluate(
         question: String,
         databaseContext: String = "",
