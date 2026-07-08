@@ -383,7 +383,9 @@ public enum SchemaToolAgentSQLIntentCoveragePolicy {
                     of: #"\buse[sd]?\b[^.!?;\n]{1,80}\bas\b[^.!?;\n]{0,40}\bmetric\b"#,
                     options: .regularExpression
                 ) != nil
-                if hasUseAsMetricDefinition, sentenceSharesSubject {
+                if hasUseAsMetricDefinition, sentenceSharesSubject,
+                    rankingApplicable || !sentenceTokens.intersection(relevantTerms).isEmpty
+                {
                     return true
                 }
                 guard rankingApplicable else { return false }
@@ -802,8 +804,7 @@ public enum SchemaToolAgentSQLIntentCoveragePolicy {
         }
 
         var sqlIncludesCountAggregate: Bool {
-            let countExpressionPattern =
-                #"^\s*(?:\(\s*select\s+)?(?:count\s*\([^)]*\)(?!\s*(?:filter\s*\([^)]*\)\s*)?over\b)|sum\s*\(\s*case\s+when\b)"#
+            let countExpressionPattern = #"\bcount\s*\(|\bsum\s*\(\s*case\s+when\b"#
             let wholeSQLHasCount = lowerSQL.range(
                 of: #"\bcount\s*\([^)]*\)(?!\s*(?:filter\s*\([^)]*\)\s*)?over\b)"#,
                 options: .regularExpression
@@ -816,6 +817,7 @@ public enum SchemaToolAgentSQLIntentCoveragePolicy {
             guard !expressions.isEmpty else { return wholeSQLHasCount }
             if expressions.contains(where: { expression in
                 expression.range(of: countExpressionPattern, options: .regularExpression) != nil
+                    && expression.range(of: #"\bover\s*\("#, options: .regularExpression) == nil
             }) {
                 return true
             }

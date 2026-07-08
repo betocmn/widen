@@ -3038,6 +3038,42 @@ struct SchemaToolAgentSQLIntentCoveragePolicyTests {
         #expect(covered.decision == .covered)
     }
 
+    @Test func rankingMetricDefinitionDoesNotDefineHealth() {
+        let missing = evaluate(
+            question: "Which accounts are healthy?",
+            databaseContext: "Use lifetime revenue as the account ranking metric.",
+            evidence: evidence(columns: [
+                "public.accounts.id",
+                "public.accounts.status",
+            ]),
+            sql: """
+                SELECT id
+                FROM public.accounts
+                WHERE status = 'active'
+                LIMIT 100
+                """
+        )
+
+        #expect(missing.decision == .mustClarify)
+    }
+
+    @Test func castWrappedCountSatisfiesHowMany() {
+        let covered = evaluate(
+            question: "How many active users do we have?",
+            evidence: evidence(columns: [
+                "public.users.id",
+                "public.users.status",
+            ]),
+            sql: """
+                SELECT CAST(COUNT(*) AS integer) AS active_user_count
+                FROM public.users
+                WHERE status = 'active'
+                """
+        )
+
+        #expect(covered.decision == .covered)
+    }
+
     private func evaluate(
         question: String,
         databaseContext: String = "",
