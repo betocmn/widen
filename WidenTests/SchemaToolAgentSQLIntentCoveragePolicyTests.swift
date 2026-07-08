@@ -2973,6 +2973,71 @@ struct SchemaToolAgentSQLIntentCoveragePolicyTests {
         #expect(missing.decision == .mustClarify)
     }
 
+    @Test func cteDimensionalCountSatisfiesGroupedHowMany() {
+        let covered = evaluate(
+            question: "How many users by country?",
+            evidence: evidence(columns: [
+                "public.users.id",
+                "public.users.country",
+            ]),
+            sql: """
+                WITH counts AS (
+                    SELECT country, COUNT(*) AS user_count
+                    FROM public.users
+                    GROUP BY country
+                )
+                SELECT country, user_count
+                FROM counts
+                """
+        )
+
+        #expect(covered.decision == .covered)
+    }
+
+    @Test func countAndReturnRequestKeepsEntityResult() {
+        for question in [
+            "How many active users do we have? Return the users.",
+            "How many active users do we have? Display the users.",
+        ] {
+            let missing = evaluate(
+                question: question,
+                evidence: evidence(columns: [
+                    "public.users.id",
+                    "public.users.email",
+                    "public.users.status",
+                ]),
+                sql: """
+                    SELECT COUNT(*) AS active_user_count
+                    FROM public.users
+                    WHERE status = 'active'
+                    """
+            )
+
+            #expect(missing.decision == .needsCorrection)
+            #expect(missing.missingSignals.contains("email projection for person/customer entity"))
+        }
+    }
+
+    @Test func genericUseAsRankingMetricAllowsCoverageChecks() {
+        let covered = evaluate(
+            question: "Who are our best customers?",
+            databaseContext: "Use lifetime revenue as the ranking metric.",
+            evidence: evidence(columns: [
+                "public.orders.customer_id",
+                "public.orders.total_cents",
+            ]),
+            sql: """
+                SELECT customer_id, SUM(total_cents) AS lifetime_revenue_cents
+                FROM public.orders
+                GROUP BY customer_id
+                ORDER BY lifetime_revenue_cents DESC
+                LIMIT 100
+                """
+        )
+
+        #expect(covered.decision == .covered)
+    }
+
     private func evaluate(
         question: String,
         databaseContext: String = "",

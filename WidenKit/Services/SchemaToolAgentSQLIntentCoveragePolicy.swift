@@ -493,7 +493,7 @@ public enum SchemaToolAgentSQLIntentCoveragePolicy {
                     options: .regularExpression
                 ) != nil
                 || lowerQuestion.range(
-                    of: #"\bshow\s+(?:all\s+|every\s+|the\s+)?(?:account|accounts|customer|customers|person|people|user|users)\b"#,
+                    of: #"\b(?:show|get|return|display|give\s+me)\s+(?:all\s+|every\s+|the\s+|our\s+)?(?:account|accounts|customer|customers|person|people|user|users)\b"#,
                     options: .regularExpression
                 ) != nil
         }
@@ -819,21 +819,22 @@ public enum SchemaToolAgentSQLIntentCoveragePolicy {
             }) {
                 return true
             }
-            guard expressions.count == 1 else { return false }
-            let bareColumn = expressions[0].trimmingCharacters(in: .whitespacesAndNewlines)
-            guard bareColumn.range(of: #"^[a-z_][a-z0-9_]*$"#, options: .regularExpression) != nil
-            else {
-                return false
-            }
-            let escaped = NSRegularExpression.escapedPattern(for: bareColumn)
-            return lowerSQL.range(
-                of: #"\bcount\s*\([^)]*\)\s*as\s+"# + escaped + #"\b"#,
-                options: .regularExpression
-            ) != nil
-                || lowerSQL.range(
-                    of: #"\bend\s*\)\s*as\s+"# + escaped + #"\b"#,
+            return expressions.contains { expression in
+                let bareColumn = expression.trimmingCharacters(in: .whitespacesAndNewlines)
+                guard bareColumn.range(of: #"^[a-z_][a-z0-9_]*$"#, options: .regularExpression) != nil
+                else {
+                    return false
+                }
+                let escaped = NSRegularExpression.escapedPattern(for: bareColumn)
+                return lowerSQL.range(
+                    of: #"\bcount\s*\([^)]*\)\s*as\s+"# + escaped + #"\b"#,
                     options: .regularExpression
                 ) != nil
+                    || lowerSQL.range(
+                        of: #"\bend\s*\)\s*as\s+"# + escaped + #"\b"#,
+                        options: .regularExpression
+                    ) != nil
+            }
         }
 
         var sqlIncludesAggregateCount: Bool {
@@ -1400,11 +1401,13 @@ public enum SchemaToolAgentSQLIntentCoveragePolicy {
 
         private static let metricSubjectStopTokens: Set<String> = Set([
             "about", "after", "all", "also", "an", "and", "any", "are", "as",
-            "at", "be", "before", "by", "can", "current", "date", "dates",
+            "at", "average", "be", "before", "by", "can", "cumulative",
+            "current", "date", "dates",
             "day", "days", "each", "every", "find", "first", "five", "for",
-            "four", "from", "has", "have", "highest", "in", "include",
-            "including", "into", "is", "last", "least", "list", "lowest",
-            "month", "months", "most", "next", "one", "our", "past",
+            "four", "from", "gross", "has", "have", "highest", "in", "include",
+            "including", "into", "is", "last", "least", "lifetime", "list",
+            "lowest", "month", "months", "most", "net", "next", "one", "our",
+            "overall", "past",
             "period", "periods", "previous", "prior", "quarter", "quarters",
             "rank", "recent", "return", "show", "that", "the", "their",
             "these", "this", "those", "three", "time", "times", "to",
