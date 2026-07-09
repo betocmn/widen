@@ -2873,6 +2873,40 @@ struct SchemaToolAgentSQLIntentCoveragePolicyTests {
         #expect(covered.decision == .covered)
     }
 
+    @Test func sumCaseOverMeasureDoesNotSatisfyHowMany() {
+        let missing = evaluate(
+            question: "How many active users do we have?",
+            evidence: evidence(columns: [
+                "public.users.id",
+                "public.users.status",
+                "public.users.total_cents",
+            ]),
+            sql: """
+                SELECT SUM(CASE WHEN status = 'active' THEN total_cents ELSE 0 END) AS active_total
+                FROM public.users
+                """
+        )
+
+        #expect(missing.decision == .needsCorrection)
+        #expect(missing.missingSignals.contains("COUNT aggregate for how-many request"))
+    }
+
+    @Test func sumCaseNullElseCountSatisfiesHowMany() {
+        let covered = evaluate(
+            question: "How many active users do we have?",
+            evidence: evidence(columns: [
+                "public.users.id",
+                "public.users.status",
+            ]),
+            sql: """
+                SELECT SUM(CASE WHEN status = 'active' THEN 1 ELSE NULL END) AS active_user_count
+                FROM public.users
+                """
+        )
+
+        #expect(covered.decision == .covered)
+    }
+
     @Test func subjectlessRankHintAllowsCoverageChecks() {
         let covered = evaluate(
             question: "Who are our best customers?",

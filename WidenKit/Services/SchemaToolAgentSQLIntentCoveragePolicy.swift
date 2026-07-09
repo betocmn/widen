@@ -804,20 +804,20 @@ public enum SchemaToolAgentSQLIntentCoveragePolicy {
         }
 
         var sqlIncludesCountAggregate: Bool {
-            let countExpressionPattern = #"\bcount\s*\(|\bsum\s*\(\s*case\s+when\b"#
             let wholeSQLHasCount = lowerSQL.range(
                 of: #"\bcount\s*\([^)]*\)(?!\s*(?:filter\s*\([^)]*\)\s*)?over\b)"#,
                 options: .regularExpression
             ) != nil
-                || lowerSQL.range(
-                    of: #"\bsum\s*\(\s*case\s+when\b"#,
-                    options: .regularExpression
-                ) != nil
+                || Self.containsRowCountingSumCase(in: lowerSQL)
             let expressions = selectExpressions
             guard !expressions.isEmpty else { return wholeSQLHasCount }
             if expressions.contains(where: { expression in
-                expression.range(of: countExpressionPattern, options: .regularExpression) != nil
-                    && expression.range(of: #"\bover\s*\("#, options: .regularExpression) == nil
+                guard expression.range(of: #"\bover\s*\("#, options: .regularExpression) == nil
+                else {
+                    return false
+                }
+                return expression.range(of: #"\bcount\s*\("#, options: .regularExpression) != nil
+                    || Self.containsRowCountingSumCase(in: expression)
             }) {
                 return true
             }
@@ -832,10 +832,39 @@ public enum SchemaToolAgentSQLIntentCoveragePolicy {
                     of: #"\bcount\s*\([^)]*\)\s*as\s+"# + escaped + #"\b"#,
                     options: .regularExpression
                 ) != nil
-                    || lowerSQL.range(
-                        of: #"\bend\s*\)\s*as\s+"# + escaped + #"\b"#,
-                        options: .regularExpression
-                    ) != nil
+                    || Self.containsRowCountingSumCase(in: lowerSQL, aliasedAs: bareColumn)
+            }
+        }
+
+        private static func containsRowCountingSumCase(
+            in value: String,
+            aliasedAs alias: String? = nil
+        ) -> Bool {
+            let aliasSuffix = alias.map {
+                #"\s*as\s+"# + NSRegularExpression.escapedPattern(for: $0) + #"\b"#
+            } ?? ""
+            guard let regex = try? NSRegularExpression(
+                pattern: #"\bsum\s*\(\s*case\s+when\b[\s\S]*?\bend\s*\)"# + aliasSuffix
+            ) else { return false }
+            let range = NSRange(value.startIndex..<value.endIndex, in: value)
+            return regex.matches(in: value, range: range).contains { match in
+                guard let blockRange = Range(match.range, in: value) else { return false }
+                return caseArmsCountRows(String(value[blockRange]))
+            }
+        }
+
+        private static func caseArmsCountRows(_ block: String) -> Bool {
+            guard let regex = try? NSRegularExpression(
+                pattern: #"\b(?:then|else)\s+('?[a-z0-9_.]+'?)"#
+            ) else { return false }
+            let range = NSRange(block.startIndex..<block.endIndex, in: block)
+            let matches = regex.matches(in: block, range: range)
+            guard !matches.isEmpty else { return false }
+            return matches.allSatisfy { match in
+                guard let valueRange = Range(match.range(at: 1), in: block) else { return false }
+                let token = String(block[valueRange])
+                    .trimmingCharacters(in: CharacterSet(charactersIn: "'"))
+                return token == "0" || token == "1" || token == "null"
             }
         }
 
