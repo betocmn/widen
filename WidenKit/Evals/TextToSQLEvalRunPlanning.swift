@@ -365,14 +365,14 @@ public enum TextToSQLEvalResumeCompatibility {
         )
         compare(
             "schema agent clarification correction mode",
-            previous.schemaAgentClarificationCorrectionMode ?? "-",
-            current.schemaAgentClarificationCorrectionMode ?? "-",
+            normalizedSchemaAgentClarificationCorrectionMode(previous.schemaAgentClarificationCorrectionMode),
+            normalizedSchemaAgentClarificationCorrectionMode(current.schemaAgentClarificationCorrectionMode),
             issues: &issues
         )
         compare(
             "schema agent intent coverage mode",
-            previous.schemaAgentIntentCoverageMode ?? "-",
-            current.schemaAgentIntentCoverageMode ?? "-",
+            normalizedSchemaAgentIntentCoverageMode(previous.schemaAgentIntentCoverageMode),
+            normalizedSchemaAgentIntentCoverageMode(current.schemaAgentIntentCoverageMode),
             issues: &issues
         )
         compare(
@@ -439,6 +439,14 @@ public enum TextToSQLEvalResumeCompatibility {
         for key in Set(previous.keys).intersection(current.keys).sorted() {
             compare("\(field)[\(key)]", previous[key] ?? "", current[key] ?? "", issues: &issues)
         }
+    }
+
+    private static func normalizedSchemaAgentClarificationCorrectionMode(_ value: String?) -> String {
+        value ?? SchemaToolAgentClarificationCorrectionMode.diagnosticsOnly.rawValue
+    }
+
+    private static func normalizedSchemaAgentIntentCoverageMode(_ value: String?) -> String {
+        value ?? SchemaToolAgentIntentCoverageMode.diagnosticsOnly.rawValue
     }
 }
 

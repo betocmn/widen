@@ -1627,6 +1627,27 @@ and tool budget exhaustion on saas status/filter cases. The next production fix
 should not be more force-SQL pressure; it should target stable query-plan and
 SQL-shape generation, or deterministic synthesis for common patterns.
 
+## PR 53 — Intent coverage review fixes and heuristic scope freeze
+
+PR 53 addressed the PR 52 review feedback: it reduced intent-coverage false
+positives (subject-scoped metric definitions, count-alias and status-predicate
+value matching, tiered context date anchors), cleared stale clarification
+rejection state after corrected SQL succeeds, and let older eval run manifests
+resume when the schema-agent mode fields are absent by treating them as
+diagnostics-only defaults. Both correction modes still default to
+`diagnosticsOnly`; production behavior is unchanged.
+
+PR 53 also froze the scope of `SchemaToolAgentSQLIntentCoveragePolicy`. Review
+iteration showed that phrase-level heuristics do not converge: every refinement
+surfaces new linguistic and SQL-shape edge cases. The policy stays a
+diagnostics-only triage layer tuned for the eval suites, and it is intentionally
+non-exhaustive. New phrasing or SQL-form rules should not be added to it; per
+the background principle above, Widen avoids building a hardcoded
+natural-language parser and SQL conformance engine. Accuracy work continues in
+schema retrieval, bounded schema tools, PostgreSQL verification with repair,
+and — if pursued — deterministic synthesis for common patterns as noted in the
+PR 52 conclusion.
+
 ---
 
 # Recommended implementation order for one coding agent

@@ -31,6 +31,19 @@ public struct SchemaToolAgentSQLIntentCoverageResult: Equatable, Sendable {
     }
 }
 
+/// Diagnostics-only heuristic triage for terminal schema-tool SQL.
+///
+/// Records best-effort signals about whether generated SQL appears to cover
+/// the question's intent. Production runs both correction modes as
+/// `diagnosticsOnly`; enforcement exists only behind explicit experimental
+/// eval flags. The phrase and SQL-shape heuristics here are intentionally
+/// non-exhaustive: they are tuned for the eval suites, not for general
+/// natural-language coverage. Do not grow them into a semantic validator by
+/// adding rules for new phrasings or SQL forms — per
+/// `docs/refactoring-plan.md`, Widen deliberately avoids a hardcoded
+/// natural-language parser and SQL conformance engine. Accuracy improvements
+/// belong in schema retrieval, bounded schema tools, PostgreSQL verification
+/// with repair, and the release-gate evals.
 public enum SchemaToolAgentSQLIntentCoveragePolicy {
     public static func evaluate(
         question: String,
@@ -81,6 +94,13 @@ public enum SchemaToolAgentSQLIntentCoveragePolicy {
         {
             missing.append("use email instead of name for grouped person/customer metric")
             categories.append("wrong projected columns")
+        }
+
+        if signals.requiresScalarCountAggregate,
+            !signals.sqlIncludesCountAggregate
+        {
+            missing.append("COUNT aggregate for how-many request")
+            categories.append("wrong aggregate")
         }
 
         if signals.requiresCentsUnitPreservation {
@@ -273,7 +293,7 @@ public enum SchemaToolAgentSQLIntentCoveragePolicy {
         }
 
         var questionAsksForName: Bool {
-            questionTokens.contains("name") || questionTokens.contains("named")
+            !questionTokens.intersection(["name", "names", "named"]).isEmpty
         }
 
         var hasProtectedMetricAmbiguity: Bool {
@@ -295,23 +315,283 @@ public enum SchemaToolAgentSQLIntentCoveragePolicy {
         }
 
         var contextDefinesMetric: Bool {
-            let tokens = contextTokens
-            return !tokens.intersection(Self.metricDefinitionTokens).isEmpty
-                || lowerContext.contains(" means ")
-                || lowerContext.contains(" is ")
-                || lowerContext.contains(" records ")
-                || lowerContext.contains(" count ")
+            containsProtectedMetricDefinition || containsScopedMetricDefinition
+        }
+
+        var containsProtectedMetricDefinition: Bool {
+            let questionProtectedTerms = questionTokens.intersection(Self.protectedMetricTerms)
+            let relevantTerms = Self.relatedProtectedMetricTerms(for: questionProtectedTerms)
+            guard !contextTokens.intersection(relevantTerms).isEmpty else {
+                return false
+            }
+            return relevantTerms.contains { term in
+                let escaped = NSRegularExpression.escapedPattern(for: term)
+                let termBeforeDefinition = lowerContext.range(
+                    of: #"\b"#
+                        + escaped
+                        + #"\b[^.!?;\n]{0,40}\b(?:means|is|are|has|have)\b[^.!?;\n]{0,80}\b(?:when|if|where|with|using|status|active|paid|verified|null|true|false|count|counts|revenue|spend|total|usage|=)\b"#,
+                    options: .regularExpression
+                ) != nil
+                let definitionBeforeTerm = lowerContext.range(
+                    of: #"\b(?:means|is|are)\b[^.!?;\n]{0,40}\b"#
+                        + escaped
+                        + #"\b[^.!?;\n]{0,60}\b(?:when|if|where|with|using|status|null|true|false|=)\b"#,
+                    options: .regularExpression
+                ) != nil
+                let conditionBeforeTerm = lowerContext.range(
+                    of: #"\b(?:when|if|where|with|using|status|null|true|false|=)\b[^.!?;\n]{0,80}\b(?:means|is|are|counts?\s+as)\b[^.!?;\n]{0,40}\b"#
+                        + escaped
+                        + #"\b"#,
+                    options: .regularExpression
+                ) != nil
+                let colonDefinition = lowerContext.range(
+                    of: #"\b"#
+                        + escaped
+                        + #"\b\s*:\s*[^.!?;\n]{0,80}\b(?:when|if|where|with|using|status|is|not|null|true|false|count|counts|sum|=)\b"#,
+                    options: .regularExpression
+                ) != nil
+                let termCountDefinition = lowerContext.range(
+                    of: #"\b"#
+                        + escaped
+                        + #"\b\s+(?:count|counts|total|totals)\b[^.!?;\n]{0,80}\b(?:when|if|where|with|using|status|null|true|false|=)\b"#,
+                    options: .regularExpression
+                ) != nil
+                let recordsTermDefinition = lowerContext.range(
+                    of: #"\b(?:records?|counts?|represents?|stores?|tracks?|marks?|indicates?|denotes?)\b[^.!?;\n]{0,60}\b(?:(?:one|a|an|1)\s+)?"#
+                        + escaped
+                        + #"\b"#,
+                    options: .regularExpression
+                ) != nil
+                let matchesDefinition = termBeforeDefinition || definitionBeforeTerm
+                    || conditionBeforeTerm || colonDefinition || termCountDefinition
+                    || recordsTermDefinition
+                guard matchesDefinition else { return false }
+                return !Self.protectedTermAttachesToForeignSubject(
+                    term: term,
+                    in: lowerContext,
+                    questionSubjects: Self.normalizedMetricSubjectTokens(
+                        questionProtectedSubjectTokens ?? questionTokens
+                    )
+                )
+            }
+        }
+
+        var containsScopedMetricDefinition: Bool {
+            let questionProtectedTerms = questionTokens.intersection(Self.protectedMetricTerms)
+            guard !questionProtectedTerms.isEmpty else {
+                return false
+            }
+            let rankingApplicable = questionProtectedTerms
+                .isSubset(of: Self.rankingApplicableProtectedTerms)
+            let relevantTerms = Self.relatedProtectedMetricTerms(for: questionProtectedTerms)
+            return Self.sentences(in: lowerContext).contains { sentence in
+                let sentenceTokens = Set(Self.tokens(in: sentence))
+                let candidateSubjects = Self.contextMetricSubjectCandidates(in: sentence)
+                let sentenceSubjectTokens = candidateSubjects.isEmpty
+                    ? sentenceTokens
+                    : candidateSubjects
+                let sentenceSharesSubject = Self.normalizedMetricSubjectTokens(sentenceTokens).isEmpty
+                    || sharesMetricSubject(with: sentenceSubjectTokens)
+                let hasUseAsMetricDefinition = sentence.range(
+                    of: #"\buse[sd]?\b[^.!?;\n]{1,80}\bas\b[^.!?;\n]{0,40}\bmetric\b"#,
+                    options: .regularExpression
+                ) != nil
+                if hasUseAsMetricDefinition, sentenceSharesSubject,
+                    rankingApplicable || !sentenceTokens.intersection(relevantTerms).isEmpty
+                {
+                    return true
+                }
+                guard rankingApplicable else { return false }
+                if !sentenceTokens.intersection(relevantTerms).isEmpty {
+                    let hasScopedRankDefinition = sentence.range(
+                        of: #"\b(?:rank|ranked|ranking|ranks)\b[^.!?;\n]{0,40}\bby\b[^.!?;\n]{0,80}\b(?:count|counts|revenue|spend|total|usage|win|wins)\b"#,
+                        options: .regularExpression
+                    ) != nil
+                    if hasScopedRankDefinition, sentenceSharesSubject {
+                        return true
+                    }
+                    let hasDirectUseDirective = sentence.range(
+                        of: #"(?:^\s*|,\s*)use[sd]?\b\s+(?:the\s+)?(?![^.!?;\n,]{0,40}\b(?:table|tables|view|views|schema|schemas|database|databases|dataset|datasets)\b)[a-z]"#,
+                        options: .regularExpression
+                    ) != nil
+                    if hasDirectUseDirective, sentenceSharesSubject {
+                        return true
+                    }
+                }
+                let hasMetricCue = sentence.range(
+                    of: #"\b(?:metric|ranking|rank|ranked|define|defines|defined)\b"#,
+                    options: .regularExpression
+                ) != nil
+                let hasMetricAssignment = sentence.range(
+                    of: #"\bmetric\b\s*(?:is|=|:)\s*[a-z0-9]"#,
+                    options: .regularExpression
+                ) != nil
+                return hasMetricCue
+                    && (hasMetricAssignment
+                        || !sentenceTokens.intersection(Self.concreteMetricDefinitionTokens).isEmpty)
+                    && sentenceSharesSubject
+            }
+        }
+
+        private static func contextMetricSubjectCandidates(in sentence: String) -> Set<String> {
+            let patterns = [
+                #"\brank(?:s|ed|ing)?\b\s+(?:the\s+|all\s+|every\s+)?([a-z][a-z-]*(?:\s+[a-z][a-z-]*)?)\s+by\b"#,
+                #"\b([a-z][a-z-]*)\s+(?:are|is)\s+ranked\b"#,
+                #"\bmetric\s+for\s+(?:the\s+|all\s+|every\s+)?([a-z][a-z-]*(?:\s+[a-z][a-z-]*)?)"#,
+                #"\b([a-z][a-z-]*)\s+ranking\s+metric\b"#,
+            ]
+            return patterns.reduce(into: Set<String>()) { candidates, pattern in
+                candidates.formUnion(subjectTokens(matching: pattern, in: sentence))
+            }
+        }
+
+        private func sharesMetricSubject(with segmentTokens: Set<String>) -> Bool {
+            let subjectTokens = questionProtectedSubjectTokens ?? questionTokens
+            if !subjectTokens.intersection(Self.personEntityTokens).isEmpty,
+                !segmentTokens.intersection(Self.personEntityTokens).isEmpty
+            {
+                return true
+            }
+            return Self.metricSubjectTokenGroups.contains { group in
+                !subjectTokens.intersection(group).isEmpty
+                    && !segmentTokens.intersection(group).isEmpty
+            } || !Self.normalizedMetricSubjectTokens(subjectTokens)
+                .intersection(Self.normalizedMetricSubjectTokens(segmentTokens))
+                .isEmpty
+        }
+
+        private var questionProtectedSubjectTokens: Set<String>? {
+            let protectedTerms = questionTokens.intersection(Self.protectedMetricTerms)
+            guard !protectedTerms.isEmpty else { return nil }
+            let whHeadSubjects = Self.subjectTokens(
+                matching: #"^\s*(?:which|what|who)\b(?:\s+(?:are|is))?(?:\s+(?:our|the|all|any|my))?\s+([a-z][a-z-]*(?:\s+[a-z][a-z-]*)?)"#,
+                in: lowerQuestion
+            )
+            if !whHeadSubjects.intersection(Self.knownMetricSubjectTokens).isEmpty {
+                return whHeadSubjects
+            }
+            var subjects = Set<String>()
+            for term in protectedTerms {
+                let escaped = NSRegularExpression.escapedPattern(for: term)
+                let patterns = [
+                    #"\b"# + escaped + #"\b\s+([a-z][a-z-]*(?:\s+[a-z][a-z-]*)?)"#,
+                    #"\b([a-z][a-z-]*)\s+(?:are|is)\s+(?:not\s+)?"# + escaped + #"\b"#,
+                ]
+                for pattern in patterns {
+                    subjects.formUnion(Self.subjectTokens(matching: pattern, in: lowerQuestion))
+                }
+            }
+            return subjects.isEmpty ? nil : subjects
+        }
+
+        private static func subjectTokens(matching pattern: String, in value: String) -> Set<String> {
+            guard let regex = try? NSRegularExpression(pattern: pattern) else { return [] }
+            let range = NSRange(value.startIndex..<value.endIndex, in: value)
+            var subjects = Set<String>()
+            for match in regex.matches(in: value, range: range) {
+                guard let captureRange = Range(match.range(at: 1), in: value) else { continue }
+                for word in value[captureRange].split(whereSeparator: \.isWhitespace) {
+                    let token = String(word)
+                    guard token.count > 2, !metricSubjectStopTokens.contains(token) else {
+                        continue
+                    }
+                    subjects.insert(token)
+                }
+            }
+            return subjects
+        }
+
+        var questionRequestsPersonEntityList: Bool {
+            !questionTokens.intersection(Self.personEntityTokens).isEmpty
+                && lowerQuestion.range(
+                    of: #"\b(?:find|list|which|who)\b"#,
+                    options: .regularExpression
+                ) != nil
+                || lowerQuestion.range(
+                    of: #"\b(?:show|get|return|display|give\s+me)\s+(?:all\s+|every\s+|the\s+|our\s+)?(?:account|accounts|customer|customers|person|people|user|users)\b"#,
+                    options: .regularExpression
+                ) != nil
         }
 
         var requiresPersonEmailProjection: Bool {
             columnNames.contains("email")
                 && !questionTokens.intersection(Self.personEntityTokens).isEmpty
+                && questionRequestsPersonEntityResult
         }
 
         var requiresGroupedPersonMetricEmailLabel: Bool {
             requiresPersonEmailProjection
                 && sqlIncludesAggregateCountOrSum
                 && sqlIncludesGroupBy
+        }
+
+        var questionRequestsPersonEntityResult: Bool {
+            if questionExplicitlyRequestsPersonEmail { return true }
+            if questionExplicitlyRequestsPersonName { return true }
+            if questionRequestsScalarPersonAggregate { return false }
+            if lowerQuestion.range(
+                of: #"\bby\s+(?:country|org|organization|organizations)\b"#,
+                options: .regularExpression
+            ) != nil, !questionRequestsPersonEntityList, !questionStartsWithPersonNounPhrase {
+                return false
+            }
+            if lowerQuestion.range(
+                of: #"\b(?:per|by|each|every)\s+(?:account|accounts|customer|customers|person|people|user|users)\b"#,
+                options: .regularExpression
+            ) != nil {
+                return true
+            }
+            return lowerQuestion.range(
+                of: #"\b(?:find|list|show|get|return|display|give\s+me|which|who|what)\b"#,
+                options: .regularExpression
+            ) != nil
+                || questionStartsWithPersonNounPhrase
+                || requiresAntiJoin
+                || requiresTopCount
+        }
+
+        var questionStartsWithPersonNounPhrase: Bool {
+            lowerQuestion.range(
+                of: #"^\s*(?:all\s+|every\s+|our\s+|the\s+)?(?:(?!(?:average|avg|count|number|sum|total)\s)[a-z][a-z-]*\s+){0,3}(?:account|accounts|customer|customers|person|people|user|users)\b"#,
+                options: .regularExpression
+            ) != nil
+        }
+
+        var questionExplicitlyRequestsPersonEmail: Bool {
+            !questionTokens.intersection(Self.personEntityTokens).isEmpty
+                && lowerQuestion.range(
+                    of: #"\b(?:e-?mail|e-?mails)\b"#,
+                    options: .regularExpression
+                ) != nil
+        }
+
+        var questionExplicitlyRequestsPersonName: Bool {
+            !questionTokens.intersection(Self.personEntityTokens).isEmpty
+                && questionAsksForName
+        }
+
+        var questionRequestsScalarPersonAggregate: Bool {
+            let groupsByPersonEntity = lowerQuestion.range(
+                of: #"\b(?:per|by|each|every)\s+(?:account|accounts|customer|customers|person|people|user|users)\b"#,
+                options: .regularExpression
+            ) != nil
+            let countIsEntityAttribute = lowerQuestion.range(
+                of: #"\b(?:with|including|and)\s+(?:their\s+)?[a-z0-9_\s-]{0,40}\b(?:count|counts)\b"#,
+                options: .regularExpression
+            ) != nil
+            let hasScalarCountPhrase = lowerQuestion.contains("how many")
+                || lowerQuestion.range(
+                    of: #"\b(?:number|count)\s+of\b"#,
+                    options: .regularExpression
+                ) != nil
+            return (hasScalarCountPhrase
+                    && !groupsByPersonEntity
+                    && !questionRequestsPersonEntityList)
+                || (questionTokens.contains("count")
+                    && !questionTokens.contains("by")
+                    && !questionTokens.contains("per")
+                    && !countIsEntityAttribute
+                    && !questionRequestsPersonEntityList)
         }
 
         var requiresCentsUnitPreservation: Bool {
@@ -502,9 +782,117 @@ public enum SchemaToolAgentSQLIntentCoveragePolicy {
                 || lowerQuestion.contains("latest")
         }
 
+        var questionRequestsExplicitTopN: Bool {
+            lowerQuestion.range(
+                of: #"\btop[-\s]+(?:\d+|one|two|three|four|five|six|seven|eight|nine|ten|eleven|twelve|thirteen|fourteen|fifteen|sixteen|seventeen|eighteen|nineteen|(?:twenty|thirty|forty|fifty|sixty|seventy|eighty|ninety)(?:[-\s]+(?:one|two|three|four|five|six|seven|eight|nine))?)\b"#,
+                options: .regularExpression
+            ) != nil
+        }
+
         var topRequestAllowsAllRows: Bool {
-            lowerQuestion.contains("all ")
-                || lowerQuestion.contains("every ")
+            if lowerQuestion.range(
+                of: #"\bwithout\s+(?:a\s+)?limit\b"#,
+                options: .regularExpression
+            ) != nil {
+                return true
+            }
+            if questionRequestsExplicitTopN {
+                return false
+            }
+            return lowerQuestion.range(
+                of: #"\b(?:all|every)\s+(?:rows?|records?|results?)\b"#,
+                options: .regularExpression
+            ) != nil
+                || lowerQuestion.range(
+                    of: #"(^|\b(?:find|list|rank|return|show|get|display|give)(?:\s+(?:me|us))?\s+)(?:all|every)\s+(?:of\s+(?:the\s+)?|the\s+)?(?!time\b|day\b|week\b|month\b|quarter\b|year\b|date\b|period\b|range\b)[a-z][a-z0-9]*(?:\s+[a-z][a-z0-9]*){0,2}\b"#,
+                    options: .regularExpression
+                ) != nil
+        }
+
+        var requiresScalarCountAggregate: Bool {
+            let excludedCountSubjects =
+                #"(?!days?\b|weeks?\b|months?\b|quarters?\b|years?\b|hours?\b|minutes?\b|seconds?\b)"#
+            if lowerQuestion.range(
+                of: #"\b(?:how\s+many|number\s+of|count\s+of)\s+"# + excludedCountSubjects,
+                options: .regularExpression
+            ) != nil {
+                return true
+            }
+            return lowerQuestion.range(
+                of: #"(?:^|[.!?;:]\s*)(?:please\s+)?count\s+(?:the\s+|all\s+)?(?!of\b)"#
+                    + excludedCountSubjects + #"[a-z]"#,
+                options: .regularExpression
+            ) != nil
+        }
+
+        var sqlIncludesCountAggregate: Bool {
+            let wholeSQLHasCount = lowerSQL.range(
+                of: #"\bcount\s*\([^)]*\)(?!\s*(?:filter\s*\([^)]*\)\s*)?over\b)"#,
+                options: .regularExpression
+            ) != nil
+                || Self.containsRowCountingSumCase(in: lowerSQL)
+            let expressions = selectExpressions
+            guard !expressions.isEmpty else { return wholeSQLHasCount }
+            if expressions.contains(where: { expression in
+                guard expression.range(of: #"\bover\s*\("#, options: .regularExpression) == nil
+                else {
+                    return false
+                }
+                return expression.range(of: #"\bcount\s*\("#, options: .regularExpression) != nil
+                    || Self.containsRowCountingSumCase(in: expression)
+            }) {
+                return true
+            }
+            return expressions.contains { expression in
+                let bareColumn = expression.trimmingCharacters(in: .whitespacesAndNewlines)
+                guard bareColumn.range(
+                    of: #"^(?:[a-z_][a-z0-9_]*\s*\.\s*)?[a-z_][a-z0-9_]*$"#,
+                    options: .regularExpression
+                ) != nil,
+                    let aliasName = Self.lastSQLPathComponent(bareColumn)?
+                        .trimmingCharacters(in: .whitespacesAndNewlines)
+                else {
+                    return false
+                }
+                let escaped = NSRegularExpression.escapedPattern(for: aliasName)
+                return lowerSQL.range(
+                    of: #"\bcount\s*\([^)]*\)\s*as\s+"# + escaped + #"\b"#,
+                    options: .regularExpression
+                ) != nil
+                    || Self.containsRowCountingSumCase(in: lowerSQL, aliasedAs: aliasName)
+            }
+        }
+
+        private static func containsRowCountingSumCase(
+            in value: String,
+            aliasedAs alias: String? = nil
+        ) -> Bool {
+            let aliasSuffix = alias.map {
+                #"\s*as\s+"# + NSRegularExpression.escapedPattern(for: $0) + #"\b"#
+            } ?? ""
+            guard let regex = try? NSRegularExpression(
+                pattern: #"\bsum\s*\(\s*case\s+when\b[\s\S]*?\bend\s*\)"# + aliasSuffix
+            ) else { return false }
+            let range = NSRange(value.startIndex..<value.endIndex, in: value)
+            return regex.matches(in: value, range: range).contains { match in
+                guard let blockRange = Range(match.range, in: value) else { return false }
+                return caseArmsCountRows(String(value[blockRange]))
+            }
+        }
+
+        private static func caseArmsCountRows(_ block: String) -> Bool {
+            guard let regex = try? NSRegularExpression(
+                pattern: #"\b(?:then|else)\s+(\S+)"#
+            ) else { return false }
+            let range = NSRange(block.startIndex..<block.endIndex, in: block)
+            let matches = regex.matches(in: block, range: range)
+            guard !matches.isEmpty else { return false }
+            return matches.allSatisfy { match in
+                guard let valueRange = Range(match.range(at: 1), in: block) else { return false }
+                let token = String(block[valueRange])
+                    .trimmingCharacters(in: CharacterSet(charactersIn: "'"))
+                return token == "0" || token == "1" || token == "null"
+            }
         }
 
         var sqlIncludesAggregateCount: Bool {
@@ -524,9 +912,14 @@ public enum SchemaToolAgentSQLIntentCoveragePolicy {
         }
 
         var explicitAnchor: ExplicitAnchor? {
-            [question, databaseContext]
-                .compactMap(Self.firstExplicitAnchor)
-                .first
+            Self.firstExplicitAnchor(in: question)
+                ?? Self.firstContextExplicitAnchor(
+                    in: databaseContext,
+                    prefersWindowBound: lowerQuestion.range(
+                        of: #"\b(?:reporting\s+)?window\b"#,
+                        options: .regularExpression
+                    ) != nil
+                )
         }
 
         var sqlUsesMovingCurrentTime: Bool {
@@ -550,17 +943,17 @@ public enum SchemaToolAgentSQLIntentCoveragePolicy {
 
         func sqlIncludesStatusPredicate(for status: String) -> Bool {
             if columnNames.contains("status") || columnNames.contains("state") {
-                if lowerSQL.range(
-                    of: #"\b(status|state)\b\s*(=|<>|!=|in|not\s+in|like|is)\b"#,
-                    options: .regularExpression
-                ) != nil {
-                    if status == "unresolved" {
-                        return lowerSQL.contains("unresolved")
-                            || lowerSQL.contains("resolved")
-                            || lowerSQL.contains("open")
-                    }
-                    return lowerSQL.contains(status)
+                let positiveValues: Set<String> = status == "unresolved"
+                    ? ["unresolved", "open"]
+                    : [status]
+                let negativeValues: Set<String> = status == "unresolved" ? ["resolved"] : []
+                let predicateValueMatches = sqlStatusPredicateComparisons.contains { comparison in
+                    comparison.matchesStatus(
+                        positiveValues: positiveValues,
+                        negativeValues: negativeValues
+                    )
                 }
+                if predicateValueMatches { return true }
             }
             if sqlIncludesBooleanPredicate(column: "is_\(status)") { return true }
             if sqlIncludesBooleanPredicate(column: status) { return true }
@@ -577,6 +970,24 @@ public enum SchemaToolAgentSQLIntentCoveragePolicy {
                 ) != nil
             }
             return false
+        }
+
+        private var sqlStatusPredicateComparisons: [SQLStatusPredicateComparison] {
+            guard let regex = try? NSRegularExpression(
+                pattern: #"(?:\b(?:lower|upper|trim|btrim)\s*\(\s*)?(?:\b[a-z_][a-z0-9_]*\s*\.\s*)?"?\b(?:status|state)\b"?(?:\s*::\s*[a-z_][a-z0-9_]*)?(?:\s*\))?\s*(=|<>|!=|\bnot\s+in\b|\bin\b|\blike\b|\bis\b)\s*('[^']*'|"[^"]*"|\([^)]*\)|(?:any|all)\s*\([^)]*\)|(?:lower|upper|trim|btrim)\s*\(\s*(?:'[^']*'|"[^"]*")\s*\)|[a-z0-9_]+)"#
+            ) else { return [] }
+            let range = NSRange(lowerSQL.startIndex..<lowerSQL.endIndex, in: lowerSQL)
+            return regex.matches(in: lowerSQL, range: range).compactMap { match in
+                guard let operatorRange = Range(match.range(at: 1), in: lowerSQL),
+                    let valueRange = Range(match.range(at: 2), in: lowerSQL)
+                else {
+                    return nil
+                }
+                return SQLStatusPredicateComparison(
+                    operatorToken: Self.normalizedSQLComparisonOperator(String(lowerSQL[operatorRange])),
+                    values: Self.normalizedStatusPredicateValues(from: String(lowerSQL[valueRange]))
+                )
+            }
         }
 
         func sqlIncludesActiveMembershipPredicate() -> Bool {
@@ -625,21 +1036,169 @@ public enum SchemaToolAgentSQLIntentCoveragePolicy {
         }
 
         private static func firstExplicitAnchor(in value: String) -> ExplicitAnchor? {
-            guard let match = value.range(
-                of: #"\b\d{4}-\d{2}-\d{2}(?:[ T]\d{2}:\d{2}(?::\d{2})?(?:\s*UTC|Z|[+-]\d{2}:?\d{2})?)?\b"#,
-                options: [.regularExpression, .caseInsensitive]
-            ) else { return nil }
-            let display = String(value[match])
-            let date = String(display.prefix(10)).lowercased()
-            let timeMatch = display.range(
-                of: #"\d{2}:\d{2}(?::\d{2})?"#,
-                options: .regularExpression
-            )
-            return ExplicitAnchor(
-                display: display,
-                date: date,
-                time: timeMatch.map { String(display[$0]).lowercased() }
-            )
+            explicitAnchorMatches(in: value).first?.anchor
+        }
+
+        private static func firstContextExplicitAnchor(
+            in value: String,
+            prefersWindowBound: Bool = false
+        ) -> ExplicitAnchor? {
+            let matches = explicitAnchorMatches(in: value)
+            let tiers: [ContextAnchorTier] = prefersWindowBound
+                ? [.windowBound, .evaluationTime]
+                : [.evaluationTime, .windowBound]
+            for tier in tiers {
+                let anchor = matches.first { match in
+                    contextAnchorPhraseApplies(in: value, dateRange: match.range, tier: tier)
+                }?.anchor
+                if let anchor { return anchor }
+            }
+            return nil
+        }
+
+        private static func explicitAnchorMatches(
+            in value: String
+        ) -> [(anchor: ExplicitAnchor, range: Range<String.Index>)] {
+            guard let regex = try? NSRegularExpression(
+                pattern: #"\b\d{4}-\d{2}-\d{2}(?:[ T]\d{2}:\d{2}(?::\d{2})?(?:\s*UTC|Z|[+-]\d{2}:?\d{2})?)?\b"#,
+                options: [.caseInsensitive]
+            ) else { return [] }
+            let range = NSRange(value.startIndex..<value.endIndex, in: value)
+            return regex.matches(in: value, range: range).compactMap { match in
+                guard let valueRange = Range(match.range, in: value) else { return nil }
+                let display = String(value[valueRange])
+                let date = String(display.prefix(10)).lowercased()
+                let timeMatch = display.range(
+                    of: #"\d{2}:\d{2}(?::\d{2})?"#,
+                    options: .regularExpression
+                )
+                return (
+                    ExplicitAnchor(
+                        display: display,
+                        date: date,
+                        time: timeMatch.map { String(display[$0]).lowercased() }
+                    ),
+                    valueRange
+                )
+            }
+        }
+
+        private enum ContextAnchorTier {
+            case evaluationTime
+            case windowBound
+        }
+
+        private static func contextAnchorPhraseApplies(
+            in value: String,
+            dateRange: Range<String.Index>,
+            tier: ContextAnchorTier
+        ) -> Bool {
+            let prefixStart = value.index(
+                dateRange.lowerBound,
+                offsetBy: -min(72, value.distance(from: value.startIndex, to: dateRange.lowerBound)),
+                limitedBy: value.startIndex
+            ) ?? value.startIndex
+            let maxSuffixEnd = value.index(
+                dateRange.upperBound,
+                offsetBy: min(32, value.distance(from: dateRange.upperBound, to: value.endIndex)),
+                limitedBy: value.endIndex
+            ) ?? value.endIndex
+            let suffixEnd = value[dateRange.upperBound..<maxSuffixEnd]
+                .firstIndex { ".!?;\n".contains($0) } ?? maxSuffixEnd
+            let prefix = String(value[prefixStart..<dateRange.lowerBound]).lowercased()
+            let suffix = String(value[dateRange.upperBound..<suffixEnd]).lowercased()
+            let prefixAnchorPatterns: [String]
+            let suffixAnchorPatterns: [String]
+            switch tier {
+            case .evaluationTime:
+                prefixAnchorPatterns = [
+                    #"\bas[\s-]+of(?:\s+the)?\b[\s,:=\-]*$"#,
+                    #"\brelative\s+to\b[\s,:=\-]*$"#,
+                    #"\bcurrent\s+date\b(?:\s+(?:for|of|in)\b[^.!?;\n]{0,30})?(?:\s+is)?[\s,:=\-]*$"#,
+                    #"\b(?:evaluation|reference)\s+date\b(?:\s+is)?[\s,:=\-]*$"#,
+                    #"\btoday(?:\s+is)?\b[\s,:=\-]*$"#,
+                    #"\banchor(?:\s+date)?(?:\s+(?:is|as))?\b[\s,:=\-]*$"#,
+                    #"\buse\s+(?:the\s+)?(?:current\s+|evaluation\s+|reference\s+|anchor\s+)?date\s+$"#,
+                ]
+                suffixAnchorPatterns = [
+                    #"^[\s,)\-]*as\s+(?:the\s+)?current\s+date\b"#,
+                    #"^[\s,)\-]*as\s+today\b"#,
+                    #"^[\s,)\-]*(?:as|is)\s+(?:the\s+)?(?:evaluation\s+)?anchor(?:\s+date)?\b"#,
+                    #"^[\s,)\-]*is\s+(?:the\s+)?current\s+date\b"#,
+                    #"^[\s,)\-]*(?:is\s+)?today\b"#,
+                ]
+            case .windowBound:
+                prefixAnchorPatterns = [
+                    #"\bthrough\b[\s,:=\-]*$"#,
+                    #"\buntil\b[\s,:=\-]*$"#,
+                    #"\bstarting(?:\s+(?:on|from))?\b[\s,:=\-]*$"#,
+                    #"\bstart\s+date(?:\s+is)?\b[\s,:=\-]*$"#,
+                    #"\bon\s+or\s+after\b[\s,:=\-]*$"#,
+                    #"\b(?:reporting\s+)?window\s+ending\s*$"#,
+                ]
+                suffixAnchorPatterns = []
+            }
+            return prefixAnchorPatterns.contains {
+                prefix.range(of: $0, options: .regularExpression) != nil
+            }
+                || suffixAnchorPatterns.contains {
+                    suffix.range(of: $0, options: .regularExpression) != nil
+                }
+        }
+
+        private static func normalizedSQLComparisonOperator(_ value: String) -> String {
+            value.split(whereSeparator: \.isWhitespace).joined(separator: " ")
+        }
+
+        private static func normalizedStatusPredicateValues(from value: String) -> [String] {
+            var trimmed = value.trimmingCharacters(in: .whitespacesAndNewlines)
+            while let unwrapped = unwrappedFunctionLiteralBody(trimmed) {
+                trimmed = unwrapped
+            }
+            let valueBody: String
+            if trimmed.hasPrefix("("), trimmed.hasSuffix(")") {
+                valueBody = String(trimmed.dropFirst().dropLast())
+            } else {
+                valueBody = trimmed
+            }
+            guard let regex = try? NSRegularExpression(
+                pattern: #"'([^']*)'|"([^"]*)"|([a-z0-9_%.-]+)"#
+            ) else { return [] }
+            let range = NSRange(valueBody.startIndex..<valueBody.endIndex, in: valueBody)
+            return regex.matches(in: valueBody, range: range).flatMap { match -> [String] in
+                for captureIndex in 1...3 {
+                    guard match.range(at: captureIndex).location != NSNotFound,
+                        let captureRange = Range(match.range(at: captureIndex), in: valueBody)
+                    else {
+                        continue
+                    }
+                    let normalized = String(valueBody[captureRange])
+                        .trimmingCharacters(in: .whitespacesAndNewlines)
+                        .lowercased()
+                    guard !normalized.isEmpty else { return [] }
+                    if normalized.hasPrefix("{"), normalized.hasSuffix("}") {
+                        return normalized.dropFirst().dropLast()
+                            .split(separator: ",")
+                            .map {
+                                $0.trimmingCharacters(in: CharacterSet(charactersIn: " \t\"'"))
+                            }
+                            .filter { !$0.isEmpty }
+                    }
+                    return [normalized]
+                }
+                return []
+            }
+        }
+
+        private static func unwrappedFunctionLiteralBody(_ value: String) -> String? {
+            guard value.hasSuffix(")"),
+                let openRange = value.range(
+                    of: #"^(?:lower|upper|trim|btrim)\s*\("#,
+                    options: .regularExpression
+                )
+            else { return nil }
+            return String(value[openRange.upperBound..<value.index(before: value.endIndex)])
+                .trimmingCharacters(in: .whitespacesAndNewlines)
         }
 
         private static func firstDateLiteral(in value: String) -> String? {
@@ -648,7 +1207,7 @@ public enum SchemaToolAgentSQLIntentCoveragePolicy {
         }
 
         private static func topLevelSelectExpressions(in sql: String) -> [String] {
-            guard let selectRange = sql.range(of: #"\bselect\b"#, options: .regularExpression) else {
+            guard let selectRange = topLevelSelectKeywordRange(in: sql) else {
                 return []
             }
             var index = selectRange.upperBound
@@ -682,6 +1241,45 @@ public enum SchemaToolAgentSQLIntentCoveragePolicy {
             guard let fromStart else { return [] }
             let selectList = String(sql[selectRange.upperBound..<fromStart])
             return splitTopLevelCommaList(selectList)
+        }
+
+        private static func topLevelSelectKeywordRange(in sql: String) -> Range<String.Index>? {
+            var depth = 0
+            var quote: Character?
+            var index = sql.startIndex
+            while index < sql.endIndex {
+                let character = sql[index]
+                if let activeQuote = quote {
+                    if character == activeQuote { quote = nil }
+                    index = sql.index(after: index)
+                    continue
+                }
+                switch character {
+                case "'", "\"":
+                    quote = character
+                case "(":
+                    depth += 1
+                case ")":
+                    depth = max(0, depth - 1)
+                default:
+                    if depth == 0, character == "s" {
+                        let previousIsWordCharacter = index > sql.startIndex && {
+                            let previous = sql[sql.index(before: index)]
+                            return previous.isLetter || previous.isNumber || previous == "_"
+                        }()
+                        if !previousIsWordCharacter,
+                            let match = sql[index...].range(
+                                of: #"^select\b"#,
+                                options: .regularExpression
+                            )
+                        {
+                            return match
+                        }
+                    }
+                }
+                index = sql.index(after: index)
+            }
+            return nil
         }
 
         private static func splitTopLevelCommaList(_ value: String) -> [String] {
@@ -728,8 +1326,51 @@ public enum SchemaToolAgentSQLIntentCoveragePolicy {
                 .map(String.init)
         }
 
+        private static func sentences(in value: String) -> [String] {
+            var sentences: [String] = []
+            var current = ""
+            var index = value.startIndex
+            while index < value.endIndex {
+                let character = value[index]
+                let next = value.index(after: index)
+                let isPeriodInsideIdentifier = character == "."
+                    && next < value.endIndex
+                    && !value[next].isWhitespace
+                if "!?;\n".contains(character) || (character == "." && !isPeriodInsideIdentifier) {
+                    sentences.append(current)
+                    current = ""
+                } else {
+                    current.append(character)
+                }
+                index = next
+            }
+            sentences.append(current)
+            return sentences.filter {
+                !$0.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+            }
+        }
+
         private static func lastSQLPathComponent(_ value: String) -> String? {
             value.split(separator: ".").last.map(String.init)
+        }
+
+        private static func normalizedMetricSubjectTokens(_ tokens: Set<String>) -> Set<String> {
+            tokens.reduce(into: Set<String>()) { normalizedTokens, token in
+                guard token.count > 2, !Self.metricSubjectStopTokens.contains(token) else {
+                    return
+                }
+                normalizedTokens.insert(Self.normalizedMetricSubjectToken(token))
+            }
+        }
+
+        private static func normalizedMetricSubjectToken(_ token: String) -> String {
+            if token.count > 4, token.hasSuffix("ies") {
+                return String(token.dropLast(3)) + "y"
+            }
+            if token.count > 3, token.hasSuffix("s"), !token.hasSuffix("ss") {
+                return String(token.dropLast())
+            }
+            return token
         }
 
         private static let statusPhraseTokens: Set<String> = [
@@ -740,9 +1381,73 @@ public enum SchemaToolAgentSQLIntentCoveragePolicy {
             "best", "healthy", "important", "win", "winner", "wins",
         ]
 
+        private static let rankingApplicableProtectedTerms: Set<String> = [
+            "best", "important", "win", "winner", "wins",
+        ]
+
+        private static let protectedMetricTermFamilies: [Set<String>] = [
+            ["best"],
+            ["healthy", "health"],
+            ["important", "importance"],
+            ["win", "winner", "wins"],
+        ]
+
+        private static func protectedTermAttachesToForeignSubject(
+            term: String,
+            in context: String,
+            questionSubjects: Set<String>
+        ) -> Bool {
+            guard !questionSubjects.isEmpty else { return false }
+            let escaped = NSRegularExpression.escapedPattern(for: term)
+            let patterns = [
+                #"\b"# + escaped + #"\b\s+([a-z][a-z0-9_-]*(?:\s+[a-z][a-z0-9_-]*){0,2})"#,
+                #"\b([a-z][a-z-]*)\s+(?:are|is)\s+(?:not\s+)?"# + escaped + #"\b"#,
+            ]
+            let range = NSRange(context.startIndex..<context.endIndex, in: context)
+            let attachedSubjects = patterns.flatMap { pattern -> [String] in
+                guard let regex = try? NSRegularExpression(pattern: pattern) else { return [] }
+                return regex.matches(in: context, range: range)
+                    .flatMap { match -> [String] in
+                        guard let captureRange = Range(match.range(at: 1), in: context) else {
+                            return []
+                        }
+                        var nounPhraseTokens: [String] = []
+                        for word in context[captureRange].split(whereSeparator: \.isWhitespace) {
+                            let token = String(word)
+                            guard token.count > 2, !metricSubjectStopTokens.contains(token) else {
+                                break
+                            }
+                            nounPhraseTokens.append(normalizedMetricSubjectToken(token))
+                        }
+                        return nounPhraseTokens
+                    }
+            }
+            guard !attachedSubjects.isEmpty else { return false }
+            if !questionSubjects.isDisjoint(with: attachedSubjects) { return false }
+            let sharesSubjectGroup = metricSubjectTokenGroups.contains { group in
+                !group.intersection(questionSubjects).isEmpty
+                    && !group.intersection(Set(attachedSubjects)).isEmpty
+            }
+            return !sharesSubjectGroup
+        }
+
+        private static func relatedProtectedMetricTerms(for terms: Set<String>) -> Set<String> {
+            terms.reduce(into: Set<String>()) { related, term in
+                related.formUnion(
+                    Self.protectedMetricTermFamilies.first { $0.contains(term) } ?? [term]
+                )
+            }
+        }
+
         private static let metricDefinitionTokens: Set<String> = [
             "count", "counts", "define", "defines", "mean", "means", "metric",
-            "record", "records", "revenue", "usage", "win", "wins",
+            "rank", "ranked", "ranking", "ranks", "record", "records", "revenue",
+            "spend", "total", "usage", "win", "wins",
+        ]
+
+        private static let concreteMetricDefinitionTokens: Set<String> = [
+            "count", "counts", "revenue", "spend", "total", "usage", "win",
+            "wins",
         ]
 
         private static let personEntityTokens: Set<String> = [
@@ -754,6 +1459,65 @@ public enum SchemaToolAgentSQLIntentCoveragePolicy {
             "amount", "average", "avg", "order", "orders", "paid", "revenue",
             "spend", "total", "value",
         ]
+
+        private static let metricSubjectTokenGroups: [Set<String>] = [
+            ["account", "accounts", "customer", "customers", "person", "people", "user", "users"],
+            ["cluster", "clusters", "feedback"],
+            ["tool", "tools"],
+            ["ticket", "tickets"],
+            ["subscription", "subscriptions"],
+        ]
+
+        private static let knownMetricSubjectTokens: Set<String> = personEntityTokens
+            .union(metricSubjectTokenGroups.reduce(into: Set<String>()) { $0.formUnion($1) })
+
+        private static let metricSubjectStopTokens: Set<String> = Set([
+            "about", "after", "all", "also", "an", "and", "any", "are", "as",
+            "at", "average", "be", "before", "by", "can", "cumulative",
+            "current", "date", "dates",
+            "day", "days", "each", "every", "find", "first", "five", "for",
+            "four", "from", "gross", "has", "have", "highest", "in", "include",
+            "including", "into", "is", "last", "least", "lifetime", "list",
+            "lowest", "month", "months", "most", "net", "next", "one", "our",
+            "overall", "past",
+            "period", "periods", "previous", "prior", "quarter", "quarters",
+            "rank", "recent", "return", "show", "that", "the", "their",
+            "these", "this", "those", "three", "time", "times", "to",
+            "today", "top", "two", "use", "using", "week", "weeks", "what",
+            "when", "where", "which", "who", "with", "year", "years",
+            "yesterday",
+        ])
+        .union(statusPhraseTokens)
+        .union(protectedMetricTerms)
+        .union(metricDefinitionTokens)
+
+        private struct SQLStatusPredicateComparison {
+            var operatorToken: String
+            var values: [String]
+
+            func matchesStatus(
+                positiveValues: Set<String>,
+                negativeValues: Set<String>
+            ) -> Bool {
+                switch operatorToken {
+                case "=", "is", "in":
+                    return values.contains { positiveValues.contains($0) }
+                case "like":
+                    return values.contains { value in
+                        positiveValues.contains(value)
+                            || positiveValues.contains(
+                                value.trimmingCharacters(in: CharacterSet(charactersIn: "%"))
+                            )
+                    }
+                case "!=", "<>":
+                    return values.contains { negativeValues.contains($0) }
+                case "not in":
+                    return values.contains { negativeValues.contains($0) }
+                default:
+                    return false
+                }
+            }
+        }
     }
 
     private struct ExplicitAnchor: Equatable {

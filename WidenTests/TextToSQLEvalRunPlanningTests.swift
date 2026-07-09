@@ -96,6 +96,36 @@ struct TextToSQLEvalRunPlanningTests {
         }
     }
 
+    @Test func compatibilityDefaultsMissingSchemaAgentModesToDiagnosticsOnly() throws {
+        let previous = Self.compatibility()
+        var current = Self.compatibility()
+        current.schemaAgentClarificationCorrectionMode =
+            SchemaToolAgentClarificationCorrectionMode.diagnosticsOnly.rawValue
+        current.schemaAgentIntentCoverageMode = SchemaToolAgentIntentCoverageMode.diagnosticsOnly.rawValue
+
+        try TextToSQLEvalResumeCompatibility.validate(previous: previous, current: current)
+    }
+
+    @Test func compatibilityRejectsChangedSchemaAgentModes() {
+        let previous = Self.compatibility()
+        var current = Self.compatibility()
+        current.schemaAgentClarificationCorrectionMode =
+            SchemaToolAgentClarificationCorrectionMode.correctOverClarificationExperimental.rawValue
+        current.schemaAgentIntentCoverageMode =
+            SchemaToolAgentIntentCoverageMode.correctAndRetryExperimental.rawValue
+
+        do {
+            try TextToSQLEvalResumeCompatibility.validate(previous: previous, current: current)
+            Issue.record("Expected compatibility rejection.")
+        } catch let error as TextToSQLEvalResumeCompatibilityError {
+            let fields = Set(error.issues.map(\.field))
+            #expect(fields.contains("schema agent clarification correction mode"))
+            #expect(fields.contains("schema agent intent coverage mode"))
+        } catch {
+            Issue.record("Unexpected error: \(error)")
+        }
+    }
+
     @Test func resumeMissingRunsOnlyMissingOrNotEvaluatedSlots() {
         let expected = Self.expectedKeys(caseIDs: ["case.a", "case.b", "case.c"], repeats: 1)
         let previousResults = [

@@ -658,6 +658,69 @@ struct OpenRouterSchemaToolSQLAgentTests {
         #expect(result.backendMetadata?.agentDiagnostics?.clarificationPolicyDecision == "shouldAnswerWithSQL")
         #expect(result.backendMetadata?.agentDiagnostics?.overClarificationCorrectionAttempted == true)
         #expect(result.backendMetadata?.agentDiagnostics?.overClarificationCorrectionSucceeded == true)
+        #expect(result.backendMetadata?.agentDiagnostics?.appSideRejectionReason == nil)
+    }
+
+    @Test func schemaSearchClarificationRejectionClearsAfterValidSQL() async throws {
+        let schema = Self.makeSchema()
+        let sql = """
+            SELECT u.id, u.name
+            FROM public.users AS u
+            LEFT JOIN public.orders AS o ON o.user_id = u.id
+            WHERE o.id IS NULL
+            LIMIT 100
+            """
+        let chatTransport = ScriptedTransport { request, index in
+            switch index {
+            case 1:
+                return Self.assistantToolCalls([
+                    Self.terminalClarification(
+                        id: "terminal-clarify-before-search",
+                        question: "Which relationship should I use between users and orders?"
+                    ),
+                ])
+            case 2:
+                let body = try Self.requestBodyText(request)
+                #expect(body.contains("schema_search_required"))
+                return Self.assistantToolCalls([
+                    Self.toolCall(id: "search-users-after-rejection", name: "search_schema", arguments: [
+                        "query": "users",
+                        "limit": 4,
+                    ]),
+                    Self.toolCall(id: "search-orders-after-rejection", name: "search_schema", arguments: [
+                        "query": "orders",
+                        "limit": 4,
+                    ]),
+                ])
+            case 3:
+                let users = try Self.tableHandle(named: #""public"."users""#, in: request)
+                let orders = try Self.tableHandle(named: #""public"."orders""#, in: request)
+                return Self.assistantToolCalls([
+                    Self.toolCall(id: "describe-users-after-rejection", name: "describe_tables", arguments: [
+                        "table_ids": [users, orders],
+                    ]),
+                ])
+            case 4:
+                return Self.assistantToolCalls([
+                    Self.terminalSQL(id: "terminal-sql-after-rejection", sql: sql),
+                ])
+            default:
+                throw URLError(.badServerResponse)
+            }
+        }
+        let agent = makeAgent(schema: schema, chatTransport: chatTransport)
+
+        let result = try await agent.generateSQL(
+            question: "Which users have never placed an order?",
+            schema: schema,
+            context: SQLGenerationContext(),
+            config: SQLGenerationConfig()
+        )
+
+        #expect(!result.needsClarification)
+        #expect(result.sql.contains("LEFT JOIN public.orders"))
+        #expect(result.backendMetadata?.agentDiagnostics?.appSideRejectionReason == nil)
+        #expect(result.backendMetadata?.agentDiagnostics?.terminalValidationFailureReason == nil)
     }
 
     @Test func defaultModeDiagnosesOverClarificationWithoutCorrecting() async throws {
@@ -834,7 +897,7 @@ struct OpenRouterSchemaToolSQLAgentTests {
 
         #expect(!result.needsClarification)
         #expect(result.sql.contains("e.winner_id IS NOT NULL"))
-        #expect(result.backendMetadata?.agentDiagnostics?.terminalValidationFailureReason == "asksForAlreadyKnownEvidence")
+        #expect(result.backendMetadata?.agentDiagnostics?.terminalValidationFailureReason == nil)
         #expect(result.backendMetadata?.agentDiagnostics?.overClarificationCorrectionAttempted == true)
         #expect(result.backendMetadata?.agentDiagnostics?.overClarificationCorrectionSucceeded == true)
     }
@@ -907,7 +970,7 @@ struct OpenRouterSchemaToolSQLAgentTests {
 
         #expect(!result.needsClarification)
         #expect(result.sql.contains(#"e."createdAt" >= NOW() - INTERVAL '14 days'"#))
-        #expect(result.backendMetadata?.agentDiagnostics?.terminalValidationFailureReason == "asksForAlreadyKnownEvidence")
+        #expect(result.backendMetadata?.agentDiagnostics?.terminalValidationFailureReason == nil)
         #expect(result.backendMetadata?.agentDiagnostics?.overClarificationCorrectionAttempted == true)
         #expect(result.backendMetadata?.agentDiagnostics?.overClarificationCorrectionSucceeded == true)
     }
