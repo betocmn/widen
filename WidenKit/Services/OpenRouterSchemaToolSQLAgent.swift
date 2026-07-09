@@ -516,6 +516,8 @@ public final class OpenRouterSchemaToolSQLAgent: SQLGenerator, Sendable {
                     diagnostics.terminalAction = terminalResult.action.rawValue
                     if terminalResult.action == .sql {
                         diagnostics.terminalQueryPlan = terminalResult.queryPlan
+                    } else {
+                        diagnostics.terminalQueryPlan = ""
                     }
 
                     switch terminalResult.action {
@@ -754,6 +756,7 @@ public final class OpenRouterSchemaToolSQLAgent: SQLGenerator, Sendable {
                                     clarificationQuestion: clarificationQuestion,
                                     queryPlan: ""
                                 )
+                                diagnostics.terminalQueryPlan = ""
                                 aggregate.terminalOutcome = "clarify_fallback"
                                 aggregate.agentDiagnostics = diagnostics.snapshot(
                                     evidence: evidence,
@@ -1157,6 +1160,7 @@ public final class OpenRouterSchemaToolSQLAgent: SQLGenerator, Sendable {
         var fallbackAggregate = aggregate
         var fallbackDiagnostics = diagnostics
         fallbackDiagnostics.terminalAction = TerminalAction.clarify.rawValue
+        fallbackDiagnostics.terminalQueryPlan = ""
         fallbackDiagnostics.appSideRejectionReason = .clarificationRejected
         fallbackAggregate.terminalOutcome = "clarify_fallback"
         fallbackAggregate.agentDiagnostics = fallbackDiagnostics.snapshot(
