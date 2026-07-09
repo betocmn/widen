@@ -514,6 +514,11 @@ public final class OpenRouterSchemaToolSQLAgent: SQLGenerator, Sendable {
                         throw await agentFailure(.terminalResultMalformed, "The terminal tool arguments were malformed.", session: session)
                     }
                     diagnostics.terminalAction = terminalResult.action.rawValue
+                    if terminalResult.action == .sql {
+                        diagnostics.terminalQueryPlan = terminalResult.queryPlan
+                    } else {
+                        diagnostics.terminalQueryPlan = ""
+                    }
 
                     switch terminalResult.action {
                     case .clarify:
@@ -628,7 +633,8 @@ public final class OpenRouterSchemaToolSQLAgent: SQLGenerator, Sendable {
                             finalTerminalResult = TerminalResult(
                                 action: .clarify,
                                 sql: "",
-                                clarificationQuestion: fallbackQuestion
+                                clarificationQuestion: fallbackQuestion,
+                                queryPlan: ""
                             )
                             diagnostics.appSideRejectionReason = .clarificationRejected
                             diagnostics.terminalValidationFailureReason = "genericClarificationReplaced"
@@ -747,8 +753,10 @@ public final class OpenRouterSchemaToolSQLAgent: SQLGenerator, Sendable {
                                 let finalTerminalResult = TerminalResult(
                                     action: .clarify,
                                     sql: "",
-                                    clarificationQuestion: clarificationQuestion
+                                    clarificationQuestion: clarificationQuestion,
+                                    queryPlan: ""
                                 )
+                                diagnostics.terminalQueryPlan = ""
                                 aggregate.terminalOutcome = "clarify_fallback"
                                 aggregate.agentDiagnostics = diagnostics.snapshot(
                                     evidence: evidence,
@@ -1152,6 +1160,7 @@ public final class OpenRouterSchemaToolSQLAgent: SQLGenerator, Sendable {
         var fallbackAggregate = aggregate
         var fallbackDiagnostics = diagnostics
         fallbackDiagnostics.terminalAction = TerminalAction.clarify.rawValue
+        fallbackDiagnostics.terminalQueryPlan = ""
         fallbackDiagnostics.appSideRejectionReason = .clarificationRejected
         fallbackAggregate.terminalOutcome = "clarify_fallback"
         fallbackAggregate.agentDiagnostics = fallbackDiagnostics.snapshot(
@@ -1159,7 +1168,7 @@ public final class OpenRouterSchemaToolSQLAgent: SQLGenerator, Sendable {
             inspectionToolCalls: await inspectionSession?.tracesSnapshot() ?? []
         )
         return try await finalResult(
-            TerminalResult(action: .clarify, sql: "", clarificationQuestion: fallbackQuestion),
+            TerminalResult(action: .clarify, sql: "", clarificationQuestion: fallbackQuestion, queryPlan: ""),
             schema: schema,
             context: context,
             aggregate: fallbackAggregate,
@@ -1532,7 +1541,7 @@ public final class OpenRouterSchemaToolSQLAgent: SQLGenerator, Sendable {
 
     private static let terminalToolDefinition = OpenRouterToolDefinition(
         name: terminalToolName,
-        description: "Finish the SQL generation by submitting exactly one SQL statement or exactly one clarification question.",
+        description: "Finish the SQL generation by submitting exactly one SQL statement or exactly one clarification question. Include a concise redacted query_plan when submitting SQL.",
         parameters: [
             "type": "object",
             "additionalProperties": false,
@@ -1550,24 +1559,28 @@ public final class OpenRouterSchemaToolSQLAgent: SQLGenerator, Sendable {
                     "type": "string",
                     "maxLength": 280,
                 ],
+                "query_plan": [
+                    "type": "string",
+                    "maxLength": 2000,
+                ],
             ],
         ]
     )
 
     fileprivate static let strictTerminalCorrection =
-        "Finish by calling submit_text_to_sql_result exactly once. Use action='sql' only if you can produce validated SQL from inspected schema. Otherwise use action='clarify' with one concise database-specific question."
+        "Finish by calling submit_text_to_sql_result exactly once. Use action='sql' only if you can produce validated SQL from inspected schema, and include query_plan with grain, joins, filters, projection, grouping, ordering, limit, and date anchors. Otherwise use action='clarify' with one concise database-specific question."
     fileprivate static let schemaSearchCorrection =
-        "Call search_schema before finishing. After inspecting schema, call submit_text_to_sql_result exactly once. Use action='sql' only if you can produce validated SQL from inspected schema. Otherwise use action='clarify' with one concise database-specific question."
+        "Call search_schema before finishing. After inspecting schema, call submit_text_to_sql_result exactly once. Use action='sql' only if you can produce validated SQL from inspected schema, and include query_plan with grain, joins, filters, projection, grouping, ordering, limit, and date anchors. Otherwise use action='clarify' with one concise database-specific question."
     fileprivate static let overClarificationCorrection =
-        "The schema evidence and database context are sufficient to answer with SQL. Do not ask the user to confirm facts already supplied. Finish by calling submit_text_to_sql_result with action='sql'. Use only inspected tables, columns, and join paths. If a genuinely unresolved database decision remains, name that exact unresolved metric, relationship, status value, or time field."
+        "The schema evidence and database context are sufficient to answer with SQL. Do not ask the user to confirm facts already supplied. Finish by calling submit_text_to_sql_result with action='sql' and a concise query_plan. Use only inspected tables, columns, and join paths. If a genuinely unresolved database decision remains, name that exact unresolved metric, relationship, status value, or time field."
     fileprivate static let terminalRequiredAfterSufficientEvidenceCorrection =
-        "The schema evidence is already sufficient for a terminal result. Stop calling schema tools. Finish by calling submit_text_to_sql_result with action='sql', or action='clarify' only if you name one concrete unresolved database decision."
+        "The schema evidence is already sufficient for a terminal result. Stop calling schema tools. Finish by calling submit_text_to_sql_result with action='sql' and a concise query_plan, or action='clarify' only if you name one concrete unresolved database decision."
 
     fileprivate static func intentCoverageCorrection(missingSignals: [String]) -> String {
         let missing = missingSignals.isEmpty
             ? "unspecified deterministic intent signal"
             : missingSignals.joined(separator: ", ")
-        return "The SQL is syntactically valid but does not preserve the requested intent. Missing requirements: \(missing). Use only inspected schema objects and finish with submit_text_to_sql_result(action='sql'). Do not ask for clarification unless a concrete database decision is still unresolved."
+        return "The SQL is syntactically valid but does not preserve the requested intent. Missing requirements: \(missing). Use only inspected schema objects and finish with submit_text_to_sql_result(action='sql') plus a concise query_plan. Do not ask for clarification unless a concrete database decision is still unresolved."
     }
 
     private static func instructions(
@@ -1602,6 +1615,7 @@ public final class OpenRouterSchemaToolSQLAgent: SQLGenerator, Sendable {
         - when ranking or counting entities, project and group by the entity table's stable id plus one human-readable label; prefer name over slug, and include slug only when the user asks for slugs or no name/title label exists;
         - keep entity identity output column names canonical, for example SELECT t.id, t.name instead of renaming them to tool_id or tool_name;
         - alias aggregate metrics with the user's metric term when clear, for example COUNT(*) AS wins for a wins question;
+        - when returning SQL, include a concise redacted query_plan covering grain, joins/roles, filters, projection/aliases/units, grouping, ordering, limit, and date anchors;
         - do not infer business meaning from connectivity alone;
         - do not ask for clarification when database context already defines the needed metric, row/event, time column, and relationship;
         - relative time phrases such as "last two weeks" define the time window; do not ask what the number means when the time unit is present;
@@ -1630,6 +1644,7 @@ public final class OpenRouterSchemaToolSQLAgent: SQLGenerator, Sendable {
         - when ranking or counting entities, project and group by the entity table's stable id plus one human-readable label; prefer name over slug, and include slug only when the user asks for slugs or no name/title label exists;
         - keep entity identity output column names canonical, for example SELECT t.id, t.name instead of renaming them to tool_id or tool_name;
         - alias aggregate metrics with the user's metric term when clear, for example COUNT(*) AS wins for a wins question;
+        - when returning SQL, include a concise redacted query_plan covering grain, joins/roles, filters, projection/aliases/units, grouping, ordering, limit, and date anchors;
         - preserve projection intent: for person/customer/user entities include email when inspected, keep money `_cents` aggregates in cents with a `_cents` alias unless dollars are requested, and use count-like aliases for COUNT metrics;
         - preserve requested intent in SQL: status/boolean filters, anti-joins for missing rows, AVG for averages, GROUP BY for per/by requests, count/order/limit for top/frequent requests, and explicit date anchors from the question or database context;
         - never replace an explicit date/time anchor with NOW(), CURRENT_DATE, or other moving current-time expressions;
@@ -1654,6 +1669,42 @@ public final class OpenRouterSchemaToolSQLAgent: SQLGenerator, Sendable {
         var action: TerminalAction
         var sql: String
         var clarificationQuestion: String
+        var queryPlan: String
+    }
+
+    private static let queryPlanSummarySections: [(label: String, needles: [String])] = [
+        ("grain", ["grain"]),
+        ("joins", ["join"]),
+        ("filters", ["filter", "where"]),
+        ("projection", ["projection", "select"]),
+        ("grouping", ["group"]),
+        ("ordering", ["order"]),
+        ("limit", ["limit"]),
+        ("date anchors", ["date anchor", "date", "time window"]),
+    ]
+    private static let maximumQueryPlanSummaryScanCharacters = 2_000
+
+    private static func redactedQueryPlanSummary(for queryPlan: String) -> String {
+        let trimmed = queryPlan.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmed.isEmpty else { return "" }
+
+        let scanned = String(trimmed.prefix(maximumQueryPlanSummaryScanCharacters))
+        let lowercased = scanned.lowercased()
+        let sections = queryPlanSummarySections.compactMap { section in
+            section.needles.contains { lowercased.contains($0) } ? section.label : nil
+        }
+
+        var parts = [
+            "present",
+            "chars: \(trimmed.count)",
+        ]
+        if trimmed.count > maximumQueryPlanSummaryScanCharacters {
+            parts.append("truncated: true")
+        }
+        if !sections.isEmpty {
+            parts.append("sections: \(sections.joined(separator: ", "))")
+        }
+        return parts.joined(separator: "; ")
     }
 
     private static func parseTerminalResult(_ arguments: String) throws -> TerminalResult {
@@ -1662,7 +1713,7 @@ public final class OpenRouterSchemaToolSQLAgent: SQLGenerator, Sendable {
         guard let object = value.objectValue else {
             throw OpenRouterSchemaToolAgentFailure(category: .terminalResultMalformed, message: "Terminal arguments must be an object.")
         }
-        let allowed = Set(["action", "sql", "clarification_question"])
+        let allowed = Set(["action", "sql", "clarification_question", "query_plan"])
         guard Set(object.keys).isSubset(of: allowed),
             let actionText = object["action"]?.stringValue,
             let action = TerminalAction(rawValue: actionText),
@@ -1671,8 +1722,13 @@ public final class OpenRouterSchemaToolSQLAgent: SQLGenerator, Sendable {
         else {
             throw OpenRouterSchemaToolAgentFailure(category: .terminalResultMalformed, message: "Terminal arguments are invalid.")
         }
+        guard object["query_plan"] == nil || object["query_plan"]?.stringValue != nil else {
+            throw OpenRouterSchemaToolAgentFailure(category: .terminalResultMalformed, message: "Terminal query_plan must be a string.")
+        }
         let trimmedSQL = sql.trimmingCharacters(in: .whitespacesAndNewlines)
         let trimmedQuestion = question.trimmingCharacters(in: .whitespacesAndNewlines)
+        let trimmedQueryPlan = (object["query_plan"]?.stringValue ?? "")
+            .trimmingCharacters(in: .whitespacesAndNewlines)
         guard trimmedSQL.count <= 20_000, trimmedQuestion.count <= 280 else {
             throw OpenRouterSchemaToolAgentFailure(category: .terminalResultMalformed, message: "Terminal arguments exceeded length limits.")
         }
@@ -1686,7 +1742,12 @@ public final class OpenRouterSchemaToolSQLAgent: SQLGenerator, Sendable {
                 throw OpenRouterSchemaToolAgentFailure(category: .terminalResultMalformed, message: "Clarification terminal result invariant failed.")
             }
         }
-        return TerminalResult(action: action, sql: trimmedSQL, clarificationQuestion: trimmedQuestion)
+        return TerminalResult(
+            action: action,
+            sql: trimmedSQL,
+            clarificationQuestion: trimmedQuestion,
+            queryPlan: action == .sql ? redactedQueryPlanSummary(for: trimmedQueryPlan) : ""
+        )
     }
 }
 
@@ -1694,6 +1755,7 @@ private struct OpenRouterSchemaToolAgentDiagnosticState {
     var logicalTurnCount: Int?
     var terminalToolSeen = false
     var terminalAction: String?
+    var terminalQueryPlan = ""
     var terminalValidationFailureReason: String?
     var triedSchemaToolsAfterTerminal = false
     var producedProseInsteadOfTools = false
@@ -1787,6 +1849,7 @@ private struct OpenRouterSchemaToolAgentDiagnosticState {
             logicalTurnCount: logicalTurnCount,
             terminalToolSeen: terminalToolSeen,
             terminalAction: terminalAction,
+            terminalQueryPlan: terminalQueryPlan,
             terminalValidationFailureReason: terminalValidationFailureReason,
             triedSchemaToolsAfterTerminal: triedSchemaToolsAfterTerminal,
             producedProseInsteadOfTools: producedProseInsteadOfTools,

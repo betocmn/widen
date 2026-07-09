@@ -129,6 +129,7 @@ public struct OpenRouterSchemaToolAgentDiagnostics: Codable, Equatable, Sendable
     public var logicalTurnCount: Int?
     public var terminalToolSeen: Bool
     public var terminalAction: String?
+    public var terminalQueryPlan: String
     public var terminalValidationFailureReason: String?
     public var triedSchemaToolsAfterTerminal: Bool
     public var producedProseInsteadOfTools: Bool
@@ -154,6 +155,7 @@ public struct OpenRouterSchemaToolAgentDiagnostics: Codable, Equatable, Sendable
         logicalTurnCount: Int? = nil,
         terminalToolSeen: Bool = false,
         terminalAction: String? = nil,
+        terminalQueryPlan: String = "",
         terminalValidationFailureReason: String? = nil,
         triedSchemaToolsAfterTerminal: Bool = false,
         producedProseInsteadOfTools: Bool = false,
@@ -178,6 +180,7 @@ public struct OpenRouterSchemaToolAgentDiagnostics: Codable, Equatable, Sendable
         self.logicalTurnCount = logicalTurnCount
         self.terminalToolSeen = terminalToolSeen
         self.terminalAction = terminalAction
+        self.terminalQueryPlan = terminalQueryPlan
         self.terminalValidationFailureReason = terminalValidationFailureReason
         self.triedSchemaToolsAfterTerminal = triedSchemaToolsAfterTerminal
         self.producedProseInsteadOfTools = producedProseInsteadOfTools
@@ -204,6 +207,7 @@ public struct OpenRouterSchemaToolAgentDiagnostics: Codable, Equatable, Sendable
         case logicalTurnCount
         case terminalToolSeen
         case terminalAction
+        case terminalQueryPlan
         case terminalValidationFailureReason
         case triedSchemaToolsAfterTerminal
         case producedProseInsteadOfTools
@@ -231,6 +235,7 @@ public struct OpenRouterSchemaToolAgentDiagnostics: Codable, Equatable, Sendable
         logicalTurnCount = try container.decodeIfPresent(Int.self, forKey: .logicalTurnCount)
         terminalToolSeen = try container.decodeIfPresent(Bool.self, forKey: .terminalToolSeen) ?? false
         terminalAction = try container.decodeIfPresent(String.self, forKey: .terminalAction)
+        terminalQueryPlan = try container.decodeIfPresent(String.self, forKey: .terminalQueryPlan) ?? ""
         terminalValidationFailureReason = try container.decodeIfPresent(
             String.self,
             forKey: .terminalValidationFailureReason

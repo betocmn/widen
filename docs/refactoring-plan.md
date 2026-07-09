@@ -47,9 +47,13 @@ PR 2 + PR 5 + PR 6
 
 PR 7 + PR 8 + PR 11 + eval evidence
   └── PR 12 ✅ — Backend defaults, older macOS, release gate [done 2026-06-26]
-      └── PR 13 — Release-gate triage and schema-tool agent fixes
-          └── PR 14 — Resumable, budget-aware release-gate evals
-              └── PR 15 — Release-gate baseline and triage docs
+      └── PR 13 ✅ — Release-gate triage and schema-tool agent fixes [complete 2026-06-28]
+          └── PR 14 ✅ — Resumable, budget-aware release-gate evals [complete 2026-06-28]
+              └── PR 15 ✅ — Release-gate baseline and triage docs [complete 2026-06-28]
+                  └── PR 16 ✅ — Schema-tool over-clarification policy [complete 2026-06-28]
+                      ├── PR 52 ✅ — Diagnostics-only schema-tool policy infrastructure [complete 2026-06-28]
+                      ├── PR 53 ✅ — Intent coverage review fixes and heuristic scope freeze [complete 2026-06-28]
+                      └── PR 54 — Stabilize schema-tool query planning and SQL shape [next]
 ```
 
 ---
@@ -1207,7 +1211,7 @@ Completion notes:
 
 ---
 
-# PR 13 — Release-gate triage and schema-tool agent fixes
+# PR 13 ✅ — Release-gate triage and schema-tool agent fixes [complete 2026-06-28]
 
 Suggested title:
 
@@ -1265,7 +1269,7 @@ If the target numbers are not met, commit the triage report and focused test res
 
 ---
 
-# PR 14 — Resumable, budget-aware release-gate evals
+# PR 14 ✅ — Resumable, budget-aware release-gate evals [complete 2026-06-28]
 
 Suggested title:
 
@@ -1445,7 +1449,7 @@ make eval-release-resume MODEL=openai/gpt-5.5 RESUME=<previous-run-dir>
 
 ---
 
-# PR 15 — Release-gate baseline and triage docs
+# PR 15 ✅ — Release-gate baseline and triage docs [complete 2026-06-28]
 
 Suggested title:
 
@@ -1542,7 +1546,7 @@ bucket.
 
 ---
 
-# PR 16 — Reduce schema-tool over-clarification
+# PR 16 ✅ — Reduce schema-tool over-clarification [complete 2026-06-28]
 
 Implemented a schema-tool clarification policy that rejects generic
 clarifications, treats explicit database context as authoritative, sends one
@@ -1571,7 +1575,7 @@ semantic result mismatch (24 results), followed by tool budget exhausted (9).
 Sanitized artifacts were updated in `docs/evals/0.1.0.md` and
 `docs/evals/0.1.0-triage.md`.
 
-## PR 52 — Diagnostics-only schema-tool policy infrastructure
+## PR 52 ✅ — Diagnostics-only schema-tool policy infrastructure [complete 2026-06-28]
 
 PR 52 merged diagnostics-only. Experimental correction modes remain disabled by
 default and are not production behavior. It keeps the answerability policy, SQL
@@ -1627,7 +1631,7 @@ and tool budget exhaustion on saas status/filter cases. The next production fix
 should not be more force-SQL pressure; it should target stable query-plan and
 SQL-shape generation, or deterministic synthesis for common patterns.
 
-## PR 53 — Intent coverage review fixes and heuristic scope freeze
+## PR 53 ✅ — Intent coverage review fixes and heuristic scope freeze [complete 2026-06-28]
 
 PR 53 addressed the PR 52 review feedback: it reduced intent-coverage false
 positives (subject-scoped metric definitions, count-alias and status-predicate
@@ -1650,6 +1654,104 @@ PR 52 conclusion.
 
 ---
 
+# PR 54 — Stabilize schema-tool query planning and SQL shape
+
+Suggested title:
+
+```text
+fix: stabilize schema tool sql shape
+```
+
+Start from latest `main` after PR 53. Keep PR 10 deferred: the latest release
+gate shows the largest remaining default-path bucket is semantic mismatch and
+SQL-shape drift, not missing schema retrieval.
+
+## Goal
+
+Improve the default OpenRouter schema-tool agent's SQL-shape reliability without
+turning the diagnostics-only intent-coverage policy into a production
+natural-language parser or enabling experimental correction modes by default.
+
+The current baseline from `docs/evals/0.1.0-triage.md` is:
+
+```text
+semantic result mismatch: 24
+semantic end-to-end pass: 24/60
+wrong decision, expected SQL got clarification: 3
+tool budget exhausted: 9
+safety/schema validity: 100%
+transport reliability: 60/60
+repeated/no-progress repair: 0
+```
+
+## Implementation
+
+* Extend the schema-tool terminal result contract with optional redacted
+  `query_plan` text for SQL terminal results. The plan should summarize grain,
+  joins/roles, filters, projection/aliases/units, grouping, ordering, limit,
+  and date anchors.
+* Persist the terminal query plan in `OpenRouterSchemaToolAgentDiagnostics`
+  with backward-compatible decoding, and include it in redacted eval/triage
+  reporting when present.
+* Update default and experimental schema-tool instructions so terminal SQL must
+  be preceded by that concise SQL-shape checklist. Missing or imperfect
+  `query_plan` remains diagnostics-only; do not reject otherwise valid SQL for
+  a plan-format issue.
+* Add `make eval-release-sql-shape MODEL=openai/gpt-5.5` for the current
+  semantic-mismatch bucket:
+  `commerce.average-order-value-country`, `commerce.customer-paid-revenue`,
+  `commerce.customers-without-orders`, `preseason.active-match-configs`,
+  `preseason.verified-tools`, `saas.expiring-subscriptions`,
+  `saas.overallocated-seats`, `support.frequent-feedback-cluster`,
+  `support.unclustered-feedback`, and `support.unresolved-by-assignee`.
+* Do not change eval goldens, seeded semantic data, schema fixtures, backend
+  defaults, privacy policy, local Foundation Models behavior, or PR 52/53
+  diagnostics-only defaults.
+
+## Tests
+
+Add deterministic tests for optional `query_plan` parsing, backward-compatible
+diagnostic metadata decoding, prompt contents, release triage redaction, and
+the focused Makefile command. Unit tests must not require OpenRouter.
+
+Manual verification:
+
+```text
+make project
+make test
+make eval-release-sql-shape MODEL=openai/gpt-5.5
+```
+
+Run the focused eval only when OpenRouter and seeded Postgres eval environment
+variables are available. If the focused run improves, run the full release gate:
+
+```text
+make eval-release MODEL=openai/gpt-5.5
+```
+
+Focused eval note, 2026-07-09: a PR 54 working-tree run of
+`make eval-release-sql-shape MODEL=openai/gpt-5.5` completed all 30 focused
+results with 6 static passes, 0 semantic end-to-end passes, 24 wrong-decision
+results, 6 semantic mismatches, 0 tool-budget failures, 100% safety/schema
+validity on evaluated SQL, 30/30 transport success, and 0 repeated repairs.
+The run did not improve the semantic mismatch bucket. The redacted triage did
+show populated query-plan summaries, so this step adds observability and prompt
+pressure, but default diagnostics-only behavior still needs a follow-up shape
+correction or synthesis step before the full release gate should be rerun.
+
+## Acceptance
+
+* Focused SQL-shape eval improves the semantic mismatch bucket, or the docs
+  record why it did not.
+* Full release-gate target before closing PR 54: semantic mismatches below 24,
+  semantic pass above 24/60, wrong-decision clarifications no worse than 3,
+  tool-budget failures no worse than 9, safety/schema validity 100%,
+  transport reliability at least 95%, and repeated repair count 0.
+* No raw eval runs, prompts, API keys, row values, full schemas, or local
+  absolute paths are committed.
+
+---
+
 # Recommended implementation order for one coding agent
 
 When only one agent is working:
@@ -1666,11 +1768,14 @@ When only one agent is working:
 9. PR 9 ✅ — Optional data inspection
 10. PR 11 ✅ — Experimental local path
 11. PR 12 ✅ — Platform/default-backend decision
-12. PR 13 — Release-gate triage and schema-tool agent fixes
-13. PR 14 — Resumable, budget-aware release-gate evals
-14. PR 15 — Release-gate baseline and triage docs
-15. PR 16 — Schema-tool over-clarification policy
-16. PR 10 ⏸️ — Embedding experiment           [deferred 2026-06-26 — revisit after PR 12 and real app/eval testing]
+12. PR 13 ✅ — Release-gate triage and schema-tool agent fixes
+13. PR 14 ✅ — Resumable, budget-aware release-gate evals
+14. PR 15 ✅ — Release-gate baseline and triage docs
+15. PR 16 ✅ — Schema-tool over-clarification policy
+16. PR 52 ✅ — Diagnostics-only schema-tool policy infrastructure
+17. PR 53 ✅ — Intent coverage review fixes and heuristic scope freeze
+18. PR 54 — Stable schema-tool query planning and SQL shape
+19. PR 10 ⏸️ — Embedding experiment           [deferred 2026-06-26 — revisit after SQL-shape and real app/eval testing show retrieval remains a bottleneck]
 ```
 
 The key discipline is to run the same 20 cases after every PR and reject changes that merely move failures from one stage to another.

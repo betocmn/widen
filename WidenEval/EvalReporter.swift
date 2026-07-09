@@ -648,6 +648,11 @@ enum EvalReporter {
         {
             parts.append("provider: \(provider)")
         }
+        if let queryPlan = result.metrics.openRouterAgentDiagnostics?.terminalQueryPlan,
+            let summary = QueryPlanReportSummary.redactedSummary(for: queryPlan)
+        {
+            parts.append("query plan: \(summary)")
+        }
         return parts.isEmpty ? "-" : tableCell(parts.joined(separator: "; "))
     }
 
@@ -704,6 +709,42 @@ private struct EvalRunFile: Codable {
     var manifest: EvalRunManifest
     var summary: EvalRunSummary
     var backendSummaries: [String: EvalRunSummary]
+}
+
+enum QueryPlanReportSummary {
+    private static let sectionNeedles: [(label: String, needles: [String])] = [
+        ("grain", ["grain"]),
+        ("joins", ["join"]),
+        ("filters", ["filter", "where"]),
+        ("projection", ["projection", "select"]),
+        ("grouping", ["group"]),
+        ("ordering", ["order"]),
+        ("limit", ["limit"]),
+        ("date anchors", ["date anchor", "date", "time window"]),
+    ]
+
+    static func redactedSummary(for queryPlan: String) -> String? {
+        let trimmed = queryPlan.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmed.isEmpty else { return nil }
+
+        let lowercased = trimmed.lowercased()
+        if lowercased.hasPrefix("present; chars:") {
+            return trimmed
+        }
+
+        let sections = sectionNeedles.compactMap { section in
+            section.needles.contains { lowercased.contains($0) } ? section.label : nil
+        }
+
+        var parts = [
+            "present",
+            "chars: \(trimmed.count)",
+        ]
+        if !sections.isEmpty {
+            parts.append("sections: \(sections.joined(separator: ", "))")
+        }
+        return parts.joined(separator: "; ")
+    }
 }
 
 extension DateFormatter {
