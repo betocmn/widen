@@ -340,11 +340,15 @@ struct TextToSQLEvalRunPlanningTests {
         let releaseText = try String(contentsOf: releaseReporter, encoding: .utf8)
         #expect(releaseText.contains("| Query Plan |"))
         #expect(releaseText.contains("terminalQueryPlan"))
+        #expect(releaseText.contains("QueryPlanReportSummary.redactedSummary"))
+        #expect(!releaseText.contains("queryPlan.isEmpty ? \"-\" : queryPlan"))
 
         let evalReporter = repoRoot.appendingPathComponent("WidenEval/EvalReporter.swift")
         let evalText = try String(contentsOf: evalReporter, encoding: .utf8)
         #expect(evalText.contains("query plan:"))
         #expect(evalText.contains("terminalQueryPlan"))
+        #expect(evalText.contains("QueryPlanReportSummary.redactedSummary"))
+        #expect(!evalText.contains(#"query plan: \(queryPlan)"#))
     }
 
     @Test func cloudResumeSourceHashesIncludeOpenRouterGenerator() throws {

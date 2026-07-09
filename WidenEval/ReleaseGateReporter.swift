@@ -687,7 +687,9 @@ enum TextToSQLReleaseTriageReporter {
             let terminal = diagnostics?.terminalAction
                 ?? result.metrics.openRouterAgentTerminalOutcome
                 ?? "-"
-            let queryPlan = diagnostics?.terminalQueryPlan ?? ""
+            let queryPlan = QueryPlanReportSummary.redactedSummary(
+                for: diagnostics?.terminalQueryPlan ?? ""
+            ) ?? "-"
             let policy = Self.policySummary(diagnostics)
             let mismatch = Self.semanticMismatchSummary(result, evalCase: evalCase)
             let schemaToolCalls = result.metrics.openRouterSchemaToolCallCount
@@ -705,7 +707,7 @@ enum TextToSQLReleaseTriageReporter {
                 tableCell(result.metrics.semanticStatus?.rawValue ?? "-"),
                 tableCell(result.metrics.postgresVerificationStatus?.rawValue ?? "-"),
                 tableCell(terminal),
-                tableCell(queryPlan.isEmpty ? "-" : queryPlan),
+                tableCell(queryPlan),
                 tableCell(policy),
                 tableCell(mismatch),
                 String(schemaToolCalls),
