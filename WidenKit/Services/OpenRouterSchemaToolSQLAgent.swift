@@ -1682,12 +1682,14 @@ public final class OpenRouterSchemaToolSQLAgent: SQLGenerator, Sendable {
         ("limit", ["limit"]),
         ("date anchors", ["date anchor", "date", "time window"]),
     ]
+    private static let maximumQueryPlanSummaryScanCharacters = 2_000
 
     private static func redactedQueryPlanSummary(for queryPlan: String) -> String {
         let trimmed = queryPlan.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !trimmed.isEmpty else { return "" }
 
-        let lowercased = trimmed.lowercased()
+        let scanned = String(trimmed.prefix(maximumQueryPlanSummaryScanCharacters))
+        let lowercased = scanned.lowercased()
         let sections = queryPlanSummarySections.compactMap { section in
             section.needles.contains { lowercased.contains($0) } ? section.label : nil
         }
@@ -1696,6 +1698,9 @@ public final class OpenRouterSchemaToolSQLAgent: SQLGenerator, Sendable {
             "present",
             "chars: \(trimmed.count)",
         ]
+        if trimmed.count > maximumQueryPlanSummaryScanCharacters {
+            parts.append("truncated: true")
+        }
         if !sections.isEmpty {
             parts.append("sections: \(sections.joined(separator: ", "))")
         }
@@ -1724,9 +1729,7 @@ public final class OpenRouterSchemaToolSQLAgent: SQLGenerator, Sendable {
         let trimmedQuestion = question.trimmingCharacters(in: .whitespacesAndNewlines)
         let trimmedQueryPlan = (object["query_plan"]?.stringValue ?? "")
             .trimmingCharacters(in: .whitespacesAndNewlines)
-        guard trimmedSQL.count <= 20_000, trimmedQuestion.count <= 280,
-            trimmedQueryPlan.count <= 2_000
-        else {
+        guard trimmedSQL.count <= 20_000, trimmedQuestion.count <= 280 else {
             throw OpenRouterSchemaToolAgentFailure(category: .terminalResultMalformed, message: "Terminal arguments exceeded length limits.")
         }
         switch action {

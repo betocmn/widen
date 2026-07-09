@@ -219,6 +219,8 @@ struct OpenRouterSchemaToolSQLAgentTests {
 
     @Test func searchDescribeTerminalSQLDoesNotSendFullSchemaInitially() async throws {
         let schema = Self.makeSchema()
+        let verboseQueryPlan = "grain: user rows; joins: none; filters: none; projection: id, name; ordering: id; limit: 100; sample: alice@example.com; "
+            + String(repeating: "raw-detail ", count: 220)
         let chatTransport = ScriptedTransport { request, index in
             switch index {
             case 1:
@@ -240,7 +242,7 @@ struct OpenRouterSchemaToolSQLAgentTests {
                     Self.terminalSQL(
                         id: "terminal-1",
                         sql: "SELECT id, name FROM public.users ORDER BY id LIMIT 100",
-                        queryPlan: "grain: user rows; joins: none; filters: none; projection: id, name; ordering: id; limit: 100; sample: alice@example.com"
+                        queryPlan: verboseQueryPlan
                     ),
                 ])
             default:
@@ -268,10 +270,12 @@ struct OpenRouterSchemaToolSQLAgentTests {
         #expect(result.backendMetadata?.agentSchemaToolCallCount == 2)
         let diagnosticQueryPlan = try #require(result.backendMetadata?.agentDiagnostics?.terminalQueryPlan)
         #expect(diagnosticQueryPlan.contains("present"))
+        #expect(diagnosticQueryPlan.contains("truncated: true"))
         #expect(diagnosticQueryPlan.contains("sections: grain, joins, filters, projection, ordering, limit"))
         #expect(!diagnosticQueryPlan.contains("user rows"))
         #expect(!diagnosticQueryPlan.contains("id, name"))
         #expect(!diagnosticQueryPlan.contains("alice@example.com"))
+        #expect(!diagnosticQueryPlan.contains("raw-detail"))
         let diagnosticsData = try JSONEncoder().encode(
             try #require(result.backendMetadata?.agentDiagnostics)
         )
@@ -280,6 +284,7 @@ struct OpenRouterSchemaToolSQLAgentTests {
         #expect(!diagnosticsJSON.contains("user rows"))
         #expect(!diagnosticsJSON.contains("id, name"))
         #expect(!diagnosticsJSON.contains("alice@example.com"))
+        #expect(!diagnosticsJSON.contains("raw-detail"))
         let firstBody = try Self.requestBodyText(chatTransport.requests[0])
         #expect(firstBody.contains("query_plan"))
         #expect(firstBody.contains("grain"))
