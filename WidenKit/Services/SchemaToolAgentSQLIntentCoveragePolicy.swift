@@ -961,7 +961,7 @@ public enum SchemaToolAgentSQLIntentCoveragePolicy {
 
         private var sqlStatusPredicateComparisons: [SQLStatusPredicateComparison] {
             guard let regex = try? NSRegularExpression(
-                pattern: #"(?:\b(?:lower|upper|trim|btrim)\s*\(\s*)?(?:\b[a-z_][a-z0-9_]*\s*\.\s*)?"?\b(?:status|state)\b"?(?:\s*::\s*[a-z_][a-z0-9_]*)?(?:\s*\))?\s*(=|<>|!=|\bnot\s+in\b|\bin\b|\blike\b|\bis\b)\s*('[^']*'|"[^"]*"|\([^)]*\)|(?:any|all)\s*\([^)]*\)|[a-z0-9_]+)"#
+                pattern: #"(?:\b(?:lower|upper|trim|btrim)\s*\(\s*)?(?:\b[a-z_][a-z0-9_]*\s*\.\s*)?"?\b(?:status|state)\b"?(?:\s*::\s*[a-z_][a-z0-9_]*)?(?:\s*\))?\s*(=|<>|!=|\bnot\s+in\b|\bin\b|\blike\b|\bis\b)\s*('[^']*'|"[^"]*"|\([^)]*\)|(?:any|all)\s*\([^)]*\)|(?:lower|upper|trim|btrim)\s*\(\s*(?:'[^']*'|"[^"]*")\s*\)|[a-z0-9_]+)"#
             ) else { return [] }
             let range = NSRange(lowerSQL.startIndex..<lowerSQL.endIndex, in: lowerSQL)
             return regex.matches(in: lowerSQL, range: range).compactMap { match in
@@ -1105,7 +1105,7 @@ public enum SchemaToolAgentSQLIntentCoveragePolicy {
                     #"\b(?:evaluation|reference)\s+date\b(?:\s+is)?[\s,:=\-]*$"#,
                     #"\btoday(?:\s+is)?\b[\s,:=\-]*$"#,
                     #"\banchor(?:\s+date)?(?:\s+(?:is|as))?\b[\s,:=\-]*$"#,
-                    #"\buse\s+(?:the\s+)?(?:date\s+)?$"#,
+                    #"\buse\s+(?:the\s+)?(?:current\s+|evaluation\s+|reference\s+|anchor\s+)?date\s+$"#,
                 ]
                 suffixAnchorPatterns = [
                     #"^[\s,)\-]*as\s+(?:the\s+)?current\s+date\b"#,
@@ -1138,7 +1138,10 @@ public enum SchemaToolAgentSQLIntentCoveragePolicy {
         }
 
         private static func normalizedStatusPredicateValues(from value: String) -> [String] {
-            let trimmed = value.trimmingCharacters(in: .whitespacesAndNewlines)
+            var trimmed = value.trimmingCharacters(in: .whitespacesAndNewlines)
+            while let unwrapped = unwrappedFunctionLiteralBody(trimmed) {
+                trimmed = unwrapped
+            }
             let valueBody: String
             if trimmed.hasPrefix("("), trimmed.hasSuffix(")") {
                 valueBody = String(trimmed.dropFirst().dropLast())
@@ -1172,6 +1175,17 @@ public enum SchemaToolAgentSQLIntentCoveragePolicy {
                 }
                 return []
             }
+        }
+
+        private static func unwrappedFunctionLiteralBody(_ value: String) -> String? {
+            guard value.hasSuffix(")"),
+                let openRange = value.range(
+                    of: #"^(?:lower|upper|trim|btrim)\s*\("#,
+                    options: .regularExpression
+                )
+            else { return nil }
+            return String(value[openRange.upperBound..<value.index(before: value.endIndex)])
+                .trimmingCharacters(in: .whitespacesAndNewlines)
         }
 
         private static func firstDateLiteral(in value: String) -> String? {
