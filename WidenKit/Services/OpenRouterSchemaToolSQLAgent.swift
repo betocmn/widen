@@ -1672,6 +1672,36 @@ public final class OpenRouterSchemaToolSQLAgent: SQLGenerator, Sendable {
         var queryPlan: String
     }
 
+    private static let queryPlanSummarySections: [(label: String, needles: [String])] = [
+        ("grain", ["grain"]),
+        ("joins", ["join"]),
+        ("filters", ["filter", "where"]),
+        ("projection", ["projection", "select"]),
+        ("grouping", ["group"]),
+        ("ordering", ["order"]),
+        ("limit", ["limit"]),
+        ("date anchors", ["date anchor", "date", "time window"]),
+    ]
+
+    private static func redactedQueryPlanSummary(for queryPlan: String) -> String {
+        let trimmed = queryPlan.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmed.isEmpty else { return "" }
+
+        let lowercased = trimmed.lowercased()
+        let sections = queryPlanSummarySections.compactMap { section in
+            section.needles.contains { lowercased.contains($0) } ? section.label : nil
+        }
+
+        var parts = [
+            "present",
+            "chars: \(trimmed.count)",
+        ]
+        if !sections.isEmpty {
+            parts.append("sections: \(sections.joined(separator: ", "))")
+        }
+        return parts.joined(separator: "; ")
+    }
+
     private static func parseTerminalResult(_ arguments: String) throws -> TerminalResult {
         let data = Data(arguments.utf8)
         let value = try JSONDecoder().decode(JSONValue.self, from: data)
@@ -1713,7 +1743,7 @@ public final class OpenRouterSchemaToolSQLAgent: SQLGenerator, Sendable {
             action: action,
             sql: trimmedSQL,
             clarificationQuestion: trimmedQuestion,
-            queryPlan: action == .sql ? trimmedQueryPlan : ""
+            queryPlan: action == .sql ? redactedQueryPlanSummary(for: trimmedQueryPlan) : ""
         )
     }
 }

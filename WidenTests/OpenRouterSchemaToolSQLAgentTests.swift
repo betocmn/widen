@@ -240,7 +240,7 @@ struct OpenRouterSchemaToolSQLAgentTests {
                     Self.terminalSQL(
                         id: "terminal-1",
                         sql: "SELECT id, name FROM public.users ORDER BY id LIMIT 100",
-                        queryPlan: "grain: user rows; joins: none; filters: none; projection: id, name; ordering: id; limit: 100"
+                        queryPlan: "grain: user rows; joins: none; filters: none; projection: id, name; ordering: id; limit: 100; sample: alice@example.com"
                     ),
                 ])
             default:
@@ -266,7 +266,20 @@ struct OpenRouterSchemaToolSQLAgentTests {
         #expect(result.backendMetadata?.agentLogicalTurnCount == 3)
         #expect(result.backendMetadata?.agentHTTPAttemptCount == 3)
         #expect(result.backendMetadata?.agentSchemaToolCallCount == 2)
-        #expect(result.backendMetadata?.agentDiagnostics?.terminalQueryPlan.contains("grain: user rows") == true)
+        let diagnosticQueryPlan = try #require(result.backendMetadata?.agentDiagnostics?.terminalQueryPlan)
+        #expect(diagnosticQueryPlan.contains("present"))
+        #expect(diagnosticQueryPlan.contains("sections: grain, joins, filters, projection, ordering, limit"))
+        #expect(!diagnosticQueryPlan.contains("user rows"))
+        #expect(!diagnosticQueryPlan.contains("id, name"))
+        #expect(!diagnosticQueryPlan.contains("alice@example.com"))
+        let diagnosticsData = try JSONEncoder().encode(
+            try #require(result.backendMetadata?.agentDiagnostics)
+        )
+        let diagnosticsJSON = String(decoding: diagnosticsData, as: UTF8.self)
+        #expect(diagnosticsJSON.contains("terminalQueryPlan"))
+        #expect(!diagnosticsJSON.contains("user rows"))
+        #expect(!diagnosticsJSON.contains("id, name"))
+        #expect(!diagnosticsJSON.contains("alice@example.com"))
         let firstBody = try Self.requestBodyText(chatTransport.requests[0])
         #expect(firstBody.contains("query_plan"))
         #expect(firstBody.contains("grain"))

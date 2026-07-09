@@ -728,6 +728,10 @@ enum QueryPlanReportSummary {
         guard !trimmed.isEmpty else { return nil }
 
         let lowercased = trimmed.lowercased()
+        if lowercased.hasPrefix("present; chars:") {
+            return trimmed
+        }
+
         let sections = sectionNeedles.compactMap { section in
             section.needles.contains { lowercased.contains($0) } ? section.label : nil
         }
