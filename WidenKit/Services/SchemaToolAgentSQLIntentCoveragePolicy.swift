@@ -797,8 +797,17 @@ public enum SchemaToolAgentSQLIntentCoveragePolicy {
         }
 
         var requiresScalarCountAggregate: Bool {
-            lowerQuestion.range(
-                of: #"\b(?:how\s+many|number\s+of|count\s+of)\s+(?!days?\b|weeks?\b|months?\b|quarters?\b|years?\b|hours?\b|minutes?\b|seconds?\b)"#,
+            let excludedCountSubjects =
+                #"(?!days?\b|weeks?\b|months?\b|quarters?\b|years?\b|hours?\b|minutes?\b|seconds?\b)"#
+            if lowerQuestion.range(
+                of: #"\b(?:how\s+many|number\s+of|count\s+of)\s+"# + excludedCountSubjects,
+                options: .regularExpression
+            ) != nil {
+                return true
+            }
+            return lowerQuestion.range(
+                of: #"(?:^|[.!?;:]\s*)(?:please\s+)?count\s+(?:the\s+|all\s+)?(?!of\b)"#
+                    + excludedCountSubjects + #"[a-z]"#,
                 options: .regularExpression
             ) != nil
         }
@@ -823,16 +832,21 @@ public enum SchemaToolAgentSQLIntentCoveragePolicy {
             }
             return expressions.contains { expression in
                 let bareColumn = expression.trimmingCharacters(in: .whitespacesAndNewlines)
-                guard bareColumn.range(of: #"^[a-z_][a-z0-9_]*$"#, options: .regularExpression) != nil
+                guard bareColumn.range(
+                    of: #"^(?:[a-z_][a-z0-9_]*\s*\.\s*)?[a-z_][a-z0-9_]*$"#,
+                    options: .regularExpression
+                ) != nil,
+                    let aliasName = Self.lastSQLPathComponent(bareColumn)?
+                        .trimmingCharacters(in: .whitespacesAndNewlines)
                 else {
                     return false
                 }
-                let escaped = NSRegularExpression.escapedPattern(for: bareColumn)
+                let escaped = NSRegularExpression.escapedPattern(for: aliasName)
                 return lowerSQL.range(
                     of: #"\bcount\s*\([^)]*\)\s*as\s+"# + escaped + #"\b"#,
                     options: .regularExpression
                 ) != nil
-                    || Self.containsRowCountingSumCase(in: lowerSQL, aliasedAs: bareColumn)
+                    || Self.containsRowCountingSumCase(in: lowerSQL, aliasedAs: aliasName)
             }
         }
 

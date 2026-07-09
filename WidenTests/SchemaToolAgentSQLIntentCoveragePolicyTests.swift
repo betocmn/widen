@@ -2395,6 +2395,56 @@ struct SchemaToolAgentSQLIntentCoveragePolicyTests {
         #expect(covered.decision == .covered)
     }
 
+    @Test func imperativeCountRequiresCountAggregate() {
+        let missing = evaluate(
+            question: "Count active users",
+            evidence: evidence(columns: [
+                "public.users.id",
+                "public.users.status",
+            ]),
+            sql: """
+                SELECT id
+                FROM public.users
+                WHERE status = 'active'
+                """
+        )
+
+        #expect(missing.decision == .needsCorrection)
+        #expect(missing.missingSignals.contains("COUNT aggregate for how-many request"))
+
+        let covered = evaluate(
+            question: "Count active users",
+            evidence: evidence(columns: [
+                "public.users.id",
+                "public.users.status",
+            ]),
+            sql: """
+                SELECT COUNT(*) AS active_user_count
+                FROM public.users
+                WHERE status = 'active'
+                """
+        )
+
+        #expect(covered.decision == .covered)
+    }
+
+    @Test func midSentenceCountWordDoesNotRequireCountAggregate() {
+        let covered = evaluate(
+            question: "Show the account status for active users",
+            evidence: evidence(columns: [
+                "public.users.id",
+                "public.users.status",
+            ]),
+            sql: """
+                SELECT id, status
+                FROM public.users
+                WHERE status = 'active'
+                """
+        )
+
+        #expect(covered.decision == .covered)
+    }
+
     @Test func scalarHowManyRequiresCountAggregate() {
         let missing = evaluate(
             question: "How many active users do we have?",
@@ -2702,6 +2752,27 @@ struct SchemaToolAgentSQLIntentCoveragePolicyTests {
                     WHERE status = 'active'
                 )
                 SELECT n
+                FROM counts
+                """
+        )
+
+        #expect(covered.decision == .covered)
+    }
+
+    @Test func qualifiedCteAliasedCountSatisfiesHowMany() {
+        let covered = evaluate(
+            question: "How many active users do we have?",
+            evidence: evidence(columns: [
+                "public.users.id",
+                "public.users.status",
+            ]),
+            sql: """
+                WITH counts AS (
+                    SELECT COUNT(*) AS n
+                    FROM public.users
+                    WHERE status = 'active'
+                )
+                SELECT counts.n
                 FROM counts
                 """
         )
