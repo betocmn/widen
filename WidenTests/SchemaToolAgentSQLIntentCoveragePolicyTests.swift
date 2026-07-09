@@ -3006,6 +3006,23 @@ struct SchemaToolAgentSQLIntentCoveragePolicyTests {
         #expect(missing.missingSignals.contains("COUNT aggregate for how-many request"))
     }
 
+    @Test func sumCaseSignedElseArmDoesNotSatisfyHowMany() {
+        let missing = evaluate(
+            question: "How many active users do we have?",
+            evidence: evidence(columns: [
+                "public.users.id",
+                "public.users.status",
+            ]),
+            sql: """
+                SELECT SUM(CASE WHEN status = 'active' THEN 1 ELSE -1 END) AS active_balance
+                FROM public.users
+                """
+        )
+
+        #expect(missing.decision == .needsCorrection)
+        #expect(missing.missingSignals.contains("COUNT aggregate for how-many request"))
+    }
+
     @Test func sumCaseNullElseCountSatisfiesHowMany() {
         let covered = evaluate(
             question: "How many active users do we have?",

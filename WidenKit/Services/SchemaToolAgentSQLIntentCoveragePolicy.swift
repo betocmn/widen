@@ -882,7 +882,7 @@ public enum SchemaToolAgentSQLIntentCoveragePolicy {
 
         private static func caseArmsCountRows(_ block: String) -> Bool {
             guard let regex = try? NSRegularExpression(
-                pattern: #"\b(?:then|else)\s+('?[a-z0-9_.]+'?)"#
+                pattern: #"\b(?:then|else)\s+(\S+)"#
             ) else { return false }
             let range = NSRange(block.startIndex..<block.endIndex, in: block)
             let matches = regex.matches(in: block, range: range)
