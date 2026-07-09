@@ -299,6 +299,10 @@ struct TextToSQLEvalRunPlanningTests {
         #expect(text.contains("--case preseason.top-wins-ambiguous --case preseason.top-wins-defined"))
         #expect(text.contains("eval-release-resume"))
         #expect(text.contains("--resume-run \"$(RESUME)\" --resume-missing"))
+        #expect(text.contains("eval-release-sql-shape"))
+        #expect(text.contains("--case commerce.average-order-value-country"))
+        #expect(text.contains("--case preseason.active-match-configs"))
+        #expect(text.contains("--case support.unresolved-by-assignee"))
     }
 
     @Test func makefileKeepsExperimentalSchemaAgentFlagsFocused() throws {
@@ -318,6 +322,29 @@ struct TextToSQLEvalRunPlanningTests {
         )
         #expect(focusedRecipe.contains("--schema-agent-clarification-correction experimental"))
         #expect(focusedRecipe.contains("--schema-agent-intent-coverage experimental"))
+
+        let sqlShapeRecipe = try #require(
+            Self.makefileRecipe(named: "eval-release-sql-shape", in: text)
+        )
+        #expect(!sqlShapeRecipe.contains("--schema-agent-clarification-correction"))
+        #expect(!sqlShapeRecipe.contains("--schema-agent-intent-coverage"))
+    }
+
+    @Test func releaseReportsIncludeRedactedQueryPlanDiagnostics() throws {
+        let testFile = URL(fileURLWithPath: #filePath)
+        let repoRoot = testFile
+            .deletingLastPathComponent()
+            .deletingLastPathComponent()
+
+        let releaseReporter = repoRoot.appendingPathComponent("WidenEval/ReleaseGateReporter.swift")
+        let releaseText = try String(contentsOf: releaseReporter, encoding: .utf8)
+        #expect(releaseText.contains("| Query Plan |"))
+        #expect(releaseText.contains("terminalQueryPlan"))
+
+        let evalReporter = repoRoot.appendingPathComponent("WidenEval/EvalReporter.swift")
+        let evalText = try String(contentsOf: evalReporter, encoding: .utf8)
+        #expect(evalText.contains("query plan:"))
+        #expect(evalText.contains("terminalQueryPlan"))
     }
 
     @Test func cloudResumeSourceHashesIncludeOpenRouterGenerator() throws {

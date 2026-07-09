@@ -1729,6 +1729,16 @@ variables are available. If the focused run improves, run the full release gate:
 make eval-release MODEL=openai/gpt-5.5
 ```
 
+Focused eval note, 2026-07-09: a PR 54 working-tree run of
+`make eval-release-sql-shape MODEL=openai/gpt-5.5` completed all 30 focused
+results with 6 static passes, 0 semantic end-to-end passes, 24 wrong-decision
+results, 6 semantic mismatches, 0 tool-budget failures, 100% safety/schema
+validity on evaluated SQL, 30/30 transport success, and 0 repeated repairs.
+The run did not improve the semantic mismatch bucket. The redacted triage did
+show populated query-plan summaries, so this step adds observability and prompt
+pressure, but default diagnostics-only behavior still needs a follow-up shape
+correction or synthesis step before the full release gate should be rerun.
+
 ## Acceptance
 
 * Focused SQL-shape eval improves the semantic mismatch bucket, or the docs

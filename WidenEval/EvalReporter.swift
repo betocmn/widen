@@ -648,6 +648,11 @@ enum EvalReporter {
         {
             parts.append("provider: \(provider)")
         }
+        if let queryPlan = result.metrics.openRouterAgentDiagnostics?.terminalQueryPlan,
+            !queryPlan.isEmpty
+        {
+            parts.append("query plan: \(queryPlan)")
+        }
         return parts.isEmpty ? "-" : tableCell(parts.joined(separator: "; "))
     }
 

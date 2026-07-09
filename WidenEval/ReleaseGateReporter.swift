@@ -416,8 +416,8 @@ enum TextToSQLReleaseTriageReporter {
                 "",
                 "## \(category.rawValue)",
                 "",
-                "| Case | Repeat | Expected | Actual | Status | Semantic | Verification | Terminal | Policy | Mismatch | Schema Tools | Described | Inspected Objects | SQL Tables | Repeated Repair |",
-                "| --- | ---: | --- | --- | --- | --- | --- | --- | --- | --- | ---: | ---: | --- | --- | --- |",
+                "| Case | Repeat | Expected | Actual | Status | Semantic | Verification | Terminal | Query Plan | Policy | Mismatch | Schema Tools | Described | Inspected Objects | SQL Tables | Repeated Repair |",
+                "| --- | ---: | --- | --- | --- | --- | --- | --- | --- | --- | --- | ---: | ---: | --- | --- | --- |",
             ]
             for row in rows {
                 lines.append(row.markdownRow)
@@ -687,6 +687,7 @@ enum TextToSQLReleaseTriageReporter {
             let terminal = diagnostics?.terminalAction
                 ?? result.metrics.openRouterAgentTerminalOutcome
                 ?? "-"
+            let queryPlan = diagnostics?.terminalQueryPlan ?? ""
             let policy = Self.policySummary(diagnostics)
             let mismatch = Self.semanticMismatchSummary(result, evalCase: evalCase)
             let schemaToolCalls = result.metrics.openRouterSchemaToolCallCount
@@ -704,6 +705,7 @@ enum TextToSQLReleaseTriageReporter {
                 tableCell(result.metrics.semanticStatus?.rawValue ?? "-"),
                 tableCell(result.metrics.postgresVerificationStatus?.rawValue ?? "-"),
                 tableCell(terminal),
+                tableCell(queryPlan.isEmpty ? "-" : queryPlan),
                 tableCell(policy),
                 tableCell(mismatch),
                 String(schemaToolCalls),
