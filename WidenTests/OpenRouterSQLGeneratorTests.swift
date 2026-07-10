@@ -378,15 +378,10 @@ struct OpenRouterSQLGeneratorTests {
         #expect(built.request.value(forHTTPHeaderField: "X-OpenRouter-Metadata") == "enabled")
     }
 
-    @Test func privateRoutingPreferencesMergeWithoutDiscardingExistingProviderOptions() throws {
-        let provider = OpenRouterProviderPreferences.requiredPrivateRouting.merging(
-            into: ["sort": "price"]
-        )
-
-        #expect(provider["sort"] as? String == "price")
-        #expect(provider["require_parameters"] as? Bool == true)
-        #expect(provider["zdr"] as? Bool == true)
-        #expect(provider["data_collection"] as? String == "deny")
+    @Test func privateRoutingPreferencesSetExactlyTheRequiredProviderBlock() throws {
+        var body: [String: Any] = ["model": "openai/gpt-5.5"]
+        OpenRouterProviderPreferences.requiredPrivateRouting.apply(to: &body)
+        try OpenRouterTestSupport.expectPrivateRouting(inBody: body)
     }
 
     @Test func requestBuilderUsesStrictModeOnlyWhenAdvertised() throws {
@@ -1478,11 +1473,7 @@ struct OpenRouterSQLGeneratorTests {
     }
 
     private func expectPrivateRouting(in request: URLRequest) throws {
-        let body = try jsonBody(request)
-        let provider = try #require(body["provider"] as? [String: Any])
-        #expect(provider["require_parameters"] as? Bool == true)
-        #expect(provider["zdr"] as? Bool == true)
-        #expect(provider["data_collection"] as? String == "deny")
+        try OpenRouterTestSupport.expectPrivateRouting(inBody: jsonBody(request))
     }
 
     private func temporaryCacheURL() -> URL {

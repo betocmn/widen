@@ -3376,11 +3376,7 @@ struct OpenRouterSchemaToolSQLAgentTests {
     }
 
     private static func expectPrivateRouting(in request: URLRequest) throws {
-        let body = try requestBody(request)
-        let provider = try #require(body["provider"] as? [String: Any])
-        #expect(provider["require_parameters"] as? Bool == true)
-        #expect(provider["zdr"] as? Bool == true)
-        #expect(provider["data_collection"] as? String == "deny")
+        try OpenRouterTestSupport.expectPrivateRouting(inBody: requestBody(request))
     }
 
     private static func catalogResponse(

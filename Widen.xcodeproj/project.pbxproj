@@ -70,6 +70,7 @@
 		4C68CAA36470F5443E52AC15 /* OpenRouterCatalog.swift in Sources */ = {isa = PBXBuildFile; fileRef = 0875D9B4DCE517781B097472 /* OpenRouterCatalog.swift */; };
 		52F7EE9577464DE29859DCF4 /* TextToSQLEvalRunPlanningTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 269E1FC90818BA2FA5DAAC23 /* TextToSQLEvalRunPlanningTests.swift */; };
 		57567D4146FBF59355F6ACF1 /* UpdaterModel.swift in Sources */ = {isa = PBXBuildFile; fileRef = 6D63609C7CFC8D581AD812BA /* UpdaterModel.swift */; };
+		5ACE7003C2FA05C86275576E /* OpenRouterTestSupport.swift in Sources */ = {isa = PBXBuildFile; fileRef = F327329894AB7945DCA80C0C /* OpenRouterTestSupport.swift */; };
 		5F0369487E4251C38AC4C383 /* FoundationModelsConnectionParser.swift in Sources */ = {isa = PBXBuildFile; fileRef = 870B967DD1A236C762771BCD /* FoundationModelsConnectionParser.swift */; };
 		603D1C66B3804DB8772F9B9C /* ChatViewModel.swift in Sources */ = {isa = PBXBuildFile; fileRef = 45FEB67F1A613C00B3549BE5 /* ChatViewModel.swift */; };
 		63CBA2CF0B107EF909EC2869 /* OpenRouterCatalogTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = E656A7DB3A80B58BD957CCA5 /* OpenRouterCatalogTests.swift */; };
@@ -372,6 +373,7 @@
 		F008F51E2B0886CE80331A26 /* AppearancePreferenceTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AppearancePreferenceTests.swift; sourceTree = "<group>"; };
 		F09E72C449EE7A5A9A66BD9F /* DatabaseSchema.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = DatabaseSchema.swift; sourceTree = "<group>"; };
 		F2CC4ADDFBD0372E41CBC1A4 /* SessionStoreTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SessionStoreTests.swift; sourceTree = "<group>"; };
+		F327329894AB7945DCA80C0C /* OpenRouterTestSupport.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = OpenRouterTestSupport.swift; sourceTree = "<group>"; };
 		F63EE53E94C2C5F8EDC5DD47 /* SchemaStore.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SchemaStore.swift; sourceTree = "<group>"; };
 		F6F18482BAFDA08E3E215F02 /* OpenRouterSQLGenerator.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = OpenRouterSQLGenerator.swift; sourceTree = "<group>"; };
 		F7F5CFF578647CD40E63C22D /* TextToSQLSemanticComparatorTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = TextToSQLSemanticComparatorTests.swift; sourceTree = "<group>"; };
@@ -520,6 +522,7 @@
 				E656A7DB3A80B58BD957CCA5 /* OpenRouterCatalogTests.swift */,
 				16E99A1232D5F66D7CD93A84 /* OpenRouterSchemaToolSQLAgentTests.swift */,
 				B99D0685D8BE2B80381201F0 /* OpenRouterSQLGeneratorTests.swift */,
+				F327329894AB7945DCA80C0C /* OpenRouterTestSupport.swift */,
 				526F33B4A497093D4F7A3300 /* PostgresIntegrationTests.swift */,
 				CD610621EA17B95CC6C89A5A /* SchemaPromptPackagerTests.swift */,
 				410F25FEC1FDA966462FC406 /* SchemaSearchIndexTests.swift */,
@@ -879,6 +882,7 @@
 				63CBA2CF0B107EF909EC2869 /* OpenRouterCatalogTests.swift in Sources */,
 				AFBCC86B144660AF022DD102 /* OpenRouterSQLGeneratorTests.swift in Sources */,
 				67A8A2E98431BC68128890D0 /* OpenRouterSchemaToolSQLAgentTests.swift in Sources */,
+				5ACE7003C2FA05C86275576E /* OpenRouterTestSupport.swift in Sources */,
 				05E75B10D5A5DAECC48EF104 /* PostgresIntegrationTests.swift in Sources */,
 				EF9CE627C80199A8351EF201 /* SQLPromptBuilderTests.swift in Sources */,
 				6A5DB748205AD6A08CB83BAE /* SQLSafetyValidatorTests.swift in Sources */,

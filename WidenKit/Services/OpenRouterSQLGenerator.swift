@@ -1232,27 +1232,22 @@ actor OpenRouterModelCatalogService {
     }
 }
 
+/// The only writer of the request `provider` block: every OpenRouter
+/// completion demands endpoints with zero data retention, no provider data
+/// collection, and full request-parameter support.
 struct OpenRouterProviderPreferences: Equatable, Sendable {
-    static let requiredPrivateRouting = OpenRouterProviderPreferences(
-        requireParameters: true,
-        zdr: true,
-        dataCollection: "deny"
-    )
+    static let requiredPrivateRouting = OpenRouterProviderPreferences()
 
-    var requireParameters: Bool
-    var zdr: Bool
-    var dataCollection: String
-
-    func merging(into existing: [String: Any] = [:]) -> [String: Any] {
-        var merged = existing
-        merged["require_parameters"] = requireParameters
-        merged["zdr"] = zdr
-        merged["data_collection"] = dataCollection
-        return merged
-    }
+    let requireParameters = true
+    let zdr = true
+    let dataCollection = "deny"
 
     func apply(to body: inout [String: Any]) {
-        body["provider"] = merging(into: body["provider"] as? [String: Any] ?? [:])
+        body["provider"] = [
+            "require_parameters": requireParameters,
+            "zdr": zdr,
+            "data_collection": dataCollection,
+        ]
     }
 }
 

@@ -54,7 +54,7 @@ struct GeneralSettingsView: View {
     private var privacyCopy: String {
         if appState.aiBackendMode == .cloud {
             if appState.cloudProvider == .openRouter {
-                return "With OpenRouter Cloud selected, Widen sends your question and allowed schema metadata through endpoints that are required not to retain or collect that submitted context. Inspected data values are sent only when cloud data inspection is enabled for that connection. Query results never leave your Mac unless you explicitly inspect and allow those values. Widen has no backend of its own."
+                return "With OpenRouter Cloud selected, Widen sends your question and allowed schema metadata to OpenRouter. \(OpenRouterCatalog.privateRoutingClaim) Inspected data values are sent only when cloud data inspection is enabled for that connection. Query results never leave your Mac unless you explicitly inspect and allow those values. Widen has no backend of its own."
             }
             return "With Cloud selected, Widen sends your question and allowed schema metadata to the provider selected in Settings › LLM. Inspected data values are sent only when cloud data inspection is enabled for that connection. Query results never leave your Mac unless you explicitly inspect and allow those values. Widen has no backend of its own."
         } else {
