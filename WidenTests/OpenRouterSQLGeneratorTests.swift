@@ -188,6 +188,51 @@ struct OpenRouterSQLGeneratorTests {
         #expect(authFailureTransport.requests.count == 1)
     }
 
+    @Test func settingsMetadataLookupSurfacesAuthenticationFailure() async throws {
+        let cacheURL = temporaryCacheURL()
+        let primingTransport = StubTransport([
+            .success((catalogResponse(id: Self.modelID), response(url: Self.apiBase.appendingPathComponent("models/user"), status: 200)))
+        ])
+        let primingService = catalogService(transport: primingTransport, cacheURL: cacheURL, ttl: 60)
+        _ = try await primingService.availableModels(apiKey: "secret-key")
+
+        let authFailureTransport = StubTransport([
+            .success((
+                errorResponse(errorType: "invalid_api_key", message: "Invalid API key"),
+                response(url: Self.apiBase.appendingPathComponent("models/user"), status: 401)
+            ))
+        ])
+        let expiredService = catalogService(transport: authFailureTransport, cacheURL: cacheURL, ttl: -1)
+
+        do {
+            _ = try await expiredService.metadataSurfacingErrors(
+                apiKey: "secret-key",
+                modelID: Self.modelID
+            )
+            Issue.record("expected authentication failure")
+        } catch let failure as OpenRouterFailure {
+            #expect(failure.category == .authentication)
+        }
+    }
+
+    @Test func settingsMetadataLookupServesStaleCacheForTransientFailures() async throws {
+        let cacheURL = temporaryCacheURL()
+        let primingTransport = StubTransport([
+            .success((catalogResponse(id: Self.modelID), response(url: Self.apiBase.appendingPathComponent("models/user"), status: 200)))
+        ])
+        let primingService = catalogService(transport: primingTransport, cacheURL: cacheURL, ttl: 60)
+        _ = try await primingService.availableModels(apiKey: "secret-key")
+
+        let flakyTransport = StubTransport([.failure(URLError(.networkConnectionLost))])
+        let expiredService = catalogService(transport: flakyTransport, cacheURL: cacheURL, ttl: -1)
+
+        let metadata = try await expiredService.metadataSurfacingErrors(
+            apiKey: "secret-key",
+            modelID: Self.modelID
+        )
+        #expect(metadata?.capabilitySource == .staleCache)
+    }
+
     @Test func cancellingOneCatalogWaiterDoesNotCancelSharedRefresh() async throws {
         let transport = DelayedTransport(
             result: (

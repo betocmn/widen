@@ -864,6 +864,41 @@ actor OpenRouterModelCatalogService {
         }
     }
 
+    /// Settings-facing lookup that rethrows the underlying catalog failure so
+    /// the UI can say why metadata is unavailable, instead of a generic
+    /// message. Transient failures still fall back to a stale cache entry;
+    /// authentication and other non-servable failures propagate. The full
+    /// catalog fetch is intentional even for a single pinned model: catalog
+    /// membership is what proves the model is visible to the saved key.
+    func metadataSurfacingErrors(
+        apiKey: String,
+        modelID: String,
+        forceRefresh: Bool = false
+    ) async throws -> OpenRouterModelMetadata? {
+        do {
+            let catalog = try await catalog(apiKey: apiKey, forceRefresh: forceRefresh)
+            if let model = Self.find(modelID, in: catalog.models) {
+                return model
+            }
+            if let single = try await fetchSingleModel(apiKey: apiKey, modelID: modelID) {
+                merge(single, apiKey: apiKey)
+                return single
+            }
+            return nil
+        } catch is CancellationError {
+            throw CancellationError()
+        } catch {
+            if canServeStaleCatalog(after: error),
+                let stale = staleCatalog(apiKey: apiKey)
+                    .map(staleCatalogWithSource)
+                    .flatMap({ Self.find(modelID, in: $0.models) })
+            {
+                return stale
+            }
+            throw error
+        }
+    }
+
     func capabilitiesForGeneration(apiKey: String, modelID: String) async
         -> OpenRouterModelCapabilities
     {

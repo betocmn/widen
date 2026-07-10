@@ -365,26 +365,39 @@ struct LLMSettingsView: View {
         isLoadingCatalog = true
         let selectedModel = OpenRouterCatalog.productionProfile.requestedModelID
         Task {
-            if let metadata = await OpenRouterModelCatalogService.shared.metadata(
-                apiKey: key,
-                modelID: selectedModel,
-                forceRefresh: force
-            ) {
+            do {
+                let metadata = try await OpenRouterModelCatalogService.shared.metadataSurfacingErrors(
+                    apiKey: key,
+                    modelID: selectedModel,
+                    forceRefresh: force
+                )
                 await MainActor.run {
                     guard catalogRefreshStillCurrent(apiKey: key, refreshID: refreshID) else { return }
-                    modelMetadata = metadata
-                    catalogMessage = metadata.isAvailableToAPIKey
-                        ? "Authenticated model metadata loaded."
-                        : "The fixed model was not visible to the saved OpenRouter key."
-                    catalogMessageIsWarning = !metadata.isAvailableToAPIKey
-                        || metadata.capabilitySource == .staleCache
+                    if let metadata {
+                        modelMetadata = metadata
+                        catalogMessage = metadata.isAvailableToAPIKey
+                            ? "Authenticated model metadata loaded."
+                            : "The fixed model was not visible to the saved OpenRouter key."
+                        catalogMessageIsWarning = !metadata.isAvailableToAPIKey
+                            || metadata.capabilitySource == .staleCache
+                    } else {
+                        modelMetadata = nil
+                        catalogMessage = "OpenRouter did not return metadata for the fixed model."
+                        catalogMessageIsWarning = true
+                    }
                     isLoadingCatalog = false
                 }
-            } else {
+            } catch is CancellationError {
+                await MainActor.run {
+                    guard catalogRefreshStillCurrent(apiKey: key, refreshID: refreshID) else { return }
+                    isLoadingCatalog = false
+                }
+            } catch {
                 await MainActor.run {
                     guard catalogRefreshStillCurrent(apiKey: key, refreshID: refreshID) else { return }
                     modelMetadata = nil
-                    catalogMessage = "Could not load the fixed OpenRouter model metadata."
+                    catalogMessage =
+                        "Could not refresh OpenRouter model metadata: \(error.localizedDescription)"
                     catalogMessageIsWarning = true
                     isLoadingCatalog = false
                 }
