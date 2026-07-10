@@ -2023,7 +2023,7 @@ struct OpenRouterConnectivityCheck: Sendable {
     init(
         apiKey: String,
         model: String,
-        expectedCanonicalModelID: String? = nil,
+        expectedCanonicalModelID: String?,
         catalogService: OpenRouterModelCatalogService = .shared,
         transport: any HTTPTransport = URLSessionTransport(),
         requestBuilder: OpenRouterRequestBuilder = OpenRouterRequestBuilder()
@@ -2104,8 +2104,8 @@ public final class OpenRouterSQLGenerator: SQLGenerator, Sendable {
     static let schemaCharacterBudget = 60_000
 
     private let apiKey: String
-    private let model: String
-    private let expectedCanonicalModelID: String?
+    let model: String
+    let expectedCanonicalModelID: String?
     private let transport: any HTTPTransport
     private let catalogService: OpenRouterModelCatalogService
     private let requestBuilder: OpenRouterRequestBuilder
@@ -2114,13 +2114,10 @@ public final class OpenRouterSQLGenerator: SQLGenerator, Sendable {
     private let countCapabilityLookupHTTPAttempts: Bool
     private let preResolvedCapabilities: OpenRouterModelCapabilities?
 
-    var configuredModelID: String { model }
-    var configuredExpectedCanonicalModelID: String? { expectedCanonicalModelID }
-
     public init(
         apiKey: String,
         model: String,
-        expectedCanonicalModelID: String? = nil,
+        expectedCanonicalModelID: String?,
         transport: any HTTPTransport = URLSessionTransport(),
         endpoint: URL = URL(string: "https://openrouter.ai/api/v1/chat/completions")!,
         maximumHTTPAttempts: Int = 3,
@@ -2140,7 +2137,7 @@ public final class OpenRouterSQLGenerator: SQLGenerator, Sendable {
     init(
         apiKey: String,
         model: String,
-        expectedCanonicalModelID: String? = nil,
+        expectedCanonicalModelID: String?,
         transport: any HTTPTransport,
         catalogService: OpenRouterModelCatalogService,
         requestBuilder: OpenRouterRequestBuilder,

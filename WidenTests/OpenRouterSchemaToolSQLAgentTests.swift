@@ -3186,6 +3186,7 @@ struct OpenRouterSchemaToolSQLAgentTests {
         return OpenRouterSchemaToolSQLAgent(
             apiKey: "test-key",
             model: Self.modelID,
+            expectedCanonicalModelID: nil,
             connectionID: Self.connectionID,
             selectedSchemas: ["public"],
             transport: chatTransport,

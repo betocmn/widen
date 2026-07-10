@@ -82,9 +82,9 @@ struct AIBackendSelectionTests {
         #expect(state.cloudBackendStatus == .ready)
         let generator = state.sqlGenerator as? OpenRouterSQLGenerator
         #expect(generator != nil)
-        #expect(generator?.configuredModelID == OpenRouterCatalog.productionProfile.requestedModelID)
+        #expect(generator?.model == OpenRouterCatalog.productionProfile.requestedModelID)
         #expect(
-            generator?.configuredExpectedCanonicalModelID
+            generator?.expectedCanonicalModelID
                 == OpenRouterCatalog.productionProfile.expectedCanonicalModelID
         )
         #expect(state.activeBackendDisplayName.contains("via OpenRouter"))
@@ -111,9 +111,9 @@ struct AIBackendSelectionTests {
 
         let agent = generator as? OpenRouterSchemaToolSQLAgent
         #expect(agent != nil)
-        #expect(agent?.configuredModelID == OpenRouterCatalog.productionProfile.requestedModelID)
+        #expect(agent?.model == OpenRouterCatalog.productionProfile.requestedModelID)
         #expect(
-            agent?.configuredExpectedCanonicalModelID
+            agent?.expectedCanonicalModelID
                 == OpenRouterCatalog.productionProfile.expectedCanonicalModelID
         )
     }
@@ -140,9 +140,9 @@ struct AIBackendSelectionTests {
 
         let agent = generator as? OpenRouterSchemaToolSQLAgent
         #expect(agent != nil)
-        #expect(agent?.configuredModelID == OpenRouterCatalog.productionProfile.requestedModelID)
+        #expect(agent?.model == OpenRouterCatalog.productionProfile.requestedModelID)
         #expect(
-            agent?.configuredExpectedCanonicalModelID
+            agent?.expectedCanonicalModelID
                 == OpenRouterCatalog.productionProfile.expectedCanonicalModelID
         )
     }

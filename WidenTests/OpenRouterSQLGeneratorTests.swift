@@ -1054,6 +1054,7 @@ struct OpenRouterSQLGeneratorTests {
         let result = await OpenRouterConnectivityCheck(
             apiKey: "test-key",
             model: model,
+            expectedCanonicalModelID: nil,
             catalogService: service,
             transport: transport,
             requestBuilder: OpenRouterRequestBuilder(endpoint: Self.chatEndpoint)
@@ -1273,6 +1274,7 @@ struct OpenRouterSQLGeneratorTests {
         OpenRouterSQLGenerator(
             apiKey: "test-key",
             model: model,
+            expectedCanonicalModelID: nil,
             transport: transport,
             catalogService: catalogService(transport: transport),
             requestBuilder: OpenRouterRequestBuilder(endpoint: Self.chatEndpoint),
@@ -1285,6 +1287,7 @@ struct OpenRouterSQLGeneratorTests {
         OpenRouterSQLGenerator(
             apiKey: "test-key",
             model: Self.modelID,
+            expectedCanonicalModelID: nil,
             transport: transport,
             catalogService: catalogService(transport: transport),
             requestBuilder: OpenRouterRequestBuilder(endpoint: Self.chatEndpoint)

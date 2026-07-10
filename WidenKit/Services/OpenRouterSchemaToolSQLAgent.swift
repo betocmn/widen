@@ -135,8 +135,8 @@ public final class OpenRouterSchemaToolSQLAgent: SQLGenerator, Sendable {
     public static let terminalToolName = "submit_text_to_sql_result"
 
     private let apiKey: String
-    private let model: String
-    private let expectedCanonicalModelID: String?
+    let model: String
+    let expectedCanonicalModelID: String?
     private let connectionID: UUID
     private let selectedSchemas: [String]
     private let transport: any HTTPTransport
@@ -152,13 +152,10 @@ public final class OpenRouterSchemaToolSQLAgent: SQLGenerator, Sendable {
     private let legacyGenerator: any SQLGenerator
     private let currentSchemaFingerprint: (@Sendable () async throws -> String)?
 
-    var configuredModelID: String { model }
-    var configuredExpectedCanonicalModelID: String? { expectedCanonicalModelID }
-
     public init(
         apiKey: String,
         model: String,
-        expectedCanonicalModelID: String? = nil,
+        expectedCanonicalModelID: String?,
         connectionID: UUID,
         selectedSchemas: [String],
         transport: any HTTPTransport = URLSessionTransport(),
@@ -198,7 +195,7 @@ public final class OpenRouterSchemaToolSQLAgent: SQLGenerator, Sendable {
     init(
         apiKey: String,
         model: String,
-        expectedCanonicalModelID: String? = nil,
+        expectedCanonicalModelID: String?,
         connectionID: UUID,
         selectedSchemas: [String],
         transport: any HTTPTransport,
