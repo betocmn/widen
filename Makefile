@@ -37,8 +37,13 @@ EVAL_ARGS += --fail-under $(FAIL_UNDER)
 endif
 CLOUD_COST_ARGS :=
 ifdef MAX_CLOUD_COST_USD
-CLOUD_COST_ARGS += --max-cloud-cost-usd $(MAX_CLOUD_COST_USD)
+EVAL_ARGS += --max-cloud-cost-usd $(MAX_CLOUD_COST_USD)
+CLOUD_COST_ARGS := --max-cloud-cost-usd $(MAX_CLOUD_COST_USD)
 endif
+
+# Release-gate targets publish docs/evals/<version>.md and must run the pinned
+# production model. Engineering comparisons must opt in explicitly.
+REQUIRE_PINNED_MODEL = @test "$(MODEL)" = "$(PINNED_OPENROUTER_MODEL)" || test "$(ALLOW_MODEL_OVERRIDE)" = "1" || { echo "error: release gate requires MODEL=$(PINNED_OPENROUTER_MODEL) but got MODEL=$(MODEL); set ALLOW_MODEL_OVERRIDE=1 to run an engineering comparison" >&2; exit 1; }
 
 .PHONY: project build test test-db test-fm eval-build eval-local eval-cloud eval-cloud-agent eval-all eval-case eval-cloud-agent-case eval-retrieval eval-retrieval-case eval-schema-tools eval-inspection-tools eval-db-local eval-db-cloud eval-db-cloud-agent eval-db-cloud-agent-case eval-release eval-release-triage eval-release-preseason eval-release-overclarification eval-release-sql-shape eval-release-resume eval-db-case eval-openrouter-smoke setup run run-conductor release release-mac xcode clean
 
@@ -89,34 +94,34 @@ eval-local: eval-build
 ## Run the text-to-SQL eval suite against OpenRouter
 eval-cloud: eval-build
 	@set -a; if [ -f .env.eval.local ]; then . ./.env.eval.local; fi; set +a; \
-	$(EVAL) --backend cloud --model "$(MODEL)" $(EVAL_ARGS) $(CLOUD_COST_ARGS)
+	$(EVAL) --backend cloud --model "$(MODEL)" $(EVAL_ARGS)
 
 ## Run the text-to-SQL eval suite against OpenRouter with --cloud-agent legacy|tools
 eval-cloud-agent: eval-build
 	@set -a; if [ -f .env.eval.local ]; then . ./.env.eval.local; fi; set +a; \
-	$(EVAL) --backend cloud --model "$(MODEL)" --cloud-agent "$(CLOUD_AGENT)" $(EVAL_ARGS) $(CLOUD_COST_ARGS)
+	$(EVAL) --backend cloud --model "$(MODEL)" --cloud-agent "$(CLOUD_AGENT)" $(EVAL_ARGS)
 
 ## Run a tiny OpenRouter transport and structured-response smoke suite
 eval-openrouter-smoke: eval-build
 	@set -a; if [ -f .env.eval.local ]; then . ./.env.eval.local; fi; set +a; \
-	$(EVAL) --backend cloud --model "$(MODEL)" --suite Evals/suites/openrouter-smoke-v1.json $(filter-out --suite Evals/suites/text-to-sql-v1.json,$(EVAL_ARGS)) $(CLOUD_COST_ARGS)
+	$(EVAL) --backend cloud --model "$(MODEL)" --suite Evals/suites/openrouter-smoke-v1.json $(filter-out --suite Evals/suites/text-to-sql-v1.json,$(EVAL_ARGS))
 
 ## Run the text-to-SQL eval suite against local and cloud backends
 eval-all: eval-build
 	@set -a; if [ -f .env.eval.local ]; then . ./.env.eval.local; fi; set +a; \
-	$(EVAL) --backend both --model "$(MODEL)" $(EVAL_ARGS) $(CLOUD_COST_ARGS)
+	$(EVAL) --backend both --model "$(MODEL)" $(EVAL_ARGS)
 
 ## Run one eval case. Example: make eval-case CASE=preseason.top-wins-defined BACKEND=cloud
 eval-case: eval-build
 	@test -n "$(CASE)" || (echo "error: CASE is required" >&2; exit 1)
 	@set -a; if [ -f .env.eval.local ]; then . ./.env.eval.local; fi; set +a; \
-	$(EVAL) --backend "$(BACKEND)" --model "$(MODEL)" $(EVAL_ARGS) $(CLOUD_COST_ARGS)
+	$(EVAL) --backend "$(BACKEND)" --model "$(MODEL)" $(EVAL_ARGS)
 
 ## Run one OpenRouter cloud-agent eval case. Example: make eval-cloud-agent-case CASE=preseason.top-wins-defined CLOUD_AGENT=tools
 eval-cloud-agent-case: eval-build
 	@test -n "$(CASE)" || (echo "error: CASE is required" >&2; exit 1)
 	@set -a; if [ -f .env.eval.local ]; then . ./.env.eval.local; fi; set +a; \
-	$(EVAL) --backend cloud --model "$(MODEL)" --cloud-agent "$(CLOUD_AGENT)" $(EVAL_ARGS) $(CLOUD_COST_ARGS)
+	$(EVAL) --backend cloud --model "$(MODEL)" --cloud-agent "$(CLOUD_AGENT)" $(EVAL_ARGS)
 
 ## Run deterministic schema retrieval evals with --retriever legacy|index|both
 eval-retrieval: eval-build
@@ -143,26 +148,28 @@ eval-db-local: eval-build
 ## Run the text-to-SQL eval suite with seeded Postgres semantic grading through OpenRouter
 eval-db-cloud: eval-build
 	@set -a; if [ -f .env.eval.local ]; then . ./.env.eval.local; fi; set +a; \
-	$(EVAL) --backend cloud --model "$(MODEL)" --semantic-db $(EVAL_ARGS) $(CLOUD_COST_ARGS)
+	$(EVAL) --backend cloud --model "$(MODEL)" --semantic-db $(EVAL_ARGS)
 
 ## Run seeded Postgres semantic grading through OpenRouter with --cloud-agent legacy|tools
 eval-db-cloud-agent: eval-build
 	@set -a; if [ -f .env.eval.local ]; then . ./.env.eval.local; fi; set +a; \
-	$(EVAL) --backend cloud --model "$(MODEL)" --cloud-agent "$(CLOUD_AGENT)" --semantic-db $(EVAL_ARGS) $(CLOUD_COST_ARGS)
+	$(EVAL) --backend cloud --model "$(MODEL)" --cloud-agent "$(CLOUD_AGENT)" --semantic-db $(EVAL_ARGS)
 
 ## Run one seeded Postgres semantic OpenRouter cloud-agent eval case.
 eval-db-cloud-agent-case: eval-build
 	@test -n "$(CASE)" || (echo "error: CASE is required" >&2; exit 1)
 	@set -a; if [ -f .env.eval.local ]; then . ./.env.eval.local; fi; set +a; \
-	$(EVAL) --backend cloud --model "$(MODEL)" --cloud-agent "$(CLOUD_AGENT)" --semantic-db $(EVAL_ARGS) $(CLOUD_COST_ARGS)
+	$(EVAL) --backend cloud --model "$(MODEL)" --cloud-agent "$(CLOUD_AGENT)" --semantic-db $(EVAL_ARGS)
 
 ## Run the PR 12 text-to-SQL release gate
 eval-release: eval-build
+	$(REQUIRE_PINNED_MODEL)
 	@set -a; if [ -f .env.eval.local ]; then . ./.env.eval.local; fi; set +a; \
 	$(EVAL) --backend cloud --model "$(MODEL)" --cloud-agent tools --suite Evals/suites/text-to-sql-v1.json --semantic-db --repeat 3 --release-gate-version "$(RELEASE_VERSION)" $(CLOUD_COST_ARGS)
 
 ## Run the release gate and write redacted failure triage artifacts
 eval-release-triage: eval-build
+	$(REQUIRE_PINNED_MODEL)
 	@set -a; if [ -f .env.eval.local ]; then . ./.env.eval.local; fi; set +a; \
 	$(EVAL) --backend cloud --model "$(MODEL)" --cloud-agent tools --suite Evals/suites/text-to-sql-v1.json --semantic-db --repeat 3 --release-gate-version "$(RELEASE_VERSION)" --write-release-triage --release-triage-version "$(RELEASE_VERSION)" $(CLOUD_COST_ARGS)
 
@@ -191,7 +198,7 @@ eval-release-resume: eval-build
 eval-db-case: eval-build
 	@test -n "$(CASE)" || (echo "error: CASE is required" >&2; exit 1)
 	@set -a; if [ -f .env.eval.local ]; then . ./.env.eval.local; fi; set +a; \
-	$(EVAL) --backend "$(BACKEND)" --model "$(MODEL)" --semantic-db $(EVAL_ARGS) $(CLOUD_COST_ARGS)
+	$(EVAL) --backend "$(BACKEND)" --model "$(MODEL)" --semantic-db $(EVAL_ARGS)
 
 ## Build and launch the app
 run: build
