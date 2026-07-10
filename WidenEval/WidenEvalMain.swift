@@ -216,6 +216,7 @@ struct EvalCLIOptions {
     var inspectionTools = false
     var releaseTriageInputPath: String?
     var writeReleaseTriage = false
+    var allowModelOverride = false
     var releaseTriageVersion: String?
     var resumeRunPath: String?
     var resumeMissing = false
@@ -347,6 +348,8 @@ struct EvalCLIOptions {
                 options.releaseTriageInputPath = try nextValue(after: argument)
             case "--write-release-triage":
                 options.writeReleaseTriage = true
+            case "--allow-model-override":
+                options.allowModelOverride = true
             case "--release-triage-version":
                 options.releaseTriageVersion = try nextValue(after: argument)
             case "--resume-run":

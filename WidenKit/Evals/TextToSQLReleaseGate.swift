@@ -1,5 +1,37 @@
 import Foundation
 
+/// Runs that publish committed release-gate or triage docs must evaluate the
+/// pinned production model. Enforced at the eval CLI so a future Makefile
+/// target or direct binary invocation cannot bypass the Makefile guard.
+public enum TextToSQLReleaseGateModelPolicy {
+    public struct Violation: Error, CustomStringConvertible, Equatable, Sendable {
+        public var model: String
+        public var pinnedModel: String
+
+        public var description: String {
+            "Release-gate and triage docs require the pinned production model \(pinnedModel) but got \(model); pass --allow-model-override to run an engineering comparison."
+        }
+    }
+
+    public static func validate(
+        model: String,
+        backendIncludesCloud: Bool,
+        releaseGateVersion: String?,
+        releaseTriageVersion: String?,
+        allowModelOverride: Bool
+    ) throws {
+        guard backendIncludesCloud,
+            releaseGateVersion != nil || releaseTriageVersion != nil,
+            !allowModelOverride,
+            model != OpenRouterCatalog.productionProfile.requestedModelID
+        else { return }
+        throw Violation(
+            model: model,
+            pinnedModel: OpenRouterCatalog.productionProfile.requestedModelID
+        )
+    }
+}
+
 public struct TextToSQLReleaseGateCount: Codable, Equatable, Sendable {
     public var count: Int
     public var denominator: Int

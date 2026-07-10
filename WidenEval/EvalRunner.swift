@@ -161,6 +161,13 @@ struct EvalRunner {
         if let resumeRun {
             try runner.applyResumeDefaults(from: resumeRun)
         }
+        try TextToSQLReleaseGateModelPolicy.validate(
+            model: runner.options.model,
+            backendIncludesCloud: runner.options.backendMode.backends.contains(.cloud),
+            releaseGateVersion: runner.options.releaseGateVersion,
+            releaseTriageVersion: runner.options.releaseTriageVersion,
+            allowModelOverride: runner.options.allowModelOverride
+        )
         return try await runner.runResolved(resumeRun: resumeRun)
     }
 
