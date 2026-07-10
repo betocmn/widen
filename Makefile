@@ -37,8 +37,8 @@ EVAL_ARGS += --fail-under $(FAIL_UNDER)
 endif
 CLOUD_COST_ARGS :=
 ifdef MAX_CLOUD_COST_USD
-EVAL_ARGS += --max-cloud-cost-usd $(MAX_CLOUD_COST_USD)
 CLOUD_COST_ARGS := --max-cloud-cost-usd $(MAX_CLOUD_COST_USD)
+EVAL_ARGS += $(CLOUD_COST_ARGS)
 endif
 
 # Release-gate targets publish docs/evals/<version>.md and must run the pinned
@@ -188,12 +188,17 @@ eval-release-sql-shape: eval-build
 	@set -a; if [ -f .env.eval.local ]; then . ./.env.eval.local; fi; set +a; \
 	$(EVAL) --backend cloud --model "$(MODEL)" --cloud-agent tools --suite Evals/suites/text-to-sql-v1.json --case commerce.average-order-value-country --case commerce.customer-paid-revenue --case commerce.customers-without-orders --case preseason.active-match-configs --case preseason.verified-tools --case saas.expiring-subscriptions --case saas.overallocated-seats --case support.frequent-feedback-cluster --case support.unclustered-feedback --case support.unresolved-by-assignee --semantic-db --repeat 3 --write-release-triage $(CLOUD_COST_ARGS)
 
-## Resume a previous release-gate run without rerunning completed cases
+## Resume a previous release-gate run without rerunning completed cases.
+## The pinned model is passed explicitly so resume compatibility rejects a
+## non-production manifest; an ALLOW_MODEL_OVERRIDE=1 resume without an
+## explicit MODEL inherits the manifest model instead, matching how the
+## overridden run was started.
+RESUME_MODEL_ARGS = $(if $(and $(filter 1,$(ALLOW_MODEL_OVERRIDE)),$(filter file,$(origin MODEL))),,--model "$(MODEL)")
 eval-release-resume: eval-build
 	@test -n "$(RESUME)" || (echo "error: RESUME is required" >&2; exit 1)
 	$(REQUIRE_PINNED_MODEL)
 	@set -a; if [ -f .env.eval.local ]; then . ./.env.eval.local; fi; set +a; \
-	$(EVAL) --resume-run "$(RESUME)" --resume-missing --model "$(MODEL)" --release-gate-version "$(RELEASE_VERSION)" --write-release-triage $(CLOUD_COST_ARGS)
+	$(EVAL) --resume-run "$(RESUME)" --resume-missing $(RESUME_MODEL_ARGS) --release-gate-version "$(RELEASE_VERSION)" --write-release-triage $(CLOUD_COST_ARGS)
 
 ## Run one seeded Postgres semantic eval case
 eval-db-case: eval-build
