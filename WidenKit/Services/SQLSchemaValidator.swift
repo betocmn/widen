@@ -1969,6 +1969,11 @@ public enum GeneratedSQLPostprocessor {
         let schemaValidation = SQLSchemaValidator.validate(sql: sql, against: schema)
         copy.referencedTables = schemaValidation.referencedTables
         if !schemaValidation.hasDefiniteErrors {
+            let trustsSchemaToolSQL = schemaToolEvidenceAllowsSQL(
+                schemaValidation: schemaValidation,
+                generation: generation
+            )
+            var diagnosticConcepts: [SQLGroundingConcept] = []
             if allowGroundingClarification,
                 let pending = anchoredWindowClarification(
                     question: question,
@@ -1976,17 +1981,20 @@ public enum GeneratedSQLPostprocessor {
                     databaseContext: databaseContext
                 )
             {
-                copy.sql = ""
-                copy.explanation = pending.question
-                copy.needsClarification = true
-                copy.clarificationQuestion = pending.question
-                copy.clarificationOptions = pending.options
-                copy.pendingClarificationID = pending.id
-                copy.pendingClarification = pending
-                copy.groundingConcepts = [pending.concept]
-                copy.confidence = min(copy.confidence, 0.2)
-                copy.riskLevel = .medium
-                return copy
+                diagnosticConcepts.append(pending.concept)
+                if !trustsSchemaToolSQL {
+                    copy.sql = ""
+                    copy.explanation = pending.question
+                    copy.needsClarification = true
+                    copy.clarificationQuestion = pending.question
+                    copy.clarificationOptions = pending.options
+                    copy.pendingClarificationID = pending.id
+                    copy.pendingClarification = pending
+                    copy.groundingConcepts = diagnosticConcepts
+                    copy.confidence = min(copy.confidence, 0.2)
+                    copy.riskLevel = .medium
+                    return copy
+                }
             }
             let grounding = groundingEvaluation(
                 question: question,
@@ -1996,16 +2004,11 @@ public enum GeneratedSQLPostprocessor {
                 databaseContext: databaseContext,
                 confirmedSemanticBindings: confirmedSemanticBindings
             )
-            copy.groundingConcepts = grounding.concepts
+            copy.groundingConcepts = diagnosticConcepts + grounding.concepts
             if allowGroundingClarification,
                 let pending = grounding.pendingClarification
             {
-                if schemaToolEvidenceAllowsSQL(
-                    question: question,
-                    databaseContext: databaseContext,
-                    schemaValidation: schemaValidation,
-                    generation: generation
-                ) {
+                if trustsSchemaToolSQL {
                     return copy
                 }
                 copy.sql = ""
@@ -2023,8 +2026,6 @@ public enum GeneratedSQLPostprocessor {
     }
 
     private static func schemaToolEvidenceAllowsSQL(
-        question: String,
-        databaseContext: String,
         schemaValidation: SQLSchemaValidationResult,
         generation: SQLGenerationResult
     ) -> Bool {
@@ -2032,10 +2033,7 @@ public enum GeneratedSQLPostprocessor {
             diagnostics.terminalToolSeen,
             diagnostics.terminalAction == "sql",
             diagnostics.appSideRejectionReason == nil,
-            [
-                SchemaToolAgentIntentCoverageMode.rejectOnlyExperimental.rawValue,
-                SchemaToolAgentIntentCoverageMode.correctAndRetryExperimental.rawValue,
-            ].contains(diagnostics.intentCoverageMode),
+            !schemaValidation.hasDefiniteErrors,
             !schemaValidation.referencedTables.isEmpty
         else {
             return false
@@ -2048,13 +2046,7 @@ public enum GeneratedSQLPostprocessor {
         }) else {
             return false
         }
-        let coverage = SchemaToolAgentSQLIntentCoveragePolicy.evaluate(
-            question: question,
-            databaseContext: databaseContext,
-            evidence: evidence,
-            sql: generation.sql
-        )
-        return coverage.decision == .covered
+        return true
     }
 
     private static func anchoredWindowClarification(
