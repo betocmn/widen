@@ -375,11 +375,28 @@ struct LLMSettingsView: View {
                     guard catalogRefreshStillCurrent(apiKey: key, refreshID: refreshID) else { return }
                     if let metadata {
                         modelMetadata = metadata
-                        catalogMessage = metadata.isAvailableToAPIKey
-                            ? "Authenticated model metadata loaded."
-                            : "The fixed model was not visible to the saved OpenRouter key."
-                        catalogMessageIsWarning = !metadata.isAvailableToAPIKey
-                            || metadata.capabilitySource == .staleCache
+                        let canonicalRolled =
+                            metadata.canonicalModelID != nil
+                            && metadata.canonicalModelID
+                                != OpenRouterCatalog.productionProfile.expectedCanonicalModelID
+                            && (metadata.capabilitySource == .authenticatedCatalog
+                                || metadata.capabilitySource == .singleModelLookup)
+                        if !metadata.isAvailableToAPIKey {
+                            catalogMessage =
+                                "The fixed model was not visible to the saved OpenRouter key."
+                            catalogMessageIsWarning = true
+                        } else if canonicalRolled {
+                            catalogMessage =
+                                "OpenRouter now resolves the fixed model to an unevaluated version. Cloud generation fails closed until a Widen update pins the new version."
+                            catalogMessageIsWarning = true
+                        } else if metadata.capabilitySource == .staleCache {
+                            catalogMessage =
+                                "Showing cached model metadata; the last refresh did not reach OpenRouter."
+                            catalogMessageIsWarning = true
+                        } else {
+                            catalogMessage = "Authenticated model metadata loaded."
+                            catalogMessageIsWarning = false
+                        }
                     } else {
                         modelMetadata = nil
                         catalogMessage = "OpenRouter did not return metadata for the fixed model."
