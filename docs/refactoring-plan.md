@@ -1846,6 +1846,9 @@ When only one agent is working:
 20. PR 10 ⏸️ — Embedding experiment           [deferred 2026-06-26 — revisit only if real app/eval evidence shows retrieval is the bottleneck]
 ```
 
+Follow-up work after PR 55 (PR 56 and onward) is planned in
+`docs/next-dev-steps.md`.
+
 The key discipline is to run the same 20 cases after every PR and reject changes that merely move failures from one stage to another.
 
 [1]: https://github.com/promptfoo/promptfoo "GitHub - promptfoo/promptfoo: Test your prompts, agents, and RAGs. Red teaming/pentesting/vulnerability scanning for AI. Compare performance of GPT, Claude, Gemini, DeepSeek, and more. Simple declarative configs with command line and CI/CD integration.  Used by OpenAI and Anthropic. · GitHub"
