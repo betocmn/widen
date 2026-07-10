@@ -31,7 +31,7 @@ PR 1 — Eval harness and first 20 cases
   ├── PR 4 — OpenRouter adapter reliability                [parallel]
   └── PR 5 — Local schema search index                     [parallel]
           ├── PR 6 ✅ — Bounded schema tools                  [done 2026-06-25]
-          └── PR 10 ⏸️ — Embedding retrieval experiment     [deferred 2026-06-26 — revisit after PR 12]
+          └── PR 10 ⏸️ — Embedding retrieval experiment     [deferred 2026-06-26 — revisit only if retrieval becomes the measured bottleneck]
 
 PR 2 + PR 4 + PR 6
   └── PR 7 ✅ — Cloud tool-using SQL agent                  [done 2026-06-25]
@@ -53,7 +53,8 @@ PR 7 + PR 8 + PR 11 + eval evidence
                   └── PR 16 ✅ — Schema-tool over-clarification policy [complete 2026-06-28]
                       ├── PR 52 ✅ — Diagnostics-only schema-tool policy infrastructure [complete 2026-06-28]
                       ├── PR 53 ✅ — Intent coverage review fixes and heuristic scope freeze [complete 2026-06-28]
-                      └── PR 54 — Stabilize schema-tool query planning and SQL shape [next]
+                      └── PR 54 ✅ — Stabilize schema-tool query planning and SQL shape [complete 2026-07-09]
+                          └── PR 55 ✅ — Select and pin the OpenRouter SQL profile [complete 2026-07-10]
 ```
 
 ---
@@ -1654,7 +1655,7 @@ PR 52 conclusion.
 
 ---
 
-# PR 54 — Stabilize schema-tool query planning and SQL shape
+# PR 54 ✅ — Stabilize schema-tool query planning and SQL shape [complete 2026-07-09]
 
 Suggested title:
 
@@ -1739,6 +1740,9 @@ show populated query-plan summaries, so this step adds observability and prompt
 pressure, but default diagnostics-only behavior still needs a follow-up shape
 correction or synthesis step before the full release gate should be rerun.
 
+PR 54 closed with this negative focused result. It kept the query-plan
+diagnostics and did not promote a behavior-changing SQL-shape correction.
+
 ## Acceptance
 
 * Focused SQL-shape eval improves the semantic mismatch bucket, or the docs
@@ -1749,6 +1753,69 @@ correction or synthesis step before the full release gate should be rerun.
   transport reliability at least 95%, and repeated repair count 0.
 * No raw eval runs, prompts, API keys, row values, full schemas, or local
   absolute paths are committed.
+
+---
+
+# PR 55 ✅ — Select and pin the OpenRouter SQL profile [complete 2026-07-10]
+
+Suggested title:
+
+```text
+feat: standardize openrouter sql profile
+```
+
+PR 55 compared the remaining eligible OpenRouter candidates under explicit
+cost caps, required private routing, the production schema-tool path, seeded
+PostgreSQL semantic grading, and deterministic promotion criteria. PR 10
+embeddings remain deferred because these failures are SQL decision and shape
+failures, not missing schema retrieval.
+
+Original bake-off evidence:
+
+| Candidate | Focused semantic | Cost | Outcome |
+| --- | ---: | ---: | --- |
+| Claude Sonnet 5 | 2/30 | $1.038 | Tied Terra at higher measured cost |
+| GPT-5.6 Terra | 2/30 | $0.633 | Best original focused power/cost result |
+| DeepSeek V4 Pro | 1/30 | $0.607 | Rejected for schema and latency failures |
+| GPT-5.6 Terra full | 17/60 | $1.512 | Below the established GPT-5.5 24/60 baseline |
+
+Corrected comparison after the query-plan work:
+
+| Run | Semantic / transport | Cost | P95 | Decision |
+| --- | ---: | ---: | ---: | --- |
+| GPT-5.5 focused | 1/30 semantic; 30/30 transport/parse | $1.518680 | 24,528 ms | Eligible |
+| GPT-5.6 Terra focused | 5/30 semantic; 30/30 transport/parse | $0.691767 | 26,643 ms | Focused winner |
+| GPT-5.6 Terra smoke | 15/15 transport/parse | $0.079022 | 8,110 ms | Private-routing smoke passed |
+| GPT-5.6 Terra full | 22/60 semantic; 59/60 transport; 57/59 parse | $1.484147 | 56,860 ms | Not promoted |
+
+Terra won the focused comparison mechanically because its 16.7% semantic pass
+rate exceeded GPT-5.5's 3.3% by more than five percentage points. The complete
+full run then failed the incremental promotion gate: semantic performance did
+not exceed 24/60 and four results had static schema failures. Clarification
+accuracy was 10/12, safety was 40/40, transport and parsing remained above 95%,
+and forbidden bindings, repeated/no-progress repairs, and eval timeouts stayed
+at zero, but those passing criteria do not override either failed requirement.
+
+The approved fallback was applied:
+
+* Reverted only the experimental trusted-agent grounding bypass.
+* Kept private OpenRouter routing: zero data retention, provider data collection
+  denied, and all request parameters required.
+* Fixed the product profile to requested model `openai/gpt-5.5`, expected
+  canonical model `openai/gpt-5.5-20260423`, display name `GPT-5.5`.
+* Made the schema-tool agent the only connected-session OpenRouter path and
+  removed custom model and agent-path preferences from Settings.
+* Added fail-closed canonical-version checks for product completions and the
+  model connectivity test. Eval model and agent CLI overrides remain free-form.
+* Kept Cloud/OpenRouter as the fresh-install default and kept Local as an
+  optional experimental backend on eligible Macs for narrow requests and
+  simple databases.
+* Kept cloud text-to-SQL labeled beta. The complete production-ready release
+  gate remains unmet.
+
+New PR 55 evaluation spend was $3.773616, below the $6.00 implementation cap.
+Historical GPT-5.5 baseline files remain intact; the current sanitized release
+summary and triage record the complete negative Terra run.
 
 ---
 
@@ -1774,8 +1841,9 @@ When only one agent is working:
 15. PR 16 ✅ — Schema-tool over-clarification policy
 16. PR 52 ✅ — Diagnostics-only schema-tool policy infrastructure
 17. PR 53 ✅ — Intent coverage review fixes and heuristic scope freeze
-18. PR 54 — Stable schema-tool query planning and SQL shape
-19. PR 10 ⏸️ — Embedding experiment           [deferred 2026-06-26 — revisit after SQL-shape and real app/eval testing show retrieval remains a bottleneck]
+18. PR 54 ✅ — Stable schema-tool query planning and SQL shape
+19. PR 55 ✅ — Fixed OpenRouter SQL profile and private routing
+20. PR 10 ⏸️ — Embedding experiment           [deferred 2026-06-26 — revisit only if real app/eval evidence shows retrieval is the bottleneck]
 ```
 
 The key discipline is to run the same 20 cases after every PR and reject changes that merely move failures from one stage to another.

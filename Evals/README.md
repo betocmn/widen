@@ -23,12 +23,12 @@ comparison metadata to establish baseline compatibility.
 
 ```sh
 make eval-local
-make eval-cloud MODEL=openai/gpt-5.5
-make eval-all MODEL=openai/gpt-5.5
+make eval-cloud
+make eval-all
 make eval-case CASE=preseason.top-wins-defined BACKEND=local
 make eval-db-local
-make eval-db-cloud MODEL=openai/gpt-5.5
-make eval-release MODEL=openai/gpt-5.5
+make eval-db-cloud
+make eval-release
 make eval-db-case CASE=preseason.top-wins-defined BACKEND=local
 make eval-retrieval
 make eval-retrieval RETRIEVER=index
@@ -57,6 +57,7 @@ variable. Do not commit API keys, prompts, or raw model output.
 --record-prompts
 --fail-under <percentage>
 --release-gate-version <version>
+--max-cloud-cost-usd <decimal>
 --semantic-db
 --retriever legacy|index|both
 ```
@@ -125,7 +126,10 @@ diffs, if added later, must stay under `.eval-results/`.
 
 ## Release Gate
 
-`make eval-release MODEL=<model>` is the PR 12 release gate. It runs
+`make eval-release` is the PR 12 release gate and defaults to the fixed
+production alias `openai/gpt-5.5`. An explicit `MODEL=<model>` or CLI `--model`
+remains available for engineering experiments without changing the app's
+production profile. The target runs
 `Evals/suites/text-to-sql-v1.json` with `--backend cloud`, `--cloud-agent tools`,
 `--semantic-db`, and `--repeat 3`. This intentionally tests the OpenRouter
 schema-tool agent because that is the default connected-session product path for
