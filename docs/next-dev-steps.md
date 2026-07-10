@@ -8,7 +8,10 @@ routing, canonical-version enforcement, release-gate hardening) merges to
 
 * The product path is fixed: OpenRouter schema-tool agent, pinned
   `openai/gpt-5.5` (canonical `openai/gpt-5.5-20260423`), zero-data-retention
-  routing, fail-closed canonical checks in the app and in pinned-model evals.
+  routing, fail-closed canonical checks in the app and in pinned-model evals
+  (with one forced-refresh recovery so a stale cache cannot fail a freshly
+  updated app). Release-gate/triage doc publication is pin-enforced in both
+  the Makefile and the eval CLI (`--allow-model-override` to opt out).
 * The release gate still fails, so text-to-SQL stays beta. The complete
   2026-07-10 gate at HEAD (pinned GPT-5.5, private routing, canonical
   enforcement, $3.18): 19/60 semantic, 11/12 clarification accuracy, 100%
@@ -139,7 +142,9 @@ compares `canonical_slug` for the pinned model against
 opens an issue. Add a rollover section to `docs/release.md`: run the release
 gate on the new canonical, update the profile constant, ship a Sparkle
 release. The in-app pre-flight and eval-side enforcement from the PR 55
-branch already fail loudly; this PR is about hearing it first.
+branch already fail loudly (after one self-healing cache refresh), and
+Settings warns when the catalog canonical has rolled; this PR is about the
+team hearing it before users do.
 
 ## PR 61 — Second vetted model in the allowlist
 
@@ -153,6 +158,28 @@ release gate under identical private routing. Add it to the profile list only
 if it meets or beats the pinned baseline on semantic pass with all hard gates
 green. Settings picker grows to two vetted entries, each with its own
 canonical pin; eval defaults stay on the primary.
+
+## PR 62 — PR 55 hardening cleanups
+
+Deferred quality cleanups surfaced by the PR 55 review passes; none block the
+merge and none change behavior:
+
+* `OpenRouterProviderPreferences` is now a vacuous singleton struct (every
+  value is fixed) — collapse it to a caseless enum with statics, and move
+  `OpenRouterCatalog.privateRoutingClaim` next to it so the routing mechanism
+  and the user-facing privacy claim live in one place.
+* `refreshOpenRouterCatalog` repeats the guard/spinner boilerplate across
+  three `MainActor.run` blocks, and its cancellation branch silently keeps
+  the previous status message — compute one result value and finish in a
+  single block.
+* The three connectivity-check canonical tests are ~25-line near-clones
+  (extract a run helper), and the tool-chat parser canonical tests hand-build
+  fixtures that the file's `assistantToolCalls`/`toolCall` helpers already
+  cover once they take a `model` parameter.
+* Pre-existing, user-initiated-only inefficiencies: `OpenRouterConnectivityCheck.run()`
+  force-fetches the full catalog twice when the model is missing from the
+  just-fetched catalog, and `testModel()` invalidates the cache (with a disk
+  write) immediately before the check force-refreshes anyway.
 
 ## Later / conditional
 
