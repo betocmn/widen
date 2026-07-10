@@ -308,7 +308,8 @@ struct OpenRouterToolChatParser: Sendable {
         response: HTTPURLResponse,
         requestedModelID: String,
         requestCount: Int,
-        retryCount: Int
+        retryCount: Int,
+        expectedCanonicalModelID: String? = nil
     ) throws -> ParsedTurn {
         if !(200..<300).contains(response.statusCode) {
             throw OpenRouterResponseParser.failure(
@@ -346,6 +347,16 @@ struct OpenRouterToolChatParser: Sendable {
                 attemptCount: requestCount
             )
         }
+        try OpenRouterCanonicalModelValidator.validate(
+            returnedModelID: completion.model,
+            expectedCanonicalModelID: expectedCanonicalModelID,
+            requestedModelID: requestedModelID,
+            httpStatus: response.statusCode,
+            completionID: completion.id,
+            requestID: requestID,
+            providerName: completion.provider ?? completion.openrouterMetadata?.selectedProvider,
+            attemptCount: requestCount
+        )
         guard let choice = completion.choices.first else {
             throw OpenRouterFailure(
                 category: .noContent,

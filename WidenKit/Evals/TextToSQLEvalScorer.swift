@@ -551,6 +551,7 @@ public enum TextToSQLEvalCaseRunner {
         case .providerLimit:
             .providerLimit
         case .authentication, .permissionDenied, .guardrailBlocked, .modelNotFound,
+            .modelVersionMismatch,
             .invalidRequest, .unsupportedFeature, .contextWindow, .maxTokensExceeded,
             .rateLimited, .providerOverloaded, .providerUnavailable, .timeout, .contentPolicy,
             .refusal, .noContent, .malformedStructuredResponse, .networkTransport, .serverFailure:

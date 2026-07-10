@@ -136,6 +136,7 @@ public final class OpenRouterSchemaToolSQLAgent: SQLGenerator, Sendable {
 
     private let apiKey: String
     private let model: String
+    private let expectedCanonicalModelID: String?
     private let connectionID: UUID
     private let selectedSchemas: [String]
     private let transport: any HTTPTransport
@@ -151,9 +152,13 @@ public final class OpenRouterSchemaToolSQLAgent: SQLGenerator, Sendable {
     private let legacyGenerator: any SQLGenerator
     private let currentSchemaFingerprint: (@Sendable () async throws -> String)?
 
+    var configuredModelID: String { model }
+    var configuredExpectedCanonicalModelID: String? { expectedCanonicalModelID }
+
     public init(
         apiKey: String,
         model: String,
+        expectedCanonicalModelID: String? = nil,
         connectionID: UUID,
         selectedSchemas: [String],
         transport: any HTTPTransport = URLSessionTransport(),
@@ -168,6 +173,7 @@ public final class OpenRouterSchemaToolSQLAgent: SQLGenerator, Sendable {
     ) {
         self.apiKey = apiKey
         self.model = model
+        self.expectedCanonicalModelID = expectedCanonicalModelID
         self.connectionID = connectionID
         self.selectedSchemas = selectedSchemas.sorted()
         self.transport = transport
@@ -182,6 +188,7 @@ public final class OpenRouterSchemaToolSQLAgent: SQLGenerator, Sendable {
         self.legacyGenerator = OpenRouterSQLGenerator(
             apiKey: apiKey,
             model: model,
+            expectedCanonicalModelID: expectedCanonicalModelID,
             transport: transport,
             catalogService: catalogService,
             requestBuilder: OpenRouterRequestBuilder(endpoint: endpoint)
@@ -191,6 +198,7 @@ public final class OpenRouterSchemaToolSQLAgent: SQLGenerator, Sendable {
     init(
         apiKey: String,
         model: String,
+        expectedCanonicalModelID: String? = nil,
         connectionID: UUID,
         selectedSchemas: [String],
         transport: any HTTPTransport,
@@ -207,6 +215,7 @@ public final class OpenRouterSchemaToolSQLAgent: SQLGenerator, Sendable {
     ) {
         self.apiKey = apiKey
         self.model = model
+        self.expectedCanonicalModelID = expectedCanonicalModelID
         self.connectionID = connectionID
         self.selectedSchemas = selectedSchemas.sorted()
         self.transport = transport
@@ -266,6 +275,7 @@ public final class OpenRouterSchemaToolSQLAgent: SQLGenerator, Sendable {
                 fallbackGenerator = OpenRouterSQLGenerator(
                     apiKey: apiKey,
                     model: model,
+                    expectedCanonicalModelID: expectedCanonicalModelID,
                     transport: transport,
                     catalogService: catalogService,
                     requestBuilder: OpenRouterRequestBuilder(endpoint: requestBuilder.endpoint),
@@ -956,7 +966,8 @@ public final class OpenRouterSchemaToolSQLAgent: SQLGenerator, Sendable {
                         response: response,
                         requestedModelID: model,
                         requestCount: attempt,
-                        retryCount: attempt - 1
+                        retryCount: attempt - 1,
+                        expectedCanonicalModelID: expectedCanonicalModelID
                     )
                     aggregate.record(parsed.metadata)
                     return parsed

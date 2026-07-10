@@ -2872,6 +2872,52 @@ struct OpenRouterSchemaToolSQLAgentTests {
         }
     }
 
+    @Test func toolChatParserRejectsUnexpectedCanonicalModelWhenEnforced() throws {
+        let parser = OpenRouterToolChatParser()
+        let returnedModelID = "openai/gpt-5.5-unevaluated"
+        let data = Self.jsonData([
+            "id": "cmpl-mismatch",
+            "model": returnedModelID,
+            "provider": "OpenAI",
+            "choices": [[
+                "index": 0,
+                "finish_reason": "tool_calls",
+                "message": [
+                    "role": "assistant",
+                    "tool_calls": [[
+                        "id": "call-1",
+                        "type": "function",
+                        "function": [
+                            "name": "search_schema",
+                            "arguments": #"{"query":"users"}"#,
+                        ],
+                    ]],
+                ],
+            ]],
+        ])
+        let response = HTTPURLResponse(
+            url: Self.chatEndpoint,
+            statusCode: 200,
+            httpVersion: "HTTP/1.1",
+            headerFields: nil
+        )!
+
+        do {
+            _ = try parser.parse(
+                data: data,
+                response: response,
+                requestedModelID: Self.modelID,
+                requestCount: 1,
+                retryCount: 0,
+                expectedCanonicalModelID: "openai/gpt-5.5-20260423"
+            )
+            Issue.record("Expected canonical model mismatch")
+        } catch let failure as OpenRouterFailure {
+            #expect(failure.category == .modelVersionMismatch)
+            #expect(failure.diagnostic.returnedModelID == returnedModelID)
+        }
+    }
+
     @Test func invalidRequestFailureIsNotReclassifiedAsUnsupportedTools() async throws {
         let schema = Self.makeSchema()
         let chatTransport = ScriptedTransport { _, _ in

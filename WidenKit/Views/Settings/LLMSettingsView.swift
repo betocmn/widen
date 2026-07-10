@@ -7,8 +7,7 @@ struct LLMSettingsView: View {
     @Environment(AppState.self) private var appState
     @State private var apiKeyDraft = ""
     @State private var hasStoredKey = false
-    @State private var isCustomModel = false
-    @State private var catalogModels: [OpenRouterModelMetadata] = []
+    @State private var modelMetadata: OpenRouterModelMetadata?
     @State private var catalogMessage: String?
     @State private var catalogMessageIsWarning = false
     @State private var catalogRefreshID = UUID()
@@ -56,20 +55,6 @@ struct LLMSettingsView: View {
                 }
             }
 
-            if appState.cloudProvider == .openRouter {
-                Section("OpenRouter Advanced") {
-                    Toggle(
-                        "Use schema-tool SQL agent",
-                        isOn: $appState.openRouterSchemaToolAgentEnabled
-                    )
-                    Text(
-                        "Enabled by default. This is Widen's current OpenRouter schema-tool path. It is still being evaluated; see docs/evals for the current release-gate status. Data values are queried and sent only when cloud data inspection is enabled for the connection. Turn this off only to fall back to the legacy one-shot OpenRouter generator."
-                    )
-                    .font(.callout)
-                    .foregroundStyle(.secondary)
-                }
-            }
-
             Section("Developer") {
                 Toggle("Use mock AI (developer)", isOn: $appState.useMockAI)
                 if appState.useMockAI {
@@ -91,15 +76,6 @@ struct LLMSettingsView: View {
         }
         .formStyle(.grouped)
         .onAppear(perform: load)
-        .onChange(of: appState.openRouterModelID) { _, _ in
-            modelTestResult = nil
-            if isKnownModelID(appState.openRouterModelID) {
-                isCustomModel = false
-                refreshOpenRouterCatalog(force: true)
-            } else {
-                isCustomModel = true
-            }
-        }
     }
 
     /// e.g. "Apple Foundation Model · macOS 26.5" — the on-device model is
@@ -164,8 +140,6 @@ struct LLMSettingsView: View {
 
     @ViewBuilder
     private var openRouterConfiguration: some View {
-        @Bindable var appState = appState
-
         SecureField("API Key", text: $apiKeyDraft, prompt: Text("sk-or-…"))
             .onSubmit(saveKey)
         HStack {
@@ -179,35 +153,23 @@ struct LLMSettingsView: View {
                 .font(.callout)
         }
 
-        Picker(
-            "Model",
-            selection: Binding(
-                get: { isCustomModel ? Self.customTag : appState.openRouterModelID },
-                set: { newValue in
-                    if newValue == Self.customTag {
-                        isCustomModel = true
-                    } else {
-                        isCustomModel = false
-                        appState.openRouterModelID = newValue
-                    }
-                }
-            )
-        ) {
-            ForEach(modelPickerRows) { option in
-                Text(option.title).tag(option.id)
+        let profile = OpenRouterCatalog.productionProfile
+        LabeledContent("Model", value: profile.displayName)
+        LabeledContent("Requested ID", value: profile.requestedModelID)
+        LabeledContent("Evaluated version", value: profile.expectedCanonicalModelID)
+        HStack {
+            Spacer()
+            Button {
+                refreshOpenRouterCatalog(force: true)
+            } label: {
+                Image(systemName: "arrow.clockwise")
             }
-            Divider()
-            Text("Custom…").tag(Self.customTag)
-        }
-        if isCustomModel {
-            TextField(
-                "Model ID", text: $appState.openRouterModelID,
-                prompt: Text("provider/model-id")
-            )
-            .autocorrectionDisabled()
+            .buttonStyle(.borderless)
+            .disabled(!hasStoredKey || isLoadingCatalog)
+            .help("Refresh OpenRouter model capabilities")
         }
         if isLoadingCatalog {
-            ProgressView("Refreshing OpenRouter models…")
+            ProgressView("Refreshing OpenRouter model…")
         }
         if let catalogMessage {
             Label(
@@ -224,7 +186,7 @@ struct LLMSettingsView: View {
         switch appState.cloudBackendStatus {
         case .ready:
             Label(
-                "OpenRouter is ready — \(OpenRouterCatalog.displayName(for: appState.openRouterModelID)).",
+                "OpenRouter is ready — \(profile.displayName).",
                 systemImage: "checkmark.circle"
             )
             .font(.callout)
@@ -241,61 +203,9 @@ struct LLMSettingsView: View {
         }
     }
 
-    private static let customTag = "custom"
-
-    private func isKnownModelID(
-        _ id: String,
-        in catalog: [OpenRouterModelMetadata]? = nil
-    ) -> Bool {
-        OpenRouterCatalog.curated.contains { $0.id == id }
-            || (catalog ?? catalogModels).contains {
-                ($0.id == id || $0.requestedID == id) && $0.isAvailableToAPIKey
-            }
-    }
-
-    private var modelPickerRows: [OpenRouterModelPickerRow] {
-        var rowsByID: [String: OpenRouterModelPickerRow] = [:]
-        for option in OpenRouterCatalog.curated {
-            let metadata = catalogModels.first { $0.id == option.id || $0.requestedID == option.id }
-            rowsByID[option.id] = OpenRouterModelPickerRow(
-                id: option.id,
-                displayName: option.displayName,
-                capabilities: metadata?.capabilities,
-                isUnavailable: metadata?.isAvailableToAPIKey == false,
-                isStale: metadata?.capabilitySource == .staleCache
-            )
-        }
-        for metadata in catalogModels {
-            let id = metadata.requestedID
-            rowsByID[id] = OpenRouterModelPickerRow(
-                id: id,
-                displayName: metadata.displayName,
-                capabilities: metadata.capabilities,
-                isUnavailable: !metadata.isAvailableToAPIKey,
-                isStale: metadata.capabilitySource == .staleCache
-            )
-        }
-        if rowsByID[appState.openRouterModelID] == nil, !appState.openRouterModelID.isEmpty {
-            rowsByID[appState.openRouterModelID] = OpenRouterModelPickerRow(
-                id: appState.openRouterModelID,
-                displayName: OpenRouterCatalog.displayName(for: appState.openRouterModelID),
-                capabilities: nil,
-                isUnavailable: hasStoredKey && !catalogModels.isEmpty,
-                isStale: false
-            )
-        }
-        return rowsByID.values.sorted { lhs, rhs in
-            if lhs.isUnavailable != rhs.isUnavailable { return !lhs.isUnavailable }
-            return lhs.displayName.localizedCaseInsensitiveCompare(rhs.displayName) == .orderedAscending
-        }
-    }
-
     @ViewBuilder
     private var selectedModelCapabilities: some View {
-        let metadata = catalogModels.first {
-            $0.id == appState.openRouterModelID || $0.requestedID == appState.openRouterModelID
-        }
-        if let metadata {
+        if let metadata = modelMetadata {
             VStack(alignment: .leading, spacing: 6) {
                 HStack(spacing: 6) {
                     CapabilityBadge("Structured output", isEnabled: metadata.capabilities.supportsStructuredOutputs)
@@ -340,7 +250,7 @@ struct LLMSettingsView: View {
                         Text("Test Model")
                     }
                 }
-                .disabled(!hasStoredKey || isTestingModel || appState.openRouterModelID.isEmpty)
+                .disabled(!hasStoredKey || isTestingModel)
 
                 Text("Sends one tiny completion and may incur a very small charge.")
                     .font(.caption)
@@ -405,7 +315,6 @@ struct LLMSettingsView: View {
         let stored = appState.loadOpenRouterAPIKey() ?? ""
         apiKeyDraft = stored
         hasStoredKey = !stored.isEmpty
-        isCustomModel = !isKnownModelID(appState.openRouterModelID)
         refreshOpenRouterCatalog(force: false)
     }
 
@@ -429,7 +338,7 @@ struct LLMSettingsView: View {
             apiKeyDraft = ""
             hasStoredKey = false
             catalogRefreshID = UUID()
-            catalogModels = []
+            modelMetadata = nil
             catalogMessage = nil
             isLoadingCatalog = false
             isTestingModel = false
@@ -446,7 +355,7 @@ struct LLMSettingsView: View {
             !key.isEmpty
         else {
             catalogRefreshID = UUID()
-            catalogModels = []
+            modelMetadata = nil
             catalogMessage = nil
             isLoadingCatalog = false
             return
@@ -454,63 +363,28 @@ struct LLMSettingsView: View {
         let refreshID = UUID()
         catalogRefreshID = refreshID
         isLoadingCatalog = true
-        let selectedModel = appState.openRouterModelID
+        let selectedModel = OpenRouterCatalog.productionProfile.requestedModelID
         Task {
-            do {
-                let models = try await OpenRouterModelCatalogService.shared.availableModels(
-                    apiKey: key,
-                    forceRefresh: force
-                )
-                if models.contains(where: { $0.id == selectedModel || $0.requestedID == selectedModel }) {
-                    await MainActor.run {
-                        guard catalogRefreshStillCurrent(apiKey: key, refreshID: refreshID) else { return }
-                        catalogModels = models
-                        isCustomModel = !isKnownModelID(appState.openRouterModelID, in: models)
-                        catalogMessage = "Authenticated model catalog loaded."
-                        catalogMessageIsWarning = models.contains { $0.capabilitySource == .staleCache }
-                        isLoadingCatalog = false
-                    }
-                } else if let custom = await OpenRouterModelCatalogService.shared.metadata(
-                    apiKey: key,
-                    modelID: selectedModel,
-                    forceRefresh: force
-                ) {
-                    await MainActor.run {
-                        guard catalogRefreshStillCurrent(apiKey: key, refreshID: refreshID) else { return }
-                        let currentModel = appState.openRouterModelID
-                        if currentModel == selectedModel {
-                            catalogModels = models + [custom]
-                            isCustomModel = !isKnownModelID(currentModel, in: models + [custom])
-                            catalogMessage = "Authenticated model catalog loaded; selected model came from single-model lookup."
-                            catalogMessageIsWarning = custom.capabilitySource == .staleCache
-                        } else {
-                            catalogModels = models
-                            isCustomModel = !isKnownModelID(currentModel, in: models)
-                            catalogMessage = "Authenticated model catalog loaded."
-                            catalogMessageIsWarning = models.contains { $0.capabilitySource == .staleCache }
-                        }
-                        isLoadingCatalog = false
-                    }
-                } else {
-                    await MainActor.run {
-                        guard catalogRefreshStillCurrent(apiKey: key, refreshID: refreshID) else { return }
-                        catalogModels = models
-                        let currentModel = appState.openRouterModelID
-                        isCustomModel = !isKnownModelID(currentModel, in: models)
-                        if currentModel == selectedModel {
-                            catalogMessage = "Authenticated catalog loaded, but the selected model was not visible."
-                            catalogMessageIsWarning = true
-                        } else {
-                            catalogMessage = "Authenticated model catalog loaded."
-                            catalogMessageIsWarning = models.contains { $0.capabilitySource == .staleCache }
-                        }
-                        isLoadingCatalog = false
-                    }
-                }
-            } catch {
+            if let metadata = await OpenRouterModelCatalogService.shared.metadata(
+                apiKey: key,
+                modelID: selectedModel,
+                forceRefresh: force
+            ) {
                 await MainActor.run {
                     guard catalogRefreshStillCurrent(apiKey: key, refreshID: refreshID) else { return }
-                    catalogMessage = "Could not refresh OpenRouter model catalog: \(error.localizedDescription)"
+                    modelMetadata = metadata
+                    catalogMessage = metadata.isAvailableToAPIKey
+                        ? "Authenticated model metadata loaded."
+                        : "The fixed model was not visible to the saved OpenRouter key."
+                    catalogMessageIsWarning = !metadata.isAvailableToAPIKey
+                        || metadata.capabilitySource == .staleCache
+                    isLoadingCatalog = false
+                }
+            } else {
+                await MainActor.run {
+                    guard catalogRefreshStillCurrent(apiKey: key, refreshID: refreshID) else { return }
+                    modelMetadata = nil
+                    catalogMessage = "Could not load the fixed OpenRouter model metadata."
                     catalogMessageIsWarning = true
                     isLoadingCatalog = false
                 }
@@ -526,12 +400,17 @@ struct LLMSettingsView: View {
         }
         isTestingModel = true
         modelTestResult = nil
-        let model = appState.openRouterModelID
+        let profile = OpenRouterCatalog.productionProfile
+        let model = profile.requestedModelID
         Task {
             await OpenRouterModelCatalogService.shared.invalidate(apiKey: key, modelID: model)
-            let result = await OpenRouterConnectivityCheck(apiKey: key, model: model).run()
+            let result = await OpenRouterConnectivityCheck(
+                apiKey: key,
+                model: model,
+                expectedCanonicalModelID: profile.expectedCanonicalModelID
+            ).run()
             await MainActor.run {
-                guard requestStillMatches(apiKey: key), appState.openRouterModelID == model else {
+                guard requestStillMatches(apiKey: key) else {
                     isTestingModel = false
                     return
                 }
@@ -540,34 +419,6 @@ struct LLMSettingsView: View {
                 refreshOpenRouterCatalog(force: false)
             }
         }
-    }
-}
-
-private struct OpenRouterModelPickerRow: Identifiable {
-    var id: String
-    var displayName: String
-    var capabilities: OpenRouterModelCapabilities?
-    var isUnavailable: Bool
-    var isStale: Bool
-
-    var title: String {
-        var badges: [String] = []
-        if capabilities?.supportsStructuredOutputs == true {
-            badges.append("Structured output")
-        }
-        if capabilities?.supportsTools == true {
-            badges.append("Tools")
-        }
-        if let contextLength = capabilities?.contextLength {
-            badges.append("\(contextLength.formatted()) context")
-        }
-        if isStale {
-            badges.append("Stale")
-        }
-        if isUnavailable {
-            badges.append("Unavailable")
-        }
-        return badges.isEmpty ? displayName : "\(displayName) · \(badges.joined(separator: " · "))"
     }
 }
 

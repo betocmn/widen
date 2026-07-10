@@ -72,7 +72,7 @@ struct AIBackendToggle: View {
         switch appState.cloudBackendStatus {
         case .ready:
             if appState.cloudProvider == .openRouter {
-                return "Generate SQL with \(OpenRouterCatalog.displayName(for: appState.openRouterModelID)) via OpenRouter. Widen requires endpoints that do not retain or collect the submitted question and schema context; inspected data values are sent only when this connection enables cloud data inspection."
+                return "Generate SQL with \(OpenRouterCatalog.productionProfile.displayName) via OpenRouter. Widen requires endpoints that do not retain or collect the submitted question and schema context; inspected data values are sent only when this connection enables cloud data inspection."
             }
             return "Generate SQL with \(CloudAIProvider.applePCC.displayName). Cloud sends your question and allowed schema metadata; inspected data values are sent only when this connection enables cloud data inspection."
         case .notConfigured(let message), .unavailable(let message):

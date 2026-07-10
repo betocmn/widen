@@ -373,6 +373,7 @@ public struct OpenRouterFailure: Error, LocalizedError, Equatable, Sendable {
         case permissionDenied
         case guardrailBlocked
         case modelNotFound
+        case modelVersionMismatch
         case invalidRequest
         case unsupportedFeature
         case contextWindow
@@ -433,7 +434,7 @@ public struct OpenRouterFailure: Error, LocalizedError, Equatable, Sendable {
     var pipelineCategory: TextToSQLFailureCategory {
         switch category {
         case .authentication, .paymentRequired, .providerLimit, .permissionDenied, .guardrailBlocked,
-            .modelNotFound:
+            .modelNotFound, .modelVersionMismatch:
             .backendUnavailable
         case .networkTransport, .rateLimited, .providerOverloaded, .providerUnavailable, .timeout,
             .serverFailure, .noContent:
@@ -567,6 +568,34 @@ public struct OpenRouterFailure: Error, LocalizedError, Equatable, Sendable {
 extension OpenRouterFailure.Category {
     var isProviderBudgetUnavailable: Bool {
         self == .paymentRequired || self == .providerLimit
+    }
+}
+
+enum OpenRouterCanonicalModelValidator {
+    static func validate(
+        returnedModelID: String?,
+        expectedCanonicalModelID: String?,
+        requestedModelID: String,
+        httpStatus: Int?,
+        completionID: String?,
+        requestID: String?,
+        providerName: String?,
+        attemptCount: Int
+    ) throws {
+        guard let expectedCanonicalModelID else { return }
+        guard returnedModelID == expectedCanonicalModelID else {
+            throw OpenRouterFailure(
+                category: .modelVersionMismatch,
+                message: "OpenRouter resolved the fixed model to an unevaluated version. Update Widen before using this cloud model.",
+                httpStatus: httpStatus,
+                completionID: completionID,
+                requestID: requestID,
+                requestedModelID: requestedModelID,
+                returnedModelID: returnedModelID,
+                providerName: providerName,
+                attemptCount: attemptCount
+            )
+        }
     }
 }
 
@@ -1086,8 +1115,8 @@ actor OpenRouterModelCatalogService {
                 .networkTransport, .serverFailure:
                 return true
             case .authentication, .paymentRequired, .providerLimit, .permissionDenied,
-                .guardrailBlocked, .modelNotFound, .invalidRequest, .unsupportedFeature, .contextWindow,
-                .maxTokensExceeded, .contentPolicy, .refusal, .noContent,
+                .guardrailBlocked, .modelNotFound, .modelVersionMismatch, .invalidRequest,
+                .unsupportedFeature, .contextWindow, .maxTokensExceeded, .contentPolicy, .refusal, .noContent,
                 .malformedStructuredResponse:
                 return false
             }
@@ -1313,7 +1342,7 @@ struct OpenRouterRetryPolicy: Sendable {
             .serverFailure, .noContent:
             true
         case .authentication, .paymentRequired, .providerLimit, .permissionDenied, .guardrailBlocked,
-            .modelNotFound, .invalidRequest, .unsupportedFeature, .contextWindow,
+            .modelNotFound, .modelVersionMismatch, .invalidRequest, .unsupportedFeature, .contextWindow,
             .maxTokensExceeded, .contentPolicy, .refusal, .malformedStructuredResponse:
             false
         }
@@ -1467,7 +1496,8 @@ struct OpenRouterResponseParser: Sendable {
         requestedModelID: String,
         mode: OpenRouterStructuredOutputMode,
         requestCount: Int,
-        retryCount: Int
+        retryCount: Int,
+        expectedCanonicalModelID: String? = nil
     ) throws -> ParsedResult {
         if !(200..<300).contains(response.statusCode) {
             throw Self.failure(
@@ -1505,6 +1535,16 @@ struct OpenRouterResponseParser: Sendable {
                 attemptCount: requestCount
             )
         }
+        try OpenRouterCanonicalModelValidator.validate(
+            returnedModelID: completion.model,
+            expectedCanonicalModelID: expectedCanonicalModelID,
+            requestedModelID: requestedModelID,
+            httpStatus: response.statusCode,
+            completionID: completion.id,
+            requestID: requestID,
+            providerName: completion.provider ?? completion.openrouterMetadata?.selectedProvider,
+            attemptCount: requestCount
+        )
         guard let choice = completion.choices.first else {
             throw OpenRouterFailure(
                 category: .noContent,
@@ -1894,6 +1934,7 @@ struct OpenRouterConnectivityCheck: Sendable {
 
     let apiKey: String
     let model: String
+    let expectedCanonicalModelID: String?
     let catalogService: OpenRouterModelCatalogService
     let transport: any HTTPTransport
     let requestBuilder: OpenRouterRequestBuilder
@@ -1901,12 +1942,14 @@ struct OpenRouterConnectivityCheck: Sendable {
     init(
         apiKey: String,
         model: String,
+        expectedCanonicalModelID: String? = nil,
         catalogService: OpenRouterModelCatalogService = .shared,
         transport: any HTTPTransport = URLSessionTransport(),
         requestBuilder: OpenRouterRequestBuilder = OpenRouterRequestBuilder()
     ) {
         self.apiKey = apiKey
         self.model = model
+        self.expectedCanonicalModelID = expectedCanonicalModelID
         self.catalogService = catalogService
         self.transport = transport
         self.requestBuilder = requestBuilder
@@ -1925,6 +1968,7 @@ struct OpenRouterConnectivityCheck: Sendable {
             let generator = OpenRouterSQLGenerator(
                 apiKey: apiKey,
                 model: model,
+                expectedCanonicalModelID: expectedCanonicalModelID,
                 transport: transport,
                 catalogService: catalogService,
                 requestBuilder: requestBuilder
@@ -1943,7 +1987,8 @@ struct OpenRouterConnectivityCheck: Sendable {
         } catch let failure as OpenRouterFailure {
             return Result(
                 keyAccepted: failure.category != .authentication,
-                selectedModelAvailable: failure.category != .modelNotFound,
+                selectedModelAvailable: failure.category != .modelNotFound
+                    && failure.category != .modelVersionMismatch,
                 capabilities: .conservative(),
                 returnedModelID: failure.diagnostic.returnedModelID,
                 providerName: failure.diagnostic.providerName,
@@ -1979,6 +2024,7 @@ public final class OpenRouterSQLGenerator: SQLGenerator, Sendable {
 
     private let apiKey: String
     private let model: String
+    private let expectedCanonicalModelID: String?
     private let transport: any HTTPTransport
     private let catalogService: OpenRouterModelCatalogService
     private let requestBuilder: OpenRouterRequestBuilder
@@ -1987,9 +2033,13 @@ public final class OpenRouterSQLGenerator: SQLGenerator, Sendable {
     private let countCapabilityLookupHTTPAttempts: Bool
     private let preResolvedCapabilities: OpenRouterModelCapabilities?
 
+    var configuredModelID: String { model }
+    var configuredExpectedCanonicalModelID: String? { expectedCanonicalModelID }
+
     public init(
         apiKey: String,
         model: String,
+        expectedCanonicalModelID: String? = nil,
         transport: any HTTPTransport = URLSessionTransport(),
         endpoint: URL = URL(string: "https://openrouter.ai/api/v1/chat/completions")!,
         maximumHTTPAttempts: Int = 3,
@@ -1997,6 +2047,7 @@ public final class OpenRouterSQLGenerator: SQLGenerator, Sendable {
     ) {
         self.apiKey = apiKey
         self.model = model
+        self.expectedCanonicalModelID = expectedCanonicalModelID
         self.transport = transport
         self.catalogService = .shared
         self.requestBuilder = OpenRouterRequestBuilder(endpoint: endpoint)
@@ -2008,6 +2059,7 @@ public final class OpenRouterSQLGenerator: SQLGenerator, Sendable {
     init(
         apiKey: String,
         model: String,
+        expectedCanonicalModelID: String? = nil,
         transport: any HTTPTransport,
         catalogService: OpenRouterModelCatalogService,
         requestBuilder: OpenRouterRequestBuilder,
@@ -2017,6 +2069,7 @@ public final class OpenRouterSQLGenerator: SQLGenerator, Sendable {
     ) {
         self.apiKey = apiKey
         self.model = model
+        self.expectedCanonicalModelID = expectedCanonicalModelID
         self.transport = transport
         self.catalogService = catalogService
         self.requestBuilder = requestBuilder
@@ -2226,7 +2279,8 @@ public final class OpenRouterSQLGenerator: SQLGenerator, Sendable {
                         requestedModelID: requestedModelID,
                         mode: built.mode,
                         requestCount: attempt,
-                        retryCount: attempt - 1
+                        retryCount: attempt - 1,
+                        expectedCanonicalModelID: expectedCanonicalModelID
                     )
                 } catch var failure as OpenRouterFailure {
                     failure.diagnostic.retryAfterSeconds = retryAfter

@@ -474,6 +474,29 @@ struct OpenRouterSQLGeneratorTests {
         #expect(partsResult.result.sql == "SELECT id FROM public.users LIMIT 100")
     }
 
+    @Test func parserRejectsUnexpectedCanonicalModelWhenEnforced() throws {
+        let parser = OpenRouterResponseParser()
+        let returnedModelID = "openai/gpt-5.5-unevaluated"
+
+        do {
+            _ = try parser.parse(
+                data: chatResponse(content: goodContent, model: returnedModelID),
+                response: response(url: Self.chatEndpoint, status: 200),
+                requestedModelID: Self.modelID,
+                mode: .strictJSONSchema,
+                requestCount: 1,
+                retryCount: 0,
+                expectedCanonicalModelID: "openai/gpt-5.5-20260423"
+            )
+            Issue.record("expected canonical model mismatch")
+        } catch let failure as OpenRouterFailure {
+            #expect(failure.category == .modelVersionMismatch)
+            #expect(failure.pipelineCategory == .backendUnavailable)
+            #expect(failure.diagnostic.requestedModelID == Self.modelID)
+            #expect(failure.diagnostic.returnedModelID == returnedModelID)
+        }
+    }
+
     @Test func malformedHTTP200EnvelopeIsStructuredResponseFailure() throws {
         let parser = OpenRouterResponseParser()
 
@@ -989,6 +1012,35 @@ struct OpenRouterSQLGeneratorTests {
         )
     }
 
+    @Test func connectivityCheckReportsCanonicalModelMismatch() async throws {
+        let expectedModelID = "openai/gpt-5.5-20260423"
+        let returnedModelID = "openai/gpt-5.5-unevaluated"
+        let transport = StubTransport([
+            .success((
+                catalogResponse(id: Self.modelID, canonicalID: expectedModelID),
+                response(url: Self.apiBase.appendingPathComponent("models/user"), status: 200)
+            )),
+            .success((
+                chatResponse(content: goodContent, model: returnedModelID),
+                response(url: Self.chatEndpoint, status: 200)
+            )),
+        ])
+        let service = catalogService(transport: transport)
+
+        let result = await OpenRouterConnectivityCheck(
+            apiKey: "test-key",
+            model: Self.modelID,
+            expectedCanonicalModelID: expectedModelID,
+            catalogService: service,
+            transport: transport,
+            requestBuilder: OpenRouterRequestBuilder(endpoint: Self.chatEndpoint)
+        ).run()
+
+        #expect(result.error?.category == .modelVersionMismatch)
+        #expect(result.returnedModelID == returnedModelID)
+        #expect(!result.selectedModelAvailable)
+    }
+
     @Test func catalogLookupCanExhaustHTTPBudgetBeforeChatRequest() async throws {
         let transport = StubTransport([
             .success((catalogResponse(), response(url: Self.apiBase.appendingPathComponent("models/user"), status: 200)))
@@ -1157,6 +1209,7 @@ struct OpenRouterSQLGeneratorTests {
 
     private func chatResponse(
         content: Any?,
+        model: String = "openai/gpt-5.5",
         finishReason: String = "stop",
         refusal: String? = nil,
         choiceError: [String: Any]? = nil
@@ -1179,7 +1232,7 @@ struct OpenRouterSQLGeneratorTests {
         }
         return jsonData([
             "id": "cmpl-1",
-            "model": "openai/gpt-5.5",
+            "model": model,
             "provider": "OpenAI",
             "service_tier": "standard",
             "choices": [choice],
