@@ -19,6 +19,12 @@ context, the current SQL being revised, and the last validation or database
 error being repaired. Those fields can include literals you typed and
 database-returned error details.
 
+For every OpenRouter completion, Widen requires zero-data-retention endpoints,
+denies provider data collection, and requires an endpoint that supports all
+request parameters. If no eligible private endpoint is available, generation
+fails instead of relaxing those requirements. OpenRouter catalog requests do
+not include question or schema context.
+
 Inspected data values are sent to a cloud provider only when cloud data
 inspection is explicitly enabled for that connection. Query result tables and
 database credentials are not sent to the model provider by Widen.

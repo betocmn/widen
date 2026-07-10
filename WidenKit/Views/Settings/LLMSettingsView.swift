@@ -121,7 +121,10 @@ struct LLMSettingsView: View {
     }
 
     private var cloudPrivacyDescription: String {
-        "Cloud SQL generation sends the question and allowed schema metadata to the selected provider. Inspected data values are sent only for connections where cloud data inspection is explicitly enabled."
+        if appState.cloudProvider == .openRouter {
+            return "Cloud SQL generation sends the question and allowed schema metadata to OpenRouter. Widen requires endpoints that neither retain nor collect the submitted question and schema context. Inspected data values are sent only for connections where cloud data inspection is explicitly enabled."
+        }
+        return "Cloud SQL generation sends the question and allowed schema metadata to the selected provider. Inspected data values are sent only for connections where cloud data inspection is explicitly enabled."
     }
 
     @ViewBuilder

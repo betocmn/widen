@@ -81,7 +81,7 @@ struct OpenRouterToolChatRequestBuilder: Sendable {
         if capabilities.supportsToolChoice, requireToolChoice {
             body["tool_choice"] = "required"
         }
-        body["provider"] = ["require_parameters": true]
+        OpenRouterProviderPreferences.requiredPrivateRouting.apply(to: &body)
 
         var request = URLRequest(url: endpoint)
         request.httpMethod = "POST"

@@ -314,8 +314,19 @@ struct OpenRouterSQLGeneratorTests {
         #expect(body["temperature"] == nil)
         #expect(body["max_tokens"] as? Int == OpenRouterRequestBuilder.completionTokenBudget)
         #expect(body["max_completion_tokens"] == nil)
-        #expect(body["provider"] == nil)
+        try expectPrivateRouting(in: built.request)
         #expect(built.request.value(forHTTPHeaderField: "X-OpenRouter-Metadata") == "enabled")
+    }
+
+    @Test func privateRoutingPreferencesMergeWithoutDiscardingExistingProviderOptions() throws {
+        let provider = OpenRouterProviderPreferences.requiredPrivateRouting.merging(
+            into: ["sort": "price"]
+        )
+
+        #expect(provider["sort"] as? String == "price")
+        #expect(provider["require_parameters"] as? Bool == true)
+        #expect(provider["zdr"] as? Bool == true)
+        #expect(provider["data_collection"] as? String == "deny")
     }
 
     @Test func requestBuilderUsesStrictModeOnlyWhenAdvertised() throws {
@@ -340,6 +351,8 @@ struct OpenRouterSQLGeneratorTests {
         #expect(built.mode == .strictJSONSchema)
         #expect(body["response_format"] != nil)
         #expect(provider?["require_parameters"] as? Bool == true)
+        #expect(provider?["zdr"] as? Bool == true)
+        #expect(provider?["data_collection"] as? String == "deny")
         #expect(body["temperature"] as? Int == 0)
         #expect(body["max_completion_tokens"] as? Int == 32)
         #expect(body["max_tokens"] == nil)
@@ -380,7 +393,7 @@ struct OpenRouterSQLGeneratorTests {
 
         #expect(built.mode == .promptOnlyJSON)
         #expect(body["response_format"] == nil)
-        #expect(body["provider"] == nil)
+        try expectPrivateRouting(in: built.request)
         #expect(body["temperature"] as? Int == 0)
         #expect(body["max_tokens"] as? Int == OpenRouterRequestBuilder.completionTokenBudget)
     }
@@ -777,7 +790,68 @@ struct OpenRouterSQLGeneratorTests {
         #expect(result.generationCallCount == 3)
         #expect(result.backendMetadata?.requestCount == 3)
         #expect(result.backendMetadata?.retryCount == 2)
-        #expect(transport.requests.filter { $0.url?.path == "/api/v1/chat/completions" }.count == 3)
+        let chatRequests = transport.requests.filter { $0.url?.path == "/api/v1/chat/completions" }
+        #expect(chatRequests.count == 3)
+        for request in chatRequests {
+            try expectPrivateRouting(in: request)
+        }
+    }
+
+    @Test func repairCompletionRequiresPrivateRouting() async throws {
+        let transport = StubTransport([
+            .success((catalogResponse(), response(url: Self.apiBase.appendingPathComponent("models/user"), status: 200))),
+            .success((chatResponse(content: goodContent), response(url: Self.chatEndpoint, status: 200))),
+        ])
+
+        _ = try await makeGenerator(transport: transport).generateSQL(
+            question: "repair the users query",
+            schema: makeSchema(),
+            context: SQLGenerationContext(
+                mode: .repair,
+                currentSQL: "SELECT missing FROM public.users",
+                lastRunError: "column missing does not exist",
+                repairContext: SQLRepairContext(
+                    failedSQL: "SELECT missing FROM public.users"
+                )
+            ),
+            config: SQLGenerationConfig()
+        )
+
+        let request = try #require(
+            transport.requests.first { $0.url?.path == "/api/v1/chat/completions" }
+        )
+        try expectPrivateRouting(in: request)
+    }
+
+    @Test func privateEndpointUnavailabilityFailsClosed() async throws {
+        let transport = StubTransport([
+            .success((catalogResponse(), response(url: Self.apiBase.appendingPathComponent("models/user"), status: 200))),
+            .success((
+                errorResponse(
+                    errorType: "provider_unavailable",
+                    message: "No private endpoint supports all required parameters."
+                ),
+                response(url: Self.chatEndpoint, status: 503)
+            )),
+        ])
+
+        do {
+            _ = try await makeGenerator(
+                transport: transport,
+                retryPolicy: OpenRouterRetryPolicy(maxAttempts: 1)
+            ).generateSQL(
+                question: "show users",
+                schema: makeSchema(),
+                config: SQLGenerationConfig()
+            )
+            Issue.record("expected provider availability failure")
+        } catch let failure as OpenRouterFailure {
+            #expect(failure.category == .providerUnavailable)
+        }
+
+        let chatRequests = transport.requests.filter { $0.url?.path == "/api/v1/chat/completions" }
+        #expect(chatRequests.count == 1)
+        try expectPrivateRouting(in: try #require(chatRequests.first))
     }
 
     @Test func retriesServerFailuresAndCountsAttempts() async throws {
@@ -881,6 +955,7 @@ struct OpenRouterSQLGeneratorTests {
         #expect(!combined.contains("Database context"))
         #expect(!combined.contains("SQL history"))
         #expect(!combined.contains("public.users"))
+        try expectPrivateRouting(in: request)
     }
 
     @Test func connectivityMarksSingleLookupModelAvailableAfterSuccessfulTest() async throws {
@@ -1173,6 +1248,14 @@ struct OpenRouterSQLGeneratorTests {
         let bodyData = try #require(request.httpBody)
         let object = try JSONSerialization.jsonObject(with: bodyData)
         return try #require(object as? [String: Any])
+    }
+
+    private func expectPrivateRouting(in request: URLRequest) throws {
+        let body = try jsonBody(request)
+        let provider = try #require(body["provider"] as? [String: Any])
+        #expect(provider["require_parameters"] as? Bool == true)
+        #expect(provider["zdr"] as? Bool == true)
+        #expect(provider["data_collection"] as? String == "deny")
     }
 
     private func temporaryCacheURL() -> URL {

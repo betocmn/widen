@@ -1138,6 +1138,30 @@ actor OpenRouterModelCatalogService {
     }
 }
 
+struct OpenRouterProviderPreferences: Equatable, Sendable {
+    static let requiredPrivateRouting = OpenRouterProviderPreferences(
+        requireParameters: true,
+        zdr: true,
+        dataCollection: "deny"
+    )
+
+    var requireParameters: Bool
+    var zdr: Bool
+    var dataCollection: String
+
+    func merging(into existing: [String: Any] = [:]) -> [String: Any] {
+        var merged = existing
+        merged["require_parameters"] = requireParameters
+        merged["zdr"] = zdr
+        merged["data_collection"] = dataCollection
+        return merged
+    }
+
+    func apply(to body: inout [String: Any]) {
+        body["provider"] = merging(into: body["provider"] as? [String: Any] ?? [:])
+    }
+}
+
 struct OpenRouterRequestBuilder: Sendable {
     static let completionTokenBudget = 2_048
     let endpoint: URL
@@ -1180,8 +1204,8 @@ struct OpenRouterRequestBuilder: Sendable {
         }
         if mode == .strictJSONSchema {
             body["response_format"] = Self.responseFormat()
-            body["provider"] = ["require_parameters": true]
         }
+        OpenRouterProviderPreferences.requiredPrivateRouting.apply(to: &body)
 
         var request = URLRequest(url: endpoint)
         request.httpMethod = "POST"
