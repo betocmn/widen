@@ -233,6 +233,17 @@ struct OpenRouterSQLGeneratorTests {
         #expect(metadata?.capabilitySource == .staleCache)
     }
 
+    @Test func keyLimitExceededClassifiesAsProviderBudget() {
+        let category = OpenRouterFailure.category(
+            errorType: nil,
+            providerCode: nil,
+            httpStatus: 403,
+            message: "Key limit exceeded (total limit). Manage it using https://openrouter.ai/keys"
+        )
+        #expect(category == .providerLimit)
+        #expect(category.isProviderBudgetUnavailable)
+    }
+
     @Test func routingPolicyFailureExplainsPrivateRoutingRequirements() throws {
         let failure = OpenRouterResponseParser.failure(
             from: errorResponse(

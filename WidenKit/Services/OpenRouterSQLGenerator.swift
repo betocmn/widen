@@ -456,6 +456,14 @@ public struct OpenRouterFailure: Error, LocalizedError, Equatable, Sendable {
         return copy
     }
 
+    private static func isKeyOrCreditLimitMessage(_ message: String) -> Bool {
+        let lower = message.lowercased()
+        return lower.contains("key limit exceeded")
+            || lower.contains("credit limit")
+            || lower.contains("insufficient credits")
+            || lower.contains("spend limit")
+    }
+
     static func category(
         errorType: String?,
         providerCode: String? = nil,
@@ -520,6 +528,13 @@ public struct OpenRouterFailure: Error, LocalizedError, Equatable, Sendable {
 
         if let message, OpenRouterResponseParser.isProviderOverloadMessage(message) {
             return .providerOverloaded
+        }
+
+        // OpenRouter reports an exhausted key/credit limit as a plain 403
+        // message without a typed code; classify it as provider budget so
+        // eval runs count it as budget-unavailable, not permission denied.
+        if let message, isKeyOrCreditLimitMessage(message) {
+            return .providerLimit
         }
 
         switch httpStatus {
