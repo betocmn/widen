@@ -1862,6 +1862,11 @@ struct OpenRouterResponseParser: Sendable {
     ) -> OpenRouterFailure {
         let message = apiError.message ?? "OpenRouter returned an error."
         let effectiveHTTPStatus = apiError.httpStatusCode ?? httpStatus
+        var displayMessage = safeMessage(message)
+        if isProviderRoutingPolicyMessage(message) {
+            displayMessage =
+                "No OpenRouter endpoint met Widen's private-routing requirements for the fixed model. Widen requires zero data retention, no provider data collection, and full request-parameter support, and fails closed rather than relaxing them. \(displayMessage)"
+        }
         return OpenRouterFailure(
             category: OpenRouterFailure.category(
                 errorType: apiError.metadata?.errorType,
@@ -1869,7 +1874,7 @@ struct OpenRouterResponseParser: Sendable {
                 httpStatus: effectiveHTTPStatus,
                 message: message
             ),
-            message: safeMessage(message),
+            message: displayMessage,
             httpStatus: effectiveHTTPStatus,
             openRouterErrorType: apiError.metadata?.errorType,
             providerCode: apiError.metadata?.providerCode,
@@ -1925,6 +1930,17 @@ struct OpenRouterResponseParser: Sendable {
             index = closing < lines.endIndex ? lines.index(after: closing) : lines.endIndex
         }
         return nil
+    }
+
+    /// OpenRouter routing failures for provider preferences (ZDR, data
+    /// collection, require_parameters) arrive as generic 404/503 messages;
+    /// detect them so the user sees why generation failed closed.
+    static func isProviderRoutingPolicyMessage(_ message: String) -> Bool {
+        let lower = message.lowercased()
+        return lower.contains("no endpoints")
+            || lower.contains("no allowed providers")
+            || lower.contains("data policy")
+            || lower.contains("matching your")
     }
 
     static func isContextWindowMessage(_ message: String) -> Bool {

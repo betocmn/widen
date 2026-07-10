@@ -233,6 +233,21 @@ struct OpenRouterSQLGeneratorTests {
         #expect(metadata?.capabilitySource == .staleCache)
     }
 
+    @Test func routingPolicyFailureExplainsPrivateRoutingRequirements() throws {
+        let failure = OpenRouterResponseParser.failure(
+            from: errorResponse(
+                errorType: "routing",
+                message: "No endpoints found matching your data policy (Zero data retention)."
+            ),
+            response: response(url: Self.chatEndpoint, status: 404),
+            requestedModelID: Self.modelID,
+            attemptCount: 1
+        )
+        #expect(failure.category == .modelNotFound)
+        #expect(failure.message.contains("private-routing requirements"))
+        #expect(failure.message.contains("data policy"))
+    }
+
     @Test func cancellingOneCatalogWaiterDoesNotCancelSharedRefresh() async throws {
         let transport = DelayedTransport(
             result: (
