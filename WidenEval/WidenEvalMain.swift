@@ -200,7 +200,7 @@ struct EvalCLIOptions {
     var schemaAgentClarificationCorrectionMode: SchemaToolAgentClarificationCorrectionMode =
         .diagnosticsOnly
     var schemaAgentIntentCoverageMode: SchemaToolAgentIntentCoverageMode = .diagnosticsOnly
-    var model: String = "openai/gpt-5.5"
+    var model: String = OpenRouterCatalog.productionProfile.requestedModelID
     var suitePath: String = "Evals/suites/text-to-sql-v1.json"
     var caseID: String?
     var caseIDs: [String] = []
