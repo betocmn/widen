@@ -1097,6 +1097,58 @@ struct OpenRouterSQLGeneratorTests {
         #expect(result.error?.message.contains("did not report") == true)
     }
 
+    @Test func preflightRejectsCanonicalRolloverBeforeCompletionRequest() async throws {
+        let transport = StubTransport([
+            .success((
+                catalogResponse(id: Self.modelID, canonicalID: "openai/gpt-5.5-20260901"),
+                response(url: Self.apiBase.appendingPathComponent("models/user"), status: 200)
+            )),
+        ])
+        let generator = OpenRouterSQLGenerator(
+            apiKey: "test-key",
+            model: Self.modelID,
+            expectedCanonicalModelID: "openai/gpt-5.5-20260423",
+            transport: transport,
+            catalogService: catalogService(transport: transport),
+            requestBuilder: OpenRouterRequestBuilder(endpoint: Self.chatEndpoint)
+        )
+
+        do {
+            _ = try await generator.generateSQL(
+                question: "show users",
+                schema: makeSchema(),
+                config: SQLGenerationConfig()
+            )
+            Issue.record("expected canonical rollover failure")
+        } catch let failure as OpenRouterFailure {
+            #expect(failure.category == .modelVersionMismatch)
+            #expect(failure.diagnostic.returnedModelID == "openai/gpt-5.5-20260901")
+        }
+
+        #expect(transport.requests.map { $0.url?.path } == ["/api/v1/models/user"])
+    }
+
+    @Test func preflightDefersToPostResponseCheckWithoutPositiveMetadata() throws {
+        try OpenRouterCanonicalModelValidator.preflight(
+            catalogCanonicalModelID: "openai/gpt-5.5-20260901",
+            capabilitySource: .staleCache,
+            expectedCanonicalModelID: "openai/gpt-5.5-20260423",
+            requestedModelID: "openai/gpt-5.5"
+        )
+        try OpenRouterCanonicalModelValidator.preflight(
+            catalogCanonicalModelID: nil,
+            capabilitySource: .conservativeDefault,
+            expectedCanonicalModelID: "openai/gpt-5.5-20260423",
+            requestedModelID: "openai/gpt-5.5"
+        )
+        try OpenRouterCanonicalModelValidator.preflight(
+            catalogCanonicalModelID: "openai/gpt-5.5-20260423",
+            capabilitySource: .authenticatedCatalog,
+            expectedCanonicalModelID: "openai/gpt-5.5-20260423",
+            requestedModelID: "openai/gpt-5.5"
+        )
+    }
+
     @Test func catalogLookupCanExhaustHTTPBudgetBeforeChatRequest() async throws {
         let transport = StubTransport([
             .success((catalogResponse(), response(url: Self.apiBase.appendingPathComponent("models/user"), status: 200)))

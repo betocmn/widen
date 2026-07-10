@@ -267,6 +267,12 @@ public final class OpenRouterSchemaToolSQLAgent: SQLGenerator, Sendable {
                 backendMetadata: metadata
             )
         }
+        try OpenRouterCanonicalModelValidator.preflight(
+            catalogCanonicalModelID: capabilities.canonicalModelID,
+            capabilitySource: capabilities.capabilitySource,
+            expectedCanonicalModelID: expectedCanonicalModelID,
+            requestedModelID: model
+        )
         if !capabilities.supportsTools,
             Self.canUseLegacyForKnownUnsupportedTools(capabilities)
         {

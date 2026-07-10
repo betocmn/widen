@@ -26,6 +26,7 @@ public struct OpenRouterModelCapabilities: Codable, Equatable, Sendable {
     public var maximumCompletionTokens: Int?
     public var capabilitySource: OpenRouterCapabilitySource
     public var fetchedAt: Date
+    public var canonicalModelID: String? = nil
 
     public static func conservative(fetchedAt: Date = Date()) -> OpenRouterModelCapabilities {
         OpenRouterModelCapabilities(
@@ -85,7 +86,8 @@ public struct OpenRouterModelMetadata: Codable, Identifiable, Equatable, Sendabl
             contextLength: contextLength,
             maximumCompletionTokens: maximumCompletionTokens,
             capabilitySource: capabilitySource,
-            fetchedAt: fetchedAt
+            fetchedAt: fetchedAt,
+            canonicalModelID: canonicalModelID
         )
     }
 }
@@ -572,6 +574,31 @@ extension OpenRouterFailure.Category {
 }
 
 enum OpenRouterCanonicalModelValidator {
+    /// Fails fast on a canonical-version rollover using already-fetched
+    /// catalog metadata, before any billed completion request. Only enforced
+    /// when the catalog positively reports the canonical version; stale or
+    /// conservative metadata defers to the post-response check.
+    static func preflight(
+        catalogCanonicalModelID: String?,
+        capabilitySource: OpenRouterCapabilitySource,
+        expectedCanonicalModelID: String?,
+        requestedModelID: String
+    ) throws {
+        guard let expectedCanonicalModelID,
+            let catalogCanonicalModelID,
+            capabilitySource == .authenticatedCatalog
+                || capabilitySource == .singleModelLookup,
+            catalogCanonicalModelID != expectedCanonicalModelID
+        else { return }
+        throw OpenRouterFailure(
+            category: .modelVersionMismatch,
+            message: "OpenRouter reports the fixed model now resolves to an unevaluated version. Update Widen before using this cloud model.",
+            requestedModelID: requestedModelID,
+            returnedModelID: catalogCanonicalModelID,
+            attemptCount: 0
+        )
+    }
+
     static func validate(
         returnedModelID: String?,
         expectedCanonicalModelID: String?,
@@ -2130,6 +2157,12 @@ public final class OpenRouterSQLGenerator: SQLGenerator, Sendable {
                 )
             )
         }
+        try OpenRouterCanonicalModelValidator.preflight(
+            catalogCanonicalModelID: capabilities.canonicalModelID,
+            capabilitySource: capabilities.capabilitySource,
+            expectedCanonicalModelID: expectedCanonicalModelID,
+            requestedModelID: model
+        )
         let remainingHTTPAttempts = countCapabilityLookupHTTPAttempts
             ? max(1, retryPolicy.maxAttempts - capabilityLookupHTTPAttempts)
             : retryPolicy.maxAttempts
