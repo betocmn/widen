@@ -939,6 +939,58 @@ actor OpenRouterModelCatalogService {
         )
     }
 
+    /// Resolves capabilities and enforces the pinned canonical version before
+    /// a billed completion. A cache written before an app update can hold the
+    /// previous canonical version for the cache TTL, so a mismatch first
+    /// invalidates the cached entry and refetches once; only a mismatch
+    /// against fresh metadata fails. Lookup HTTP attempts from both passes
+    /// are carried in the returned lookup and on the thrown failure.
+    func validatedCapabilitiesForGeneration(
+        apiKey: String,
+        modelID: String,
+        expectedCanonicalModelID: String?,
+        maximumHTTPRequests: Int?
+    ) async throws -> OpenRouterModelCapabilitiesLookup {
+        let lookup = await capabilitiesForGeneration(
+            apiKey: apiKey,
+            modelID: modelID,
+            maximumHTTPRequests: maximumHTTPRequests
+        )
+        do {
+            try OpenRouterCanonicalModelValidator.preflight(
+                catalogCanonicalModelID: lookup.capabilities.canonicalModelID,
+                capabilitySource: lookup.capabilities.capabilitySource,
+                expectedCanonicalModelID: expectedCanonicalModelID,
+                requestedModelID: modelID
+            )
+            return lookup
+        } catch let failure as OpenRouterFailure where failure.category == .modelVersionMismatch {
+            invalidate(apiKey: apiKey, modelID: modelID)
+            let refreshed = await capabilitiesForGeneration(
+                apiKey: apiKey,
+                modelID: modelID,
+                maximumHTTPRequests: maximumHTTPRequests
+            )
+            let totalRequests = lookup.httpRequestCount + refreshed.httpRequestCount
+            do {
+                try OpenRouterCanonicalModelValidator.preflight(
+                    catalogCanonicalModelID: refreshed.capabilities.canonicalModelID,
+                    capabilitySource: refreshed.capabilities.capabilitySource,
+                    expectedCanonicalModelID: expectedCanonicalModelID,
+                    requestedModelID: modelID
+                )
+            } catch let refreshedFailure as OpenRouterFailure {
+                throw totalRequests > 0
+                    ? refreshedFailure.withAttemptCount(totalRequests)
+                    : refreshedFailure
+            }
+            return OpenRouterModelCapabilitiesLookup(
+                capabilities: refreshed.capabilities,
+                httpRequestCount: totalRequests
+            )
+        }
+    }
+
     func invalidate(apiKey: String? = nil, modelID: String? = nil) {
         loadDiskCacheIfNeeded()
         if let apiKey {
@@ -2193,22 +2245,27 @@ public final class OpenRouterSQLGenerator: SQLGenerator, Sendable {
         let capabilityLookupHTTPAttempts: Int
         let capabilities: OpenRouterModelCapabilities
         if let preResolvedCapabilities {
+            // The connectivity check resolves and preflights capabilities
+            // itself before constructing this generator.
             capabilityLookupHTTPAttempts = 0
             capabilities = preResolvedCapabilities
         } else if countCapabilityLookupHTTPAttempts {
-            let lookup = await catalogService.capabilitiesForGeneration(
+            let lookup = try await catalogService.validatedCapabilitiesForGeneration(
                 apiKey: apiKey,
                 modelID: model,
+                expectedCanonicalModelID: expectedCanonicalModelID,
                 maximumHTTPRequests: retryPolicy.maxAttempts
             )
             capabilityLookupHTTPAttempts = lookup.httpRequestCount
             capabilities = lookup.capabilities
         } else {
             capabilityLookupHTTPAttempts = 0
-            capabilities = await catalogService.capabilitiesForGeneration(
+            capabilities = try await catalogService.validatedCapabilitiesForGeneration(
                 apiKey: apiKey,
-                modelID: model
-            )
+                modelID: model,
+                expectedCanonicalModelID: expectedCanonicalModelID,
+                maximumHTTPRequests: nil
+            ).capabilities
         }
         if countCapabilityLookupHTTPAttempts,
             capabilityLookupHTTPAttempts >= retryPolicy.maxAttempts
@@ -2221,12 +2278,6 @@ public final class OpenRouterSQLGenerator: SQLGenerator, Sendable {
                 )
             )
         }
-        try OpenRouterCanonicalModelValidator.preflight(
-            catalogCanonicalModelID: capabilities.canonicalModelID,
-            capabilitySource: capabilities.capabilitySource,
-            expectedCanonicalModelID: expectedCanonicalModelID,
-            requestedModelID: model
-        )
         let remainingHTTPAttempts = countCapabilityLookupHTTPAttempts
             ? max(1, retryPolicy.maxAttempts - capabilityLookupHTTPAttempts)
             : retryPolicy.maxAttempts

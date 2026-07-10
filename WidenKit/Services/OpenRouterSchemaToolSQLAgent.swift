@@ -236,18 +236,21 @@ public final class OpenRouterSchemaToolSQLAgent: SQLGenerator, Sendable {
         var aggregate = OpenRouterAgentMetadataAccumulator(requestedModelID: model)
         let capabilities: OpenRouterModelCapabilities
         if configuration.countCapabilityLookupHTTPAttempts {
-            let lookup = await catalogService.capabilitiesForGeneration(
+            let lookup = try await catalogService.validatedCapabilitiesForGeneration(
                 apiKey: apiKey,
                 modelID: model,
+                expectedCanonicalModelID: expectedCanonicalModelID,
                 maximumHTTPRequests: configuration.maximumHTTPAttempts
             )
             aggregate.httpAttemptCount += lookup.httpRequestCount
             capabilities = lookup.capabilities
         } else {
-            capabilities = await catalogService.capabilitiesForGeneration(
+            capabilities = try await catalogService.validatedCapabilitiesForGeneration(
                 apiKey: apiKey,
-                modelID: model
-            )
+                modelID: model,
+                expectedCanonicalModelID: expectedCanonicalModelID,
+                maximumHTTPRequests: nil
+            ).capabilities
         }
         if configuration.countCapabilityLookupHTTPAttempts,
             aggregate.httpAttemptCount >= configuration.maximumHTTPAttempts
@@ -264,12 +267,6 @@ public final class OpenRouterSchemaToolSQLAgent: SQLGenerator, Sendable {
                 backendMetadata: metadata
             )
         }
-        try OpenRouterCanonicalModelValidator.preflight(
-            catalogCanonicalModelID: capabilities.canonicalModelID,
-            capabilitySource: capabilities.capabilitySource,
-            expectedCanonicalModelID: expectedCanonicalModelID,
-            requestedModelID: model
-        )
         if !capabilities.supportsTools,
             Self.canUseLegacyForKnownUnsupportedTools(capabilities)
         {

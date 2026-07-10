@@ -1196,6 +1196,10 @@ struct OpenRouterSQLGeneratorTests {
                 catalogResponse(id: Self.modelID, canonicalID: "openai/gpt-5.5-20260901"),
                 response(url: Self.apiBase.appendingPathComponent("models/user"), status: 200)
             )),
+            .success((
+                catalogResponse(id: Self.modelID, canonicalID: "openai/gpt-5.5-20260901"),
+                response(url: Self.apiBase.appendingPathComponent("models/user"), status: 200)
+            )),
         ])
         let generator = OpenRouterSQLGenerator(
             apiKey: "test-key",
@@ -1218,7 +1222,57 @@ struct OpenRouterSQLGeneratorTests {
             #expect(failure.diagnostic.returnedModelID == "openai/gpt-5.5-20260901")
         }
 
-        #expect(transport.requests.map { $0.url?.path } == ["/api/v1/models/user"])
+        // Mismatch against cached metadata refetches once before failing.
+        #expect(
+            transport.requests.map { $0.url?.path } == [
+                "/api/v1/models/user",
+                "/api/v1/models/user",
+            ]
+        )
+    }
+
+    @Test func preflightRecoversWhenStaleCacheHoldsPreviousCanonical() async throws {
+        let cacheURL = temporaryCacheURL()
+        let transport = StubTransport([
+            .success((
+                catalogResponse(id: Self.modelID, canonicalID: "openai/gpt-5.5-20260101"),
+                response(url: Self.apiBase.appendingPathComponent("models/user"), status: 200)
+            )),
+            .success((
+                catalogResponse(id: Self.modelID, canonicalID: "openai/gpt-5.5-20260423"),
+                response(url: Self.apiBase.appendingPathComponent("models/user"), status: 200)
+            )),
+            .success((
+                chatResponse(content: goodContent, model: "openai/gpt-5.5-20260423"),
+                response(url: Self.chatEndpoint, status: 200)
+            )),
+        ])
+        let service = catalogService(transport: transport, cacheURL: cacheURL, ttl: 60)
+        _ = try await service.availableModels(apiKey: "test-key", forceRefresh: true)
+
+        let generator = OpenRouterSQLGenerator(
+            apiKey: "test-key",
+            model: Self.modelID,
+            expectedCanonicalModelID: "openai/gpt-5.5-20260423",
+            transport: transport,
+            catalogService: service,
+            requestBuilder: OpenRouterRequestBuilder(endpoint: Self.chatEndpoint)
+        )
+
+        let result = try await generator.generateSQL(
+            question: "show users",
+            schema: makeSchema(),
+            config: SQLGenerationConfig()
+        )
+
+        #expect(result.sql == "SELECT id FROM public.users LIMIT 100")
+        #expect(
+            transport.requests.map { $0.url?.path } == [
+                "/api/v1/models/user",
+                "/api/v1/models/user",
+                "/api/v1/chat/completions",
+            ]
+        )
     }
 
     @Test func preflightDefersToPostResponseCheckWithoutPositiveMetadata() throws {
