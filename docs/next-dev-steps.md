@@ -44,11 +44,14 @@ full-gated on Terra. GPT-5.5, the pinned model, never got the full-gate
 comparison; its 24/60 baseline predates the bypass.
 
 **What:** Cherry-pick the reverted bypass, run `make eval-release-triage`
-(pinned model, ~$1.5–3.5), and apply the same pre-registered criteria:
-merge only if semantic pass exceeds 19/60 (the HEAD baseline) with 100%
-safety/schema validity, at least 95% transport, and zero repeated repairs.
-Otherwise revert again and record the negative result here and in the
-refactoring plan.
+(pinned model, ~$1.5–3.5), and apply pre-registered criteria covering the
+full approved gate, not just the headline: merge only if semantic pass
+exceeds 19/60 (the HEAD baseline) AND clarification decision accuracy stays
+at or above 11/12 AND safety/schema validity stays 100% on evaluated SQL AND
+transport and structured-response parsing stay at or above 95% AND
+forbidden-binding violations, repeated/no-progress repairs, and eval
+timeouts all stay at zero. Otherwise revert again and record the negative
+result here and in the refactoring plan.
 
 **Expectations:** High since the 2026-07-10 HEAD gate: 28 of 60 results are
 valid model SQL discarded by the host grounder, which is precisely the path
@@ -70,20 +73,26 @@ prompt pressure or phrase heuristics.
 
 **What:** Promote the query plan from prose diagnostics to a small structured
 contract (grain, joins with roles, filters, aggregation, group/order/limit,
-date anchors — all referencing schema-tool evidence IDs). For a closed set of
-plan shapes that dominate the suite (grouped aggregate + order + limit,
-anti-join "without", anchored date-window filters, distinct counts), compile
-the plan to SQL deterministically in the app and prefer the compiled SQL when
-the plan is complete; fall back to the model's SQL otherwise. This is
-synthesis from the model's own structured plan over inspected schema
-evidence — not a natural-language parser — which keeps the "no second
-database engine" principle intact.
+date anchors — all referencing schema-tool evidence IDs). Then use it in the
+least invasive mode that moves the metric, in this order:
 
-**Acceptance:** Semantic mismatch bucket strictly below 24 and semantic pass
-at or above 30/60 on the full gate, with safety/schema at 100% and no growth
-in wrong-decision or tool-budget buckets. Deterministic unit tests for the
-plan decoder and each compiled shape; unsupported plans must fall back, never
-error.
+1. **Plan-validate-and-repair (default):** check the model's SQL against its
+   own structured plan and against the plan's evidence bindings; on
+   divergence, drive the existing single-repair path with the specific
+   mismatch. No app-generated SQL.
+2. **Plan-compile (requires an explicit architecture decision):** compiling
+   joins/filters/aggregation in the app is exactly the custom SQL compiler
+   the refactoring-plan background rejects, and fallback-on-unsupported does
+   not protect against incorrectly compiled "supported" plans. Only pursue
+   this if option 1 measurably stalls, record the decision in the
+   refactoring plan, and build on a proven SQL AST/query-builder rather than
+   string assembly.
+
+**Acceptance:** Semantic mismatch bucket shrinks against the post-PR 56
+triage baseline with safety/schema at 100% and no growth in wrong-decision
+or tool-budget buckets. Deterministic unit tests for the plan decoder and
+every validation rule; plans that do not fit the contract must fall back to
+current behavior, never error.
 
 **Do not change:** eval goldens, seeded data, backend defaults, privacy
 routing, frozen heuristics.
@@ -102,16 +111,20 @@ increasing the expected-SQL-got-clarification bucket above 3.
 
 ## PR 59 — Tool-budget exhaustion bucket
 
-**Why:** 6 HEAD full-gate results die on the four-call schema-tool budget,
-concentrated in saas status/filter cases.
+**Why:** 6 HEAD full-gate results exhaust the schema-tool call budget
+(production default: `maximumSchemaToolCalls = 6`), concentrated in saas
+status/filter cases.
 
-**What:** Measure before changing: from triage, classify whether exhaustion
-comes from repeated identical calls (fix: serve repeated `describe_tables`
-from the evidence ledger without consuming budget), scattered exploration
-(fix: prompt guidance on budget), or genuinely needing a fifth call (fix:
-raise the budget for multi-table questions only, with cost/latency measured).
+**What:** Re-derive the failure mechanics from fresh traces before touching
+anything — earlier assumptions have gone stale once already: the budget is
+six calls, not four, and repeated identical tool calls are already
+intercepted with a correction response before invocation. From the traces,
+classify whether exhaustion comes from scattered near-duplicate exploration
+(distinct arguments that add no evidence), from genuinely broad questions,
+or from correction turns burning budget, then fix that specific mechanism
+with cost/latency measured.
 
-**Acceptance:** Bucket at or below 4 on the full gate with per-case cost and
+**Acceptance:** Bucket at or below 3 on the full gate with per-case cost and
 p95 latency no worse than 15% over baseline.
 
 ## PR 60 — Canonical-version watch and rollover runbook
