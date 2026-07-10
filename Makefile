@@ -34,6 +34,10 @@ endif
 ifdef FAIL_UNDER
 EVAL_ARGS += --fail-under $(FAIL_UNDER)
 endif
+CLOUD_COST_ARGS :=
+ifdef MAX_CLOUD_COST_USD
+CLOUD_COST_ARGS += --max-cloud-cost-usd $(MAX_CLOUD_COST_USD)
+endif
 
 .PHONY: project build test test-db test-fm eval-build eval-local eval-cloud eval-cloud-agent eval-all eval-case eval-cloud-agent-case eval-retrieval eval-retrieval-case eval-schema-tools eval-inspection-tools eval-db-local eval-db-cloud eval-db-cloud-agent eval-db-cloud-agent-case eval-release eval-release-triage eval-release-preseason eval-release-overclarification eval-release-sql-shape eval-release-resume eval-db-case eval-openrouter-smoke setup run run-conductor release release-mac xcode clean
 
@@ -84,34 +88,34 @@ eval-local: eval-build
 ## Run the text-to-SQL eval suite against OpenRouter
 eval-cloud: eval-build
 	@set -a; if [ -f .env.eval.local ]; then . ./.env.eval.local; fi; set +a; \
-	$(EVAL) --backend cloud --model "$(MODEL)" $(EVAL_ARGS)
+	$(EVAL) --backend cloud --model "$(MODEL)" $(EVAL_ARGS) $(CLOUD_COST_ARGS)
 
 ## Run the text-to-SQL eval suite against OpenRouter with --cloud-agent legacy|tools
 eval-cloud-agent: eval-build
 	@set -a; if [ -f .env.eval.local ]; then . ./.env.eval.local; fi; set +a; \
-	$(EVAL) --backend cloud --model "$(MODEL)" --cloud-agent "$(CLOUD_AGENT)" $(EVAL_ARGS)
+	$(EVAL) --backend cloud --model "$(MODEL)" --cloud-agent "$(CLOUD_AGENT)" $(EVAL_ARGS) $(CLOUD_COST_ARGS)
 
 ## Run a tiny OpenRouter transport and structured-response smoke suite
 eval-openrouter-smoke: eval-build
 	@set -a; if [ -f .env.eval.local ]; then . ./.env.eval.local; fi; set +a; \
-	$(EVAL) --backend cloud --model "$(MODEL)" --suite Evals/suites/openrouter-smoke-v1.json $(filter-out --suite Evals/suites/text-to-sql-v1.json,$(EVAL_ARGS))
+	$(EVAL) --backend cloud --model "$(MODEL)" --suite Evals/suites/openrouter-smoke-v1.json $(filter-out --suite Evals/suites/text-to-sql-v1.json,$(EVAL_ARGS)) $(CLOUD_COST_ARGS)
 
 ## Run the text-to-SQL eval suite against local and cloud backends
 eval-all: eval-build
 	@set -a; if [ -f .env.eval.local ]; then . ./.env.eval.local; fi; set +a; \
-	$(EVAL) --backend both --model "$(MODEL)" $(EVAL_ARGS)
+	$(EVAL) --backend both --model "$(MODEL)" $(EVAL_ARGS) $(CLOUD_COST_ARGS)
 
 ## Run one eval case. Example: make eval-case CASE=preseason.top-wins-defined BACKEND=cloud
 eval-case: eval-build
 	@test -n "$(CASE)" || (echo "error: CASE is required" >&2; exit 1)
 	@set -a; if [ -f .env.eval.local ]; then . ./.env.eval.local; fi; set +a; \
-	$(EVAL) --backend "$(BACKEND)" --model "$(MODEL)" $(EVAL_ARGS)
+	$(EVAL) --backend "$(BACKEND)" --model "$(MODEL)" $(EVAL_ARGS) $(CLOUD_COST_ARGS)
 
 ## Run one OpenRouter cloud-agent eval case. Example: make eval-cloud-agent-case CASE=preseason.top-wins-defined CLOUD_AGENT=tools
 eval-cloud-agent-case: eval-build
 	@test -n "$(CASE)" || (echo "error: CASE is required" >&2; exit 1)
 	@set -a; if [ -f .env.eval.local ]; then . ./.env.eval.local; fi; set +a; \
-	$(EVAL) --backend cloud --model "$(MODEL)" --cloud-agent "$(CLOUD_AGENT)" $(EVAL_ARGS)
+	$(EVAL) --backend cloud --model "$(MODEL)" --cloud-agent "$(CLOUD_AGENT)" $(EVAL_ARGS) $(CLOUD_COST_ARGS)
 
 ## Run deterministic schema retrieval evals with --retriever legacy|index|both
 eval-retrieval: eval-build
@@ -138,55 +142,55 @@ eval-db-local: eval-build
 ## Run the text-to-SQL eval suite with seeded Postgres semantic grading through OpenRouter
 eval-db-cloud: eval-build
 	@set -a; if [ -f .env.eval.local ]; then . ./.env.eval.local; fi; set +a; \
-	$(EVAL) --backend cloud --model "$(MODEL)" --semantic-db $(EVAL_ARGS)
+	$(EVAL) --backend cloud --model "$(MODEL)" --semantic-db $(EVAL_ARGS) $(CLOUD_COST_ARGS)
 
 ## Run seeded Postgres semantic grading through OpenRouter with --cloud-agent legacy|tools
 eval-db-cloud-agent: eval-build
 	@set -a; if [ -f .env.eval.local ]; then . ./.env.eval.local; fi; set +a; \
-	$(EVAL) --backend cloud --model "$(MODEL)" --cloud-agent "$(CLOUD_AGENT)" --semantic-db $(EVAL_ARGS)
+	$(EVAL) --backend cloud --model "$(MODEL)" --cloud-agent "$(CLOUD_AGENT)" --semantic-db $(EVAL_ARGS) $(CLOUD_COST_ARGS)
 
 ## Run one seeded Postgres semantic OpenRouter cloud-agent eval case.
 eval-db-cloud-agent-case: eval-build
 	@test -n "$(CASE)" || (echo "error: CASE is required" >&2; exit 1)
 	@set -a; if [ -f .env.eval.local ]; then . ./.env.eval.local; fi; set +a; \
-	$(EVAL) --backend cloud --model "$(MODEL)" --cloud-agent "$(CLOUD_AGENT)" --semantic-db $(EVAL_ARGS)
+	$(EVAL) --backend cloud --model "$(MODEL)" --cloud-agent "$(CLOUD_AGENT)" --semantic-db $(EVAL_ARGS) $(CLOUD_COST_ARGS)
 
 ## Run the PR 12 text-to-SQL release gate
 eval-release: eval-build
 	@set -a; if [ -f .env.eval.local ]; then . ./.env.eval.local; fi; set +a; \
-	$(EVAL) --backend cloud --model "$(MODEL)" --cloud-agent tools --suite Evals/suites/text-to-sql-v1.json --semantic-db --repeat 3 --release-gate-version "$(RELEASE_VERSION)"
+	$(EVAL) --backend cloud --model "$(MODEL)" --cloud-agent tools --suite Evals/suites/text-to-sql-v1.json --semantic-db --repeat 3 --release-gate-version "$(RELEASE_VERSION)" $(CLOUD_COST_ARGS)
 
 ## Run the release gate and write redacted failure triage artifacts
 eval-release-triage: eval-build
 	@set -a; if [ -f .env.eval.local ]; then . ./.env.eval.local; fi; set +a; \
-	$(EVAL) --backend cloud --model "$(MODEL)" --cloud-agent tools --suite Evals/suites/text-to-sql-v1.json --semantic-db --repeat 3 --release-gate-version "$(RELEASE_VERSION)" --write-release-triage --release-triage-version "$(RELEASE_VERSION)"
+	$(EVAL) --backend cloud --model "$(MODEL)" --cloud-agent tools --suite Evals/suites/text-to-sql-v1.json --semantic-db --repeat 3 --release-gate-version "$(RELEASE_VERSION)" --write-release-triage --release-triage-version "$(RELEASE_VERSION)" $(CLOUD_COST_ARGS)
 
 ## Run focused Preseason release-gate regressions with triage output
 eval-release-preseason: eval-build
 	@set -a; if [ -f .env.eval.local ]; then . ./.env.eval.local; fi; set +a; \
-	$(EVAL) --backend cloud --model "$(MODEL)" --cloud-agent tools --suite Evals/suites/text-to-sql-v1.json --case preseason.top-wins-ambiguous --case preseason.top-wins-defined --semantic-db --repeat 3 --write-release-triage
+	$(EVAL) --backend cloud --model "$(MODEL)" --cloud-agent tools --suite Evals/suites/text-to-sql-v1.json --case preseason.top-wins-ambiguous --case preseason.top-wins-defined --semantic-db --repeat 3 --write-release-triage $(CLOUD_COST_ARGS)
 
 ## Run focused release-gate over-clarification cases with triage output
 eval-release-overclarification: eval-build
 	@set -a; if [ -f .env.eval.local ]; then . ./.env.eval.local; fi; set +a; \
-	$(EVAL) --backend cloud --model "$(MODEL)" --cloud-agent tools --schema-agent-clarification-correction experimental --schema-agent-intent-coverage experimental --suite Evals/suites/text-to-sql-v1.json --case commerce.average-order-value-country --case commerce.customer-paid-revenue --case commerce.customers-without-orders --case saas.expiring-subscriptions --case saas.overallocated-seats --case saas.users-without-membership --case support.average-first-response --case support.frequent-feedback-cluster --case support.unclustered-feedback --case support.unresolved-by-assignee --semantic-db --repeat 3 --write-release-triage
+	$(EVAL) --backend cloud --model "$(MODEL)" --cloud-agent tools --schema-agent-clarification-correction experimental --schema-agent-intent-coverage experimental --suite Evals/suites/text-to-sql-v1.json --case commerce.average-order-value-country --case commerce.customer-paid-revenue --case commerce.customers-without-orders --case saas.expiring-subscriptions --case saas.overallocated-seats --case saas.users-without-membership --case support.average-first-response --case support.frequent-feedback-cluster --case support.unclustered-feedback --case support.unresolved-by-assignee --semantic-db --repeat 3 --write-release-triage $(CLOUD_COST_ARGS)
 
 ## Run focused release-gate SQL-shape semantic mismatch cases with triage output
 eval-release-sql-shape: eval-build
 	@set -a; if [ -f .env.eval.local ]; then . ./.env.eval.local; fi; set +a; \
-	$(EVAL) --backend cloud --model "$(MODEL)" --cloud-agent tools --suite Evals/suites/text-to-sql-v1.json --case commerce.average-order-value-country --case commerce.customer-paid-revenue --case commerce.customers-without-orders --case preseason.active-match-configs --case preseason.verified-tools --case saas.expiring-subscriptions --case saas.overallocated-seats --case support.frequent-feedback-cluster --case support.unclustered-feedback --case support.unresolved-by-assignee --semantic-db --repeat 3 --write-release-triage
+	$(EVAL) --backend cloud --model "$(MODEL)" --cloud-agent tools --suite Evals/suites/text-to-sql-v1.json --case commerce.average-order-value-country --case commerce.customer-paid-revenue --case commerce.customers-without-orders --case preseason.active-match-configs --case preseason.verified-tools --case saas.expiring-subscriptions --case saas.overallocated-seats --case support.frequent-feedback-cluster --case support.unclustered-feedback --case support.unresolved-by-assignee --semantic-db --repeat 3 --write-release-triage $(CLOUD_COST_ARGS)
 
 ## Resume a previous release-gate run without rerunning completed cases
 eval-release-resume: eval-build
 	@test -n "$(RESUME)" || (echo "error: RESUME is required" >&2; exit 1)
 	@set -a; if [ -f .env.eval.local ]; then . ./.env.eval.local; fi; set +a; \
-	$(EVAL) --resume-run "$(RESUME)" --resume-missing --release-gate-version "$(RELEASE_VERSION)" --write-release-triage
+	$(EVAL) --resume-run "$(RESUME)" --resume-missing --release-gate-version "$(RELEASE_VERSION)" --write-release-triage $(CLOUD_COST_ARGS)
 
 ## Run one seeded Postgres semantic eval case
 eval-db-case: eval-build
 	@test -n "$(CASE)" || (echo "error: CASE is required" >&2; exit 1)
 	@set -a; if [ -f .env.eval.local ]; then . ./.env.eval.local; fi; set +a; \
-	$(EVAL) --backend "$(BACKEND)" --model "$(MODEL)" --semantic-db $(EVAL_ARGS)
+	$(EVAL) --backend "$(BACKEND)" --model "$(MODEL)" --semantic-db $(EVAL_ARGS) $(CLOUD_COST_ARGS)
 
 ## Build and launch the app
 run: build
