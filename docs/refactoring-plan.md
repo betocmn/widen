@@ -1817,6 +1817,52 @@ New PR 55 evaluation spend was $3.773616, below the $6.00 implementation cap.
 Historical GPT-5.5 baseline files remain intact; the current sanitized release
 summary and triage record the complete negative Terra run.
 
+## PR 55 hardening follow-up [2026-07-10]
+
+A post-merge review pass hardened the pinned-profile work on the same branch:
+
+* Pinned-model eval runs now enforce the same canonical-version contract as
+  the app, including a pre-flight catalog check that fails before any billed
+  completion when OpenRouter rolls the canonical version. The live catalog
+  and completion responses both confirmed `openai/gpt-5.5-20260423`.
+* `make eval-release` and `make eval-release-triage` refuse a non-pinned
+  `MODEL=` override unless `ALLOW_MODEL_OVERRIDE=1` is set, so gate docs can
+  no longer silently record a non-production model.
+* Settings surfaces the underlying catalog error for a rejected key, missing
+  response model versions produce a distinct fail-closed message, private
+  routing rejections explain Widen's requirements, the zero-retention claim
+  is one shared constant across views, and OpenRouter key/credit-limit
+  failures are classified as provider budget rather than permission denied.
+
+The full release gate was rerun at HEAD for the pinned GPT-5.5 profile with
+private routing and canonical enforcement active (a first attempt stopped at
+23/60 on an exhausted key limit; after the limit was raised, the complete
+rerun cost $3.18). Complete results, recorded in `docs/evals/0.1.0.md`:
+
+```text
+gate: failed (still beta)
+semantic end-to-end: 19/60
+clarification decision accuracy: 11/12
+safety and schema validity: 100%
+transport: 60/60 with private routing and canonical checks on every request
+repeated/no-progress repairs: 0
+wrong decision, expected SQL got clarification: 28
+semantic result mismatch: 6
+tool budget exhausted: 6
+```
+
+The failure profile flipped versus the June 24/60 baseline: semantic
+mismatch collapsed (24 to 6) while host-side false clarification returned to
+its pre-PR 16 level (3 to 28). All 28 of those results had terminal action
+`sql` — the model produced SQL and the legacy grounding clarification path
+discarded it. The June baseline ran with PR 16's over-clarification
+enforcement, which PR 52 later defaulted to diagnostics-only; the current
+default path therefore reproduces the PR 15-era wrong-decision bucket. The
+highest-leverage next step is the trusted-agent grounding-bypass experiment
+on the pinned model (PR 56 in `docs/next-dev-steps.md`), which targets
+exactly this bucket. The June GPT-5.5 24/60 record remains in git history at
+commit `386f363` and earlier.
+
 ---
 
 # Recommended implementation order for one coding agent

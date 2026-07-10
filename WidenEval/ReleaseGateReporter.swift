@@ -523,7 +523,7 @@ enum TextToSQLReleaseTriageReporter {
                 )
             } else if let result = resultByKey[key] {
                 lines.append(
-                    "| \(tableCell(key.caseID)) | \(tableCell(key.backend.rawValue)) | \(key.repeatIndex) | Not evaluated | \(tableCell(result.status.rawValue)) | \(tableCell(result.metrics.semanticStatus?.rawValue ?? "-")) | Not evaluated | - | - | - | \(tableCell(result.diagnostics.errorMessage ?? result.status.notEvaluatedReason?.rawValue ?? "-")) |"
+                    "| \(tableCell(key.caseID)) | \(tableCell(key.backend.rawValue)) | \(key.repeatIndex) | Not evaluated | \(tableCell(result.status.rawValue)) | \(tableCell(result.metrics.semanticStatus?.rawValue ?? "-")) | Not evaluated | - | - | - | \(tableCell(result.diagnostics.errorMessage.map(Self.redactedProviderMessage) ?? result.status.notEvaluatedReason?.rawValue ?? "-")) |"
                 )
             } else {
                 lines.append(
@@ -922,6 +922,23 @@ enum TextToSQLReleaseTriageReporter {
             .replacingOccurrences(of: "\r", with: " ")
             .replacingOccurrences(of: "|", with: "\\|")
             .trimmingCharacters(in: .whitespacesAndNewlines)
+    }
+
+    /// Provider error messages can embed account-specific URLs and key
+    /// identifiers; strip them before they reach a sanitized committed
+    /// report.
+    private static func redactedProviderMessage(_ message: String) -> String {
+        message
+            .replacingOccurrences(
+                of: #"https?://\S+"#,
+                with: "[redacted-url]",
+                options: .regularExpression
+            )
+            .replacingOccurrences(
+                of: #"\b[a-fA-F0-9]{32,}\b"#,
+                with: "[redacted-id]",
+                options: .regularExpression
+            )
     }
 }
 

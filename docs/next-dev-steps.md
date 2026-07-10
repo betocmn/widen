@@ -9,12 +9,16 @@ routing, canonical-version enforcement, release-gate hardening) merges to
 * The product path is fixed: OpenRouter schema-tool agent, pinned
   `openai/gpt-5.5` (canonical `openai/gpt-5.5-20260423`), zero-data-retention
   routing, fail-closed canonical checks in the app and in pinned-model evals.
-* The release gate still fails, so text-to-SQL stays beta. Best complete
-  GPT-5.5 full gate: 24/60 semantic, 10/12 clarification accuracy, 100%
-  safety/schema, 100% transport, 0 repeated repairs.
-* Failure buckets from the last triages, largest first: semantic result
-  mismatch (~24), tool budget exhausted (~9), wrong decision (~3),
-  clarification accuracy (2/12 short).
+* The release gate still fails, so text-to-SQL stays beta. The complete
+  2026-07-10 gate at HEAD (pinned GPT-5.5, private routing, canonical
+  enforcement, $3.18): 19/60 semantic, 11/12 clarification accuracy, 100%
+  safety/schema, 60/60 transport, 0 repeated repairs.
+* Failure buckets at HEAD, largest first: host-side false clarification
+  (28 — the model returned SQL in every one; the legacy grounder discarded
+  it), semantic result mismatch (6), tool budget exhausted (6),
+  clarification accuracy (1/12 short). The June 24/60 baseline ran with
+  PR 16 enforcement that PR 52 later defaulted off, which is why the
+  wrong-decision bucket returned to its pre-PR 16 level.
 * Standing conclusions to respect: the intent-coverage phrase heuristics are
   frozen (PR 53); more force-SQL prompt pressure does not help (PR 52); the
   next accuracy lever is stable query planning / deterministic synthesis
@@ -23,9 +27,11 @@ routing, canonical-version enforcement, release-gate hardening) merges to
 
 ## Recommended order
 
-1. PR 56 (cheap pre-registered experiment)
-2. PR 57 (the main accuracy bet)
-3. Full release gate rerun, then PR 58 and PR 59 against fresh triage
+1. PR 56 — now the main accuracy lever: the 28-case false-clarification
+   bucket is exactly what the bypass addresses
+2. PR 57 against the post-PR 56 triage (semantic mismatch is only 6 at HEAD;
+   confirm it is still worth the build before starting)
+3. PR 58 and PR 59 against fresh triage
 4. PR 60 and PR 61 are independent and can land anytime
 
 ---
@@ -38,18 +44,26 @@ full-gated on Terra. GPT-5.5, the pinned model, never got the full-gate
 comparison; its 24/60 baseline predates the bypass.
 
 **What:** Cherry-pick the reverted bypass, run `make eval-release-triage`
-(pinned model, ~$1.5–2.5), and apply the same pre-registered criteria:
-merge only if semantic pass exceeds 24/60 with 100% safety/schema validity,
-at least 95% transport, and zero repeated repairs. Otherwise revert again and
-record the negative result here and in the refactoring plan.
+(pinned model, ~$1.5–3.5), and apply the same pre-registered criteria:
+merge only if semantic pass exceeds 19/60 (the HEAD baseline) with 100%
+safety/schema validity, at least 95% transport, and zero repeated repairs.
+Otherwise revert again and record the negative result here and in the
+refactoring plan.
 
-**Expectations:** Low — the focused GPT-5.5 run only moved 0/30 → 1/30 under
-the bypass — but the experiment is one cherry-pick plus one eval run, and it
-closes the last untested cell of the PR 55 comparison matrix.
+**Expectations:** High since the 2026-07-10 HEAD gate: 28 of 60 results are
+valid model SQL discarded by the host grounder, which is precisely the path
+the bypass trusts. Some converted results will land as semantic mismatches
+instead (Terra showed that pattern), but that bucket is only 6 at HEAD.
+Alternative worth considering in the same PR: instead of the bypass,
+re-enable PR 16's over-clarification enforcement that PR 52 defaulted off —
+the June 24/60 baseline shows that configuration held the bucket at 3.
 
 ## PR 57 — Plan-then-compile SQL synthesis for covered shapes
 
-**Why:** Semantic result mismatch is the dominant bucket (~24/60). PR 54
+**Why:** Semantic result mismatch was the dominant bucket (~24/60) before
+the PR 55 hardening gate; at HEAD it is 6, and it will likely grow again
+once PR 56 stops discarding model SQL. Re-triage after PR 56 before
+committing to this build. PR 54
 added a redacted `query_plan` to the terminal contract as diagnostics; PR 52
 concluded the fix is stable query-plan and SQL-shape generation, not more
 prompt pressure or phrase heuristics.
@@ -76,7 +90,7 @@ routing, frozen heuristics.
 
 ## PR 58 — Clarification decision accuracy to 12/12
 
-**Why:** The gate requires 100%; the last complete runs sat at 10/12.
+**Why:** The gate requires 100%; the HEAD gate sits at 11/12.
 
 **What:** Triage the two failing ambiguity cases from the freshest gate run,
 then fix the specific decision behavior (prompt guidance or clarification
@@ -88,7 +102,7 @@ increasing the expected-SQL-got-clarification bucket above 3.
 
 ## PR 59 — Tool-budget exhaustion bucket
 
-**Why:** ~9 full-gate results die on the four-call schema-tool budget,
+**Why:** 6 HEAD full-gate results die on the four-call schema-tool budget,
 concentrated in saas status/filter cases.
 
 **What:** Measure before changing: from triage, classify whether exhaustion
