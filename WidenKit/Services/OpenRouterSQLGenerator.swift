@@ -456,14 +456,6 @@ public struct OpenRouterFailure: Error, LocalizedError, Equatable, Sendable {
         return copy
     }
 
-    private static func isKeyOrCreditLimitMessage(_ message: String) -> Bool {
-        let lower = message.lowercased()
-        return lower.contains("key limit exceeded")
-            || lower.contains("credit limit")
-            || lower.contains("insufficient credits")
-            || lower.contains("spend limit")
-    }
-
     static func category(
         errorType: String?,
         providerCode: String? = nil,
@@ -533,7 +525,11 @@ public struct OpenRouterFailure: Error, LocalizedError, Equatable, Sendable {
         // OpenRouter reports an exhausted key/credit limit as a plain 403
         // message without a typed code; classify it as provider budget so
         // eval runs count it as budget-unavailable, not permission denied.
-        if let message, isKeyOrCreditLimitMessage(message) {
+        // Gate by status: 401 stays authentication and 5xx stays retryable
+        // even when a provider message mentions a limit.
+        if let message, OpenRouterResponseParser.isKeyOrCreditLimitMessage(message),
+            httpStatus == nil || httpStatus == 402 || httpStatus == 403 || httpStatus == 429
+        {
             return .providerLimit
         }
 
@@ -1927,7 +1923,7 @@ struct OpenRouterResponseParser: Sendable {
         var displayMessage = safeMessage(message)
         if isProviderRoutingPolicyMessage(message) {
             displayMessage =
-                "No OpenRouter endpoint met Widen's private-routing requirements for the fixed model. Widen requires zero data retention, no provider data collection, and full request-parameter support, and fails closed rather than relaxing them. \(displayMessage)"
+                "No OpenRouter endpoint met Widen's private-routing requirements for this model. Widen requires zero data retention, no provider data collection, and full request-parameter support, and fails closed rather than relaxing them. \(displayMessage)"
         }
         return OpenRouterFailure(
             category: OpenRouterFailure.category(
@@ -1994,15 +1990,28 @@ struct OpenRouterResponseParser: Sendable {
         return nil
     }
 
-    /// OpenRouter routing failures for provider preferences (ZDR, data
-    /// collection, require_parameters) arrive as generic 404/503 messages;
-    /// detect them so the user sees why generation failed closed.
+    /// OpenRouter routing failures for provider data-policy preferences (ZDR,
+    /// data collection) arrive as generic 404/503 messages; detect them so
+    /// the user sees why generation failed closed. Keep the match specific to
+    /// data-policy wording — generic "no endpoints" messages also cover model
+    /// delisting and provider outages, which are not privacy failures.
     static func isProviderRoutingPolicyMessage(_ message: String) -> Bool {
         let lower = message.lowercased()
-        return lower.contains("no endpoints")
-            || lower.contains("no allowed providers")
-            || lower.contains("data policy")
-            || lower.contains("matching your")
+        return lower.contains("data policy")
+            || lower.contains("data collection")
+            || lower.contains("zero data retention")
+            || lower.contains("zdr")
+    }
+
+    /// OpenRouter reports an exhausted key/credit limit as plain message text
+    /// without a typed code; detect it so eval runs count it as
+    /// budget-unavailable rather than permission denied.
+    static func isKeyOrCreditLimitMessage(_ message: String) -> Bool {
+        let lower = message.lowercased()
+        return lower.contains("key limit exceeded")
+            || lower.contains("credit limit")
+            || lower.contains("insufficient credits")
+            || lower.contains("spend limit")
     }
 
     static func isContextWindowMessage(_ message: String) -> Bool {

@@ -244,6 +244,39 @@ struct OpenRouterSQLGeneratorTests {
         #expect(category.isProviderBudgetUnavailable)
     }
 
+    @Test func keyLimitMessageDoesNotReclassifyAuthenticationOrServerFailures() {
+        #expect(
+            OpenRouterFailure.category(
+                errorType: nil,
+                providerCode: nil,
+                httpStatus: 401,
+                message: "Key limit exceeded for a disabled key"
+            ) == .authentication
+        )
+        #expect(
+            OpenRouterFailure.category(
+                errorType: nil,
+                providerCode: nil,
+                httpStatus: 500,
+                message: "Upstream provider hit its credit limit"
+            ) == .serverFailure
+        )
+    }
+
+    @Test func genericNoEndpointsFailureIsNotAttributedToPrivateRouting() throws {
+        let failure = OpenRouterResponseParser.failure(
+            from: errorResponse(
+                errorType: "routing",
+                message: "No endpoints found for openai/gpt-5.5."
+            ),
+            response: response(url: Self.chatEndpoint, status: 404),
+            requestedModelID: Self.modelID,
+            attemptCount: 1
+        )
+        #expect(failure.category == .modelNotFound)
+        #expect(!failure.message.contains("private-routing requirements"))
+    }
+
     @Test func routingPolicyFailureExplainsPrivateRoutingRequirements() throws {
         let failure = OpenRouterResponseParser.failure(
             from: errorResponse(
