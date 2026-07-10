@@ -191,8 +191,9 @@ eval-release-sql-shape: eval-build
 ## Resume a previous release-gate run without rerunning completed cases
 eval-release-resume: eval-build
 	@test -n "$(RESUME)" || (echo "error: RESUME is required" >&2; exit 1)
+	$(REQUIRE_PINNED_MODEL)
 	@set -a; if [ -f .env.eval.local ]; then . ./.env.eval.local; fi; set +a; \
-	$(EVAL) --resume-run "$(RESUME)" --resume-missing --release-gate-version "$(RELEASE_VERSION)" --write-release-triage $(CLOUD_COST_ARGS)
+	$(EVAL) --resume-run "$(RESUME)" --resume-missing --model "$(MODEL)" --release-gate-version "$(RELEASE_VERSION)" --write-release-triage $(CLOUD_COST_ARGS)
 
 ## Run one seeded Postgres semantic eval case
 eval-db-case: eval-build
