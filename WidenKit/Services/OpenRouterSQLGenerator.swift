@@ -2056,6 +2056,12 @@ struct OpenRouterConnectivityCheck: Sendable {
                 metadata = await catalogService.metadata(apiKey: apiKey, modelID: model, forceRefresh: true)
             }
             let capabilities = metadata?.capabilities ?? .conservative()
+            try OpenRouterCanonicalModelValidator.preflight(
+                catalogCanonicalModelID: capabilities.canonicalModelID,
+                capabilitySource: capabilities.capabilitySource,
+                expectedCanonicalModelID: expectedCanonicalModelID,
+                requestedModelID: model
+            )
             let generator = OpenRouterSQLGenerator(
                 apiKey: apiKey,
                 model: model,

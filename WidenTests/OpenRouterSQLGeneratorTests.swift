@@ -1136,6 +1136,32 @@ struct OpenRouterSQLGeneratorTests {
         #expect(result.returnedModelID == expectedModelID)
     }
 
+    @Test func connectivityCheckRejectsCanonicalRolloverBeforeCompletionRequest() async throws {
+        let expectedModelID = "openai/gpt-5.5-20260423"
+        let returnedModelID = "openai/gpt-5.5-20260901"
+        let transport = StubTransport([
+            .success((
+                catalogResponse(id: Self.modelID, canonicalID: returnedModelID),
+                response(url: Self.apiBase.appendingPathComponent("models/user"), status: 200)
+            )),
+        ])
+        let service = catalogService(transport: transport)
+
+        let result = await OpenRouterConnectivityCheck(
+            apiKey: "test-key",
+            model: Self.modelID,
+            expectedCanonicalModelID: expectedModelID,
+            catalogService: service,
+            transport: transport,
+            requestBuilder: OpenRouterRequestBuilder(endpoint: Self.chatEndpoint)
+        ).run()
+
+        #expect(result.error?.category == .modelVersionMismatch)
+        #expect(result.returnedModelID == returnedModelID)
+        #expect(!result.selectedModelAvailable)
+        #expect(transport.requests.map { $0.url?.path } == ["/api/v1/models/user"])
+    }
+
     @Test func missingReturnedModelFailsClosedAsVersionMismatch() async throws {
         let expectedModelID = "openai/gpt-5.5-20260423"
         let transport = StubTransport([
