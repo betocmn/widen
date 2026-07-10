@@ -856,15 +856,7 @@ actor OpenRouterModelCatalogService {
         allowStaleFallback: Bool = true
     ) async -> OpenRouterModelMetadata? {
         do {
-            let catalog = try await catalog(apiKey: apiKey, forceRefresh: forceRefresh)
-            if let model = Self.find(modelID, in: catalog.models) {
-                return model
-            }
-            if let single = try await fetchSingleModel(apiKey: apiKey, modelID: modelID) {
-                merge(single, apiKey: apiKey)
-                return single
-            }
-            return nil
+            return try await lookupModel(apiKey: apiKey, modelID: modelID, forceRefresh: forceRefresh)
         } catch is CancellationError {
             return nil
         } catch {
@@ -887,15 +879,7 @@ actor OpenRouterModelCatalogService {
         forceRefresh: Bool = false
     ) async throws -> OpenRouterModelMetadata? {
         do {
-            let catalog = try await catalog(apiKey: apiKey, forceRefresh: forceRefresh)
-            if let model = Self.find(modelID, in: catalog.models) {
-                return model
-            }
-            if let single = try await fetchSingleModel(apiKey: apiKey, modelID: modelID) {
-                merge(single, apiKey: apiKey)
-                return single
-            }
-            return nil
+            return try await lookupModel(apiKey: apiKey, modelID: modelID, forceRefresh: forceRefresh)
         } catch is CancellationError {
             throw CancellationError()
         } catch {
@@ -908,6 +892,25 @@ actor OpenRouterModelCatalogService {
             }
             throw error
         }
+    }
+
+    /// The one shared model-lookup flow: fresh catalog membership first, then
+    /// the single-model endpoint. Both public lookups wrap this with their
+    /// distinct error handling so Settings and generation cannot drift.
+    private func lookupModel(
+        apiKey: String,
+        modelID: String,
+        forceRefresh: Bool
+    ) async throws -> OpenRouterModelMetadata? {
+        let catalog = try await catalog(apiKey: apiKey, forceRefresh: forceRefresh)
+        if let model = Self.find(modelID, in: catalog.models) {
+            return model
+        }
+        if let single = try await fetchSingleModel(apiKey: apiKey, modelID: modelID) {
+            merge(single, apiKey: apiKey)
+            return single
+        }
+        return nil
     }
 
     func capabilitiesForGeneration(apiKey: String, modelID: String) async
