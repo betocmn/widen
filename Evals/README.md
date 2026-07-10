@@ -127,9 +127,10 @@ diffs, if added later, must stay under `.eval-results/`.
 ## Release Gate
 
 `make eval-release` is the PR 12 release gate and defaults to the fixed
-production alias `openai/gpt-5.5`. An explicit `MODEL=<model>` or CLI `--model`
-remains available for engineering experiments without changing the app's
-production profile. The target runs
+production alias `openai/gpt-5.5`. Engineering comparisons must opt in with
+`make eval-release MODEL=<model> ALLOW_MODEL_OVERRIDE=1`; direct CLI runs can
+still use `--model`. Neither override changes the app's production profile. The
+target runs
 `Evals/suites/text-to-sql-v1.json` with `--backend cloud`, `--cloud-agent tools`,
 `--semantic-db`, and `--repeat 3`. This intentionally tests the OpenRouter
 schema-tool agent because that is the default connected-session product path for
