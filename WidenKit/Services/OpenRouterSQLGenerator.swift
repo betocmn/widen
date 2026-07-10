@@ -583,19 +583,22 @@ enum OpenRouterCanonicalModelValidator {
         attemptCount: Int
     ) throws {
         guard let expectedCanonicalModelID else { return }
-        guard returnedModelID == expectedCanonicalModelID else {
-            throw OpenRouterFailure(
-                category: .modelVersionMismatch,
-                message: "OpenRouter resolved the fixed model to an unevaluated version. Update Widen before using this cloud model.",
-                httpStatus: httpStatus,
-                completionID: completionID,
-                requestID: requestID,
-                requestedModelID: requestedModelID,
-                returnedModelID: returnedModelID,
-                providerName: providerName,
-                attemptCount: attemptCount
-            )
-        }
+        guard returnedModelID != expectedCanonicalModelID else { return }
+        let message =
+            returnedModelID == nil
+            ? "OpenRouter did not report which model version served this request, so Widen cannot confirm it matches the evaluated version. Try again, and update Widen if this persists."
+            : "OpenRouter resolved the fixed model to an unevaluated version. Update Widen before using this cloud model."
+        throw OpenRouterFailure(
+            category: .modelVersionMismatch,
+            message: message,
+            httpStatus: httpStatus,
+            completionID: completionID,
+            requestID: requestID,
+            requestedModelID: requestedModelID,
+            returnedModelID: returnedModelID,
+            providerName: providerName,
+            attemptCount: attemptCount
+        )
     }
 }
 
