@@ -25,4 +25,13 @@ public enum OpenRouterCatalog {
         expectedCanonicalModelID: "openai/gpt-5.5-20260423",
         displayName: "GPT-5.5"
     )
+
+    /// The canonical version to enforce for a requested model ID. Evals may
+    /// run arbitrary models, but when they run the pinned production model
+    /// they must enforce the same canonical-version contract as the app.
+    public static func expectedCanonicalModelID(forRequestedModelID id: String) -> String? {
+        id == productionProfile.requestedModelID
+            ? productionProfile.expectedCanonicalModelID
+            : nil
+    }
 }

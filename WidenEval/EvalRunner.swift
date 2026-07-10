@@ -1041,10 +1041,14 @@ struct EvalRunner {
             #endif
         case .cloud:
             guard let apiKey = Self.openRouterAPIKey() else { return nil }
+            let expectedCanonicalModelID = OpenRouterCatalog.expectedCanonicalModelID(
+                forRequestedModelID: options.model
+            )
             if options.cloudAgentMode == .tools {
                 return EvalCloudSchemaToolSQLGenerator(
                     apiKey: apiKey,
                     model: options.model,
+                    expectedCanonicalModelID: expectedCanonicalModelID,
                     maximumHTTPAttempts: maximumHTTPAttempts,
                     clarificationCorrectionMode: options.schemaAgentClarificationCorrectionMode,
                     intentCoverageMode: options.schemaAgentIntentCoverageMode
@@ -1053,6 +1057,7 @@ struct EvalRunner {
             return OpenRouterSQLGenerator(
                 apiKey: apiKey,
                 model: options.model,
+                expectedCanonicalModelID: expectedCanonicalModelID,
                 maximumHTTPAttempts: maximumHTTPAttempts.map { min(3, max(1, $0)) } ?? 3,
                 countCapabilityLookupHTTPAttempts: maximumHTTPAttempts != nil
             )
@@ -1801,6 +1806,7 @@ private extension TextToSQLEvalResult {
 private struct EvalCloudSchemaToolSQLGenerator: SQLGenerator, Sendable {
     var apiKey: String
     var model: String
+    var expectedCanonicalModelID: String?
     var maximumHTTPAttempts: Int?
     var clarificationCorrectionMode: SchemaToolAgentClarificationCorrectionMode
     var intentCoverageMode: SchemaToolAgentIntentCoverageMode
@@ -1819,6 +1825,7 @@ private struct EvalCloudSchemaToolSQLGenerator: SQLGenerator, Sendable {
         let agent = OpenRouterSchemaToolSQLAgent(
             apiKey: apiKey,
             model: model,
+            expectedCanonicalModelID: expectedCanonicalModelID,
             connectionID: connectionID,
             selectedSchemas: selectedSchemas,
             configuration: agentConfiguration()
