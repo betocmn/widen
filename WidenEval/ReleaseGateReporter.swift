@@ -924,21 +924,8 @@ enum TextToSQLReleaseTriageReporter {
             .trimmingCharacters(in: .whitespacesAndNewlines)
     }
 
-    /// Provider error messages can embed account-specific URLs and key
-    /// identifiers; strip them before they reach a sanitized committed
-    /// report.
     private static func redactedProviderMessage(_ message: String) -> String {
-        message
-            .replacingOccurrences(
-                of: #"https?://\S+"#,
-                with: "[redacted-url]",
-                options: .regularExpression
-            )
-            .replacingOccurrences(
-                of: #"\b[a-fA-F0-9]{32,}\b"#,
-                with: "[redacted-id]",
-                options: .regularExpression
-            )
+        EvalReportRedaction.redactedProviderMessage(message)
     }
 }
 
