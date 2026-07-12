@@ -128,9 +128,12 @@ diffs, if added later, must stay under `.eval-results/`.
 
 `make eval-release` is the PR 12 release gate and defaults to the fixed
 production alias `openai/gpt-5.5`. Engineering comparisons must opt in with
-`make eval-release MODEL=<model> ALLOW_MODEL_OVERRIDE=1`; direct CLI runs can
-still use `--model`. Neither override changes the app's production profile. The
-target runs
+`make eval-release MODEL=<model> ALLOW_MODEL_OVERRIDE=1`; direct CLI runs that
+publish release-gate or triage docs equally require `--allow-model-override`
+for a non-pinned `--model` (including offline `--triage-release` re-runs).
+Even with the override, a non-pinned run never writes the committed
+`docs/evals/` files — its gate summary and triage stay in the run directory.
+Neither override changes the app's production profile. The target runs
 `Evals/suites/text-to-sql-v1.json` with `--backend cloud`, `--cloud-agent tools`,
 `--semantic-db`, and `--repeat 3`. This intentionally tests the OpenRouter
 schema-tool agent because that is the default connected-session product path for

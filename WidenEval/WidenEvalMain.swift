@@ -268,6 +268,7 @@ struct EvalCLIOptions {
           --triage-release <run.json path>
           --write-release-triage
           --release-triage-version <version>
+          --allow-model-override
           --resume-run <path-to-run-directory-or-run.json>
           --resume-missing
           --resume-failed

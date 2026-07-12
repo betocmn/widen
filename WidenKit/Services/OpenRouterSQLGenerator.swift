@@ -910,9 +910,11 @@ actor OpenRouterModelCatalogService {
         }
     }
 
-    /// The one shared model-lookup flow: fresh catalog membership first, then
+    /// The shared model-lookup flow: fresh catalog membership first, then
     /// the single-model endpoint. Both public lookups wrap this with their
     /// distinct error handling so Settings and generation cannot drift.
+    /// `metadataWithUsage` keeps a budget-gated variant of the same sequence
+    /// for counted eval lookups; changes here should be mirrored there.
     private func lookupModel(
         apiKey: String,
         modelID: String,
@@ -2279,8 +2281,9 @@ public final class OpenRouterSQLGenerator: SQLGenerator, Sendable {
         let capabilityLookupHTTPAttempts: Int
         let capabilities: OpenRouterModelCapabilities
         if let preResolvedCapabilities {
-            // The connectivity check resolves and preflights capabilities
-            // itself before constructing this generator.
+            // Pre-resolved capabilities were already validated by the caller:
+            // the schema-tool agent's legacy fallback passes capabilities it
+            // resolved through validatedCapabilitiesForGeneration.
             capabilityLookupHTTPAttempts = 0
             capabilities = preResolvedCapabilities
         } else if countCapabilityLookupHTTPAttempts {

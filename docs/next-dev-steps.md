@@ -176,10 +176,19 @@ merge and none change behavior:
   (extract a run helper), and the tool-chat parser canonical tests hand-build
   fixtures that the file's `assistantToolCalls`/`toolCall` helpers already
   cover once they take a `model` parameter.
-* Pre-existing, user-initiated-only inefficiencies: `OpenRouterConnectivityCheck.run()`
-  force-fetches the full catalog twice when the model is missing from the
-  just-fetched catalog, and `testModel()` invalidates the cache (with a disk
-  write) immediately before the check force-refreshes anyway.
+* Pre-existing, user-initiated-only inefficiency: `testModel()` invalidates
+  the cache (with a disk write) immediately before the connectivity check
+  force-refreshes anyway.
+* During a live canonical rollover, each cache-served generation pays one
+  invalidate + catalog refetch before failing closed (bounded, but a
+  confirmed-mismatch memo on the catalog service could re-verify once per
+  TTL instead of once per generation). Network-fresh mismatches already skip
+  the refetch.
+* Micro-cleanups from the third review pass: `TextToSQLReleaseGateModelPolicy.Violation.pinnedModel`
+  can be computed instead of stored; the one-line `redactedProviderMessage`
+  wrapper in `ReleaseGateReporter` can be inlined; `validatedCapabilitiesForGeneration`'s
+  duplicated preflight calls could collapse into a two-iteration loop; the
+  `RESUME_MODEL_ARGS` make expression could become an explicit `ifeq` block.
 
 ## Later / conditional
 
