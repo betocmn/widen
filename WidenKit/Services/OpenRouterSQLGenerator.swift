@@ -964,13 +964,20 @@ actor OpenRouterModelCatalogService {
             )
             return lookup
         } catch let failure as OpenRouterFailure where failure.category == .modelVersionMismatch {
+            // A refetch can only observe different data when the mismatching
+            // metadata came from the cache; a network-fresh mismatch is
+            // authoritative. Recovering only for cache-served lookups also
+            // keeps total lookup HTTP requests within the caller's budget,
+            // because a cache-served first pass spent none of it.
+            guard lookup.httpRequestCount == 0 else {
+                throw failure.withAttemptCount(lookup.httpRequestCount)
+            }
             invalidate(apiKey: apiKey, modelID: modelID)
             let refreshed = await capabilitiesForGeneration(
                 apiKey: apiKey,
                 modelID: modelID,
                 maximumHTTPRequests: maximumHTTPRequests
             )
-            let totalRequests = lookup.httpRequestCount + refreshed.httpRequestCount
             do {
                 try OpenRouterCanonicalModelValidator.preflight(
                     catalogCanonicalModelID: refreshed.capabilities.canonicalModelID,
@@ -979,14 +986,11 @@ actor OpenRouterModelCatalogService {
                     requestedModelID: modelID
                 )
             } catch let refreshedFailure as OpenRouterFailure {
-                throw totalRequests > 0
-                    ? refreshedFailure.withAttemptCount(totalRequests)
+                throw refreshed.httpRequestCount > 0
+                    ? refreshedFailure.withAttemptCount(refreshed.httpRequestCount)
                     : refreshedFailure
             }
-            return OpenRouterModelCapabilitiesLookup(
-                capabilities: refreshed.capabilities,
-                httpRequestCount: totalRequests
-            )
+            return refreshed
         }
     }
 

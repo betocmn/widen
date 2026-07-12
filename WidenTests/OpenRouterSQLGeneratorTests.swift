@@ -1229,10 +1229,6 @@ struct OpenRouterSQLGeneratorTests {
                 catalogResponse(id: Self.modelID, canonicalID: "openai/gpt-5.5-20260901"),
                 response(url: Self.apiBase.appendingPathComponent("models/user"), status: 200)
             )),
-            .success((
-                catalogResponse(id: Self.modelID, canonicalID: "openai/gpt-5.5-20260901"),
-                response(url: Self.apiBase.appendingPathComponent("models/user"), status: 200)
-            )),
         ])
         let generator = OpenRouterSQLGenerator(
             apiKey: "test-key",
@@ -1253,15 +1249,12 @@ struct OpenRouterSQLGeneratorTests {
         } catch let failure as OpenRouterFailure {
             #expect(failure.category == .modelVersionMismatch)
             #expect(failure.diagnostic.returnedModelID == "openai/gpt-5.5-20260901")
+            #expect(failure.diagnostic.attemptCount == 1)
         }
 
-        // Mismatch against cached metadata refetches once before failing.
-        #expect(
-            transport.requests.map { $0.url?.path } == [
-                "/api/v1/models/user",
-                "/api/v1/models/user",
-            ]
-        )
+        // A network-fresh mismatch is authoritative: no recovery refetch and
+        // no billed completion request.
+        #expect(transport.requests.map { $0.url?.path } == ["/api/v1/models/user"])
     }
 
     @Test func preflightRecoversWhenStaleCacheHoldsPreviousCanonical() async throws {
