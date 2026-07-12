@@ -218,15 +218,9 @@ struct LLMSettingsView: View {
                             .background(.thinMaterial, in: Capsule())
                     }
                 }
-                if metadata.capabilitySource == .staleCache {
-                    Text("Showing stale cached model metadata.")
-                        .font(.caption)
-                        .foregroundStyle(.orange)
-                } else if !metadata.isAvailableToAPIKey {
-                    Text("This model was not visible to the saved OpenRouter key.")
-                        .font(.caption)
-                        .foregroundStyle(.orange)
-                }
+                // Stale-cache and key-visibility warnings render once via
+                // catalogMessage; repeating them here showed two adjacent
+                // differently-worded warnings for the same state.
             }
         } else if hasStoredKey {
             Text("Model capabilities are unknown until the catalog refresh succeeds.")
@@ -375,12 +369,19 @@ struct LLMSettingsView: View {
                     guard catalogRefreshStillCurrent(apiKey: key, refreshID: refreshID) else { return }
                     if let metadata {
                         modelMetadata = metadata
-                        let canonicalRolled =
-                            metadata.canonicalModelID != nil
-                            && metadata.canonicalModelID
-                                != OpenRouterCatalog.productionProfile.expectedCanonicalModelID
-                            && (metadata.capabilitySource == .authenticatedCatalog
-                                || metadata.capabilitySource == .singleModelLookup)
+                        let canonicalRolled = OpenRouterCanonicalModelValidator.canonicalHasRolled(
+                            catalogCanonicalModelID: metadata.canonicalModelID,
+                            capabilitySource: metadata.capabilitySource,
+                            expectedCanonicalModelID:
+                                OpenRouterCatalog.productionProfile.expectedCanonicalModelID
+                        )
+                        if canonicalRolled, !force {
+                            // A within-TTL cache can hold the canonical from
+                            // before an app update; verify against the live
+                            // catalog before asserting a rollover.
+                            refreshOpenRouterCatalog(force: true)
+                            return
+                        }
                         if !metadata.isAvailableToAPIKey {
                             catalogMessage =
                                 "The fixed model was not visible to the saved OpenRouter key."

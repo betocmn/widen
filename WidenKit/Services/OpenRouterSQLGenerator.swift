@@ -526,9 +526,10 @@ public struct OpenRouterFailure: Error, LocalizedError, Equatable, Sendable {
         // message without a typed code; classify it as provider budget so
         // eval runs count it as budget-unavailable, not permission denied.
         // Gate by status: 401 stays authentication and 5xx stays retryable
-        // even when a provider message mentions a limit.
+        // even when a provider message mentions a limit. Effective 2xx covers
+        // provider errors delivered inside HTTP-200 envelopes.
         if let message, OpenRouterResponseParser.isKeyOrCreditLimitMessage(message),
-            httpStatus == nil || httpStatus == 402 || httpStatus == 403 || httpStatus == 429
+            httpStatus.map({ [402, 403, 429].contains($0) || (200...299).contains($0) }) ?? true
         {
             return .providerLimit
         }
@@ -585,6 +586,22 @@ extension OpenRouterFailure.Category {
 }
 
 enum OpenRouterCanonicalModelValidator {
+    /// True when positively-sourced catalog metadata reports a canonical
+    /// version other than the pinned expectation. Shared by the preflight
+    /// check and the Settings rollover warning so the two cannot drift.
+    static func canonicalHasRolled(
+        catalogCanonicalModelID: String?,
+        capabilitySource: OpenRouterCapabilitySource,
+        expectedCanonicalModelID: String?
+    ) -> Bool {
+        guard let expectedCanonicalModelID,
+            let catalogCanonicalModelID,
+            capabilitySource == .authenticatedCatalog
+                || capabilitySource == .singleModelLookup
+        else { return false }
+        return catalogCanonicalModelID != expectedCanonicalModelID
+    }
+
     /// Fails fast on a canonical-version rollover using already-fetched
     /// catalog metadata, before any billed completion request. Only enforced
     /// when the catalog positively reports the canonical version; stale or
@@ -595,12 +612,11 @@ enum OpenRouterCanonicalModelValidator {
         expectedCanonicalModelID: String?,
         requestedModelID: String
     ) throws {
-        guard let expectedCanonicalModelID,
-            let catalogCanonicalModelID,
-            capabilitySource == .authenticatedCatalog
-                || capabilitySource == .singleModelLookup,
-            catalogCanonicalModelID != expectedCanonicalModelID
-        else { return }
+        guard canonicalHasRolled(
+            catalogCanonicalModelID: catalogCanonicalModelID,
+            capabilitySource: capabilitySource,
+            expectedCanonicalModelID: expectedCanonicalModelID
+        ) else { return }
         throw OpenRouterFailure(
             category: .modelVersionMismatch,
             message: "OpenRouter reports the fixed model now resolves to an unevaluated version. Update Widen before using this cloud model.",
@@ -2008,6 +2024,9 @@ struct OpenRouterResponseParser: Sendable {
             || lower.contains("data collection")
             || lower.contains("zero data retention")
             || lower.contains("zdr")
+            // require_parameters is the third enforced routing preference;
+            // its rejections are worded around unsupported parameters.
+            || lower.contains("requested parameters")
     }
 
     /// OpenRouter reports an exhausted key/credit limit as plain message text
