@@ -244,6 +244,30 @@ struct OpenRouterSQLGeneratorTests {
         #expect(category.isProviderBudgetUnavailable)
     }
 
+    @Test func envelopedKeyLimitErrorsClassifyAsProviderBudget() {
+        #expect(
+            OpenRouterFailure.category(
+                errorType: nil,
+                providerCode: nil,
+                httpStatus: 200,
+                message: "Insufficient credits remaining for this key"
+            ) == .providerLimit
+        )
+    }
+
+    @Test func parameterRoutingFailureExplainsPrivateRoutingRequirements() throws {
+        let failure = OpenRouterResponseParser.failure(
+            from: errorResponse(
+                errorType: "routing",
+                message: "No endpoints found that support the requested parameters."
+            ),
+            response: response(url: Self.chatEndpoint, status: 404),
+            requestedModelID: Self.modelID,
+            attemptCount: 1
+        )
+        #expect(failure.message.contains("private-routing requirements"))
+    }
+
     @Test func keyLimitMessageDoesNotReclassifyAuthenticationOrServerFailures() {
         #expect(
             OpenRouterFailure.category(
