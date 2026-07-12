@@ -1108,7 +1108,6 @@ struct OpenRouterSQLGeneratorTests {
         let model = "custom/model"
         let transport = StubTransport([
             .success((catalogResponse(id: "openai/other"), response(url: Self.apiBase.appendingPathComponent("models/user"), status: 200))),
-            .success((catalogResponse(id: "openai/other"), response(url: Self.apiBase.appendingPathComponent("models/user"), status: 200))),
             .success((singleModelResponse(id: model), response(url: Self.apiBase.appendingPathComponent("model/custom/model"), status: 200))),
             .success((chatResponse(content: goodContent), response(url: Self.chatEndpoint, status: 200))),
         ])
@@ -1126,9 +1125,11 @@ struct OpenRouterSQLGeneratorTests {
         #expect(result.error == nil)
         #expect(result.selectedModelAvailable)
         #expect(result.capabilities.supportsMaxTokens)
+        // The shared lookup serves the model from one forced catalog fetch
+        // plus the single-model fallback; the old hand-rolled matcher fetched
+        // the catalog twice.
         #expect(
             transport.requests.map { $0.url?.path } == [
-                "/api/v1/models/user",
                 "/api/v1/models/user",
                 "/api/v1/model/custom/model",
                 "/api/v1/chat/completions",

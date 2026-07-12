@@ -2136,12 +2136,11 @@ struct OpenRouterConnectivityCheck: Sendable {
     func run() async -> Result {
         let started = Date()
         do {
-            let models = try await catalogService.availableModels(apiKey: apiKey, forceRefresh: true)
-            let selected = models.first { $0.id == model || $0.requestedID == model }
-            var metadata = selected
-            if metadata == nil {
-                metadata = await catalogService.metadata(apiKey: apiKey, modelID: model, forceRefresh: true)
-            }
+            let metadata = try await catalogService.metadataSurfacingErrors(
+                apiKey: apiKey,
+                modelID: model,
+                forceRefresh: true
+            )
             let capabilities = metadata?.capabilities ?? .conservative()
             try OpenRouterCanonicalModelValidator.preflight(
                 catalogCanonicalModelID: capabilities.canonicalModelID,
