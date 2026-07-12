@@ -21,11 +21,16 @@ enum WidenEvalMain {
             if let releaseTriageInputPath = options.releaseTriageInputPath {
                 let triageOutput = try TextToSQLReleaseTriageReporter.writeExisting(
                     runJSONPath: releaseTriageInputPath,
-                    copyVersion: options.releaseTriageVersion
+                    copyVersion: options.releaseTriageVersion,
+                    allowModelOverride: options.allowModelOverride
                 )
                 print("Release gate triage: \(triageOutput.triage.path)")
                 if let copied = triageOutput.copiedSummary {
                     print("Copied sanitized triage summary: \(copied.path)")
+                } else if options.releaseTriageVersion != nil {
+                    print(
+                        "Skipped committed triage copy: the run model is not the pinned production model."
+                    )
                 }
                 return
             }
@@ -88,19 +93,33 @@ enum WidenEvalMain {
             print("Wrote eval results to \(output.directory.path)")
             print("Summary: \(output.summary.path)")
 
+            // Committed docs/evals artifacts are reserved for the pinned
+            // production model; override runs keep their gate and triage
+            // output in the run directory.
+            let publishesCommittedDocs =
+                run.manifest.model == nil
+                || run.manifest.model == OpenRouterCatalog.productionProfile.requestedModelID
+            let committedTriageVersion =
+                publishesCommittedDocs ? options.releaseTriageVersion : nil
             var wroteReleaseTriage = false
             if let releaseGateVersion = options.releaseGateVersion {
                 let gateOutput = try TextToSQLReleaseGateReporter.write(
                     run: run,
                     evalOutput: output,
-                    version: releaseGateVersion
+                    version: releaseGateVersion,
+                    publishCommittedDoc: publishesCommittedDocs
                 )
                 print("Release gate summary: \(gateOutput.summary.path)")
+                if !publishesCommittedDocs {
+                    print(
+                        "Engineering comparison model: committed docs/evals left unchanged."
+                    )
+                }
                 if options.writeReleaseTriage {
                     let triageOutput = try TextToSQLReleaseTriageReporter.write(
                         run: run,
                         evalOutput: output,
-                        copyVersion: options.releaseTriageVersion
+                        copyVersion: committedTriageVersion
                     )
                     wroteReleaseTriage = true
                     print("Release gate triage: \(triageOutput.triage.path)")
@@ -120,7 +139,7 @@ enum WidenEvalMain {
                 let triageOutput = try TextToSQLReleaseTriageReporter.write(
                     run: run,
                     evalOutput: output,
-                    copyVersion: options.releaseTriageVersion
+                    copyVersion: committedTriageVersion
                 )
                 print("Release gate triage: \(triageOutput.triage.path)")
                 if let copied = triageOutput.copiedSummary {

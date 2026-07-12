@@ -11,13 +11,25 @@ enum TextToSQLReleaseGateReporter {
     static func write(
         run: EvalRun,
         evalOutput: EvalOutputPaths,
-        version: String
+        version: String,
+        publishCommittedDoc: Bool
     ) throws -> TextToSQLReleaseGateOutput {
         let evaluationInput = input(for: run)
         let evaluation = TextToSQLReleaseGate.evaluate(evaluationInput)
-        let directory = URL(fileURLWithPath: "docs/evals", isDirectory: true)
-        try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
-        let summary = directory.appendingPathComponent("\(version).md")
+        let summary: URL
+        if publishCommittedDoc {
+            let directory = URL(fileURLWithPath: "docs/evals", isDirectory: true)
+            try FileManager.default.createDirectory(
+                at: directory,
+                withIntermediateDirectories: true
+            )
+            summary = directory.appendingPathComponent("\(version).md")
+        } else {
+            // Engineering comparison runs keep their gate summary in the run
+            // directory so the committed pinned-model record cannot be
+            // overwritten, even with the model override enabled.
+            summary = evalOutput.directory.appendingPathComponent("release-gate-\(version).md")
+        }
         try markdown(
             run: run,
             evalOutput: evalOutput,
@@ -323,7 +335,8 @@ enum TextToSQLReleaseTriageReporter {
 
     static func writeExisting(
         runJSONPath: String,
-        copyVersion: String?
+        copyVersion: String?,
+        allowModelOverride: Bool
     ) throws -> TextToSQLReleaseTriageOutput {
         let runURL = URL(fileURLWithPath: runJSONPath).standardizedFileURL
         let directory = runURL.deletingLastPathComponent()
@@ -331,6 +344,21 @@ enum TextToSQLReleaseTriageReporter {
             ReleaseTriageRunFile.self,
             from: Data(contentsOf: runURL)
         )
+        // Offline re-triage publishes committed docs too, so it enforces the
+        // same pinned-model policy as evaluated runs — and even with the
+        // override, a non-pinned run never replaces the committed copy.
+        if let model = runFile.manifest.model {
+            try TextToSQLReleaseGateModelPolicy.validate(
+                model: model,
+                backendIncludesCloud: true,
+                releaseGateVersion: nil,
+                releaseTriageVersion: copyVersion,
+                allowModelOverride: allowModelOverride
+            )
+        }
+        let publishesCommittedCopy =
+            runFile.manifest.model == nil
+            || runFile.manifest.model == OpenRouterCatalog.productionProfile.requestedModelID
         let results = try readCasesJSONL(
             directory.appendingPathComponent("cases.jsonl")
         )
@@ -349,7 +377,10 @@ enum TextToSQLReleaseTriageReporter {
         let markdown = triageMarkdown(run: run, casesByID: casesByID)
         let triage = directory.appendingPathComponent("triage.md")
         try markdown.write(to: triage, atomically: true, encoding: .utf8)
-        let copied = try copySummaryIfNeeded(markdown: markdown, version: copyVersion)
+        let copied = try copySummaryIfNeeded(
+            markdown: markdown,
+            version: publishesCommittedCopy ? copyVersion : nil
+        )
         return TextToSQLReleaseTriageOutput(triage: triage, copiedSummary: copied)
     }
 
