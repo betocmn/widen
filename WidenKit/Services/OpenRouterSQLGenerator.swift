@@ -2387,6 +2387,17 @@ public final class OpenRouterSQLGenerator: SQLGenerator, Sendable {
         )
         let prompt = bundle.prompt
         let started = Date()
+        let availableHTTPAttempts = countCapabilityLookupHTTPAttempts
+            ? OpenRouterHTTPAttemptBudget.remaining(
+                maximumHTTPAttempts: retryPolicy.maxAttempts,
+                contextModelCallCount: context.modelCallCount
+            )
+            : retryPolicy.maxAttempts
+        guard availableHTTPAttempts > 0 else {
+            throw OpenRouterHTTPAttemptBudgetExhausted(
+                message: "OpenRouter HTTP-attempt budget exhausted before generation."
+            )
+        }
         let capabilityLookupHTTPAttempts: Int
         let capabilities: OpenRouterModelCapabilities
         if let preResolvedCapabilities {
@@ -2400,7 +2411,7 @@ public final class OpenRouterSQLGenerator: SQLGenerator, Sendable {
                 apiKey: apiKey,
                 modelID: model,
                 expectedCanonicalModelID: expectedCanonicalModelID,
-                maximumHTTPRequests: retryPolicy.maxAttempts
+                maximumHTTPRequests: availableHTTPAttempts
             )
             capabilityLookupHTTPAttempts = lookup.httpRequestCount
             capabilities = lookup.capabilities
@@ -2417,7 +2428,7 @@ public final class OpenRouterSQLGenerator: SQLGenerator, Sendable {
             config.usageSink?(.httpAttempts(capabilityLookupHTTPAttempts))
         }
         if countCapabilityLookupHTTPAttempts,
-            capabilityLookupHTTPAttempts >= retryPolicy.maxAttempts
+            capabilityLookupHTTPAttempts >= availableHTTPAttempts
         {
             throw OpenRouterHTTPAttemptBudgetExhausted(
                 message: "OpenRouter HTTP-attempt budget exhausted before chat completion.",
@@ -2428,7 +2439,7 @@ public final class OpenRouterSQLGenerator: SQLGenerator, Sendable {
             )
         }
         let remainingHTTPAttempts = countCapabilityLookupHTTPAttempts
-            ? max(1, retryPolicy.maxAttempts - capabilityLookupHTTPAttempts)
+            ? max(1, availableHTTPAttempts - capabilityLookupHTTPAttempts)
             : retryPolicy.maxAttempts
         do {
             let parsed = try await performRequest(

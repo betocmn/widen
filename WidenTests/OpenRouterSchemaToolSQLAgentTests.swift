@@ -3250,6 +3250,47 @@ struct OpenRouterSchemaToolSQLAgentTests {
         }
     }
 
+    @Test func repairContextPriorAttemptsReduceAgentCatalogAndChatBudget() async throws {
+        let schema = Self.makeSchema()
+        let chatTransport = ScriptedTransport { _, _ in
+            Issue.record("Agent chat transport should not be called")
+            return Self.assistantToolCalls([])
+        }
+        let catalogTransport = ScriptedTransport { _, _ in
+            Self.catalogResponse()
+        }
+        let agent = makeAgent(
+            schema: schema,
+            chatTransport: chatTransport,
+            catalogTransport: catalogTransport,
+            configuration: OpenRouterSchemaToolSQLAgentConfiguration(
+                maximumSchemaToolCalls: 4,
+                maximumRepairSchemaToolCalls: 2,
+                maximumModelTurns: 6,
+                maximumMalformedTerminalCorrections: 1,
+                maximumRepeatedToolCorrections: 1,
+                maximumHTTPAttempts: 3,
+                countCapabilityLookupHTTPAttempts: true,
+                wallClockTimeoutSeconds: 10
+            )
+        )
+
+        do {
+            _ = try await agent.generateSQL(
+                question: "Repair users query",
+                schema: schema,
+                context: SQLGenerationContext(mode: .repair, modelCallCount: 3),
+                config: SQLGenerationConfig()
+            )
+            Issue.record("Expected HTTP-attempt budget failure")
+        } catch let failure as OpenRouterSchemaToolAgentFailure {
+            #expect(failure.category == .httpAttemptBudgetExhausted)
+            #expect(failure.backendMetadata?.agentHTTPAttemptCount == 1)
+            #expect(catalogTransport.requests.map { $0.url?.path } == ["/api/v1/models/user"])
+            #expect(chatTransport.requests.isEmpty)
+        }
+    }
+
     @Test func retryBackoffIsBoundedByWallClockTimeout() async throws {
         let schema = Self.makeSchema()
         let chatTransport = ScriptedHTTPTransport { request, _ in

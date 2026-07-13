@@ -1516,6 +1516,38 @@ struct OpenRouterSQLGeneratorTests {
         }
     }
 
+    @Test func repairContextPriorAttemptsReduceCatalogAndChatBudget() async throws {
+        let transport = StubTransport([
+            .success(
+                (
+                    catalogResponse(),
+                    response(
+                        url: Self.apiBase.appendingPathComponent("models/user"),
+                        status: 200
+                    )
+                )
+            )
+        ])
+        let generator = makeGenerator(
+            transport: transport,
+            retryPolicy: OpenRouterRetryPolicy(maxAttempts: 3),
+            countCapabilityLookupHTTPAttempts: true
+        )
+
+        do {
+            _ = try await generator.generateSQL(
+                question: "Repair users query",
+                schema: makeSchema(),
+                context: SQLGenerationContext(mode: .repair, modelCallCount: 3),
+                config: SQLGenerationConfig()
+            )
+            Issue.record("Expected HTTP-attempt budget exhaustion.")
+        } catch let failure as OpenRouterHTTPAttemptBudgetExhausted {
+            #expect(failure.backendMetadata?.requestCount == 1)
+            #expect(transport.requests.map { $0.url?.path } == ["/api/v1/models/user"])
+        }
+    }
+
     @Test func catalogLookupCountsTowardLegacyFailureAttempts() async throws {
         let transport = StubTransport([
             .success((catalogResponse(), response(url: Self.apiBase.appendingPathComponent("models/user"), status: 200))),

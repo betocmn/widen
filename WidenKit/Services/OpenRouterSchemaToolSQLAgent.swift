@@ -234,13 +234,32 @@ public final class OpenRouterSchemaToolSQLAgent: SQLGenerator, Sendable {
         config: SQLGenerationConfig
     ) async throws -> SQLGenerationResult {
         var aggregate = OpenRouterAgentMetadataAccumulator(requestedModelID: model)
+        let availableHTTPAttempts = configuration.countCapabilityLookupHTTPAttempts
+            ? OpenRouterHTTPAttemptBudget.remaining(
+                maximumHTTPAttempts: configuration.maximumHTTPAttempts,
+                contextModelCallCount: context.modelCallCount
+            )
+            : configuration.maximumHTTPAttempts
+        guard availableHTTPAttempts > 0 else {
+            var metadata = aggregate.metadata(
+                contextModelCallCount: context.modelCallCount,
+                schemaToolCalls: [],
+                inspectionToolCalls: []
+            )
+            metadata.agentSelectionReason = "tools"
+            throw OpenRouterSchemaToolAgentFailure(
+                category: .httpAttemptBudgetExhausted,
+                message: "The schema-tool agent exhausted its OpenRouter HTTP-attempt budget.",
+                backendMetadata: metadata
+            )
+        }
         let capabilities: OpenRouterModelCapabilities
         if configuration.countCapabilityLookupHTTPAttempts {
             let lookup = try await catalogService.validatedCapabilitiesForGeneration(
                 apiKey: apiKey,
                 modelID: model,
                 expectedCanonicalModelID: expectedCanonicalModelID,
-                maximumHTTPRequests: configuration.maximumHTTPAttempts
+                maximumHTTPRequests: availableHTTPAttempts
             )
             aggregate.httpAttemptCount += lookup.httpRequestCount
             if lookup.httpRequestCount > 0 {
@@ -256,7 +275,7 @@ public final class OpenRouterSchemaToolSQLAgent: SQLGenerator, Sendable {
             ).capabilities
         }
         if configuration.countCapabilityLookupHTTPAttempts,
-            aggregate.httpAttemptCount >= configuration.maximumHTTPAttempts
+            aggregate.httpAttemptCount >= availableHTTPAttempts
         {
             var metadata = aggregate.metadata(
                 contextModelCallCount: context.modelCallCount,
@@ -285,7 +304,7 @@ public final class OpenRouterSchemaToolSQLAgent: SQLGenerator, Sendable {
                     retryPolicy: OpenRouterRetryPolicy(
                         maxAttempts: max(
                             1,
-                            configuration.maximumHTTPAttempts - aggregate.httpAttemptCount
+                            availableHTTPAttempts - aggregate.httpAttemptCount
                         )
                     ),
                     countCapabilityLookupHTTPAttempts: false,
@@ -393,6 +412,7 @@ public final class OpenRouterSchemaToolSQLAgent: SQLGenerator, Sendable {
                         tools: tools,
                         capabilities: capabilities,
                         aggregate: &aggregate,
+                        maximumHTTPAttempts: availableHTTPAttempts,
                         deadline: deadline,
                         usageSink: config.usageSink
                     )
@@ -940,6 +960,7 @@ public final class OpenRouterSchemaToolSQLAgent: SQLGenerator, Sendable {
         tools: [OpenRouterToolDefinition],
         capabilities: OpenRouterModelCapabilities,
         aggregate: inout OpenRouterAgentMetadataAccumulator,
+        maximumHTTPAttempts: Int,
         deadline: Date,
         usageSink: (@Sendable (SQLGenerationUsageEvent) -> Void)?
     ) async throws -> OpenRouterToolChatParser.ParsedTurn {
@@ -955,7 +976,7 @@ public final class OpenRouterSchemaToolSQLAgent: SQLGenerator, Sendable {
         while true {
             try Task.checkCancellation()
             try checkDeadline(deadline)
-            guard aggregate.httpAttemptCount < configuration.maximumHTTPAttempts else {
+            guard aggregate.httpAttemptCount < maximumHTTPAttempts else {
                 throw OpenRouterSchemaToolAgentFailure(
                     category: .httpAttemptBudgetExhausted,
                     message: "The schema-tool agent exhausted its OpenRouter HTTP-attempt budget."
@@ -989,7 +1010,7 @@ public final class OpenRouterSchemaToolSQLAgent: SQLGenerator, Sendable {
                         attempt: attempt,
                         noContentRetries: max(0, noContentRetries - 1)
                     ) {
-                        guard aggregate.httpAttemptCount < configuration.maximumHTTPAttempts else {
+                        guard aggregate.httpAttemptCount < maximumHTTPAttempts else {
                             throw failure.withAttemptCount(attempt)
                         }
                         attempt += 1
@@ -1020,7 +1041,7 @@ public final class OpenRouterSchemaToolSQLAgent: SQLGenerator, Sendable {
                     attempt: attempt,
                     noContentRetries: noContentRetries
                 ) {
-                    guard aggregate.httpAttemptCount < configuration.maximumHTTPAttempts else {
+                    guard aggregate.httpAttemptCount < maximumHTTPAttempts else {
                         throw failure.withAttemptCount(attempt)
                     }
                     attempt += 1

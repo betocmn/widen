@@ -1,5 +1,15 @@
 import Foundation
 
+enum OpenRouterHTTPAttemptBudget {
+    static func remaining(
+        maximumHTTPAttempts: Int,
+        contextModelCallCount: Int
+    ) -> Int {
+        let priorHTTPAttempts = max(0, contextModelCallCount - 1)
+        return max(0, maximumHTTPAttempts - priorHTTPAttempts)
+    }
+}
+
 public struct OpenRouterHTTPAttemptBudgetExhausted: Error, LocalizedError, Equatable, Sendable {
     public var message: String
     public var backendMetadata: OpenRouterGenerationMetadata?
