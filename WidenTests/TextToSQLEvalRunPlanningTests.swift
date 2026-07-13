@@ -393,7 +393,7 @@ struct TextToSQLEvalRunPlanningTests {
         #expect(!evalText.contains(#"query plan: \(queryPlan)"#))
     }
 
-    @Test func cloudResumeSourceHashesIncludeOpenRouterGenerator() throws {
+    @Test func cloudResumeSourceHashesIncludeGenerationAndOpenRouterSources() throws {
         let testFile = URL(fileURLWithPath: #filePath)
         let evalRunner = testFile
             .deletingLastPathComponent()
@@ -401,6 +401,7 @@ struct TextToSQLEvalRunPlanningTests {
             .appendingPathComponent("WidenEval/EvalRunner.swift")
         let source = try String(contentsOf: evalRunner, encoding: .utf8)
 
+        #expect(source.contains("\"WidenKit/Models/SQLGenerationResult.swift\""))
         #expect(source.contains("\"WidenKit/Models/OpenRouterCatalog.swift\""))
         #expect(source.contains("\"WidenKit/Services/OpenRouterSQLGenerator.swift\""))
         #expect(source.contains("options.backendMode.backends.contains(.cloud)"))
