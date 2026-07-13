@@ -4,6 +4,27 @@ import Foundation
 /// pinned production model. Enforced at the eval CLI so a future Makefile
 /// target or direct binary invocation cannot bypass the Makefile guard.
 public enum TextToSQLReleaseGateModelPolicy {
+    public enum CommittedDocIneligibility: Equatable, Sendable, CustomStringConvertible {
+        case cloudBackendRequired
+        case pinnedModelRequired(actual: String?)
+        case expectedCanonicalModelRequired(actual: String?)
+        case cloudEvaluationRequired
+
+        public var description: String {
+            let profile = OpenRouterCatalog.productionProfile
+            switch self {
+            case .cloudBackendRequired:
+                return "the run does not include the cloud backend"
+            case .pinnedModelRequired(let actual):
+                return "the requested model is \(actual ?? "missing"), not the pinned model \(profile.requestedModelID)"
+            case .expectedCanonicalModelRequired(let actual):
+                return "the manifest expected canonical model is \(actual ?? "missing"), not \(profile.expectedCanonicalModelID)"
+            case .cloudEvaluationRequired:
+                return "the run has no backend-available cloud results"
+            }
+        }
+    }
+
     public struct Violation: LocalizedError, CustomStringConvertible, Equatable, Sendable {
         public var model: String?
         public var pinnedModel: String
@@ -28,10 +49,8 @@ public enum TextToSQLReleaseGateModelPolicy {
         guard releaseGateVersion != nil || releaseTriageVersion != nil,
             !allowModelOverride
         else { return }
-        guard !canPublishCommittedDocs(
-            model: model,
-            backendIncludesCloud: backendIncludesCloud
-        ) else { return }
+        guard !isPinnedCloudRun(model: model, backendIncludesCloud: backendIncludesCloud)
+        else { return }
         throw Violation(
             model: backendIncludesCloud ? model : nil,
             pinnedModel: OpenRouterCatalog.productionProfile.requestedModelID
@@ -41,6 +60,40 @@ public enum TextToSQLReleaseGateModelPolicy {
     /// Sink-time eligibility is deliberately stricter than the override used
     /// to run engineering comparisons: overrides never publish committed docs.
     public static func canPublishCommittedDocs(
+        model: String?,
+        expectedCanonicalModelID: String?,
+        backendIncludesCloud: Bool,
+        cloudEvaluatedResultCount: Int
+    ) -> Bool {
+        committedDocIneligibility(
+            model: model,
+            expectedCanonicalModelID: expectedCanonicalModelID,
+            backendIncludesCloud: backendIncludesCloud,
+            cloudEvaluatedResultCount: cloudEvaluatedResultCount
+        ) == nil
+    }
+
+    public static func committedDocIneligibility(
+        model: String?,
+        expectedCanonicalModelID: String?,
+        backendIncludesCloud: Bool,
+        cloudEvaluatedResultCount: Int
+    ) -> CommittedDocIneligibility? {
+        let profile = OpenRouterCatalog.productionProfile
+        guard backendIncludesCloud else { return .cloudBackendRequired }
+        guard model == profile.requestedModelID else {
+            return .pinnedModelRequired(actual: model)
+        }
+        guard expectedCanonicalModelID == profile.expectedCanonicalModelID else {
+            return .expectedCanonicalModelRequired(actual: expectedCanonicalModelID)
+        }
+        guard cloudEvaluatedResultCount > 0 else {
+            return .cloudEvaluationRequired
+        }
+        return nil
+    }
+
+    private static func isPinnedCloudRun(
         model: String?,
         backendIncludesCloud: Bool
     ) -> Bool {

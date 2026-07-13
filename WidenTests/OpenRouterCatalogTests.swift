@@ -80,32 +80,77 @@ struct OpenRouterCatalogTests {
         }
     }
 
-    @Test func committedDocEligibilityRequiresCloudAndThePinnedModel() {
-        let pinned = OpenRouterCatalog.productionProfile.requestedModelID
+    @Test func committedDocEligibilityRequiresVerifiedCloudEvaluation() {
+        let profile = OpenRouterCatalog.productionProfile
         #expect(
             TextToSQLReleaseGateModelPolicy.canPublishCommittedDocs(
-                model: pinned,
-                backendIncludesCloud: true
+                model: profile.requestedModelID,
+                expectedCanonicalModelID: profile.expectedCanonicalModelID,
+                backendIncludesCloud: true,
+                cloudEvaluatedResultCount: 1
             )
         )
         #expect(
             !TextToSQLReleaseGateModelPolicy.canPublishCommittedDocs(
                 model: nil,
-                backendIncludesCloud: true
+                expectedCanonicalModelID: profile.expectedCanonicalModelID,
+                backendIncludesCloud: true,
+                cloudEvaluatedResultCount: 1
             )
         )
         #expect(
             !TextToSQLReleaseGateModelPolicy.canPublishCommittedDocs(
-                model: pinned,
-                backendIncludesCloud: false
+                model: profile.requestedModelID,
+                expectedCanonicalModelID: profile.expectedCanonicalModelID,
+                backendIncludesCloud: false,
+                cloudEvaluatedResultCount: 1
             )
         )
         #expect(
             !TextToSQLReleaseGateModelPolicy.canPublishCommittedDocs(
                 model: "vendor/other",
-                backendIncludesCloud: true
+                expectedCanonicalModelID: profile.expectedCanonicalModelID,
+                backendIncludesCloud: true,
+                cloudEvaluatedResultCount: 1
             )
         )
+        #expect(
+            !TextToSQLReleaseGateModelPolicy.canPublishCommittedDocs(
+                model: profile.requestedModelID,
+                expectedCanonicalModelID: nil,
+                backendIncludesCloud: true,
+                cloudEvaluatedResultCount: 1
+            )
+        )
+        #expect(
+            !TextToSQLReleaseGateModelPolicy.canPublishCommittedDocs(
+                model: profile.requestedModelID,
+                expectedCanonicalModelID: "openai/gpt-5.5-unevaluated",
+                backendIncludesCloud: true,
+                cloudEvaluatedResultCount: 1
+            )
+        )
+        #expect(
+            !TextToSQLReleaseGateModelPolicy.canPublishCommittedDocs(
+                model: profile.requestedModelID,
+                expectedCanonicalModelID: profile.expectedCanonicalModelID,
+                backendIncludesCloud: true,
+                cloudEvaluatedResultCount: 0
+            )
+        )
+    }
+
+    @Test func committedDocIneligibilityExplainsMissingExecutionEvidence() {
+        let profile = OpenRouterCatalog.productionProfile
+        let reason = TextToSQLReleaseGateModelPolicy.committedDocIneligibility(
+            model: profile.requestedModelID,
+            expectedCanonicalModelID: profile.expectedCanonicalModelID,
+            backendIncludesCloud: true,
+            cloudEvaluatedResultCount: 0
+        )
+
+        #expect(reason == .cloudEvaluationRequired)
+        #expect(reason?.description.contains("no backend-available cloud results") == true)
     }
 
     @Test func releaseGateViolationHasAnActionableLocalizedDescription() {

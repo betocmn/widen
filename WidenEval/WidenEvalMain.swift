@@ -27,9 +27,11 @@ enum WidenEvalMain {
                 print("Release gate triage: \(triageOutput.triage.path)")
                 if let copied = triageOutput.copiedSummary {
                     print("Copied sanitized triage summary: \(copied.path)")
-                } else if options.releaseTriageVersion != nil {
+                } else if options.releaseTriageVersion != nil,
+                    let reason = triageOutput.committedDocIneligibility
+                {
                     print(
-                        "Skipped committed triage copy: the run model is not the pinned production model."
+                        "Skipped committed triage copy: \(reason.description)."
                     )
                 }
                 return
@@ -93,39 +95,33 @@ enum WidenEvalMain {
             print("Wrote eval results to \(output.directory.path)")
             print("Summary: \(output.summary.path)")
 
-            // Committed docs/evals artifacts are reserved for the pinned
-            // production model; override runs keep their gate and triage
-            // output in the run directory.
-            let publishesCommittedDocs = TextToSQLReleaseGateModelPolicy.canPublishCommittedDocs(
-                model: run.manifest.model,
-                backendIncludesCloud: run.backendSummaries[.cloud] != nil
-            )
-            let committedTriageVersion =
-                publishesCommittedDocs ? options.releaseTriageVersion : nil
             var wroteReleaseTriage = false
             if let releaseGateVersion = options.releaseGateVersion {
                 let gateOutput = try TextToSQLReleaseGateReporter.write(
                     run: run,
                     evalOutput: output,
-                    version: releaseGateVersion,
-                    publishCommittedDoc: publishesCommittedDocs
+                    version: releaseGateVersion
                 )
                 print("Release gate summary: \(gateOutput.summary.path)")
-                if !publishesCommittedDocs {
+                if let reason = gateOutput.committedDocIneligibility {
                     print(
-                        "Non-production release-gate run: committed docs/evals left unchanged."
+                        "Committed release-gate doc skipped: \(reason.description)."
                     )
                 }
                 if options.writeReleaseTriage {
                     let triageOutput = try TextToSQLReleaseTriageReporter.write(
                         run: run,
                         evalOutput: output,
-                        copyVersion: committedTriageVersion
+                        copyVersion: options.releaseTriageVersion
                     )
                     wroteReleaseTriage = true
                     print("Release gate triage: \(triageOutput.triage.path)")
                     if let copied = triageOutput.copiedSummary {
                         print("Copied sanitized triage summary: \(copied.path)")
+                    } else if options.releaseTriageVersion != nil,
+                        let reason = triageOutput.committedDocIneligibility
+                    {
+                        print("Skipped committed triage copy: \(reason.description).")
                     }
                 }
                 if !gateOutput.evaluation.passed {
@@ -140,11 +136,15 @@ enum WidenEvalMain {
                 let triageOutput = try TextToSQLReleaseTriageReporter.write(
                     run: run,
                     evalOutput: output,
-                    copyVersion: committedTriageVersion
+                    copyVersion: options.releaseTriageVersion
                 )
                 print("Release gate triage: \(triageOutput.triage.path)")
                 if let copied = triageOutput.copiedSummary {
                     print("Copied sanitized triage summary: \(copied.path)")
+                } else if options.releaseTriageVersion != nil,
+                    let reason = triageOutput.committedDocIneligibility
+                {
+                    print("Skipped committed triage copy: \(reason.description).")
                 }
             }
 

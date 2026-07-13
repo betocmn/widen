@@ -1814,8 +1814,9 @@ The approved fallback was applied:
   gate remains unmet.
 
 New PR 55 evaluation spend was $3.773616, below the $6.00 implementation cap.
-Historical GPT-5.5 baseline files remain intact; the current sanitized release
-summary and triage record the complete negative Terra run.
+Historical bake-off artifacts remain in their run directories; the current
+sanitized release summary and triage record the complete negative pinned
+GPT-5.5 run.
 
 ## PR 55 hardening follow-up [2026-07-10]
 

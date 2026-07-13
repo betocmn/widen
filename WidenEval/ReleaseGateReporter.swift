@@ -5,19 +5,40 @@ import WidenKit
 struct TextToSQLReleaseGateOutput {
     var summary: URL
     var evaluation: TextToSQLReleaseGateEvaluation
+    var committedDocIneligibility: TextToSQLReleaseGateModelPolicy.CommittedDocIneligibility?
+}
+
+extension EvalRun {
+    var committedDocIneligibility: TextToSQLReleaseGateModelPolicy.CommittedDocIneligibility? {
+        let backendIncludesCloud = manifest.backendMode == TextToSQLEvalBackend.cloud.rawValue
+            || manifest.backendMode == "both"
+            || backendSummaries[.cloud] != nil
+            || results.contains { $0.backend == .cloud }
+        let cloudEvaluatedResultCount = results.filter {
+            $0.backend == .cloud
+                && $0.metrics.backendAvailable
+                && $0.status.isCompletedEvaluation
+        }.count
+        return TextToSQLReleaseGateModelPolicy.committedDocIneligibility(
+            model: manifest.model,
+            expectedCanonicalModelID: manifest.expectedCanonicalModelID,
+            backendIncludesCloud: backendIncludesCloud,
+            cloudEvaluatedResultCount: cloudEvaluatedResultCount
+        )
+    }
 }
 
 enum TextToSQLReleaseGateReporter {
     static func write(
         run: EvalRun,
         evalOutput: EvalOutputPaths,
-        version: String,
-        publishCommittedDoc: Bool
+        version: String
     ) throws -> TextToSQLReleaseGateOutput {
         let evaluationInput = input(for: run)
         let evaluation = TextToSQLReleaseGate.evaluate(evaluationInput)
+        let committedDocIneligibility = run.committedDocIneligibility
         let summary: URL
-        if publishCommittedDoc {
+        if committedDocIneligibility == nil {
             let directory = URL(fileURLWithPath: "docs/evals", isDirectory: true)
             try FileManager.default.createDirectory(
                 at: directory,
@@ -38,7 +59,11 @@ enum TextToSQLReleaseGateReporter {
             evaluation: evaluation
         )
         .write(to: summary, atomically: true, encoding: .utf8)
-        return TextToSQLReleaseGateOutput(summary: summary, evaluation: evaluation)
+        return TextToSQLReleaseGateOutput(
+            summary: summary,
+            evaluation: evaluation,
+            committedDocIneligibility: committedDocIneligibility
+        )
     }
 
     static func input(for run: EvalRun) -> TextToSQLReleaseGateInput {
@@ -115,6 +140,7 @@ enum TextToSQLReleaseGateReporter {
             "| Schema agent clarification correction | \(tableCell(run.manifest.schemaAgentClarificationCorrectionMode ?? "-")) |",
             "| Schema agent intent coverage | \(tableCell(run.manifest.schemaAgentIntentCoverageMode ?? "-")) |",
             "| Model | \(tableCell(run.manifest.model ?? "-")) |",
+            "| Expected canonical model | \(tableCell(run.manifest.expectedCanonicalModelID ?? "-")) |",
             "| Repeats | \(run.manifest.repeatCount) |",
             "| Results | \(input.totalResults) |",
             "| Complete | \(input.completedResults == input.expectedResults ? "Yes" : "No") |",
@@ -294,6 +320,7 @@ enum TextToSQLReleaseGateReporter {
 struct TextToSQLReleaseTriageOutput {
     var triage: URL
     var copiedSummary: URL?
+    var committedDocIneligibility: TextToSQLReleaseGateModelPolicy.CommittedDocIneligibility?
 }
 
 enum TextToSQLReleaseTriageCategory: String, CaseIterable {
@@ -329,8 +356,16 @@ enum TextToSQLReleaseTriageReporter {
         let markdown = triageMarkdown(run: run, casesByID: casesByID)
         let triage = evalOutput.directory.appendingPathComponent("triage.md")
         try markdown.write(to: triage, atomically: true, encoding: .utf8)
-        let copied = try copySummaryIfNeeded(markdown: markdown, version: copyVersion)
-        return TextToSQLReleaseTriageOutput(triage: triage, copiedSummary: copied)
+        let committedDocIneligibility = run.committedDocIneligibility
+        let copied = try copySummaryIfNeeded(
+            markdown: markdown,
+            version: committedDocIneligibility == nil ? copyVersion : nil
+        )
+        return TextToSQLReleaseTriageOutput(
+            triage: triage,
+            copiedSummary: copied,
+            committedDocIneligibility: committedDocIneligibility
+        )
     }
 
     static func writeExisting(
@@ -356,10 +391,6 @@ enum TextToSQLReleaseTriageReporter {
             releaseTriageVersion: copyVersion,
             allowModelOverride: allowModelOverride
         )
-        let publishesCommittedCopy = TextToSQLReleaseGateModelPolicy.canPublishCommittedDocs(
-            model: runFile.manifest.model,
-            backendIncludesCloud: backendIncludesCloud
-        )
         let results = try readCasesJSONL(
             directory.appendingPathComponent("cases.jsonl")
         )
@@ -378,11 +409,16 @@ enum TextToSQLReleaseTriageReporter {
         let markdown = triageMarkdown(run: run, casesByID: casesByID)
         let triage = directory.appendingPathComponent("triage.md")
         try markdown.write(to: triage, atomically: true, encoding: .utf8)
+        let committedDocIneligibility = run.committedDocIneligibility
         let copied = try copySummaryIfNeeded(
             markdown: markdown,
-            version: publishesCommittedCopy ? copyVersion : nil
+            version: committedDocIneligibility == nil ? copyVersion : nil
         )
-        return TextToSQLReleaseTriageOutput(triage: triage, copiedSummary: copied)
+        return TextToSQLReleaseTriageOutput(
+            triage: triage,
+            copiedSummary: copied,
+            committedDocIneligibility: committedDocIneligibility
+        )
     }
 
     private static func triageMarkdown(
@@ -420,6 +456,7 @@ enum TextToSQLReleaseTriageReporter {
             "| Schema agent clarification correction | \(tableCell(run.manifest.schemaAgentClarificationCorrectionMode ?? "-")) |",
             "| Schema agent intent coverage | \(tableCell(run.manifest.schemaAgentIntentCoverageMode ?? "-")) |",
             "| Model | \(tableCell(run.manifest.model ?? "-")) |",
+            "| Expected canonical model | \(tableCell(run.manifest.expectedCanonicalModelID ?? "-")) |",
             "| Results | \(run.results.count) |",
             "| Complete | \(completeness.isComplete ? "Yes" : "No") |",
             "| Expected results | \(completeness.expectedResultCount) |",
