@@ -55,8 +55,11 @@ Run the narrowest test set that covers your change:
   PostgreSQL available.
 - Foundation Models behavior should run `make test-fm` only on an eligible Mac
   with macOS 26+, Apple Intelligence enabled, and local model support.
-- Text-to-SQL release changes should run `make eval-release MODEL=<model>` when
-  the OpenRouter and local PostgreSQL eval environment is available.
+- Text-to-SQL release changes should run `make eval-release` (it defaults to
+  the pinned production model) when the OpenRouter and local PostgreSQL eval
+  environment is available. The gate rejects other models; engineering
+  comparisons need `MODEL=<model> ALLOW_MODEL_OVERRIDE=1` and do not update
+  the committed release docs' meaning.
 
 If you cannot run an expected test locally, say that in the pull request.
 

@@ -135,7 +135,8 @@ public final class OpenRouterSchemaToolSQLAgent: SQLGenerator, Sendable {
     public static let terminalToolName = "submit_text_to_sql_result"
 
     private let apiKey: String
-    private let model: String
+    let model: String
+    let expectedCanonicalModelID: String?
     private let connectionID: UUID
     private let selectedSchemas: [String]
     private let transport: any HTTPTransport
@@ -154,6 +155,7 @@ public final class OpenRouterSchemaToolSQLAgent: SQLGenerator, Sendable {
     public init(
         apiKey: String,
         model: String,
+        expectedCanonicalModelID: String?,
         connectionID: UUID,
         selectedSchemas: [String],
         transport: any HTTPTransport = URLSessionTransport(),
@@ -168,6 +170,7 @@ public final class OpenRouterSchemaToolSQLAgent: SQLGenerator, Sendable {
     ) {
         self.apiKey = apiKey
         self.model = model
+        self.expectedCanonicalModelID = expectedCanonicalModelID
         self.connectionID = connectionID
         self.selectedSchemas = selectedSchemas.sorted()
         self.transport = transport
@@ -182,6 +185,7 @@ public final class OpenRouterSchemaToolSQLAgent: SQLGenerator, Sendable {
         self.legacyGenerator = OpenRouterSQLGenerator(
             apiKey: apiKey,
             model: model,
+            expectedCanonicalModelID: expectedCanonicalModelID,
             transport: transport,
             catalogService: catalogService,
             requestBuilder: OpenRouterRequestBuilder(endpoint: endpoint)
@@ -191,6 +195,7 @@ public final class OpenRouterSchemaToolSQLAgent: SQLGenerator, Sendable {
     init(
         apiKey: String,
         model: String,
+        expectedCanonicalModelID: String?,
         connectionID: UUID,
         selectedSchemas: [String],
         transport: any HTTPTransport,
@@ -207,6 +212,7 @@ public final class OpenRouterSchemaToolSQLAgent: SQLGenerator, Sendable {
     ) {
         self.apiKey = apiKey
         self.model = model
+        self.expectedCanonicalModelID = expectedCanonicalModelID
         self.connectionID = connectionID
         self.selectedSchemas = selectedSchemas.sorted()
         self.transport = transport
@@ -228,23 +234,48 @@ public final class OpenRouterSchemaToolSQLAgent: SQLGenerator, Sendable {
         config: SQLGenerationConfig
     ) async throws -> SQLGenerationResult {
         var aggregate = OpenRouterAgentMetadataAccumulator(requestedModelID: model)
-        let capabilities: OpenRouterModelCapabilities
-        if configuration.countCapabilityLookupHTTPAttempts {
-            let lookup = await catalogService.capabilitiesForGeneration(
-                apiKey: apiKey,
-                modelID: model,
-                maximumHTTPRequests: configuration.maximumHTTPAttempts
+        let availableHTTPAttempts = configuration.countCapabilityLookupHTTPAttempts
+            ? OpenRouterHTTPAttemptBudget.remaining(
+                maximumHTTPAttempts: configuration.maximumHTTPAttempts,
+                contextModelCallCount: context.modelCallCount
             )
-            aggregate.httpAttemptCount += lookup.httpRequestCount
-            capabilities = lookup.capabilities
-        } else {
-            capabilities = await catalogService.capabilitiesForGeneration(
-                apiKey: apiKey,
-                modelID: model
+            : configuration.maximumHTTPAttempts
+        guard availableHTTPAttempts > 0 else {
+            var metadata = aggregate.metadata(
+                contextModelCallCount: context.modelCallCount,
+                schemaToolCalls: [],
+                inspectionToolCalls: []
+            )
+            metadata.agentSelectionReason = "tools"
+            throw OpenRouterSchemaToolAgentFailure(
+                category: .httpAttemptBudgetExhausted,
+                message: "The schema-tool agent exhausted its OpenRouter HTTP-attempt budget.",
+                backendMetadata: metadata
             )
         }
+        let capabilities: OpenRouterModelCapabilities
+        if configuration.countCapabilityLookupHTTPAttempts {
+            let lookup = try await catalogService.validatedCapabilitiesForGeneration(
+                apiKey: apiKey,
+                modelID: model,
+                expectedCanonicalModelID: expectedCanonicalModelID,
+                maximumHTTPRequests: availableHTTPAttempts
+            )
+            aggregate.httpAttemptCount += lookup.httpRequestCount
+            if lookup.httpRequestCount > 0 {
+                config.usageSink?(.httpAttempts(lookup.httpRequestCount))
+            }
+            capabilities = lookup.capabilities
+        } else {
+            capabilities = try await catalogService.validatedCapabilitiesForGeneration(
+                apiKey: apiKey,
+                modelID: model,
+                expectedCanonicalModelID: expectedCanonicalModelID,
+                maximumHTTPRequests: nil
+            ).capabilities
+        }
         if configuration.countCapabilityLookupHTTPAttempts,
-            aggregate.httpAttemptCount >= configuration.maximumHTTPAttempts
+            aggregate.httpAttemptCount >= availableHTTPAttempts
         {
             var metadata = aggregate.metadata(
                 contextModelCallCount: context.modelCallCount,
@@ -266,13 +297,14 @@ public final class OpenRouterSchemaToolSQLAgent: SQLGenerator, Sendable {
                 fallbackGenerator = OpenRouterSQLGenerator(
                     apiKey: apiKey,
                     model: model,
+                    expectedCanonicalModelID: expectedCanonicalModelID,
                     transport: transport,
                     catalogService: catalogService,
                     requestBuilder: OpenRouterRequestBuilder(endpoint: requestBuilder.endpoint),
                     retryPolicy: OpenRouterRetryPolicy(
                         maxAttempts: max(
                             1,
-                            configuration.maximumHTTPAttempts - aggregate.httpAttemptCount
+                            availableHTTPAttempts - aggregate.httpAttemptCount
                         )
                     ),
                     countCapabilityLookupHTTPAttempts: false,
@@ -380,7 +412,9 @@ public final class OpenRouterSchemaToolSQLAgent: SQLGenerator, Sendable {
                         tools: tools,
                         capabilities: capabilities,
                         aggregate: &aggregate,
-                        deadline: deadline
+                        maximumHTTPAttempts: availableHTTPAttempts,
+                        deadline: deadline,
+                        usageSink: config.usageSink
                     )
                 } catch is CancellationError {
                     throw CancellationError()
@@ -926,7 +960,9 @@ public final class OpenRouterSchemaToolSQLAgent: SQLGenerator, Sendable {
         tools: [OpenRouterToolDefinition],
         capabilities: OpenRouterModelCapabilities,
         aggregate: inout OpenRouterAgentMetadataAccumulator,
-        deadline: Date
+        maximumHTTPAttempts: Int,
+        deadline: Date,
+        usageSink: (@Sendable (SQLGenerationUsageEvent) -> Void)?
     ) async throws -> OpenRouterToolChatParser.ParsedTurn {
         let built = try requestBuilder.build(
             apiKey: apiKey,
@@ -940,15 +976,19 @@ public final class OpenRouterSchemaToolSQLAgent: SQLGenerator, Sendable {
         while true {
             try Task.checkCancellation()
             try checkDeadline(deadline)
-            guard aggregate.httpAttemptCount < configuration.maximumHTTPAttempts else {
+            guard aggregate.httpAttemptCount < maximumHTTPAttempts else {
                 throw OpenRouterSchemaToolAgentFailure(
                     category: .httpAttemptBudgetExhausted,
                     message: "The schema-tool agent exhausted its OpenRouter HTTP-attempt budget."
                 )
             }
             aggregate.httpAttemptCount += 1
+            usageSink?(.httpAttempts(1))
             do {
                 let (data, response) = try await sendWithDeadline(built.request, deadline: deadline)
+                if let reportedUsage = OpenRouterResponseParser.reportedUsage(from: data) {
+                    usageSink?(reportedUsage.generationUsageEvent)
+                }
                 let retryAfter = retryPolicy.retryAfter(from: response)
                 do {
                     let parsed = try parser.parse(
@@ -956,19 +996,21 @@ public final class OpenRouterSchemaToolSQLAgent: SQLGenerator, Sendable {
                         response: response,
                         requestedModelID: model,
                         requestCount: attempt,
-                        retryCount: attempt - 1
+                        retryCount: attempt - 1,
+                        expectedCanonicalModelID: expectedCanonicalModelID
                     )
                     aggregate.record(parsed.metadata)
                     return parsed
                 } catch var failure as OpenRouterFailure {
                     failure.diagnostic.retryAfterSeconds = retryAfter
+                    aggregate.record(failure.diagnostic)
                     if failure.category == .noContent { noContentRetries += 1 }
                     if let delay = retryPolicy.retryDelay(
                         for: failure,
                         attempt: attempt,
                         noContentRetries: max(0, noContentRetries - 1)
                     ) {
-                        guard aggregate.httpAttemptCount < configuration.maximumHTTPAttempts else {
+                        guard aggregate.httpAttemptCount < maximumHTTPAttempts else {
                             throw failure.withAttemptCount(attempt)
                         }
                         attempt += 1
@@ -999,7 +1041,7 @@ public final class OpenRouterSchemaToolSQLAgent: SQLGenerator, Sendable {
                     attempt: attempt,
                     noContentRetries: noContentRetries
                 ) {
-                    guard aggregate.httpAttemptCount < configuration.maximumHTTPAttempts else {
+                    guard aggregate.httpAttemptCount < maximumHTTPAttempts else {
                         throw failure.withAttemptCount(attempt)
                     }
                     attempt += 1
@@ -2639,6 +2681,33 @@ private struct OpenRouterAgentMetadataAccumulator {
         append(metadata.requestID, to: &requestIDs)
         append(metadata.returnedModelID, to: &returnedModelIDs)
         append(metadata.providerName, to: &providerNames)
+    }
+
+    mutating func record(_ diagnostic: OpenRouterFailureDiagnostic) {
+        if let value = diagnostic.promptTokens {
+            promptTokens += value
+            hasPromptTokens = true
+        }
+        if let value = diagnostic.completionTokens {
+            completionTokens += value
+            hasCompletionTokens = true
+        }
+        if let value = diagnostic.reasoningTokens {
+            reasoningTokens += value
+            hasReasoningTokens = true
+        }
+        if let value = diagnostic.totalTokens {
+            totalTokens += value
+            hasTotalTokens = true
+        }
+        if let value = diagnostic.costUSD {
+            costUSD += value
+            hasCost = true
+        }
+        append(diagnostic.completionID, to: &completionIDs)
+        append(diagnostic.requestID, to: &requestIDs)
+        append(diagnostic.returnedModelID, to: &returnedModelIDs)
+        append(diagnostic.providerName, to: &providerNames)
     }
 
     func metadata(

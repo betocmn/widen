@@ -71,9 +71,12 @@ struct AIBackendToggle: View {
     private var cloudHelp: String {
         switch appState.cloudBackendStatus {
         case .ready:
-            "Generate SQL with \(appState.cloudProvider == .applePCC ? CloudAIProvider.applePCC.displayName : "\(OpenRouterCatalog.displayName(for: appState.openRouterModelID)) via OpenRouter"). Cloud sends your question and allowed schema metadata; inspected data values are sent only when this connection enables cloud data inspection."
+            if appState.cloudProvider == .openRouter {
+                return "Generate SQL with \(OpenRouterCatalog.productionProfile.displayName) via OpenRouter. \(OpenRouterCatalog.privateRoutingClaim) Inspected data values are sent only when this connection enables cloud data inspection."
+            }
+            return "Generate SQL with \(CloudAIProvider.applePCC.displayName). Cloud sends your question and allowed schema metadata; inspected data values are sent only when this connection enables cloud data inspection."
         case .notConfigured(let message), .unavailable(let message):
-            "\(message) Click to open Settings › LLM. This switch only picks the LLM used for SQL generation."
+            return "\(message) Click to open Settings › LLM. This switch only picks the LLM used for SQL generation."
         }
     }
 }

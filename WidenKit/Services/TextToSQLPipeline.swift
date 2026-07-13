@@ -381,7 +381,8 @@ public struct TextToSQLPipeline: TextToSQLRunning {
             let failure = TextToSQLPipelineFailure(
                 stage: .modelGeneration,
                 category: .emptySQL,
-                message: "The model did not return SQL."
+                message: "The model did not return SQL.",
+                backendMetadata: result.backendMetadata
             )
             trace.append(
                 .canonicalization,
@@ -481,7 +482,8 @@ public struct TextToSQLPipeline: TextToSQLRunning {
             let failure = TextToSQLPipelineFailure(
                 stage: validationEventStage,
                 category: validationFailureCategory,
-                message: firstError
+                message: firstError,
+                backendMetadata: result.backendMetadata
             )
             trace.append(.validationRepair, outcome: .skipped, since: Date())
             trace.append(
@@ -559,10 +561,11 @@ public struct TextToSQLPipeline: TextToSQLRunning {
         )
 
         guard verification.isRepairable else {
-            let failure = postgresVerificationFailure(
+            var failure = postgresVerificationFailure(
                 stage: .postgresVerification,
                 verification: verification
             )
+            failure.backendMetadata = generation.backendMetadata
             trace.append(
                 .validationRepair,
                 outcome: .skipped,
@@ -744,10 +747,11 @@ public struct TextToSQLPipeline: TextToSQLRunning {
         )
 
         guard let repairMode = coordinator.beginNextAttempt() else {
-            let failure = postgresVerificationFailure(
+            var failure = postgresVerificationFailure(
                 stage: .postgresVerificationRepair,
                 verification: verification
             )
+            failure.backendMetadata = startingGeneration.backendMetadata
             return RepairRun(decision: .failed(failure), failureCategory: failure.category)
         }
 
@@ -795,7 +799,7 @@ public struct TextToSQLPipeline: TextToSQLRunning {
                 databaseContext: request.config.databaseContext,
                 confirmedSemanticBindings: context.confirmedSemanticBindings,
                 allowGroundingClarification: request.allowGroundingClarification
-            )
+            ).accumulatingBackendUsage(from: startingGeneration.backendMetadata)
         } catch is CancellationError {
             trace.append(
                 .postgresVerificationRepair,
@@ -809,7 +813,11 @@ public struct TextToSQLPipeline: TextToSQLRunning {
         } catch {
             trace.mergeSchemaToolCalls(schemaToolCalls(from: error))
             trace.mergeInspectionToolCalls(inspectionToolCalls(from: error))
-            let failure = generationFailure(error, stage: .postgresVerificationRepair)
+            let failure = generationFailure(
+                error,
+                stage: .postgresVerificationRepair,
+                priorBackendMetadata: startingGeneration.backendMetadata
+            )
             trace.append(
                 .postgresVerificationRepair,
                 outcome: .failure,
@@ -833,11 +841,12 @@ public struct TextToSQLPipeline: TextToSQLRunning {
             guard let clarification = evaluation.message,
                 !clarification.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
             else {
-                let failure = repairFailure(
+                var failure = repairFailure(
                     attempts: coordinator.attempts,
                     category: .repeatedNoProgressRepair,
                     stage: .postgresVerificationRepair
                 )
+                failure.backendMetadata = generation.backendMetadata
                 trace.append(
                     .postgresVerificationRepair,
                     outcome: .failure,
@@ -878,11 +887,12 @@ public struct TextToSQLPipeline: TextToSQLRunning {
                 request: request,
                 events: &events
             )
-            let failure = repairFailure(
+            var failure = repairFailure(
                 attempts: coordinator.attempts,
                 category: category,
                 stage: .postgresVerificationRepair
             )
+            failure.backendMetadata = generation.backendMetadata
             return RepairRun(decision: .failed(failure), failureCategory: failure.category)
 
         case .accepted:
@@ -890,11 +900,12 @@ public struct TextToSQLPipeline: TextToSQLRunning {
         }
 
         guard let repairedSQL = evaluation.sql else {
-            let failure = repairFailure(
+            var failure = repairFailure(
                 attempts: coordinator.attempts,
                 category: .modelGeneration,
                 stage: .postgresVerificationRepair
             )
+            failure.backendMetadata = generation.backendMetadata
             trace.append(
                 .postgresVerificationRepair,
                 outcome: .failure,
@@ -935,7 +946,8 @@ public struct TextToSQLPipeline: TextToSQLRunning {
             let failure = TextToSQLPipelineFailure(
                 stage: .postgresVerificationRepair,
                 category: category,
-                message: AppError.validationFailed(repairedValidation.errors).localizedDescription
+                message: AppError.validationFailed(repairedValidation.errors).localizedDescription,
+                backendMetadata: generation.backendMetadata
             )
             return RepairRun(decision: .failed(failure), failureCategory: failure.category)
         }
@@ -963,10 +975,11 @@ public struct TextToSQLPipeline: TextToSQLRunning {
                 request: request,
                 events: &events
             )
-            let failure = postgresVerificationFailure(
+            var failure = postgresVerificationFailure(
                 stage: .postgresVerificationRepair,
                 verification: repairedVerification
             )
+            failure.backendMetadata = generation.backendMetadata
             return RepairRun(decision: .failed(failure), failureCategory: failure.category)
         }
 
@@ -1022,6 +1035,7 @@ public struct TextToSQLPipeline: TextToSQLRunning {
                 modelCallBudget: repairModelCallBudget
             )
         )
+        var accumulatedBackendMetadata = startingGeneration.backendMetadata
 
         while let repairMode = coordinator.beginNextAttempt() {
             let attemptNumber = repairMode == .repair ? 1 : 2
@@ -1071,7 +1085,8 @@ public struct TextToSQLPipeline: TextToSQLRunning {
                     databaseContext: request.config.databaseContext,
                     confirmedSemanticBindings: context.confirmedSemanticBindings,
                     allowGroundingClarification: request.allowGroundingClarification
-                )
+                ).accumulatingBackendUsage(from: accumulatedBackendMetadata)
+                accumulatedBackendMetadata = generation.backendMetadata
             } catch is CancellationError {
                 trace.append(
                     .validationRepair,
@@ -1084,7 +1099,11 @@ public struct TextToSQLPipeline: TextToSQLRunning {
             } catch {
                 trace.mergeSchemaToolCalls(schemaToolCalls(from: error))
                 trace.mergeInspectionToolCalls(inspectionToolCalls(from: error))
-                let failure = generationFailure(error, stage: .validationRepair)
+                let failure = generationFailure(
+                    error,
+                    stage: .validationRepair,
+                    priorBackendMetadata: accumulatedBackendMetadata
+                )
                 await record(
                     TextToSQLPipelineEvent(
                         kind: .validationRepairGenerationFailed,
@@ -1118,10 +1137,11 @@ public struct TextToSQLPipeline: TextToSQLRunning {
                 guard let clarification = evaluation.message,
                     !clarification.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
                 else {
-                    let failure = repairFailure(
+                    var failure = repairFailure(
                         attempts: coordinator.attempts,
                         category: .repeatedNoProgressRepair
                     )
+                    failure.backendMetadata = accumulatedBackendMetadata
                     trace.append(
                         .validationRepair,
                         outcome: .failure,
@@ -1185,7 +1205,10 @@ public struct TextToSQLPipeline: TextToSQLRunning {
                     {
                         return RepairRun(
                             decision: .clarification(
-                                SQLGenerationResult.pipelineClarification(clarification)
+                                SQLGenerationResult.pipelineClarification(
+                                    clarification,
+                                    backendMetadata: accumulatedBackendMetadata
+                                )
                             )
                         )
                     }
@@ -1194,7 +1217,10 @@ public struct TextToSQLPipeline: TextToSQLRunning {
                     ) {
                         return RepairRun(
                             decision: .clarification(
-                                SQLGenerationResult.pipelineClarification(clarification)
+                                SQLGenerationResult.pipelineClarification(
+                                    clarification,
+                                    backendMetadata: accumulatedBackendMetadata
+                                )
                             )
                         )
                     }
@@ -1202,7 +1228,8 @@ public struct TextToSQLPipeline: TextToSQLRunning {
                 if evaluation.allowsReconstruction, coordinator.canRequestAnotherModelCall {
                     continue
                 }
-                let failure = repairFailure(attempts: coordinator.attempts, category: category)
+                var failure = repairFailure(attempts: coordinator.attempts, category: category)
+                failure.backendMetadata = accumulatedBackendMetadata
                 return RepairRun(decision: .failed(failure), failureCategory: failure.category)
 
             case .accepted:
@@ -1210,10 +1237,11 @@ public struct TextToSQLPipeline: TextToSQLRunning {
             }
 
             guard let generatedSQL = evaluation.sql else {
-                let failure = repairFailure(
+                var failure = repairFailure(
                     attempts: coordinator.attempts,
                     category: .modelGeneration
                 )
+                failure.backendMetadata = accumulatedBackendMetadata
                 trace.append(
                     .validationRepair,
                     outcome: .failure,
@@ -1264,7 +1292,8 @@ public struct TextToSQLPipeline: TextToSQLRunning {
                     stage: .validationRepair,
                     category: category,
                     message: AppError.validationFailed(candidateValidation.errors)
-                        .localizedDescription
+                        .localizedDescription,
+                    backendMetadata: accumulatedBackendMetadata
                 )
                 return RepairRun(decision: .failed(failure), failureCategory: failure.category)
             }
@@ -1317,17 +1346,19 @@ public struct TextToSQLPipeline: TextToSQLRunning {
                     events: &events
                 )
             }
-            let failure = postgresVerificationFailure(
+            var failure = postgresVerificationFailure(
                 stage: .postgresVerification,
                 verification: verification
             )
+            failure.backendMetadata = accumulatedBackendMetadata
             return RepairRun(decision: .failed(failure), failureCategory: failure.category)
         }
 
-        let failure = repairFailure(
+        var failure = repairFailure(
             attempts: coordinator.attempts,
             category: .repeatedNoProgressRepair
         )
+        failure.backendMetadata = accumulatedBackendMetadata
         trace.append(
             .validationRepair,
             outcome: .failure,
@@ -1465,7 +1496,8 @@ public struct TextToSQLPipeline: TextToSQLRunning {
 
     private func generationFailure(
         _ error: any Error,
-        stage: TextToSQLStage
+        stage: TextToSQLStage,
+        priorBackendMetadata: OpenRouterGenerationMetadata? = nil
     ) -> TextToSQLPipelineFailure {
         if let failure = SQLGenerationFailure.typed(error) {
             let openRouterDiagnostic: OpenRouterFailureDiagnostic?
@@ -1488,18 +1520,28 @@ public struct TextToSQLPipeline: TextToSQLRunning {
                 openRouterDiagnostic = nil
                 backendMetadata = nil
             }
+            let accumulatedMetadata = backendMetadata
+                .map { $0.accumulatingPipelineUsage(from: priorBackendMetadata) }
+                ?? openRouterDiagnostic.flatMap {
+                    OpenRouterGenerationMetadata.pipelineFailureMetadata(
+                        from: $0,
+                        prior: priorBackendMetadata
+                    )
+                }
+                ?? priorBackendMetadata
             return TextToSQLPipelineFailure(
                 stage: stage,
                 category: failure.pipelineCategory,
                 message: failure.localizedDescription,
                 openRouterFailure: openRouterDiagnostic,
-                backendMetadata: backendMetadata
+                backendMetadata: accumulatedMetadata
             )
         }
         return TextToSQLPipelineFailure(
             stage: stage,
             category: .modelGeneration,
-            message: error.localizedDescription
+            message: error.localizedDescription,
+            backendMetadata: priorBackendMetadata
         )
     }
 
@@ -1759,7 +1801,22 @@ private extension SQLGenerationResult {
         return copy
     }
 
-    static func pipelineClarification(_ question: String) -> SQLGenerationResult {
+    func accumulatingBackendUsage(
+        from priorMetadata: OpenRouterGenerationMetadata?
+    ) -> SQLGenerationResult {
+        var copy = self
+        if let backendMetadata {
+            copy.backendMetadata = backendMetadata.accumulatingPipelineUsage(from: priorMetadata)
+        } else {
+            copy.backendMetadata = priorMetadata
+        }
+        return copy
+    }
+
+    static func pipelineClarification(
+        _ question: String,
+        backendMetadata: OpenRouterGenerationMetadata? = nil
+    ) -> SQLGenerationResult {
         SQLGenerationResult(
             sql: "",
             explanation: question,
@@ -1768,8 +1825,120 @@ private extension SQLGenerationResult {
             confidence: 0.2,
             riskLevel: .medium,
             needsClarification: true,
-            clarificationQuestion: question
+            clarificationQuestion: question,
+            backendMetadata: backendMetadata
         )
+    }
+}
+
+private extension OpenRouterGenerationMetadata {
+    func accumulatingPipelineUsage(
+        from priorMetadata: OpenRouterGenerationMetadata?
+    ) -> OpenRouterGenerationMetadata {
+        guard let priorMetadata else { return self }
+
+        var copy = self
+        copy.requestedModelID = copy.requestedModelID.isEmpty
+            ? priorMetadata.requestedModelID
+            : copy.requestedModelID
+        copy.returnedModelID = copy.returnedModelID ?? priorMetadata.returnedModelID
+        copy.providerName = copy.providerName ?? priorMetadata.providerName
+        copy.completionID = copy.completionID ?? priorMetadata.completionID
+        copy.requestID = copy.requestID ?? priorMetadata.requestID
+        copy.retryCount += priorMetadata.retryCount
+        copy.promptTokens = Self.sum(priorMetadata.promptTokens, copy.promptTokens)
+        copy.completionTokens = Self.sum(priorMetadata.completionTokens, copy.completionTokens)
+        copy.reasoningTokens = Self.sum(priorMetadata.reasoningTokens, copy.reasoningTokens)
+        copy.totalTokens = Self.sum(priorMetadata.totalTokens, copy.totalTokens)
+        copy.costUSD = Self.sum(priorMetadata.costUSD, copy.costUSD)
+        copy.serviceTier = copy.serviceTier ?? priorMetadata.serviceTier
+        copy.finishReason = copy.finishReason ?? priorMetadata.finishReason
+        copy.nativeFinishReason = copy.nativeFinishReason ?? priorMetadata.nativeFinishReason
+        copy.agentSelectionReason = copy.agentSelectionReason ?? priorMetadata.agentSelectionReason
+
+        if priorMetadata.agentHTTPAttemptCount != nil || copy.agentHTTPAttemptCount != nil {
+            copy.agentHTTPAttemptCount =
+                (priorMetadata.agentHTTPAttemptCount ?? priorMetadata.requestCount)
+                + (copy.agentHTTPAttemptCount ?? copy.requestCount)
+        }
+        copy.agentLogicalTurnCount = Self.sum(
+            priorMetadata.agentLogicalTurnCount,
+            copy.agentLogicalTurnCount
+        )
+        copy.agentSchemaToolCallCount = Self.sum(
+            priorMetadata.agentSchemaToolCallCount,
+            copy.agentSchemaToolCallCount
+        )
+        copy.agentInspectionToolCallCount = Self.sum(
+            priorMetadata.agentInspectionToolCallCount,
+            copy.agentInspectionToolCallCount
+        )
+        copy.agentTerminalOutcome = copy.agentTerminalOutcome ?? priorMetadata.agentTerminalOutcome
+        copy.agentFinishReasons = Self.concatenate(
+            priorMetadata.agentFinishReasons,
+            copy.agentFinishReasons
+        )
+        copy.agentCompletionIDs = Self.concatenate(
+            priorMetadata.agentCompletionIDs,
+            copy.agentCompletionIDs
+        )
+        copy.agentRequestIDs = Self.concatenate(
+            priorMetadata.agentRequestIDs,
+            copy.agentRequestIDs
+        )
+        copy.agentReturnedModelIDs = Self.concatenate(
+            priorMetadata.agentReturnedModelIDs,
+            copy.agentReturnedModelIDs
+        )
+        copy.agentProviderNames = Self.concatenate(
+            priorMetadata.agentProviderNames,
+            copy.agentProviderNames
+        )
+        copy.agentDiagnostics = copy.agentDiagnostics ?? priorMetadata.agentDiagnostics
+        return copy
+    }
+
+    static func pipelineFailureMetadata(
+        from diagnostic: OpenRouterFailureDiagnostic,
+        prior: OpenRouterGenerationMetadata?
+    ) -> OpenRouterGenerationMetadata? {
+        guard let requestedModelID = diagnostic.requestedModelID ?? prior?.requestedModelID else {
+            return nil
+        }
+        let current = OpenRouterGenerationMetadata(
+            requestedModelID: requestedModelID,
+            returnedModelID: diagnostic.returnedModelID,
+            providerName: diagnostic.providerName,
+            completionID: diagnostic.completionID,
+            requestID: diagnostic.requestID,
+            structuredOutputMode: prior?.structuredOutputMode ?? .promptOnlyJSON,
+            requestCount: max(0, diagnostic.attemptCount),
+            retryCount: max(0, diagnostic.attemptCount - 1),
+            promptTokens: diagnostic.promptTokens,
+            completionTokens: diagnostic.completionTokens,
+            reasoningTokens: diagnostic.reasoningTokens,
+            totalTokens: diagnostic.totalTokens,
+            costUSD: diagnostic.costUSD,
+            serviceTier: nil,
+            finishReason: nil,
+            nativeFinishReason: nil
+        )
+        return current.accumulatingPipelineUsage(from: prior)
+    }
+
+    static func sum(_ first: Int?, _ second: Int?) -> Int? {
+        guard first != nil || second != nil else { return nil }
+        return (first ?? 0) + (second ?? 0)
+    }
+
+    static func sum(_ first: Double?, _ second: Double?) -> Double? {
+        guard first != nil || second != nil else { return nil }
+        return (first ?? 0) + (second ?? 0)
+    }
+
+    static func concatenate(_ first: [String]?, _ second: [String]?) -> [String]? {
+        let values = (first ?? []) + (second ?? [])
+        return values.isEmpty ? nil : values
     }
 }
 

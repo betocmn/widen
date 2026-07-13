@@ -31,6 +31,7 @@ struct EvalRunManifest: Codable {
     var schemaAgentClarificationCorrectionMode: String?
     var schemaAgentIntentCoverageMode: String?
     var model: String?
+    var expectedCanonicalModelID: String?
     var osVersion: String
     var architecture: String
     var caseCount: Int
@@ -161,6 +162,13 @@ struct EvalRunner {
         if let resumeRun {
             try runner.applyResumeDefaults(from: resumeRun)
         }
+        try TextToSQLReleaseGateModelPolicy.validate(
+            model: runner.options.model,
+            backendIncludesCloud: runner.options.backendMode.backends.contains(.cloud),
+            releaseGateVersion: runner.options.releaseGateVersion,
+            releaseTriageVersion: runner.options.releaseTriageVersion,
+            allowModelOverride: runner.options.allowModelOverride
+        )
         return try await runner.runResolved(resumeRun: resumeRun)
     }
 
@@ -197,6 +205,9 @@ struct EvalRunner {
         )
         let databaseDirectory = evalDirectory.appendingPathComponent("databases", isDirectory: true)
         let isOpenRouterSmoke = suite.name.hasPrefix("openrouter-smoke")
+        let expectedCanonicalModelID = options.backendMode.backends.contains(.cloud)
+            ? OpenRouterCatalog.expectedCanonicalModelID(forRequestedModelID: options.model)
+            : nil
         let scorerSourcePaths = scorerSourcePaths(isOpenRouterSmoke: isOpenRouterSmoke)
         let scorerSourceHash = Self.sourceHash(
             relativePaths: scorerSourcePaths,
@@ -226,6 +237,7 @@ struct EvalRunner {
             suiteFileHash: Self.sha256(suiteData),
             schemaFixtureHashes: schemas.mapValues(\.sha256),
             model: options.backendMode == .local ? nil : options.model,
+            expectedCanonicalModelID: expectedCanonicalModelID,
             backendMode: options.backendMode.rawValue,
             cloudAgentMode: options.backendMode.backends.contains(.cloud)
                 ? options.cloudAgentMode.rawValue
@@ -321,6 +333,7 @@ struct EvalRunner {
                     ? options.schemaAgentIntentCoverageMode.rawValue
                     : nil,
                 model: options.backendMode == .local ? nil : options.model,
+                expectedCanonicalModelID: expectedCanonicalModelID,
                 osVersion: ProcessInfo.processInfo.operatingSystemVersionString,
                 architecture: Self.architecture(),
                 caseCount: selectedCases.count,
@@ -650,6 +663,7 @@ struct EvalRunner {
             "WidenKit/Evals/TextToSQLEvalResult.swift",
             "WidenKit/Evals/TextToSQLEvalRunPlanning.swift",
             "WidenEval/EvalRunner.swift",
+            "WidenKit/Models/SQLGenerationResult.swift",
             "WidenKit/Services/TextToSQLPipeline.swift",
             "WidenKit/Services/SQLGenerationFailure.swift",
             "WidenKit/Services/GeneratedSQLRepairSupport.swift",
@@ -657,7 +671,10 @@ struct EvalRunner {
             "WidenKit/Services/PostgresErrorMapper.swift",
             "WidenKit/Services/PostgresService.swift",
         ] + ((isOpenRouterSmoke || options.backendMode.backends.contains(.cloud))
-            ? ["WidenKit/Services/OpenRouterSQLGenerator.swift"]
+            ? [
+                "WidenKit/Models/OpenRouterCatalog.swift",
+                "WidenKit/Services/OpenRouterSQLGenerator.swift",
+            ]
             : [])
             + (options.cloudAgentMode == .tools ? [
                 "WidenKit/Services/OpenRouterSchemaToolSQLAgent.swift",
@@ -1041,10 +1058,14 @@ struct EvalRunner {
             #endif
         case .cloud:
             guard let apiKey = Self.openRouterAPIKey() else { return nil }
+            let expectedCanonicalModelID = OpenRouterCatalog.expectedCanonicalModelID(
+                forRequestedModelID: options.model
+            )
             if options.cloudAgentMode == .tools {
                 return EvalCloudSchemaToolSQLGenerator(
                     apiKey: apiKey,
                     model: options.model,
+                    expectedCanonicalModelID: expectedCanonicalModelID,
                     maximumHTTPAttempts: maximumHTTPAttempts,
                     clarificationCorrectionMode: options.schemaAgentClarificationCorrectionMode,
                     intentCoverageMode: options.schemaAgentIntentCoverageMode
@@ -1053,6 +1074,7 @@ struct EvalRunner {
             return OpenRouterSQLGenerator(
                 apiKey: apiKey,
                 model: options.model,
+                expectedCanonicalModelID: expectedCanonicalModelID,
                 maximumHTTPAttempts: maximumHTTPAttempts.map { min(3, max(1, $0)) } ?? 3,
                 countCapabilityLookupHTTPAttempts: maximumHTTPAttempts != nil
             )
@@ -1635,6 +1657,7 @@ private extension EvalRunManifest {
             suiteFileHash: suiteFileHash,
             schemaFixtureHashes: schemaFixtureHashes,
             model: model,
+            expectedCanonicalModelID: expectedCanonicalModelID,
             backendMode: backendMode,
             cloudAgentMode: cloudAgentMode,
             schemaAgentClarificationCorrectionMode: schemaAgentClarificationCorrectionMode,
@@ -1801,6 +1824,7 @@ private extension TextToSQLEvalResult {
 private struct EvalCloudSchemaToolSQLGenerator: SQLGenerator, Sendable {
     var apiKey: String
     var model: String
+    var expectedCanonicalModelID: String?
     var maximumHTTPAttempts: Int?
     var clarificationCorrectionMode: SchemaToolAgentClarificationCorrectionMode
     var intentCoverageMode: SchemaToolAgentIntentCoverageMode
@@ -1819,6 +1843,7 @@ private struct EvalCloudSchemaToolSQLGenerator: SQLGenerator, Sendable {
         let agent = OpenRouterSchemaToolSQLAgent(
             apiKey: apiKey,
             model: model,
+            expectedCanonicalModelID: expectedCanonicalModelID,
             connectionID: connectionID,
             selectedSchemas: selectedSchemas,
             configuration: agentConfiguration()

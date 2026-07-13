@@ -88,6 +88,7 @@ enum EvalReporter {
             "| Schema agent clarification correction | \(tableCell(run.manifest.schemaAgentClarificationCorrectionMode ?? "-")) |",
             "| Schema agent intent coverage | \(tableCell(run.manifest.schemaAgentIntentCoverageMode ?? "-")) |",
             "| Model | \(tableCell(run.manifest.model ?? "-")) |",
+            "| Expected canonical model | \(tableCell(run.manifest.expectedCanonicalModelID ?? "-")) |",
             "| OS | \(tableCell(run.manifest.osVersion)) |",
             "| Architecture | \(tableCell(run.manifest.architecture)) |",
             "| Cases | \(run.manifest.caseCount) |",

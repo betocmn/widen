@@ -188,6 +188,134 @@ struct OpenRouterSQLGeneratorTests {
         #expect(authFailureTransport.requests.count == 1)
     }
 
+    @Test func settingsMetadataLookupSurfacesAuthenticationFailure() async throws {
+        let cacheURL = temporaryCacheURL()
+        let primingTransport = StubTransport([
+            .success((catalogResponse(id: Self.modelID), response(url: Self.apiBase.appendingPathComponent("models/user"), status: 200)))
+        ])
+        let primingService = catalogService(transport: primingTransport, cacheURL: cacheURL, ttl: 60)
+        _ = try await primingService.availableModels(apiKey: "secret-key")
+
+        let authFailureTransport = StubTransport([
+            .success((
+                errorResponse(errorType: "invalid_api_key", message: "Invalid API key"),
+                response(url: Self.apiBase.appendingPathComponent("models/user"), status: 401)
+            ))
+        ])
+        let expiredService = catalogService(transport: authFailureTransport, cacheURL: cacheURL, ttl: -1)
+
+        do {
+            _ = try await expiredService.metadataSurfacingErrors(
+                apiKey: "secret-key",
+                modelID: Self.modelID
+            )
+            Issue.record("expected authentication failure")
+        } catch let failure as OpenRouterFailure {
+            #expect(failure.category == .authentication)
+        }
+    }
+
+    @Test func settingsMetadataLookupServesStaleCacheForTransientFailures() async throws {
+        let cacheURL = temporaryCacheURL()
+        let primingTransport = StubTransport([
+            .success((catalogResponse(id: Self.modelID), response(url: Self.apiBase.appendingPathComponent("models/user"), status: 200)))
+        ])
+        let primingService = catalogService(transport: primingTransport, cacheURL: cacheURL, ttl: 60)
+        _ = try await primingService.availableModels(apiKey: "secret-key")
+
+        let flakyTransport = StubTransport([.failure(URLError(.networkConnectionLost))])
+        let expiredService = catalogService(transport: flakyTransport, cacheURL: cacheURL, ttl: -1)
+
+        let metadata = try await expiredService.metadataSurfacingErrors(
+            apiKey: "secret-key",
+            modelID: Self.modelID
+        )
+        #expect(metadata?.capabilitySource == .staleCache)
+    }
+
+    @Test func keyLimitExceededClassifiesAsProviderBudget() {
+        let category = OpenRouterFailure.category(
+            errorType: nil,
+            providerCode: nil,
+            httpStatus: 403,
+            message: "Key limit exceeded (total limit). Manage it using https://openrouter.ai/keys"
+        )
+        #expect(category == .providerLimit)
+        #expect(category.isProviderBudgetUnavailable)
+    }
+
+    @Test func envelopedKeyLimitErrorsClassifyAsProviderBudget() {
+        #expect(
+            OpenRouterFailure.category(
+                errorType: nil,
+                providerCode: nil,
+                httpStatus: 200,
+                message: "Insufficient credits remaining for this key"
+            ) == .providerLimit
+        )
+    }
+
+    @Test func parameterRoutingFailureExplainsPrivateRoutingRequirements() throws {
+        let failure = OpenRouterResponseParser.failure(
+            from: errorResponse(
+                errorType: "routing",
+                message: "No endpoints found that support the requested parameters."
+            ),
+            response: response(url: Self.chatEndpoint, status: 404),
+            requestedModelID: Self.modelID,
+            attemptCount: 1
+        )
+        #expect(failure.message.contains("private-routing requirements"))
+    }
+
+    @Test func keyLimitMessageDoesNotReclassifyAuthenticationOrServerFailures() {
+        #expect(
+            OpenRouterFailure.category(
+                errorType: nil,
+                providerCode: nil,
+                httpStatus: 401,
+                message: "Key limit exceeded for a disabled key"
+            ) == .authentication
+        )
+        #expect(
+            OpenRouterFailure.category(
+                errorType: nil,
+                providerCode: nil,
+                httpStatus: 500,
+                message: "Upstream provider hit its credit limit"
+            ) == .serverFailure
+        )
+    }
+
+    @Test func genericNoEndpointsFailureIsNotAttributedToPrivateRouting() throws {
+        let failure = OpenRouterResponseParser.failure(
+            from: errorResponse(
+                errorType: "routing",
+                message: "No endpoints found for openai/gpt-5.5."
+            ),
+            response: response(url: Self.chatEndpoint, status: 404),
+            requestedModelID: Self.modelID,
+            attemptCount: 1
+        )
+        #expect(failure.category == .modelNotFound)
+        #expect(!failure.message.contains("private-routing requirements"))
+    }
+
+    @Test func routingPolicyFailureExplainsPrivateRoutingRequirements() throws {
+        let failure = OpenRouterResponseParser.failure(
+            from: errorResponse(
+                errorType: "routing",
+                message: "No endpoints found matching your data policy (Zero data retention)."
+            ),
+            response: response(url: Self.chatEndpoint, status: 404),
+            requestedModelID: Self.modelID,
+            attemptCount: 1
+        )
+        #expect(failure.category == .modelNotFound)
+        #expect(failure.message.contains("private-routing requirements"))
+        #expect(failure.message.contains("data policy"))
+    }
+
     @Test func cancellingOneCatalogWaiterDoesNotCancelSharedRefresh() async throws {
         let transport = DelayedTransport(
             result: (
@@ -314,8 +442,14 @@ struct OpenRouterSQLGeneratorTests {
         #expect(body["temperature"] == nil)
         #expect(body["max_tokens"] as? Int == OpenRouterRequestBuilder.completionTokenBudget)
         #expect(body["max_completion_tokens"] == nil)
-        #expect(body["provider"] == nil)
+        try expectPrivateRouting(in: built.request)
         #expect(built.request.value(forHTTPHeaderField: "X-OpenRouter-Metadata") == "enabled")
+    }
+
+    @Test func privateRoutingPreferencesSetExactlyTheRequiredProviderBlock() throws {
+        var body: [String: Any] = ["model": "openai/gpt-5.5"]
+        OpenRouterProviderPreferences.requiredPrivateRouting.apply(to: &body)
+        try OpenRouterTestSupport.expectPrivateRouting(inBody: body)
     }
 
     @Test func requestBuilderUsesStrictModeOnlyWhenAdvertised() throws {
@@ -340,6 +474,8 @@ struct OpenRouterSQLGeneratorTests {
         #expect(built.mode == .strictJSONSchema)
         #expect(body["response_format"] != nil)
         #expect(provider?["require_parameters"] as? Bool == true)
+        #expect(provider?["zdr"] as? Bool == true)
+        #expect(provider?["data_collection"] as? String == "deny")
         #expect(body["temperature"] as? Int == 0)
         #expect(body["max_completion_tokens"] as? Int == 32)
         #expect(body["max_tokens"] == nil)
@@ -380,7 +516,7 @@ struct OpenRouterSQLGeneratorTests {
 
         #expect(built.mode == .promptOnlyJSON)
         #expect(body["response_format"] == nil)
-        #expect(body["provider"] == nil)
+        try expectPrivateRouting(in: built.request)
         #expect(body["temperature"] as? Int == 0)
         #expect(body["max_tokens"] as? Int == OpenRouterRequestBuilder.completionTokenBudget)
     }
@@ -461,6 +597,29 @@ struct OpenRouterSQLGeneratorTests {
         #expect(partsResult.result.sql == "SELECT id FROM public.users LIMIT 100")
     }
 
+    @Test func parserRejectsUnexpectedCanonicalModelWhenEnforced() throws {
+        let parser = OpenRouterResponseParser()
+        let returnedModelID = "openai/gpt-5.5-unevaluated"
+
+        do {
+            _ = try parser.parse(
+                data: chatResponse(content: goodContent, model: returnedModelID),
+                response: response(url: Self.chatEndpoint, status: 200),
+                requestedModelID: Self.modelID,
+                mode: .strictJSONSchema,
+                requestCount: 1,
+                retryCount: 0,
+                expectedCanonicalModelID: "openai/gpt-5.5-20260423"
+            )
+            Issue.record("expected canonical model mismatch")
+        } catch let failure as OpenRouterFailure {
+            #expect(failure.category == .modelVersionMismatch)
+            #expect(failure.pipelineCategory == .backendUnavailable)
+            #expect(failure.diagnostic.requestedModelID == Self.modelID)
+            #expect(failure.diagnostic.returnedModelID == returnedModelID)
+        }
+    }
+
     @Test func malformedHTTP200EnvelopeIsStructuredResponseFailure() throws {
         let parser = OpenRouterResponseParser()
 
@@ -478,6 +637,39 @@ struct OpenRouterSQLGeneratorTests {
             #expect(failure.category == .malformedStructuredResponse)
             #expect(failure.diagnostic.httpStatus == 200)
             #expect(failure.diagnostic.requestedModelID == Self.modelID)
+        }
+    }
+
+    @Test func malformedEnvelopeFailurePreservesReportedUsage() throws {
+        let parser = OpenRouterResponseParser()
+        let data = jsonData([
+            "choices": "invalid",
+            "usage": [
+                "prompt_tokens": 4,
+                "completion_tokens": 5,
+                "total_tokens": 9,
+                "completion_tokens_details": ["reasoning_tokens": 2],
+                "cost": 0.25,
+            ],
+        ])
+
+        do {
+            _ = try parser.parse(
+                data: data,
+                response: response(url: Self.chatEndpoint, status: 200),
+                requestedModelID: Self.modelID,
+                mode: .strictJSONSchema,
+                requestCount: 1,
+                retryCount: 0
+            )
+            Issue.record("expected malformed envelope failure")
+        } catch let failure as OpenRouterFailure {
+            #expect(failure.category == .malformedStructuredResponse)
+            #expect(failure.diagnostic.promptTokens == 4)
+            #expect(failure.diagnostic.completionTokens == 5)
+            #expect(failure.diagnostic.reasoningTokens == 2)
+            #expect(failure.diagnostic.totalTokens == 9)
+            #expect(failure.diagnostic.costUSD == 0.25)
         }
     }
 
@@ -648,6 +840,96 @@ struct OpenRouterSQLGeneratorTests {
         }
     }
 
+    @Test func choiceLevelErrorTakesPrecedenceOverCanonicalValidation() throws {
+        let parser = OpenRouterResponseParser()
+        do {
+            _ = try parser.parse(
+                data: chatResponse(
+                    content: nil,
+                    model: nil,
+                    choiceError: [
+                        "message": "provider failed",
+                        "metadata": [
+                            "error_type": "provider_unavailable",
+                            "provider_code": "overloaded",
+                        ],
+                    ]
+                ),
+                response: response(url: Self.chatEndpoint, status: 200),
+                requestedModelID: Self.modelID,
+                mode: .strictJSONSchema,
+                requestCount: 1,
+                retryCount: 0,
+                expectedCanonicalModelID: "openai/gpt-5.5-20260423"
+            )
+            Issue.record("expected provider error")
+        } catch let failure as OpenRouterFailure {
+            #expect(failure.category == .providerUnavailable)
+            #expect(failure.diagnostic.providerCode == "overloaded")
+        }
+    }
+
+    @Test func failedCompletionTakesPrecedenceOverCanonicalValidation() throws {
+        let parser = OpenRouterResponseParser()
+        let expectedCanonicalModelID = "openai/gpt-5.5-20260423"
+
+        try expectFailure(.providerUnavailable) {
+            try parser.parse(
+                data: chatResponse(content: nil, model: nil, finishReason: "error"),
+                response: response(url: Self.chatEndpoint, status: 200),
+                requestedModelID: Self.modelID,
+                mode: .strictJSONSchema,
+                requestCount: 1,
+                retryCount: 0,
+                expectedCanonicalModelID: expectedCanonicalModelID
+            )
+        }
+        try expectFailure(.maxTokensExceeded) {
+            try parser.parse(
+                data: chatResponse(content: goodContent, model: nil, finishReason: "length"),
+                response: response(url: Self.chatEndpoint, status: 200),
+                requestedModelID: Self.modelID,
+                mode: .strictJSONSchema,
+                requestCount: 1,
+                retryCount: 0,
+                expectedCanonicalModelID: expectedCanonicalModelID
+            )
+        }
+        try expectFailure(.contentPolicy) {
+            try parser.parse(
+                data: chatResponse(content: goodContent, model: nil, finishReason: "content_filter"),
+                response: response(url: Self.chatEndpoint, status: 200),
+                requestedModelID: Self.modelID,
+                mode: .strictJSONSchema,
+                requestCount: 1,
+                retryCount: 0,
+                expectedCanonicalModelID: expectedCanonicalModelID
+            )
+        }
+        try expectFailure(.refusal) {
+            try parser.parse(
+                data: chatResponse(content: goodContent, model: nil, refusal: "No."),
+                response: response(url: Self.chatEndpoint, status: 200),
+                requestedModelID: Self.modelID,
+                mode: .strictJSONSchema,
+                requestCount: 1,
+                retryCount: 0,
+                expectedCanonicalModelID: expectedCanonicalModelID
+            )
+        }
+        try expectFailure(.noContent) {
+            try parser.parse(
+                data: chatResponse(content: nil, model: nil),
+                response: response(url: Self.chatEndpoint, status: 200),
+                requestedModelID: Self.modelID,
+                mode: .strictJSONSchema,
+                requestCount: 1,
+                retryCount: 0,
+                expectedCanonicalModelID: expectedCanonicalModelID
+            )
+        }
+    }
+
     @Test func everyTypedFailureCategoryIsReachable() {
         let cases: [(String?, Int?, String?, OpenRouterFailure.Category)] = [
             ("invalid_api_key", 400, nil, .authentication),
@@ -777,7 +1059,90 @@ struct OpenRouterSQLGeneratorTests {
         #expect(result.generationCallCount == 3)
         #expect(result.backendMetadata?.requestCount == 3)
         #expect(result.backendMetadata?.retryCount == 2)
-        #expect(transport.requests.filter { $0.url?.path == "/api/v1/chat/completions" }.count == 3)
+        let chatRequests = transport.requests.filter { $0.url?.path == "/api/v1/chat/completions" }
+        #expect(chatRequests.count == 3)
+        for request in chatRequests {
+            try expectPrivateRouting(in: request)
+        }
+    }
+
+    @Test func retryMetadataIncludesUsageFromFailedCompletion() async throws {
+        let transport = StubTransport([
+            .success((catalogResponse(), response(url: Self.apiBase.appendingPathComponent("models/user"), status: 200))),
+            .success((chatResponse(content: ""), response(url: Self.chatEndpoint, status: 200, headers: ["Retry-After": "0"]))),
+            .success((chatResponse(content: goodContent), response(url: Self.chatEndpoint, status: 200))),
+        ])
+
+        let result = try await makeGenerator(transport: transport).generateSQL(
+            question: "show users",
+            schema: makeSchema(),
+            config: SQLGenerationConfig()
+        )
+
+        #expect(result.backendMetadata?.requestCount == 2)
+        #expect(result.backendMetadata?.retryCount == 1)
+        #expect(result.backendMetadata?.promptTokens == 22)
+        #expect(result.backendMetadata?.completionTokens == 44)
+        #expect(result.backendMetadata?.reasoningTokens == 6)
+        #expect(result.backendMetadata?.totalTokens == 66)
+        #expect(result.backendMetadata?.costUSD == 0.00024)
+    }
+
+    @Test func repairCompletionRequiresPrivateRouting() async throws {
+        let transport = StubTransport([
+            .success((catalogResponse(), response(url: Self.apiBase.appendingPathComponent("models/user"), status: 200))),
+            .success((chatResponse(content: goodContent), response(url: Self.chatEndpoint, status: 200))),
+        ])
+
+        _ = try await makeGenerator(transport: transport).generateSQL(
+            question: "repair the users query",
+            schema: makeSchema(),
+            context: SQLGenerationContext(
+                mode: .repair,
+                currentSQL: "SELECT missing FROM public.users",
+                lastRunError: "column missing does not exist",
+                repairContext: SQLRepairContext(
+                    failedSQL: "SELECT missing FROM public.users"
+                )
+            ),
+            config: SQLGenerationConfig()
+        )
+
+        let request = try #require(
+            transport.requests.first { $0.url?.path == "/api/v1/chat/completions" }
+        )
+        try expectPrivateRouting(in: request)
+    }
+
+    @Test func privateEndpointUnavailabilityFailsClosed() async throws {
+        let transport = StubTransport([
+            .success((catalogResponse(), response(url: Self.apiBase.appendingPathComponent("models/user"), status: 200))),
+            .success((
+                errorResponse(
+                    errorType: "provider_unavailable",
+                    message: "No private endpoint supports all required parameters."
+                ),
+                response(url: Self.chatEndpoint, status: 503)
+            )),
+        ])
+
+        do {
+            _ = try await makeGenerator(
+                transport: transport,
+                retryPolicy: OpenRouterRetryPolicy(maxAttempts: 1)
+            ).generateSQL(
+                question: "show users",
+                schema: makeSchema(),
+                config: SQLGenerationConfig()
+            )
+            Issue.record("expected provider availability failure")
+        } catch let failure as OpenRouterFailure {
+            #expect(failure.category == .providerUnavailable)
+        }
+
+        let chatRequests = transport.requests.filter { $0.url?.path == "/api/v1/chat/completions" }
+        #expect(chatRequests.count == 1)
+        try expectPrivateRouting(in: try #require(chatRequests.first))
     }
 
     @Test func retriesServerFailuresAndCountsAttempts() async throws {
@@ -881,12 +1246,12 @@ struct OpenRouterSQLGeneratorTests {
         #expect(!combined.contains("Database context"))
         #expect(!combined.contains("SQL history"))
         #expect(!combined.contains("public.users"))
+        try expectPrivateRouting(in: request)
     }
 
     @Test func connectivityMarksSingleLookupModelAvailableAfterSuccessfulTest() async throws {
         let model = "custom/model"
         let transport = StubTransport([
-            .success((catalogResponse(id: "openai/other"), response(url: Self.apiBase.appendingPathComponent("models/user"), status: 200))),
             .success((catalogResponse(id: "openai/other"), response(url: Self.apiBase.appendingPathComponent("models/user"), status: 200))),
             .success((singleModelResponse(id: model), response(url: Self.apiBase.appendingPathComponent("model/custom/model"), status: 200))),
             .success((chatResponse(content: goodContent), response(url: Self.chatEndpoint, status: 200))),
@@ -896,6 +1261,7 @@ struct OpenRouterSQLGeneratorTests {
         let result = await OpenRouterConnectivityCheck(
             apiKey: "test-key",
             model: model,
+            expectedCanonicalModelID: nil,
             catalogService: service,
             transport: transport,
             requestBuilder: OpenRouterRequestBuilder(endpoint: Self.chatEndpoint)
@@ -904,13 +1270,225 @@ struct OpenRouterSQLGeneratorTests {
         #expect(result.error == nil)
         #expect(result.selectedModelAvailable)
         #expect(result.capabilities.supportsMaxTokens)
+        // The shared lookup serves the model from one forced catalog fetch
+        // plus the single-model fallback; the old hand-rolled matcher fetched
+        // the catalog twice.
         #expect(
             transport.requests.map { $0.url?.path } == [
-                "/api/v1/models/user",
                 "/api/v1/models/user",
                 "/api/v1/model/custom/model",
                 "/api/v1/chat/completions",
             ]
+        )
+    }
+
+    @Test func connectivityCheckReportsCanonicalModelMismatch() async throws {
+        let expectedModelID = "openai/gpt-5.5-20260423"
+        let returnedModelID = "openai/gpt-5.5-unevaluated"
+        let transport = StubTransport([
+            .success((
+                catalogResponse(id: Self.modelID, canonicalID: expectedModelID),
+                response(url: Self.apiBase.appendingPathComponent("models/user"), status: 200)
+            )),
+            .success((
+                chatResponse(content: goodContent, model: returnedModelID),
+                response(url: Self.chatEndpoint, status: 200)
+            )),
+        ])
+        let service = catalogService(transport: transport)
+
+        let result = await OpenRouterConnectivityCheck(
+            apiKey: "test-key",
+            model: Self.modelID,
+            expectedCanonicalModelID: expectedModelID,
+            catalogService: service,
+            transport: transport,
+            requestBuilder: OpenRouterRequestBuilder(endpoint: Self.chatEndpoint)
+        ).run()
+
+        #expect(result.error?.category == .modelVersionMismatch)
+        #expect(result.returnedModelID == returnedModelID)
+        #expect(!result.selectedModelAvailable)
+    }
+
+    @Test func connectivityCheckAcceptsMatchingCanonicalModel() async throws {
+        let expectedModelID = "openai/gpt-5.5-20260423"
+        let transport = StubTransport([
+            .success((
+                catalogResponse(id: Self.modelID, canonicalID: expectedModelID),
+                response(url: Self.apiBase.appendingPathComponent("models/user"), status: 200)
+            )),
+            .success((
+                chatResponse(content: goodContent, model: expectedModelID),
+                response(url: Self.chatEndpoint, status: 200)
+            )),
+        ])
+        let service = catalogService(transport: transport)
+
+        let result = await OpenRouterConnectivityCheck(
+            apiKey: "test-key",
+            model: Self.modelID,
+            expectedCanonicalModelID: expectedModelID,
+            catalogService: service,
+            transport: transport,
+            requestBuilder: OpenRouterRequestBuilder(endpoint: Self.chatEndpoint)
+        ).run()
+
+        #expect(result.error == nil)
+        #expect(result.selectedModelAvailable)
+        #expect(result.returnedModelID == expectedModelID)
+    }
+
+    @Test func connectivityCheckRejectsCanonicalRolloverBeforeCompletionRequest() async throws {
+        let expectedModelID = "openai/gpt-5.5-20260423"
+        let returnedModelID = "openai/gpt-5.5-20260901"
+        let transport = StubTransport([
+            .success((
+                catalogResponse(id: Self.modelID, canonicalID: returnedModelID),
+                response(url: Self.apiBase.appendingPathComponent("models/user"), status: 200)
+            )),
+        ])
+        let service = catalogService(transport: transport)
+
+        let result = await OpenRouterConnectivityCheck(
+            apiKey: "test-key",
+            model: Self.modelID,
+            expectedCanonicalModelID: expectedModelID,
+            catalogService: service,
+            transport: transport,
+            requestBuilder: OpenRouterRequestBuilder(endpoint: Self.chatEndpoint)
+        ).run()
+
+        #expect(result.error?.category == .modelVersionMismatch)
+        #expect(result.returnedModelID == returnedModelID)
+        #expect(!result.selectedModelAvailable)
+        #expect(transport.requests.map { $0.url?.path } == ["/api/v1/models/user"])
+    }
+
+    @Test func missingReturnedModelFailsClosedAsVersionMismatch() async throws {
+        let expectedModelID = "openai/gpt-5.5-20260423"
+        let transport = StubTransport([
+            .success((
+                catalogResponse(id: Self.modelID, canonicalID: expectedModelID),
+                response(url: Self.apiBase.appendingPathComponent("models/user"), status: 200)
+            )),
+            .success((
+                chatResponse(content: goodContent, model: nil),
+                response(url: Self.chatEndpoint, status: 200)
+            )),
+        ])
+        let service = catalogService(transport: transport)
+
+        let result = await OpenRouterConnectivityCheck(
+            apiKey: "test-key",
+            model: Self.modelID,
+            expectedCanonicalModelID: expectedModelID,
+            catalogService: service,
+            transport: transport,
+            requestBuilder: OpenRouterRequestBuilder(endpoint: Self.chatEndpoint)
+        ).run()
+
+        #expect(result.error?.category == .modelVersionMismatch)
+        #expect(result.returnedModelID == nil)
+        #expect(result.error?.message.contains("did not report") == true)
+    }
+
+    @Test func preflightRejectsCanonicalRolloverBeforeCompletionRequest() async throws {
+        let transport = StubTransport([
+            .success((
+                catalogResponse(id: Self.modelID, canonicalID: "openai/gpt-5.5-20260901"),
+                response(url: Self.apiBase.appendingPathComponent("models/user"), status: 200)
+            )),
+        ])
+        let generator = OpenRouterSQLGenerator(
+            apiKey: "test-key",
+            model: Self.modelID,
+            expectedCanonicalModelID: "openai/gpt-5.5-20260423",
+            transport: transport,
+            catalogService: catalogService(transport: transport),
+            requestBuilder: OpenRouterRequestBuilder(endpoint: Self.chatEndpoint)
+        )
+
+        do {
+            _ = try await generator.generateSQL(
+                question: "show users",
+                schema: makeSchema(),
+                config: SQLGenerationConfig()
+            )
+            Issue.record("expected canonical rollover failure")
+        } catch let failure as OpenRouterFailure {
+            #expect(failure.category == .modelVersionMismatch)
+            #expect(failure.diagnostic.returnedModelID == "openai/gpt-5.5-20260901")
+            #expect(failure.diagnostic.attemptCount == 1)
+        }
+
+        // A network-fresh mismatch is authoritative: no recovery refetch and
+        // no billed completion request.
+        #expect(transport.requests.map { $0.url?.path } == ["/api/v1/models/user"])
+    }
+
+    @Test func preflightRecoversWhenStaleCacheHoldsPreviousCanonical() async throws {
+        let cacheURL = temporaryCacheURL()
+        let transport = StubTransport([
+            .success((
+                catalogResponse(id: Self.modelID, canonicalID: "openai/gpt-5.5-20260101"),
+                response(url: Self.apiBase.appendingPathComponent("models/user"), status: 200)
+            )),
+            .success((
+                catalogResponse(id: Self.modelID, canonicalID: "openai/gpt-5.5-20260423"),
+                response(url: Self.apiBase.appendingPathComponent("models/user"), status: 200)
+            )),
+            .success((
+                chatResponse(content: goodContent, model: "openai/gpt-5.5-20260423"),
+                response(url: Self.chatEndpoint, status: 200)
+            )),
+        ])
+        let service = catalogService(transport: transport, cacheURL: cacheURL, ttl: 60)
+        _ = try await service.availableModels(apiKey: "test-key", forceRefresh: true)
+
+        let generator = OpenRouterSQLGenerator(
+            apiKey: "test-key",
+            model: Self.modelID,
+            expectedCanonicalModelID: "openai/gpt-5.5-20260423",
+            transport: transport,
+            catalogService: service,
+            requestBuilder: OpenRouterRequestBuilder(endpoint: Self.chatEndpoint)
+        )
+
+        let result = try await generator.generateSQL(
+            question: "show users",
+            schema: makeSchema(),
+            config: SQLGenerationConfig()
+        )
+
+        #expect(result.sql == "SELECT id FROM public.users LIMIT 100")
+        #expect(
+            transport.requests.map { $0.url?.path } == [
+                "/api/v1/models/user",
+                "/api/v1/models/user",
+                "/api/v1/chat/completions",
+            ]
+        )
+    }
+
+    @Test func preflightDefersToPostResponseCheckWithoutPositiveMetadata() throws {
+        try OpenRouterCanonicalModelValidator.preflight(
+            catalogCanonicalModelID: "openai/gpt-5.5-20260901",
+            capabilitySource: .staleCache,
+            expectedCanonicalModelID: "openai/gpt-5.5-20260423",
+            requestedModelID: "openai/gpt-5.5"
+        )
+        try OpenRouterCanonicalModelValidator.preflight(
+            catalogCanonicalModelID: nil,
+            capabilitySource: .conservativeDefault,
+            expectedCanonicalModelID: "openai/gpt-5.5-20260423",
+            requestedModelID: "openai/gpt-5.5"
+        )
+        try OpenRouterCanonicalModelValidator.preflight(
+            catalogCanonicalModelID: "openai/gpt-5.5-20260423",
+            capabilitySource: .authenticatedCatalog,
+            expectedCanonicalModelID: "openai/gpt-5.5-20260423",
+            requestedModelID: "openai/gpt-5.5"
         )
     }
 
@@ -929,6 +1507,38 @@ struct OpenRouterSQLGeneratorTests {
                 question: "List users",
                 schema: makeSchema(),
                 context: SQLGenerationContext(),
+                config: SQLGenerationConfig()
+            )
+            Issue.record("Expected HTTP-attempt budget exhaustion.")
+        } catch let failure as OpenRouterHTTPAttemptBudgetExhausted {
+            #expect(failure.backendMetadata?.requestCount == 1)
+            #expect(transport.requests.map { $0.url?.path } == ["/api/v1/models/user"])
+        }
+    }
+
+    @Test func repairContextPriorAttemptsReduceCatalogAndChatBudget() async throws {
+        let transport = StubTransport([
+            .success(
+                (
+                    catalogResponse(),
+                    response(
+                        url: Self.apiBase.appendingPathComponent("models/user"),
+                        status: 200
+                    )
+                )
+            )
+        ])
+        let generator = makeGenerator(
+            transport: transport,
+            retryPolicy: OpenRouterRetryPolicy(maxAttempts: 3),
+            countCapabilityLookupHTTPAttempts: true
+        )
+
+        do {
+            _ = try await generator.generateSQL(
+                question: "Repair users query",
+                schema: makeSchema(),
+                context: SQLGenerationContext(mode: .repair, modelCallCount: 3),
                 config: SQLGenerationConfig()
             )
             Issue.record("Expected HTTP-attempt budget exhaustion.")
@@ -978,6 +1588,7 @@ struct OpenRouterSQLGeneratorTests {
         OpenRouterSQLGenerator(
             apiKey: "test-key",
             model: model,
+            expectedCanonicalModelID: nil,
             transport: transport,
             catalogService: catalogService(transport: transport),
             requestBuilder: OpenRouterRequestBuilder(endpoint: Self.chatEndpoint),
@@ -990,6 +1601,7 @@ struct OpenRouterSQLGeneratorTests {
         OpenRouterSQLGenerator(
             apiKey: "test-key",
             model: Self.modelID,
+            expectedCanonicalModelID: nil,
             transport: transport,
             catalogService: catalogService(transport: transport),
             requestBuilder: OpenRouterRequestBuilder(endpoint: Self.chatEndpoint)
@@ -1082,6 +1694,7 @@ struct OpenRouterSQLGeneratorTests {
 
     private func chatResponse(
         content: Any?,
+        model: String? = "openai/gpt-5.5",
         finishReason: String = "stop",
         refusal: String? = nil,
         choiceError: [String: Any]? = nil
@@ -1102,9 +1715,8 @@ struct OpenRouterSQLGeneratorTests {
         if let choiceError {
             choice["error"] = choiceError
         }
-        return jsonData([
+        var body: [String: Any] = [
             "id": "cmpl-1",
-            "model": "openai/gpt-5.5",
             "provider": "OpenAI",
             "service_tier": "standard",
             "choices": [choice],
@@ -1115,7 +1727,11 @@ struct OpenRouterSQLGeneratorTests {
                 "completion_tokens_details": ["reasoning_tokens": 3],
                 "cost": 0.00012,
             ],
-        ])
+        ]
+        if let model {
+            body["model"] = model
+        }
+        return jsonData(body)
     }
 
     private func topLevelErrorResponse(
@@ -1173,6 +1789,10 @@ struct OpenRouterSQLGeneratorTests {
         let bodyData = try #require(request.httpBody)
         let object = try JSONSerialization.jsonObject(with: bodyData)
         return try #require(object as? [String: Any])
+    }
+
+    private func expectPrivateRouting(in request: URLRequest) throws {
+        try OpenRouterTestSupport.expectPrivateRouting(inBody: jsonBody(request))
     }
 
     private func temporaryCacheURL() -> URL {

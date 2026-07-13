@@ -142,44 +142,11 @@ public final class AppState {
     }
     private static let cloudProviderKey = "WidenCloudAIProvider"
 
-    /// The OpenRouter model ID used for cloud generations.
-    public var openRouterModelID: String =
-        UserDefaults.standard.string(forKey: AppState.openRouterModelIDKey)
-        ?? OpenRouterCatalog.defaultModelID
-    {
-        didSet {
-            UserDefaults.standard.set(openRouterModelID, forKey: Self.openRouterModelIDKey)
-        }
-    }
     private static let openRouterModelIDKey = "WidenOpenRouterModelID"
-
-    /// OpenRouter's default generation path for connected database sessions.
-    /// It lets the model inspect bounded schema metadata through tools instead
-    /// of sending one large one-shot schema prompt.
-    public var openRouterSchemaToolAgentEnabled: Bool =
-        AppState.loadOpenRouterSchemaToolAgentEnabled()
-    {
-        didSet {
-            UserDefaults.standard.set(
-                openRouterSchemaToolAgentEnabled,
-                forKey: Self.openRouterSchemaToolAgentEnabledKey
-            )
-        }
-    }
     private static let openRouterSchemaToolAgentEnabledKey =
         "WidenOpenRouterSchemaToolAgentEnabled"
     private static let legacyExperimentalCloudSchemaAgentEnabledKey =
         "WidenExperimentalCloudSchemaAgentEnabled"
-
-    private static func loadOpenRouterSchemaToolAgentEnabled() -> Bool {
-        if UserDefaults.standard.object(forKey: openRouterSchemaToolAgentEnabledKey) != nil {
-            return UserDefaults.standard.bool(forKey: openRouterSchemaToolAgentEnabledKey)
-        }
-        if UserDefaults.standard.object(forKey: legacyExperimentalCloudSchemaAgentEnabledKey) != nil {
-            return UserDefaults.standard.bool(forKey: legacyExperimentalCloudSchemaAgentEnabledKey)
-        }
-        return true
-    }
 
     /// Test seam, mirrors `titleGeneratorOverride`: `.some(value)` replaces
     /// the Keychain lookup, including `.some(nil)` to force "no key stored".
@@ -206,9 +173,6 @@ public final class AppState {
         case .openRouter:
             guard let key = openRouterAPIKey, !key.isEmpty else {
                 return .notConfigured("Add an OpenRouter API key in Settings › LLM.")
-            }
-            guard !openRouterModelID.trimmingCharacters(in: .whitespaces).isEmpty else {
-                return .notConfigured("Choose an OpenRouter model in Settings › LLM.")
             }
             return .ready
         }
@@ -295,14 +259,15 @@ public final class AppState {
             switch cloudProvider {
             case .openRouter:
                 if let key = openRouterAPIKey, !key.isEmpty {
-                    if openRouterSchemaToolAgentEnabled,
-                        let connectionID,
+                    let profile = OpenRouterCatalog.productionProfile
+                    if let connectionID,
                         let schema
                     {
                         let selectedSchemas = selectedSchemaSet(from: schema)
                         return OpenRouterSchemaToolSQLAgent(
                             apiKey: key,
-                            model: openRouterModelID,
+                            model: profile.requestedModelID,
+                            expectedCanonicalModelID: profile.expectedCanonicalModelID,
                             connectionID: connectionID,
                             selectedSchemas: selectedSchemas,
                             databaseInspectionPolicy: generationConnection?.databaseInspectionPolicy(
@@ -318,7 +283,11 @@ public final class AppState {
                             )
                         )
                     }
-                    return OpenRouterSQLGenerator(apiKey: key, model: openRouterModelID)
+                    return OpenRouterSQLGenerator(
+                        apiKey: key,
+                        model: profile.requestedModelID,
+                        expectedCanonicalModelID: profile.expectedCanonicalModelID
+                    )
                 }
             case .applePCC:
                 if let generator = PCCSupport.makeGenerator() {
@@ -387,7 +356,7 @@ public final class AppState {
             case .applePCC:
                 return "Apple Private Cloud Compute"
             case .openRouter:
-                return "\(OpenRouterCatalog.displayName(for: openRouterModelID)) via OpenRouter"
+                return "\(OpenRouterCatalog.productionProfile.displayName) via OpenRouter"
             }
         }
         return "On-Device — Experimental"
@@ -506,6 +475,7 @@ public final class AppState {
     public func onLaunch() async {
         guard !didLaunch else { return }
         didLaunch = true
+        removeObsoleteOpenRouterPreferences()
         do {
             connections = try connectionStore.load()
         } catch {
@@ -535,6 +505,12 @@ public final class AppState {
             aiBackendMode = .cloud
         }
         checkLocalLLMEligibilityForInstallIfNeeded()
+    }
+
+    private func removeObsoleteOpenRouterPreferences() {
+        UserDefaults.standard.removeObject(forKey: Self.openRouterModelIDKey)
+        UserDefaults.standard.removeObject(forKey: Self.openRouterSchemaToolAgentEnabledKey)
+        UserDefaults.standard.removeObject(forKey: Self.legacyExperimentalCloudSchemaAgentEnabledKey)
     }
 
     public func checkLocalLLMEligibilityForInstallIfNeeded() {

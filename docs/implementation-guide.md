@@ -5,10 +5,12 @@ repository. It explains how the Widen MVP is implemented, how data moves
 through the app, where the safety boundaries are, and which files to change for
 common feature work.
 
-Widen is a native SwiftUI macOS app for asking questions of a local PostgreSQL
-database. It introspects the schema, asks Apple's on-device Foundation Model to
-draft one read-only PostgreSQL query, validates that SQL deterministically, runs
-it inside a read-only transaction, and shows the result table.
+Widen is a native SwiftUI macOS app for asking questions of a PostgreSQL
+database. It introspects the schema and defaults text-to-SQL to a fixed
+OpenRouter cloud profile. Eligible macOS 26+ Apple Silicon Macs can instead use
+Apple's on-device Foundation Model for an optional experimental Local mode.
+Widen validates generated SQL deterministically and shows it for review before
+anything runs.
 
 The key design rule is simple: the model is helpful but never trusted. Every
 query, whether generated or typed manually, passes through the same local
@@ -56,7 +58,7 @@ make run       # build and open Debug app
 make test      # unit tests, gated integration tests skipped
 make test-db   # unit + local PostgreSQL integration tests
 make test-fm   # unit + Foundation Models smoke test
-make eval-release MODEL=openai/gpt-5.5  # PR 12 release gate
+make eval-release  # PR 12 release gate; defaults to the pinned GPT-5.5 profile
 ```
 
 The app is ad-hoc signed for local development and App Sandbox is disabled in
@@ -472,17 +474,20 @@ There are five implementations:
 - `FoundationModelsSQLGenerator`: optional local generation using Apple's
   Foundation Models framework on eligible macOS 26+ Apple Silicon Macs.
 - `OpenRouterSQLGenerator`: cloud generation through OpenRouter's
-  OpenAI-compatible chat-completions API, with the user's API key and chosen
-  model (`OpenRouterCatalog` curates the picker; any custom ID works). Strict
-  JSON-schema output mirroring `GeneratedSQLResponse`, one retry without
-  `response_format` for models that reject it, and a 60,000-character schema
-  budget. HTTP goes through the injectable `HTTPTransport` seam so tests stub
-  the network.
+  OpenAI-compatible chat-completions API. In the product it is constructed only
+  from `OpenRouterCatalog.productionProfile`, which pins the requested GPT-5.5
+  alias and expected canonical version. A returned version mismatch fails with
+  a typed `modelVersionMismatch` error. Every completion requires parameter-
+  compatible zero-data-retention routing and denies provider data collection.
+  The legacy one-shot prompt remains an internal fallback when connection and
+  schema-tool context do not exist. HTTP goes through the injectable
+  `HTTPTransport` seam so low-level tests and evals can still use arbitrary
+  model IDs.
 - `OpenRouterSchemaToolSQLAgent`: the default OpenRouter path for connected
   sessions. It uses OpenRouter tool calls to inspect bounded schema metadata
   from host-controlled schema tools, then submits the final text-to-SQL result.
-  The legacy one-shot OpenRouter generator remains available when no
-  connection/schema context exists or when explicitly disabled.
+  Users cannot disable this path or select the one-shot generator. Every tool
+  turn enforces the product profile's expected canonical model version.
 - `PrivateCloudComputeSQLGenerator`: planned Apple cloud model support. It is
   compile-gated to the required Apple SDK and runtime-gated to the required OS;
   until that support is actually available, `PCCSupport` reports it as
@@ -493,15 +498,15 @@ There are five implementations:
 `AppState` picks the backend: mock wins, then the selected cloud provider when
 `aiBackendMode == .cloud` and `cloudBackendStatus == .ready`, or the local model
 only when `LocalLLMEligibility` is visible and ready. Fresh preferences default
-`aiBackendMode` to `.cloud`, `cloudProvider` to `.openRouter`,
-`openRouterModelID` to `openai/gpt-5.5`, and the OpenRouter schema-tool agent
-to enabled. Connected sessions call `AppState.sqlGenerator(connectionID:schema:)`
-so the default OpenRouter path is the same schema-tool agent exercised by
-`make eval-release`. An unusable selection returns `UnavailableSQLGenerator` so
-production never silently swaps to another backend. `modelAvailabilityMessage`
-explains the selected backend problem in the chat banner and Settings › LLM.
-Session titles use the on-device generator when available, otherwise the
-deterministic fallback.
+`aiBackendMode` to `.cloud` and `cloudProvider` to `.openRouter`. The OpenRouter
+model and connected-session agent path are not preferences: both come from the
+immutable production profile. Connected sessions call
+`AppState.sqlGenerator(connectionID:schema:)`, so the product path is the same
+schema-tool agent exercised by `make eval-release`. An unusable selection
+returns `UnavailableSQLGenerator` so production never silently swaps to another
+backend. `modelAvailabilityMessage` explains the selected backend problem in
+the chat banner and Settings › LLM. Session titles use the on-device generator
+when available, otherwise the deterministic fallback.
 
 Preferences and secrets:
 
@@ -509,13 +514,20 @@ Preferences and secrets:
 |---|---|---|
 | Backend mode (`local`/`cloud`) | UserDefaults | `WidenAIBackendMode` |
 | Cloud provider (`applePCC`/`openRouter`) | UserDefaults | `WidenCloudAIProvider` |
-| OpenRouter model ID | UserDefaults | `WidenOpenRouterModelID` |
-| OpenRouter schema-tool agent enabled | UserDefaults | `WidenOpenRouterSchemaToolAgentEnabled` |
 | OpenRouter API key | Keychain, service `Widen` | `openrouter-api-key` |
 
+At startup, `AppState` deletes the obsolete `WidenOpenRouterModelID`,
+`WidenOpenRouterSchemaToolAgentEnabled`, and
+`WidenExperimentalCloudSchemaAgentEnabled` keys. It does not delete or rewrite
+`WidenAIBackendMode`; a saved Local selection remains Local when the host is
+eligible.
+
 The UI surface is the Settings › LLM tab (`LLMSettingsView`) plus the
-`AIBackendToggle` toolbar segmented control, which chooses Cloud/Local when
-Local is visible and opens Settings › LLM when the cloud backend needs setup.
+`AIBackendToggle` toolbar segmented control. Settings shows read-only production
+model/version information, capability refresh and badges, API-key controls, and
+the canonical-version-aware model test; it has no custom model or agent-path
+selection. The toolbar chooses Cloud/Local when Local is visible and opens
+Settings › LLM when the cloud backend needs setup.
 Local is hidden on older or unsupported hosts, preserved when explicitly stored
 and eligible, and blocked through `AppState.requestAIBackendMode(_:)` when the
 host cannot run it. First launch does not show local-model compatibility alerts
@@ -897,12 +909,20 @@ Add per-session state:
 
 ## Invariants Future Work Should Preserve
 
-- The app remains local-only: no backend and no external LLM API calls.
+- The app is cloud-first for text-to-SQL, with no Widen-hosted backend and an
+  optional experimental Local generator on eligible Macs.
+- The OpenRouter product profile and connected-session schema-tool path are
+  fixed. Changing the requested or canonical model ID requires a new release
+  and release-gate evaluation.
+- OpenRouter completion requests require zero-data-retention endpoints, deny
+  provider data collection, and require all request parameters.
 - Passwords are never stored in `DatabaseConnectionConfig` or JSON files.
 - Query results are never persisted; `sessions.json` holds transcripts, SQL
   text, and generation metadata only.
 - A manual session rename is never overwritten by the auto-namer.
 - Generated SQL is never auto-executed.
+- No generated SQL bypasses safety validation, schema validation, PostgreSQL
+  verification when available, or manual Run.
 - Manual and generated SQL share the exact same validation and execution path.
 - Only `SELECT` or `WITH ... SELECT` statements can reach PostgreSQL.
 - Execution always uses `BEGIN READ ONLY`.

@@ -11,6 +11,11 @@ Widen's schema-tool agent. Widen has no hosted backend of its own; cloud
 requests go directly from your Mac to the provider you configure in
 Settings > LLM.
 
+The OpenRouter text-to-SQL profile is fixed to the evaluated GPT-5.5 alias and
+canonical version shipped with the app. Users cannot enter an arbitrary model
+ID or disable the connected-session schema-tool path. A model-version change
+requires a new app release and release-gate evaluation.
+
 Cloud mode sends the question and allowed schema metadata to the selected
 provider so it can draft SQL. Schema metadata includes table names, column
 names, comments, constraints, enum/check values, and foreign-key structure.
@@ -18,6 +23,12 @@ Prompt context can also include saved database context, recent conversation
 context, the current SQL being revised, and the last validation or database
 error being repaired. Those fields can include literals you typed and
 database-returned error details.
+
+For every OpenRouter completion, Widen requires zero-data-retention endpoints,
+denies provider data collection, and requires an endpoint that supports all
+request parameters. If no eligible private endpoint is available, generation
+fails instead of relaxing those requirements. OpenRouter catalog requests do
+not include question or schema context.
 
 Inspected data values are sent to a cloud provider only when cloud data
 inspection is explicitly enabled for that connection. Query result tables and

@@ -63,8 +63,8 @@ configure in Settings.
 
 | Mode | Schema/question | Query results | Notes |
 | --- | ---: | ---: | --- |
-| Cloud mode | Question and allowed schema metadata are sent to the provider you choose | Stays on your Mac unless cloud data inspection is enabled for that connection | Default text-to-SQL backend. Fresh installs use OpenRouter with the schema-tool agent and `openai/gpt-5.5` unless you choose another model. |
-| Local mode | Stays on your Mac | Stays on your Mac | Optional on eligible macOS 26+ Apple Silicon Macs with Apple Intelligence enabled. |
+| Cloud mode | Question and allowed schema metadata are sent to the provider you choose | Stays on your Mac unless cloud data inspection is enabled for that connection | Default text-to-SQL backend. Fresh installs use the fixed OpenRouter GPT-5.5 profile and schema-tool agent. OpenRouter requests require zero-data-retention endpoints and deny provider data collection. |
+| Local mode | Stays on your Mac | Stays on your Mac | Optional on eligible macOS 26+ Apple Silicon Macs with Apple Intelligence enabled. Best suited to narrow requests over simple databases. |
 
 Passwords and API keys live in the macOS Keychain, never on disk in plaintext.
 
@@ -101,8 +101,10 @@ query sessions, and turning questions into SQL:
 - PostgreSQL only.
 - Early MVP, not full DataGrip/TablePlus/Postico feature parity.
 - Cloud text-to-SQL requires your own provider setup. Widen defaults to
-  OpenRouter. Apple Private Cloud Compute support is planned when Apple's
-  required OS and SDK support is available.
+  OpenRouter with the fixed `openai/gpt-5.5` profile. Custom OpenRouter model
+  selection is not exposed; changing the evaluated model version requires a
+  new app release and release-gate evaluation. Apple Private Cloud Compute
+  support is planned when Apple's required OS and SDK support is available.
 - The optional local Foundation Model requires eligible macOS 26+ Apple Silicon
   hardware and has a small context window; very large schemas are truncated
   whole-table-at-a-time before prompting.
@@ -287,16 +289,19 @@ real `WIDEN_EVAL_OPENROUTER_API_KEY`, never from an all-unavailable run.
 Foundation Models cancellation is cooperative, so timed-out model work may
 continue in process until the framework returns.
 
-The PR 12 release gate is:
+The release gate defaults to the same pinned GPT-5.5 profile as the app:
 
 ```sh
-make eval-release MODEL=openai/gpt-5.5
+make eval-release
 ```
 
 It runs the 20-case suite three times against the same OpenRouter schema-tool
 path used by the default product experience, with seeded Postgres semantic
-grading. It writes the normal `.eval-results/` artifacts, writes
-`docs/evals/<version>.md`, and exits nonzero unless the release thresholds pass.
+grading. Engineering comparisons must opt in with
+`MODEL=<id> ALLOW_MODEL_OVERRIDE=1`; their gate and triage reports stay in the
+run directory rather than replacing committed release docs. A pinned gate
+writes the normal `.eval-results/` artifacts, writes `docs/evals/<version>.md`,
+and exits nonzero unless the release thresholds pass.
 Cloud/OpenRouter is the default text-to-SQL path, but text-to-SQL remains beta
 and should not be described as production-ready until that gate passes. Manual
 SQL editing, schema browsing, and normal database work remain supported

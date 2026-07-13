@@ -5,6 +5,27 @@ import WidenKit
 struct TextToSQLReleaseGateOutput {
     var summary: URL
     var evaluation: TextToSQLReleaseGateEvaluation
+    var committedDocIneligibility: TextToSQLReleaseGateModelPolicy.CommittedDocIneligibility?
+}
+
+extension EvalRun {
+    var committedDocIneligibility: TextToSQLReleaseGateModelPolicy.CommittedDocIneligibility? {
+        let backendIncludesCloud = manifest.backendMode == TextToSQLEvalBackend.cloud.rawValue
+            || manifest.backendMode == "both"
+            || backendSummaries[.cloud] != nil
+            || results.contains { $0.backend == .cloud }
+        let cloudEvaluatedResultCount = results.filter {
+            $0.backend == .cloud
+                && $0.metrics.backendAvailable
+                && $0.status.isCompletedEvaluation
+        }.count
+        return TextToSQLReleaseGateModelPolicy.committedDocIneligibility(
+            model: manifest.model,
+            expectedCanonicalModelID: manifest.expectedCanonicalModelID,
+            backendIncludesCloud: backendIncludesCloud,
+            cloudEvaluatedResultCount: cloudEvaluatedResultCount
+        )
+    }
 }
 
 enum TextToSQLReleaseGateReporter {
@@ -13,11 +34,24 @@ enum TextToSQLReleaseGateReporter {
         evalOutput: EvalOutputPaths,
         version: String
     ) throws -> TextToSQLReleaseGateOutput {
+        try TextToSQLReleaseArtifactVersionPolicy.validate(version)
         let evaluationInput = input(for: run)
         let evaluation = TextToSQLReleaseGate.evaluate(evaluationInput)
-        let directory = URL(fileURLWithPath: "docs/evals", isDirectory: true)
-        try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
-        let summary = directory.appendingPathComponent("\(version).md")
+        let committedDocIneligibility = run.committedDocIneligibility
+        let summary: URL
+        if committedDocIneligibility == nil {
+            let directory = URL(fileURLWithPath: "docs/evals", isDirectory: true)
+            try FileManager.default.createDirectory(
+                at: directory,
+                withIntermediateDirectories: true
+            )
+            summary = directory.appendingPathComponent("\(version).md")
+        } else {
+            // Engineering comparison runs keep their gate summary in the run
+            // directory so the committed pinned-model record cannot be
+            // overwritten, even with the model override enabled.
+            summary = evalOutput.directory.appendingPathComponent("release-gate-\(version).md")
+        }
         try markdown(
             run: run,
             evalOutput: evalOutput,
@@ -26,7 +60,11 @@ enum TextToSQLReleaseGateReporter {
             evaluation: evaluation
         )
         .write(to: summary, atomically: true, encoding: .utf8)
-        return TextToSQLReleaseGateOutput(summary: summary, evaluation: evaluation)
+        return TextToSQLReleaseGateOutput(
+            summary: summary,
+            evaluation: evaluation,
+            committedDocIneligibility: committedDocIneligibility
+        )
     }
 
     static func input(for run: EvalRun) -> TextToSQLReleaseGateInput {
@@ -103,6 +141,7 @@ enum TextToSQLReleaseGateReporter {
             "| Schema agent clarification correction | \(tableCell(run.manifest.schemaAgentClarificationCorrectionMode ?? "-")) |",
             "| Schema agent intent coverage | \(tableCell(run.manifest.schemaAgentIntentCoverageMode ?? "-")) |",
             "| Model | \(tableCell(run.manifest.model ?? "-")) |",
+            "| Expected canonical model | \(tableCell(run.manifest.expectedCanonicalModelID ?? "-")) |",
             "| Repeats | \(run.manifest.repeatCount) |",
             "| Results | \(input.totalResults) |",
             "| Complete | \(input.completedResults == input.expectedResults ? "Yes" : "No") |",
@@ -282,6 +321,7 @@ enum TextToSQLReleaseGateReporter {
 struct TextToSQLReleaseTriageOutput {
     var triage: URL
     var copiedSummary: URL?
+    var committedDocIneligibility: TextToSQLReleaseGateModelPolicy.CommittedDocIneligibility?
 }
 
 enum TextToSQLReleaseTriageCategory: String, CaseIterable {
@@ -317,19 +357,40 @@ enum TextToSQLReleaseTriageReporter {
         let markdown = triageMarkdown(run: run, casesByID: casesByID)
         let triage = evalOutput.directory.appendingPathComponent("triage.md")
         try markdown.write(to: triage, atomically: true, encoding: .utf8)
-        let copied = try copySummaryIfNeeded(markdown: markdown, version: copyVersion)
-        return TextToSQLReleaseTriageOutput(triage: triage, copiedSummary: copied)
+        let committedDocIneligibility = run.committedDocIneligibility
+        let copied = try copySummaryIfNeeded(
+            markdown: markdown,
+            version: committedDocIneligibility == nil ? copyVersion : nil
+        )
+        return TextToSQLReleaseTriageOutput(
+            triage: triage,
+            copiedSummary: copied,
+            committedDocIneligibility: committedDocIneligibility
+        )
     }
 
     static func writeExisting(
         runJSONPath: String,
-        copyVersion: String?
+        copyVersion: String?,
+        allowModelOverride: Bool
     ) throws -> TextToSQLReleaseTriageOutput {
         let runURL = URL(fileURLWithPath: runJSONPath).standardizedFileURL
         let directory = runURL.deletingLastPathComponent()
         let runFile = try JSONDecoder().decode(
             ReleaseTriageRunFile.self,
             from: Data(contentsOf: runURL)
+        )
+        // Offline re-triage publishes committed docs too, so it enforces the
+        // same pinned-model policy as evaluated runs — and even with the
+        // override, a non-pinned run never replaces the committed copy.
+        let backendIncludesCloud = runFile.manifest.backendMode == "cloud"
+            || runFile.manifest.backendMode == "both"
+        try TextToSQLReleaseGateModelPolicy.validate(
+            model: runFile.manifest.model,
+            backendIncludesCloud: backendIncludesCloud,
+            releaseGateVersion: nil,
+            releaseTriageVersion: copyVersion,
+            allowModelOverride: allowModelOverride
         )
         let results = try readCasesJSONL(
             directory.appendingPathComponent("cases.jsonl")
@@ -349,8 +410,16 @@ enum TextToSQLReleaseTriageReporter {
         let markdown = triageMarkdown(run: run, casesByID: casesByID)
         let triage = directory.appendingPathComponent("triage.md")
         try markdown.write(to: triage, atomically: true, encoding: .utf8)
-        let copied = try copySummaryIfNeeded(markdown: markdown, version: copyVersion)
-        return TextToSQLReleaseTriageOutput(triage: triage, copiedSummary: copied)
+        let committedDocIneligibility = run.committedDocIneligibility
+        let copied = try copySummaryIfNeeded(
+            markdown: markdown,
+            version: committedDocIneligibility == nil ? copyVersion : nil
+        )
+        return TextToSQLReleaseTriageOutput(
+            triage: triage,
+            copiedSummary: copied,
+            committedDocIneligibility: committedDocIneligibility
+        )
     }
 
     private static func triageMarkdown(
@@ -388,6 +457,7 @@ enum TextToSQLReleaseTriageReporter {
             "| Schema agent clarification correction | \(tableCell(run.manifest.schemaAgentClarificationCorrectionMode ?? "-")) |",
             "| Schema agent intent coverage | \(tableCell(run.manifest.schemaAgentIntentCoverageMode ?? "-")) |",
             "| Model | \(tableCell(run.manifest.model ?? "-")) |",
+            "| Expected canonical model | \(tableCell(run.manifest.expectedCanonicalModelID ?? "-")) |",
             "| Results | \(run.results.count) |",
             "| Complete | \(completeness.isComplete ? "Yes" : "No") |",
             "| Expected results | \(completeness.expectedResultCount) |",
@@ -523,7 +593,7 @@ enum TextToSQLReleaseTriageReporter {
                 )
             } else if let result = resultByKey[key] {
                 lines.append(
-                    "| \(tableCell(key.caseID)) | \(tableCell(key.backend.rawValue)) | \(key.repeatIndex) | Not evaluated | \(tableCell(result.status.rawValue)) | \(tableCell(result.metrics.semanticStatus?.rawValue ?? "-")) | Not evaluated | - | - | - | \(tableCell(result.diagnostics.errorMessage ?? result.status.notEvaluatedReason?.rawValue ?? "-")) |"
+                    "| \(tableCell(key.caseID)) | \(tableCell(key.backend.rawValue)) | \(key.repeatIndex) | Not evaluated | \(tableCell(result.status.rawValue)) | \(tableCell(result.metrics.semanticStatus?.rawValue ?? "-")) | Not evaluated | - | - | - | \(tableCell(result.diagnostics.errorMessage.map(Self.redactedProviderMessage) ?? result.status.notEvaluatedReason?.rawValue ?? "-")) |"
                 )
             } else {
                 lines.append(
@@ -902,6 +972,7 @@ enum TextToSQLReleaseTriageReporter {
 
     private static func copySummaryIfNeeded(markdown: String, version: String?) throws -> URL? {
         guard let version else { return nil }
+        try TextToSQLReleaseArtifactVersionPolicy.validate(version)
         let directory = URL(fileURLWithPath: "docs/evals", isDirectory: true)
         try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
         let url = directory.appendingPathComponent("\(version)-triage.md")
@@ -922,6 +993,10 @@ enum TextToSQLReleaseTriageReporter {
             .replacingOccurrences(of: "\r", with: " ")
             .replacingOccurrences(of: "|", with: "\\|")
             .trimmingCharacters(in: .whitespacesAndNewlines)
+    }
+
+    private static func redactedProviderMessage(_ message: String) -> String {
+        EvalReportRedaction.redactedProviderMessage(message)
     }
 }
 

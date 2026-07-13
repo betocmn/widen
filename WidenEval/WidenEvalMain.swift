@@ -21,11 +21,18 @@ enum WidenEvalMain {
             if let releaseTriageInputPath = options.releaseTriageInputPath {
                 let triageOutput = try TextToSQLReleaseTriageReporter.writeExisting(
                     runJSONPath: releaseTriageInputPath,
-                    copyVersion: options.releaseTriageVersion
+                    copyVersion: options.releaseTriageVersion,
+                    allowModelOverride: options.allowModelOverride
                 )
                 print("Release gate triage: \(triageOutput.triage.path)")
                 if let copied = triageOutput.copiedSummary {
                     print("Copied sanitized triage summary: \(copied.path)")
+                } else if options.releaseTriageVersion != nil,
+                    let reason = triageOutput.committedDocIneligibility
+                {
+                    print(
+                        "Skipped committed triage copy: \(reason.description)."
+                    )
                 }
                 return
             }
@@ -96,6 +103,11 @@ enum WidenEvalMain {
                     version: releaseGateVersion
                 )
                 print("Release gate summary: \(gateOutput.summary.path)")
+                if let reason = gateOutput.committedDocIneligibility {
+                    print(
+                        "Committed release-gate doc skipped: \(reason.description)."
+                    )
+                }
                 if options.writeReleaseTriage {
                     let triageOutput = try TextToSQLReleaseTriageReporter.write(
                         run: run,
@@ -106,6 +118,10 @@ enum WidenEvalMain {
                     print("Release gate triage: \(triageOutput.triage.path)")
                     if let copied = triageOutput.copiedSummary {
                         print("Copied sanitized triage summary: \(copied.path)")
+                    } else if options.releaseTriageVersion != nil,
+                        let reason = triageOutput.committedDocIneligibility
+                    {
+                        print("Skipped committed triage copy: \(reason.description).")
                     }
                 }
                 if !gateOutput.evaluation.passed {
@@ -125,6 +141,10 @@ enum WidenEvalMain {
                 print("Release gate triage: \(triageOutput.triage.path)")
                 if let copied = triageOutput.copiedSummary {
                     print("Copied sanitized triage summary: \(copied.path)")
+                } else if options.releaseTriageVersion != nil,
+                    let reason = triageOutput.committedDocIneligibility
+                {
+                    print("Skipped committed triage copy: \(reason.description).")
                 }
             }
 
@@ -200,7 +220,7 @@ struct EvalCLIOptions {
     var schemaAgentClarificationCorrectionMode: SchemaToolAgentClarificationCorrectionMode =
         .diagnosticsOnly
     var schemaAgentIntentCoverageMode: SchemaToolAgentIntentCoverageMode = .diagnosticsOnly
-    var model: String = "openai/gpt-5.5"
+    var model: String = OpenRouterCatalog.productionProfile.requestedModelID
     var suitePath: String = "Evals/suites/text-to-sql-v1.json"
     var caseID: String?
     var caseIDs: [String] = []
@@ -216,6 +236,7 @@ struct EvalCLIOptions {
     var inspectionTools = false
     var releaseTriageInputPath: String?
     var writeReleaseTriage = false
+    var allowModelOverride = false
     var releaseTriageVersion: String?
     var resumeRunPath: String?
     var resumeMissing = false
@@ -248,6 +269,7 @@ struct EvalCLIOptions {
           --triage-release <run.json path>
           --write-release-triage
           --release-triage-version <version>
+          --allow-model-override
           --resume-run <path-to-run-directory-or-run.json>
           --resume-missing
           --resume-failed
@@ -347,6 +369,8 @@ struct EvalCLIOptions {
                 options.releaseTriageInputPath = try nextValue(after: argument)
             case "--write-release-triage":
                 options.writeReleaseTriage = true
+            case "--allow-model-override":
+                options.allowModelOverride = true
             case "--release-triage-version":
                 options.releaseTriageVersion = try nextValue(after: argument)
             case "--resume-run":
@@ -414,6 +438,12 @@ struct EvalCLIOptions {
         {
             throw EvalCLIError.resumeSelectionWithoutRun
         }
+        if options.releaseTriageVersion != nil,
+            options.releaseTriageInputPath == nil,
+            !options.writeReleaseTriage
+        {
+            throw EvalCLIError.releaseTriageVersionWithoutOutput
+        }
         return options
     }
 
@@ -457,6 +487,7 @@ enum EvalCLIError: LocalizedError {
     case invalidValue(String, String)
     case unknownArgument(String)
     case resumeSelectionWithoutRun
+    case releaseTriageVersionWithoutOutput
 
     var errorDescription: String? {
         switch self {
@@ -468,6 +499,8 @@ enum EvalCLIError: LocalizedError {
             "Unknown argument: \(argument)."
         case .resumeSelectionWithoutRun:
             "Resume selection flags require --resume-run."
+        case .releaseTriageVersionWithoutOutput:
+            "--release-triage-version requires --write-release-triage or --triage-release."
         }
     }
 }

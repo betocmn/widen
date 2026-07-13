@@ -244,6 +244,7 @@ struct TextToSQLPipelineTests {
         needsClarification: Bool = false,
         clarificationQuestion: String? = nil,
         generationCallCount: Int? = nil,
+        backendMetadata: OpenRouterGenerationMetadata? = nil,
         schemaToolCalls: [SchemaToolCallTrace] = [],
         inspectionToolCalls: [DatabaseInspectionToolCallTrace] = []
     ) -> SQLGenerationResult {
@@ -257,8 +258,35 @@ struct TextToSQLPipelineTests {
             needsClarification: needsClarification,
             clarificationQuestion: clarificationQuestion,
             generationCallCount: generationCallCount,
+            backendMetadata: backendMetadata,
             schemaToolCalls: schemaToolCalls,
             inspectionToolCalls: inspectionToolCalls
+        )
+    }
+
+    private func backendMetadata(
+        costUSD: Double,
+        totalTokens: Int,
+        requestCount: Int = 1,
+        retryCount: Int = 0
+    ) -> OpenRouterGenerationMetadata {
+        OpenRouterGenerationMetadata(
+            requestedModelID: "test/model",
+            returnedModelID: "test/model-version",
+            providerName: "TestProvider",
+            completionID: "completion-\(totalTokens)",
+            requestID: "request-\(totalTokens)",
+            structuredOutputMode: .promptOnlyJSON,
+            requestCount: requestCount,
+            retryCount: retryCount,
+            promptTokens: totalTokens / 2,
+            completionTokens: totalTokens - (totalTokens / 2),
+            reasoningTokens: nil,
+            totalTokens: totalTokens,
+            costUSD: costUSD,
+            serviceTier: nil,
+            finishReason: "stop",
+            nativeFinishReason: nil
         )
     }
 
@@ -384,8 +412,18 @@ struct TextToSQLPipelineTests {
         let originalSQL = "SELECT id FROM public.users LIMIT 100"
         let repairedSQL = #"SELECT "createdAt" FROM public.users LIMIT 100"#
         let generator = ScriptedGenerator([
-            .success(generation(sql: originalSQL)),
-            .success(generation(sql: repairedSQL)),
+            .success(
+                generation(
+                    sql: originalSQL,
+                    backendMetadata: backendMetadata(costUSD: 0.01, totalTokens: 10)
+                )
+            ),
+            .success(
+                generation(
+                    sql: repairedSQL,
+                    backendMetadata: backendMetadata(costUSD: 0.02, totalTokens: 20)
+                )
+            ),
         ])
         let verifier = ScriptedVerifier([
             .success(
@@ -409,6 +447,8 @@ struct TextToSQLPipelineTests {
             return
         }
         #expect(generation.sql == repairedSQL)
+        #expect(generation.backendMetadata?.totalTokens == 30)
+        #expect(abs((generation.backendMetadata?.costUSD ?? 0) - 0.03) < 0.000_001)
         #expect(generator.contexts.count == 2)
         #expect(generator.contexts[1].mode == .repair)
         #expect(verifier.requests.map(\.sql) == [originalSQL, repairedSQL])
@@ -462,7 +502,14 @@ struct TextToSQLPipelineTests {
 
     @Test func postgresPermissionFailureDoesNotRepair() async throws {
         let sql = "SELECT id FROM public.users LIMIT 100"
-        let generator = ScriptedGenerator([.success(generation(sql: sql))])
+        let generator = ScriptedGenerator([
+            .success(
+                generation(
+                    sql: sql,
+                    backendMetadata: backendMetadata(costUSD: 0.01, totalTokens: 10)
+                )
+            )
+        ])
         let verifier = ScriptedVerifier([
             .success(
                 verificationFailure(
@@ -486,6 +533,8 @@ struct TextToSQLPipelineTests {
         #expect(failure.stage == .postgresVerification)
         #expect(failure.category == .postgresVerification)
         #expect(failure.databaseDiagnostic?.kind == .insufficientPrivilege)
+        #expect(failure.backendMetadata?.totalTokens == 10)
+        #expect(failure.backendMetadata?.costUSD == 0.01)
         #expect(generator.contexts.count == 1)
         #expect(verifier.requests.count == 1)
         #expect(!result.events.map(\.kind).contains(.postgresVerificationRepairStarted))
@@ -1110,9 +1159,24 @@ struct TextToSQLPipelineTests {
 
     @Test func repairThatRemainsInvalidReturnsSchemaFailure() async throws {
         let generator = ScriptedGenerator([
-            .success(generation(sql: "SELECT missing FROM public.users")),
-            .success(generation(sql: "SELECT absent FROM public.users")),
-            .success(generation(sql: "SELECT nope FROM public.users")),
+            .success(
+                generation(
+                    sql: "SELECT missing FROM public.users",
+                    backendMetadata: backendMetadata(costUSD: 0.01, totalTokens: 10)
+                )
+            ),
+            .success(
+                generation(
+                    sql: "SELECT absent FROM public.users",
+                    backendMetadata: backendMetadata(costUSD: 0.02, totalTokens: 20)
+                )
+            ),
+            .success(
+                generation(
+                    sql: "SELECT nope FROM public.users",
+                    backendMetadata: backendMetadata(costUSD: 0.03, totalTokens: 30)
+                )
+            ),
         ])
 
         let result = try await run(generator)
@@ -1122,6 +1186,8 @@ struct TextToSQLPipelineTests {
             return
         }
         #expect(failure.category == .schemaValidation)
+        #expect(failure.backendMetadata?.totalTokens == 60)
+        #expect(abs((failure.backendMetadata?.costUSD ?? 0) - 0.06) < 0.000_001)
         #expect(failure.message.contains("still failed validation"))
         #expect(failure.message.contains("I did not show the rejected SQL"))
         #expect(!failure.message.contains("rejected SQL and repair attempts are shown above"))
@@ -1129,8 +1195,26 @@ struct TextToSQLPipelineTests {
 
     @Test func repairGeneratorFailureReturnsFailedDecision() async throws {
         let generator = ScriptedGenerator([
-            .success(generation(sql: "SELECT missing FROM public.users")),
-            .failure(SQLGenerationFailure.transport("Network failed.")),
+            .success(
+                generation(
+                    sql: "SELECT missing FROM public.users",
+                    backendMetadata: backendMetadata(costUSD: 0.01, totalTokens: 10)
+                )
+            ),
+            .failure(
+                OpenRouterFailure(
+                    category: .providerUnavailable,
+                    message: "Provider failed after billing the request.",
+                    requestedModelID: "test/model",
+                    returnedModelID: "test/model-version",
+                    providerName: "TestProvider",
+                    promptTokens: 10,
+                    completionTokens: 10,
+                    totalTokens: 20,
+                    costUSD: 0.02,
+                    attemptCount: 1
+                )
+            ),
         ])
 
         let result = try await run(generator)
@@ -1141,6 +1225,8 @@ struct TextToSQLPipelineTests {
         }
         #expect(failure.stage == .validationRepair)
         #expect(failure.category == .transport)
+        #expect(failure.backendMetadata?.totalTokens == 30)
+        #expect(abs((failure.backendMetadata?.costUSD ?? 0) - 0.03) < 0.000_001)
         #expect(generator.contexts.count == 2)
         #expect(result.trace.modelCalls == 2)
     }
@@ -1200,8 +1286,18 @@ struct TextToSQLPipelineTests {
         let fixedSQL = "SELECT id FROM public.users LIMIT 100"
         let collector = EventCollector()
         let generator = ScriptedGenerator([
-            .success(generation(sql: badSQL)),
-            .success(generation(sql: fixedSQL)),
+            .success(
+                generation(
+                    sql: badSQL,
+                    backendMetadata: backendMetadata(costUSD: 0.01, totalTokens: 10)
+                )
+            ),
+            .success(
+                generation(
+                    sql: fixedSQL,
+                    backendMetadata: backendMetadata(costUSD: 0.02, totalTokens: 20)
+                )
+            ),
         ])
 
         let result = try await TextToSQLPipeline(generator: generator).run(
@@ -1220,6 +1316,8 @@ struct TextToSQLPipelineTests {
             return
         }
         #expect(generation.sql == fixedSQL)
+        #expect(generation.backendMetadata?.totalTokens == 30)
+        #expect(abs((generation.backendMetadata?.costUSD ?? 0) - 0.03) < 0.000_001)
         #expect(result.events.map(\.kind) == [
             .validationFailed,
             .validationRepairStarted,

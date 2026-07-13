@@ -53,9 +53,12 @@ struct GeneralSettingsView: View {
 
     private var privacyCopy: String {
         if appState.aiBackendMode == .cloud {
-            "With Cloud selected, Widen sends your question and allowed schema metadata to the provider selected in Settings › LLM. Inspected data values are sent only when cloud data inspection is enabled for that connection. Query results never leave your Mac unless you explicitly inspect and allow those values. Widen has no backend of its own."
+            if appState.cloudProvider == .openRouter {
+                return "With OpenRouter Cloud selected, Widen sends your question and allowed schema metadata to OpenRouter. \(OpenRouterCatalog.privateRoutingClaim) Inspected data values are sent only when cloud data inspection is enabled for that connection. Query results never leave your Mac unless you explicitly inspect and allow those values. Widen has no backend of its own."
+            }
+            return "With Cloud selected, Widen sends your question and allowed schema metadata to the provider selected in Settings › LLM. Inspected data values are sent only when cloud data inspection is enabled for that connection. Query results never leave your Mac unless you explicitly inspect and allow those values. Widen has no backend of its own."
         } else {
-            "With Local selected, Widen sends prompts to Apple's local Foundation Model through macOS. It does not send your database schema, questions, or query results to our servers. Widen has no backend of its own."
+            return "With Local selected, Widen sends prompts to Apple's local Foundation Model through macOS. It does not send your database schema, questions, or query results to our servers. Widen has no backend of its own."
         }
     }
 }

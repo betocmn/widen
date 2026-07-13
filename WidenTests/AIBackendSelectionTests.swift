@@ -80,7 +80,13 @@ struct AIBackendSelectionTests {
         state.openRouterAPIKeyOverride = .some("sk-test")
 
         #expect(state.cloudBackendStatus == .ready)
-        #expect(state.sqlGenerator is OpenRouterSQLGenerator)
+        let generator = state.sqlGenerator as? OpenRouterSQLGenerator
+        #expect(generator != nil)
+        #expect(generator?.model == OpenRouterCatalog.productionProfile.requestedModelID)
+        #expect(
+            generator?.expectedCanonicalModelID
+                == OpenRouterCatalog.productionProfile.expectedCanonicalModelID
+        )
         #expect(state.activeBackendDisplayName.contains("via OpenRouter"))
         #expect(state.modelAvailabilityMessage == nil)
     }
@@ -103,12 +109,18 @@ struct AIBackendSelectionTests {
             )
         )
 
-        #expect(state.openRouterSchemaToolAgentEnabled)
-        #expect(generator is OpenRouterSchemaToolSQLAgent)
+        let agent = generator as? OpenRouterSchemaToolSQLAgent
+        #expect(agent != nil)
+        #expect(agent?.model == OpenRouterCatalog.productionProfile.requestedModelID)
+        #expect(
+            agent?.expectedCanonicalModelID
+                == OpenRouterCatalog.productionProfile.expectedCanonicalModelID
+        )
     }
 
-    @Test func explicitSchemaToolAgentOptOutUsesLegacyOpenRouterGenerator() {
+    @Test func legacyModelAndAgentPreferencesCannotChangeRuntimeProfile() {
         clearDefaults()
+        UserDefaults.standard.set("custom/model-id", forKey: "WidenOpenRouterModelID")
         UserDefaults.standard.set(false, forKey: "WidenOpenRouterSchemaToolAgentEnabled")
         let (state, dir) = makeState()
         defer { cleanUp(dir) }
@@ -126,8 +138,13 @@ struct AIBackendSelectionTests {
             )
         )
 
-        #expect(!state.openRouterSchemaToolAgentEnabled)
-        #expect(generator is OpenRouterSQLGenerator)
+        let agent = generator as? OpenRouterSchemaToolSQLAgent
+        #expect(agent != nil)
+        #expect(agent?.model == OpenRouterCatalog.productionProfile.requestedModelID)
+        #expect(
+            agent?.expectedCanonicalModelID
+                == OpenRouterCatalog.productionProfile.expectedCanonicalModelID
+        )
     }
 
     @Test func connectionCloudSchemaMetadataOptOutBlocksCloudGeneration() {
@@ -292,8 +309,11 @@ struct AIBackendSelectionTests {
         #expect(state.aiBackendMode == .cloud)
         #expect(state.activeBackendDisplayName.contains("via OpenRouter"))
         #expect(state.cloudProvider == .openRouter)
-        #expect(state.openRouterModelID == "openai/gpt-5.5")
-        #expect(state.openRouterSchemaToolAgentEnabled)
+        #expect(OpenRouterCatalog.productionProfile.requestedModelID == "openai/gpt-5.5")
+        #expect(
+            OpenRouterCatalog.productionProfile.expectedCanonicalModelID
+                == "openai/gpt-5.5-20260423"
+        )
     }
 
     @Test func firstLaunchWithCloudDefaultDoesNotShowLocalCompatibilityAlert() async {
@@ -416,30 +436,51 @@ struct AIBackendSelectionTests {
         #expect(state.cloudProvider == .openRouter)
     }
 
-    @Test func legacyExperimentalSchemaAgentPreferenceIsPreserved() {
+    @Test func launchRemovesObsoleteOpenRouterPreferences() async {
         clearDefaults()
+        UserDefaults.standard.set("custom/model-id", forKey: "WidenOpenRouterModelID")
+        UserDefaults.standard.set(false, forKey: "WidenOpenRouterSchemaToolAgentEnabled")
         UserDefaults.standard.set(false, forKey: "WidenExperimentalCloudSchemaAgentEnabled")
         let (state, dir) = makeState()
         defer { cleanUp(dir) }
 
-        #expect(!state.openRouterSchemaToolAgentEnabled)
+        await state.onLaunch()
+
+        #expect(UserDefaults.standard.object(forKey: "WidenOpenRouterModelID") == nil)
+        #expect(UserDefaults.standard.object(forKey: "WidenOpenRouterSchemaToolAgentEnabled") == nil)
+        #expect(UserDefaults.standard.object(forKey: "WidenExperimentalCloudSchemaAgentEnabled") == nil)
     }
 
-    @Test func backendPreferencesPersistAcrossStates() {
+    @Test func supportedBackendPreferencesPersistAcrossStates() {
         clearDefaults()
         let (state, dir) = makeState()
         defer { cleanUp(dir) }
 
         state.aiBackendMode = .cloud
         state.cloudProvider = .openRouter
-        state.openRouterModelID = "custom/model-id"
-        state.openRouterSchemaToolAgentEnabled = false
 
         let (reloaded, dir2) = makeState()
         defer { try? FileManager.default.removeItem(at: dir2) }
         #expect(reloaded.aiBackendMode == .cloud)
         #expect(reloaded.cloudProvider == .openRouter)
-        #expect(reloaded.openRouterModelID == "custom/model-id")
-        #expect(!reloaded.openRouterSchemaToolAgentEnabled)
+    }
+
+    @Test func cloudLocalCloudSwitchKeepsBothEligiblePathsAvailable() {
+        clearDefaults()
+        let (state, dir) = makeState()
+        defer { cleanUp(dir) }
+
+        state.aiBackendMode = .cloud
+        state.cloudProvider = .openRouter
+        state.openRouterAPIKeyOverride = .some("sk-test")
+        state.localLLMEligibilityOverride = .ready
+
+        #expect(state.sqlGenerator is OpenRouterSQLGenerator)
+        #expect(state.requestAIBackendMode(.local))
+        #expect(state.aiBackendMode == .local)
+        #expect(!(state.sqlGenerator is UnavailableSQLGenerator))
+        #expect(state.requestAIBackendMode(.cloud))
+        #expect(state.aiBackendMode == .cloud)
+        #expect(state.sqlGenerator is OpenRouterSQLGenerator)
     }
 }

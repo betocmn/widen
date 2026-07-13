@@ -96,6 +96,28 @@ struct TextToSQLEvalRunPlanningTests {
         }
     }
 
+    @Test func compatibilityRejectsChangedOrMissingExpectedCanonicalModel() {
+        let current = Self.compatibility()
+        var changed = current
+        changed.expectedCanonicalModelID = "openai/gpt-5.5-unevaluated"
+        var legacy = current
+        legacy.expectedCanonicalModelID = nil
+
+        for (previous, resumed) in [(current, changed), (legacy, current)] {
+            do {
+                try TextToSQLEvalResumeCompatibility.validate(
+                    previous: previous,
+                    current: resumed
+                )
+                Issue.record("Expected compatibility rejection.")
+            } catch let error as TextToSQLEvalResumeCompatibilityError {
+                #expect(error.issues.map(\.field) == ["expected canonical model"])
+            } catch {
+                Issue.record("Unexpected error: \(error)")
+            }
+        }
+    }
+
     @Test func compatibilityDefaultsMissingSchemaAgentModesToDiagnosticsOnly() throws {
         let previous = Self.compatibility()
         var current = Self.compatibility()
@@ -245,6 +267,26 @@ struct TextToSQLEvalRunPlanningTests {
         #expect(state.stopReasonBeforeNextResult(backend: .cloud) == "Eval completed-result budget reached (2/2).")
     }
 
+    @Test func cloudCostBudgetIncludesCostsStoredOnFailedResults() {
+        let failed = Self.result(
+            caseID: "case.a",
+            repeatIndex: 1,
+            status: .parseFailure,
+            estimatedCloudCostUSD: 0.75
+        )
+
+        let state = TextToSQLEvalBudgetState(
+            limits: TextToSQLEvalBudgetLimits(maxCloudCostUSD: Decimal(string: "0.75")),
+            seedResults: [failed]
+        )
+
+        #expect(state.cloudCostUSD == Decimal(string: "0.75"))
+        #expect(
+            state.stopReasonBeforeNextResult(backend: .cloud)
+                == "Eval estimated cloud-cost budget reached ($0.75/$0.75)."
+        )
+    }
+
     @Test func httpBudgetStopsOnlyCloudAndReportsRemainingAttempts() {
         let reused = [
             Self.result(
@@ -351,7 +393,7 @@ struct TextToSQLEvalRunPlanningTests {
         #expect(!evalText.contains(#"query plan: \(queryPlan)"#))
     }
 
-    @Test func cloudResumeSourceHashesIncludeOpenRouterGenerator() throws {
+    @Test func cloudResumeSourceHashesIncludeGenerationAndOpenRouterSources() throws {
         let testFile = URL(fileURLWithPath: #filePath)
         let evalRunner = testFile
             .deletingLastPathComponent()
@@ -359,6 +401,8 @@ struct TextToSQLEvalRunPlanningTests {
             .appendingPathComponent("WidenEval/EvalRunner.swift")
         let source = try String(contentsOf: evalRunner, encoding: .utf8)
 
+        #expect(source.contains("\"WidenKit/Models/SQLGenerationResult.swift\""))
+        #expect(source.contains("\"WidenKit/Models/OpenRouterCatalog.swift\""))
         #expect(source.contains("\"WidenKit/Services/OpenRouterSQLGenerator.swift\""))
         #expect(source.contains("options.backendMode.backends.contains(.cloud)"))
     }
@@ -396,7 +440,8 @@ struct TextToSQLEvalRunPlanningTests {
         status: TextToSQLEvalCaseStatus,
         endToEndPassed: Bool? = nil,
         modelCallCount: Int? = nil,
-        openRouterHTTPAttempts: Int? = nil
+        openRouterHTTPAttempts: Int? = nil,
+        estimatedCloudCostUSD: Double? = nil
     ) -> TextToSQLEvalResult {
         TextToSQLEvalResult(
             caseID: caseID,
@@ -411,6 +456,7 @@ struct TextToSQLEvalRunPlanningTests {
                 decisionMatches: status == .passed,
                 latencyMs: 1,
                 modelCallCount: modelCallCount,
+                estimatedCloudCostUSD: estimatedCloudCostUSD,
                 openRouterAgentHTTPAttemptCount: openRouterHTTPAttempts,
                 endToEndPassed: endToEndPassed
             )
@@ -424,6 +470,7 @@ struct TextToSQLEvalRunPlanningTests {
             suiteFileHash: "suite-hash",
             schemaFixtureHashes: ["commerce": "schema-hash"],
             model: "openai/gpt-5.5",
+            expectedCanonicalModelID: "openai/gpt-5.5-20260423",
             backendMode: "cloud",
             cloudAgentMode: "tools",
             semanticDatabaseEnabled: true,

@@ -13,7 +13,8 @@ EVAL_XCODEBUILD := xcodebuild -project Widen.xcodeproj -scheme WidenEval -config
 
 APP := build/Build/Products/Debug/Widen.app
 EVAL := build/Build/Products/Debug/WidenEval
-MODEL ?= openai/gpt-5.5
+PINNED_OPENROUTER_MODEL := openai/gpt-5.5
+MODEL ?= $(PINNED_OPENROUTER_MODEL)
 BACKEND ?= local
 RETRIEVER ?= both
 CLOUD_AGENT ?= tools
@@ -34,6 +35,18 @@ endif
 ifdef FAIL_UNDER
 EVAL_ARGS += --fail-under $(FAIL_UNDER)
 endif
+CLOUD_COST_ARGS :=
+ifdef MAX_CLOUD_COST_USD
+CLOUD_COST_ARGS := --max-cloud-cost-usd $(MAX_CLOUD_COST_USD)
+EVAL_ARGS += $(CLOUD_COST_ARGS)
+endif
+
+# Release-gate targets publish docs/evals/<version>.md and must run the pinned
+# production model. Engineering comparisons must opt in explicitly. The same
+# rule is enforced inside WidenEval (--allow-model-override), so direct binary
+# invocations cannot bypass it either.
+REQUIRE_PINNED_MODEL = @test "$(MODEL)" = "$(PINNED_OPENROUTER_MODEL)" || test "$(ALLOW_MODEL_OVERRIDE)" = "1" || { echo "error: release gate requires MODEL=$(PINNED_OPENROUTER_MODEL) but got MODEL=$(MODEL); set ALLOW_MODEL_OVERRIDE=1 to run an engineering comparison" >&2; exit 1; }
+MODEL_OVERRIDE_ARGS = $(if $(filter 1,$(ALLOW_MODEL_OVERRIDE)),--allow-model-override,)
 
 .PHONY: project build test test-db test-fm eval-build eval-local eval-cloud eval-cloud-agent eval-all eval-case eval-cloud-agent-case eval-retrieval eval-retrieval-case eval-schema-tools eval-inspection-tools eval-db-local eval-db-cloud eval-db-cloud-agent eval-db-cloud-agent-case eval-release eval-release-triage eval-release-preseason eval-release-overclarification eval-release-sql-shape eval-release-resume eval-db-case eval-openrouter-smoke setup run run-conductor release release-mac xcode clean
 
@@ -153,34 +166,42 @@ eval-db-cloud-agent-case: eval-build
 
 ## Run the PR 12 text-to-SQL release gate
 eval-release: eval-build
+	$(REQUIRE_PINNED_MODEL)
 	@set -a; if [ -f .env.eval.local ]; then . ./.env.eval.local; fi; set +a; \
-	$(EVAL) --backend cloud --model "$(MODEL)" --cloud-agent tools --suite Evals/suites/text-to-sql-v1.json --semantic-db --repeat 3 --release-gate-version "$(RELEASE_VERSION)"
+	$(EVAL) --backend cloud --model "$(MODEL)" --cloud-agent tools --suite Evals/suites/text-to-sql-v1.json --semantic-db --repeat 3 --release-gate-version "$(RELEASE_VERSION)" $(MODEL_OVERRIDE_ARGS) $(CLOUD_COST_ARGS)
 
 ## Run the release gate and write redacted failure triage artifacts
 eval-release-triage: eval-build
+	$(REQUIRE_PINNED_MODEL)
 	@set -a; if [ -f .env.eval.local ]; then . ./.env.eval.local; fi; set +a; \
-	$(EVAL) --backend cloud --model "$(MODEL)" --cloud-agent tools --suite Evals/suites/text-to-sql-v1.json --semantic-db --repeat 3 --release-gate-version "$(RELEASE_VERSION)" --write-release-triage --release-triage-version "$(RELEASE_VERSION)"
+	$(EVAL) --backend cloud --model "$(MODEL)" --cloud-agent tools --suite Evals/suites/text-to-sql-v1.json --semantic-db --repeat 3 --release-gate-version "$(RELEASE_VERSION)" --write-release-triage --release-triage-version "$(RELEASE_VERSION)" $(MODEL_OVERRIDE_ARGS) $(CLOUD_COST_ARGS)
 
 ## Run focused Preseason release-gate regressions with triage output
 eval-release-preseason: eval-build
 	@set -a; if [ -f .env.eval.local ]; then . ./.env.eval.local; fi; set +a; \
-	$(EVAL) --backend cloud --model "$(MODEL)" --cloud-agent tools --suite Evals/suites/text-to-sql-v1.json --case preseason.top-wins-ambiguous --case preseason.top-wins-defined --semantic-db --repeat 3 --write-release-triage
+	$(EVAL) --backend cloud --model "$(MODEL)" --cloud-agent tools --suite Evals/suites/text-to-sql-v1.json --case preseason.top-wins-ambiguous --case preseason.top-wins-defined --semantic-db --repeat 3 --write-release-triage $(CLOUD_COST_ARGS)
 
 ## Run focused release-gate over-clarification cases with triage output
 eval-release-overclarification: eval-build
 	@set -a; if [ -f .env.eval.local ]; then . ./.env.eval.local; fi; set +a; \
-	$(EVAL) --backend cloud --model "$(MODEL)" --cloud-agent tools --schema-agent-clarification-correction experimental --schema-agent-intent-coverage experimental --suite Evals/suites/text-to-sql-v1.json --case commerce.average-order-value-country --case commerce.customer-paid-revenue --case commerce.customers-without-orders --case saas.expiring-subscriptions --case saas.overallocated-seats --case saas.users-without-membership --case support.average-first-response --case support.frequent-feedback-cluster --case support.unclustered-feedback --case support.unresolved-by-assignee --semantic-db --repeat 3 --write-release-triage
+	$(EVAL) --backend cloud --model "$(MODEL)" --cloud-agent tools --schema-agent-clarification-correction experimental --schema-agent-intent-coverage experimental --suite Evals/suites/text-to-sql-v1.json --case commerce.average-order-value-country --case commerce.customer-paid-revenue --case commerce.customers-without-orders --case saas.expiring-subscriptions --case saas.overallocated-seats --case saas.users-without-membership --case support.average-first-response --case support.frequent-feedback-cluster --case support.unclustered-feedback --case support.unresolved-by-assignee --semantic-db --repeat 3 --write-release-triage $(CLOUD_COST_ARGS)
 
 ## Run focused release-gate SQL-shape semantic mismatch cases with triage output
 eval-release-sql-shape: eval-build
 	@set -a; if [ -f .env.eval.local ]; then . ./.env.eval.local; fi; set +a; \
-	$(EVAL) --backend cloud --model "$(MODEL)" --cloud-agent tools --suite Evals/suites/text-to-sql-v1.json --case commerce.average-order-value-country --case commerce.customer-paid-revenue --case commerce.customers-without-orders --case preseason.active-match-configs --case preseason.verified-tools --case saas.expiring-subscriptions --case saas.overallocated-seats --case support.frequent-feedback-cluster --case support.unclustered-feedback --case support.unresolved-by-assignee --semantic-db --repeat 3 --write-release-triage
+	$(EVAL) --backend cloud --model "$(MODEL)" --cloud-agent tools --suite Evals/suites/text-to-sql-v1.json --case commerce.average-order-value-country --case commerce.customer-paid-revenue --case commerce.customers-without-orders --case preseason.active-match-configs --case preseason.verified-tools --case saas.expiring-subscriptions --case saas.overallocated-seats --case support.frequent-feedback-cluster --case support.unclustered-feedback --case support.unresolved-by-assignee --semantic-db --repeat 3 --write-release-triage $(CLOUD_COST_ARGS)
 
-## Resume a previous release-gate run without rerunning completed cases
+## Resume a previous release-gate run without rerunning completed cases.
+## The pinned model is passed explicitly so resume compatibility rejects a
+## non-production manifest; an ALLOW_MODEL_OVERRIDE=1 resume without an
+## explicit MODEL inherits the manifest model instead, matching how the
+## overridden run was started.
+RESUME_MODEL_ARGS = $(if $(and $(filter 1,$(ALLOW_MODEL_OVERRIDE)),$(filter file,$(origin MODEL))),,--model "$(MODEL)")
 eval-release-resume: eval-build
 	@test -n "$(RESUME)" || (echo "error: RESUME is required" >&2; exit 1)
+	$(REQUIRE_PINNED_MODEL)
 	@set -a; if [ -f .env.eval.local ]; then . ./.env.eval.local; fi; set +a; \
-	$(EVAL) --resume-run "$(RESUME)" --resume-missing --release-gate-version "$(RELEASE_VERSION)" --write-release-triage
+	$(EVAL) --resume-run "$(RESUME)" --resume-missing $(RESUME_MODEL_ARGS) --release-gate-version "$(RELEASE_VERSION)" --write-release-triage $(MODEL_OVERRIDE_ARGS) $(CLOUD_COST_ARGS)
 
 ## Run one seeded Postgres semantic eval case
 eval-db-case: eval-build

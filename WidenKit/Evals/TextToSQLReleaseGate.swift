@@ -1,5 +1,145 @@
 import Foundation
 
+public enum TextToSQLReleaseArtifactVersionPolicy {
+    public struct Violation: LocalizedError, Equatable, Sendable {
+        public var errorDescription: String? {
+            "Release artifact versions must be 1-64 ASCII letters, digits, periods, hyphens, or underscores and start with a letter or digit."
+        }
+    }
+
+    public static func validate(_ version: String) throws {
+        let scalars = version.unicodeScalars
+        guard (1...64).contains(version.utf8.count),
+            let first = scalars.first,
+            isASCIIAlphanumeric(first),
+            scalars.allSatisfy(isAllowed)
+        else {
+            throw Violation()
+        }
+    }
+
+    private static func isAllowed(_ scalar: Unicode.Scalar) -> Bool {
+        isASCIIAlphanumeric(scalar) || scalar == "." || scalar == "-" || scalar == "_"
+    }
+
+    private static func isASCIIAlphanumeric(_ scalar: Unicode.Scalar) -> Bool {
+        switch scalar.value {
+        case 48...57, 65...90, 97...122:
+            true
+        default:
+            false
+        }
+    }
+}
+
+/// Runs that publish committed release-gate or triage docs must evaluate the
+/// pinned production model. Enforced at the eval CLI so a future Makefile
+/// target or direct binary invocation cannot bypass the Makefile guard.
+public enum TextToSQLReleaseGateModelPolicy {
+    public enum CommittedDocIneligibility: Equatable, Sendable, CustomStringConvertible {
+        case cloudBackendRequired
+        case pinnedModelRequired(actual: String?)
+        case expectedCanonicalModelRequired(actual: String?)
+        case cloudEvaluationRequired
+
+        public var description: String {
+            let profile = OpenRouterCatalog.productionProfile
+            switch self {
+            case .cloudBackendRequired:
+                return "the run does not include the cloud backend"
+            case .pinnedModelRequired(let actual):
+                return "the requested model is \(actual ?? "missing"), not the pinned model \(profile.requestedModelID)"
+            case .expectedCanonicalModelRequired(let actual):
+                return "the manifest expected canonical model is \(actual ?? "missing"), not \(profile.expectedCanonicalModelID)"
+            case .cloudEvaluationRequired:
+                return "the run has no backend-available cloud results"
+            }
+        }
+    }
+
+    public struct Violation: LocalizedError, CustomStringConvertible, Equatable, Sendable {
+        public var model: String?
+        public var pinnedModel: String
+
+        public var description: String {
+            guard let model else {
+                return "Release-gate and triage docs require a cloud run using the pinned production model \(pinnedModel); pass --allow-model-override to run an engineering comparison."
+            }
+            return "Release-gate and triage docs require the pinned production model \(pinnedModel) but got \(model); pass --allow-model-override to run an engineering comparison."
+        }
+
+        public var errorDescription: String? { description }
+    }
+
+    public static func validate(
+        model: String?,
+        backendIncludesCloud: Bool,
+        releaseGateVersion: String?,
+        releaseTriageVersion: String?,
+        allowModelOverride: Bool
+    ) throws {
+        if let releaseGateVersion {
+            try TextToSQLReleaseArtifactVersionPolicy.validate(releaseGateVersion)
+        }
+        if let releaseTriageVersion {
+            try TextToSQLReleaseArtifactVersionPolicy.validate(releaseTriageVersion)
+        }
+        guard releaseGateVersion != nil || releaseTriageVersion != nil,
+            !allowModelOverride
+        else { return }
+        guard !isPinnedCloudRun(model: model, backendIncludesCloud: backendIncludesCloud)
+        else { return }
+        throw Violation(
+            model: backendIncludesCloud ? model : nil,
+            pinnedModel: OpenRouterCatalog.productionProfile.requestedModelID
+        )
+    }
+
+    /// Sink-time eligibility is deliberately stricter than the override used
+    /// to run engineering comparisons: overrides never publish committed docs.
+    public static func canPublishCommittedDocs(
+        model: String?,
+        expectedCanonicalModelID: String?,
+        backendIncludesCloud: Bool,
+        cloudEvaluatedResultCount: Int
+    ) -> Bool {
+        committedDocIneligibility(
+            model: model,
+            expectedCanonicalModelID: expectedCanonicalModelID,
+            backendIncludesCloud: backendIncludesCloud,
+            cloudEvaluatedResultCount: cloudEvaluatedResultCount
+        ) == nil
+    }
+
+    public static func committedDocIneligibility(
+        model: String?,
+        expectedCanonicalModelID: String?,
+        backendIncludesCloud: Bool,
+        cloudEvaluatedResultCount: Int
+    ) -> CommittedDocIneligibility? {
+        let profile = OpenRouterCatalog.productionProfile
+        guard backendIncludesCloud else { return .cloudBackendRequired }
+        guard model == profile.requestedModelID else {
+            return .pinnedModelRequired(actual: model)
+        }
+        guard expectedCanonicalModelID == profile.expectedCanonicalModelID else {
+            return .expectedCanonicalModelRequired(actual: expectedCanonicalModelID)
+        }
+        guard cloudEvaluatedResultCount > 0 else {
+            return .cloudEvaluationRequired
+        }
+        return nil
+    }
+
+    private static func isPinnedCloudRun(
+        model: String?,
+        backendIncludesCloud: Bool
+    ) -> Bool {
+        backendIncludesCloud
+            && model == OpenRouterCatalog.productionProfile.requestedModelID
+    }
+}
+
 public struct TextToSQLReleaseGateCount: Codable, Equatable, Sendable {
     public var count: Int
     public var denominator: Int
