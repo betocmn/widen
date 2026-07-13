@@ -290,6 +290,32 @@ struct TextToSQLPipelineTests {
         )
     }
 
+    private func schemaToolSQLMetadata(
+        describedTableIDs: [String],
+        appSideRejectionReason: OpenRouterSchemaToolAppRejectionReason? = nil
+    ) -> OpenRouterGenerationMetadata {
+        var metadata = OpenRouterGenerationMetadata(
+            requestedModelID: "test/model",
+            structuredOutputMode: .promptOnlyJSON,
+            requestCount: 1,
+            retryCount: 0
+        )
+        metadata.agentSelectionReason = "tools"
+        metadata.agentTerminalOutcome = "sql"
+        metadata.agentDiagnostics = OpenRouterSchemaToolAgentDiagnostics(
+            terminalToolSeen: true,
+            terminalAction: "sql",
+            schemaEvidence: OpenRouterSchemaToolEvidenceSummary(
+                searched: true,
+                describedTableIDs: describedTableIDs,
+                exposedColumnIDs: ["public.users.id", "public.users.status"]
+            ),
+            appSideRejectionReason: appSideRejectionReason,
+            intentCoverageMode: SchemaToolAgentIntentCoverageMode.diagnosticsOnly.rawValue
+        )
+        return metadata
+    }
+
     private func diagnostic(
         _ kind: DatabaseDiagnosticKind,
         sqlState: String,
@@ -835,6 +861,33 @@ struct TextToSQLPipelineTests {
         #expect(generation.clarificationQuestion == "Which metric defines best?")
     }
 
+    @Test func explicitSchemaToolClarificationRemainsFinalClarification() async throws {
+        let result = try await run(
+            ScriptedGenerator([
+                .success(
+                    generation(
+                        sql: "",
+                        explanation: "Needs a metric.",
+                        needsClarification: true,
+                        clarificationQuestion: "Which metric defines best?",
+                        backendMetadata: schemaToolSQLMetadata(
+                            describedTableIDs: ["public.users"]
+                        )
+                    )
+                )
+            ])
+        )
+
+        guard case .clarification(let generation) = result.finalDecision else {
+            Issue.record("expected schema-tool clarification decision")
+            return
+        }
+        #expect(generation.clarificationQuestion == "Which metric defines best?")
+        #expect(result.trace.stages.contains {
+            $0.stage == .safetyValidation && $0.outcome == .skipped
+        })
+    }
+
     @Test func productionDefaultAllowsGroundingClarification() async throws {
         let generator = ScriptedGenerator([
             .success(
@@ -858,6 +911,102 @@ struct TextToSQLPipelineTests {
         #expect(generator.contexts.count == 1)
         #expect(generation.pendingClarification?.concept.term == "active")
         #expect(generation.needsClarification)
+    }
+
+    @Test func constrainedLocalGenerationRetainsGroundingClarification() async throws {
+        let generator = ConstrainedScriptedGenerator([
+            .success(
+                generation(sql: "SELECT id FROM public.users WHERE status = 'active' LIMIT 100")
+            )
+        ])
+
+        let result = try await TextToSQLPipeline(generator: generator).run(
+            TextToSQLRequest(
+                question: "show active users",
+                schema: makeStatusSchema()
+            )
+        )
+
+        guard case .clarification(let generation) = result.finalDecision else {
+            Issue.record("expected local grounding clarification decision")
+            return
+        }
+        #expect(generation.pendingClarification?.concept.term == "active")
+    }
+
+    @Test func legacyOpenRouterGenerationRetainsGroundingClarification() async throws {
+        var metadata = OpenRouterGenerationMetadata(
+            requestedModelID: "test/model",
+            structuredOutputMode: .promptOnlyJSON,
+            requestCount: 1,
+            retryCount: 0
+        )
+        metadata.agentSelectionReason = "legacy"
+        let generator = ScriptedGenerator([
+            .success(
+                generation(
+                    sql: "SELECT id FROM public.users WHERE status = 'active' LIMIT 100",
+                    backendMetadata: metadata
+                )
+            )
+        ])
+
+        let result = try await TextToSQLPipeline(generator: generator).run(
+            TextToSQLRequest(
+                question: "show active users",
+                schema: makeStatusSchema()
+            )
+        )
+
+        guard case .clarification(let generation) = result.finalDecision else {
+            Issue.record("expected legacy grounding clarification decision")
+            return
+        }
+        #expect(generation.pendingClarification?.concept.term == "active")
+    }
+
+    @Test func trustedSchemaToolSQLContinuesThroughAllValidationStages() async throws {
+        let sql = "SELECT id FROM public.users WHERE status = 'active' LIMIT 100"
+        let generator = ScriptedGenerator([
+            .success(
+                generation(
+                    sql: sql,
+                    backendMetadata: schemaToolSQLMetadata(
+                        describedTableIDs: ["public.users"]
+                    )
+                )
+            )
+        ])
+        let verifier = ScriptedVerifier([.success(.passed(elapsedMs: 2))])
+
+        let result = try await TextToSQLPipeline(generator: generator).run(
+            TextToSQLRequest(
+                question: "show active users",
+                schema: makeStatusSchema(),
+                sqlVerifier: verifier,
+                verificationConnection: verificationConnection()
+            )
+        )
+
+        guard case .sql(let generation) = result.finalDecision else {
+            Issue.record("expected trusted schema-tool SQL decision")
+            return
+        }
+        #expect(generation.sql == sql)
+        #expect(generation.groundingConcepts.contains {
+            $0.term == "active" && $0.state == .unsupported
+        })
+        #expect(verifier.requests.map(\.sql) == [sql])
+        for stage in [
+            TextToSQLStage.canonicalization,
+            .safetyValidation,
+            .schemaValidation,
+            .postgresVerification,
+        ] {
+            #expect(result.trace.stages.contains {
+                $0.stage == stage && $0.outcome == .success
+            })
+        }
     }
 
     @Test func mixedCaseIdentifierIsDeterministicallyQuoted() async throws {
