@@ -836,6 +836,67 @@ struct OpenRouterSQLGeneratorTests {
         }
     }
 
+    @Test func failedCompletionTakesPrecedenceOverCanonicalValidation() throws {
+        let parser = OpenRouterResponseParser()
+        let expectedCanonicalModelID = "openai/gpt-5.5-20260423"
+
+        try expectFailure(.providerUnavailable) {
+            try parser.parse(
+                data: chatResponse(content: nil, model: nil, finishReason: "error"),
+                response: response(url: Self.chatEndpoint, status: 200),
+                requestedModelID: Self.modelID,
+                mode: .strictJSONSchema,
+                requestCount: 1,
+                retryCount: 0,
+                expectedCanonicalModelID: expectedCanonicalModelID
+            )
+        }
+        try expectFailure(.maxTokensExceeded) {
+            try parser.parse(
+                data: chatResponse(content: goodContent, model: nil, finishReason: "length"),
+                response: response(url: Self.chatEndpoint, status: 200),
+                requestedModelID: Self.modelID,
+                mode: .strictJSONSchema,
+                requestCount: 1,
+                retryCount: 0,
+                expectedCanonicalModelID: expectedCanonicalModelID
+            )
+        }
+        try expectFailure(.contentPolicy) {
+            try parser.parse(
+                data: chatResponse(content: goodContent, model: nil, finishReason: "content_filter"),
+                response: response(url: Self.chatEndpoint, status: 200),
+                requestedModelID: Self.modelID,
+                mode: .strictJSONSchema,
+                requestCount: 1,
+                retryCount: 0,
+                expectedCanonicalModelID: expectedCanonicalModelID
+            )
+        }
+        try expectFailure(.refusal) {
+            try parser.parse(
+                data: chatResponse(content: goodContent, model: nil, refusal: "No."),
+                response: response(url: Self.chatEndpoint, status: 200),
+                requestedModelID: Self.modelID,
+                mode: .strictJSONSchema,
+                requestCount: 1,
+                retryCount: 0,
+                expectedCanonicalModelID: expectedCanonicalModelID
+            )
+        }
+        try expectFailure(.noContent) {
+            try parser.parse(
+                data: chatResponse(content: nil, model: nil),
+                response: response(url: Self.chatEndpoint, status: 200),
+                requestedModelID: Self.modelID,
+                mode: .strictJSONSchema,
+                requestCount: 1,
+                retryCount: 0,
+                expectedCanonicalModelID: expectedCanonicalModelID
+            )
+        }
+    }
+
     @Test func everyTypedFailureCategoryIsReachable() {
         let cases: [(String?, Int?, String?, OpenRouterFailure.Category)] = [
             ("invalid_api_key", 400, nil, .authentication),

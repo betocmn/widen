@@ -2912,6 +2912,92 @@ struct OpenRouterSchemaToolSQLAgentTests {
         }
     }
 
+    @Test func toolChatFailedCompletionTakesPrecedenceOverCanonicalValidation() throws {
+        let parser = OpenRouterToolChatParser()
+        let expectedCanonicalModelID = "openai/gpt-5.5-20260423"
+        let response = HTTPURLResponse(
+            url: Self.chatEndpoint,
+            statusCode: 200,
+            httpVersion: "HTTP/1.1",
+            headerFields: nil
+        )!
+        let cases: [(OpenRouterFailure.Category, Data)] = [
+            (
+                .providerUnavailable,
+                Self.jsonData([
+                    "id": "cmpl-finish-error",
+                    "choices": [[
+                        "index": 0,
+                        "finish_reason": "error",
+                        "message": ["role": "assistant"],
+                    ]],
+                ])
+            ),
+            (
+                .maxTokensExceeded,
+                Self.jsonData([
+                    "id": "cmpl-length",
+                    "choices": [[
+                        "index": 0,
+                        "finish_reason": "length",
+                        "message": ["role": "assistant", "content": "partial"],
+                    ]],
+                ])
+            ),
+            (
+                .contentPolicy,
+                Self.jsonData([
+                    "id": "cmpl-content-filter",
+                    "choices": [[
+                        "index": 0,
+                        "finish_reason": "content_filter",
+                        "message": ["role": "assistant", "content": "filtered"],
+                    ]],
+                ])
+            ),
+            (
+                .refusal,
+                Self.jsonData([
+                    "id": "cmpl-refusal",
+                    "choices": [[
+                        "index": 0,
+                        "finish_reason": "stop",
+                        "message": ["role": "assistant", "refusal": "No."],
+                    ]],
+                ])
+            ),
+            (
+                .noContent,
+                Self.jsonData([
+                    "id": "cmpl-empty",
+                    "choices": [[
+                        "index": 0,
+                        "finish_reason": "stop",
+                        "message": ["role": "assistant"],
+                    ]],
+                ])
+            ),
+        ]
+
+        for (expectedCategory, data) in cases {
+            do {
+                _ = try parser.parse(
+                    data: data,
+                    response: response,
+                    requestedModelID: Self.modelID,
+                    requestCount: 1,
+                    retryCount: 0,
+                    expectedCanonicalModelID: expectedCanonicalModelID
+                )
+                Issue.record("Expected \(expectedCategory) failure")
+            } catch let failure as OpenRouterFailure {
+                #expect(failure.category == expectedCategory)
+            } catch {
+                Issue.record("Unexpected error: \(error)")
+            }
+        }
+    }
+
     @Test func toolChatParserRejectsUnexpectedCanonicalModelWhenEnforced() throws {
         let parser = OpenRouterToolChatParser()
         let returnedModelID = "openai/gpt-5.5-unevaluated"
