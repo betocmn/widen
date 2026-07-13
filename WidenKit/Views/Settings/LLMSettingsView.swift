@@ -13,6 +13,7 @@ struct LLMSettingsView: View {
     @State private var catalogRefreshID = UUID()
     @State private var isLoadingCatalog = false
     @State private var isTestingModel = false
+    @State private var modelTestID = UUID()
     @State private var modelTestResult: OpenRouterModelTestResult?
 
     var body: some View {
@@ -306,6 +307,9 @@ struct LLMSettingsView: View {
     }
 
     private func load() {
+        modelTestID = UUID()
+        isTestingModel = false
+        modelTestResult = nil
         let stored = appState.loadOpenRouterAPIKey() ?? ""
         apiKeyDraft = stored
         hasStoredKey = !stored.isEmpty
@@ -317,6 +321,8 @@ struct LLMSettingsView: View {
         apiKeyDraft = key
         if appState.setOpenRouterAPIKey(key) {
             hasStoredKey = !key.isEmpty
+            modelTestID = UUID()
+            isTestingModel = false
             modelTestResult = nil
             Task {
                 await OpenRouterModelCatalogService.shared.invalidate(apiKey: key)
@@ -335,6 +341,7 @@ struct LLMSettingsView: View {
             modelMetadata = nil
             catalogMessage = nil
             isLoadingCatalog = false
+            modelTestID = UUID()
             isTestingModel = false
             modelTestResult = nil
             Task {
@@ -431,6 +438,8 @@ struct LLMSettingsView: View {
         }
         isTestingModel = true
         modelTestResult = nil
+        let testID = UUID()
+        modelTestID = testID
         let profile = OpenRouterCatalog.productionProfile
         let model = profile.requestedModelID
         Task {
@@ -441,6 +450,7 @@ struct LLMSettingsView: View {
                 expectedCanonicalModelID: profile.expectedCanonicalModelID
             ).run()
             await MainActor.run {
+                guard modelTestID == testID else { return }
                 guard requestStillMatches(apiKey: key) else {
                     isTestingModel = false
                     return
