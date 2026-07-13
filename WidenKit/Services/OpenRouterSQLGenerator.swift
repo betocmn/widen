@@ -321,6 +321,45 @@ public struct OpenRouterSchemaToolAgentDiagnostics: Codable, Equatable, Sendable
     }
 }
 
+struct OpenRouterReportedUsage: Decodable, Equatable, Sendable {
+    struct CompletionDetails: Decodable, Equatable, Sendable {
+        let reasoningTokens: Int?
+
+        private enum CodingKeys: String, CodingKey {
+            case reasoningTokens = "reasoning_tokens"
+        }
+    }
+
+    let promptTokens: Int?
+    let completionTokens: Int?
+    let totalTokens: Int?
+    let completionTokensDetails: CompletionDetails?
+    let cost: Double?
+
+    private enum CodingKeys: String, CodingKey {
+        case promptTokens = "prompt_tokens"
+        case completionTokens = "completion_tokens"
+        case totalTokens = "total_tokens"
+        case completionTokensDetails = "completion_tokens_details"
+        case cost
+    }
+
+    var generationUsageEvent: SQLGenerationUsageEvent {
+        SQLGenerationUsageEvent(
+            httpAttemptCount: 0,
+            promptTokens: promptTokens,
+            completionTokens: completionTokens,
+            reasoningTokens: completionTokensDetails?.reasoningTokens,
+            totalTokens: totalTokens,
+            costUSD: cost
+        )
+    }
+}
+
+private struct OpenRouterReportedUsageEnvelope: Decodable {
+    let usage: OpenRouterReportedUsage?
+}
+
 public struct OpenRouterGenerationMetadata: Codable, Equatable, Sendable {
     public var requestedModelID: String
     public var returnedModelID: String?
@@ -364,6 +403,11 @@ public struct OpenRouterFailureDiagnostic: Codable, Equatable, Sendable {
     public var providerName: String?
     public var retryAfterSeconds: Double?
     public var suggestedWaitSeconds: Double?
+    public var promptTokens: Int?
+    public var completionTokens: Int?
+    public var reasoningTokens: Int?
+    public var totalTokens: Int?
+    public var costUSD: Double?
     public var attemptCount: Int
 }
 
@@ -409,6 +453,11 @@ public struct OpenRouterFailure: Error, LocalizedError, Equatable, Sendable {
         providerName: String? = nil,
         retryAfterSeconds: Double? = nil,
         suggestedWaitSeconds: Double? = nil,
+        promptTokens: Int? = nil,
+        completionTokens: Int? = nil,
+        reasoningTokens: Int? = nil,
+        totalTokens: Int? = nil,
+        costUSD: Double? = nil,
         attemptCount: Int = 1
     ) {
         self.category = category
@@ -425,6 +474,11 @@ public struct OpenRouterFailure: Error, LocalizedError, Equatable, Sendable {
             providerName: providerName,
             retryAfterSeconds: retryAfterSeconds,
             suggestedWaitSeconds: suggestedWaitSeconds,
+            promptTokens: promptTokens,
+            completionTokens: completionTokens,
+            reasoningTokens: reasoningTokens,
+            totalTokens: totalTokens,
+            costUSD: costUSD,
             attemptCount: attemptCount
         )
     }
@@ -453,6 +507,17 @@ public struct OpenRouterFailure: Error, LocalizedError, Equatable, Sendable {
     func withAttemptCount(_ count: Int) -> OpenRouterFailure {
         var copy = self
         copy.diagnostic.attemptCount = count
+        return copy
+    }
+
+    func withReportedUsage(_ usage: OpenRouterReportedUsage?) -> OpenRouterFailure {
+        guard let usage else { return self }
+        var copy = self
+        copy.diagnostic.promptTokens = usage.promptTokens
+        copy.diagnostic.completionTokens = usage.completionTokens
+        copy.diagnostic.reasoningTokens = usage.completionTokensDetails?.reasoningTokens
+        copy.diagnostic.totalTokens = usage.totalTokens
+        copy.diagnostic.costUSD = usage.cost
         return copy
     }
 
@@ -582,6 +647,62 @@ public struct OpenRouterFailure: Error, LocalizedError, Equatable, Sendable {
 extension OpenRouterFailure.Category {
     var isProviderBudgetUnavailable: Bool {
         self == .paymentRequired || self == .providerLimit
+    }
+}
+
+private struct OpenRouterUsageAccumulator {
+    var promptTokens: Int?
+    var completionTokens: Int?
+    var reasoningTokens: Int?
+    var totalTokens: Int?
+    var costUSD: Double?
+
+    mutating func record(_ diagnostic: OpenRouterFailureDiagnostic) {
+        Self.add(diagnostic.promptTokens, to: &promptTokens)
+        Self.add(diagnostic.completionTokens, to: &completionTokens)
+        Self.add(diagnostic.reasoningTokens, to: &reasoningTokens)
+        Self.add(diagnostic.totalTokens, to: &totalTokens)
+        Self.add(diagnostic.costUSD, to: &costUSD)
+    }
+
+    func merging(into metadata: OpenRouterGenerationMetadata) -> OpenRouterGenerationMetadata {
+        var copy = metadata
+        copy.promptTokens = Self.sum(promptTokens, copy.promptTokens)
+        copy.completionTokens = Self.sum(completionTokens, copy.completionTokens)
+        copy.reasoningTokens = Self.sum(reasoningTokens, copy.reasoningTokens)
+        copy.totalTokens = Self.sum(totalTokens, copy.totalTokens)
+        copy.costUSD = Self.sum(costUSD, copy.costUSD)
+        return copy
+    }
+
+    func applying(to failure: OpenRouterFailure) -> OpenRouterFailure {
+        var copy = failure
+        copy.diagnostic.promptTokens = promptTokens
+        copy.diagnostic.completionTokens = completionTokens
+        copy.diagnostic.reasoningTokens = reasoningTokens
+        copy.diagnostic.totalTokens = totalTokens
+        copy.diagnostic.costUSD = costUSD
+        return copy
+    }
+
+    private static func add(_ value: Int?, to total: inout Int?) {
+        guard let value else { return }
+        total = (total ?? 0) + value
+    }
+
+    private static func add(_ value: Double?, to total: inout Double?) {
+        guard let value else { return }
+        total = (total ?? 0) + value
+    }
+
+    private static func sum(_ first: Int?, _ second: Int?) -> Int? {
+        guard first != nil || second != nil else { return nil }
+        return (first ?? 0) + (second ?? 0)
+    }
+
+    private static func sum(_ first: Double?, _ second: Double?) -> Double? {
+        guard first != nil || second != nil else { return nil }
+        return (first ?? 0) + (second ?? 0)
     }
 }
 
@@ -1539,7 +1660,7 @@ struct OpenRouterResponseParser: Sendable {
         let provider: String?
         let serviceTier: String?
         let choices: [Choice]
-        let usage: Usage?
+        let usage: OpenRouterReportedUsage?
         let error: OpenRouterAPIErrorEnvelope.APIError?
         let openrouterMetadata: OpenRouterRouterMetadata?
 
@@ -1561,7 +1682,7 @@ struct OpenRouterResponseParser: Sendable {
             provider = try container.decodeIfPresent(String.self, forKey: .provider)
             serviceTier = try container.decodeIfPresent(String.self, forKey: .serviceTier)
             choices = try container.decodeIfPresent([Choice].self, forKey: .choices) ?? []
-            usage = try container.decodeIfPresent(Usage.self, forKey: .usage)
+            usage = try container.decodeIfPresent(OpenRouterReportedUsage.self, forKey: .usage)
             error = try container.decodeIfPresent(OpenRouterAPIErrorEnvelope.APIError.self, forKey: .error)
             openrouterMetadata = try container.decodeIfPresent(
                 OpenRouterRouterMetadata.self,
@@ -1603,30 +1724,6 @@ struct OpenRouterResponseParser: Sendable {
         }
     }
 
-    private struct Usage: Decodable {
-        struct CompletionDetails: Decodable {
-            let reasoningTokens: Int?
-
-            private enum CodingKeys: String, CodingKey {
-                case reasoningTokens = "reasoning_tokens"
-            }
-        }
-
-        let promptTokens: Int?
-        let completionTokens: Int?
-        let totalTokens: Int?
-        let completionTokensDetails: CompletionDetails?
-        let cost: Double?
-
-        private enum CodingKeys: String, CodingKey {
-            case promptTokens = "prompt_tokens"
-            case completionTokens = "completion_tokens"
-            case totalTokens = "total_tokens"
-            case completionTokensDetails = "completion_tokens_details"
-            case cost
-        }
-    }
-
     private struct CloudGeneratedSQLResponse: Decodable {
         let sql: String
         let explanation: String?
@@ -1647,13 +1744,14 @@ struct OpenRouterResponseParser: Sendable {
         retryCount: Int,
         expectedCanonicalModelID: String? = nil
     ) throws -> ParsedResult {
+        let reportedUsage = Self.reportedUsage(from: data)
         if !(200..<300).contains(response.statusCode) {
             throw Self.failure(
                 from: data,
                 response: response,
                 requestedModelID: requestedModelID,
                 attemptCount: requestCount
-            )
+            ).withReportedUsage(reportedUsage)
         }
         let requestID = response.value(forHTTPHeaderField: "X-Request-Id")
             ?? response.value(forHTTPHeaderField: "X-Request-ID")
@@ -1669,7 +1767,7 @@ struct OpenRouterResponseParser: Sendable {
                 requestID: requestID,
                 requestedModelID: requestedModelID,
                 attemptCount: requestCount
-            )
+            ).withReportedUsage(reportedUsage)
         }
         if let topError = completion.error {
             throw Self.failure(
@@ -1681,7 +1779,7 @@ struct OpenRouterResponseParser: Sendable {
                 returnedModelID: completion.model,
                 providerName: completion.provider ?? completion.openrouterMetadata?.selectedProvider,
                 attemptCount: requestCount
-            )
+            ).withReportedUsage(reportedUsage)
         }
         guard let choice = completion.choices.first else {
             throw OpenRouterFailure(
@@ -1694,7 +1792,7 @@ struct OpenRouterResponseParser: Sendable {
                 returnedModelID: completion.model,
                 providerName: completion.provider ?? completion.openrouterMetadata?.selectedProvider,
                 attemptCount: requestCount
-            )
+            ).withReportedUsage(reportedUsage)
         }
         if let choiceError = choice.error {
             throw Self.failure(
@@ -1706,7 +1804,7 @@ struct OpenRouterResponseParser: Sendable {
                 returnedModelID: completion.model,
                 providerName: completion.provider ?? completion.openrouterMetadata?.selectedProvider,
                 attemptCount: requestCount
-            )
+            ).withReportedUsage(reportedUsage)
         }
         if choice.finishReason == "error" {
             throw OpenRouterFailure(
@@ -1719,7 +1817,7 @@ struct OpenRouterResponseParser: Sendable {
                 returnedModelID: completion.model,
                 providerName: completion.provider ?? completion.openrouterMetadata?.selectedProvider,
                 attemptCount: requestCount
-            )
+            ).withReportedUsage(reportedUsage)
         }
         if choice.finishReason == "length" {
             throw OpenRouterFailure(
@@ -1732,7 +1830,7 @@ struct OpenRouterResponseParser: Sendable {
                 returnedModelID: completion.model,
                 providerName: completion.provider ?? completion.openrouterMetadata?.selectedProvider,
                 attemptCount: requestCount
-            )
+            ).withReportedUsage(reportedUsage)
         }
         if choice.finishReason == "content_filter" {
             throw OpenRouterFailure(
@@ -1745,7 +1843,7 @@ struct OpenRouterResponseParser: Sendable {
                 returnedModelID: completion.model,
                 providerName: completion.provider ?? completion.openrouterMetadata?.selectedProvider,
                 attemptCount: requestCount
-            )
+            ).withReportedUsage(reportedUsage)
         }
         if let refusal = choice.message?.refusal, !refusal.isEmpty {
             throw OpenRouterFailure(
@@ -1758,7 +1856,7 @@ struct OpenRouterResponseParser: Sendable {
                 returnedModelID: completion.model,
                 providerName: completion.provider ?? completion.openrouterMetadata?.selectedProvider,
                 attemptCount: requestCount
-            )
+            ).withReportedUsage(reportedUsage)
         }
         guard let content = choice.message?.content?.text
             .trimmingCharacters(in: .whitespacesAndNewlines),
@@ -1774,18 +1872,22 @@ struct OpenRouterResponseParser: Sendable {
                 returnedModelID: completion.model,
                 providerName: completion.provider ?? completion.openrouterMetadata?.selectedProvider,
                 attemptCount: requestCount
-            )
+            ).withReportedUsage(reportedUsage)
         }
-        try OpenRouterCanonicalModelValidator.validate(
-            returnedModelID: completion.model,
-            expectedCanonicalModelID: expectedCanonicalModelID,
-            requestedModelID: requestedModelID,
-            httpStatus: response.statusCode,
-            completionID: completion.id,
-            requestID: requestID,
-            providerName: completion.provider ?? completion.openrouterMetadata?.selectedProvider,
-            attemptCount: requestCount
-        )
+        do {
+            try OpenRouterCanonicalModelValidator.validate(
+                returnedModelID: completion.model,
+                expectedCanonicalModelID: expectedCanonicalModelID,
+                requestedModelID: requestedModelID,
+                httpStatus: response.statusCode,
+                completionID: completion.id,
+                requestID: requestID,
+                providerName: completion.provider ?? completion.openrouterMetadata?.selectedProvider,
+                attemptCount: requestCount
+            )
+        } catch let failure as OpenRouterFailure {
+            throw failure.withReportedUsage(reportedUsage)
+        }
         let objectData: Data
         switch mode {
         case .strictJSONSchema:
@@ -1802,7 +1904,7 @@ struct OpenRouterResponseParser: Sendable {
                     returnedModelID: completion.model,
                     providerName: completion.provider ?? completion.openrouterMetadata?.selectedProvider,
                     attemptCount: requestCount
-                )
+                ).withReportedUsage(reportedUsage)
             }
             objectData = data
         }
@@ -1821,7 +1923,7 @@ struct OpenRouterResponseParser: Sendable {
                 returnedModelID: completion.model,
                 providerName: completion.provider ?? completion.openrouterMetadata?.selectedProvider,
                 attemptCount: requestCount
-            )
+            ).withReportedUsage(reportedUsage)
         }
 
         let needsClarification = generated.needsClarification ?? false
@@ -1839,7 +1941,7 @@ struct OpenRouterResponseParser: Sendable {
                 returnedModelID: completion.model,
                 providerName: completion.provider ?? completion.openrouterMetadata?.selectedProvider,
                 attemptCount: requestCount
-            )
+            ).withReportedUsage(reportedUsage)
         }
         guard !needsClarification || clarificationQuestion?.isEmpty == false else {
             throw OpenRouterFailure(
@@ -1852,7 +1954,7 @@ struct OpenRouterResponseParser: Sendable {
                 returnedModelID: completion.model,
                 providerName: completion.provider ?? completion.openrouterMetadata?.selectedProvider,
                 attemptCount: requestCount
-            )
+            ).withReportedUsage(reportedUsage)
         }
 
         let metadata = OpenRouterGenerationMetadata(
@@ -1886,6 +1988,14 @@ struct OpenRouterResponseParser: Sendable {
         )
         result.backendMetadata = metadata
         return ParsedResult(result: result, metadata: metadata)
+    }
+
+    static func reportedUsage(from data: Data) -> OpenRouterReportedUsage? {
+        guard let envelope = try? JSONDecoder().decode(
+            OpenRouterReportedUsageEnvelope.self,
+            from: data
+        ) else { return nil }
+        return envelope.usage
     }
 
     static func failure(
@@ -2303,6 +2413,9 @@ public final class OpenRouterSQLGenerator: SQLGenerator, Sendable {
                 maximumHTTPRequests: nil
             ).capabilities
         }
+        if countCapabilityLookupHTTPAttempts, capabilityLookupHTTPAttempts > 0 {
+            config.usageSink?(.httpAttempts(capabilityLookupHTTPAttempts))
+        }
         if countCapabilityLookupHTTPAttempts,
             capabilityLookupHTTPAttempts >= retryPolicy.maxAttempts
         {
@@ -2322,7 +2435,8 @@ public final class OpenRouterSQLGenerator: SQLGenerator, Sendable {
                 instructions: instructions,
                 prompt: prompt,
                 capabilities: capabilities,
-                maximumHTTPAttempts: remainingHTTPAttempts
+                maximumHTTPAttempts: remainingHTTPAttempts,
+                usageSink: config.usageSink
             )
             let requestCount = capabilityLookupHTTPAttempts + parsed.metadata.requestCount
             let callCount = max(1, context.modelCallCount) + max(0, requestCount - 1)
@@ -2427,7 +2541,8 @@ public final class OpenRouterSQLGenerator: SQLGenerator, Sendable {
         instructions: String,
         prompt: String,
         capabilities: OpenRouterModelCapabilities,
-        maximumHTTPAttempts: Int? = nil
+        maximumHTTPAttempts: Int? = nil,
+        usageSink: (@Sendable (SQLGenerationUsageEvent) -> Void)? = nil
     ) async throws -> OpenRouterResponseParser.ParsedResult {
         let built = try requestBuilder.build(
             apiKey: apiKey,
@@ -2439,14 +2554,16 @@ public final class OpenRouterSQLGenerator: SQLGenerator, Sendable {
         return try await performBuiltRequest(
             built,
             requestedModelID: model,
-            maximumHTTPAttempts: maximumHTTPAttempts
+            maximumHTTPAttempts: maximumHTTPAttempts,
+            usageSink: usageSink
         )
     }
 
     private func performBuiltRequest(
         _ built: OpenRouterRequestBuilder.BuiltRequest,
         requestedModelID: String,
-        maximumHTTPAttempts: Int? = nil
+        maximumHTTPAttempts: Int? = nil,
+        usageSink: (@Sendable (SQLGenerationUsageEvent) -> Void)? = nil
     ) async throws -> OpenRouterResponseParser.ParsedResult {
         let effectiveRetryPolicy = OpenRouterRetryPolicy(
             maxAttempts: maximumHTTPAttempts.map { min(retryPolicy.maxAttempts, max(1, $0)) }
@@ -2454,13 +2571,18 @@ public final class OpenRouterSQLGenerator: SQLGenerator, Sendable {
         )
         var attempt = 1
         var noContentRetries = 0
+        var failedUsage = OpenRouterUsageAccumulator()
         while true {
             try Task.checkCancellation()
             do {
+                usageSink?(.httpAttempts(1))
                 let (data, response) = try await transport.send(built.request)
+                if let reportedUsage = OpenRouterResponseParser.reportedUsage(from: data) {
+                    usageSink?(reportedUsage.generationUsageEvent)
+                }
                 let retryAfter = retryPolicy.retryAfter(from: response)
                 do {
-                    return try parser.parse(
+                    var parsed = try parser.parse(
                         data: data,
                         response: response,
                         requestedModelID: requestedModelID,
@@ -2469,8 +2591,12 @@ public final class OpenRouterSQLGenerator: SQLGenerator, Sendable {
                         retryCount: attempt - 1,
                         expectedCanonicalModelID: expectedCanonicalModelID
                     )
+                    parsed.metadata = failedUsage.merging(into: parsed.metadata)
+                    parsed.result.backendMetadata = parsed.metadata
+                    return parsed
                 } catch var failure as OpenRouterFailure {
                     failure.diagnostic.retryAfterSeconds = retryAfter
+                    failedUsage.record(failure.diagnostic)
                     if failure.category == .noContent { noContentRetries += 1 }
                     if let delay = effectiveRetryPolicy.retryDelay(
                         for: failure,
@@ -2486,7 +2612,7 @@ public final class OpenRouterSQLGenerator: SQLGenerator, Sendable {
                     {
                         failure.diagnostic.suggestedWaitSeconds = retryAfter
                     }
-                    throw failure.withAttemptCount(attempt)
+                    throw failedUsage.applying(to: failure.withAttemptCount(attempt))
                 }
             } catch is CancellationError {
                 throw CancellationError()
@@ -2504,7 +2630,7 @@ public final class OpenRouterSQLGenerator: SQLGenerator, Sendable {
                     try await Task.sleep(nanoseconds: UInt64(delay * 1_000_000_000))
                     continue
                 }
-                throw failure.withAttemptCount(attempt)
+                throw failedUsage.applying(to: failure.withAttemptCount(attempt))
             }
         }
     }

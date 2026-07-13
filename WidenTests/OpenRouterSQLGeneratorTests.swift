@@ -640,6 +640,39 @@ struct OpenRouterSQLGeneratorTests {
         }
     }
 
+    @Test func malformedEnvelopeFailurePreservesReportedUsage() throws {
+        let parser = OpenRouterResponseParser()
+        let data = jsonData([
+            "choices": "invalid",
+            "usage": [
+                "prompt_tokens": 4,
+                "completion_tokens": 5,
+                "total_tokens": 9,
+                "completion_tokens_details": ["reasoning_tokens": 2],
+                "cost": 0.25,
+            ],
+        ])
+
+        do {
+            _ = try parser.parse(
+                data: data,
+                response: response(url: Self.chatEndpoint, status: 200),
+                requestedModelID: Self.modelID,
+                mode: .strictJSONSchema,
+                requestCount: 1,
+                retryCount: 0
+            )
+            Issue.record("expected malformed envelope failure")
+        } catch let failure as OpenRouterFailure {
+            #expect(failure.category == .malformedStructuredResponse)
+            #expect(failure.diagnostic.promptTokens == 4)
+            #expect(failure.diagnostic.completionTokens == 5)
+            #expect(failure.diagnostic.reasoningTokens == 2)
+            #expect(failure.diagnostic.totalTokens == 9)
+            #expect(failure.diagnostic.costUSD == 0.25)
+        }
+    }
+
     @Test func parserAcceptsFencedJSONOnlyInPromptMode() throws {
         let parser = OpenRouterResponseParser()
         let fenced = "```json\n\(goodContent)\n```"
@@ -1031,6 +1064,28 @@ struct OpenRouterSQLGeneratorTests {
         for request in chatRequests {
             try expectPrivateRouting(in: request)
         }
+    }
+
+    @Test func retryMetadataIncludesUsageFromFailedCompletion() async throws {
+        let transport = StubTransport([
+            .success((catalogResponse(), response(url: Self.apiBase.appendingPathComponent("models/user"), status: 200))),
+            .success((chatResponse(content: ""), response(url: Self.chatEndpoint, status: 200, headers: ["Retry-After": "0"]))),
+            .success((chatResponse(content: goodContent), response(url: Self.chatEndpoint, status: 200))),
+        ])
+
+        let result = try await makeGenerator(transport: transport).generateSQL(
+            question: "show users",
+            schema: makeSchema(),
+            config: SQLGenerationConfig()
+        )
+
+        #expect(result.backendMetadata?.requestCount == 2)
+        #expect(result.backendMetadata?.retryCount == 1)
+        #expect(result.backendMetadata?.promptTokens == 22)
+        #expect(result.backendMetadata?.completionTokens == 44)
+        #expect(result.backendMetadata?.reasoningTokens == 6)
+        #expect(result.backendMetadata?.totalTokens == 66)
+        #expect(result.backendMetadata?.costUSD == 0.00024)
     }
 
     @Test func repairCompletionRequiresPrivateRouting() async throws {

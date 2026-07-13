@@ -2687,7 +2687,7 @@ struct OpenRouterSchemaToolSQLAgentTests {
             #expect(failure.backendMetadata?.agentLogicalTurnCount == 1)
             #expect(failure.backendMetadata?.agentHTTPAttemptCount == 2)
             #expect(failure.backendMetadata?.requestCount == 2)
-            #expect(failure.backendMetadata?.totalTokens == 15)
+            #expect(failure.backendMetadata?.totalTokens == 30)
         }
     }
 
@@ -3159,6 +3159,52 @@ struct OpenRouterSchemaToolSQLAgentTests {
             #expect(failure.backendMetadata?.agentHTTPAttemptCount == 1)
             #expect(failure.backendMetadata?.retryCount == 0)
             #expect(chatTransport.requests.count == 1)
+        }
+    }
+
+    @Test func failedToolTurnRetriesPreserveBilledUsage() async throws {
+        let schema = Self.makeSchema()
+        let chatTransport = ScriptedHTTPTransport { request, _ in
+            (
+                Self.assistantToolCalls([]),
+                HTTPURLResponse(
+                    url: request.url!,
+                    statusCode: 200,
+                    httpVersion: "HTTP/1.1",
+                    headerFields: ["Retry-After": "0"]
+                )!
+            )
+        }
+        let agent = makeAgent(
+            schema: schema,
+            chatTransport: chatTransport,
+            configuration: OpenRouterSchemaToolSQLAgentConfiguration(
+                maximumSchemaToolCalls: 4,
+                maximumRepairSchemaToolCalls: 2,
+                maximumModelTurns: 6,
+                maximumMalformedTerminalCorrections: 1,
+                maximumRepeatedToolCorrections: 1,
+                maximumHTTPAttempts: 2,
+                wallClockTimeoutSeconds: 10
+            )
+        )
+
+        do {
+            _ = try await agent.generateSQL(
+                question: "List users",
+                schema: schema,
+                context: SQLGenerationContext(),
+                config: SQLGenerationConfig()
+            )
+            Issue.record("Expected empty tool-turn failure")
+        } catch let failure as OpenRouterSchemaToolAgentFailure {
+            #expect(failure.category == .openRouterRequestFailure)
+            #expect(failure.openRouterFailure?.category == .noContent)
+            #expect(failure.backendMetadata?.agentHTTPAttemptCount == 2)
+            #expect(failure.backendMetadata?.retryCount == 1)
+            #expect(failure.backendMetadata?.totalTokens == 30)
+            #expect(failure.backendMetadata?.costUSD == 0.00002)
+            #expect(chatTransport.requests.count == 2)
         }
     }
 

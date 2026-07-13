@@ -283,12 +283,39 @@ extension SQLGenerationResult {
     }
 }
 
+struct SQLGenerationUsageEvent: Equatable, Sendable {
+    var httpAttemptCount: Int
+    var promptTokens: Int?
+    var completionTokens: Int?
+    var reasoningTokens: Int?
+    var totalTokens: Int?
+    var costUSD: Double?
+
+    static func httpAttempts(_ count: Int) -> SQLGenerationUsageEvent {
+        SQLGenerationUsageEvent(
+            httpAttemptCount: max(0, count),
+            promptTokens: nil,
+            completionTokens: nil,
+            reasoningTokens: nil,
+            totalTokens: nil,
+            costUSD: nil
+        )
+    }
+}
+
 public struct SQLGenerationConfig: Equatable, Sendable {
     public var defaultRowLimit: Int
     public var databaseContext: String
+    var usageSink: (@Sendable (SQLGenerationUsageEvent) -> Void)?
 
     public init(defaultRowLimit: Int = 100, databaseContext: String = "") {
         self.defaultRowLimit = defaultRowLimit
         self.databaseContext = databaseContext
+        usageSink = nil
+    }
+
+    public static func == (lhs: SQLGenerationConfig, rhs: SQLGenerationConfig) -> Bool {
+        lhs.defaultRowLimit == rhs.defaultRowLimit
+            && lhs.databaseContext == rhs.databaseContext
     }
 }

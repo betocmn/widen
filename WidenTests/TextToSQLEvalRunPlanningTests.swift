@@ -267,6 +267,26 @@ struct TextToSQLEvalRunPlanningTests {
         #expect(state.stopReasonBeforeNextResult(backend: .cloud) == "Eval completed-result budget reached (2/2).")
     }
 
+    @Test func cloudCostBudgetIncludesCostsStoredOnFailedResults() {
+        let failed = Self.result(
+            caseID: "case.a",
+            repeatIndex: 1,
+            status: .parseFailure,
+            estimatedCloudCostUSD: 0.75
+        )
+
+        let state = TextToSQLEvalBudgetState(
+            limits: TextToSQLEvalBudgetLimits(maxCloudCostUSD: Decimal(string: "0.75")),
+            seedResults: [failed]
+        )
+
+        #expect(state.cloudCostUSD == Decimal(string: "0.75"))
+        #expect(
+            state.stopReasonBeforeNextResult(backend: .cloud)
+                == "Eval estimated cloud-cost budget reached ($0.75/$0.75)."
+        )
+    }
+
     @Test func httpBudgetStopsOnlyCloudAndReportsRemainingAttempts() {
         let reused = [
             Self.result(
@@ -419,7 +439,8 @@ struct TextToSQLEvalRunPlanningTests {
         status: TextToSQLEvalCaseStatus,
         endToEndPassed: Bool? = nil,
         modelCallCount: Int? = nil,
-        openRouterHTTPAttempts: Int? = nil
+        openRouterHTTPAttempts: Int? = nil,
+        estimatedCloudCostUSD: Double? = nil
     ) -> TextToSQLEvalResult {
         TextToSQLEvalResult(
             caseID: caseID,
@@ -434,6 +455,7 @@ struct TextToSQLEvalRunPlanningTests {
                 decisionMatches: status == .passed,
                 latencyMs: 1,
                 modelCallCount: modelCallCount,
+                estimatedCloudCostUSD: estimatedCloudCostUSD,
                 openRouterAgentHTTPAttemptCount: openRouterHTTPAttempts,
                 endToEndPassed: endToEndPassed
             )

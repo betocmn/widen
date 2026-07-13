@@ -175,6 +175,29 @@ struct TextToSQLEvalTests {
         }
     }
 
+    private struct UsageReportingHangingGenerator: SQLGenerator {
+        func generateSQL(
+            question: String,
+            schema: DatabaseSchema,
+            context: SQLGenerationContext,
+            config: SQLGenerationConfig
+        ) async throws -> SQLGenerationResult {
+            config.usageSink?(.httpAttempts(2))
+            config.usageSink?(
+                SQLGenerationUsageEvent(
+                    httpAttemptCount: 0,
+                    promptTokens: 12,
+                    completionTokens: 8,
+                    reasoningTokens: 2,
+                    totalTokens: 20,
+                    costUSD: 0.02
+                )
+            )
+            try await Task.sleep(nanoseconds: 60_000_000_000)
+            throw SQLGenerationFailure.generation("Hanging generator unexpectedly completed.")
+        }
+    }
+
     private struct BlockingGenerator: SQLGenerator {
         func generateSQL(
             question: String,
@@ -1080,6 +1103,31 @@ struct TextToSQLEvalTests {
         #expect(nextResult.status == .passed)
     }
 
+    @Test func caseTimeoutPreservesObservedCloudUsage() async {
+        let evalCase = TextToSQLEvalCase(
+            id: "commerce.recent-orders",
+            schemaFixture: "commerce",
+            question: "Show the 10 most recent orders",
+            expected: TextToSQLEvalExpectation(decision: .sql)
+        )
+
+        let result = await TextToSQLEvalCaseRunner.run(
+            evalCase: evalCase,
+            schema: makeCommerceSchema(),
+            generator: UsageReportingHangingGenerator(),
+            options: TextToSQLEvalRunOptions(
+                backend: .cloud,
+                model: "test/model",
+                caseTimeoutSeconds: 0.01
+            )
+        )
+
+        #expect(result.status == .evalTimeout)
+        #expect(result.metrics.modelCallCount == 2)
+        #expect(result.metrics.tokenUsage == 20)
+        #expect(result.metrics.estimatedCloudCostUSD == 0.02)
+    }
+
     @Test func parentCancellationCancelsTimedCasePromptly() async {
         let evalCase = TextToSQLEvalCase(
             id: "commerce.recent-orders",
@@ -1193,6 +1241,36 @@ struct TextToSQLEvalTests {
         #expect(result.metrics.structuredResponseParsed == false)
         #expect(result.metrics.requiredTableCoverage == nil)
         #expect(result.metrics.requiredColumnBindingCoverage == nil)
+    }
+
+    @Test func openRouterFailureUsageReachesEvalCostMetrics() async {
+        let evalCase = TextToSQLEvalCase(
+            id: "commerce.recent-orders",
+            schemaFixture: "commerce",
+            question: "Show the 10 most recent orders",
+            expected: TextToSQLEvalExpectation(decision: .sql)
+        )
+        let failure = OpenRouterFailure(
+            category: .malformedStructuredResponse,
+            message: "Malformed completion.",
+            requestedModelID: "test/model",
+            promptTokens: 4,
+            completionTokens: 5,
+            reasoningTokens: 2,
+            totalTokens: 9,
+            costUSD: 0.25
+        )
+
+        let result = await TextToSQLEvalCaseRunner.run(
+            evalCase: evalCase,
+            schema: makeCommerceSchema(),
+            generator: ThrowingGenerator(error: failure),
+            options: TextToSQLEvalRunOptions(backend: .cloud, model: "test/model")
+        )
+
+        #expect(result.status == .parseFailure)
+        #expect(result.metrics.tokenUsage == 9)
+        #expect(result.metrics.estimatedCloudCostUSD == 0.25)
     }
 
     @Test func localStructuredDecodeFailureCountsAsParseFailure() async {

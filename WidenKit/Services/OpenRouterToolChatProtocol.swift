@@ -201,7 +201,7 @@ struct OpenRouterToolChatParser: Sendable {
         let provider: String?
         let serviceTier: String?
         let choices: [Choice]
-        let usage: Usage?
+        let usage: OpenRouterReportedUsage?
         let error: OpenRouterAPIErrorEnvelope.APIError?
         let openrouterMetadata: RouterMetadata?
 
@@ -223,7 +223,7 @@ struct OpenRouterToolChatParser: Sendable {
             provider = try container.decodeIfPresent(String.self, forKey: .provider)
             serviceTier = try container.decodeIfPresent(String.self, forKey: .serviceTier)
             choices = try container.decodeIfPresent([Choice].self, forKey: .choices) ?? []
-            usage = try container.decodeIfPresent(Usage.self, forKey: .usage)
+            usage = try container.decodeIfPresent(OpenRouterReportedUsage.self, forKey: .usage)
             error = try container.decodeIfPresent(OpenRouterAPIErrorEnvelope.APIError.self, forKey: .error)
             openrouterMetadata = try container.decodeIfPresent(RouterMetadata.self, forKey: .openrouterMetadata)
         }
@@ -262,30 +262,6 @@ struct OpenRouterToolChatParser: Sendable {
         }
     }
 
-    private struct Usage: Decodable {
-        struct CompletionDetails: Decodable {
-            let reasoningTokens: Int?
-
-            private enum CodingKeys: String, CodingKey {
-                case reasoningTokens = "reasoning_tokens"
-            }
-        }
-
-        let promptTokens: Int?
-        let completionTokens: Int?
-        let totalTokens: Int?
-        let completionTokensDetails: CompletionDetails?
-        let cost: Double?
-
-        private enum CodingKeys: String, CodingKey {
-            case promptTokens = "prompt_tokens"
-            case completionTokens = "completion_tokens"
-            case totalTokens = "total_tokens"
-            case completionTokensDetails = "completion_tokens_details"
-            case cost
-        }
-    }
-
     private struct RouterMetadata: Decodable, Equatable, Sendable {
         struct Endpoints: Decodable, Equatable, Sendable {
             struct Endpoint: Decodable, Equatable, Sendable {
@@ -311,13 +287,14 @@ struct OpenRouterToolChatParser: Sendable {
         retryCount: Int,
         expectedCanonicalModelID: String? = nil
     ) throws -> ParsedTurn {
+        let reportedUsage = OpenRouterResponseParser.reportedUsage(from: data)
         if !(200..<300).contains(response.statusCode) {
             throw OpenRouterResponseParser.failure(
                 from: data,
                 response: response,
                 requestedModelID: requestedModelID,
                 attemptCount: requestCount
-            )
+            ).withReportedUsage(reportedUsage)
         }
         let requestID = response.value(forHTTPHeaderField: "X-Request-Id")
             ?? response.value(forHTTPHeaderField: "X-Request-ID")
@@ -333,7 +310,7 @@ struct OpenRouterToolChatParser: Sendable {
                 requestID: requestID,
                 requestedModelID: requestedModelID,
                 attemptCount: requestCount
-            )
+            ).withReportedUsage(reportedUsage)
         }
         if let topError = completion.error {
             throw OpenRouterResponseParser.failure(
@@ -345,7 +322,7 @@ struct OpenRouterToolChatParser: Sendable {
                 returnedModelID: completion.model,
                 providerName: completion.provider ?? completion.openrouterMetadata?.selectedProvider,
                 attemptCount: requestCount
-            )
+            ).withReportedUsage(reportedUsage)
         }
         guard let choice = completion.choices.first else {
             throw OpenRouterFailure(
@@ -358,7 +335,7 @@ struct OpenRouterToolChatParser: Sendable {
                 returnedModelID: completion.model,
                 providerName: completion.provider ?? completion.openrouterMetadata?.selectedProvider,
                 attemptCount: requestCount
-            )
+            ).withReportedUsage(reportedUsage)
         }
         if let choiceError = choice.error {
             throw OpenRouterResponseParser.failure(
@@ -370,7 +347,7 @@ struct OpenRouterToolChatParser: Sendable {
                 returnedModelID: completion.model,
                 providerName: completion.provider ?? completion.openrouterMetadata?.selectedProvider,
                 attemptCount: requestCount
-            )
+            ).withReportedUsage(reportedUsage)
         }
         if choice.finishReason == "error" {
             throw OpenRouterFailure(
@@ -383,7 +360,7 @@ struct OpenRouterToolChatParser: Sendable {
                 returnedModelID: completion.model,
                 providerName: completion.provider ?? completion.openrouterMetadata?.selectedProvider,
                 attemptCount: requestCount
-            )
+            ).withReportedUsage(reportedUsage)
         }
         if choice.finishReason == "length" {
             throw OpenRouterFailure(
@@ -396,7 +373,7 @@ struct OpenRouterToolChatParser: Sendable {
                 returnedModelID: completion.model,
                 providerName: completion.provider ?? completion.openrouterMetadata?.selectedProvider,
                 attemptCount: requestCount
-            )
+            ).withReportedUsage(reportedUsage)
         }
         if choice.finishReason == "content_filter" {
             throw OpenRouterFailure(
@@ -409,7 +386,7 @@ struct OpenRouterToolChatParser: Sendable {
                 returnedModelID: completion.model,
                 providerName: completion.provider ?? completion.openrouterMetadata?.selectedProvider,
                 attemptCount: requestCount
-            )
+            ).withReportedUsage(reportedUsage)
         }
         if let refusal = choice.message?.refusal, !refusal.isEmpty {
             throw OpenRouterFailure(
@@ -422,7 +399,7 @@ struct OpenRouterToolChatParser: Sendable {
                 returnedModelID: completion.model,
                 providerName: completion.provider ?? completion.openrouterMetadata?.selectedProvider,
                 attemptCount: requestCount
-            )
+            ).withReportedUsage(reportedUsage)
         }
 
         let toolCalls = try (choice.message?.toolCalls ?? []).map { call in
@@ -443,7 +420,7 @@ struct OpenRouterToolChatParser: Sendable {
                     returnedModelID: completion.model,
                     providerName: completion.provider ?? completion.openrouterMetadata?.selectedProvider,
                     attemptCount: requestCount
-                )
+                ).withReportedUsage(reportedUsage)
             }
             return OpenRouterToolCall(id: id, name: name, arguments: arguments)
         }
@@ -461,18 +438,22 @@ struct OpenRouterToolChatParser: Sendable {
                 returnedModelID: completion.model,
                 providerName: completion.provider ?? completion.openrouterMetadata?.selectedProvider,
                 attemptCount: requestCount
-            )
+            ).withReportedUsage(reportedUsage)
         }
-        try OpenRouterCanonicalModelValidator.validate(
-            returnedModelID: completion.model,
-            expectedCanonicalModelID: expectedCanonicalModelID,
-            requestedModelID: requestedModelID,
-            httpStatus: response.statusCode,
-            completionID: completion.id,
-            requestID: requestID,
-            providerName: completion.provider ?? completion.openrouterMetadata?.selectedProvider,
-            attemptCount: requestCount
-        )
+        do {
+            try OpenRouterCanonicalModelValidator.validate(
+                returnedModelID: completion.model,
+                expectedCanonicalModelID: expectedCanonicalModelID,
+                requestedModelID: requestedModelID,
+                httpStatus: response.statusCode,
+                completionID: completion.id,
+                requestID: requestID,
+                providerName: completion.provider ?? completion.openrouterMetadata?.selectedProvider,
+                attemptCount: requestCount
+            )
+        } catch let failure as OpenRouterFailure {
+            throw failure.withReportedUsage(reportedUsage)
+        }
         let metadata = OpenRouterGenerationMetadata(
             requestedModelID: requestedModelID,
             returnedModelID: completion.model,

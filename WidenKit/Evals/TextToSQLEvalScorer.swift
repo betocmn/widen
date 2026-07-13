@@ -128,6 +128,36 @@ public enum TextToSQLEvalCaseRunner {
         }
     }
 
+    private final class UsageRecorder: @unchecked Sendable {
+        private let lock = NSLock()
+        private var usage = SQLGenerationUsageEvent.httpAttempts(0)
+
+        func record(_ event: SQLGenerationUsageEvent) {
+            lock.withLock {
+                usage.httpAttemptCount += event.httpAttemptCount
+                Self.add(event.promptTokens, to: &usage.promptTokens)
+                Self.add(event.completionTokens, to: &usage.completionTokens)
+                Self.add(event.reasoningTokens, to: &usage.reasoningTokens)
+                Self.add(event.totalTokens, to: &usage.totalTokens)
+                Self.add(event.costUSD, to: &usage.costUSD)
+            }
+        }
+
+        func snapshot() -> SQLGenerationUsageEvent {
+            lock.withLock { usage }
+        }
+
+        private static func add(_ value: Int?, to total: inout Int?) {
+            guard let value else { return }
+            total = (total ?? 0) + value
+        }
+
+        private static func add(_ value: Double?, to total: inout Double?) {
+            guard let value else { return }
+            total = (total ?? 0) + value
+        }
+    }
+
     public static func run(
         evalCase: TextToSQLEvalCase,
         schema: DatabaseSchema,
@@ -140,7 +170,8 @@ public enum TextToSQLEvalCaseRunner {
                 schema: schema,
                 generator: generator,
                 options: options,
-                started: Date()
+                started: Date(),
+                usageRecorder: nil
             )
         }
         return await runWithTimeout(
@@ -162,6 +193,7 @@ public enum TextToSQLEvalCaseRunner {
         let started = Date()
         let timeoutDuration = timeoutDuration(for: timeoutSeconds)
         let cancellation = TimeoutCancellation()
+        let usageRecorder = UsageRecorder()
         return await withTaskCancellationHandler {
             await withCheckedContinuation { continuation in
                 let race = TimeoutRace(continuation: continuation)
@@ -171,7 +203,8 @@ public enum TextToSQLEvalCaseRunner {
                         schema: schema,
                         generator: generator,
                         options: options,
-                        started: started
+                        started: started,
+                        usageRecorder: usageRecorder
                     )
                     race.finish(result, cancelPipeline: false, cancelTimeout: true)
                 }
@@ -183,7 +216,8 @@ public enum TextToSQLEvalCaseRunner {
                             cancellationResult(
                                 evalCase: evalCase,
                                 options: options,
-                                latencyMs: elapsedMilliseconds(since: started)
+                                latencyMs: elapsedMilliseconds(since: started),
+                                observedUsage: usageRecorder.snapshot()
                             ),
                             cancelPipeline: true,
                             cancelTimeout: false
@@ -195,7 +229,8 @@ public enum TextToSQLEvalCaseRunner {
                             evalCase: evalCase,
                             options: options,
                             timeoutSeconds: timeoutDuration.seconds,
-                            latencyMs: elapsedMilliseconds(since: started)
+                            latencyMs: elapsedMilliseconds(since: started),
+                            observedUsage: usageRecorder.snapshot()
                         ),
                         cancelPipeline: true,
                         cancelTimeout: false
@@ -207,7 +242,8 @@ public enum TextToSQLEvalCaseRunner {
                         cancellationResult(
                             evalCase: evalCase,
                             options: options,
-                            latencyMs: elapsedMilliseconds(since: started)
+                            latencyMs: elapsedMilliseconds(since: started),
+                            observedUsage: usageRecorder.snapshot()
                         ),
                         cancelPipeline: true,
                         cancelTimeout: true
@@ -235,17 +271,22 @@ public enum TextToSQLEvalCaseRunner {
         schema: DatabaseSchema,
         generator: any SQLGenerator,
         options: TextToSQLEvalRunOptions,
-        started: Date
+        started: Date,
+        usageRecorder: UsageRecorder?
     ) async -> TextToSQLEvalResult {
         do {
+            var config = SQLGenerationConfig(
+                defaultRowLimit: options.defaultRowLimit,
+                databaseContext: evalCase.databaseContext ?? ""
+            )
+            if let usageRecorder {
+                config.usageSink = { usageRecorder.record($0) }
+            }
             let run = try await TextToSQLPipeline(generator: generator).run(
                 TextToSQLRequest(
                     question: evalCase.question,
                     schema: schema,
-                    config: SQLGenerationConfig(
-                        defaultRowLimit: options.defaultRowLimit,
-                        databaseContext: evalCase.databaseContext ?? ""
-                    ),
+                    config: config,
                     allowGroundingClarification: !options.testOnlyDisableGroundingClarification,
                     sqlVerifier: options.sqlVerifier,
                     verificationConnection: options.verificationConnection
@@ -274,7 +315,8 @@ public enum TextToSQLEvalCaseRunner {
             return cancellationResult(
                 evalCase: evalCase,
                 options: options,
-                latencyMs: elapsedMilliseconds(since: started)
+                latencyMs: elapsedMilliseconds(since: started),
+                observedUsage: usageRecorder?.snapshot()
             )
         } catch {
             return failureResult(
@@ -294,7 +336,8 @@ public enum TextToSQLEvalCaseRunner {
         evalCase: TextToSQLEvalCase,
         options: TextToSQLEvalRunOptions,
         timeoutSeconds: Double,
-        latencyMs: Int
+        latencyMs: Int,
+        observedUsage: SQLGenerationUsageEvent
     ) -> TextToSQLEvalResult {
         TextToSQLEvalResult(
             caseID: evalCase.id,
@@ -308,7 +351,11 @@ public enum TextToSQLEvalCaseRunner {
                 structuredResponseParsed: false,
                 decisionMatches: false,
                 latencyMs: latencyMs,
-                estimatedInitialPromptCharacters: options.estimatedInitialPromptCharacters
+                modelCallCount: observedUsage.httpAttemptCount > 0
+                    ? observedUsage.httpAttemptCount : nil,
+                estimatedInitialPromptCharacters: options.estimatedInitialPromptCharacters,
+                tokenUsage: observedUsage.totalTokens,
+                estimatedCloudCostUSD: observedUsage.costUSD
             ),
             diagnostics: TextToSQLEvalDiagnostics(
                 errorMessage:
@@ -321,7 +368,8 @@ public enum TextToSQLEvalCaseRunner {
     private static func cancellationResult(
         evalCase: TextToSQLEvalCase,
         options: TextToSQLEvalRunOptions,
-        latencyMs: Int
+        latencyMs: Int,
+        observedUsage: SQLGenerationUsageEvent? = nil
     ) -> TextToSQLEvalResult {
         TextToSQLEvalResult(
             caseID: evalCase.id,
@@ -335,7 +383,12 @@ public enum TextToSQLEvalCaseRunner {
                 structuredResponseParsed: false,
                 decisionMatches: false,
                 latencyMs: latencyMs,
-                estimatedInitialPromptCharacters: options.estimatedInitialPromptCharacters
+                modelCallCount: observedUsage.flatMap {
+                    $0.httpAttemptCount > 0 ? $0.httpAttemptCount : nil
+                },
+                estimatedInitialPromptCharacters: options.estimatedInitialPromptCharacters,
+                tokenUsage: observedUsage?.totalTokens,
+                estimatedCloudCostUSD: observedUsage?.costUSD
             ),
             diagnostics: TextToSQLEvalDiagnostics(
                 errorMessage: "Eval case \(evalCase.id) was cancelled."
@@ -403,8 +456,9 @@ public enum TextToSQLEvalCaseRunner {
                     backendMetadata: backendMetadata
                 ),
                 estimatedInitialPromptCharacters: options.estimatedInitialPromptCharacters,
-                tokenUsage: backendMetadata?.totalTokens,
-                estimatedCloudCostUSD: backendMetadata?.costUSD,
+                tokenUsage: backendMetadata?.totalTokens ?? openRouterDiagnostic?.totalTokens,
+                estimatedCloudCostUSD: backendMetadata?.costUSD
+                    ?? openRouterDiagnostic?.costUSD,
                 openRouterStructuredOutputMode: backendMetadata?.structuredOutputMode.rawValue,
                 openRouterRetryCount: backendMetadata?.retryCount
                     ?? openRouterDiagnostic.map { max(0, $0.attemptCount - 1) },
@@ -470,8 +524,10 @@ public enum TextToSQLEvalCaseRunner {
                     backendMetadata: backendMetadata
                 ),
                 estimatedInitialPromptCharacters: options.estimatedInitialPromptCharacters,
-                tokenUsage: backendMetadata?.totalTokens,
-                estimatedCloudCostUSD: backendMetadata?.costUSD,
+                tokenUsage: backendMetadata?.totalTokens
+                    ?? failure.openRouterFailure?.totalTokens,
+                estimatedCloudCostUSD: backendMetadata?.costUSD
+                    ?? failure.openRouterFailure?.costUSD,
                 openRouterStructuredOutputMode: backendMetadata?.structuredOutputMode.rawValue,
                 openRouterRetryCount: backendMetadata?.retryCount
                     ?? failure.openRouterFailure.map { max(0, $0.attemptCount - 1) },
