@@ -749,6 +749,8 @@ enum OpenRouterCanonicalModelValidator {
 
     static func validate(
         returnedModelID: String?,
+        routerRequestedModelID: String?,
+        selectedEndpointModelID: String?,
         expectedCanonicalModelID: String?,
         requestedModelID: String,
         httpStatus: Int?,
@@ -759,6 +761,12 @@ enum OpenRouterCanonicalModelValidator {
     ) throws {
         guard let expectedCanonicalModelID else { return }
         guard returnedModelID != expectedCanonicalModelID else { return }
+        if returnedModelID == requestedModelID,
+            routerRequestedModelID == requestedModelID,
+            selectedEndpointModelID == expectedCanonicalModelID
+        {
+            return
+        }
         let message =
             returnedModelID == nil
             ? "OpenRouter did not report which model version served this request, so Widen cannot confirm it matches the evaluated version. Try again, and update Widen if this persists."
@@ -1877,6 +1885,8 @@ struct OpenRouterResponseParser: Sendable {
         do {
             try OpenRouterCanonicalModelValidator.validate(
                 returnedModelID: completion.model,
+                routerRequestedModelID: completion.openrouterMetadata?.requested,
+                selectedEndpointModelID: completion.openrouterMetadata?.selectedModelID,
                 expectedCanonicalModelID: expectedCanonicalModelID,
                 requestedModelID: requestedModelID,
                 httpStatus: response.statusCode,
@@ -2204,8 +2214,19 @@ struct OpenRouterRouterMetadata: Decodable, Equatable, Sendable {
     let attempt: Int?
     let endpoints: Endpoints?
 
+    private var selectedEndpoint: Endpoints.Endpoint? {
+        guard let selected = endpoints?.available?.filter({ $0.selected == true }),
+            selected.count == 1
+        else { return nil }
+        return selected[0]
+    }
+
     var selectedProvider: String? {
-        endpoints?.available?.first { $0.selected == true }?.provider
+        selectedEndpoint?.provider
+    }
+
+    var selectedModelID: String? {
+        selectedEndpoint?.model
     }
 }
 

@@ -3085,6 +3085,58 @@ struct OpenRouterSchemaToolSQLAgentTests {
         #expect(parsed.metadata.returnedModelID == canonicalModelID)
     }
 
+    @Test func toolChatParserAcceptsAliasWithMatchingSelectedEndpointCanonicalModel() throws {
+        let parser = OpenRouterToolChatParser()
+        let canonicalModelID = "openai/gpt-5.5-20260423"
+        let data = Self.jsonData([
+            "id": "cmpl-router-match",
+            "model": Self.modelID,
+            "provider": "Azure",
+            "openrouter_metadata": [
+                "requested": Self.modelID,
+                "endpoints": [
+                    "available": [[
+                        "provider": "Azure",
+                        "model": canonicalModelID,
+                        "selected": true,
+                    ]],
+                ],
+            ],
+            "choices": [[
+                "index": 0,
+                "finish_reason": "tool_calls",
+                "message": [
+                    "role": "assistant",
+                    "tool_calls": [[
+                        "id": "call-1",
+                        "type": "function",
+                        "function": [
+                            "name": "search_schema",
+                            "arguments": #"{"query":"users"}"#,
+                        ],
+                    ]],
+                ],
+            ]],
+        ])
+        let response = HTTPURLResponse(
+            url: Self.chatEndpoint,
+            statusCode: 200,
+            httpVersion: "HTTP/1.1",
+            headerFields: nil
+        )!
+
+        let parsed = try parser.parse(
+            data: data,
+            response: response,
+            requestedModelID: Self.modelID,
+            requestCount: 1,
+            retryCount: 0,
+            expectedCanonicalModelID: canonicalModelID
+        )
+
+        #expect(parsed.metadata.returnedModelID == Self.modelID)
+    }
+
     @Test func invalidRequestFailureIsNotReclassifiedAsUnsupportedTools() async throws {
         let schema = Self.makeSchema()
         let chatTransport = ScriptedTransport { _, _ in
