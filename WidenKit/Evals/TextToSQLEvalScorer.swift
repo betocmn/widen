@@ -554,9 +554,16 @@ public enum TextToSQLEvalCaseRunner {
         openRouterFailure: OpenRouterFailureDiagnostic?,
         backendMetadata: OpenRouterGenerationMetadata? = nil
     ) -> Int? {
-        if let agentAttemptCount = backendMetadata?.agentHTTPAttemptCount ?? backendMetadata?.requestCount {
-            guard trace.modelCalls > 0 else { return agentAttemptCount }
-            return trace.modelCalls + max(0, agentAttemptCount - 1)
+        if let agentAttemptCount = backendMetadata?.agentHTTPAttemptCount {
+            // Pipeline aggregation makes the agent total cumulative across
+            // initial and repair generations, while the trace already carries
+            // the cumulative model-call count. Use the larger observation
+            // instead of adding the same earlier attempts twice.
+            return max(trace.modelCalls, agentAttemptCount)
+        }
+        if let requestCount = backendMetadata?.requestCount {
+            guard trace.modelCalls > 0 else { return requestCount }
+            return trace.modelCalls + max(0, requestCount - 1)
         }
         guard let attemptCount = openRouterFailure?.attemptCount else {
             return trace.modelCalls == 0 ? nil : trace.modelCalls

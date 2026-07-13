@@ -120,6 +120,14 @@ struct TextToSQLEvalTests {
             config: SQLGenerationConfig
         ) async throws -> SQLGenerationResult {
             if context.mode == .initial {
+                var metadata = OpenRouterGenerationMetadata(
+                    requestedModelID: "test/model",
+                    structuredOutputMode: .promptOnlyJSON,
+                    requestCount: 1,
+                    retryCount: 0
+                )
+                metadata.agentSelectionReason = "tools"
+                metadata.agentHTTPAttemptCount = 1
                 return SQLGenerationResult(
                     sql: "SELECT missing_column FROM public.orders LIMIT 10",
                     explanation: "Intentionally references a missing column.",
@@ -129,7 +137,8 @@ struct TextToSQLEvalTests {
                     riskLevel: .medium,
                     needsClarification: false,
                     clarificationQuestion: nil,
-                    generationCallCount: 1
+                    generationCallCount: 1,
+                    backendMetadata: metadata
                 )
             }
             var metadata = OpenRouterGenerationMetadata(
