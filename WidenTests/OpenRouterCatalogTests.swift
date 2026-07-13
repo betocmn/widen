@@ -80,6 +80,39 @@ struct OpenRouterCatalogTests {
         }
     }
 
+    @Test func releaseArtifactVersionsCannotEscapeTheirOutputDirectory() {
+        for version in ["0.1.0", "1.0-beta_1"] {
+            #expect(throws: Never.self) {
+                try TextToSQLReleaseArtifactVersionPolicy.validate(version)
+            }
+        }
+
+        let invalidVersions = [
+            "",
+            "../README",
+            "0.1/../../README",
+            ".hidden",
+            "version with spaces",
+            "v\u{00E9}rsion",
+            String(repeating: "a", count: 65),
+        ]
+        for version in invalidVersions {
+            #expect(throws: TextToSQLReleaseArtifactVersionPolicy.Violation.self) {
+                try TextToSQLReleaseArtifactVersionPolicy.validate(version)
+            }
+        }
+
+        #expect(throws: TextToSQLReleaseArtifactVersionPolicy.Violation.self) {
+            try TextToSQLReleaseGateModelPolicy.validate(
+                model: "vendor/other",
+                backendIncludesCloud: true,
+                releaseGateVersion: "../README",
+                releaseTriageVersion: nil,
+                allowModelOverride: true
+            )
+        }
+    }
+
     @Test func committedDocEligibilityRequiresVerifiedCloudEvaluation() {
         let profile = OpenRouterCatalog.productionProfile
         #expect(

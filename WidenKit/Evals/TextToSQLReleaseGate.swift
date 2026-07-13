@@ -1,5 +1,37 @@
 import Foundation
 
+public enum TextToSQLReleaseArtifactVersionPolicy {
+    public struct Violation: LocalizedError, Equatable, Sendable {
+        public var errorDescription: String? {
+            "Release artifact versions must be 1-64 ASCII letters, digits, periods, hyphens, or underscores and start with a letter or digit."
+        }
+    }
+
+    public static func validate(_ version: String) throws {
+        let scalars = version.unicodeScalars
+        guard (1...64).contains(version.utf8.count),
+            let first = scalars.first,
+            isASCIIAlphanumeric(first),
+            scalars.allSatisfy(isAllowed)
+        else {
+            throw Violation()
+        }
+    }
+
+    private static func isAllowed(_ scalar: Unicode.Scalar) -> Bool {
+        isASCIIAlphanumeric(scalar) || scalar == "." || scalar == "-" || scalar == "_"
+    }
+
+    private static func isASCIIAlphanumeric(_ scalar: Unicode.Scalar) -> Bool {
+        switch scalar.value {
+        case 48...57, 65...90, 97...122:
+            true
+        default:
+            false
+        }
+    }
+}
+
 /// Runs that publish committed release-gate or triage docs must evaluate the
 /// pinned production model. Enforced at the eval CLI so a future Makefile
 /// target or direct binary invocation cannot bypass the Makefile guard.
@@ -46,6 +78,12 @@ public enum TextToSQLReleaseGateModelPolicy {
         releaseTriageVersion: String?,
         allowModelOverride: Bool
     ) throws {
+        if let releaseGateVersion {
+            try TextToSQLReleaseArtifactVersionPolicy.validate(releaseGateVersion)
+        }
+        if let releaseTriageVersion {
+            try TextToSQLReleaseArtifactVersionPolicy.validate(releaseTriageVersion)
+        }
         guard releaseGateVersion != nil || releaseTriageVersion != nil,
             !allowModelOverride
         else { return }

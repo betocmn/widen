@@ -34,6 +34,7 @@ enum TextToSQLReleaseGateReporter {
         evalOutput: EvalOutputPaths,
         version: String
     ) throws -> TextToSQLReleaseGateOutput {
+        try TextToSQLReleaseArtifactVersionPolicy.validate(version)
         let evaluationInput = input(for: run)
         let evaluation = TextToSQLReleaseGate.evaluate(evaluationInput)
         let committedDocIneligibility = run.committedDocIneligibility
@@ -971,6 +972,7 @@ enum TextToSQLReleaseTriageReporter {
 
     private static func copySummaryIfNeeded(markdown: String, version: String?) throws -> URL? {
         guard let version else { return nil }
+        try TextToSQLReleaseArtifactVersionPolicy.validate(version)
         let directory = URL(fileURLWithPath: "docs/evals", isDirectory: true)
         try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
         let url = directory.appendingPathComponent("\(version)-triage.md")
