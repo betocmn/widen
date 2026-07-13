@@ -347,18 +347,19 @@ enum TextToSQLReleaseTriageReporter {
         // Offline re-triage publishes committed docs too, so it enforces the
         // same pinned-model policy as evaluated runs — and even with the
         // override, a non-pinned run never replaces the committed copy.
-        if let model = runFile.manifest.model {
-            try TextToSQLReleaseGateModelPolicy.validate(
-                model: model,
-                backendIncludesCloud: true,
-                releaseGateVersion: nil,
-                releaseTriageVersion: copyVersion,
-                allowModelOverride: allowModelOverride
-            )
-        }
-        let publishesCommittedCopy =
-            runFile.manifest.model == nil
-            || runFile.manifest.model == OpenRouterCatalog.productionProfile.requestedModelID
+        let backendIncludesCloud = runFile.manifest.backendMode == "cloud"
+            || runFile.manifest.backendMode == "both"
+        try TextToSQLReleaseGateModelPolicy.validate(
+            model: runFile.manifest.model,
+            backendIncludesCloud: backendIncludesCloud,
+            releaseGateVersion: nil,
+            releaseTriageVersion: copyVersion,
+            allowModelOverride: allowModelOverride
+        )
+        let publishesCommittedCopy = TextToSQLReleaseGateModelPolicy.canPublishCommittedDocs(
+            model: runFile.manifest.model,
+            backendIncludesCloud: backendIncludesCloud
+        )
         let results = try readCasesJSONL(
             directory.appendingPathComponent("cases.jsonl")
         )

@@ -4,31 +4,48 @@ import Foundation
 /// pinned production model. Enforced at the eval CLI so a future Makefile
 /// target or direct binary invocation cannot bypass the Makefile guard.
 public enum TextToSQLReleaseGateModelPolicy {
-    public struct Violation: Error, CustomStringConvertible, Equatable, Sendable {
-        public var model: String
+    public struct Violation: LocalizedError, CustomStringConvertible, Equatable, Sendable {
+        public var model: String?
         public var pinnedModel: String
 
         public var description: String {
-            "Release-gate and triage docs require the pinned production model \(pinnedModel) but got \(model); pass --allow-model-override to run an engineering comparison."
+            guard let model else {
+                return "Release-gate and triage docs require a cloud run using the pinned production model \(pinnedModel); pass --allow-model-override to run an engineering comparison."
+            }
+            return "Release-gate and triage docs require the pinned production model \(pinnedModel) but got \(model); pass --allow-model-override to run an engineering comparison."
         }
+
+        public var errorDescription: String? { description }
     }
 
     public static func validate(
-        model: String,
+        model: String?,
         backendIncludesCloud: Bool,
         releaseGateVersion: String?,
         releaseTriageVersion: String?,
         allowModelOverride: Bool
     ) throws {
-        guard backendIncludesCloud,
-            releaseGateVersion != nil || releaseTriageVersion != nil,
-            !allowModelOverride,
-            model != OpenRouterCatalog.productionProfile.requestedModelID
+        guard releaseGateVersion != nil || releaseTriageVersion != nil,
+            !allowModelOverride
         else { return }
-        throw Violation(
+        guard !canPublishCommittedDocs(
             model: model,
+            backendIncludesCloud: backendIncludesCloud
+        ) else { return }
+        throw Violation(
+            model: backendIncludesCloud ? model : nil,
             pinnedModel: OpenRouterCatalog.productionProfile.requestedModelID
         )
+    }
+
+    /// Sink-time eligibility is deliberately stricter than the override used
+    /// to run engineering comparisons: overrides never publish committed docs.
+    public static func canPublishCommittedDocs(
+        model: String?,
+        backendIncludesCloud: Bool
+    ) -> Bool {
+        backendIncludesCloud
+            && model == OpenRouterCatalog.productionProfile.requestedModelID
     }
 }
 

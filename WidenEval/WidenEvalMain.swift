@@ -96,9 +96,10 @@ enum WidenEvalMain {
             // Committed docs/evals artifacts are reserved for the pinned
             // production model; override runs keep their gate and triage
             // output in the run directory.
-            let publishesCommittedDocs =
-                run.manifest.model == nil
-                || run.manifest.model == OpenRouterCatalog.productionProfile.requestedModelID
+            let publishesCommittedDocs = TextToSQLReleaseGateModelPolicy.canPublishCommittedDocs(
+                model: run.manifest.model,
+                backendIncludesCloud: run.backendSummaries[.cloud] != nil
+            )
             let committedTriageVersion =
                 publishesCommittedDocs ? options.releaseTriageVersion : nil
             var wroteReleaseTriage = false
@@ -112,7 +113,7 @@ enum WidenEvalMain {
                 print("Release gate summary: \(gateOutput.summary.path)")
                 if !publishesCommittedDocs {
                     print(
-                        "Engineering comparison model: committed docs/evals left unchanged."
+                        "Non-production release-gate run: committed docs/evals left unchanged."
                     )
                 }
                 if options.writeReleaseTriage {

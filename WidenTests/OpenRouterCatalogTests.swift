@@ -60,6 +60,63 @@ struct OpenRouterCatalogTests {
                 allowModelOverride: false
             )
         }
+        #expect(throws: TextToSQLReleaseGateModelPolicy.Violation.self) {
+            try TextToSQLReleaseGateModelPolicy.validate(
+                model: pinned,
+                backendIncludesCloud: false,
+                releaseGateVersion: "0.1.0",
+                releaseTriageVersion: nil,
+                allowModelOverride: false
+            )
+        }
+        #expect(throws: Never.self) {
+            try TextToSQLReleaseGateModelPolicy.validate(
+                model: pinned,
+                backendIncludesCloud: false,
+                releaseGateVersion: "0.1.0",
+                releaseTriageVersion: nil,
+                allowModelOverride: true
+            )
+        }
+    }
+
+    @Test func committedDocEligibilityRequiresCloudAndThePinnedModel() {
+        let pinned = OpenRouterCatalog.productionProfile.requestedModelID
+        #expect(
+            TextToSQLReleaseGateModelPolicy.canPublishCommittedDocs(
+                model: pinned,
+                backendIncludesCloud: true
+            )
+        )
+        #expect(
+            !TextToSQLReleaseGateModelPolicy.canPublishCommittedDocs(
+                model: nil,
+                backendIncludesCloud: true
+            )
+        )
+        #expect(
+            !TextToSQLReleaseGateModelPolicy.canPublishCommittedDocs(
+                model: pinned,
+                backendIncludesCloud: false
+            )
+        )
+        #expect(
+            !TextToSQLReleaseGateModelPolicy.canPublishCommittedDocs(
+                model: "vendor/other",
+                backendIncludesCloud: true
+            )
+        )
+    }
+
+    @Test func releaseGateViolationHasAnActionableLocalizedDescription() {
+        let pinned = OpenRouterCatalog.productionProfile.requestedModelID
+        let violation = TextToSQLReleaseGateModelPolicy.Violation(
+            model: nil,
+            pinnedModel: pinned
+        )
+
+        #expect(violation.localizedDescription.contains("require a cloud run"))
+        #expect(violation.localizedDescription.contains("--allow-model-override"))
     }
 
     @Test func expectedCanonicalModelIDEnforcesOnlyThePinnedModel() {
