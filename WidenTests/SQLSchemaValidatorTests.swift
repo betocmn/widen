@@ -1929,7 +1929,7 @@ struct SQLSchemaValidatorTests {
         #expect(enriched.referencedTables == ["public.users"])
     }
 
-    @Test func diagnosticsOnlySchemaToolEvidenceDoesNotSuppressGroundingClarification() {
+    @Test func diagnosticsOnlySchemaToolEvidenceSuppressesGroundingClarification() {
         let generation = SQLGenerationResult(
             sql: "SELECT COUNT(*) FROM public.users WHERE status = 'active'",
             explanation: "Counts active users.",
@@ -1952,10 +1952,70 @@ struct SQLSchemaValidatorTests {
             databaseContext: ""
         )
 
+        #expect(!enriched.needsClarification)
+        #expect(enriched.sql == generation.sql)
+        #expect(enriched.clarificationQuestion == nil)
+        #expect(enriched.groundingConcepts.contains {
+            $0.term == "active" && $0.state == .unsupported
+        })
+        #expect(enriched.referencedTables == ["public.users"])
+    }
+
+    @Test func appRejectedSchemaToolSQLDoesNotSuppressGroundingClarification() {
+        let generation = SQLGenerationResult(
+            sql: "SELECT COUNT(*) FROM public.users WHERE status = 'active'",
+            explanation: "Counts active users.",
+            assumptions: [],
+            referencedTables: [],
+            confidence: 1,
+            riskLevel: .low,
+            needsClarification: false,
+            clarificationQuestion: nil,
+            backendMetadata: schemaToolSQLMetadata(
+                describedTableIDs: ["public.users"],
+                exposedColumnIDs: ["public.users.id", "public.users.status"],
+                appSideRejectionReason: .intentCoverageRejected
+            )
+        )
+
+        let enriched = GeneratedSQLPostprocessor.enriched(
+            generation,
+            question: "how many active users do we have?",
+            schema: makeUsersUnconstrainedStatusSchema(),
+            databaseContext: ""
+        )
+
         #expect(enriched.needsClarification)
         #expect(enriched.sql.isEmpty)
-        #expect(enriched.clarificationQuestion?.contains("\"active\"") == true)
-        #expect(enriched.referencedTables == ["public.users"])
+        #expect(enriched.pendingClarification?.concept.term == "active")
+    }
+
+    @Test func undescribedSchemaToolTableDoesNotSuppressGroundingClarification() {
+        let generation = SQLGenerationResult(
+            sql: "SELECT COUNT(*) FROM public.users WHERE status = 'active'",
+            explanation: "Counts active users.",
+            assumptions: [],
+            referencedTables: [],
+            confidence: 1,
+            riskLevel: .low,
+            needsClarification: false,
+            clarificationQuestion: nil,
+            backendMetadata: schemaToolSQLMetadata(
+                describedTableIDs: ["public.orders"],
+                exposedColumnIDs: []
+            )
+        )
+
+        let enriched = GeneratedSQLPostprocessor.enriched(
+            generation,
+            question: "how many active users do we have?",
+            schema: makeUsersUnconstrainedStatusSchema(),
+            databaseContext: ""
+        )
+
+        #expect(enriched.needsClarification)
+        #expect(enriched.sql.isEmpty)
+        #expect(enriched.pendingClarification?.concept.term == "active")
     }
 
     @Test func nonMetricFilterTermsStillRequireGrounding() {
@@ -2185,6 +2245,54 @@ struct SQLSchemaValidatorTests {
         #expect(!enriched.needsClarification)
         #expect(enriched.sql == generation.sql)
         #expect(enriched.referencedTables == ["public.users"])
+    }
+
+    @Test func trustedSchemaToolSQLSuppressesAnchoredWindowClarification() {
+        let generation = SQLGenerationResult(
+            sql: """
+                SELECT t.name, COUNT(*) AS wins
+                FROM public.preseason_match_evaluation AS e
+                JOIN public.preseason_tool AS t ON e.winner_id = t.id
+                WHERE e.winner_id IS NOT NULL
+                  AND e."createdAt" >= NOW() - INTERVAL '14 days'
+                GROUP BY t.name
+                """,
+            explanation: "Counts winning evaluations by tool.",
+            assumptions: [],
+            referencedTables: [],
+            confidence: 1,
+            riskLevel: .low,
+            needsClarification: false,
+            clarificationQuestion: nil,
+            backendMetadata: schemaToolSQLMetadata(
+                describedTableIDs: [
+                    "public.preseason_match_evaluation",
+                    "public.preseason_tool",
+                ],
+                exposedColumnIDs: [
+                    "public.preseason_match_evaluation.winner_id",
+                    "public.preseason_match_evaluation.createdAt",
+                    "public.preseason_tool.id",
+                    "public.preseason_tool.name",
+                ]
+            )
+        )
+
+        let enriched = GeneratedSQLPostprocessor.enriched(
+            generation,
+            question: "Which tools have the most wins in the two weeks ending 2026-06-24 12:00 UTC?",
+            schema: makePreseasonWinnerSchema(),
+            databaseContext:
+                "Each evaluation with a non-null winner_id records one win. Use createdAt and anchor at 2026-06-24 12:00 UTC."
+        )
+
+        #expect(!enriched.needsClarification)
+        #expect(enriched.sql == generation.sql)
+        #expect(enriched.groundingConcepts.contains { $0.term == "time window anchor" })
+        #expect(enriched.referencedTables == [
+            "public.preseason_match_evaluation",
+            "public.preseason_tool",
+        ])
     }
 
     @Test func confirmedSemanticBindingDefinesUnconstrainedStatusLiteral() {
@@ -2565,7 +2673,8 @@ struct SQLSchemaValidatorTests {
         describedTableIDs: [String],
         exposedColumnIDs: [String],
         exposedForeignKeyPathIDs: [String] = [],
-        intentCoverageMode: SchemaToolAgentIntentCoverageMode = .diagnosticsOnly
+        intentCoverageMode: SchemaToolAgentIntentCoverageMode = .diagnosticsOnly,
+        appSideRejectionReason: OpenRouterSchemaToolAppRejectionReason? = nil
     ) -> OpenRouterGenerationMetadata {
         var metadata = OpenRouterGenerationMetadata(
             requestedModelID: "test/model",
@@ -2584,6 +2693,7 @@ struct SQLSchemaValidatorTests {
                 exposedColumnIDs: exposedColumnIDs,
                 exposedForeignKeyPathIDs: exposedForeignKeyPathIDs
             ),
+            appSideRejectionReason: appSideRejectionReason,
             intentCoverageMode: intentCoverageMode.rawValue
         )
         return metadata
