@@ -807,6 +807,35 @@ struct OpenRouterSQLGeneratorTests {
         }
     }
 
+    @Test func choiceLevelErrorTakesPrecedenceOverCanonicalValidation() throws {
+        let parser = OpenRouterResponseParser()
+        do {
+            _ = try parser.parse(
+                data: chatResponse(
+                    content: nil,
+                    model: nil,
+                    choiceError: [
+                        "message": "provider failed",
+                        "metadata": [
+                            "error_type": "provider_unavailable",
+                            "provider_code": "overloaded",
+                        ],
+                    ]
+                ),
+                response: response(url: Self.chatEndpoint, status: 200),
+                requestedModelID: Self.modelID,
+                mode: .strictJSONSchema,
+                requestCount: 1,
+                retryCount: 0,
+                expectedCanonicalModelID: "openai/gpt-5.5-20260423"
+            )
+            Issue.record("expected provider error")
+        } catch let failure as OpenRouterFailure {
+            #expect(failure.category == .providerUnavailable)
+            #expect(failure.diagnostic.providerCode == "overloaded")
+        }
+    }
+
     @Test func everyTypedFailureCategoryIsReachable() {
         let cases: [(String?, Int?, String?, OpenRouterFailure.Category)] = [
             ("invalid_api_key", 400, nil, .authentication),

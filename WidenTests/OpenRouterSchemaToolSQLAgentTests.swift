@@ -2872,6 +2872,46 @@ struct OpenRouterSchemaToolSQLAgentTests {
         }
     }
 
+    @Test func toolChatChoiceErrorTakesPrecedenceOverCanonicalValidation() throws {
+        let parser = OpenRouterToolChatParser()
+        let data = Self.jsonData([
+            "id": "cmpl-choice-error",
+            "provider": "OpenAI",
+            "choices": [[
+                "index": 0,
+                "error": [
+                    "code": 503,
+                    "message": "provider failed",
+                    "metadata": [
+                        "error_type": "provider_unavailable",
+                        "provider_code": "overloaded",
+                    ],
+                ],
+            ]],
+        ])
+        let response = HTTPURLResponse(
+            url: Self.chatEndpoint,
+            statusCode: 200,
+            httpVersion: "HTTP/1.1",
+            headerFields: nil
+        )!
+
+        do {
+            _ = try parser.parse(
+                data: data,
+                response: response,
+                requestedModelID: Self.modelID,
+                requestCount: 1,
+                retryCount: 0,
+                expectedCanonicalModelID: "openai/gpt-5.5-20260423"
+            )
+            Issue.record("Expected provider failure")
+        } catch let failure as OpenRouterFailure {
+            #expect(failure.category == .providerUnavailable)
+            #expect(failure.diagnostic.providerCode == "overloaded")
+        }
+    }
+
     @Test func toolChatParserRejectsUnexpectedCanonicalModelWhenEnforced() throws {
         let parser = OpenRouterToolChatParser()
         let returnedModelID = "openai/gpt-5.5-unevaluated"
