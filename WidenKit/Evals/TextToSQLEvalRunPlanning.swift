@@ -268,6 +268,7 @@ public struct TextToSQLEvalResumeCompatibilityManifest: Equatable, Sendable {
     public var suiteFileHash: String
     public var schemaFixtureHashes: [String: String]
     public var model: String?
+    public var expectedCanonicalModelID: String?
     public var backendMode: String
     public var cloudAgentMode: String?
     public var schemaAgentClarificationCorrectionMode: String?
@@ -284,6 +285,7 @@ public struct TextToSQLEvalResumeCompatibilityManifest: Equatable, Sendable {
         suiteFileHash: String,
         schemaFixtureHashes: [String: String],
         model: String?,
+        expectedCanonicalModelID: String? = nil,
         backendMode: String,
         cloudAgentMode: String?,
         schemaAgentClarificationCorrectionMode: String? = nil,
@@ -299,6 +301,7 @@ public struct TextToSQLEvalResumeCompatibilityManifest: Equatable, Sendable {
         self.suiteFileHash = suiteFileHash
         self.schemaFixtureHashes = schemaFixtureHashes
         self.model = model
+        self.expectedCanonicalModelID = expectedCanonicalModelID
         self.backendMode = backendMode
         self.cloudAgentMode = cloudAgentMode
         self.schemaAgentClarificationCorrectionMode = schemaAgentClarificationCorrectionMode
@@ -356,6 +359,12 @@ public enum TextToSQLEvalResumeCompatibility {
             issues: &issues
         )
         compare("model", previous.model ?? "-", current.model ?? "-", issues: &issues)
+        compare(
+            "expected canonical model",
+            previous.expectedCanonicalModelID ?? "-",
+            current.expectedCanonicalModelID ?? "-",
+            issues: &issues
+        )
         compare("backend", previous.backendMode, current.backendMode, issues: &issues)
         compare(
             "cloud agent",

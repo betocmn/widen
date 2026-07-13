@@ -31,6 +31,7 @@ struct EvalRunManifest: Codable {
     var schemaAgentClarificationCorrectionMode: String?
     var schemaAgentIntentCoverageMode: String?
     var model: String?
+    var expectedCanonicalModelID: String?
     var osVersion: String
     var architecture: String
     var caseCount: Int
@@ -204,6 +205,9 @@ struct EvalRunner {
         )
         let databaseDirectory = evalDirectory.appendingPathComponent("databases", isDirectory: true)
         let isOpenRouterSmoke = suite.name.hasPrefix("openrouter-smoke")
+        let expectedCanonicalModelID = options.backendMode.backends.contains(.cloud)
+            ? OpenRouterCatalog.expectedCanonicalModelID(forRequestedModelID: options.model)
+            : nil
         let scorerSourcePaths = scorerSourcePaths(isOpenRouterSmoke: isOpenRouterSmoke)
         let scorerSourceHash = Self.sourceHash(
             relativePaths: scorerSourcePaths,
@@ -233,6 +237,7 @@ struct EvalRunner {
             suiteFileHash: Self.sha256(suiteData),
             schemaFixtureHashes: schemas.mapValues(\.sha256),
             model: options.backendMode == .local ? nil : options.model,
+            expectedCanonicalModelID: expectedCanonicalModelID,
             backendMode: options.backendMode.rawValue,
             cloudAgentMode: options.backendMode.backends.contains(.cloud)
                 ? options.cloudAgentMode.rawValue
@@ -328,6 +333,7 @@ struct EvalRunner {
                     ? options.schemaAgentIntentCoverageMode.rawValue
                     : nil,
                 model: options.backendMode == .local ? nil : options.model,
+                expectedCanonicalModelID: expectedCanonicalModelID,
                 osVersion: ProcessInfo.processInfo.operatingSystemVersionString,
                 architecture: Self.architecture(),
                 caseCount: selectedCases.count,
@@ -664,7 +670,10 @@ struct EvalRunner {
             "WidenKit/Services/PostgresErrorMapper.swift",
             "WidenKit/Services/PostgresService.swift",
         ] + ((isOpenRouterSmoke || options.backendMode.backends.contains(.cloud))
-            ? ["WidenKit/Services/OpenRouterSQLGenerator.swift"]
+            ? [
+                "WidenKit/Models/OpenRouterCatalog.swift",
+                "WidenKit/Services/OpenRouterSQLGenerator.swift",
+            ]
             : [])
             + (options.cloudAgentMode == .tools ? [
                 "WidenKit/Services/OpenRouterSchemaToolSQLAgent.swift",
@@ -1647,6 +1656,7 @@ private extension EvalRunManifest {
             suiteFileHash: suiteFileHash,
             schemaFixtureHashes: schemaFixtureHashes,
             model: model,
+            expectedCanonicalModelID: expectedCanonicalModelID,
             backendMode: backendMode,
             cloudAgentMode: cloudAgentMode,
             schemaAgentClarificationCorrectionMode: schemaAgentClarificationCorrectionMode,

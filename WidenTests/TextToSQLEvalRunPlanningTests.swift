@@ -96,6 +96,28 @@ struct TextToSQLEvalRunPlanningTests {
         }
     }
 
+    @Test func compatibilityRejectsChangedOrMissingExpectedCanonicalModel() {
+        let current = Self.compatibility()
+        var changed = current
+        changed.expectedCanonicalModelID = "openai/gpt-5.5-unevaluated"
+        var legacy = current
+        legacy.expectedCanonicalModelID = nil
+
+        for (previous, resumed) in [(current, changed), (legacy, current)] {
+            do {
+                try TextToSQLEvalResumeCompatibility.validate(
+                    previous: previous,
+                    current: resumed
+                )
+                Issue.record("Expected compatibility rejection.")
+            } catch let error as TextToSQLEvalResumeCompatibilityError {
+                #expect(error.issues.map(\.field) == ["expected canonical model"])
+            } catch {
+                Issue.record("Unexpected error: \(error)")
+            }
+        }
+    }
+
     @Test func compatibilityDefaultsMissingSchemaAgentModesToDiagnosticsOnly() throws {
         let previous = Self.compatibility()
         var current = Self.compatibility()
@@ -359,6 +381,7 @@ struct TextToSQLEvalRunPlanningTests {
             .appendingPathComponent("WidenEval/EvalRunner.swift")
         let source = try String(contentsOf: evalRunner, encoding: .utf8)
 
+        #expect(source.contains("\"WidenKit/Models/OpenRouterCatalog.swift\""))
         #expect(source.contains("\"WidenKit/Services/OpenRouterSQLGenerator.swift\""))
         #expect(source.contains("options.backendMode.backends.contains(.cloud)"))
     }
@@ -424,6 +447,7 @@ struct TextToSQLEvalRunPlanningTests {
             suiteFileHash: "suite-hash",
             schemaFixtureHashes: ["commerce": "schema-hash"],
             model: "openai/gpt-5.5",
+            expectedCanonicalModelID: "openai/gpt-5.5-20260423",
             backendMode: "cloud",
             cloudAgentMode: "tools",
             semanticDatabaseEnabled: true,
