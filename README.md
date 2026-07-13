@@ -297,10 +297,11 @@ make eval-release
 
 It runs the 20-case suite three times against the same OpenRouter schema-tool
 path used by the default product experience, with seeded Postgres semantic
-grading. Engineering comparisons can still pass an explicit `MODEL=<id>`
-without changing the product profile. The gate writes the normal
-`.eval-results/` artifacts, writes
-`docs/evals/<version>.md`, and exits nonzero unless the release thresholds pass.
+grading. Engineering comparisons must opt in with
+`MODEL=<id> ALLOW_MODEL_OVERRIDE=1`; their gate and triage reports stay in the
+run directory rather than replacing committed release docs. A pinned gate
+writes the normal `.eval-results/` artifacts, writes `docs/evals/<version>.md`,
+and exits nonzero unless the release thresholds pass.
 Cloud/OpenRouter is the default text-to-SQL path, but text-to-SQL remains beta
 and should not be described as production-ready until that gate passes. Manual
 SQL editing, schema browsing, and normal database work remain supported
