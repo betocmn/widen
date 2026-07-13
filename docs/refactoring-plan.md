@@ -1864,6 +1864,36 @@ on the pinned model (PR 56 in `docs/next-dev-steps.md`), which targets
 exactly this bucket. The June GPT-5.5 24/60 record remains in git history at
 commit `386f363` and earlier.
 
+## PR 56 grounding-bypass attempt [2026-07-13]
+
+The first pinned GPT-5.5 grounding-bypass attempt was inconclusive. Commit
+`747eef5` restored the previously tested bypass and passed the two focused
+validator/pipeline suites (182 tests) and the full unit suite (1,094 tests).
+The capped `make eval-release-triage MODEL=openai/gpt-5.5
+MAX_CLOUD_COST_USD=4` run could not produce an evaluable result:
+
+```text
+result records: 35/60 attempted; 0 completed; 25 missing
+status: 35 backendUnavailable
+failure: 35 modelVersionMismatch
+HTTP/provider: 35 successful responses from Azure
+catalog canonical: openai/gpt-5.5-20260423
+completion model field: openai/gpt-5.5
+schema-tool calls: 0
+cost: $0.204335
+P95 latency: 4,748 ms
+```
+
+The authenticated catalog still advertised the pinned canonical version, but
+every completion response supplied only the requested alias. Fail-closed
+completion-version enforcement therefore rejected every result before schema
+discovery. After 35 identical outcomes the run was stopped to avoid paying for
+the same systemic failure 25 more times. No PR 56 acceptance metric and no
+post-bypass PR 57–59 failure bucket can be inferred from this run. The valid
+2026-07-10 60/60 reports remain committed, `30c5cb9` reverted the bypass, and
+the experiment must be retried after the completion response model-ID contract
+is resolved or confirmed without weakening canonical enforcement.
+
 ---
 
 # Recommended implementation order for one coding agent

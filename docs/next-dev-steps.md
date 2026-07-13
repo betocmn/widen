@@ -16,6 +16,13 @@ routing, canonical-version enforcement, release-gate hardening) merges to
   2026-07-10 gate at HEAD (pinned GPT-5.5, private routing, canonical
   enforcement, $3.18): 19/60 semantic, 11/12 clarification accuracy, 100%
   safety/schema, 60/60 transport, 0 repeated repairs.
+* A 2026-07-13 PR 56 attempt was inconclusive rather than a negative bypass
+  result. The authenticated catalog still reported canonical
+  `openai/gpt-5.5-20260423`, but all 35 attempted Azure completions returned
+  only the requested alias `openai/gpt-5.5`. Fail-closed completion-version
+  enforcement rejected every result before schema tools ran. The run was
+  stopped at $0.204335 instead of billing the remaining identical failures,
+  the bypass was reverted, and the valid 2026-07-10 gate remains the baseline.
 * Failure buckets at HEAD, largest first: host-side false clarification
   (28 — the model returned SQL in every one; the legacy grounder discarded
   it), semantic result mismatch (6), tool budget exhausted (6),
@@ -30,8 +37,9 @@ routing, canonical-version enforcement, release-gate hardening) merges to
 
 ## Recommended order
 
-1. PR 56 — now the main accuracy lever: the 28-case false-clarification
-   bucket is exactly what the bypass addresses
+1. Resolve or confirm OpenRouter's completion response model-ID contract,
+   then retry PR 56 — the 28-case false-clarification bucket remains the main
+   accuracy lever and the bypass has not yet received a valid GPT-5.5 gate
 2. PR 57 against the post-PR 56 triage (semantic mismatch is only 6 at HEAD;
    confirm it is still worth the build before starting)
 3. PR 58 and PR 59 against fresh triage
@@ -55,6 +63,20 @@ transport and structured-response parsing stay at or above 95% AND
 forbidden-binding violations, repeated/no-progress repairs, and eval
 timeouts all stay at zero. Otherwise revert again and record the negative
 result here and in the refactoring plan.
+
+**Attempt 2026-07-13 — inconclusive:** Commit `747eef5` restored the bypass
+and passed 182 focused tests plus the full 1,094-test suite. The pinned gate
+then produced 35/35 typed `modelVersionMismatch` failures from HTTP-successful
+Azure responses: the authenticated catalog reported the expected canonical
+ID, while every completion reported only `openai/gpt-5.5`. The run had zero
+completed/evaluable results, zero schema-tool calls, 25 results still missing,
+P95 latency 4,748 ms, and $0.204335 cost when it was stopped. Because none of
+the pre-registered accuracy or reliability criteria could be evaluated, this
+is neither a pass nor a negative bypass result. Commit `30c5cb9` reverted the
+bypass, the committed release reports were left at the last valid complete
+gate, and PRs 57–59 did not receive fresh triage. Retry this experiment only
+after the response model-ID behavior is resolved or positively confirmed;
+do not weaken fail-closed canonical enforcement to manufacture a gate result.
 
 **Expectations:** High since the 2026-07-10 HEAD gate: 28 of 60 results are
 valid model SQL discarded by the host grounder, which is precisely the path
