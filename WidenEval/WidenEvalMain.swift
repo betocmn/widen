@@ -438,6 +438,12 @@ struct EvalCLIOptions {
         {
             throw EvalCLIError.resumeSelectionWithoutRun
         }
+        if options.releaseTriageVersion != nil,
+            options.releaseTriageInputPath == nil,
+            !options.writeReleaseTriage
+        {
+            throw EvalCLIError.releaseTriageVersionWithoutOutput
+        }
         return options
     }
 
@@ -481,6 +487,7 @@ enum EvalCLIError: LocalizedError {
     case invalidValue(String, String)
     case unknownArgument(String)
     case resumeSelectionWithoutRun
+    case releaseTriageVersionWithoutOutput
 
     var errorDescription: String? {
         switch self {
@@ -492,6 +499,8 @@ enum EvalCLIError: LocalizedError {
             "Unknown argument: \(argument)."
         case .resumeSelectionWithoutRun:
             "Resume selection flags require --resume-run."
+        case .releaseTriageVersionWithoutOutput:
+            "--release-triage-version requires --write-release-triage or --triage-release."
         }
     }
 }
