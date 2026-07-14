@@ -79,7 +79,7 @@ Numbering continues from `docs/refactoring-plan.md`.
 3. If a retry clears every PR 56 criterion, PR 57 becomes the next accuracy
    lever: semantic mismatch was the largest fresh actionable bucket at 28
 4. PR 58 only if clarification remains independently below 12/12 after the
-   budget/timeout cases are fixed; PR 60 and PR 61 remain independent
+   budget/timeout cases are fixed; PR 60 remains independent
 
 ---
 
@@ -301,21 +301,6 @@ already fail loudly (after one self-healing cache refresh), and Settings warns
 when the catalog canonical has rolled; this PR is about the team hearing it
 before users do.
 
-## PR 61 — Second vetted model in the allowlist
-
-**Status: ⏳ Not started.**
-
-**Why:** Accounts whose OpenRouter provider policies hide GPT-5.5's
-ZDR endpoints currently have no cloud path; the allowlist was always meant to
-grow once evaluation capacity allowed.
-
-**What:** Evaluate one fallback candidate (Claude Sonnet 5 tied Terra in the
-original focused bake-off; re-survey current models first) through the full
-release gate under identical private routing. Add it to the profile list only
-if it meets or beats the pinned baseline on semantic pass with all hard gates
-green. Settings picker grows to two vetted entries, each with its own
-canonical pin; eval defaults stay on the primary.
-
 ## PR 62 — PR 55 hardening cleanups
 
 **Status: ⏳ Not started.**
@@ -363,3 +348,9 @@ merge and none change behavior:
   semantic, 100% clarification, 100% safety/schema, >= 95% transport, 0
   repeated repairs), update README/PRIVACY beta wording and commit the
   passing `docs/evals/<version>.md` as the production-ready record.
+* **Second vetted model in the allowlist (formerly PR 61)** — dropped from
+  planned work; keep as optional future work. If accounts whose OpenRouter
+  provider policies hide GPT-5.5's ZDR endpoints ever need a cloud path,
+  evaluate one fallback candidate through the full release gate under
+  identical private routing and add it to the profile list only if it meets
+  or beats the pinned baseline with all hard gates green.
