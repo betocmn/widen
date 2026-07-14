@@ -6,11 +6,12 @@ Numbering continues from `docs/refactoring-plan.md`.
 
 ## Completed and remaining work
 
-* ✅ **Done — PR 56 experiment:** restored the trusted
-  schema-tool SQL bypass, ran the complete pinned GPT-5.5 gate, applied every
-  pre-registered criterion, published sanitized evidence, and reverted the
-  bypass after it missed the clarification floor. The experiment is complete;
-  the bypass is not part of the final product diff.
+* ✅ **Done — PR 56 experiment and retry:** restored the trusted
+  schema-tool SQL bypass, ran the complete pinned GPT-5.5 gate before and
+  after PR 59, applied every pre-registered criterion, and published sanitized
+  evidence. The post-PR 59 retry cleared the semantic and clarification floors
+  but recorded one internal schema-agent timeout, so the conjunctive decision
+  rule rejected the bypass again. It is not part of the final product diff.
 * ✅ **Done — routed-model verification:** retained the
   OpenRouter metadata fix needed to verify the concrete model behind a
   completion alias, including fail-closed handling for missing, ambiguous,
@@ -23,11 +24,11 @@ Numbering continues from `docs/refactoring-plan.md`.
   schema-tool budget exhaustion end to end (agent failure category, redacted
   diagnostics, eval status, triage bucket, gate reporting) and added
   deterministic interception of provably redundant schema-tool calls so they
-  no longer consume the six-call budget, which stays at six. The bucket-size
-  acceptance still needs the next funded full gate.
-* ⏳ **Not done:** a PR 56 retry, structured plan validation or compilation,
-  clarification behavior changes, canonical rollover monitoring, a second
-  model, and cleanup work.
+  no longer consume the six-call budget, which stays at six. The post-PR 59
+  full gate completed the bucket, cost, latency, timeout-reporting, and
+  counter-population acceptance measurement.
+* ⏳ **Not done:** PR 58 clarification behavior, structured plan validation
+  or compilation, canonical rollover monitoring, and cleanup work.
 
 ## Where things stand
 
@@ -41,25 +42,32 @@ Numbering continues from `docs/refactoring-plan.md`.
   still fails closed. Release-gate/triage doc publication is pin-enforced in
   both the Makefile and the eval CLI (`--allow-model-override` to opt out).
 * The release gate still fails, so text-to-SQL stays beta. The complete
-  2026-07-13 PR 56 experiment (pinned GPT-5.5, private routing, canonical
-  enforcement, $3.276305) reached 22/60 semantic but only 9/12 clarification
-  decisions. Safety/schema stayed 41/41, transport was 60/60, structured
-  parsing was 57/60, and forbidden bindings and repeated repairs were zero.
-  The reported eval-timeout status was zero, but one 91-second schema-agent
-  timeout surfaced as a parse failure. Because clarification missed the
-  pre-registered 11/12 floor (and a strict any-timeout reading also fails),
-  the grounding bypass is rejected and reverted in the following commit.
-* The experiment moved primary failure buckets from the 2026-07-10 comparator
-  as expected but too aggressively: expected-SQL clarification fell 28 -> 5,
-  while semantic mismatch grew 6 -> 28; tool-budget triage moved 6 -> 5 and
-  static schema failure 1 -> 0. The five remaining wrong SQL decisions were
-  not trusted grounding candidates: four terminal SQL results were rejected
-  by deterministic validation, and one was an explicit model clarification.
-* The clarification shortfall was operational, not evidence for new phrase
-  rules. Two `saas.healthy-accounts` repeats genuinely exhausted the six-call
-  schema-tool budget. One `preseason.top-wins-ambiguous` repeat timed out after
-  91 seconds before any tool call but was grouped into the same redacted
-  triage bucket; that classification/observability gap belongs in PR 59.
+  2026-07-14 post-PR 59 retry (pinned GPT-5.5, private routing, canonical
+  enforcement, $3.521450) reached 26/60 semantic and 11/12 clarification.
+  Safety/schema stayed 42/42, transport was 60/60, structured parsing was
+  59/60, and forbidden bindings, repeated repairs, and eval timeouts were
+  zero. One 93.7-second internal schema-agent timeout was correctly reported
+  as a `generationFailure`, the `schema-agent timeout` triage bucket, and an
+  `Internal schema-agent timeouts` count of one. The pre-registered PR 56
+  criteria are conjunctive and require both timeout kinds to stay at zero, so
+  the bypass was rejected and reverted in follow-up commit `842bd42`.
+* Against the 2026-07-10 retained product comparator, the retry moved
+  expected-SQL clarification 28 -> 5, semantic mismatch triage 6 -> 26,
+  tool-budget failure triage 6 -> 0, and static schema failure 1 -> 0. The
+  semantic-status total is 27 mismatches because one result with an earlier
+  zero-hit search is classified by triage precedence as `no schema match`.
+* PR 59 now passes its funded acceptance measurement. Cost was $0.058690833
+  per case versus $0.054605083 (+7.48%, below the 15% ceiling), and P95 was
+  33,781 ms versus 30,244 ms (+11.70%). The failed-result tool-budget bucket
+  was zero; two otherwise successful clarification results carried genuine
+  `sessionBudgetExceeded` traces, which also remain within the at-most-three
+  target. All 60 diagnostics populated the three redundant-interception
+  counters; no interception fired in this run (duplicate/zero-hit/join-path
+  totals 0/0/0).
+* Clarification is independently 11/12 after PR 59. The sole miss was
+  `preseason.top-wins-ambiguous` repeat 3 returning SQL without a timeout,
+  budget error, or app-side rejection. That makes PR 58 the next roadmap item;
+  it does not justify expanding the frozen phrase heuristics.
 * Standing conclusions to respect: the intent-coverage phrase heuristics are
   frozen (PR 53); more force-SQL prompt pressure does not help (PR 52); the
   next accuracy lever is stable query planning / deterministic synthesis
@@ -68,18 +76,17 @@ Numbering continues from `docs/refactoring-plan.md`.
 
 ## Recommended order
 
-1. ✅ Done — PR 59 budget/timeout fix: pre-tool timeouts are now classified
+1. ✅ Done — PR 59 budget/timeout fix and funded acceptance: pre-tool
+   timeouts are now classified
    and reported separately from genuine six-call exhaustion, redundant
    schema-tool exploration is deterministically intercepted without burning
-   budget, and the six-call limit is unchanged
-2. Retry PR 56 next; the bypass remains experimental because the complete
-   run missed 11/12, and that gate run doubles as the PR 59 acceptance
-   measurement (tool-budget bucket at or below 3 with cost and p95 latency
-   within 15% of baseline)
-3. If a retry clears every PR 56 criterion, PR 57 becomes the next accuracy
-   lever: semantic mismatch was the largest fresh actionable bucket at 28
-4. PR 58 only if clarification remains independently below 12/12 after the
-   budget/timeout cases are fixed; PR 60 remains independent
+   budget, the six-call limit is unchanged, and the full-gate bucket/cost/
+   latency criteria pass
+2. ✅ Done — PR 56 retry: every criterion except zero internal schema-agent
+   timeouts passed, so the bypass was reverted and PR 57 remains conditional
+3. PR 58 next: clarification remains independently below 12/12 after PR 59
+4. PR 57 only after a future bypass iteration clears every PR 56 criterion;
+   PR 60 remains independent
 
 ---
 
@@ -101,8 +108,8 @@ exceeds 19/60 (the HEAD baseline) AND clarification decision accuracy stays
 at or above 11/12 AND safety/schema validity stays 100% on evaluated SQL AND
 transport and structured-response parsing stay at or above 95% AND
 forbidden-binding violations, repeated/no-progress repairs, and eval
-timeouts all stay at zero. Otherwise revert again and record the negative
-result here and in the refactoring plan.
+timeouts and internal schema-agent timeouts all stay at zero. Otherwise
+revert again and record the negative result here and in the refactoring plan.
 
 **First attempt 2026-07-13 — inconclusive:** Commit `747eef5` restored the bypass
 and passed 182 focused tests plus the full 1,094-test suite. The pinned gate
@@ -151,18 +158,50 @@ routed-model verifier reject contradictions even when the top-level response
 already names the expected canonical model. The final parser suites passed
 128 tests, and `make test` passed 1,092 tests across 49 suites.
 
+**Post-PR 59 retry 2026-07-14 — negative, ✅ Done:** Commit `bcaf957`
+restored the exact patch last tested in `cd10d86`; comparison with both restore/
+revert cycles (`cd10d86` / `55d7d63` and `747eef5` / `30c5cb9`) confirmed the
+two newer restore patches are identical. The routed-model verifier and
+canonical enforcement were untouched, the bypass validator/pipeline suites
+passed 182 tests, and `make test` passed 1,117 tests in 49 suites before the
+first paid request. The complete pinned gate recorded:
+
+```text
+results: 60/60 complete
+semantic end-to-end: 26/60 (criterion >= 20: pass)
+clarification decisions: 11/12 (criterion >= 11: pass)
+safety/schema: 42/42 each (100%: pass)
+transport: 60/60 (100%: pass)
+structured parsing: 59/60 (98.3%: pass)
+forbidden bindings / repeated repairs: 0 / 0 (pass)
+eval-timeout status: 0 (pass)
+internal schema-agent timeouts: 1 (criterion 0: fail)
+latency: p50 17,968 ms; p95 33,781 ms; max 93,681 ms
+gate cost: $3.521450
+```
+
+The criteria are conjunctive. The separately typed internal schema-agent
+timeout therefore rejects the bypass even though every other PR 56 criterion
+passed. It was reported consistently as a `generationFailure`, the
+`schema-agent timeout` triage bucket, and an `Internal schema-agent timeouts`
+count of one; eval timeouts stayed zero. Commit `842bd42` reverted only the
+bypass. The routed-model verifier, canonical enforcement, and sanitized gate
+evidence remain.
+
 ## PR 57 — Plan-then-compile SQL synthesis for covered shapes
 
-**Status: ✅ Done — re-triage only.** The implementation has not started and
-remains conditional on a future PR 56 retry passing every promotion criterion.
+**Status: re-triage ✅ Done; implementation ⏳ Not started.** PR 57 is not
+next because the post-PR 59 bypass retry failed and was reverted. It remains
+conditional on a future bypass iteration passing every promotion criterion.
 
 **Why:** Semantic result mismatch was 6 on the retained PR 55 behavior and
-grew to the largest experimental bucket, 28, when PR 56 stopped discarding
-model SQL. Because PR 56 was rejected and reverted, treat 28 as evidence for
-the next passing bypass iteration, not as the current product baseline. PR 54
-added a redacted `query_plan` to the terminal contract as diagnostics; PR 52
-concluded the fix is stable query-plan and SQL-shape generation, not more
-prompt pressure or phrase heuristics.
+grew to the largest experimental bucket, 28 in the 2026-07-13 experiment and
+26 in the post-PR 59 retry, when PR 56 stopped discarding model SQL. Because
+both bypass runs were rejected and reverted, treat those results as evidence
+for the next passing bypass iteration, not as the current product baseline.
+PR 54 added a redacted `query_plan` to the terminal contract as diagnostics;
+PR 52 concluded the fix is stable query-plan and SQL-shape generation, not
+more prompt pressure or phrase heuristics.
 
 **What:** Promote the query plan from prose diagnostics to a small structured
 contract (grain, joins with roles, filters, aggregation, group/order/limit,
@@ -192,30 +231,31 @@ routing, frozen heuristics.
 
 ## PR 58 — Clarification decision accuracy to 12/12
 
-**Status: ✅ Done — re-triage only.** No clarification behavior or frozen
-phrase heuristic changed. Revisit only if clarification remains independently
-below 12/12 after PR 59.
+**Status: re-triage ✅ Done; implementation ⏳ Next.** No clarification
+behavior or frozen phrase heuristic changed. The post-PR 59 gate confirms the
+condition for this work: clarification remains independently below 12/12.
 
-**Why:** The gate requires 100%; the retained PR 55 comparator sits at 11/12.
-The PR 56 experiment fell to 9/12, but all three misses were operational
-(two genuine tool-budget exhaustions and one pre-tool timeout), so PR 58 is
-not the next fix unless clarification remains low after PR 59.
+**Why:** The gate requires 100%; the retained PR 55 comparator and the
+post-PR 59 retry both sit at 11/12. The earlier 9/12 experiment had three
+operational misses, but the new sole miss was independent:
+`preseason.top-wins-ambiguous` repeat 3 returned SQL without a timeout, budget
+error, or app-side rejection. PR 58 is therefore the next fix.
 
-**What:** After PR 59, rerun the clarification cases and triage only failures
-that remain independently of budget or timeout behavior. Fix the specific
-decision behavior (prompt guidance or clarification policy fidelity for those
-ambiguity classes). No new phrase heuristics — the PR 53 freeze stands.
+**What:** Reproduce and triage the one independent clarification failure, then
+fix its specific decision behavior (prompt guidance or clarification policy
+fidelity for that ambiguity class). No new phrase heuristics — the PR 53
+freeze stands.
 
 **Acceptance:** 12/12 clarification decisions across three repeats without
 increasing the expected-SQL-got-clarification bucket above 3.
 
 ## PR 59 — Tool-budget exhaustion bucket
 
-**Status: ✅ Done.** The trace diagnosis separated four genuine six-call
-exhaustions from one misclassified pre-tool timeout, and the budget/timeout
-fix landed in commits `47d6ad1`, `2b28900`, and `551ce3e`. The six-call
-budget is unchanged; the bucket-size acceptance below still needs the next
-funded full gate.
+**Status: ✅ Done, including funded acceptance.** The trace diagnosis
+separated four genuine six-call exhaustions from one misclassified pre-tool
+timeout, and the budget/timeout fix landed in commits `47d6ad1`, `2b28900`,
+and `551ce3e`. The six-call budget is unchanged; the post-PR 59 full gate
+completed the acceptance measurement below.
 
 **Why:** The retained comparator has 6 triaged tool-budget results. The PR 56
 experiment had four genuine exhaustion records: each used six successful
@@ -286,10 +326,28 @@ canonical-model checks, or the frozen phrase heuristics:
   wall-clock timeout it is. After the fixes the focused agent and
   eval-planning suites pass and `make test` passes 1,110 tests in 49 suites.
 
-The acceptance criterion (bucket at or below 3 with per-case cost and p95
-latency within 15% of baseline) requires a complete pinned gate. Per the
-standing spend rule no paid evaluation was run here; measure it on the next
-funded gate, which the PR 56 retry comparator provides.
+**Funded acceptance measurement — ✅ Passed:** The post-PR 59 PR 56 retry
+provided the complete pinned comparator:
+
+| Metric | Same-bypass baseline | 2026-07-14 retry | Result |
+| --- | ---: | ---: | --- |
+| Failed-result tool-budget bucket | 5 | 0 | Pass (`<= 3`) |
+| Cost per result | $0.054605083 | $0.058690833 | Pass (+7.48%) |
+| P95 latency | 30,244 ms | 33,781 ms | Pass (+11.70%) |
+| Schema-agent timeout bucket | Misclassified with tool budget | 1 | Correctly populated |
+| Internal timeout count | Not separately reported | 1 | Correctly populated |
+| Redundant duplicate / zero-search / join-path | Not available | 0 / 0 / 0 | Counters populated |
+
+All three redundant-interception counters were present on 60/60 diagnostics;
+their zero totals mean no redundant interception fired in this run. Two
+otherwise successful `preseason.top-wins-ambiguous` clarification results did
+carry genuine `sessionBudgetExceeded` traces even though the failure-only
+triage bucket is zero. That operational count is also within the at-most-three
+target and is retained here so the bucket semantics are explicit. The timeout
+bucket and run-table count both reported one, while the generic timeout/
+cancellation bucket and eval-timeout status stayed zero. PR 59 therefore
+passes its acceptance criteria even though the observed internal timeout
+independently fails PR 56's stricter zero-timeout rule.
 
 ## PR 60 — Canonical-version watch and rollover runbook
 

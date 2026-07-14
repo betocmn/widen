@@ -1864,7 +1864,7 @@ on the pinned model (PR 56 in `docs/next-dev-steps.md`), which targets
 exactly this bucket. The June GPT-5.5 24/60 record remains in git history at
 commit `386f363` and earlier.
 
-## PR 56 grounding-bypass experiment [2026-07-13]
+## PR 56 grounding-bypass experiment ✅ [completed 2026-07-14]
 
 The first pinned GPT-5.5 attempt was inconclusive. Commit `747eef5` restored
 the previously tested bypass and passed the two focused validator/pipeline
@@ -1950,8 +1950,81 @@ dedicated wall-clock timeout failure category with its own `timedOut`
 diagnostic, eval status, `schema-agent timeout` triage bucket, and gate-report
 count, plus deterministic pre-invocation interception of value-identical
 repeats, repeated zero-result searches, and already-explored join-path scopes
-so they no longer burn schema-tool budget. Details and remaining acceptance
-measurement live in `docs/next-dev-steps.md`.
+so they no longer burn schema-tool budget. Implementation details and the
+completed acceptance measurement live in `docs/next-dev-steps.md`.
+
+### Post-PR 59 PR 56 retry [2026-07-14] — ✅ Done, negative
+
+Commit `bcaf957` restored the exact patch last tested in `cd10d86`. Stable
+patch comparison confirmed that the `cd10d86` and `747eef5` restores are
+identical, while the older `7d6baff` patch predates later test-helper changes.
+The retry changed only the grounding bypass and its validator/pipeline tests;
+the routed-model verifier, canonical enforcement, privacy routing, safety and
+schema validation, PostgreSQL verification, frozen phrase heuristics, and
+six-call schema-tool limit were unchanged. The two focused suites passed 182
+tests, `make test` passed 1,117 tests in 49 suites, and the complete pinned
+gate recorded:
+
+```text
+pre-registered PR 56 criteria
+complete results: 60/60                                  pass
+semantic end-to-end: 26/60 (required >= 20)             pass
+clarification decisions: 11/12 (required >= 11)         pass
+safety validity: 42/42 (required 100%)                  pass
+schema validity: 42/42 (required 100%)                  pass
+transport: 60/60 (required >= 95%)                      pass
+structured parsing: 59/60 (required >= 95%)             pass
+forbidden bindings: 0                                   pass
+repeated/no-progress repairs: 0                         pass
+eval-timeout status: 0                                  pass
+internal schema-agent timeouts: 1 (required 0)           fail
+latency: P50 17,968 ms; P95 33,781 ms; max 93,681 ms
+cost: $3.521450
+```
+
+The criteria are conjunctive, so the one internal schema-agent timeout rejects
+the bypass despite every other PR 56 criterion passing. The timeout was
+reported consistently as a `generationFailure`, the `schema-agent timeout`
+triage bucket, and an `Internal schema-agent timeouts` run-table count of one;
+it was not an eval timeout, parse failure, or tool-budget triage result. Commit
+`842bd42` reverted only the bypass. The sanitized gate intentionally records
+`bcaf957`, the commit that was evaluated, while routed-model and canonical
+enforcement remain in the retained product. Recorded branch OpenRouter spend
+was $3.521450, below both the $4 gate cap and $8 branch authorization.
+
+The fresh exclusive triage categories were 26 semantic mismatches, five
+expected-SQL clarifications, one expected-clarification SQL decision, one
+schema-agent timeout, one earlier-zero-hit `no schema match` classification,
+and zero tool-budget, safety, or schema failures. The semantic-status total is
+27 mismatches because category precedence assigns the result with the earlier
+zero-hit search to `no schema match` even though it later produced and verified
+SQL. The sole clarification miss, `preseason.top-wins-ambiguous` repeat 3,
+returned SQL independently of timeout or budget behavior. PR 58 is therefore
+next; PR 57 remains conditional on a future bypass iteration passing every
+promotion criterion.
+
+### PR 59 funded acceptance measurement [2026-07-14] — ✅ Done
+
+The same complete gate supplied PR 59's pre-registered measurement:
+
+| Metric | Same-bypass baseline | 2026-07-14 retry | Result |
+| --- | ---: | ---: | --- |
+| Failed-result tool-budget bucket | 5 | 0 | Pass (`<= 3`) |
+| Cost per result | $0.054605083 | $0.058690833 | Pass (+7.48%) |
+| P95 latency | 30,244 ms | 33,781 ms | Pass (+11.70%) |
+| Schema-agent timeout bucket | Misclassified with tool budget | 1 | Correctly populated |
+| Internal timeout count | Not separately reported | 1 | Correctly populated |
+| Redundant duplicate / zero-search / join-path | Not available | 0 / 0 / 0 | Counters populated |
+
+All 60 diagnostics carried all three redundant-interception counters; zero
+totals mean none of the interception paths fired in this sample. Two otherwise
+successful `preseason.top-wins-ambiguous` clarification results did carry
+`sessionBudgetExceeded` traces even though the failed-result triage bucket is
+zero. That operational count of two also passes the at-most-three target. The
+timeout bucket and the internal-timeout count both reported one, while the
+generic timeout/cancellation bucket and eval-timeout status remained zero.
+PR 59 therefore passes its bucket, cost, latency, classification, and
+observability acceptance criteria without raising `maximumSchemaToolCalls`.
 
 ---
 
@@ -1984,6 +2057,15 @@ When only one agent is working:
 
 Follow-up work after PR 55 (PR 56 and onward) is planned in
 `docs/next-dev-steps.md`.
+
+Current follow-up decision:
+
+```text
+PR 59 ✅ — implementation and funded acceptance measurement complete
+PR 56 ✅ — retry complete, negative, bypass reverted
+PR 58 ⏳ — next because clarification remains independently at 11/12
+PR 57 ⏳ — conditional on a future bypass gate passing every criterion
+```
 
 The key discipline is to run the same 20 cases after every PR and reject changes that merely move failures from one stage to another.
 
