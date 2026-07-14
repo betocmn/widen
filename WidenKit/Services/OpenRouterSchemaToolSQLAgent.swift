@@ -63,6 +63,7 @@ public struct OpenRouterSchemaToolAgentFailure: Error, LocalizedError, Equatable
         case schemaToolByteBudgetExhausted
         case httpAttemptBudgetExhausted
         case modelTurnBudgetExhausted
+        case wallClockTimeout
         case terminalResultMissing
         case terminalResultMalformed
         case overcautiousClarificationNoProgress
@@ -118,6 +119,8 @@ public struct OpenRouterSchemaToolAgentFailure: Error, LocalizedError, Equatable
         case .schemaToolCallBudgetExhausted, .schemaToolByteBudgetExhausted,
             .overcautiousClarificationNoProgress, .intentCoverageNoProgress,
             .terminalRequiredAfterSufficientEvidenceNoProgress:
+            .modelGeneration
+        case .wallClockTimeout:
             .modelGeneration
         case .staleSchemaSnapshot:
             .modelGeneration
@@ -1068,7 +1071,7 @@ public final class OpenRouterSchemaToolSQLAgent: SQLGenerator, Sendable {
         guard remaining > 0 else {
             try checkDeadline(deadline)
             throw OpenRouterSchemaToolAgentFailure(
-                category: .modelTurnBudgetExhausted,
+                category: .wallClockTimeout,
                 message: "The schema-tool agent timed out."
             )
         }
@@ -1096,7 +1099,7 @@ public final class OpenRouterSchemaToolSQLAgent: SQLGenerator, Sendable {
                     return (data, response)
                 case .deadlineExceeded:
                     throw OpenRouterSchemaToolAgentFailure(
-                        category: .modelTurnBudgetExhausted,
+                        category: .wallClockTimeout,
                         message: "The schema-tool agent timed out."
                     )
                 }
@@ -1511,7 +1514,8 @@ public final class OpenRouterSchemaToolSQLAgent: SQLGenerator, Sendable {
             .malformedToolCall, .schemaToolCallBudgetExhausted, .schemaToolByteBudgetExhausted:
             true
         case .unsupportedTools, .repeatedToolCallNoProgress, .httpAttemptBudgetExhausted,
-            .modelTurnBudgetExhausted, .overcautiousClarificationNoProgress,
+            .modelTurnBudgetExhausted, .wallClockTimeout,
+            .overcautiousClarificationNoProgress,
             .intentCoverageNoProgress, .terminalRequiredAfterSufficientEvidenceNoProgress,
             .safetyValidation, .uninspectedSchemaObjects, .staleSchemaSnapshot,
             .cancellation, .openRouterRequestFailure:
@@ -1533,7 +1537,7 @@ public final class OpenRouterSchemaToolSQLAgent: SQLGenerator, Sendable {
     private func checkDeadline(_ deadline: Date) throws {
         guard Date() <= deadline else {
             throw OpenRouterSchemaToolAgentFailure(
-                category: .modelTurnBudgetExhausted,
+                category: .wallClockTimeout,
                 message: "The schema-tool agent timed out."
             )
         }
@@ -1825,6 +1829,8 @@ private struct OpenRouterSchemaToolAgentDiagnosticState {
             .httpAttemptBudgetExhausted,
             .modelTurnBudgetExhausted:
             appSideRejectionReason = .budgetExhausted
+        case .wallClockTimeout:
+            appSideRejectionReason = .timedOut
         case .terminalResultMalformed, .terminalResultMissing, .mixedTerminalAndSchemaCalls,
             .malformedToolCall:
             appSideRejectionReason = .malformedTerminal
@@ -1944,7 +1950,8 @@ private struct SchemaToolEvidenceLedger {
                 prefix = "Fix the invalid SQL binding using only owner candidates already exposed by schema tools."
             case .intentCoverageRejected:
                 prefix = "Preserve the requested SQL intent before returning a terminal result."
-            case .unsupportedAction, .malformedTerminal, .budgetExhausted, .clarificationRejected:
+            case .unsupportedAction, .malformedTerminal, .budgetExhausted, .timedOut,
+                .clarificationRejected:
                 prefix = "Use schema tools and validator feedback before returning SQL."
             }
             return "\(prefix) \(message). \(OpenRouterSchemaToolSQLAgent.strictTerminalCorrection)"

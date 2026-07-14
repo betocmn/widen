@@ -393,6 +393,26 @@ struct TextToSQLEvalRunPlanningTests {
         #expect(!evalText.contains(#"query plan: \(queryPlan)"#))
     }
 
+    @Test func releaseTriageClassifiesSchemaAgentTimeoutSeparatelyFromToolBudget() throws {
+        let testFile = URL(fileURLWithPath: #filePath)
+        let repoRoot = testFile
+            .deletingLastPathComponent()
+            .deletingLastPathComponent()
+
+        let releaseReporter = repoRoot.appendingPathComponent("WidenEval/ReleaseGateReporter.swift")
+        let releaseText = try String(contentsOf: releaseReporter, encoding: .utf8)
+        #expect(releaseText.contains("case schemaAgentTimeout = \"schema-agent timeout\""))
+        #expect(releaseText.contains("| Internal schema-agent timeouts |"))
+
+        let timedOutCheck = try #require(
+            releaseText.range(of: "appSideRejectionReason == .timedOut")
+        )
+        let budgetCheck = try #require(
+            releaseText.range(of: "appSideRejectionReason == .budgetExhausted")
+        )
+        #expect(timedOutCheck.lowerBound < budgetCheck.lowerBound)
+    }
+
     @Test func cloudResumeSourceHashesIncludeGenerationAndOpenRouterSources() throws {
         let testFile = URL(fileURLWithPath: #filePath)
         let evalRunner = testFile

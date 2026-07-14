@@ -99,6 +99,7 @@ public enum OpenRouterSchemaToolAppRejectionReason: String, Codable, Equatable, 
     case unsupportedAction
     case malformedTerminal
     case budgetExhausted
+    case timedOut
     case clarificationRejected
 }
 

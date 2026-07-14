@@ -104,6 +104,50 @@ struct OpenRouterSchemaToolSQLAgentTests {
         }
     }
 
+    private final class ScriptedThenHangingTransport: HTTPTransport, @unchecked Sendable {
+        typealias Handler = @Sendable (URLRequest, Int) throws -> Data?
+
+        private let lock = NSLock()
+        private let handler: Handler
+        private var recorded: [URLRequest] = []
+
+        init(_ handler: @escaping Handler) {
+            self.handler = handler
+        }
+
+        var requests: [URLRequest] {
+            lock.withLock { recorded }
+        }
+
+        func send(_ request: URLRequest) async throws -> (Data, HTTPURLResponse) {
+            let index = lock.withLock {
+                recorded.append(request)
+                return recorded.count
+            }
+            guard let data = try handler(request, index) else {
+                try await Task.sleep(nanoseconds: 5_000_000_000)
+                return (
+                    Data(),
+                    HTTPURLResponse(
+                        url: request.url!,
+                        statusCode: 200,
+                        httpVersion: "HTTP/1.1",
+                        headerFields: ["Content-Type": "application/json"]
+                    )!
+                )
+            }
+            return (
+                data,
+                HTTPURLResponse(
+                    url: request.url!,
+                    statusCode: 200,
+                    httpVersion: "HTTP/1.1",
+                    headerFields: ["Content-Type": "application/json"]
+                )!
+            )
+        }
+    }
+
     private final class LegacyGenerator: SQLGenerator, @unchecked Sendable {
         private let lock = NSLock()
         private var recordedCallCount = 0
@@ -2750,6 +2794,7 @@ struct OpenRouterSchemaToolSQLAgentTests {
                 "search-over-repair-budget",
             ])
             #expect(failure.schemaToolCalls.last?.errorCode == .sessionBudgetExceeded)
+            #expect(failure.backendMetadata?.agentDiagnostics?.appSideRejectionReason == .budgetExhausted)
         }
     }
 
@@ -3439,7 +3484,7 @@ struct OpenRouterSchemaToolSQLAgentTests {
             Issue.record("Expected timeout failure")
         } catch let failure as OpenRouterSchemaToolAgentFailure {
             let elapsed = started.duration(to: .now)
-            #expect(failure.category == .modelTurnBudgetExhausted)
+            #expect(failure.category == .wallClockTimeout)
             #expect(elapsed < .milliseconds(500))
         }
     }
@@ -3472,11 +3517,107 @@ struct OpenRouterSchemaToolSQLAgentTests {
             Issue.record("Expected timeout failure")
         } catch let failure as OpenRouterSchemaToolAgentFailure {
             let elapsed = started.duration(to: .now)
-            #expect(failure.category == .modelTurnBudgetExhausted)
+            #expect(failure.category == .wallClockTimeout)
             #expect(chatTransport.requests.count == 1)
             #expect(chatTransport.wasCancelled)
             #expect(elapsed < .milliseconds(500))
         }
+    }
+
+    @Test func preToolWallClockTimeoutIsNotClassifiedAsBudgetExhaustion() async throws {
+        let schema = Self.makeSchema()
+        let chatTransport = HangingTransport()
+        let agent = makeAgent(
+            schema: schema,
+            chatTransport: chatTransport,
+            configuration: OpenRouterSchemaToolSQLAgentConfiguration(
+                maximumSchemaToolCalls: 6,
+                maximumRepairSchemaToolCalls: 2,
+                maximumModelTurns: 6,
+                maximumMalformedTerminalCorrections: 1,
+                maximumRepeatedToolCorrections: 1,
+                maximumHTTPAttempts: 8,
+                wallClockTimeoutSeconds: 0.03
+            )
+        )
+
+        do {
+            _ = try await agent.generateSQL(
+                question: "List users",
+                schema: schema,
+                context: SQLGenerationContext(),
+                config: SQLGenerationConfig()
+            )
+            Issue.record("Expected timeout failure")
+        } catch let failure as OpenRouterSchemaToolAgentFailure {
+            #expect(failure.category == .wallClockTimeout)
+            #expect(failure.pipelineCategory == .modelGeneration)
+            #expect(failure.schemaToolCalls.isEmpty)
+            let diagnostics = failure.backendMetadata?.agentDiagnostics
+            #expect(diagnostics?.appSideRejectionReason == .timedOut)
+        }
+    }
+
+    @Test func midRunWallClockTimeoutKeepsTimeoutClassificationAndTraces() async throws {
+        let schema = Self.makeSchema()
+        let chatTransport = ScriptedThenHangingTransport { _, index in
+            guard index == 1 else { return nil }
+            return Self.assistantToolCalls([
+                Self.toolCall(id: "search-before-timeout", name: "search_schema", arguments: [
+                    "query": "users",
+                    "limit": 4,
+                ]),
+            ])
+        }
+        let agent = makeAgent(
+            schema: schema,
+            chatTransport: chatTransport,
+            configuration: OpenRouterSchemaToolSQLAgentConfiguration(
+                maximumSchemaToolCalls: 6,
+                maximumRepairSchemaToolCalls: 2,
+                maximumModelTurns: 6,
+                maximumMalformedTerminalCorrections: 1,
+                maximumRepeatedToolCorrections: 1,
+                maximumHTTPAttempts: 8,
+                wallClockTimeoutSeconds: 0.5
+            )
+        )
+
+        do {
+            _ = try await agent.generateSQL(
+                question: "List users",
+                schema: schema,
+                context: SQLGenerationContext(),
+                config: SQLGenerationConfig()
+            )
+            Issue.record("Expected timeout failure")
+        } catch let failure as OpenRouterSchemaToolAgentFailure {
+            #expect(failure.category == .wallClockTimeout)
+            #expect(failure.schemaToolCalls.map(\.callID) == ["search-before-timeout"])
+            #expect(failure.schemaToolCalls.allSatisfy { $0.errorCode != .sessionBudgetExceeded })
+            let diagnostics = failure.backendMetadata?.agentDiagnostics
+            #expect(diagnostics?.appSideRejectionReason == .timedOut)
+        }
+    }
+
+    @Test func wallClockTimeoutFailureCategoryMappingsStayDistinctFromBudgets() {
+        let timeout = OpenRouterSchemaToolAgentFailure(category: .wallClockTimeout, message: "timed out")
+        #expect(timeout.pipelineCategory == .modelGeneration)
+        let turnBudget = OpenRouterSchemaToolAgentFailure(
+            category: .modelTurnBudgetExhausted,
+            message: "turn budget"
+        )
+        #expect(turnBudget.pipelineCategory == .structuredResponseParsing)
+        let toolBudget = OpenRouterSchemaToolAgentFailure(
+            category: .schemaToolCallBudgetExhausted,
+            message: "tool budget"
+        )
+        #expect(toolBudget.pipelineCategory == .modelGeneration)
+    }
+
+    @Test func defaultConfigurationKeepsSixSchemaToolCalls() {
+        #expect(OpenRouterSchemaToolSQLAgentConfiguration.default.maximumSchemaToolCalls == 6)
+        #expect(OpenRouterSchemaToolSQLAgentConfiguration().maximumSchemaToolCalls == 6)
     }
 
     private func makeAgent(

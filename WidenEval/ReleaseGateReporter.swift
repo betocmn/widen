@@ -112,6 +112,12 @@ enum TextToSQLReleaseGateReporter {
         count.map(gateCount)
     }
 
+    static func internalSchemaAgentTimeoutCount(_ results: [TextToSQLEvalResult]) -> Int {
+        results.filter {
+            $0.metrics.openRouterAgentDiagnostics?.appSideRejectionReason == .timedOut
+        }.count
+    }
+
     private static func markdown(
         run: EvalRun,
         evalOutput: EvalOutputPaths,
@@ -151,6 +157,7 @@ enum TextToSQLReleaseGateReporter {
             "| Skipped by budget | \(input.skippedBudgetResults) |",
             "| Provider budget unavailable | \(input.providerBudgetUnavailableResults) |",
             "| Budget stop | \(tableCell(run.manifest.budgetStopReason ?? "-")) |",
+            "| Internal schema-agent timeouts | \(internalSchemaAgentTimeoutCount(releaseGateResults(for: run))) |",
             "",
             "## Gate Criteria",
             "",
@@ -330,6 +337,7 @@ enum TextToSQLReleaseTriageCategory: String, CaseIterable {
     case modelToolProtocolFailure = "model/tool protocol failure"
     case missingTerminalToolResult = "missing terminal tool result"
     case malformedTerminalResult = "malformed terminal result"
+    case schemaAgentTimeout = "schema-agent timeout"
     case toolBudgetExhausted = "tool budget exhausted"
     case schemaToolError = "schema-tool error"
     case noSchemaMatch = "no schema match"
@@ -465,6 +473,7 @@ enum TextToSQLReleaseTriageReporter {
             "| Missing results | \(completeness.missingResultCount) |",
             "| Skipped by budget | \(completeness.skippedBudgetCount) |",
             "| Provider budget unavailable | \(completeness.providerBudgetUnavailableCount) |",
+            "| Internal schema-agent timeouts | \(TextToSQLReleaseGateReporter.internalSchemaAgentTimeoutCount(run.results)) |",
             "| Resumed from | \(tableCell(artifactPath(run.manifest.resumedFrom))) |",
             "| Budget stop | \(tableCell(run.manifest.budgetStopReason ?? "-")) |",
             "| Failed results | \(failed.count) |",
@@ -863,6 +872,9 @@ enum TextToSQLReleaseTriageReporter {
             }
             if result.status == .transportFailure || !result.metrics.transportSuccess {
                 return .transportFailure
+            }
+            if result.metrics.openRouterAgentDiagnostics?.appSideRejectionReason == .timedOut {
+                return .schemaAgentTimeout
             }
             if result.metrics.openRouterAgentDiagnostics?.appSideRejectionReason == .budgetExhausted
                 || hasToolBudgetError(result)
