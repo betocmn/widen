@@ -275,8 +275,16 @@ canonical-model checks, or the frozen phrase heuristics:
   recorded as fully explored only when the response provably contains every
   path (truncated results are direction-dependent), and out-of-range
   join-path arguments fall through to the session's validation error instead
-  of being intercepted. After the fixes the focused agent and eval-planning
-  suites pass and `make test` passes 1,105 tests in 49 suites.
+  of being intercepted. A PR review round tightened three more edge cases:
+  the redundant interception now runs before repeated-call tracking (so
+  provably redundant byte-identical repeats no longer consume the one
+  repeated-call correction or escalate to the typed no-progress failure,
+  while repeats of failed calls still do), search and join-path argument
+  shapes are fully validated before interception (malformed repeats still
+  get the session's validation error), and a transport-level timeout that
+  surfaces after the agent deadline has passed is classified as the
+  wall-clock timeout it is. After the fixes the focused agent and
+  eval-planning suites pass and `make test` passes 1,110 tests in 49 suites.
 
 The acceptance criterion (bucket at or below 3 with per-case cost and p95
 latency within 15% of baseline) requires a complete pinned gate. Per the

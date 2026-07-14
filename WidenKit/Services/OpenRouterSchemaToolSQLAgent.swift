@@ -864,6 +864,22 @@ public final class OpenRouterSchemaToolSQLAgent: SQLGenerator, Sendable {
                         messages.append(toolErrorResponse(call: unknown, code: "unknown_tool", message: "Unknown tool."))
                         continue
                     }
+                    if let interception = Self.redundantSchemaCallInterception(
+                        call: call,
+                        executedSchemaCallSignatures: executedSchemaCallSignatures,
+                        zeroResultSearchQueries: zeroResultSearchQueries,
+                        exploredJoinPathScopes: exploredJoinPathScopes
+                    ) {
+                        diagnostics.recordRedundantInterception(interception.kind)
+                        messages.append(
+                            toolErrorResponse(
+                                call: call,
+                                code: interception.code,
+                                message: interception.message
+                            )
+                        )
+                        continue
+                    }
                     let signature = "\(call.name):\(call.arguments)"
                     if !seenToolSignatures.insert(signature).inserted {
                         if repeatedToolCorrections < configuration.maximumRepeatedToolCorrections {
@@ -882,22 +898,6 @@ public final class OpenRouterSchemaToolSQLAgent: SQLGenerator, Sendable {
                             "The model repeated a schema tool call without progress.",
                             session: session
                         )
-                    }
-                    if let interception = Self.redundantSchemaCallInterception(
-                        call: call,
-                        executedSchemaCallSignatures: executedSchemaCallSignatures,
-                        zeroResultSearchQueries: zeroResultSearchQueries,
-                        exploredJoinPathScopes: exploredJoinPathScopes
-                    ) {
-                        diagnostics.recordRedundantInterception(interception.kind)
-                        messages.append(
-                            toolErrorResponse(
-                                call: call,
-                                code: interception.code,
-                                message: interception.message
-                            )
-                        )
-                        continue
                     }
                     let result = try await invokeToolCall(
                         call,
@@ -1061,6 +1061,9 @@ public final class OpenRouterSchemaToolSQLAgent: SQLGenerator, Sendable {
             } catch let error as URLError {
                 if error.code == .cancelled, Task.isCancelled {
                     throw CancellationError()
+                }
+                if let timeout = Self.wallClockTimeoutFailure(for: error, deadline: deadline) {
+                    throw timeout
                 }
                 let failure = OpenRouterSQLGenerator.mapForAgent(
                     error,
@@ -1843,6 +1846,22 @@ struct SchemaToolJoinPathScope: Equatable {
 }
 
 extension OpenRouterSchemaToolSQLAgent {
+    /// The production transport's request timeout can race the agent's
+    /// wall-clock deadline. A transport timeout that surfaces once the
+    /// deadline has passed ended the run for the same reason the deadline
+    /// race would have reported, so it is classified as the agent timeout
+    /// rather than a transport failure.
+    static func wallClockTimeoutFailure(
+        for error: URLError,
+        deadline: Date
+    ) -> OpenRouterSchemaToolAgentFailure? {
+        guard error.code == .timedOut, Date() > deadline else { return nil }
+        return OpenRouterSchemaToolAgentFailure(
+            category: .wallClockTimeout,
+            message: "The schema-tool agent timed out."
+        )
+    }
+
     /// Deterministic pre-invocation interception of schema tool calls that
     /// provably repeat evidence the model already has in context. Intercepted
     /// calls receive a structured tool error and never reach the session, so
@@ -1946,13 +1965,20 @@ extension OpenRouterSchemaToolSQLAgent {
 
     /// Zero-hit search results are limit-independent, so a repeat of a query
     /// that already returned no matches can only add trimming variants. Case
-    /// is preserved because quoted identifiers keep case significance.
+    /// is preserved because quoted identifiers keep case significance. Calls
+    /// whose argument shape the session would reject return nil so they still
+    /// receive the session's validation error instead of being intercepted.
     static func normalizedSearchQuery(fromArguments arguments: String) -> String? {
         guard
             let object = (try? JSONDecoder().decode(JSONValue.self, from: Data(arguments.utf8)))?
                 .objectValue,
-            let query = object["query"]?.stringValue
+            object.keys.allSatisfy({ $0 == "query" || $0 == "limit" }),
+            let query = object["query"]?.stringValue,
+            (1...256).contains(query.count)
         else { return nil }
+        if let limit = object["limit"] {
+            guard let value = limit.intValue, (1...8).contains(value) else { return nil }
+        }
         let trimmed = query.trimmingCharacters(in: .whitespacesAndNewlines)
         return trimmed.isEmpty ? nil : trimmed
     }
@@ -1963,9 +1989,11 @@ extension OpenRouterSchemaToolSQLAgent {
     static func joinPathExplorationRequest(
         fromArguments arguments: String
     ) -> (key: String, scope: SchemaToolJoinPathScope)? {
+        let allowedKeys: Set<String> = ["from_table_id", "to_table_id", "max_hops", "max_paths"]
         guard
             let object = (try? JSONDecoder().decode(JSONValue.self, from: Data(arguments.utf8)))?
                 .objectValue,
+            object.keys.allSatisfy(allowedKeys.contains),
             let from = object["from_table_id"]?.stringValue,
             let to = object["to_table_id"]?.stringValue,
             !from.isEmpty, !to.isEmpty,
