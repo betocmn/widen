@@ -63,6 +63,7 @@ public struct OpenRouterSchemaToolAgentFailure: Error, LocalizedError, Equatable
         case schemaToolByteBudgetExhausted
         case httpAttemptBudgetExhausted
         case modelTurnBudgetExhausted
+        case wallClockTimeout
         case terminalResultMissing
         case terminalResultMalformed
         case overcautiousClarificationNoProgress
@@ -118,6 +119,8 @@ public struct OpenRouterSchemaToolAgentFailure: Error, LocalizedError, Equatable
         case .schemaToolCallBudgetExhausted, .schemaToolByteBudgetExhausted,
             .overcautiousClarificationNoProgress, .intentCoverageNoProgress,
             .terminalRequiredAfterSufficientEvidenceNoProgress:
+            .modelGeneration
+        case .wallClockTimeout:
             .modelGeneration
         case .staleSchemaSnapshot:
             .modelGeneration
@@ -366,6 +369,9 @@ public final class OpenRouterSchemaToolSQLAgent: SQLGenerator, Sendable {
         diagnostics.intentCoverageMode = configuration.intentCoverageMode.rawValue
         var seenProviderCallIDs = Set<String>()
         var seenToolSignatures = Set<String>()
+        var executedSchemaCallSignatures = Set<String>()
+        var zeroResultSearchQueries = Set<String>()
+        var exploredJoinPathScopes: [String: [SchemaToolJoinPathScope]] = [:]
         var malformedTerminalCorrections = 0
         var repeatedToolCorrections = 0
         var uninspectedSQLCorrections = 0
@@ -858,6 +864,22 @@ public final class OpenRouterSchemaToolSQLAgent: SQLGenerator, Sendable {
                         messages.append(toolErrorResponse(call: unknown, code: "unknown_tool", message: "Unknown tool."))
                         continue
                     }
+                    if let interception = Self.redundantSchemaCallInterception(
+                        call: call,
+                        executedSchemaCallSignatures: executedSchemaCallSignatures,
+                        zeroResultSearchQueries: zeroResultSearchQueries,
+                        exploredJoinPathScopes: exploredJoinPathScopes
+                    ) {
+                        diagnostics.recordRedundantInterception(interception.kind)
+                        messages.append(
+                            toolErrorResponse(
+                                call: call,
+                                code: interception.code,
+                                message: interception.message
+                            )
+                        )
+                        continue
+                    }
                     let signature = "\(call.name):\(call.arguments)"
                     if !seenToolSignatures.insert(signature).inserted {
                         if repeatedToolCorrections < configuration.maximumRepeatedToolCorrections {
@@ -914,6 +936,15 @@ public final class OpenRouterSchemaToolSQLAgent: SQLGenerator, Sendable {
                         )
                     }
                     messages.append(try toolResponse(result, providerCallID: call.id))
+                    if case .schema(let schemaResult) = result, schemaResult.success {
+                        Self.recordExecutedSchemaCall(
+                            call: call,
+                            result: schemaResult,
+                            executedSchemaCallSignatures: &executedSchemaCallSignatures,
+                            zeroResultSearchQueries: &zeroResultSearchQueries,
+                            exploredJoinPathScopes: &exploredJoinPathScopes
+                        )
+                    }
                 }
             }
 
@@ -1031,6 +1062,9 @@ public final class OpenRouterSchemaToolSQLAgent: SQLGenerator, Sendable {
                 if error.code == .cancelled, Task.isCancelled {
                     throw CancellationError()
                 }
+                if let timeout = Self.wallClockTimeoutFailure(for: error, deadline: deadline) {
+                    throw timeout
+                }
                 let failure = OpenRouterSQLGenerator.mapForAgent(
                     error,
                     requestedModelID: model,
@@ -1068,7 +1102,7 @@ public final class OpenRouterSchemaToolSQLAgent: SQLGenerator, Sendable {
         guard remaining > 0 else {
             try checkDeadline(deadline)
             throw OpenRouterSchemaToolAgentFailure(
-                category: .modelTurnBudgetExhausted,
+                category: .wallClockTimeout,
                 message: "The schema-tool agent timed out."
             )
         }
@@ -1096,7 +1130,7 @@ public final class OpenRouterSchemaToolSQLAgent: SQLGenerator, Sendable {
                     return (data, response)
                 case .deadlineExceeded:
                     throw OpenRouterSchemaToolAgentFailure(
-                        category: .modelTurnBudgetExhausted,
+                        category: .wallClockTimeout,
                         message: "The schema-tool agent timed out."
                     )
                 }
@@ -1511,7 +1545,8 @@ public final class OpenRouterSchemaToolSQLAgent: SQLGenerator, Sendable {
             .malformedToolCall, .schemaToolCallBudgetExhausted, .schemaToolByteBudgetExhausted:
             true
         case .unsupportedTools, .repeatedToolCallNoProgress, .httpAttemptBudgetExhausted,
-            .modelTurnBudgetExhausted, .overcautiousClarificationNoProgress,
+            .modelTurnBudgetExhausted, .wallClockTimeout,
+            .overcautiousClarificationNoProgress,
             .intentCoverageNoProgress, .terminalRequiredAfterSufficientEvidenceNoProgress,
             .safetyValidation, .uninspectedSchemaObjects, .staleSchemaSnapshot,
             .cancellation, .openRouterRequestFailure:
@@ -1533,7 +1568,7 @@ public final class OpenRouterSchemaToolSQLAgent: SQLGenerator, Sendable {
     private func checkDeadline(_ deadline: Date) throws {
         guard Date() <= deadline else {
             throw OpenRouterSchemaToolAgentFailure(
-                category: .modelTurnBudgetExhausted,
+                category: .wallClockTimeout,
                 message: "The schema-tool agent timed out."
             )
         }
@@ -1793,6 +1828,185 @@ public final class OpenRouterSchemaToolSQLAgent: SQLGenerator, Sendable {
     }
 }
 
+enum RedundantSchemaCallKind: Equatable {
+    case duplicateCall
+    case zeroResultSearch
+    case joinPathExploration
+}
+
+struct RedundantSchemaCallInterception {
+    var kind: RedundantSchemaCallKind
+    var code: String
+    var message: String
+}
+
+struct SchemaToolJoinPathScope: Equatable {
+    var maxHops: Int
+    var maxPaths: Int
+}
+
+extension OpenRouterSchemaToolSQLAgent {
+    /// The production transport's request timeout can race the agent's
+    /// wall-clock deadline. A transport timeout that surfaces once the
+    /// deadline has passed ended the run for the same reason the deadline
+    /// race would have reported, so it is classified as the agent timeout
+    /// rather than a transport failure.
+    static func wallClockTimeoutFailure(
+        for error: URLError,
+        deadline: Date
+    ) -> OpenRouterSchemaToolAgentFailure? {
+        guard error.code == .timedOut, Date() > deadline else { return nil }
+        return OpenRouterSchemaToolAgentFailure(
+            category: .wallClockTimeout,
+            message: "The schema-tool agent timed out."
+        )
+    }
+
+    /// Deterministic pre-invocation interception of schema tool calls that
+    /// provably repeat evidence the model already has in context. Intercepted
+    /// calls receive a structured tool error and never reach the session, so
+    /// they do not consume the schema-tool call budget.
+    static func redundantSchemaCallInterception(
+        call: OpenRouterToolCall,
+        executedSchemaCallSignatures: Set<String>,
+        zeroResultSearchQueries: Set<String>,
+        exploredJoinPathScopes: [String: [SchemaToolJoinPathScope]]
+    ) -> RedundantSchemaCallInterception? {
+        guard let toolName = SchemaToolName(rawValue: call.name) else { return nil }
+        let canonical = canonicalToolSignature(name: call.name, arguments: call.arguments)
+        if executedSchemaCallSignatures.contains(canonical) {
+            return RedundantSchemaCallInterception(
+                kind: .duplicateCall,
+                code: "redundant_tool_call",
+                message: "This tool call was already made with identical arguments. Reuse the earlier result instead of repeating the call."
+            )
+        }
+        switch toolName {
+        case .searchSchema:
+            guard let query = normalizedSearchQuery(fromArguments: call.arguments),
+                zeroResultSearchQueries.contains(query)
+            else { return nil }
+            return RedundantSchemaCallInterception(
+                kind: .zeroResultSearch,
+                code: "redundant_zero_result_search",
+                message: "This search query already returned no matches. Use different search terms or describe tables already discovered."
+            )
+        case .findJoinPaths:
+            guard let request = joinPathExplorationRequest(fromArguments: call.arguments),
+                exploredJoinPathScopes[request.key]?.contains(where: {
+                    $0.maxHops >= request.scope.maxHops && $0.maxPaths >= request.scope.maxPaths
+                }) == true
+            else { return nil }
+            return RedundantSchemaCallInterception(
+                kind: .joinPathExploration,
+                code: "redundant_join_path_call",
+                message: "Join paths for these tables were already returned, including the reversed direction. Reuse the earlier find_join_paths result."
+            )
+        default:
+            return nil
+        }
+    }
+
+    static func recordExecutedSchemaCall(
+        call: OpenRouterToolCall,
+        result: SchemaToolResult,
+        executedSchemaCallSignatures: inout Set<String>,
+        zeroResultSearchQueries: inout Set<String>,
+        exploredJoinPathScopes: inout [String: [SchemaToolJoinPathScope]]
+    ) {
+        executedSchemaCallSignatures.insert(
+            canonicalToolSignature(name: call.name, arguments: call.arguments)
+        )
+        switch SchemaToolName(rawValue: call.name) {
+        case .searchSchema:
+            guard result.payload?.objectValue?["hits"]?.arrayValue?.isEmpty == true,
+                let query = normalizedSearchQuery(fromArguments: call.arguments)
+            else { return }
+            zeroResultSearchQueries.insert(query)
+        case .findJoinPaths:
+            guard let request = joinPathExplorationRequest(fromArguments: call.arguments),
+                joinPathResultIsComplete(result, scope: request.scope)
+            else { return }
+            exploredJoinPathScopes[request.key, default: []].append(request.scope)
+        default:
+            return
+        }
+    }
+
+    /// Truncated join-path results are direction- and scope-dependent, so a
+    /// scope counts as fully explored only when the response provably holds
+    /// every path: fewer paths than the requested cap and no truncation. An
+    /// empty result is complete knowledge that no path exists in the scope.
+    static func joinPathResultIsComplete(
+        _ result: SchemaToolResult,
+        scope: SchemaToolJoinPathScope
+    ) -> Bool {
+        guard !result.truncation.truncated,
+            let paths = result.payload?.objectValue?["paths"]?.arrayValue
+        else { return false }
+        return paths.count < scope.maxPaths
+    }
+
+    /// Canonicalizes tool-call arguments (key order, whitespace, number form)
+    /// so value-identical repeats are detected even when the raw JSON differs.
+    /// Argument values are preserved exactly; identifier case is untouched.
+    static func canonicalToolSignature(name: String, arguments: String) -> String {
+        guard let value = try? JSONDecoder().decode(JSONValue.self, from: Data(arguments.utf8))
+        else {
+            return "\(name):\(arguments)"
+        }
+        let encoder = JSONEncoder()
+        encoder.outputFormatting = [.sortedKeys]
+        guard let canonical = try? encoder.encode(value) else {
+            return "\(name):\(arguments)"
+        }
+        return "\(name):\(String(decoding: canonical, as: UTF8.self))"
+    }
+
+    /// Zero-hit search results are limit-independent, so a repeat of a query
+    /// that already returned no matches can only add trimming variants. Case
+    /// is preserved because quoted identifiers keep case significance. Calls
+    /// whose argument shape the session would reject return nil so they still
+    /// receive the session's validation error instead of being intercepted.
+    static func normalizedSearchQuery(fromArguments arguments: String) -> String? {
+        guard
+            let object = (try? JSONDecoder().decode(JSONValue.self, from: Data(arguments.utf8)))?
+                .objectValue,
+            object.keys.allSatisfy({ $0 == "query" || $0 == "limit" }),
+            let query = object["query"]?.stringValue,
+            (1...256).contains(query.count)
+        else { return nil }
+        if let limit = object["limit"] {
+            guard let value = limit.intValue, (1...8).contains(value) else { return nil }
+        }
+        let trimmed = query.trimmingCharacters(in: .whitespacesAndNewlines)
+        return trimmed.isEmpty ? nil : trimmed
+    }
+
+    /// The foreign-key graph is bidirectional, so join paths for an unordered
+    /// endpoint pair at hop/path scopes no larger than an already executed
+    /// call are derivable from that call's response.
+    static func joinPathExplorationRequest(
+        fromArguments arguments: String
+    ) -> (key: String, scope: SchemaToolJoinPathScope)? {
+        let allowedKeys: Set<String> = ["from_table_id", "to_table_id", "max_hops", "max_paths"]
+        guard
+            let object = (try? JSONDecoder().decode(JSONValue.self, from: Data(arguments.utf8)))?
+                .objectValue,
+            object.keys.allSatisfy(allowedKeys.contains),
+            let from = object["from_table_id"]?.stringValue,
+            let to = object["to_table_id"]?.stringValue,
+            !from.isEmpty, !to.isEmpty,
+            let maxHops = object["max_hops"]?.intValue,
+            (1...3).contains(maxHops)
+        else { return nil }
+        let maxPaths = object["max_paths"]?.intValue ?? 3
+        guard (1...3).contains(maxPaths) else { return nil }
+        let key = [from, to].sorted().joined(separator: "\u{1F}")
+        return (key, SchemaToolJoinPathScope(maxHops: maxHops, maxPaths: maxPaths))
+    }
+}
+
 private struct OpenRouterSchemaToolAgentDiagnosticState {
     var logicalTurnCount: Int?
     var terminalToolSeen = false
@@ -1801,6 +2015,9 @@ private struct OpenRouterSchemaToolAgentDiagnosticState {
     var terminalValidationFailureReason: String?
     var triedSchemaToolsAfterTerminal = false
     var producedProseInsteadOfTools = false
+    var redundantDuplicateToolCallCount = 0
+    var redundantZeroResultSearchCount = 0
+    var redundantJoinPathCallCount = 0
     var appSideRejectionReason: OpenRouterSchemaToolAppRejectionReason?
     var clarificationCorrectionMode = ""
     var intentCoverageMode = ""
@@ -1819,12 +2036,20 @@ private struct OpenRouterSchemaToolAgentDiagnosticState {
     var intentCoverageCorrectionSucceeded = false
 
     mutating func recordFailureCategory(_ category: OpenRouterSchemaToolAgentFailure.Category) {
+        if category == .wallClockTimeout {
+            // A reason left behind by an earlier recovered correction must not
+            // hide the timeout that actually ended the run.
+            appSideRejectionReason = .timedOut
+            return
+        }
         if appSideRejectionReason != nil { return }
         switch category {
         case .schemaToolCallBudgetExhausted, .schemaToolByteBudgetExhausted,
             .httpAttemptBudgetExhausted,
             .modelTurnBudgetExhausted:
             appSideRejectionReason = .budgetExhausted
+        case .wallClockTimeout:
+            appSideRejectionReason = .timedOut
         case .terminalResultMalformed, .terminalResultMissing, .mixedTerminalAndSchemaCalls,
             .malformedToolCall:
             appSideRejectionReason = .malformedTerminal
@@ -1842,6 +2067,17 @@ private struct OpenRouterSchemaToolAgentDiagnosticState {
         case .repeatedToolCallNoProgress, .staleSchemaSnapshot, .cancellation,
             .openRouterRequestFailure:
             break
+        }
+    }
+
+    mutating func recordRedundantInterception(_ kind: RedundantSchemaCallKind) {
+        switch kind {
+        case .duplicateCall:
+            redundantDuplicateToolCallCount += 1
+        case .zeroResultSearch:
+            redundantZeroResultSearchCount += 1
+        case .joinPathExploration:
+            redundantJoinPathCallCount += 1
         }
     }
 
@@ -1895,6 +2131,9 @@ private struct OpenRouterSchemaToolAgentDiagnosticState {
             terminalValidationFailureReason: terminalValidationFailureReason,
             triedSchemaToolsAfterTerminal: triedSchemaToolsAfterTerminal,
             producedProseInsteadOfTools: producedProseInsteadOfTools,
+            redundantDuplicateToolCallCount: redundantDuplicateToolCallCount,
+            redundantZeroResultSearchCount: redundantZeroResultSearchCount,
+            redundantJoinPathCallCount: redundantJoinPathCallCount,
             schemaEvidence: evidence.summary(inspectionToolCalls: inspectionToolCalls),
             appSideRejectionReason: appSideRejectionReason,
             clarificationCorrectionMode: clarificationCorrectionMode,
@@ -1944,7 +2183,8 @@ private struct SchemaToolEvidenceLedger {
                 prefix = "Fix the invalid SQL binding using only owner candidates already exposed by schema tools."
             case .intentCoverageRejected:
                 prefix = "Preserve the requested SQL intent before returning a terminal result."
-            case .unsupportedAction, .malformedTerminal, .budgetExhausted, .clarificationRejected:
+            case .unsupportedAction, .malformedTerminal, .budgetExhausted, .timedOut,
+                .clarificationRejected:
                 prefix = "Use schema tools and validator feedback before returning SQL."
             }
             return "\(prefix) \(message). \(OpenRouterSchemaToolSQLAgent.strictTerminalCorrection)"

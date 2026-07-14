@@ -393,6 +393,44 @@ struct TextToSQLEvalRunPlanningTests {
         #expect(!evalText.contains(#"query plan: \(queryPlan)"#))
     }
 
+    @Test func releaseTriageClassifiesSchemaAgentTimeoutSeparatelyFromToolBudget() throws {
+        let testFile = URL(fileURLWithPath: #filePath)
+        let repoRoot = testFile
+            .deletingLastPathComponent()
+            .deletingLastPathComponent()
+
+        let releaseReporter = repoRoot.appendingPathComponent("WidenEval/ReleaseGateReporter.swift")
+        let releaseText = try String(contentsOf: releaseReporter, encoding: .utf8)
+        #expect(releaseText.contains("case schemaAgentTimeout = \"schema-agent timeout\""))
+        #expect(releaseText.contains("| Internal schema-agent timeouts |"))
+
+        let classifierStart = try #require(
+            releaseText.range(of: "private static func category(")
+        )
+        let classifierText = String(releaseText[classifierStart.lowerBound...])
+        let timedOutCheck = try #require(
+            classifierText.range(of: "appSideRejectionReason == .timedOut")
+        )
+        let budgetCheck = try #require(
+            classifierText.range(of: "appSideRejectionReason == .budgetExhausted")
+        )
+        #expect(timedOutCheck.lowerBound < budgetCheck.lowerBound)
+    }
+
+    @Test func releaseTriageReportsRedundantSchemaToolInterceptions() throws {
+        let testFile = URL(fileURLWithPath: #filePath)
+        let repoRoot = testFile
+            .deletingLastPathComponent()
+            .deletingLastPathComponent()
+
+        let releaseReporter = repoRoot.appendingPathComponent("WidenEval/ReleaseGateReporter.swift")
+        let releaseText = try String(contentsOf: releaseReporter, encoding: .utf8)
+        #expect(releaseText.contains("| Redundant |"))
+        #expect(releaseText.contains("redundantDuplicateToolCallCount"))
+        #expect(releaseText.contains("redundantZeroResultSearchCount"))
+        #expect(releaseText.contains("redundantJoinPathCallCount"))
+    }
+
     @Test func cloudResumeSourceHashesIncludeGenerationAndOpenRouterSources() throws {
         let testFile = URL(fileURLWithPath: #filePath)
         let evalRunner = testFile

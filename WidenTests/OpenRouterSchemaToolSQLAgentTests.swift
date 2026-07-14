@@ -20,6 +20,9 @@ struct OpenRouterSchemaToolSQLAgentTests {
         #expect(diagnostics.terminalToolSeen)
         #expect(diagnostics.terminalAction == "sql")
         #expect(diagnostics.terminalQueryPlan == "")
+        #expect(diagnostics.redundantDuplicateToolCallCount == 0)
+        #expect(diagnostics.redundantZeroResultSearchCount == 0)
+        #expect(diagnostics.redundantJoinPathCallCount == 0)
     }
 
     private final class ScriptedTransport: HTTPTransport, @unchecked Sendable {
@@ -101,6 +104,50 @@ struct OpenRouterSchemaToolSQLAgentTests {
                 throw error
             }
             return (Data(), HTTPURLResponse(url: request.url!, statusCode: 200, httpVersion: nil, headerFields: nil)!)
+        }
+    }
+
+    private final class ScriptedThenHangingTransport: HTTPTransport, @unchecked Sendable {
+        typealias Handler = @Sendable (URLRequest, Int) throws -> Data?
+
+        private let lock = NSLock()
+        private let handler: Handler
+        private var recorded: [URLRequest] = []
+
+        init(_ handler: @escaping Handler) {
+            self.handler = handler
+        }
+
+        var requests: [URLRequest] {
+            lock.withLock { recorded }
+        }
+
+        func send(_ request: URLRequest) async throws -> (Data, HTTPURLResponse) {
+            let index = lock.withLock {
+                recorded.append(request)
+                return recorded.count
+            }
+            guard let data = try handler(request, index) else {
+                try await Task.sleep(nanoseconds: 5_000_000_000)
+                return (
+                    Data(),
+                    HTTPURLResponse(
+                        url: request.url!,
+                        statusCode: 200,
+                        httpVersion: "HTTP/1.1",
+                        headerFields: ["Content-Type": "application/json"]
+                    )!
+                )
+            }
+            return (
+                data,
+                HTTPURLResponse(
+                    url: request.url!,
+                    statusCode: 200,
+                    httpVersion: "HTTP/1.1",
+                    headerFields: ["Content-Type": "application/json"]
+                )!
+            )
         }
     }
 
@@ -268,6 +315,9 @@ struct OpenRouterSchemaToolSQLAgentTests {
         #expect(result.backendMetadata?.agentLogicalTurnCount == 3)
         #expect(result.backendMetadata?.agentHTTPAttemptCount == 3)
         #expect(result.backendMetadata?.agentSchemaToolCallCount == 2)
+        #expect(result.backendMetadata?.agentDiagnostics?.redundantDuplicateToolCallCount == 0)
+        #expect(result.backendMetadata?.agentDiagnostics?.redundantZeroResultSearchCount == 0)
+        #expect(result.backendMetadata?.agentDiagnostics?.redundantJoinPathCallCount == 0)
         let diagnosticQueryPlan = try #require(result.backendMetadata?.agentDiagnostics?.terminalQueryPlan)
         #expect(diagnosticQueryPlan.contains("present"))
         #expect(diagnosticQueryPlan.contains("truncated: true"))
@@ -2750,6 +2800,7 @@ struct OpenRouterSchemaToolSQLAgentTests {
                 "search-over-repair-budget",
             ])
             #expect(failure.schemaToolCalls.last?.errorCode == .sessionBudgetExceeded)
+            #expect(failure.backendMetadata?.agentDiagnostics?.appSideRejectionReason == .budgetExhausted)
         }
     }
 
@@ -3439,7 +3490,7 @@ struct OpenRouterSchemaToolSQLAgentTests {
             Issue.record("Expected timeout failure")
         } catch let failure as OpenRouterSchemaToolAgentFailure {
             let elapsed = started.duration(to: .now)
-            #expect(failure.category == .modelTurnBudgetExhausted)
+            #expect(failure.category == .wallClockTimeout)
             #expect(elapsed < .milliseconds(500))
         }
     }
@@ -3472,10 +3523,773 @@ struct OpenRouterSchemaToolSQLAgentTests {
             Issue.record("Expected timeout failure")
         } catch let failure as OpenRouterSchemaToolAgentFailure {
             let elapsed = started.duration(to: .now)
-            #expect(failure.category == .modelTurnBudgetExhausted)
+            #expect(failure.category == .wallClockTimeout)
             #expect(chatTransport.requests.count == 1)
             #expect(chatTransport.wasCancelled)
             #expect(elapsed < .milliseconds(500))
+        }
+    }
+
+    @Test func preToolWallClockTimeoutIsNotClassifiedAsBudgetExhaustion() async throws {
+        let schema = Self.makeSchema()
+        let chatTransport = HangingTransport()
+        let agent = makeAgent(
+            schema: schema,
+            chatTransport: chatTransport,
+            configuration: OpenRouterSchemaToolSQLAgentConfiguration(
+                maximumSchemaToolCalls: 6,
+                maximumRepairSchemaToolCalls: 2,
+                maximumModelTurns: 6,
+                maximumMalformedTerminalCorrections: 1,
+                maximumRepeatedToolCorrections: 1,
+                maximumHTTPAttempts: 8,
+                wallClockTimeoutSeconds: 0.03
+            )
+        )
+
+        do {
+            _ = try await agent.generateSQL(
+                question: "List users",
+                schema: schema,
+                context: SQLGenerationContext(),
+                config: SQLGenerationConfig()
+            )
+            Issue.record("Expected timeout failure")
+        } catch let failure as OpenRouterSchemaToolAgentFailure {
+            #expect(failure.category == .wallClockTimeout)
+            #expect(failure.pipelineCategory == .modelGeneration)
+            #expect(failure.schemaToolCalls.isEmpty)
+            let diagnostics = failure.backendMetadata?.agentDiagnostics
+            #expect(diagnostics?.appSideRejectionReason == .timedOut)
+        }
+    }
+
+    @Test func midRunWallClockTimeoutKeepsTimeoutClassificationAndTraces() async throws {
+        let schema = Self.makeSchema()
+        let chatTransport = ScriptedThenHangingTransport { _, index in
+            guard index == 1 else { return nil }
+            return Self.assistantToolCalls([
+                Self.toolCall(id: "search-before-timeout", name: "search_schema", arguments: [
+                    "query": "users",
+                    "limit": 4,
+                ]),
+            ])
+        }
+        let agent = makeAgent(
+            schema: schema,
+            chatTransport: chatTransport,
+            configuration: OpenRouterSchemaToolSQLAgentConfiguration(
+                maximumSchemaToolCalls: 6,
+                maximumRepairSchemaToolCalls: 2,
+                maximumModelTurns: 6,
+                maximumMalformedTerminalCorrections: 1,
+                maximumRepeatedToolCorrections: 1,
+                maximumHTTPAttempts: 8,
+                wallClockTimeoutSeconds: 0.5
+            )
+        )
+
+        do {
+            _ = try await agent.generateSQL(
+                question: "List users",
+                schema: schema,
+                context: SQLGenerationContext(),
+                config: SQLGenerationConfig()
+            )
+            Issue.record("Expected timeout failure")
+        } catch let failure as OpenRouterSchemaToolAgentFailure {
+            #expect(failure.category == .wallClockTimeout)
+            #expect(failure.schemaToolCalls.map(\.callID) == ["search-before-timeout"])
+            #expect(failure.schemaToolCalls.allSatisfy { $0.errorCode != .sessionBudgetExceeded })
+            let diagnostics = failure.backendMetadata?.agentDiagnostics
+            #expect(diagnostics?.appSideRejectionReason == .timedOut)
+        }
+    }
+
+    @Test func wallClockTimeoutMapsToModelGenerationPipelineCategory() {
+        let timeout = OpenRouterSchemaToolAgentFailure(category: .wallClockTimeout, message: "timed out")
+        #expect(timeout.pipelineCategory == .modelGeneration)
+        let turnBudget = OpenRouterSchemaToolAgentFailure(
+            category: .modelTurnBudgetExhausted,
+            message: "turn budget"
+        )
+        #expect(turnBudget.pipelineCategory == .structuredResponseParsing)
+        let toolBudget = OpenRouterSchemaToolAgentFailure(
+            category: .schemaToolCallBudgetExhausted,
+            message: "tool budget"
+        )
+        #expect(toolBudget.pipelineCategory == .modelGeneration)
+    }
+
+    @Test func defaultConfigurationKeepsSixSchemaToolCalls() {
+        #expect(OpenRouterSchemaToolSQLAgentConfiguration.default.maximumSchemaToolCalls == 6)
+        #expect(OpenRouterSchemaToolSQLAgentConfiguration().maximumSchemaToolCalls == 6)
+    }
+
+    @Test func byteVariantDuplicateSchemaCallIsInterceptedWithoutBurningBudget() async throws {
+        let schema = Self.makeSchema()
+        let chatTransport = ScriptedTransport { request, index in
+            switch index {
+            case 1:
+                return Self.assistantToolCalls([
+                    Self.toolCallRaw(
+                        id: "search-dup-1",
+                        name: "search_schema",
+                        argumentsJSON: #"{"query":"users","limit":4}"#
+                    ),
+                ])
+            case 2:
+                return Self.assistantToolCalls([
+                    Self.toolCallRaw(
+                        id: "search-dup-2",
+                        name: "search_schema",
+                        argumentsJSON: #"{"limit":4, "query":"users"}"#
+                    ),
+                ])
+            case 3:
+                let text = try Self.requestBodyText(request)
+                #expect(text.contains("redundant_tool_call"))
+                let tableID = try Self.tableHandle(named: #""public"."users""#, in: request)
+                return Self.assistantToolCalls([
+                    Self.toolCall(id: "describe-dup", name: "describe_tables", arguments: [
+                        "table_ids": [tableID],
+                    ]),
+                ])
+            case 4:
+                return Self.assistantToolCalls([
+                    Self.terminalSQL(
+                        id: "terminal-dup",
+                        sql: "SELECT id, name FROM public.users ORDER BY id LIMIT 100"
+                    ),
+                ])
+            default:
+                throw URLError(.badServerResponse)
+            }
+        }
+        let agent = makeAgent(
+            schema: schema,
+            chatTransport: chatTransport,
+            configuration: OpenRouterSchemaToolSQLAgentConfiguration(maximumSchemaToolCalls: 2)
+        )
+
+        let result = try await agent.generateSQL(
+            question: "List users",
+            schema: schema,
+            context: SQLGenerationContext(),
+            config: SQLGenerationConfig()
+        )
+
+        #expect(result.sql == "SELECT id, name FROM public.users ORDER BY id LIMIT 100")
+        #expect(result.schemaToolCalls.map(\.callID) == ["search-dup-1", "describe-dup"])
+        #expect(result.backendMetadata?.agentSchemaToolCallCount == 2)
+        let diagnostics = result.backendMetadata?.agentDiagnostics
+        #expect(diagnostics?.redundantDuplicateToolCallCount == 1)
+        #expect(diagnostics?.redundantZeroResultSearchCount == 0)
+        #expect(diagnostics?.redundantJoinPathCallCount == 0)
+    }
+
+    @Test func repeatedZeroResultSearchIsInterceptedWithoutBurningBudget() async throws {
+        let schema = Self.makeSchema()
+        let chatTransport = ScriptedTransport { request, index in
+            switch index {
+            case 1:
+                return Self.assistantToolCalls([
+                    Self.toolCall(id: "search-zero-1", name: "search_schema", arguments: [
+                        "query": "zzzqqq nothing",
+                        "limit": 4,
+                    ]),
+                    Self.toolCall(id: "search-zero-2", name: "search_schema", arguments: [
+                        "query": "vvv nomatch",
+                        "limit": 4,
+                    ]),
+                ])
+            case 2:
+                return Self.assistantToolCalls([
+                    Self.toolCall(id: "search-zero-repeat", name: "search_schema", arguments: [
+                        "query": "zzzqqq nothing ",
+                        "limit": 8,
+                    ]),
+                    Self.toolCall(id: "search-users", name: "search_schema", arguments: [
+                        "query": "users",
+                        "limit": 4,
+                    ]),
+                ])
+            case 3:
+                let text = try Self.requestBodyText(request)
+                #expect(text.contains("redundant_zero_result_search"))
+                let tableID = try Self.tableHandle(named: #""public"."users""#, in: request)
+                return Self.assistantToolCalls([
+                    Self.toolCall(id: "describe-zero", name: "describe_tables", arguments: [
+                        "table_ids": [tableID],
+                    ]),
+                ])
+            case 4:
+                return Self.assistantToolCalls([
+                    Self.terminalSQL(
+                        id: "terminal-zero",
+                        sql: "SELECT id, name FROM public.users ORDER BY id LIMIT 100"
+                    ),
+                ])
+            default:
+                throw URLError(.badServerResponse)
+            }
+        }
+        let agent = makeAgent(
+            schema: schema,
+            chatTransport: chatTransport,
+            configuration: OpenRouterSchemaToolSQLAgentConfiguration(maximumSchemaToolCalls: 4)
+        )
+
+        let result = try await agent.generateSQL(
+            question: "List users",
+            schema: schema,
+            context: SQLGenerationContext(),
+            config: SQLGenerationConfig()
+        )
+
+        #expect(result.sql == "SELECT id, name FROM public.users ORDER BY id LIMIT 100")
+        #expect(result.schemaToolCalls.map(\.callID) == [
+            "search-zero-1", "search-zero-2", "search-users", "describe-zero",
+        ])
+        let diagnostics = result.backendMetadata?.agentDiagnostics
+        #expect(diagnostics?.redundantZeroResultSearchCount == 1)
+        #expect(diagnostics?.redundantDuplicateToolCallCount == 0)
+    }
+
+    @Test func reversedJoinPathCallIsInterceptedWithoutBurningBudget() async throws {
+        let schema = Self.makeSchema()
+        let chatTransport = ScriptedTransport { request, index in
+            switch index {
+            case 1:
+                return Self.assistantToolCalls([
+                    Self.toolCall(id: "search-join-users", name: "search_schema", arguments: [
+                        "query": "users",
+                        "limit": 4,
+                    ]),
+                    Self.toolCall(id: "search-join-orders", name: "search_schema", arguments: [
+                        "query": "orders",
+                        "limit": 4,
+                    ]),
+                ])
+            case 2:
+                let users = try Self.tableHandle(named: #""public"."users""#, in: request)
+                let orders = try Self.tableHandle(named: #""public"."orders""#, in: request)
+                return Self.assistantToolCalls([
+                    Self.toolCall(id: "join-forward", name: "find_join_paths", arguments: [
+                        "from_table_id": users,
+                        "to_table_id": orders,
+                        "max_hops": 2,
+                    ]),
+                ])
+            case 3:
+                let users = try Self.tableHandle(named: #""public"."users""#, in: request)
+                let orders = try Self.tableHandle(named: #""public"."orders""#, in: request)
+                return Self.assistantToolCalls([
+                    Self.toolCall(id: "join-reversed", name: "find_join_paths", arguments: [
+                        "from_table_id": orders,
+                        "to_table_id": users,
+                        "max_hops": 2,
+                    ]),
+                ])
+            case 4:
+                let text = try Self.requestBodyText(request)
+                #expect(text.contains("redundant_join_path_call"))
+                let users = try Self.tableHandle(named: #""public"."users""#, in: request)
+                let orders = try Self.tableHandle(named: #""public"."orders""#, in: request)
+                return Self.assistantToolCalls([
+                    Self.toolCall(id: "describe-join", name: "describe_tables", arguments: [
+                        "table_ids": [users, orders],
+                    ]),
+                ])
+            case 5:
+                return Self.assistantToolCalls([
+                    Self.terminalSQL(
+                        id: "terminal-join",
+                        sql: "SELECT id, name FROM public.users ORDER BY id LIMIT 100"
+                    ),
+                ])
+            default:
+                throw URLError(.badServerResponse)
+            }
+        }
+        let agent = makeAgent(
+            schema: schema,
+            chatTransport: chatTransport,
+            configuration: OpenRouterSchemaToolSQLAgentConfiguration(maximumSchemaToolCalls: 4)
+        )
+
+        let result = try await agent.generateSQL(
+            question: "List users with orders",
+            schema: schema,
+            context: SQLGenerationContext(),
+            config: SQLGenerationConfig()
+        )
+
+        #expect(result.sql == "SELECT id, name FROM public.users ORDER BY id LIMIT 100")
+        #expect(result.schemaToolCalls.map(\.callID) == [
+            "search-join-users", "search-join-orders", "join-forward", "describe-join",
+        ])
+        let diagnostics = result.backendMetadata?.agentDiagnostics
+        #expect(diagnostics?.redundantJoinPathCallCount == 1)
+        #expect(diagnostics?.redundantDuplicateToolCallCount == 0)
+    }
+
+    @Test func widenedJoinPathScopeIsNotIntercepted() async throws {
+        let schema = Self.makeSchema()
+        let chatTransport = ScriptedTransport { request, index in
+            switch index {
+            case 1:
+                return Self.assistantToolCalls([
+                    Self.toolCall(id: "search-scope-users", name: "search_schema", arguments: [
+                        "query": "users",
+                        "limit": 4,
+                    ]),
+                    Self.toolCall(id: "search-scope-orders", name: "search_schema", arguments: [
+                        "query": "orders",
+                        "limit": 4,
+                    ]),
+                ])
+            case 2:
+                let users = try Self.tableHandle(named: #""public"."users""#, in: request)
+                let orders = try Self.tableHandle(named: #""public"."orders""#, in: request)
+                return Self.assistantToolCalls([
+                    Self.toolCall(id: "join-narrow", name: "find_join_paths", arguments: [
+                        "from_table_id": users,
+                        "to_table_id": orders,
+                        "max_hops": 1,
+                    ]),
+                ])
+            case 3:
+                let users = try Self.tableHandle(named: #""public"."users""#, in: request)
+                let orders = try Self.tableHandle(named: #""public"."orders""#, in: request)
+                return Self.assistantToolCalls([
+                    Self.toolCall(id: "join-wide", name: "find_join_paths", arguments: [
+                        "from_table_id": users,
+                        "to_table_id": orders,
+                        "max_hops": 2,
+                    ]),
+                ])
+            case 4:
+                let users = try Self.tableHandle(named: #""public"."users""#, in: request)
+                return Self.assistantToolCalls([
+                    Self.toolCall(id: "describe-scope", name: "describe_tables", arguments: [
+                        "table_ids": [users],
+                    ]),
+                ])
+            case 5:
+                return Self.assistantToolCalls([
+                    Self.terminalSQL(
+                        id: "terminal-scope",
+                        sql: "SELECT id, name FROM public.users ORDER BY id LIMIT 100"
+                    ),
+                ])
+            default:
+                throw URLError(.badServerResponse)
+            }
+        }
+        let agent = makeAgent(
+            schema: schema,
+            chatTransport: chatTransport,
+            configuration: OpenRouterSchemaToolSQLAgentConfiguration(maximumSchemaToolCalls: 5)
+        )
+
+        let result = try await agent.generateSQL(
+            question: "List users with orders",
+            schema: schema,
+            context: SQLGenerationContext(),
+            config: SQLGenerationConfig()
+        )
+
+        #expect(result.sql == "SELECT id, name FROM public.users ORDER BY id LIMIT 100")
+        #expect(result.schemaToolCalls.map(\.callID) == [
+            "search-scope-users", "search-scope-orders", "join-narrow", "join-wide",
+            "describe-scope",
+        ])
+        let diagnostics = result.backendMetadata?.agentDiagnostics
+        #expect(diagnostics?.redundantJoinPathCallCount == 0)
+        #expect(diagnostics?.redundantDuplicateToolCallCount == 0)
+        #expect(diagnostics?.redundantZeroResultSearchCount == 0)
+    }
+
+    @Test func wallClockTimeoutAfterRecoveredCorrectionStillReportsTimedOut() async throws {
+        let schema = Self.makeSchema()
+        let chatTransport = ScriptedThenHangingTransport { _, index in
+            guard index == 1 else { return nil }
+            return Self.assistantToolCalls([
+                Self.terminalSQL(
+                    id: "terminal-mixed-timeout",
+                    sql: "SELECT id FROM public.users LIMIT 100"
+                ),
+                Self.toolCall(id: "search-mixed-timeout", name: "search_schema", arguments: [
+                    "query": "users",
+                    "limit": 4,
+                ]),
+            ])
+        }
+        let agent = makeAgent(
+            schema: schema,
+            chatTransport: chatTransport,
+            configuration: OpenRouterSchemaToolSQLAgentConfiguration(
+                maximumSchemaToolCalls: 6,
+                maximumRepairSchemaToolCalls: 2,
+                maximumModelTurns: 6,
+                maximumMalformedTerminalCorrections: 1,
+                maximumRepeatedToolCorrections: 1,
+                maximumHTTPAttempts: 8,
+                wallClockTimeoutSeconds: 0.5
+            )
+        )
+
+        do {
+            _ = try await agent.generateSQL(
+                question: "List users",
+                schema: schema,
+                context: SQLGenerationContext(),
+                config: SQLGenerationConfig()
+            )
+            Issue.record("Expected timeout failure")
+        } catch let failure as OpenRouterSchemaToolAgentFailure {
+            #expect(failure.category == .wallClockTimeout)
+            let diagnostics = failure.backendMetadata?.agentDiagnostics
+            #expect(diagnostics?.appSideRejectionReason == .timedOut)
+        }
+    }
+
+    @Test func byteIdenticalRepeatOfExecutedCallIsInterceptedWithoutCorrectionStrike() async throws {
+        let schema = Self.makeSchema()
+        let searchArguments = #"{"query":"users","limit":4}"#
+        let chatTransport = ScriptedTransport { request, index in
+            switch index {
+            case 1:
+                return Self.assistantToolCalls([
+                    Self.toolCallRaw(
+                        id: "search-identical-1",
+                        name: "search_schema",
+                        argumentsJSON: searchArguments
+                    ),
+                ])
+            case 2:
+                return Self.assistantToolCalls([
+                    Self.toolCallRaw(
+                        id: "search-identical-2",
+                        name: "search_schema",
+                        argumentsJSON: searchArguments
+                    ),
+                ])
+            case 3:
+                let text = try Self.requestBodyText(request)
+                #expect(text.contains("redundant_tool_call"))
+                #expect(!text.contains("repeated_tool_call"))
+                return Self.assistantToolCalls([
+                    Self.toolCallRaw(
+                        id: "search-identical-3",
+                        name: "search_schema",
+                        argumentsJSON: searchArguments
+                    ),
+                ])
+            case 4:
+                let tableID = try Self.tableHandle(named: #""public"."users""#, in: request)
+                return Self.assistantToolCalls([
+                    Self.toolCall(id: "describe-identical", name: "describe_tables", arguments: [
+                        "table_ids": [tableID],
+                    ]),
+                ])
+            case 5:
+                return Self.assistantToolCalls([
+                    Self.terminalSQL(
+                        id: "terminal-identical",
+                        sql: "SELECT id, name FROM public.users ORDER BY id LIMIT 100"
+                    ),
+                ])
+            default:
+                throw URLError(.badServerResponse)
+            }
+        }
+        let agent = makeAgent(
+            schema: schema,
+            chatTransport: chatTransport,
+            configuration: OpenRouterSchemaToolSQLAgentConfiguration(maximumSchemaToolCalls: 2)
+        )
+
+        let result = try await agent.generateSQL(
+            question: "List users",
+            schema: schema,
+            context: SQLGenerationContext(),
+            config: SQLGenerationConfig()
+        )
+
+        #expect(result.sql == "SELECT id, name FROM public.users ORDER BY id LIMIT 100")
+        #expect(result.schemaToolCalls.map(\.callID) == ["search-identical-1", "describe-identical"])
+        #expect(result.backendMetadata?.agentDiagnostics?.redundantDuplicateToolCallCount == 2)
+    }
+
+    @Test func repeatedFailedCallStillEscalatesThroughCorrectionToTypedFailure() async throws {
+        let schema = Self.makeSchema()
+        let invalidArguments = #"{"query":"users","limit":99}"#
+        let chatTransport = ScriptedTransport { _, index in
+            switch index {
+            case 1, 2, 3:
+                return Self.assistantToolCalls([
+                    Self.toolCallRaw(
+                        id: "search-invalid-\(index)",
+                        name: "search_schema",
+                        argumentsJSON: invalidArguments
+                    ),
+                ])
+            default:
+                throw URLError(.badServerResponse)
+            }
+        }
+        let agent = makeAgent(schema: schema, chatTransport: chatTransport)
+
+        do {
+            _ = try await agent.generateSQL(
+                question: "List users",
+                schema: schema,
+                context: SQLGenerationContext(),
+                config: SQLGenerationConfig()
+            )
+            Issue.record("Expected repeated-call failure")
+        } catch let failure as OpenRouterSchemaToolAgentFailure {
+            #expect(failure.category == .repeatedToolCallNoProgress)
+            #expect(failure.schemaToolCalls.map(\.callID) == ["search-invalid-1"])
+            #expect(failure.backendMetadata?.agentDiagnostics?.redundantDuplicateToolCallCount == 0)
+        }
+    }
+
+    @Test func zeroResultRepeatWithInvalidArgumentsIsNotIntercepted() async throws {
+        let schema = Self.makeSchema()
+        let chatTransport = ScriptedTransport { request, index in
+            switch index {
+            case 1:
+                return Self.assistantToolCalls([
+                    Self.toolCall(id: "search-zero-valid", name: "search_schema", arguments: [
+                        "query": "zzzqqq nothing",
+                        "limit": 4,
+                    ]),
+                ])
+            case 2:
+                return Self.assistantToolCalls([
+                    Self.toolCallRaw(
+                        id: "search-zero-invalid-limit",
+                        name: "search_schema",
+                        argumentsJSON: #"{"query":"zzzqqq nothing","limit":0}"#
+                    ),
+                ])
+            case 3:
+                let text = try Self.requestBodyText(request)
+                #expect(!text.contains("redundant_zero_result_search"))
+                return Self.assistantToolCalls([
+                    Self.toolCall(id: "search-users-after-invalid", name: "search_schema", arguments: [
+                        "query": "users",
+                        "limit": 4,
+                    ]),
+                ])
+            case 4:
+                let tableID = try Self.tableHandle(named: #""public"."users""#, in: request)
+                return Self.assistantToolCalls([
+                    Self.toolCall(id: "describe-after-invalid", name: "describe_tables", arguments: [
+                        "table_ids": [tableID],
+                    ]),
+                ])
+            case 5:
+                return Self.assistantToolCalls([
+                    Self.terminalSQL(
+                        id: "terminal-after-invalid",
+                        sql: "SELECT id, name FROM public.users ORDER BY id LIMIT 100"
+                    ),
+                ])
+            default:
+                throw URLError(.badServerResponse)
+            }
+        }
+        let agent = makeAgent(
+            schema: schema,
+            chatTransport: chatTransport,
+            configuration: OpenRouterSchemaToolSQLAgentConfiguration(maximumSchemaToolCalls: 4)
+        )
+
+        let result = try await agent.generateSQL(
+            question: "List users",
+            schema: schema,
+            context: SQLGenerationContext(),
+            config: SQLGenerationConfig()
+        )
+
+        #expect(result.sql == "SELECT id, name FROM public.users ORDER BY id LIMIT 100")
+        #expect(result.schemaToolCalls.map(\.callID) == [
+            "search-zero-valid", "search-zero-invalid-limit", "search-users-after-invalid",
+            "describe-after-invalid",
+        ])
+        let diagnostics = result.backendMetadata?.agentDiagnostics
+        #expect(diagnostics?.redundantZeroResultSearchCount == 0)
+    }
+
+    @Test func searchQueryNormalizationRejectsInvalidArgumentShapes() {
+        #expect(
+            OpenRouterSchemaToolSQLAgent.normalizedSearchQuery(
+                fromArguments: #"{"query":"users","limit":4}"#
+            ) == "users"
+        )
+        #expect(
+            OpenRouterSchemaToolSQLAgent.normalizedSearchQuery(
+                fromArguments: #"{"query":"users","limit":0}"#
+            ) == nil
+        )
+        #expect(
+            OpenRouterSchemaToolSQLAgent.normalizedSearchQuery(
+                fromArguments: #"{"query":"users","limit":"4"}"#
+            ) == nil
+        )
+        #expect(
+            OpenRouterSchemaToolSQLAgent.normalizedSearchQuery(
+                fromArguments: #"{"query":"users","unexpected":true}"#
+            ) == nil
+        )
+        #expect(
+            OpenRouterSchemaToolSQLAgent.normalizedSearchQuery(
+                fromArguments: #"{"query":""}"#
+            ) == nil
+        )
+    }
+
+    @Test func transportTimeoutPastDeadlineBecomesWallClockTimeout() {
+        let pastDeadline = Date().addingTimeInterval(-1)
+        let futureDeadline = Date().addingTimeInterval(60)
+
+        let converted = OpenRouterSchemaToolSQLAgent.wallClockTimeoutFailure(
+            for: URLError(.timedOut),
+            deadline: pastDeadline
+        )
+        #expect(converted?.category == .wallClockTimeout)
+
+        #expect(
+            OpenRouterSchemaToolSQLAgent.wallClockTimeoutFailure(
+                for: URLError(.timedOut),
+                deadline: futureDeadline
+            ) == nil
+        )
+        #expect(
+            OpenRouterSchemaToolSQLAgent.wallClockTimeoutFailure(
+                for: URLError(.networkConnectionLost),
+                deadline: pastDeadline
+            ) == nil
+        )
+    }
+
+    @Test func truncatedJoinPathResultIsNotRecordedAsExplored() {
+        var signatures = Set<String>()
+        var zeroResults = Set<String>()
+        var scopes: [String: [SchemaToolJoinPathScope]] = [:]
+        let forward = OpenRouterToolCall(
+            id: "join-capped",
+            name: "find_join_paths",
+            arguments: #"{"from_table_id":"t1","to_table_id":"t2","max_hops":2,"max_paths":2}"#
+        )
+        let reversed = OpenRouterToolCall(
+            id: "join-capped-reversed",
+            name: "find_join_paths",
+            arguments: #"{"from_table_id":"t2","to_table_id":"t1","max_hops":2,"max_paths":2}"#
+        )
+        let cappedResult = SchemaToolResult(
+            callID: "join-capped",
+            toolName: "find_join_paths",
+            success: true,
+            payload: .object([
+                "paths": .array([.object([:]), .object([:])]),
+                "no_path": .bool(false),
+            ])
+        )
+
+        OpenRouterSchemaToolSQLAgent.recordExecutedSchemaCall(
+            call: forward,
+            result: cappedResult,
+            executedSchemaCallSignatures: &signatures,
+            zeroResultSearchQueries: &zeroResults,
+            exploredJoinPathScopes: &scopes
+        )
+
+        #expect(scopes.isEmpty)
+        #expect(
+            OpenRouterSchemaToolSQLAgent.redundantSchemaCallInterception(
+                call: reversed,
+                executedSchemaCallSignatures: signatures,
+                zeroResultSearchQueries: zeroResults,
+                exploredJoinPathScopes: scopes
+            ) == nil
+        )
+
+        let completeResult = SchemaToolResult(
+            callID: "join-capped",
+            toolName: "find_join_paths",
+            success: true,
+            payload: .object([
+                "paths": .array([.object([:])]),
+                "no_path": .bool(false),
+            ])
+        )
+        OpenRouterSchemaToolSQLAgent.recordExecutedSchemaCall(
+            call: forward,
+            result: completeResult,
+            executedSchemaCallSignatures: &signatures,
+            zeroResultSearchQueries: &zeroResults,
+            exploredJoinPathScopes: &scopes
+        )
+
+        #expect(scopes.count == 1)
+        let interception = OpenRouterSchemaToolSQLAgent.redundantSchemaCallInterception(
+            call: reversed,
+            executedSchemaCallSignatures: signatures,
+            zeroResultSearchQueries: zeroResults,
+            exploredJoinPathScopes: scopes
+        )
+        #expect(interception?.kind == .joinPathExploration)
+    }
+
+    @Test func outOfRangeJoinPathArgumentsAreNeverIntercepted() {
+        var signatures = Set<String>()
+        var zeroResults = Set<String>()
+        var scopes: [String: [SchemaToolJoinPathScope]] = [:]
+        let forward = OpenRouterToolCall(
+            id: "join-range",
+            name: "find_join_paths",
+            arguments: #"{"from_table_id":"t1","to_table_id":"t2","max_hops":3,"max_paths":3}"#
+        )
+        let completeResult = SchemaToolResult(
+            callID: "join-range",
+            toolName: "find_join_paths",
+            success: true,
+            payload: .object([
+                "paths": .array([.object([:])]),
+                "no_path": .bool(false),
+            ])
+        )
+        OpenRouterSchemaToolSQLAgent.recordExecutedSchemaCall(
+            call: forward,
+            result: completeResult,
+            executedSchemaCallSignatures: &signatures,
+            zeroResultSearchQueries: &zeroResults,
+            exploredJoinPathScopes: &scopes
+        )
+        #expect(scopes.count == 1)
+
+        for arguments in [
+            #"{"from_table_id":"t1","to_table_id":"t2","max_hops":0,"max_paths":3}"#,
+            #"{"from_table_id":"t1","to_table_id":"t2","max_hops":2,"max_paths":0}"#,
+        ] {
+            let invalid = OpenRouterToolCall(
+                id: "join-invalid",
+                name: "find_join_paths",
+                arguments: arguments
+            )
+            #expect(
+                OpenRouterSchemaToolSQLAgent.redundantSchemaCallInterception(
+                    call: invalid,
+                    executedSchemaCallSignatures: signatures,
+                    zeroResultSearchQueries: zeroResults,
+                    exploredJoinPathScopes: scopes
+                ) == nil
+            )
         }
     }
 
@@ -3611,6 +4425,21 @@ struct OpenRouterSchemaToolSQLAgentTests {
             "function": [
                 "name": name,
                 "arguments": jsonString(arguments),
+            ],
+        ]
+    }
+
+    private static func toolCallRaw(
+        id: String,
+        name: String,
+        argumentsJSON: String
+    ) -> [String: Any] {
+        [
+            "id": id,
+            "type": "function",
+            "function": [
+                "name": name,
+                "arguments": argumentsJSON,
             ],
         ]
     }

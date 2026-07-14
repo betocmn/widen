@@ -19,9 +19,15 @@ Numbering continues from `docs/refactoring-plan.md`.
   failure buckets, identified PR 59 as the next implementation, and documented
   what PRs 57 and 58 should evaluate afterward. No PR 57, 58, or 59 behavior
   change was implemented here.
-* ⏳ **Not done:** the PR 59 budget/timeout fix, a PR 56 retry,
-  structured plan validation or compilation, clarification behavior changes,
-  canonical rollover monitoring, a second model, and cleanup work.
+* ✅ **Done — PR 59 budget/timeout fix:** separated wall-clock timeouts from
+  schema-tool budget exhaustion end to end (agent failure category, redacted
+  diagnostics, eval status, triage bucket, gate reporting) and added
+  deterministic interception of provably redundant schema-tool calls so they
+  no longer consume the six-call budget, which stays at six. The bucket-size
+  acceptance still needs the next funded full gate.
+* ⏳ **Not done:** a PR 56 retry, structured plan validation or compilation,
+  clarification behavior changes, canonical rollover monitoring, a second
+  model, and cleanup work.
 
 ## Where things stand
 
@@ -62,16 +68,18 @@ Numbering continues from `docs/refactoring-plan.md`.
 
 ## Recommended order
 
-1. PR 59 evidence work before any grounding-bypass retry: distinguish the
-   pre-tool timeout from genuine six-call exhaustion and reduce the observed
-   redundant exploration, leaving the six-call limit unchanged unless new
-   evidence justifies it
-2. Retry PR 56 only after that operational shortfall is addressed; the
-   bypass remains experimental because this complete run missed 11/12
+1. ✅ Done — PR 59 budget/timeout fix: pre-tool timeouts are now classified
+   and reported separately from genuine six-call exhaustion, redundant
+   schema-tool exploration is deterministically intercepted without burning
+   budget, and the six-call limit is unchanged
+2. Retry PR 56 next; the bypass remains experimental because the complete
+   run missed 11/12, and that gate run doubles as the PR 59 acceptance
+   measurement (tool-budget bucket at or below 3 with cost and p95 latency
+   within 15% of baseline)
 3. If a retry clears every PR 56 criterion, PR 57 becomes the next accuracy
    lever: semantic mismatch was the largest fresh actionable bucket at 28
 4. PR 58 only if clarification remains independently below 12/12 after the
-   budget/timeout cases are fixed; PR 60 and PR 61 remain independent
+   budget/timeout cases are fixed; PR 60 remains independent
 
 ---
 
@@ -203,9 +211,11 @@ increasing the expected-SQL-got-clarification bucket above 3.
 
 ## PR 59 — Tool-budget exhaustion bucket
 
-**Status: ✅ Done — trace diagnosis only.** The completed diagnosis separated
-four genuine six-call exhaustions from one misclassified pre-tool timeout. It
-did not change the six-call budget or implement the fix.
+**Status: ✅ Done.** The trace diagnosis separated four genuine six-call
+exhaustions from one misclassified pre-tool timeout, and the budget/timeout
+fix landed in commits `47d6ad1`, `2b28900`, and `551ce3e`. The six-call
+budget is unchanged; the bucket-size acceptance below still needs the next
+funded full gate.
 
 **Why:** The retained comparator has 6 triaged tool-budget results. The PR 56
 experiment had four genuine exhaustion records: each used six successful
@@ -230,6 +240,57 @@ without evidence that the added call is the bounded, correct remedy.
 **Acceptance:** Bucket at or below 3 on the full gate with per-case cost and
 p95 latency no worse than 15% over baseline.
 
+**Outcome 2026-07-14:** The classification gap and the deterministic
+redundancy mechanisms are fixed without touching the six-call budget, the
+prompts, safety/schema validation, PostgreSQL verification, privacy routing,
+canonical-model checks, or the frozen phrase heuristics:
+
+* Wall-clock deadline expiry now throws a dedicated `wallClockTimeout`
+  agent-failure category instead of `modelTurnBudgetExhausted`, at the
+  turn-loop deadline check and both in-flight send deadline races. Redacted
+  diagnostics record `timedOut` instead of `budgetExhausted`, the eval case
+  status becomes `generationFailure` instead of `parseFailure`, triage
+  buckets it as `schema-agent timeout` ahead of the tool-budget predicate,
+  and the gate and triage run tables report an `Internal schema-agent
+  timeouts` count. Genuine exhaustion still records `budgetExhausted` plus a
+  `sessionBudgetExceeded` tool trace, so the tool-budget bucket now means
+  actual exhaustion.
+* Three provably redundant schema-tool call classes are intercepted before
+  session invocation with structured tool errors, so they no longer consume
+  the six-call budget: value-identical repeats of an already executed call
+  (canonicalized JSON arguments), repeats of a search query that already
+  returned zero hits (zero-hit search results are limit-independent), and
+  `find_join_paths` requests whose unordered endpoint pair and hop/path
+  scope are dominated by an already executed call (the foreign-key graph is
+  bidirectional). Wider-scope join-path requests still execute, interception
+  never counts toward the repeated-call hard-failure limit, and identifier
+  case is preserved throughout. Redacted diagnostics count each interception
+  kind and triage rows gained a `Redundant` column next to `Schema Tools`.
+* Deterministic reproductions preceded the fix: against the pre-fix agent,
+  all three interception tests failed with `schemaToolCallBudgetExhausted`,
+  and the timeout tests could not express the timeout/budget distinction at
+  all. An adversarial review pass then hardened three edge cases with
+  regression tests: a timeout after a recovered correction now overrides the
+  stale rejection reason instead of hiding under it, a join-path scope is
+  recorded as fully explored only when the response provably contains every
+  path (truncated results are direction-dependent), and out-of-range
+  join-path arguments fall through to the session's validation error instead
+  of being intercepted. A PR review round tightened three more edge cases:
+  the redundant interception now runs before repeated-call tracking (so
+  provably redundant byte-identical repeats no longer consume the one
+  repeated-call correction or escalate to the typed no-progress failure,
+  while repeats of failed calls still do), search and join-path argument
+  shapes are fully validated before interception (malformed repeats still
+  get the session's validation error), and a transport-level timeout that
+  surfaces after the agent deadline has passed is classified as the
+  wall-clock timeout it is. After the fixes the focused agent and
+  eval-planning suites pass and `make test` passes 1,110 tests in 49 suites.
+
+The acceptance criterion (bucket at or below 3 with per-case cost and p95
+latency within 15% of baseline) requires a complete pinned gate. Per the
+standing spend rule no paid evaluation was run here; measure it on the next
+funded gate, which the PR 56 retry comparator provides.
+
 ## PR 60 — Canonical-version watch and rollover runbook
 
 **Status: ⏳ Not started.**
@@ -247,21 +308,6 @@ release. The in-app pre-flight and eval-side enforcement added in PR 55
 already fail loudly (after one self-healing cache refresh), and Settings warns
 when the catalog canonical has rolled; this PR is about the team hearing it
 before users do.
-
-## PR 61 — Second vetted model in the allowlist
-
-**Status: ⏳ Not started.**
-
-**Why:** Accounts whose OpenRouter provider policies hide GPT-5.5's
-ZDR endpoints currently have no cloud path; the allowlist was always meant to
-grow once evaluation capacity allowed.
-
-**What:** Evaluate one fallback candidate (Claude Sonnet 5 tied Terra in the
-original focused bake-off; re-survey current models first) through the full
-release gate under identical private routing. Add it to the profile list only
-if it meets or beats the pinned baseline on semantic pass with all hard gates
-green. Settings picker grows to two vetted entries, each with its own
-canonical pin; eval defaults stay on the primary.
 
 ## PR 62 — PR 55 hardening cleanups
 
@@ -310,3 +356,9 @@ merge and none change behavior:
   semantic, 100% clarification, 100% safety/schema, >= 95% transport, 0
   repeated repairs), update README/PRIVACY beta wording and commit the
   passing `docs/evals/<version>.md` as the production-ready record.
+* **Second vetted model in the allowlist (formerly PR 61)** — dropped from
+  planned work; keep as optional future work. If accounts whose OpenRouter
+  provider policies hide GPT-5.5's ZDR endpoints ever need a cloud path,
+  evaluate one fallback candidate through the full release gate under
+  identical private routing and add it to the profile list only if it meets
+  or beats the pinned baseline with all hard gates green.
