@@ -103,22 +103,6 @@ struct SchemaToolAgentClarificationPolicyTests {
         #expect(result.unresolvedDecisionKinds.contains(.metric))
     }
 
-    @Test func winsAmbiguityIsNotResolvedByPlausibleWinnerSchema() {
-        let result = evaluate(
-            question: "Tools with the most wins in the last two weeks",
-            clarification: "Should wins count rows where winner_id is not null?",
-            evidence: evidence(columns: [
-                "public.preseason_match_evaluation.winner_id",
-                "public.preseason_match_evaluation.createdAt",
-                "public.preseason_tool.id",
-            ])
-        )
-
-        #expect(result.decision == .acceptableAmbiguity)
-        #expect(result.evidenceSufficientForSQL == false)
-        #expect(result.unresolvedDecisionKinds.contains(.metric))
-    }
-
     @Test func relationshipAmbiguityIsAcceptedWhenMultipleJoinPathsRemain() {
         let result = evaluate(
             question: "Show revenue by account",

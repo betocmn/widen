@@ -748,36 +748,6 @@ public final class OpenRouterSchemaToolSQLAgent: SQLGenerator, Sendable {
                         if configuration.intentCoverageMode != .disabled {
                             diagnostics.recordSQLIntentCoverage(intentCoverage)
                         }
-                        // An unresolved business definition is a terminal decision,
-                        // not a SQL-shape correction. Keep broader corrections gated
-                        // by the mode switch below.
-                        if configuration.intentCoverageMode != .disabled,
-                            intentCoverage.decision == .mustClarify
-                        {
-                            let clarificationQuestion = intentCoverage.clarificationQuestion
-                                ?? evidence.fallbackClarificationQuestion(for: question)
-                                ?? "Which concrete database decision remains unresolved?"
-                            let finalTerminalResult = TerminalResult(
-                                action: .clarify,
-                                sql: "",
-                                clarificationQuestion: clarificationQuestion,
-                                queryPlan: ""
-                            )
-                            diagnostics.terminalQueryPlan = ""
-                            aggregate.terminalOutcome = "clarify_fallback"
-                            aggregate.agentDiagnostics = diagnostics.snapshot(
-                                evidence: evidence,
-                                inspectionToolCalls: inspectionTraces
-                            )
-                            return try await finalResult(
-                                finalTerminalResult,
-                                schema: schema,
-                                context: context,
-                                aggregate: aggregate,
-                                session: session,
-                                inspectionSession: inspectionSession
-                            )
-                        }
                         switch configuration.intentCoverageMode {
                         case .disabled, .diagnosticsOnly:
                             break
@@ -817,7 +787,29 @@ public final class OpenRouterSchemaToolSQLAgent: SQLGenerator, Sendable {
                                     session: session
                                 )
                             case .mustClarify:
-                                break
+                                let clarificationQuestion = intentCoverage.clarificationQuestion
+                                    ?? evidence.fallbackClarificationQuestion(for: question)
+                                    ?? "Which concrete database decision remains unresolved?"
+                                let finalTerminalResult = TerminalResult(
+                                    action: .clarify,
+                                    sql: "",
+                                    clarificationQuestion: clarificationQuestion,
+                                    queryPlan: ""
+                                )
+                                diagnostics.terminalQueryPlan = ""
+                                aggregate.terminalOutcome = "clarify_fallback"
+                                aggregate.agentDiagnostics = diagnostics.snapshot(
+                                    evidence: evidence,
+                                    inspectionToolCalls: inspectionTraces
+                                )
+                                return try await finalResult(
+                                    finalTerminalResult,
+                                    schema: schema,
+                                    context: context,
+                                    aggregate: aggregate,
+                                    session: session,
+                                    inspectionSession: inspectionSession
+                                )
                             }
                         }
                         aggregate.terminalOutcome = "sql"

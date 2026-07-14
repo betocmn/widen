@@ -31,16 +31,15 @@ public struct SchemaToolAgentSQLIntentCoverageResult: Equatable, Sendable {
     }
 }
 
-/// Bounded heuristic triage for terminal schema-tool SQL.
+/// Diagnostics-only heuristic triage for terminal schema-tool SQL.
 ///
 /// Records best-effort signals about whether generated SQL appears to cover
-/// the question's intent. Production converts the policy's high-confidence
-/// `mustClarify` decision into a clarification; SQL-shape `needsCorrection`
-/// findings remain diagnostics-only unless explicit experimental eval flags
-/// are enabled. The phrase and SQL-shape heuristics here are intentionally
-/// non-exhaustive and frozen: they are tuned for the eval suites, not for
-/// general natural-language coverage. Do not grow them into a semantic
-/// validator by adding rules for new phrasings or SQL forms — per
+/// the question's intent. Production runs both correction modes as
+/// `diagnosticsOnly`; enforcement exists only behind explicit experimental
+/// eval flags. The phrase and SQL-shape heuristics here are intentionally
+/// non-exhaustive: they are tuned for the eval suites, not for general
+/// natural-language coverage. Do not grow them into a semantic validator by
+/// adding rules for new phrasings or SQL forms — per
 /// `docs/refactoring-plan.md`, Widen deliberately avoids a hardcoded
 /// natural-language parser and SQL conformance engine. Accuracy improvements
 /// belong in schema retrieval, bounded schema tools, PostgreSQL verification
