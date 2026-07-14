@@ -697,6 +697,54 @@ struct OpenRouterSQLGeneratorTests {
         }
     }
 
+    @Test func parserRejectsCanonicalModelWhenRouterMetadataConflicts() throws {
+        let parser = OpenRouterResponseParser()
+        let expectedCanonicalModelID = "openai/gpt-5.5-20260423"
+        let responses = [
+            chatResponse(
+                content: goodContent,
+                model: expectedCanonicalModelID,
+                openrouterMetadata: routerMetadata(
+                    requestedModelID: "openai/gpt-5.5-unevaluated",
+                    selectedModelIDs: [expectedCanonicalModelID]
+                )
+            ),
+            chatResponse(
+                content: goodContent,
+                model: expectedCanonicalModelID,
+                openrouterMetadata: routerMetadata(
+                    requestedModelID: Self.modelID,
+                    selectedModelIDs: ["openai/gpt-5.5-unevaluated"]
+                )
+            ),
+            chatResponse(
+                content: goodContent,
+                model: expectedCanonicalModelID,
+                openrouterMetadata: routerMetadata(
+                    requestedModelID: Self.modelID,
+                    selectedModelIDs: [expectedCanonicalModelID, expectedCanonicalModelID]
+                )
+            ),
+        ]
+
+        for data in responses {
+            do {
+                _ = try parser.parse(
+                    data: data,
+                    response: response(url: Self.chatEndpoint, status: 200),
+                    requestedModelID: Self.modelID,
+                    mode: .strictJSONSchema,
+                    requestCount: 1,
+                    retryCount: 0,
+                    expectedCanonicalModelID: expectedCanonicalModelID
+                )
+                Issue.record("expected contradictory canonical evidence to fail")
+            } catch let failure as OpenRouterFailure {
+                #expect(failure.category == .modelVersionMismatch)
+            }
+        }
+    }
+
     @Test func malformedHTTP200EnvelopeIsStructuredResponseFailure() throws {
         let parser = OpenRouterResponseParser()
 

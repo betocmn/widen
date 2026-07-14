@@ -3137,6 +3137,61 @@ struct OpenRouterSchemaToolSQLAgentTests {
         #expect(parsed.metadata.returnedModelID == Self.modelID)
     }
 
+    @Test func toolChatParserRejectsCanonicalModelWhenRouterMetadataConflicts() throws {
+        let parser = OpenRouterToolChatParser()
+        let canonicalModelID = "openai/gpt-5.5-20260423"
+        let data = Self.jsonData([
+            "id": "cmpl-router-conflict",
+            "model": canonicalModelID,
+            "provider": "Azure",
+            "openrouter_metadata": [
+                "requested": Self.modelID,
+                "endpoints": [
+                    "available": [[
+                        "provider": "Azure",
+                        "model": "openai/gpt-5.5-unevaluated",
+                        "selected": true,
+                    ]],
+                ],
+            ],
+            "choices": [[
+                "index": 0,
+                "finish_reason": "tool_calls",
+                "message": [
+                    "role": "assistant",
+                    "tool_calls": [[
+                        "id": "call-1",
+                        "type": "function",
+                        "function": [
+                            "name": "search_schema",
+                            "arguments": #"{"query":"users"}"#,
+                        ],
+                    ]],
+                ],
+            ]],
+        ])
+        let response = HTTPURLResponse(
+            url: Self.chatEndpoint,
+            statusCode: 200,
+            httpVersion: "HTTP/1.1",
+            headerFields: nil
+        )!
+
+        do {
+            _ = try parser.parse(
+                data: data,
+                response: response,
+                requestedModelID: Self.modelID,
+                requestCount: 1,
+                retryCount: 0,
+                expectedCanonicalModelID: canonicalModelID
+            )
+            Issue.record("Expected contradictory canonical evidence to fail")
+        } catch let failure as OpenRouterFailure {
+            #expect(failure.category == .modelVersionMismatch)
+        }
+    }
+
     @Test func invalidRequestFailureIsNotReclassifiedAsUnsupportedTools() async throws {
         let schema = Self.makeSchema()
         let chatTransport = ScriptedTransport { _, _ in

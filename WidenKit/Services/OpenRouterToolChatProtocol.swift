@@ -429,8 +429,7 @@ struct OpenRouterToolChatParser: Sendable {
         do {
             try OpenRouterCanonicalModelValidator.validate(
                 returnedModelID: completion.model,
-                routerRequestedModelID: completion.openrouterMetadata?.requested,
-                selectedEndpointModelID: completion.openrouterMetadata?.selectedModelID,
+                routerMetadata: completion.openrouterMetadata,
                 expectedCanonicalModelID: expectedCanonicalModelID,
                 requestedModelID: requestedModelID,
                 httpStatus: response.statusCode,

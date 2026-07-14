@@ -749,8 +749,7 @@ enum OpenRouterCanonicalModelValidator {
 
     static func validate(
         returnedModelID: String?,
-        routerRequestedModelID: String?,
-        selectedEndpointModelID: String?,
+        routerMetadata: OpenRouterRouterMetadata?,
         expectedCanonicalModelID: String?,
         requestedModelID: String,
         httpStatus: Int?,
@@ -760,28 +759,34 @@ enum OpenRouterCanonicalModelValidator {
         attemptCount: Int
     ) throws {
         guard let expectedCanonicalModelID else { return }
-        guard returnedModelID != expectedCanonicalModelID else { return }
-        if returnedModelID == requestedModelID,
-            routerRequestedModelID == requestedModelID,
-            selectedEndpointModelID == expectedCanonicalModelID
-        {
-            return
+        let routerEvidenceMatches = routerMetadata.map {
+            $0.requested == requestedModelID
+                && $0.selectedModelID == expectedCanonicalModelID
         }
-        let message =
-            returnedModelID == nil
-            ? "OpenRouter did not report which model version served this request, so Widen cannot confirm it matches the evaluated version. Try again, and update Widen if this persists."
-            : "OpenRouter resolved the fixed model to an unevaluated version. Update Widen before using this cloud model."
-        throw OpenRouterFailure(
-            category: .modelVersionMismatch,
-            message: message,
-            httpStatus: httpStatus,
-            completionID: completionID,
-            requestID: requestID,
-            requestedModelID: requestedModelID,
-            returnedModelID: returnedModelID,
-            providerName: providerName,
-            attemptCount: attemptCount
-        )
+        let hasConflictingRouterEvidence =
+            routerMetadata != nil && routerEvidenceMatches != true
+        let returnedModelMatches =
+            returnedModelID == expectedCanonicalModelID
+            || (returnedModelID == requestedModelID && routerEvidenceMatches == true)
+        guard !hasConflictingRouterEvidence, returnedModelMatches else {
+            let message =
+                hasConflictingRouterEvidence
+                ? "OpenRouter reported conflicting model-version metadata, so Widen cannot confirm which version served this request. Try again, and update Widen if this persists."
+                : returnedModelID == nil
+                    ? "OpenRouter did not report which model version served this request, so Widen cannot confirm it matches the evaluated version. Try again, and update Widen if this persists."
+                    : "OpenRouter resolved the fixed model to an unevaluated version. Update Widen before using this cloud model."
+            throw OpenRouterFailure(
+                category: .modelVersionMismatch,
+                message: message,
+                httpStatus: httpStatus,
+                completionID: completionID,
+                requestID: requestID,
+                requestedModelID: requestedModelID,
+                returnedModelID: returnedModelID,
+                providerName: providerName,
+                attemptCount: attemptCount
+            )
+        }
     }
 }
 
@@ -1885,8 +1890,7 @@ struct OpenRouterResponseParser: Sendable {
         do {
             try OpenRouterCanonicalModelValidator.validate(
                 returnedModelID: completion.model,
-                routerRequestedModelID: completion.openrouterMetadata?.requested,
-                selectedEndpointModelID: completion.openrouterMetadata?.selectedModelID,
+                routerMetadata: completion.openrouterMetadata,
                 expectedCanonicalModelID: expectedCanonicalModelID,
                 requestedModelID: requestedModelID,
                 httpStatus: response.statusCode,
