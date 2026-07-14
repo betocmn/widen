@@ -2003,6 +2003,19 @@ returned SQL independently of timeout or budget behavior. PR 58 is therefore
 next; PR 57 remains conditional on a future bypass iteration passing every
 promotion criterion.
 
+### PR 58 comparator reconciliation [2026-07-14] — pre-registered
+
+Before any PR 58 paid gate, the acceptance comparator was reconciled against
+the retained production path. The historical expected-SQL clarification
+ceiling of 3 came from the PR 16 configuration that PR 52 later made
+diagnostics-only. The retained PR 55 product-path comparator instead recorded
+28 in that exclusive triage bucket, while the later value of 5 came from a
+rejected and reverted grounding-bypass experiment. The approved PR 58 gate
+therefore requires 12/12 clarification decisions across three repeats without
+raising the retained-path expected-SQL clarification bucket above 28. This
+choice was recorded before seeing PR 58 results; it does not restore the
+grounding bypass or broaden the frozen phrase heuristics.
+
 ### PR 59 funded acceptance measurement [2026-07-14] — ✅ Done
 
 The same complete gate supplied PR 59's pre-registered measurement:

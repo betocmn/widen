@@ -231,9 +231,10 @@ routing, frozen heuristics.
 
 ## PR 58 — Clarification decision accuracy to 12/12
 
-**Status: re-triage ✅ Done; implementation ⏳ Next.** No clarification
-behavior or frozen phrase heuristic changed. The post-PR 59 gate confirms the
-condition for this work: clarification remains independently below 12/12.
+**Status: re-triage ✅ Done; implementation under funded validation.** Commit
+`bfc4ea2` selectively enforces the existing high-confidence `mustClarify`
+terminal decision while leaving broader SQL-shape corrections diagnostics-only.
+The frozen phrase heuristic set is unchanged.
 
 **Why:** The gate requires 100%; the retained PR 55 comparator and the
 post-PR 59 retry both sit at 11/12. The earlier 9/12 experiment had three
@@ -246,8 +247,14 @@ fix its specific decision behavior (prompt guidance or clarification policy
 fidelity for that ambiguity class). No new phrase heuristics — the PR 53
 freeze stands.
 
-**Acceptance:** 12/12 clarification decisions across three repeats without
-increasing the expected-SQL-got-clarification bucket above 3.
+**Acceptance (reconciled before the paid gate on 2026-07-14):** 12/12
+clarification decisions across three repeats, with the exclusive
+expected-SQL-got-clarification bucket no higher than the retained PR 55
+product-path comparator of 28. The earlier ceiling of 3 came from the PR 16
+configuration that PR 52 later made diagnostics-only; the rejected and
+reverted grounding-bypass comparator of 5 is not the retained product path.
+This comparator choice was explicitly approved before seeing PR 58 gate
+results.
 
 ## PR 59 — Tool-budget exhaustion bucket
 
