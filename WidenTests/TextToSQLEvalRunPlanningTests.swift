@@ -431,6 +431,28 @@ struct TextToSQLEvalRunPlanningTests {
         #expect(releaseText.contains("redundantJoinPathCallCount"))
     }
 
+    @Test func releaseTriageReportsIntentPolicyWithoutClarificationPolicy() throws {
+        let testFile = URL(fileURLWithPath: #filePath)
+        let releaseReporter = testFile
+            .deletingLastPathComponent()
+            .deletingLastPathComponent()
+            .appendingPathComponent("WidenEval/ReleaseGateReporter.swift")
+        let releaseText = try String(contentsOf: releaseReporter, encoding: .utf8)
+        let policyStart = try #require(
+            releaseText.range(of: "private static func policySummary(")
+        )
+        let policyText = String(releaseText[policyStart.lowerBound...])
+
+        #expect(
+            policyText.contains(
+                "!diagnostics.clarificationPolicyDecision.isEmpty\n"
+                    + "                    || !diagnostics.sqlIntentCoverageDecision.isEmpty"
+            )
+        )
+        #expect(policyText.contains("var parts: [String] = []"))
+        #expect(policyText.contains("parts.append(diagnostics.clarificationPolicyDecision)"))
+    }
+
     @Test func cloudResumeSourceHashesIncludeGenerationAndOpenRouterSources() throws {
         let testFile = URL(fileURLWithPath: #filePath)
         let evalRunner = testFile

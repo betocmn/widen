@@ -2045,6 +2045,11 @@ not stem terms. The separate `saas.healthy-accounts` repeat 2 miss exhausted
 the fixed six-call budget and had its seventh schema-tool request rejected;
 there was no terminal response for the guard to inspect.
 
+A reporting-only follow-up fixed the triage policy column so intent-policy
+diagnostics remain visible when the separate clarification-policy decision is
+empty. Offline re-triage now records `unresolved: metric; intent: mustClarify`
+for the ambiguity miss without changing decisions or scoring.
+
 The raw expected-SQL-to-clarification count stayed 33 in both runs. Exclusive
 triage precedence assigned five of those comparator results and three attempt
 results to the tool-budget category, producing the pre-registered comparison

@@ -286,6 +286,11 @@ or “winner” and do not stem the term. The other clarification miss,
 were followed by a rejected seventh call, so no terminal response existed for
 the guard to evaluate. `maximumSchemaToolCalls` remains six.
 
+A reporting-only follow-up fixed the triage policy column so an intent-policy
+decision is visible even when the separate clarification-policy field is
+empty. Offline re-triage now exposes `unresolved: metric; intent: mustClarify`
+for the ambiguity miss. This changes neither decisions nor scoring.
+
 The raw expected-SQL-to-clarification count was 33 in both the comparator and
 the attempt. Triage precedence assigned five comparator results but only
 three attempt results to the tool-budget bucket, leaving the pre-registered
