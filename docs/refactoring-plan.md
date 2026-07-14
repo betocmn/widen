@@ -2016,6 +2016,61 @@ raising the retained-path expected-SQL clarification bucket above 28. This
 choice was recorded before seeing PR 58 results; it does not restore the
 grounding bypass or broaden the frozen phrase heuristics.
 
+### PR 58 funded attempt [2026-07-14] — negative, behavior reverted
+
+The narrow attempt enforced the existing terminal `mustClarify` intent
+coverage decision while preserving diagnostics-only handling for broader SQL
+shape corrections. Deterministic tests reproduced the prior terminal-SQL
+failure before the change and passed afterward, alongside nearby ambiguous
+and defined-context controls. The focused clarification/validator/pipeline/
+reporting matrix passed 427/427 tests, the full suite passed 1,112 tests, and
+`make eval-build` passed before the gate.
+
+The complete pinned `openai/gpt-5.5` gate evaluated commit `ff79bb2`, completed
+60/60 cases, and spent $3.330465 under the authorized $4 cap. It failed both
+pre-registered PR 58 criteria:
+
+| Mechanical criterion | Retained PR 55 comparator | PR 58 attempt | Result |
+| --- | ---: | ---: | --- |
+| Clarification decisions | 11/12 | 10/12 | Fail (required 12/12) |
+| Exclusive expected-SQL clarification bucket | 28 | 30 | Fail (required `<= 28`) |
+| Semantic end to end | 19/60 | 19/60 | No change |
+
+The targeted `preseason.top-wins-ambiguous` path did reach the new guard in
+repeat 2: diagnostics recorded `mustClarify`, and the app returned a
+clarification instead of the model's SQL. It nevertheless failed the
+clarification-quality scorer because the fallback used plural “wins,” while
+the expected concepts contain singular “win” or “winner” and the scorer does
+not stem terms. The separate `saas.healthy-accounts` repeat 2 miss exhausted
+the fixed six-call budget and had its seventh schema-tool request rejected;
+there was no terminal response for the guard to inspect.
+
+The raw expected-SQL-to-clarification count stayed 33 in both runs. Exclusive
+triage precedence assigned five of those comparator results and three attempt
+results to the tool-budget category, producing the pre-registered comparison
+of 28 to 30. That criterion was applied mechanically without post-result
+reinterpretation.
+
+The complete attempt also recorded 19/60 semantic end-to-end, SQL semantic
+9/15, safety 15/15, schema validity 15/15, PostgreSQL verification 15/15,
+transport 60/60, structured parsing 59/60, forbidden bindings 0,
+repeated/no-progress repairs 0, eval timeouts 0, internal schema-agent
+timeouts 0, direct schema-tool budget failures 1 (exclusive triage bucket 4),
+and semantic mismatches 6. Latency was 15,717 ms P50, 27,042 ms P95, and
+30,725 ms maximum. All 60 requested and returned aliases were
+`openai/gpt-5.5`; private routing, canonical-model enforcement, and
+routed-model verification remained active. The sanitized evidence is in
+`docs/evals/0.1.0.md` and `docs/evals/0.1.0-triage.md`.
+
+Because the conjunctive criteria failed, commit `b3b69fe` reverted the
+behavioral change and its tests. PR 58 remains not done. The retained tree
+still has `maximumSchemaToolCalls == 6`, the PR 53 phrase-heuristic freeze,
+all safety/schema/PostgreSQL and structured-response checks, PR 59 timeout/
+budget/interception behavior, and no PR 56 grounding bypass. A retry should
+make evidence-specific ambiguity wording quality-safe and separately address
+terminal-less nonredundant six-call exploration, then earn a fresh funded
+gate rather than retaining an unproven change.
+
 ### PR 59 funded acceptance measurement [2026-07-14] — ✅ Done
 
 The same complete gate supplied PR 59's pre-registered measurement:
@@ -2076,7 +2131,7 @@ Current follow-up decision:
 ```text
 PR 59 ✅ — implementation and funded acceptance measurement complete
 PR 56 ✅ — retry complete, negative, bypass reverted
-PR 58 ⏳ — next because clarification remains independently at 11/12
+PR 58 ⏳ — funded attempt negative, behavior reverted, remains next
 PR 57 ⏳ — conditional on a future bypass gate passing every criterion
 ```
 
