@@ -413,6 +413,20 @@ struct TextToSQLEvalRunPlanningTests {
         #expect(timedOutCheck.lowerBound < budgetCheck.lowerBound)
     }
 
+    @Test func releaseTriageReportsRedundantSchemaToolInterceptions() throws {
+        let testFile = URL(fileURLWithPath: #filePath)
+        let repoRoot = testFile
+            .deletingLastPathComponent()
+            .deletingLastPathComponent()
+
+        let releaseReporter = repoRoot.appendingPathComponent("WidenEval/ReleaseGateReporter.swift")
+        let releaseText = try String(contentsOf: releaseReporter, encoding: .utf8)
+        #expect(releaseText.contains("| Redundant |"))
+        #expect(releaseText.contains("redundantDuplicateToolCallCount"))
+        #expect(releaseText.contains("redundantZeroResultSearchCount"))
+        #expect(releaseText.contains("redundantJoinPathCallCount"))
+    }
+
     @Test func cloudResumeSourceHashesIncludeGenerationAndOpenRouterSources() throws {
         let testFile = URL(fileURLWithPath: #filePath)
         let evalRunner = testFile

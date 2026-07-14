@@ -495,8 +495,8 @@ enum TextToSQLReleaseTriageReporter {
                 "",
                 "## \(category.rawValue)",
                 "",
-                "| Case | Repeat | Expected | Actual | Status | Semantic | Verification | Terminal | Query Plan | Policy | Mismatch | Schema Tools | Described | Inspected Objects | SQL Tables | Repeated Repair |",
-                "| --- | ---: | --- | --- | --- | --- | --- | --- | --- | --- | --- | ---: | ---: | --- | --- | --- |",
+                "| Case | Repeat | Expected | Actual | Status | Semantic | Verification | Terminal | Query Plan | Policy | Mismatch | Schema Tools | Redundant | Described | Inspected Objects | SQL Tables | Repeated Repair |",
+                "| --- | ---: | --- | --- | --- | --- | --- | --- | --- | --- | --- | ---: | ---: | ---: | --- | --- | --- |",
             ]
             for row in rows {
                 lines.append(row.markdownRow)
@@ -774,6 +774,11 @@ enum TextToSQLReleaseTriageReporter {
             let schemaToolCalls = result.metrics.openRouterSchemaToolCallCount
                 ?? result.trace?.schemaToolCalls.count
                 ?? 0
+            let redundantInterceptions = diagnostics.map {
+                $0.redundantDuplicateToolCallCount
+                    + $0.redundantZeroResultSearchCount
+                    + $0.redundantJoinPathCallCount
+            }
             let described = evidence?.describedTableIDs.count ?? 0
             let inspectedObjects = evidence?.describedTableIDs.prefix(8).joined(separator: ", ") ?? "-"
             let sqlTables = result.referencedTables.prefix(8).joined(separator: ", ")
@@ -790,6 +795,7 @@ enum TextToSQLReleaseTriageReporter {
                 tableCell(policy),
                 tableCell(mismatch),
                 String(schemaToolCalls),
+                redundantInterceptions.map(String.init) ?? "-",
                 String(described),
                 tableCell(inspectedObjects.isEmpty ? "-" : inspectedObjects),
                 tableCell(sqlTables.isEmpty ? "-" : sqlTables),

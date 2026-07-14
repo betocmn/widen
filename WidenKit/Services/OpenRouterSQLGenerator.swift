@@ -136,6 +136,9 @@ public struct OpenRouterSchemaToolAgentDiagnostics: Codable, Equatable, Sendable
     public var terminalValidationFailureReason: String?
     public var triedSchemaToolsAfterTerminal: Bool
     public var producedProseInsteadOfTools: Bool
+    public var redundantDuplicateToolCallCount: Int
+    public var redundantZeroResultSearchCount: Int
+    public var redundantJoinPathCallCount: Int
     public var schemaEvidence: OpenRouterSchemaToolEvidenceSummary
     public var appSideRejectionReason: OpenRouterSchemaToolAppRejectionReason?
     public var clarificationCorrectionMode: String
@@ -162,6 +165,9 @@ public struct OpenRouterSchemaToolAgentDiagnostics: Codable, Equatable, Sendable
         terminalValidationFailureReason: String? = nil,
         triedSchemaToolsAfterTerminal: Bool = false,
         producedProseInsteadOfTools: Bool = false,
+        redundantDuplicateToolCallCount: Int = 0,
+        redundantZeroResultSearchCount: Int = 0,
+        redundantJoinPathCallCount: Int = 0,
         schemaEvidence: OpenRouterSchemaToolEvidenceSummary = OpenRouterSchemaToolEvidenceSummary(),
         appSideRejectionReason: OpenRouterSchemaToolAppRejectionReason? = nil,
         clarificationCorrectionMode: String = "",
@@ -187,6 +193,9 @@ public struct OpenRouterSchemaToolAgentDiagnostics: Codable, Equatable, Sendable
         self.terminalValidationFailureReason = terminalValidationFailureReason
         self.triedSchemaToolsAfterTerminal = triedSchemaToolsAfterTerminal
         self.producedProseInsteadOfTools = producedProseInsteadOfTools
+        self.redundantDuplicateToolCallCount = redundantDuplicateToolCallCount
+        self.redundantZeroResultSearchCount = redundantZeroResultSearchCount
+        self.redundantJoinPathCallCount = redundantJoinPathCallCount
         self.schemaEvidence = schemaEvidence
         self.appSideRejectionReason = appSideRejectionReason
         self.clarificationCorrectionMode = clarificationCorrectionMode
@@ -214,6 +223,9 @@ public struct OpenRouterSchemaToolAgentDiagnostics: Codable, Equatable, Sendable
         case terminalValidationFailureReason
         case triedSchemaToolsAfterTerminal
         case producedProseInsteadOfTools
+        case redundantDuplicateToolCallCount
+        case redundantZeroResultSearchCount
+        case redundantJoinPathCallCount
         case schemaEvidence
         case appSideRejectionReason
         case clarificationCorrectionMode
@@ -251,6 +263,18 @@ public struct OpenRouterSchemaToolAgentDiagnostics: Codable, Equatable, Sendable
             Bool.self,
             forKey: .producedProseInsteadOfTools
         ) ?? false
+        redundantDuplicateToolCallCount = try container.decodeIfPresent(
+            Int.self,
+            forKey: .redundantDuplicateToolCallCount
+        ) ?? 0
+        redundantZeroResultSearchCount = try container.decodeIfPresent(
+            Int.self,
+            forKey: .redundantZeroResultSearchCount
+        ) ?? 0
+        redundantJoinPathCallCount = try container.decodeIfPresent(
+            Int.self,
+            forKey: .redundantJoinPathCallCount
+        ) ?? 0
         schemaEvidence = try container.decodeIfPresent(
             OpenRouterSchemaToolEvidenceSummary.self,
             forKey: .schemaEvidence
