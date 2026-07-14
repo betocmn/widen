@@ -620,6 +620,131 @@ struct OpenRouterSQLGeneratorTests {
         }
     }
 
+    @Test func parserAcceptsAliasWhenRouterMetadataPinsExpectedCanonicalModel() throws {
+        let parser = OpenRouterResponseParser()
+        let expectedCanonicalModelID = "openai/gpt-5.5-20260423"
+
+        let parsed = try parser.parse(
+            data: chatResponse(
+                content: goodContent,
+                openrouterMetadata: routerMetadata(
+                    requestedModelID: Self.modelID,
+                    selectedModelIDs: [expectedCanonicalModelID]
+                )
+            ),
+            response: response(url: Self.chatEndpoint, status: 200),
+            requestedModelID: Self.modelID,
+            mode: .strictJSONSchema,
+            requestCount: 1,
+            retryCount: 0,
+            expectedCanonicalModelID: expectedCanonicalModelID
+        )
+
+        #expect(parsed.metadata.returnedModelID == Self.modelID)
+    }
+
+    @Test func parserRejectsAliasWithoutUnambiguousMatchingRouterMetadata() throws {
+        let parser = OpenRouterResponseParser()
+        let expectedCanonicalModelID = "openai/gpt-5.5-20260423"
+        let responses = [
+            chatResponse(content: goodContent),
+            chatResponse(
+                content: goodContent,
+                openrouterMetadata: routerMetadata(
+                    requestedModelID: "openai/gpt-5.5-unevaluated",
+                    selectedModelIDs: [expectedCanonicalModelID]
+                )
+            ),
+            chatResponse(
+                content: goodContent,
+                openrouterMetadata: routerMetadata(
+                    requestedModelID: Self.modelID,
+                    selectedModelIDs: ["openai/gpt-5.5-unevaluated"]
+                )
+            ),
+            chatResponse(
+                content: goodContent,
+                openrouterMetadata: routerMetadata(
+                    requestedModelID: Self.modelID,
+                    selectedModelIDs: [expectedCanonicalModelID, expectedCanonicalModelID]
+                )
+            ),
+            chatResponse(
+                content: goodContent,
+                model: "openai/gpt-5.5-unevaluated",
+                openrouterMetadata: routerMetadata(
+                    requestedModelID: Self.modelID,
+                    selectedModelIDs: [expectedCanonicalModelID]
+                )
+            ),
+        ]
+
+        for data in responses {
+            do {
+                _ = try parser.parse(
+                    data: data,
+                    response: response(url: Self.chatEndpoint, status: 200),
+                    requestedModelID: Self.modelID,
+                    mode: .strictJSONSchema,
+                    requestCount: 1,
+                    retryCount: 0,
+                    expectedCanonicalModelID: expectedCanonicalModelID
+                )
+                Issue.record("expected incomplete or conflicting canonical evidence to fail")
+            } catch let failure as OpenRouterFailure {
+                #expect(failure.category == .modelVersionMismatch)
+            }
+        }
+    }
+
+    @Test func parserRejectsCanonicalModelWhenRouterMetadataConflicts() throws {
+        let parser = OpenRouterResponseParser()
+        let expectedCanonicalModelID = "openai/gpt-5.5-20260423"
+        let responses = [
+            chatResponse(
+                content: goodContent,
+                model: expectedCanonicalModelID,
+                openrouterMetadata: routerMetadata(
+                    requestedModelID: "openai/gpt-5.5-unevaluated",
+                    selectedModelIDs: [expectedCanonicalModelID]
+                )
+            ),
+            chatResponse(
+                content: goodContent,
+                model: expectedCanonicalModelID,
+                openrouterMetadata: routerMetadata(
+                    requestedModelID: Self.modelID,
+                    selectedModelIDs: ["openai/gpt-5.5-unevaluated"]
+                )
+            ),
+            chatResponse(
+                content: goodContent,
+                model: expectedCanonicalModelID,
+                openrouterMetadata: routerMetadata(
+                    requestedModelID: Self.modelID,
+                    selectedModelIDs: [expectedCanonicalModelID, expectedCanonicalModelID]
+                )
+            ),
+        ]
+
+        for data in responses {
+            do {
+                _ = try parser.parse(
+                    data: data,
+                    response: response(url: Self.chatEndpoint, status: 200),
+                    requestedModelID: Self.modelID,
+                    mode: .strictJSONSchema,
+                    requestCount: 1,
+                    retryCount: 0,
+                    expectedCanonicalModelID: expectedCanonicalModelID
+                )
+                Issue.record("expected contradictory canonical evidence to fail")
+            } catch let failure as OpenRouterFailure {
+                #expect(failure.category == .modelVersionMismatch)
+            }
+        }
+    }
+
     @Test func malformedHTTP200EnvelopeIsStructuredResponseFailure() throws {
         let parser = OpenRouterResponseParser()
 
@@ -1697,7 +1822,8 @@ struct OpenRouterSQLGeneratorTests {
         model: String? = "openai/gpt-5.5",
         finishReason: String = "stop",
         refusal: String? = nil,
-        choiceError: [String: Any]? = nil
+        choiceError: [String: Any]? = nil,
+        openrouterMetadata: [String: Any]? = nil
     ) -> Data {
         var message: [String: Any] = ["role": "assistant"]
         if let content {
@@ -1731,7 +1857,28 @@ struct OpenRouterSQLGeneratorTests {
         if let model {
             body["model"] = model
         }
+        if let openrouterMetadata {
+            body["openrouter_metadata"] = openrouterMetadata
+        }
         return jsonData(body)
+    }
+
+    private func routerMetadata(
+        requestedModelID: String,
+        selectedModelIDs: [String]
+    ) -> [String: Any] {
+        [
+            "requested": requestedModelID,
+            "endpoints": [
+                "available": selectedModelIDs.map { modelID in
+                    [
+                        "provider": "Azure",
+                        "model": modelID,
+                        "selected": true,
+                    ] as [String: Any]
+                },
+            ],
+        ]
     }
 
     private func topLevelErrorResponse(

@@ -203,7 +203,7 @@ struct OpenRouterToolChatParser: Sendable {
         let choices: [Choice]
         let usage: OpenRouterReportedUsage?
         let error: OpenRouterAPIErrorEnvelope.APIError?
-        let openrouterMetadata: RouterMetadata?
+        let openrouterMetadata: OpenRouterRouterMetadata?
 
         private enum CodingKeys: String, CodingKey {
             case id
@@ -225,7 +225,10 @@ struct OpenRouterToolChatParser: Sendable {
             choices = try container.decodeIfPresent([Choice].self, forKey: .choices) ?? []
             usage = try container.decodeIfPresent(OpenRouterReportedUsage.self, forKey: .usage)
             error = try container.decodeIfPresent(OpenRouterAPIErrorEnvelope.APIError.self, forKey: .error)
-            openrouterMetadata = try container.decodeIfPresent(RouterMetadata.self, forKey: .openrouterMetadata)
+            openrouterMetadata = try container.decodeIfPresent(
+                OpenRouterRouterMetadata.self,
+                forKey: .openrouterMetadata
+            )
         }
     }
 
@@ -259,23 +262,6 @@ struct OpenRouterToolChatParser: Sendable {
                     return part.text
                 }.joined()
             }
-        }
-    }
-
-    private struct RouterMetadata: Decodable, Equatable, Sendable {
-        struct Endpoints: Decodable, Equatable, Sendable {
-            struct Endpoint: Decodable, Equatable, Sendable {
-                let provider: String?
-                let selected: Bool?
-            }
-
-            let available: [Endpoint]?
-        }
-
-        let endpoints: Endpoints?
-
-        var selectedProvider: String? {
-            endpoints?.available?.first { $0.selected == true }?.provider
         }
     }
 
@@ -443,6 +429,7 @@ struct OpenRouterToolChatParser: Sendable {
         do {
             try OpenRouterCanonicalModelValidator.validate(
                 returnedModelID: completion.model,
+                routerMetadata: completion.openrouterMetadata,
                 expectedCanonicalModelID: expectedCanonicalModelID,
                 requestedModelID: requestedModelID,
                 httpStatus: response.statusCode,

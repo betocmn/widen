@@ -1864,6 +1864,85 @@ on the pinned model (PR 56 in `docs/next-dev-steps.md`), which targets
 exactly this bucket. The June GPT-5.5 24/60 record remains in git history at
 commit `386f363` and earlier.
 
+## PR 56 grounding-bypass experiment [2026-07-13]
+
+The first pinned GPT-5.5 attempt was inconclusive. Commit `747eef5` restored
+the previously tested bypass and passed the two focused validator/pipeline
+suites (182 tests) and the full unit suite (1,094 tests). The capped
+`make eval-release-triage MODEL=openai/gpt-5.5 MAX_CLOUD_COST_USD=4` run
+produced 35/35 typed `modelVersionMismatch` failures from HTTP-successful
+Azure responses before any schema tool ran. The authenticated catalog named
+canonical `openai/gpt-5.5-20260423`, while every top-level completion `model`
+field contained only `openai/gpt-5.5`. The run stopped with 25 records missing,
+$0.204335 spent, and P95 latency 4,748 ms; `30c5cb9` reverted the bypass.
+
+The response contract was then resolved without trusting the alias alone.
+OpenRouter router metadata echoes the requested alias and reports the selected
+endpoint's concrete model. Commit `9d8eb1a` accepts an alias response only when
+that requested value matches and exactly one selected endpoint reports the
+pinned canonical ID. Missing, ambiguous, conflicting, or unexpected evidence
+still produces `modelVersionMismatch`; both regular and tool-chat parsers use
+the same validator. Its focused parser suites passed 126 tests.
+
+Commit `cd10d86` restored the bypass for a second gate. The 182 focused
+validator/pipeline tests and the full 1,097-test suite passed. The complete
+60/60 gate cost $3.276305 and recorded:
+
+```text
+pre-registered PR 56 criteria
+semantic end-to-end: 22/60 (required >= 20)             pass
+clarification decisions: 9/12 (required >= 11)          fail
+safety validity: 41/41 (required 100%)                  pass
+schema validity: 41/41 (required 100%)                  pass
+transport: 60/60 (required >= 95%)                      pass
+structured parsing: 57/60 (required >= 95%)             pass
+forbidden bindings: 0                                   pass
+repeated/no-progress repairs: 0                         pass
+eval-timeout status: 0                                  pass
+internal schema-agent timeout surfaced as parseFailure: 1  strict fail
+latency: P50 16,977 ms; P95 30,244 ms; max 91,012 ms
+```
+
+The experiment therefore fails its conjunctive promotion gate even though
+semantic end-to-end improved from 19 to 22. Clarification alone is sufficient
+to reject it; a strict reading that counts any internal timeout also fails.
+Cumulative branch OpenRouter spend
+was $3.481360: the $0.204335 inconclusive attempt, $0.000720 in two metadata
+probes, and the $3.276305 complete gate. The bypass is reverted in the
+following commit while the canonical router-metadata verifier remains.
+
+Fresh failure buckets explain the tradeoff:
+
+```text
+bucket                                      PR 55 comparator   PR 56 experiment
+wrong decision, expected SQL got clarify            28                 5
+semantic result mismatch                              6                28
+tool-budget triage                                     6                 5
+static schema failure                                  1                 0
+```
+
+The five non-budget wrong-decision records are outside the bypass trust
+contract: four terminal SQL results had deterministic `invalidSQL` app
+rejections, and one result was an explicit model clarification. The semantic
+mismatches are now the largest actionable experimental bucket, dominated by
+projection shape differences (20 missing candidate-column and 7
+unexpected-extra-column comparisons, plus 1 ordered-row mismatch). PR 57 is
+therefore the accuracy lever if a future bypass retry first clears every
+promotion criterion; the 28-result bucket is not the retained product baseline
+after this revert.
+
+The 9/12 clarification result does not justify expanding frozen phrase
+heuristics. Two `saas.healthy-accounts` repeats consumed six successful schema
+calls and received an error on the seventh `inspect_column_constraints` call.
+One `preseason.top-wins-ambiguous` repeat instead timed out after 91 seconds
+before any schema call, but its `budgetExhausted` diagnostic grouped it into
+the redacted tool-budget bucket. The same six-call pattern also affected two
+`saas.active-users-by-org` SQL decisions. PR 59 should separate that timeout
+classification from genuine exhaustion and explain the redundant zero-result
+search/join-path sequences before changing behavior. Do not raise the six-call
+budget without evidence. PR 58 follows only if clarification remains
+independently below 12/12 after those operational failures are addressed.
+
 ---
 
 # Recommended implementation order for one coding agent
