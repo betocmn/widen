@@ -522,6 +522,80 @@ struct OpenRouterSchemaToolSQLAgentTests {
         #expect(result.backendMetadata?.agentDiagnostics?.schemaEvidence.describedTableIDs.count == 2)
     }
 
+    @Test func defaultModeConvertsTerminalSQLForUndefinedWinsToClarification() async throws {
+        let schema = Self.makePreseasonSchema()
+        let sql = """
+            SELECT t.id, t.name, COUNT(*) AS wins
+            FROM public.preseason_match_evaluation AS e
+            JOIN public.preseason_tool AS t ON e.winner_id = t.id
+            WHERE e.winner_id IS NOT NULL
+              AND e."createdAt" >= NOW() - INTERVAL '14 days'
+            GROUP BY t.id, t.name
+            ORDER BY COUNT(*) DESC
+            LIMIT 100
+            """
+        let chatTransport = ScriptedTransport { request, index in
+            switch index {
+            case 1:
+                return Self.assistantToolCalls([
+                    Self.toolCall(id: "search-ambiguous-sql-evaluations", name: "search_schema", arguments: [
+                        "query": "preseason_match_evaluation winner_id createdAt",
+                        "limit": 4,
+                    ]),
+                    Self.toolCall(id: "search-ambiguous-sql-tools", name: "search_schema", arguments: [
+                        "query": "preseason_tool id name",
+                        "limit": 4,
+                    ]),
+                ])
+            case 2:
+                let evaluations = try Self.tableHandle(
+                    named: #""public"."preseason_match_evaluation""#,
+                    in: request
+                )
+                let tools = try Self.tableHandle(named: #""public"."preseason_tool""#, in: request)
+                return Self.assistantToolCalls([
+                    Self.toolCall(id: "describe-ambiguous-sql", name: "describe_tables", arguments: [
+                        "table_ids": [evaluations, tools],
+                    ]),
+                ])
+            case 3:
+                return Self.assistantToolCalls([
+                    Self.terminalSQL(id: "terminal-ambiguous-sql", sql: sql),
+                ])
+            default:
+                throw URLError(.badServerResponse)
+            }
+        }
+        let agent = makeAgent(
+            schema: schema,
+            chatTransport: chatTransport,
+            configuration: .default
+        )
+
+        let result = try await agent.generateSQL(
+            question: "Tools with the most wins in the last two weeks",
+            schema: schema,
+            context: SQLGenerationContext(),
+            config: SQLGenerationConfig()
+        )
+
+        #expect(result.needsClarification)
+        #expect(result.sql.isEmpty)
+        #expect(result.clarificationQuestion == "Which metric should define wins?")
+        #expect(chatTransport.requests.count == 3)
+        #expect(result.schemaToolCalls.map(\.callID) == [
+            "search-ambiguous-sql-evaluations",
+            "search-ambiguous-sql-tools",
+            "describe-ambiguous-sql",
+        ])
+        #expect(result.backendMetadata?.agentSchemaToolCallCount == 3)
+        #expect(result.backendMetadata?.agentTerminalOutcome == "clarify_fallback")
+        #expect(result.backendMetadata?.agentDiagnostics?.intentCoverageMode == "diagnosticsOnly")
+        #expect(result.backendMetadata?.agentDiagnostics?.sqlIntentCoverageDecision == "mustClarify")
+        #expect(result.backendMetadata?.agentDiagnostics?.appSideRejectionReason == nil)
+        #expect(result.backendMetadata?.agentDiagnostics?.terminalValidationFailureReason == nil)
+    }
+
     @Test func inspectedAmbiguityFallsBackToClarificationWhenToolBudgetIsExhausted() async throws {
         let schema = Self.makePreseasonSchema()
         let chatTransport = ScriptedTransport { request, index in
@@ -1760,6 +1834,8 @@ struct OpenRouterSchemaToolSQLAgentTests {
         #expect(!result.sql.contains("e.tool_a_id"))
         #expect(!result.sql.contains("e.tool_b_id"))
         #expect(result.backendMetadata?.agentDiagnostics?.terminalAction == "sql")
+        #expect(result.backendMetadata?.agentTerminalOutcome == "sql")
+        #expect(result.backendMetadata?.agentDiagnostics?.sqlIntentCoverageDecision == "covered")
     }
 
     @Test func databaseContextDefinitionsArePresentedAsAuthoritative() async throws {
