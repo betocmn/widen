@@ -4,6 +4,25 @@ Follow-up PRs after the PR 55 branch (pinned OpenRouter profile, private
 routing, canonical-version enforcement, release-gate hardening) merges to
 `main`. Numbering continues from `docs/refactoring-plan.md`.
 
+## What this branch completed
+
+* ✅ **Done in this branch — PR 56 experiment:** restored the trusted
+  schema-tool SQL bypass, ran the complete pinned GPT-5.5 gate, applied every
+  pre-registered criterion, published sanitized evidence, and reverted the
+  bypass after it missed the clarification floor. The experiment is complete;
+  the bypass is not part of the final product diff.
+* ✅ **Done in this branch — routed-model verification:** retained the
+  OpenRouter metadata fix needed to verify the concrete model behind a
+  completion alias, including fail-closed handling for missing, ambiguous,
+  unexpected, or contradictory routing evidence.
+* ✅ **Done in this branch — PRs 57–59 evidence work:** re-ranked the fresh
+  failure buckets, identified PR 59 as the next implementation, and documented
+  what PRs 57 and 58 should evaluate afterward. No PR 57, 58, or 59 behavior
+  change was implemented here.
+* ⏳ **Not done in this branch:** the PR 59 budget/timeout fix, a PR 56 retry,
+  structured plan validation or compilation, clarification behavior changes,
+  canonical rollover monitoring, a second model, and cleanup work.
+
 ## Where things stand
 
 * The product path is fixed: OpenRouter schema-tool agent, pinned
@@ -57,6 +76,10 @@ routing, canonical-version enforcement, release-gate hardening) merges to
 ---
 
 ## PR 56 — GPT-5.5 grounding-bypass full-gate experiment
+
+**Branch status: ✅ Done in this branch.** The experiment and decision are
+complete. The bypass failed its conjunctive gate and was reverted; only the
+routed-model verifier and sanitized evidence remain.
 
 **Why:** The trusted-agent grounding bypass (commit `7d6baff`, reverted in
 `0e7d430`) raised Terra's full gate from 17/60 to 22/60, but was only ever
@@ -115,7 +138,16 @@ tool-budget triage 6 -> 5, and static schema failure 1 -> 0. The sanitized
 gate and triage reports retain this negative evidence; raw prompts, model
 responses, rows, schemas, and `.eval-results` remain uncommitted.
 
+**Post-review hardening — ✅ Done in this branch:** Commit `33f37e3` made the
+routed-model verifier reject contradictions even when the top-level response
+already names the expected canonical model. The final parser suites passed
+128 tests, and `make test` passed 1,092 tests across 49 suites.
+
 ## PR 57 — Plan-then-compile SQL synthesis for covered shapes
+
+**Branch status: ✅ Done in this branch: re-triage only.** The implementation
+has not started and remains conditional on a future PR 56 retry passing every
+promotion criterion.
 
 **Why:** Semantic result mismatch was 6 on the retained PR 55 behavior and
 grew to the largest experimental bucket, 28, when PR 56 stopped discarding
@@ -153,6 +185,10 @@ routing, frozen heuristics.
 
 ## PR 58 — Clarification decision accuracy to 12/12
 
+**Branch status: ✅ Done in this branch: re-triage only.** No clarification
+behavior or frozen phrase heuristic changed. Revisit only if clarification
+remains independently below 12/12 after PR 59.
+
 **Why:** The gate requires 100%; the retained PR 55 comparator sits at 11/12.
 The PR 56 experiment fell to 9/12, but all three misses were operational
 (two genuine tool-budget exhaustions and one pre-tool timeout), so PR 58 is
@@ -167,6 +203,10 @@ ambiguity classes). No new phrase heuristics — the PR 53 freeze stands.
 increasing the expected-SQL-got-clarification bucket above 3.
 
 ## PR 59 — Tool-budget exhaustion bucket
+
+**Branch status: ✅ Done in this branch: trace diagnosis only.** The branch
+separated four genuine six-call exhaustions from one misclassified pre-tool
+timeout. It did not change the six-call budget or implement the fix.
 
 **Why:** The retained comparator has 6 triaged tool-budget results. The PR 56
 experiment had four genuine exhaustion records: each used six successful
@@ -193,6 +233,8 @@ p95 latency no worse than 15% over baseline.
 
 ## PR 60 — Canonical-version watch and rollover runbook
 
+**Branch status: ⏳ Not started in this branch.**
+
 **Why:** The app fails closed if OpenRouter rolls `openai/gpt-5.5` to a new
 canonical version; users then need an app update. Today nothing warns the
 team before users hit it.
@@ -209,6 +251,8 @@ team hearing it before users do.
 
 ## PR 61 — Second vetted model in the allowlist
 
+**Branch status: ⏳ Not started in this branch.**
+
 **Why:** Accounts whose OpenRouter provider policies hide GPT-5.5's
 ZDR endpoints currently have no cloud path; the allowlist was always meant to
 grow once evaluation capacity allowed.
@@ -221,6 +265,8 @@ green. Settings picker grows to two vetted entries, each with its own
 canonical pin; eval defaults stay on the primary.
 
 ## PR 62 — PR 55 hardening cleanups
+
+**Branch status: ⏳ Not started in this branch.**
 
 Deferred quality cleanups surfaced by the PR 55 review passes; none block the
 merge and none change behavior:
