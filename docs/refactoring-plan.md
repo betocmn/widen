@@ -1944,7 +1944,8 @@ budget without evidence. PR 58 follows only if clarification remains
 independently below 12/12 after those operational failures are addressed.
 
 PR 59 subsequently implemented that separation and the redundancy fix in
-commits `47d6ad1` and `2b28900` without raising the six-call budget: a
+commits `47d6ad1`, `2b28900`, and `551ce3e` without raising the six-call
+budget: a
 dedicated wall-clock timeout failure category with its own `timedOut`
 diagnostic, eval status, `schema-agent timeout` triage bucket, and gate-report
 count, plus deterministic pre-invocation interception of value-identical

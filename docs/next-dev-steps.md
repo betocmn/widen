@@ -213,9 +213,9 @@ increasing the expected-SQL-got-clarification bucket above 3.
 
 **Status: ✅ Done.** The trace diagnosis separated four genuine six-call
 exhaustions from one misclassified pre-tool timeout, and the budget/timeout
-fix landed in commits `47d6ad1` and `2b28900`. The six-call budget is
-unchanged; the bucket-size acceptance below still needs the next funded full
-gate.
+fix landed in commits `47d6ad1`, `2b28900`, and `551ce3e`. The six-call
+budget is unchanged; the bucket-size acceptance below still needs the next
+funded full gate.
 
 **Why:** The retained comparator has 6 triaged tool-budget results. The PR 56
 experiment had four genuine exhaustion records: each used six successful
@@ -269,8 +269,14 @@ canonical-model checks, or the frozen phrase heuristics:
 * Deterministic reproductions preceded the fix: against the pre-fix agent,
   all three interception tests failed with `schemaToolCallBudgetExhausted`,
   and the timeout tests could not express the timeout/budget distinction at
-  all. After the fix the focused agent and eval-planning suites pass and
-  `make test` passes 1,102 tests in 49 suites.
+  all. An adversarial review pass then hardened three edge cases with
+  regression tests: a timeout after a recovered correction now overrides the
+  stale rejection reason instead of hiding under it, a join-path scope is
+  recorded as fully explored only when the response provably contains every
+  path (truncated results are direction-dependent), and out-of-range
+  join-path arguments fall through to the session's validation error instead
+  of being intercepted. After the fixes the focused agent and eval-planning
+  suites pass and `make test` passes 1,105 tests in 49 suites.
 
 The acceptance criterion (bucket at or below 3 with per-case cost and p95
 latency within 15% of baseline) requires a complete pinned gate. Per the
