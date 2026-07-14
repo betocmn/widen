@@ -3606,7 +3606,7 @@ struct OpenRouterSchemaToolSQLAgentTests {
         }
     }
 
-    @Test func wallClockTimeoutFailureCategoryMappingsStayDistinctFromBudgets() {
+    @Test func wallClockTimeoutMapsToModelGenerationPipelineCategory() {
         let timeout = OpenRouterSchemaToolAgentFailure(category: .wallClockTimeout, message: "timed out")
         #expect(timeout.pipelineCategory == .modelGeneration)
         let turnBudget = OpenRouterSchemaToolAgentFailure(
@@ -3909,6 +3909,166 @@ struct OpenRouterSchemaToolSQLAgentTests {
         #expect(diagnostics?.redundantJoinPathCallCount == 0)
         #expect(diagnostics?.redundantDuplicateToolCallCount == 0)
         #expect(diagnostics?.redundantZeroResultSearchCount == 0)
+    }
+
+    @Test func wallClockTimeoutAfterRecoveredCorrectionStillReportsTimedOut() async throws {
+        let schema = Self.makeSchema()
+        let chatTransport = ScriptedThenHangingTransport { _, index in
+            guard index == 1 else { return nil }
+            return Self.assistantToolCalls([
+                Self.terminalSQL(
+                    id: "terminal-mixed-timeout",
+                    sql: "SELECT id FROM public.users LIMIT 100"
+                ),
+                Self.toolCall(id: "search-mixed-timeout", name: "search_schema", arguments: [
+                    "query": "users",
+                    "limit": 4,
+                ]),
+            ])
+        }
+        let agent = makeAgent(
+            schema: schema,
+            chatTransport: chatTransport,
+            configuration: OpenRouterSchemaToolSQLAgentConfiguration(
+                maximumSchemaToolCalls: 6,
+                maximumRepairSchemaToolCalls: 2,
+                maximumModelTurns: 6,
+                maximumMalformedTerminalCorrections: 1,
+                maximumRepeatedToolCorrections: 1,
+                maximumHTTPAttempts: 8,
+                wallClockTimeoutSeconds: 0.5
+            )
+        )
+
+        do {
+            _ = try await agent.generateSQL(
+                question: "List users",
+                schema: schema,
+                context: SQLGenerationContext(),
+                config: SQLGenerationConfig()
+            )
+            Issue.record("Expected timeout failure")
+        } catch let failure as OpenRouterSchemaToolAgentFailure {
+            #expect(failure.category == .wallClockTimeout)
+            let diagnostics = failure.backendMetadata?.agentDiagnostics
+            #expect(diagnostics?.appSideRejectionReason == .timedOut)
+        }
+    }
+
+    @Test func truncatedJoinPathResultIsNotRecordedAsExplored() {
+        var signatures = Set<String>()
+        var zeroResults = Set<String>()
+        var scopes: [String: [SchemaToolJoinPathScope]] = [:]
+        let forward = OpenRouterToolCall(
+            id: "join-capped",
+            name: "find_join_paths",
+            arguments: #"{"from_table_id":"t1","to_table_id":"t2","max_hops":2,"max_paths":2}"#
+        )
+        let reversed = OpenRouterToolCall(
+            id: "join-capped-reversed",
+            name: "find_join_paths",
+            arguments: #"{"from_table_id":"t2","to_table_id":"t1","max_hops":2,"max_paths":2}"#
+        )
+        let cappedResult = SchemaToolResult(
+            callID: "join-capped",
+            toolName: "find_join_paths",
+            success: true,
+            payload: .object([
+                "paths": .array([.object([:]), .object([:])]),
+                "no_path": .bool(false),
+            ])
+        )
+
+        OpenRouterSchemaToolSQLAgent.recordExecutedSchemaCall(
+            call: forward,
+            result: cappedResult,
+            executedSchemaCallSignatures: &signatures,
+            zeroResultSearchQueries: &zeroResults,
+            exploredJoinPathScopes: &scopes
+        )
+
+        #expect(scopes.isEmpty)
+        #expect(
+            OpenRouterSchemaToolSQLAgent.redundantSchemaCallInterception(
+                call: reversed,
+                executedSchemaCallSignatures: signatures,
+                zeroResultSearchQueries: zeroResults,
+                exploredJoinPathScopes: scopes
+            ) == nil
+        )
+
+        let completeResult = SchemaToolResult(
+            callID: "join-capped",
+            toolName: "find_join_paths",
+            success: true,
+            payload: .object([
+                "paths": .array([.object([:])]),
+                "no_path": .bool(false),
+            ])
+        )
+        OpenRouterSchemaToolSQLAgent.recordExecutedSchemaCall(
+            call: forward,
+            result: completeResult,
+            executedSchemaCallSignatures: &signatures,
+            zeroResultSearchQueries: &zeroResults,
+            exploredJoinPathScopes: &scopes
+        )
+
+        #expect(scopes.count == 1)
+        let interception = OpenRouterSchemaToolSQLAgent.redundantSchemaCallInterception(
+            call: reversed,
+            executedSchemaCallSignatures: signatures,
+            zeroResultSearchQueries: zeroResults,
+            exploredJoinPathScopes: scopes
+        )
+        #expect(interception?.kind == .joinPathExploration)
+    }
+
+    @Test func outOfRangeJoinPathArgumentsAreNeverIntercepted() {
+        var signatures = Set<String>()
+        var zeroResults = Set<String>()
+        var scopes: [String: [SchemaToolJoinPathScope]] = [:]
+        let forward = OpenRouterToolCall(
+            id: "join-range",
+            name: "find_join_paths",
+            arguments: #"{"from_table_id":"t1","to_table_id":"t2","max_hops":3,"max_paths":3}"#
+        )
+        let completeResult = SchemaToolResult(
+            callID: "join-range",
+            toolName: "find_join_paths",
+            success: true,
+            payload: .object([
+                "paths": .array([.object([:])]),
+                "no_path": .bool(false),
+            ])
+        )
+        OpenRouterSchemaToolSQLAgent.recordExecutedSchemaCall(
+            call: forward,
+            result: completeResult,
+            executedSchemaCallSignatures: &signatures,
+            zeroResultSearchQueries: &zeroResults,
+            exploredJoinPathScopes: &scopes
+        )
+        #expect(scopes.count == 1)
+
+        for arguments in [
+            #"{"from_table_id":"t1","to_table_id":"t2","max_hops":0,"max_paths":3}"#,
+            #"{"from_table_id":"t1","to_table_id":"t2","max_hops":2,"max_paths":0}"#,
+        ] {
+            let invalid = OpenRouterToolCall(
+                id: "join-invalid",
+                name: "find_join_paths",
+                arguments: arguments
+            )
+            #expect(
+                OpenRouterSchemaToolSQLAgent.redundantSchemaCallInterception(
+                    call: invalid,
+                    executedSchemaCallSignatures: signatures,
+                    zeroResultSearchQueries: zeroResults,
+                    exploredJoinPathScopes: scopes
+                ) == nil
+            )
+        }
     }
 
     private func makeAgent(

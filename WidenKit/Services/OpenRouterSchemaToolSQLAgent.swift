@@ -1825,7 +1825,7 @@ public final class OpenRouterSchemaToolSQLAgent: SQLGenerator, Sendable {
     }
 }
 
-enum RedundantSchemaCallKind {
+enum RedundantSchemaCallKind: Equatable {
     case duplicateCall
     case zeroResultSearch
     case joinPathExploration
@@ -1905,13 +1905,27 @@ extension OpenRouterSchemaToolSQLAgent {
             else { return }
             zeroResultSearchQueries.insert(query)
         case .findJoinPaths:
-            guard let request = joinPathExplorationRequest(fromArguments: call.arguments) else {
-                return
-            }
+            guard let request = joinPathExplorationRequest(fromArguments: call.arguments),
+                joinPathResultIsComplete(result, scope: request.scope)
+            else { return }
             exploredJoinPathScopes[request.key, default: []].append(request.scope)
         default:
             return
         }
+    }
+
+    /// Truncated join-path results are direction- and scope-dependent, so a
+    /// scope counts as fully explored only when the response provably holds
+    /// every path: fewer paths than the requested cap and no truncation. An
+    /// empty result is complete knowledge that no path exists in the scope.
+    static func joinPathResultIsComplete(
+        _ result: SchemaToolResult,
+        scope: SchemaToolJoinPathScope
+    ) -> Bool {
+        guard !result.truncation.truncated,
+            let paths = result.payload?.objectValue?["paths"]?.arrayValue
+        else { return false }
+        return paths.count < scope.maxPaths
     }
 
     /// Canonicalizes tool-call arguments (key order, whitespace, number form)
@@ -1955,9 +1969,11 @@ extension OpenRouterSchemaToolSQLAgent {
             let from = object["from_table_id"]?.stringValue,
             let to = object["to_table_id"]?.stringValue,
             !from.isEmpty, !to.isEmpty,
-            let maxHops = object["max_hops"]?.intValue
+            let maxHops = object["max_hops"]?.intValue,
+            (1...3).contains(maxHops)
         else { return nil }
         let maxPaths = object["max_paths"]?.intValue ?? 3
+        guard (1...3).contains(maxPaths) else { return nil }
         let key = [from, to].sorted().joined(separator: "\u{1F}")
         return (key, SchemaToolJoinPathScope(maxHops: maxHops, maxPaths: maxPaths))
     }
@@ -1992,6 +2008,12 @@ private struct OpenRouterSchemaToolAgentDiagnosticState {
     var intentCoverageCorrectionSucceeded = false
 
     mutating func recordFailureCategory(_ category: OpenRouterSchemaToolAgentFailure.Category) {
+        if category == .wallClockTimeout {
+            // A reason left behind by an earlier recovered correction must not
+            // hide the timeout that actually ended the run.
+            appSideRejectionReason = .timedOut
+            return
+        }
         if appSideRejectionReason != nil { return }
         switch category {
         case .schemaToolCallBudgetExhausted, .schemaToolByteBudgetExhausted,

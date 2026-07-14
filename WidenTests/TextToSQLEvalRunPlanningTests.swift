@@ -404,11 +404,15 @@ struct TextToSQLEvalRunPlanningTests {
         #expect(releaseText.contains("case schemaAgentTimeout = \"schema-agent timeout\""))
         #expect(releaseText.contains("| Internal schema-agent timeouts |"))
 
+        let classifierStart = try #require(
+            releaseText.range(of: "private static func category(")
+        )
+        let classifierText = String(releaseText[classifierStart.lowerBound...])
         let timedOutCheck = try #require(
-            releaseText.range(of: "appSideRejectionReason == .timedOut")
+            classifierText.range(of: "appSideRejectionReason == .timedOut")
         )
         let budgetCheck = try #require(
-            releaseText.range(of: "appSideRejectionReason == .budgetExhausted")
+            classifierText.range(of: "appSideRejectionReason == .budgetExhausted")
         )
         #expect(timedOutCheck.lowerBound < budgetCheck.lowerBound)
     }
