@@ -1,0 +1,110 @@
+name: OpenRouter Canonical Watch
+
+on:
+  schedule:
+    - cron: "23 8 * * *"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  issues: write
+
+concurrency:
+  group: openrouter-canonical-watch
+  cancel-in-progress: false
+
+jobs:
+  watch:
+    name: Check production model version
+    if: github.ref_name == github.event.repository.default_branch
+    runs-on: macos-26
+    timeout-minutes: 15
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v7
+        with:
+          persist-credentials: false
+
+      - name: Build watcher
+        run: make eval-build DEVELOPER_DIR="$(xcode-select -p)"
+
+      - name: Check canonical version
+        id: watch
+        shell: bash
+        run: |
+          set +e
+          output="$(build/Build/Products/Debug/WidenEval --check-openrouter-canonical 2>&1)"
+          watch_exit=$?
+          set -e
+
+          case "$watch_exit" in
+            0)
+              status="current"
+              details="$output"
+              printf '%s\n' "$details"
+              ;;
+            2)
+              status="drift"
+              details="$output"
+              printf '%s\n' "$details"
+              ;;
+            *)
+              status="error"
+              details="canonical_watch_status=error"
+              echo "::warning::Canonical watch failed operationally; provider output was suppressed."
+              ;;
+          esac
+
+          delimiter="widen-watch-$(uuidgen)"
+          {
+            echo "status=$status"
+            echo "details<<$delimiter"
+            printf '%s\n' "$details"
+            echo "$delimiter"
+          } >> "$GITHUB_OUTPUT"
+
+      - name: Open canonical rollover issue
+        if: steps.watch.outputs.status == 'drift'
+        uses: actions/github-script@v9
+        env:
+          WATCH_DETAILS: ${{ steps.watch.outputs.details }}
+        with:
+          script: |
+            const marker = '<!-- widen-canonical-model-drift -->';
+            const title = 'fix: update pinned OpenRouter canonical model';
+            const issues = await github.paginate(github.rest.issues.listForRepo, {
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              state: 'open',
+              per_page: 100,
+            });
+            const existing = issues.find(
+              issue => !issue.pull_request && (issue.body ?? '').includes(marker)
+            );
+            if (existing) {
+              core.info(`Canonical rollover issue already open: ${existing.html_url}`);
+              return;
+            }
+
+            const runURL = `${context.serverUrl}/${context.repo.owner}/${context.repo.repo}/actions/runs/${context.runId}`;
+            const branch = context.payload.repository.default_branch;
+            const runbookURL = `${context.serverUrl}/${context.repo.owner}/${context.repo.repo}/blob/${branch}/docs/release.md#openrouter-canonical-rollover`;
+            await github.rest.issues.create({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              title,
+              body: `${marker}\n\nThe scheduled watch confirmed that OpenRouter's production alias resolves to a different canonical model.\n\n\`\`\`text\n${process.env.WATCH_DETAILS}\n\`\`\`\n\n- [Workflow run](${runURL})\n- [Canonical rollover runbook](${runbookURL})`,
+            });
+
+      - name: Fail on confirmed drift
+        if: steps.watch.outputs.status == 'drift'
+        run: |
+          echo "::error::OpenRouter canonical model drift was confirmed."
+          exit 1
+
+      - name: Fail on operational error
+        if: steps.watch.outputs.status == 'error'
+        run: |
+          echo "::error::Canonical watch failed without confirming drift; no issue was created."
+          exit 1

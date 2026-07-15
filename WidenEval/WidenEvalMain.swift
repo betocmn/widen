@@ -16,6 +16,18 @@ enum WidenEvalMain {
                 return
             }
 
+            if options.checkOpenRouterCanonical {
+                let observation = try await OpenRouterProductionCanonicalWatch.check()
+                print("canonical_watch_status=\(observation.hasDrift ? "drift" : "current")")
+                print("requested_model=\(observation.requestedModelID)")
+                print("expected_canonical_model=\(observation.expectedCanonicalModelID)")
+                print("observed_canonical_model=\(observation.observedCanonicalModelID)")
+                if observation.hasDrift {
+                    exit(2)
+                }
+                return
+            }
+
             await GenerationLog.shared.setEnabled(options.recordPrompts)
 
             if let releaseTriageInputPath = options.releaseTriageInputPath {
@@ -246,6 +258,7 @@ struct EvalCLIOptions {
     var maxHTTPAttempts: Int?
     var maxCompletedResults: Int?
     var stopBeforeProviderLimit = false
+    var checkOpenRouterCanonical = false
     var explicitOptions: Set<EvalExplicitOption> = []
     var showHelp = false
 
@@ -282,6 +295,7 @@ struct EvalCLIOptions {
           --retriever legacy|index|both
           --schema-tools
           --inspection-tools
+          --check-openrouter-canonical
           --help
         """
 
@@ -426,6 +440,8 @@ struct EvalCLIOptions {
                 options.schemaTools = true
             case "--inspection-tools":
                 options.inspectionTools = true
+            case "--check-openrouter-canonical":
+                options.checkOpenRouterCanonical = true
             case "--help", "-h":
                 options.showHelp = true
             default:

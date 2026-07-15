@@ -1348,7 +1348,22 @@ actor OpenRouterModelCatalogService {
         )
     }
 
-    private func fetchSingleModel(apiKey: String, modelID: String) async throws
+    /// A one-shot lookup for automation that must never accept cached or stale
+    /// metadata. OpenRouter documents the single-model catalog endpoint as
+    /// public, so this path sends no spend-capable API credential.
+    func freshPublicModel(modelID: String) async throws -> OpenRouterModelMetadata? {
+        try await fetchSingleModel(
+            apiKey: nil,
+            modelID: modelID,
+            title: "Widen Canonical Watch"
+        )
+    }
+
+    private func fetchSingleModel(
+        apiKey: String?,
+        modelID: String,
+        title: String = "Widen"
+    ) async throws
         -> OpenRouterModelMetadata?
     {
         let parts = modelID.split(separator: "/", maxSplits: 1).map(String.init)
@@ -1360,8 +1375,11 @@ actor OpenRouterModelCatalogService {
                 .appendingPathComponent(parts[1])
         )
         request.httpMethod = "GET"
-        request.setValue("Bearer \(apiKey)", forHTTPHeaderField: "Authorization")
-        request.setValue("Widen", forHTTPHeaderField: "X-Title")
+        if let apiKey {
+            request.setValue("Bearer \(apiKey)", forHTTPHeaderField: "Authorization")
+        }
+        request.setValue(title, forHTTPHeaderField: "X-Title")
+        request.setValue("application/json", forHTTPHeaderField: "Accept")
         let (data, response) = try await transport.send(request)
         guard (200..<300).contains(response.statusCode) else {
             if response.statusCode == 404 { return nil }
