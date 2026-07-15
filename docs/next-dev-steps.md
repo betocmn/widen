@@ -27,10 +27,14 @@ Numbering continues from `docs/refactoring-plan.md`.
   no longer consume the six-call budget, which stays at six. The post-PR 59
   full gate completed the bucket, cost, latency, timeout-reporting, and
   counter-population acceptance measurement.
+* ✅ **Done — PR 60 canonical-version watch:** added a daily/manual,
+  credential-free public catalog check with drift-only issue creation,
+  fail-closed operational handling, deterministic coverage, and a
+  spend-accounted canonical rollover runbook.
 * ⏳ **Not done:** PR 58 clarification behavior (two funded attempts were
   reverted; the latest reached 12/12 clarification but failed the retained
   over-clarification guardrail), structured plan validation or compilation,
-  canonical rollover monitoring, and cleanup work.
+  and cleanup work.
 
 ## Where things stand
 
@@ -82,6 +86,11 @@ Numbering continues from `docs/refactoring-plan.md`.
   clarification bucket, above the retained PR 55 ceiling of 28, so the
   conjunctive PR 58 acceptance rule rejected it too. Commit `e13f6aa` reverted
   candidate `f356ba4`; only sanitized evidence remains.
+* PR 60 now checks the production alias-to-canonical mapping every day and on
+  manual dispatch without an API key or completion. Confirmed drift opens one
+  deduplicated rollover issue; lookup, transport, decoding, and invalid
+  identity failures fail visibly without claiming drift. The live metadata
+  check on 2026-07-15 confirmed the current pin.
 * Standing conclusions to respect: the intent-coverage phrase heuristics are
   frozen (PR 53); more force-SQL prompt pressure does not help (PR 52); the
   next accuracy lever is stable query planning / deterministic synthesis
@@ -98,12 +107,12 @@ Numbering continues from `docs/refactoring-plan.md`.
    latency criteria pass
 2. ✅ Done — PR 56 retry: every criterion except zero internal schema-agent
    timeouts passed, so the bypass was reverted and PR 57 remains conditional
-3. PR 60 is the next independent shippable item: add canonical-version
-   monitoring and the rollover runbook without changing text-to-SQL behavior
-4. PR 58 remains open after two negative funded attempts; retry only with a
+3. ✅ Done — PR 60 canonical-version watch and rollover runbook
+4. PR 62 next: independent PR 55 hardening cleanups
+5. PR 58 remains open after two negative funded attempts; retry only with a
    genuinely narrower, pre-registered design that can preserve 12/12 without
    exceeding the retained over-clarification comparator
-5. PR 57 only after a future bypass iteration clears every PR 56 criterion
+6. PR 57 only after a future bypass iteration clears every PR 56 criterion
 
 ---
 
@@ -479,7 +488,7 @@ independently fails PR 56's stricter zero-timeout rule.
 
 ## PR 60 — Canonical-version watch and rollover runbook
 
-**Status: ⏳ Not started.**
+**Status: ✅ Done.**
 
 **Why:** The app fails closed if OpenRouter rolls `openai/gpt-5.5` to a new
 canonical version; users then need an app update. Today nothing warns the
@@ -495,9 +504,31 @@ already fail loudly (after one self-healing cache refresh), and Settings warns
 when the catalog canonical has rolled; this PR is about the team hearing it
 before users do.
 
+**Outcome 2026-07-15:** The default-branch workflow runs daily at 08:23 UTC
+and on manual dispatch. It reads both production IDs directly from
+`OpenRouterCatalog.productionProfile`, performs one public single-model
+lookup without an API key or completion, bypasses Widen/local cache state,
+requests upstream revalidation, and accepts drift only when the response
+model identity and canonical ID are strictly validated. The CLI exits `0`
+for current, `2` for confirmed drift, and `1` for an operational failure.
+
+Confirmed drift creates at most one open issue identified by a stable hidden
+marker and then fails the workflow. Operational failures suppress provider
+output, create no issue, and still fail visibly. Tests cover current and
+rolled canonicals, missing/unexpected/malformed identities, invalid model-ID
+shapes, HTTP/transport/decoding failures, a primed local catalog cache, no
+credential or request body, workflow permissions/scheduling/deduplication,
+and both failure paths. `make project`, 205 focused tests in five suites, all
+1,117 tests in 49 suites, and `make eval-build` pass. The live metadata-only
+check returned current for `openai/gpt-5.5-20260423`; no paid OpenRouter
+request was made. The release runbook now pre-registers rollover criteria,
+preserves the requested alias and enforcement layers, accounts for cumulative
+branch spend and resumable gate ceilings, and keeps beta exit separate from
+rollover non-regression.
+
 ## PR 62 — PR 55 hardening cleanups
 
-**Status: ⏳ Not started.**
+**Status: ⏳ Next independent cleanup.**
 
 Deferred quality cleanups surfaced by the PR 55 review passes; none block the
 merge and none change behavior:
