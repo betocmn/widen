@@ -808,8 +808,12 @@ enum TextToSQLReleaseTriageReporter {
         ) -> String {
             guard let diagnostics,
                 !diagnostics.clarificationPolicyDecision.isEmpty
+                    || !diagnostics.sqlIntentCoverageDecision.isEmpty
             else { return "-" }
-            var parts = [diagnostics.clarificationPolicyDecision]
+            var parts: [String] = []
+            if !diagnostics.clarificationPolicyDecision.isEmpty {
+                parts.append(diagnostics.clarificationPolicyDecision)
+            }
             if diagnostics.evidenceSufficientForSQL {
                 parts.append("evidence sufficient")
             }
