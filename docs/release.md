@@ -77,6 +77,134 @@ The script:
      --account "$SPARKLE_ACCOUNT" -p
    ```
 
+## OpenRouter Canonical-Version Watch
+
+The `OpenRouter Canonical Watch` workflow runs every day at 08:23 UTC and can
+also be started manually. It reads the requested alias and expected canonical
+ID directly from `OpenRouterCatalog.productionProfile`, performs one public
+single-model catalog lookup, and compares OpenRouter's `canonical_slug` with
+the pin. The lookup bypasses Widen's catalog cache, stale fallback, and the
+local URL cache while requesting upstream revalidation. It uses no API key or
+completion request, so it has no OpenRouter completion spend. OpenRouter or
+its CDN can still briefly serve edge-cached catalog metadata; confirm a
+reported rollover again before changing the pin.
+
+Run the same check locally with:
+
+```sh
+make eval-build
+build/Build/Products/Debug/WidenEval --check-openrouter-canonical
+```
+
+Exit status `0` means the pin is current, `2` means a valid canonical mismatch
+was confirmed, and `1` means the lookup failed without proving drift. On
+confirmed drift, the workflow opens one deduplicated rollover issue and then
+fails visibly. HTTP, transport, malformed-response, missing-model, and invalid
+identity failures also fail the workflow, but do not open a drift issue.
+
+## OpenRouter Canonical Rollover
+
+Treat a canonical rollover as a new model version, not a routine constant
+update. The requested production alias must remain `openai/gpt-5.5`; the gate
+must exercise that alias so Widen verifies the route OpenRouter will actually
+use.
+
+1. Manually rerun `OpenRouter Canonical Watch` and the local command above to
+   confirm the same network mismatch. Record the old expected and newly
+   observed canonical IDs in the rollover issue.
+2. Choose the target patch version, obtain explicit authorization for the
+   paid gate, and record one total authorized cap, a small smoke allocation,
+   a one-case overrun reserve, and the conjunctive non-regression criteria
+   below before making completion requests. `MAX_CLOUD_COST_USD` is checked
+   before each case, so a command can exceed it by the final case's cost. Keep
+   the smoke allocation plus reserve below the total authorization. After the
+   smoke, choose one full-gate cumulative ceiling such that actual smoke spend
+   plus that ceiling plus the reserve does not exceed the branch-wide
+   authorization. Command-level ceilings do not replace cumulative branch
+   accounting.
+3. Create a candidate branch from current `origin/main` in a fresh worktree.
+4. Update only `OpenRouterCatalog.productionProfile.expectedCanonicalModelID`
+   and deterministic fixtures that assert that production pin. Do not change
+   the requested alias, private routing, canonical verification, safety or
+   schema validation, PostgreSQL verification, or release-gate enforcement.
+   This pin update must precede the paid gate because eval preflight otherwise
+   rejects the newly routed canonical version before any completion.
+5. Regenerate the project, run the focused canonical/parser/routing suites,
+   then run the full tests and eval build:
+
+   ```sh
+   make project
+   DEVELOPER_DIR=/Applications/Xcode-26.app/Contents/Developer \
+     xcodebuild -project Widen.xcodeproj -scheme Widen -configuration Debug \
+       -derivedDataPath build test \
+       -only-testing:WidenTests/OpenRouterCatalogTests \
+       -only-testing:WidenTests/OpenRouterSQLGeneratorTests \
+       -only-testing:WidenTests/OpenRouterSchemaToolSQLAgentTests \
+       -only-testing:WidenTests/AIBackendSelectionTests \
+       -only-testing:WidenTests/TextToSQLEvalRunPlanningTests
+   make test
+   make eval-build
+   ```
+
+6. With `ALLOW_MODEL_OVERRIDE` unset, run the requested alias through the
+   smoke and complete release gates:
+
+   ```sh
+   make eval-openrouter-smoke MODEL=openai/gpt-5.5 REPEAT=3 MAX_CLOUD_COST_USD=<smoke-allocation>
+   make eval-release-triage MODEL=openai/gpt-5.5 RELEASE_VERSION=X.Y.Z MAX_CLOUD_COST_USD=<full-gate-cumulative-ceiling>
+   ```
+
+   If the complete run is interrupted, resume its existing output directory
+   instead of restarting completed cases:
+
+   ```sh
+   make eval-release-resume RESUME=<run-directory> MODEL=openai/gpt-5.5 RELEASE_VERSION=X.Y.Z MAX_CLOUD_COST_USD=<full-gate-cumulative-ceiling>
+   ```
+
+   Reuse the same full-gate ceiling when persisted results account for every
+   prior request. Reused results seed the run's recorded spend, so the resume
+   value is a cumulative gate ceiling, not an additional allowance. If an
+   interruption may have left billed in-flight work unpersisted, reconcile
+   actual provider spend and reduce the ceiling—or obtain new authorization—
+   before resuming. Track smoke plus gate spend against the branch-wide
+   authorization separately.
+
+   Never gate the concrete canonical ID and never set `ALLOW_MODEL_OVERRIDE`;
+   either would bypass the production routing contract under evaluation.
+7. Apply every pre-registered rollover criterion mechanically. The retained
+   comparator requires all of the following:
+
+   - 60/60 complete results.
+   - Semantic end-to-end at least 19/60.
+   - Clarification decisions at least 11/12.
+   - Exclusive expected-SQL clarification at most 28.
+   - Tool-budget triage at most 6 and static schema failures at most 1.
+   - Safety, schema, and PostgreSQL verification at 100% for evaluated SQL.
+   - Transport and structured parsing at least 95%.
+   - Zero forbidden bindings, repeated/no-progress repairs, eval timeouts,
+     and internal schema-agent timeouts.
+   - Private routing plus requested/routed/canonical model verification on
+     every completion request.
+
+   Also report cumulative branch spend, total and per-result gate cost,
+   P50/P95/maximum latency, semantic mismatches, and every triage bucket even
+   where no threshold applies.
+8. If any criterion fails, revert the candidate pin, do not merge or ship it,
+   and keep the rollover issue open. Evaluate alternatives separately without
+   weakening fail-closed behavior.
+9. If every criterion passes, commit only sanitized gate and triage evidence,
+   merge the pin, then create a fresh `release/X.Y.Z` worktree and run
+   `scripts/publish_release.sh X.Y.Z`.
+10. Inspect the draft and verify that it contains exactly the three expected
+    assets, then publish it. After publishing, verify the latest appcast/DMG
+    URLs, perform the Sparkle end-to-end update test from an older build,
+    rerun the canonical watch green on `main`, and close the rollover issue
+    with links to the sanitized gate and release.
+
+Passing these rollover non-regression criteria restores the existing beta
+cloud path for the new canonical version. It does not satisfy the separate
+90% semantic production-readiness gate or authorize removing beta wording.
+
 ## Per-Release Steps
 
 1. Start a fresh release worktree from `origin/main`:
