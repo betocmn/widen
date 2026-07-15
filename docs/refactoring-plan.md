@@ -2065,7 +2065,8 @@ and semantic mismatches 6. Latency was 15,717 ms P50, 27,042 ms P95, and
 30,725 ms maximum. All 60 requested and returned aliases were
 `openai/gpt-5.5`; private routing, canonical-model enforcement, and
 routed-model verification remained active. The sanitized evidence is in
-`docs/evals/0.1.0.md` and `docs/evals/0.1.0-triage.md`.
+the history of commit `4618375`; those report paths now contain the later
+retry described below.
 
 Because the conjunctive criteria failed, commit `b3b69fe` reverted the
 behavioral change and its tests. PR 58 remains not done. The retained tree
@@ -2075,6 +2076,61 @@ budget/interception behavior, and no PR 56 grounding bypass. A retry should
 make evidence-specific ambiguity wording quality-safe and separately address
 terminal-less nonredundant six-call exploration, then earn a fresh funded
 gate rather than retaining an unproven change.
+
+### PR 58 funded retry [2026-07-15] — negative, behavior reverted
+
+Candidate `f356ba4` addressed both mechanisms exposed by the first attempt.
+It changed the existing protected-metric fallback to ask what counts as one
+win, centralized evidence-vetted ambiguity selection, and added a bounded
+response after a real rejected seventh schema-tool request. The budget path
+either returned a protected, evidence-grounded clarification or allowed one
+terminal-only model turn for SQL; it did not permit an eighth schema-tool
+invocation or change `maximumSchemaToolCalls == 6`. Deterministic coverage
+included the historical terminal-SQL miss, the terminal-less six-call miss,
+defined and ungrounded controls, trailing batches, attempted eighth calls,
+timeout precedence, and the pinned clarification scorer. No phrase-matching
+set was added or broadened.
+
+The focused ten-suite matrix passed with 571 successful test executions and
+no failures, `make test` passed 1,120 tests across 49 suites, and
+`make eval-build` passed. The complete pinned `openai/gpt-5.5` gate evaluated
+`f356ba4`, completed 60/60 cases, and spent $3.378570 under the fresh $4 cap.
+
+| Mechanical criterion | Retained PR 55 comparator | PR 58 retry | Result |
+| --- | ---: | ---: | --- |
+| Clarification decisions | 11/12 | 12/12 | Pass (required 12/12) |
+| Exclusive expected-SQL clarification bucket | 28 | 30 | Fail (required `<= 28`) |
+| Semantic end to end | 19/60 | 21/60 | Informational (+2) |
+
+All three `preseason.top-wins-ambiguous` repeats and all three
+`saas.healthy-accounts` repeats clarified correctly. The raw
+expected-SQL-to-clarification count was 33; triage precedence assigned three
+of those outcomes to `tool budget exhausted`, leaving 30 in the exclusive
+guardrail bucket. The pre-registered criteria are conjunctive, so 12/12 did
+not offset the over-clarification failure. The general release gate also
+failed independently at 21/60 semantic end to end versus its 90% threshold.
+
+The complete retry also recorded SQL semantic 9/15, safety 15/15, schema
+validity 15/15, PostgreSQL verification 15/15, transport 60/60, structured
+parsing 60/60, forbidden bindings 0, repeated/no-progress repairs 0, eval
+timeouts 0, internal schema-agent timeouts 0, direct schema-tool budget
+failures 0, six results with one app-side budget-rejection trace each, an
+exclusive tool-budget triage bucket of 3, and semantic mismatches 6. Latency
+was 15,820 ms P50, 32,361 ms P95, and 73,599 ms maximum. All 60 requested and
+returned aliases were `openai/gpt-5.5`; private routing, canonical-model
+enforcement, and routed-model verification remained active. The two PR 58
+funded gates spent $6.709035 in total, of which this retry used $3.378570.
+
+Commit `e13f6aa` reverted `f356ba4` and its tests after the failed guardrail.
+PR 58 remains not done, and the latest sanitized gate and triage reports are
+`docs/evals/0.1.0.md` and `docs/evals/0.1.0-triage.md`; they intentionally name
+the evaluated candidate rather than the later revert. The retained tree keeps
+the six-call budget, PR 53 heuristic freeze, safety/schema/PostgreSQL and
+structured-response checks, private and canonical/routed-model protections,
+PR 59 timeout/budget/interception behavior, and no PR 56 bypass. Any future
+retry needs a narrower recovery for the protected ambiguity class that does
+not convert additional retained expected-SQL outcomes, followed by fresh
+spend authorization.
 
 ### PR 59 funded acceptance measurement [2026-07-14] — ✅ Done
 
@@ -2136,7 +2192,8 @@ Current follow-up decision:
 ```text
 PR 59 ✅ — implementation and funded acceptance measurement complete
 PR 56 ✅ — retry complete, negative, bypass reverted
-PR 58 ⏳ — funded attempt negative, behavior reverted, remains next
+PR 60 ⏳ — next independent shippable item; not implemented here
+PR 58 ⏳ — two funded attempts negative; await a genuinely narrower design
 PR 57 ⏳ — conditional on a future bypass gate passing every criterion
 ```
 
