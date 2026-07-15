@@ -372,6 +372,60 @@ struct TextToSQLEvalRunPlanningTests {
         #expect(!sqlShapeRecipe.contains("--schema-agent-intent-coverage"))
     }
 
+    @Test func canonicalModelWatchIsScheduledLeastPrivilegeAndDriftOnly() throws {
+        let testFile = URL(fileURLWithPath: #filePath)
+        let repoRoot = testFile
+            .deletingLastPathComponent()
+            .deletingLastPathComponent()
+        let workflow = try String(
+            contentsOf: repoRoot.appendingPathComponent(
+                ".github/workflows/openrouter-canonical-watch.yml"
+            ),
+            encoding: .utf8
+        )
+        let evalMain = try String(
+            contentsOf: repoRoot.appendingPathComponent("WidenEval/WidenEvalMain.swift"),
+            encoding: .utf8
+        )
+
+        #expect(workflow.contains("schedule:"))
+        #expect(workflow.contains("workflow_dispatch:"))
+        #expect(!workflow.contains("pull_request:"))
+        #expect(!workflow.contains("push:"))
+        #expect(workflow.contains("contents: read"))
+        #expect(workflow.contains("issues: write"))
+        #expect(
+            workflow.contains(
+                "if: github.ref_name == github.event.repository.default_branch"
+            )
+        )
+        #expect(workflow.contains("group: openrouter-canonical-watch"))
+        #expect(workflow.contains("cancel-in-progress: false"))
+        #expect(workflow.contains("persist-credentials: false"))
+        #expect(workflow.contains("uses: actions/checkout@v7"))
+        #expect(workflow.contains("uses: actions/github-script@v9"))
+        #expect(workflow.contains("make eval-build"))
+        #expect(workflow.contains("--check-openrouter-canonical"))
+        #expect(workflow.contains("steps.watch.outputs.status == 'drift'"))
+        #expect(workflow.contains("<!-- widen-canonical-model-drift -->"))
+        #expect(workflow.contains("github.paginate"))
+        #expect(workflow.contains("!issue.pull_request"))
+        #expect(workflow.contains("state: 'open'"))
+        #expect(workflow.contains("github.rest.issues.create"))
+        #expect(workflow.contains("OpenRouter canonical model drift was confirmed"))
+        #expect(workflow.contains("if: steps.watch.outputs.status == 'error'"))
+        #expect(workflow.contains("no issue was created"))
+        #expect(workflow.contains("details=\"canonical_watch_status=error\""))
+        #expect(workflow.contains("provider output was suppressed"))
+        #expect(!workflow.contains("printf '%s\\n' \"$output\""))
+        #expect(!workflow.contains("OPENROUTER_API_KEY"))
+        #expect(!workflow.contains("chat/completions"))
+
+        #expect(evalMain.contains("case \"--check-openrouter-canonical\""))
+        #expect(evalMain.contains("OpenRouterProductionCanonicalWatch.check()"))
+        #expect(evalMain.contains("exit(2)"))
+    }
+
     @Test func releaseReportsIncludeRedactedQueryPlanDiagnostics() throws {
         let testFile = URL(fileURLWithPath: #filePath)
         let repoRoot = testFile

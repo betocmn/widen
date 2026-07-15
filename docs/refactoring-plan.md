@@ -2156,6 +2156,44 @@ generic timeout/cancellation bucket and eval-timeout status remained zero.
 PR 59 therefore passes its bucket, cost, latency, classification, and
 observability acceptance criteria without raising `maximumSchemaToolCalls`.
 
+## PR 60 canonical-version watch ✅ [completed 2026-07-15]
+
+The production alias now has an independent default-branch watch before a
+canonical rollover reaches users. A daily 08:23 UTC schedule and manual
+dispatch build `WidenEval`, read the requested and expected IDs directly from
+`OpenRouterCatalog.productionProfile`, and query OpenRouter's public
+single-model catalog endpoint without an API key or completion request. The
+lookup bypasses Widen's catalog cache, stale fallback, and local URL cache and
+requests upstream revalidation; provider edge caching can still briefly delay
+visibility, so rollover reports are reconfirmed before changing the pin.
+
+The watch accepts only an exact requested-model identity plus a validated
+`author/model` canonical ID. It exits `0` when current, `2` only for a
+confirmed canonical mismatch, and `1` for missing/unexpected identities,
+invalid canonical values, HTTP/transport/decoding failures, or other
+operational errors. Confirmed drift creates one deduplicated open issue using
+a stable marker and then fails the workflow. Operational failures suppress
+provider-controlled output, create no drift issue, and fail visibly. The
+workflow is default-branch-only, serializes runs, disables persisted checkout
+credentials, and grants only `contents: read` plus `issues: write`.
+
+Deterministic tests cover current/drift decisions, invalid identity shapes,
+all operational classes, a pre-populated local catalog cache, the no-auth/no-
+body request contract, scheduling and permissions, issue creation and
+deduplication, and both terminal workflow failures. The five focused suites
+pass 205 tests, `make project` is stable, `make test` passes 1,117 tests in 49
+suites, and `make eval-build` passes. A live metadata-only check confirmed
+`openai/gpt-5.5-20260423` remains current, with no paid OpenRouter request.
+
+`docs/release.md` now contains the matching rollover procedure: reconfirm the
+network observation, obtain explicit spend authorization, update only the
+expected canonical pin and deterministic fixtures before eval preflight, gate
+the requested alias without `ALLOW_MODEL_OVERRIDE`, apply the retained
+non-regression criteria conjunctively, preserve every routing/validation
+layer, and track smoke plus resumable full-gate spend against one branch-wide
+authorization. Passing rollover non-regression restores only the existing
+beta path; the separate 90% semantic production-ready gate remains unchanged.
+
 ---
 
 # Recommended implementation order for one coding agent
@@ -2193,7 +2231,8 @@ Current follow-up decision:
 ```text
 PR 59 ✅ — implementation and funded acceptance measurement complete
 PR 56 ✅ — retry complete, negative, bypass reverted
-PR 60 ⏳ — next independent shippable item; not implemented here
+PR 60 ✅ — canonical-version watch and rollover runbook complete
+PR 62 ⏳ — next independent PR 55 hardening cleanup
 PR 58 ⏳ — two funded attempts negative; await a genuinely narrower design
 PR 57 ⏳ — conditional on a future bypass gate passing every criterion
 ```
