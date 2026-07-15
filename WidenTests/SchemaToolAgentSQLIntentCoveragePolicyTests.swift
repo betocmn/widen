@@ -1212,26 +1212,6 @@ struct SchemaToolAgentSQLIntentCoveragePolicyTests {
         #expect(storesDefinition.decision == .covered)
     }
 
-    @Test func undefinedWinsMetricUsesSingularClarificationConcept() {
-        let missing = evaluate(
-            question: "Tools with the most wins in the last two weeks",
-            evidence: evidence(columns: [
-                "public.preseason_match_evaluation.winner_id",
-                "public.preseason_match_evaluation.createdAt",
-                "public.preseason_tool.id",
-            ]),
-            sql: """
-                SELECT tool_id, COUNT(*) AS wins
-                FROM public.preseason_match_evaluation
-                GROUP BY tool_id
-                ORDER BY wins DESC
-                """
-        )
-
-        #expect(missing.decision == .mustClarify)
-        #expect(missing.clarificationQuestion == "What should count as one win?")
-    }
-
     @Test func unrelatedProtectedTokenDoesNotBlockScopedMetricDefinition() {
         let covered = evaluate(
             question: "Who are our best customers?",

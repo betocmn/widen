@@ -31,16 +31,15 @@ public struct SchemaToolAgentSQLIntentCoverageResult: Equatable, Sendable {
     }
 }
 
-/// Bounded heuristic triage for terminal schema-tool SQL.
+/// Diagnostics-only heuristic triage for terminal schema-tool SQL.
 ///
 /// Records best-effort signals about whether generated SQL appears to cover
-/// the question's intent. Production uses a high-confidence `mustClarify`
-/// result only after the resulting question passes the clarification policy;
-/// SQL-shape corrections remain behind explicit experimental eval flags. The
-/// phrase and SQL-shape heuristics here are intentionally non-exhaustive: they
-/// are tuned for the eval suites, not for general natural-language coverage.
-/// Do not grow them into a semantic validator by adding rules for new
-/// phrasings or SQL forms — per
+/// the question's intent. Production runs both correction modes as
+/// `diagnosticsOnly`; enforcement exists only behind explicit experimental
+/// eval flags. The phrase and SQL-shape heuristics here are intentionally
+/// non-exhaustive: they are tuned for the eval suites, not for general
+/// natural-language coverage. Do not grow them into a semantic validator by
+/// adding rules for new phrasings or SQL forms — per
 /// `docs/refactoring-plan.md`, Widen deliberately avoids a hardcoded
 /// natural-language parser and SQL conformance engine. Accuracy improvements
 /// belong in schema retrieval, bounded schema tools, PostgreSQL verification
@@ -59,8 +58,14 @@ public enum SchemaToolAgentSQLIntentCoveragePolicy {
             sql: sql
         )
 
-        if let ambiguity = protectedMetricAmbiguity(in: signals) {
-            return ambiguity
+        if signals.hasProtectedMetricAmbiguity {
+            return SchemaToolAgentSQLIntentCoverageResult(
+                decision: .mustClarify,
+                reason: "question contains a metric term that database context does not define",
+                unresolvedDecisionKinds: [.metric],
+                clarificationQuestion: signals.metricClarificationQuestion,
+                semanticMismatchCategory: "missing required filter"
+            )
         }
 
         var missing: [String] = []
@@ -229,35 +234,6 @@ public enum SchemaToolAgentSQLIntentCoveragePolicy {
         )
     }
 
-    /// Reuses the frozen protected-metric decision when no terminal SQL exists.
-    static func protectedMetricAmbiguity(
-        question: String,
-        databaseContext: String,
-        evidence: OpenRouterSchemaToolEvidenceSummary
-    ) -> SchemaToolAgentSQLIntentCoverageResult? {
-        protectedMetricAmbiguity(
-            in: IntentSignals(
-                question: question,
-                databaseContext: databaseContext,
-                evidence: evidence,
-                sql: ""
-            )
-        )
-    }
-
-    private static func protectedMetricAmbiguity(
-        in signals: IntentSignals
-    ) -> SchemaToolAgentSQLIntentCoverageResult? {
-        guard signals.hasProtectedMetricAmbiguity else { return nil }
-        return SchemaToolAgentSQLIntentCoverageResult(
-            decision: .mustClarify,
-            reason: "question contains a metric term that database context does not define",
-            unresolvedDecisionKinds: [.metric],
-            clarificationQuestion: signals.metricClarificationQuestion,
-            semanticMismatchCategory: "missing required filter"
-        )
-    }
-
     public static func semanticMismatchCategory(
         question: String,
         databaseContext: String,
@@ -333,7 +309,7 @@ public enum SchemaToolAgentSQLIntentCoveragePolicy {
                 return "Which metric should define important feedback clusters?"
             }
             if questionTokens.contains("win") || questionTokens.contains("wins") {
-                return "What should count as one win?"
+                return "Which metric should define wins?"
             }
             return "Which metric should define this request?"
         }
