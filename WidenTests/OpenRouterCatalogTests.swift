@@ -7,11 +7,15 @@ import Testing
 struct OpenRouterCatalogTests {
     private final class StubTransport: HTTPTransport, @unchecked Sendable {
         private let lock = NSLock()
-        private let result: Result<(Data, HTTPURLResponse), Error>
+        private var results: [Result<(Data, HTTPURLResponse), Error>]
         private var recordedRequests: [URLRequest] = []
 
         init(_ result: Result<(Data, HTTPURLResponse), Error>) {
-            self.result = result
+            results = [result]
+        }
+
+        init(_ results: [Result<(Data, HTTPURLResponse), Error>]) {
+            self.results = results
         }
 
         var requests: [URLRequest] {
@@ -21,7 +25,10 @@ struct OpenRouterCatalogTests {
         func send(_ request: URLRequest) async throws -> (Data, HTTPURLResponse) {
             try lock.withLock {
                 recordedRequests.append(request)
-                return try result.get()
+                guard !results.isEmpty else {
+                    throw URLError(.badServerResponse)
+                }
+                return try results.removeFirst().get()
             }
         }
     }
@@ -260,7 +267,67 @@ struct OpenRouterCatalogTests {
         #expect(request.value(forHTTPHeaderField: "Authorization") == nil)
         #expect(request.value(forHTTPHeaderField: "X-Title") == "Widen Canonical Watch")
         #expect(request.value(forHTTPHeaderField: "Accept") == "application/json")
+        #expect(request.value(forHTTPHeaderField: "Cache-Control") == "no-cache")
+        #expect(request.cachePolicy == .reloadIgnoringLocalCacheData)
         #expect(request.httpBody == nil)
+    }
+
+    @Test func canonicalWatchIgnoresWidenCachedAndStaleFallbackMetadata() async throws {
+        let profile = OpenRouterCatalog.productionProfile
+        let catalogEndpoint = Self.watchBaseURL.appendingPathComponent("models/user")
+        let watchEndpoint = Self.watchEndpoint()
+        let rolledCanonicalModelID = "openai/gpt-5.5-rolled"
+        let transport = StubTransport([
+            .success((
+                Self.catalogResponseData(
+                    id: profile.requestedModelID,
+                    canonicalModelID: profile.expectedCanonicalModelID
+                ),
+                Self.watchHTTPResponse(url: catalogEndpoint)
+            )),
+            .success((
+                Self.watchResponseData(
+                    id: profile.requestedModelID,
+                    canonicalModelID: rolledCanonicalModelID
+                ),
+                Self.watchHTTPResponse(url: watchEndpoint)
+            )),
+            .success((Data(), Self.watchHTTPResponse(url: watchEndpoint, statusCode: 503))),
+        ])
+        let catalogService = Self.watchCatalogService(transport: transport)
+
+        let cached = try await catalogService.availableModels(
+            apiKey: "cache-priming-key",
+            forceRefresh: true
+        )
+        #expect(cached.only?.canonicalModelID == profile.expectedCanonicalModelID)
+
+        let observation = try await OpenRouterProductionCanonicalWatch.check(
+            catalogService: catalogService
+        )
+        #expect(observation.hasDrift)
+        #expect(observation.observedCanonicalModelID == rolledCanonicalModelID)
+
+        do {
+            _ = try await OpenRouterProductionCanonicalWatch.check(
+                catalogService: catalogService
+            )
+            Issue.record("Expected fresh catalog failure instead of cached metadata")
+        } catch let error as OpenRouterProductionCanonicalWatchError {
+            #expect(error == .catalogLookupFailed(profile.requestedModelID))
+        } catch {
+            Issue.record("Expected sanitized canonical watch error, got \(error)")
+        }
+
+        #expect(transport.requests.count == 3)
+        #expect(transport.requests[0].url?.path == "/api/v1/models/user")
+        #expect(transport.requests[0].value(forHTTPHeaderField: "Authorization") != nil)
+        #expect(transport.requests[1].url?.path == "/api/v1/model/openai/gpt-5.5")
+        #expect(transport.requests[1].value(forHTTPHeaderField: "Authorization") == nil)
+        #expect(transport.requests[1].value(forHTTPHeaderField: "Cache-Control") == "no-cache")
+        #expect(transport.requests[2].url?.path == "/api/v1/model/openai/gpt-5.5")
+        #expect(transport.requests[2].value(forHTTPHeaderField: "Authorization") == nil)
+        #expect(transport.requests[2].value(forHTTPHeaderField: "Cache-Control") == "no-cache")
     }
 
     @Test func canonicalWatchReportsOnlyAConfirmedCanonicalMismatchAsDrift() async throws {
@@ -417,6 +484,17 @@ struct OpenRouterCatalogTests {
             model["canonical_slug"] = canonicalModelID
         }
         return try! JSONSerialization.data(withJSONObject: ["data": model])
+    }
+
+    private static func catalogResponseData(
+        id: String,
+        canonicalModelID: String?
+    ) -> Data {
+        var model: [String: Any] = ["id": id]
+        if let canonicalModelID {
+            model["canonical_slug"] = canonicalModelID
+        }
+        return try! JSONSerialization.data(withJSONObject: ["data": [model]])
     }
 
     private static func watchHTTPResponse(

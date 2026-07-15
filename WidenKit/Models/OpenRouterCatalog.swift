@@ -43,7 +43,7 @@ public enum OpenRouterCatalog {
     }
 }
 
-/// One fresh observation of the production alias-to-canonical mapping.
+/// One network observation of the production alias-to-canonical mapping.
 public struct OpenRouterCanonicalVersionObservation: Equatable, Sendable {
     public let requestedModelID: String
     public let expectedCanonicalModelID: String
@@ -81,8 +81,8 @@ extension OpenRouterProductionCanonicalWatchError: LocalizedError {
 }
 
 /// Checks the public single-model catalog endpoint without a completion,
-/// credential, cache, or stale fallback. Only a fully validated canonical ID
-/// mismatch is classified as drift; every other anomaly throws.
+/// credential, Widen cache, or stale fallback. Only a fully validated
+/// canonical ID mismatch is classified as drift; every other anomaly throws.
 public enum OpenRouterProductionCanonicalWatch {
     public static func check() async throws -> OpenRouterCanonicalVersionObservation {
         let catalogService = OpenRouterModelCatalogService(
