@@ -66,8 +66,8 @@ Numbering continues from `docs/refactoring-plan.md`.
   target. All 60 diagnostics populated the three redundant-interception
   counters; no interception fired in this run (duplicate/zero-hit/join-path
   totals 0/0/0).
-* Clarification is independently 11/12 on the retained path after PR 59. The
-  sole miss was
+* Clarification was 11/12 in both the retained PR 55 comparator and the
+  post-PR 59 PR 56-bypass retry. The retry's sole miss was
   `preseason.top-wins-ambiguous` repeat 3 returning SQL without a timeout,
   budget error, or app-side rejection. Two later PR 58 attempts were rejected;
   this miss still does not justify expanding the frozen phrase heuristics.
@@ -373,8 +373,9 @@ behavior, and no PR 56 bypass. PR 58 remains not done. The latest sanitized
 evidence is [evals/0.1.0.md](evals/0.1.0.md) and
 [evals/0.1.0-triage.md](evals/0.1.0-triage.md); they intentionally identify
 the evaluated candidate rather than the later revert. A future retry needs a
-narrower way to recover the protected ambiguity class without converting more
-retained expected-SQL outcomes, plus fresh spend authorization.
+narrower way to recover the protected ambiguity class while reaching 12/12
+and an exclusive expected-SQL clarification bucket at or below 28 with margin
+for triage-precedence movement, plus fresh spend authorization.
 
 ## PR 59 — Tool-budget exhaustion bucket
 

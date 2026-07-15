@@ -2128,9 +2128,10 @@ the evaluated candidate rather than the later revert. The retained tree keeps
 the six-call budget, PR 53 heuristic freeze, safety/schema/PostgreSQL and
 structured-response checks, private and canonical/routed-model protections,
 PR 59 timeout/budget/interception behavior, and no PR 56 bypass. Any future
-retry needs a narrower recovery for the protected ambiguity class that does
-not convert additional retained expected-SQL outcomes, followed by fresh
-spend authorization.
+retry needs a narrower recovery for the protected ambiguity class that reaches
+12/12 and keeps the exclusive expected-SQL clarification bucket at or below
+28 with margin for triage-precedence movement, followed by fresh spend
+authorization.
 
 ### PR 59 funded acceptance measurement [2026-07-14] — ✅ Done
 
