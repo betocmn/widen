@@ -2194,6 +2194,42 @@ layer, and track smoke plus resumable full-gate spend against one branch-wide
 authorization. Passing rollover non-regression restores only the existing
 beta path; the separate 90% semantic production-ready gate remains unchanged.
 
+## PR 62 PR 55 hardening cleanups ✅ [completed 2026-07-16]
+
+The fixed OpenRouter private-routing preferences are now expressed as a
+caseless enum with static functionality, with the matching user-facing privacy
+claim colocated beside the enforced provider configuration. Settings catalog
+refresh computes one result and completes in one `MainActor` block, including
+an explicit cancellation status, and its force-refreshing connectivity test no
+longer performs a redundant catalog invalidation and disk write. Connectivity
+canonical tests share a run helper, while tool-chat canonical tests use the
+existing fixtures extended with a model value.
+
+The catalog service now keeps a narrow, actor-local confirmed-canonical-
+mismatch memo for cache-served generation preflight. It is keyed by an API-key
+fingerprint plus requested and expected model identities and tied to the
+observed catalog snapshot. The same snapshot fails closed without another
+invalidate/refetch cycle; TTL expiry or explicit invalidation permits one new
+verification. A network-fresh mismatch still fails immediately with no second
+fetch. The memo is not serialized, successful verification clears it, and no
+raw credential is retained.
+
+Generation preflight's duplicate calls are a bounded two-pass loop. Release-
+gate violations compute the production pin instead of storing it, reporting
+uses the redactor directly, and the resumable-eval model selection uses
+explicit nested Make `ifeq` branches. Deterministic tests cover memoization,
+cache-served recovery, TTL expiry, network-fresh failure, refresh cancellation,
+canonical connectivity/tool-chat fixtures, computed release pins, redaction,
+and every default/override resume-model combination.
+
+The seven focused suites pass 225 tests with zero skipped or failed. The full
+run completes 1,124 tests in 49 suites (1,082 passed, 42 skipped, zero failed).
+`make project` produces no generated diff, `make eval-build` succeeds, and
+diff hygiene checks pass. No paid OpenRouter request was made. The six-call
+schema-tool budget and all private-routing, model-identity, validation,
+parsing, review, phrase-freeze, timeout/interception, canonical-watch,
+privacy, and credential boundaries remain intact.
+
 ---
 
 # Recommended implementation order for one coding agent
@@ -2232,7 +2268,7 @@ Current follow-up decision:
 PR 59 ✅ — implementation and funded acceptance measurement complete
 PR 56 ✅ — retry complete, negative, bypass reverted
 PR 60 ✅ — canonical-version watch and rollover runbook complete
-PR 62 ⏳ — next independent PR 55 hardening cleanup
+PR 62 ✅ — PR 55 hardening cleanup complete
 PR 58 ⏳ — two funded attempts negative; await a genuinely narrower design
 PR 57 ⏳ — conditional on a future bypass gate passing every criterion
 ```

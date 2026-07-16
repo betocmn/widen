@@ -196,7 +196,12 @@ eval-release-sql-shape: eval-build
 ## non-production manifest; an ALLOW_MODEL_OVERRIDE=1 resume without an
 ## explicit MODEL inherits the manifest model instead, matching how the
 ## overridden run was started.
-RESUME_MODEL_ARGS = $(if $(and $(filter 1,$(ALLOW_MODEL_OVERRIDE)),$(filter file,$(origin MODEL))),,--model "$(MODEL)")
+RESUME_MODEL_ARGS := --model "$(MODEL)"
+ifeq ($(ALLOW_MODEL_OVERRIDE),1)
+ifeq ($(origin MODEL),file)
+RESUME_MODEL_ARGS :=
+endif
+endif
 eval-release-resume: eval-build
 	@test -n "$(RESUME)" || (echo "error: RESUME is required" >&2; exit 1)
 	$(REQUIRE_PINNED_MODEL)

@@ -1,5 +1,33 @@
 import SwiftUI
 
+enum OpenRouterCatalogRefreshResult: Sendable {
+    case metadata(OpenRouterModelMetadata?)
+    case cancelled
+    case failure(String)
+}
+
+struct OpenRouterCatalogRefreshPresentation: Equatable, Sendable {
+    var modelMetadata: OpenRouterModelMetadata?
+    var message: String?
+    var messageIsWarning: Bool
+    var isLoading: Bool
+
+    mutating func finish(with result: OpenRouterCatalogRefreshResult) {
+        switch result {
+        case .cancelled:
+            message = "OpenRouter model metadata refresh was cancelled."
+            messageIsWarning = true
+        case .failure(let providerMessage):
+            modelMetadata = nil
+            message = "Could not refresh OpenRouter model metadata: \(providerMessage)"
+            messageIsWarning = true
+        case .metadata:
+            preconditionFailure("Metadata refresh results use the metadata presentation path.")
+        }
+        isLoading = false
+    }
+}
+
 /// Configuration for the two LLM backends — the on-device model and the
 /// cloud pro provider — plus the developer mock toggle. Switching between
 /// Local and Cloud happens with the toolbar toggle, not here.
@@ -99,7 +127,7 @@ struct LLMSettingsView: View {
 
     private var cloudPrivacyDescription: String {
         if appState.cloudProvider == .openRouter {
-            return "Cloud SQL generation sends the question and allowed schema metadata to OpenRouter. \(OpenRouterCatalog.privateRoutingClaim) Inspected data values are sent only for connections where cloud data inspection is explicitly enabled."
+            return "Cloud SQL generation sends the question and allowed schema metadata to OpenRouter. \(OpenRouterProviderPreferences.privateRoutingClaim) Inspected data values are sent only for connections where cloud data inspection is explicitly enabled."
         }
         return "Cloud SQL generation sends the question and allowed schema metadata to the selected provider. Inspected data values are sent only for connections where cloud data inspection is explicitly enabled."
     }
@@ -366,14 +394,25 @@ struct LLMSettingsView: View {
         isLoadingCatalog = true
         let selectedModel = OpenRouterCatalog.productionProfile.requestedModelID
         Task {
+            let result: OpenRouterCatalogRefreshResult
             do {
-                let metadata = try await OpenRouterModelCatalogService.shared.metadataSurfacingErrors(
-                    apiKey: key,
-                    modelID: selectedModel,
-                    forceRefresh: force
+                result = .metadata(
+                    try await OpenRouterModelCatalogService.shared.metadataSurfacingErrors(
+                        apiKey: key,
+                        modelID: selectedModel,
+                        forceRefresh: force
+                    )
                 )
-                await MainActor.run {
-                    guard catalogRefreshStillCurrent(apiKey: key, refreshID: refreshID) else { return }
+            } catch is CancellationError {
+                result = .cancelled
+            } catch {
+                result = .failure(error.localizedDescription)
+            }
+
+            await MainActor.run {
+                guard catalogRefreshStillCurrent(apiKey: key, refreshID: refreshID) else { return }
+                switch result {
+                case .metadata(let metadata):
                     if let metadata {
                         modelMetadata = metadata
                         let canonicalRolled = OpenRouterCanonicalModelValidator.canonicalHasRolled(
@@ -411,20 +450,18 @@ struct LLMSettingsView: View {
                         catalogMessageIsWarning = true
                     }
                     isLoadingCatalog = false
-                }
-            } catch is CancellationError {
-                await MainActor.run {
-                    guard catalogRefreshStillCurrent(apiKey: key, refreshID: refreshID) else { return }
-                    isLoadingCatalog = false
-                }
-            } catch {
-                await MainActor.run {
-                    guard catalogRefreshStillCurrent(apiKey: key, refreshID: refreshID) else { return }
-                    modelMetadata = nil
-                    catalogMessage =
-                        "Could not refresh OpenRouter model metadata: \(error.localizedDescription)"
-                    catalogMessageIsWarning = true
-                    isLoadingCatalog = false
+                case .cancelled, .failure:
+                    var presentation = OpenRouterCatalogRefreshPresentation(
+                        modelMetadata: modelMetadata,
+                        message: catalogMessage,
+                        messageIsWarning: catalogMessageIsWarning,
+                        isLoading: isLoadingCatalog
+                    )
+                    presentation.finish(with: result)
+                    modelMetadata = presentation.modelMetadata
+                    catalogMessage = presentation.message
+                    catalogMessageIsWarning = presentation.messageIsWarning
+                    isLoadingCatalog = presentation.isLoading
                 }
             }
         }
@@ -443,7 +480,6 @@ struct LLMSettingsView: View {
         let profile = OpenRouterCatalog.productionProfile
         let model = profile.requestedModelID
         Task {
-            await OpenRouterModelCatalogService.shared.invalidate(apiKey: key, modelID: model)
             let result = await OpenRouterConnectivityCheck(
                 apiKey: key,
                 model: model,

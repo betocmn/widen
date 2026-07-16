@@ -218,11 +218,9 @@ struct OpenRouterCatalogTests {
 
     @Test func releaseGateViolationHasAnActionableLocalizedDescription() {
         let pinned = OpenRouterCatalog.productionProfile.requestedModelID
-        let violation = TextToSQLReleaseGateModelPolicy.Violation(
-            model: nil,
-            pinnedModel: pinned
-        )
+        let violation = TextToSQLReleaseGateModelPolicy.Violation(model: nil)
 
+        #expect(violation.pinnedModel == pinned)
         #expect(violation.localizedDescription.contains("require a cloud run"))
         #expect(violation.localizedDescription.contains("--allow-model-override"))
     }

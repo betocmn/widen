@@ -914,6 +914,24 @@ actor OpenRouterModelCatalogService {
         var models: [OpenRouterModelMetadata]
     }
 
+    private struct CanonicalMismatchMemoKey: Hashable {
+        var apiKeyFingerprint: String
+        var requestedModelID: String
+        var expectedCanonicalModelID: String
+    }
+
+    private struct CanonicalMismatchSnapshot: Equatable {
+        var fetchedAt: Date
+        var canonicalModelID: String?
+        var capabilitySource: OpenRouterCapabilitySource
+
+        init(capabilities: OpenRouterModelCapabilities) {
+            fetchedAt = capabilities.fetchedAt
+            canonicalModelID = capabilities.canonicalModelID
+            capabilitySource = capabilities.capabilitySource
+        }
+    }
+
     private struct CatalogResponse: Decodable {
         let data: [Model]
     }
@@ -998,6 +1016,9 @@ actor OpenRouterModelCatalogService {
     private var memoryCache: [String: CachedCatalog] = [:]
     private var refreshTasks: [String: Task<CachedCatalog, Error>] = [:]
     private var refreshWaiterCounts: [String: Int] = [:]
+    private var confirmedCanonicalMismatches: [
+        CanonicalMismatchMemoKey: CanonicalMismatchSnapshot
+    ] = [:]
 
     init(
         transport: any HTTPTransport = URLSessionTransport(),
@@ -1117,9 +1138,9 @@ actor OpenRouterModelCatalogService {
 
     /// Resolves capabilities and enforces the pinned canonical version before
     /// a billed completion. A cache written before an app update can hold the
-    /// previous canonical version for the cache TTL, so a mismatch first
-    /// invalidates the cached entry and refetches once; only a mismatch
-    /// against fresh metadata fails. Lookup HTTP attempts from both passes
+    /// previous canonical version for the cache TTL, so an unconfirmed cached
+    /// mismatch refetches once. A mismatch already confirmed for the same
+    /// catalog snapshot fails without another refetch. Lookup HTTP attempts
     /// are carried in the returned lookup and on the thrown failure.
     func validatedCapabilitiesForGeneration(
         apiKey: String,
@@ -1127,54 +1148,71 @@ actor OpenRouterModelCatalogService {
         expectedCanonicalModelID: String?,
         maximumHTTPRequests: Int?
     ) async throws -> OpenRouterModelCapabilitiesLookup {
-        let lookup = await capabilitiesForGeneration(
-            apiKey: apiKey,
-            modelID: modelID,
-            maximumHTTPRequests: maximumHTTPRequests
-        )
-        do {
-            try OpenRouterCanonicalModelValidator.preflight(
-                catalogCanonicalModelID: lookup.capabilities.canonicalModelID,
-                capabilitySource: lookup.capabilities.capabilitySource,
-                expectedCanonicalModelID: expectedCanonicalModelID,
-                requestedModelID: modelID
+        let memoKey = expectedCanonicalModelID.map {
+            CanonicalMismatchMemoKey(
+                apiKeyFingerprint: Self.apiKeyFingerprint(apiKey),
+                requestedModelID: modelID,
+                expectedCanonicalModelID: $0
             )
-            return lookup
-        } catch let failure as OpenRouterFailure where failure.category == .modelVersionMismatch {
-            // A refetch can only observe different data when the mismatching
-            // metadata came from the cache; a network-fresh mismatch is
-            // authoritative. Recovering only for cache-served lookups also
-            // keeps total lookup HTTP requests within the caller's budget,
-            // because a cache-served first pass spent none of it.
-            guard lookup.httpRequestCount == 0 else {
-                throw failure.withAttemptCount(lookup.httpRequestCount)
-            }
-            invalidate(apiKey: apiKey, modelID: modelID)
-            let refreshed = await capabilitiesForGeneration(
+        }
+        for pass in 0..<2 {
+            let lookup = await capabilitiesForGeneration(
                 apiKey: apiKey,
                 modelID: modelID,
                 maximumHTTPRequests: maximumHTTPRequests
             )
             do {
                 try OpenRouterCanonicalModelValidator.preflight(
-                    catalogCanonicalModelID: refreshed.capabilities.canonicalModelID,
-                    capabilitySource: refreshed.capabilities.capabilitySource,
+                    catalogCanonicalModelID: lookup.capabilities.canonicalModelID,
+                    capabilitySource: lookup.capabilities.capabilitySource,
                     expectedCanonicalModelID: expectedCanonicalModelID,
                     requestedModelID: modelID
                 )
-            } catch let refreshedFailure as OpenRouterFailure {
-                throw refreshed.httpRequestCount > 0
-                    ? refreshedFailure.withAttemptCount(refreshed.httpRequestCount)
-                    : refreshedFailure
+                if let memoKey {
+                    confirmedCanonicalMismatches[memoKey] = nil
+                }
+                return lookup
+            } catch let failure as OpenRouterFailure
+                where failure.category == .modelVersionMismatch
+            {
+                let snapshot = CanonicalMismatchSnapshot(capabilities: lookup.capabilities)
+                let wasNetworkFresh = lookup.httpRequestCount > 0
+                let alreadyConfirmed = memoKey.map {
+                    confirmedCanonicalMismatches[$0] == snapshot
+                } ?? false
+
+                // A network-fresh mismatch is authoritative. The second pass
+                // follows an explicit cache invalidation, so it also confirms
+                // the replacement snapshot even if it joined another refresh.
+                if wasNetworkFresh || alreadyConfirmed || pass == 1 {
+                    if let memoKey, (wasNetworkFresh || pass == 1) {
+                        confirmedCanonicalMismatches[memoKey] = snapshot
+                    }
+                    throw lookup.httpRequestCount > 0
+                        ? failure.withAttemptCount(lookup.httpRequestCount)
+                        : failure
+                }
+
+                // Only an unconfirmed cache-served mismatch reaches here.
+                // Invalidating before the second pass preserves the one-time
+                // recovery for a cache written by an older app version.
+                invalidate(apiKey: apiKey, modelID: modelID)
             }
-            return refreshed
         }
+        preconditionFailure("Canonical model validation exceeded its bounded retry.")
     }
 
     func invalidate(apiKey: String? = nil, modelID: String? = nil) {
         loadDiskCacheIfNeeded()
         if let apiKey {
             let key = Self.apiKeyFingerprint(apiKey)
+            confirmedCanonicalMismatches = confirmedCanonicalMismatches.filter { entry in
+                let memoMatchesModel = modelID.map { invalidatedModelID in
+                    invalidatedModelID == entry.key.requestedModelID
+                        || invalidatedModelID == entry.value.canonicalModelID
+                } ?? true
+                return entry.key.apiKeyFingerprint != key || !memoMatchesModel
+            }
             if modelID == nil {
                 memoryCache.removeValue(forKey: key)
             } else if var cached = memoryCache[key] {
@@ -1186,6 +1224,7 @@ actor OpenRouterModelCatalogService {
             }
         } else {
             memoryCache.removeAll()
+            confirmedCanonicalMismatches.removeAll()
         }
         writeDiskCache()
     }
@@ -1506,14 +1545,19 @@ actor OpenRouterModelCatalogService {
 /// The only writer of the request `provider` block: every OpenRouter
 /// completion demands endpoints with zero data retention, no provider data
 /// collection, and full request-parameter support.
-struct OpenRouterProviderPreferences: Equatable, Sendable {
-    static let requiredPrivateRouting = OpenRouterProviderPreferences()
+enum OpenRouterProviderPreferences {
+    static let requireParameters = true
+    static let zdr = true
+    static let dataCollection = "deny"
 
-    let requireParameters = true
-    let zdr = true
-    let dataCollection = "deny"
+    /// The one user-facing sentence describing the private routing Widen
+    /// enforces on every OpenRouter completion. Interpolated by every view
+    /// that makes this claim so the wording cannot drift; keep aligned with
+    /// PRIVACY.md and the provider block below.
+    static let privateRoutingClaim =
+        "Widen requires OpenRouter endpoints that do not retain or collect the submitted question and schema context."
 
-    func apply(to body: inout [String: Any]) {
+    static func apply(to body: inout [String: Any]) {
         body["provider"] = [
             "require_parameters": requireParameters,
             "zdr": zdr,
@@ -1565,7 +1609,7 @@ struct OpenRouterRequestBuilder: Sendable {
         if mode == .strictJSONSchema {
             body["response_format"] = Self.responseFormat()
         }
-        OpenRouterProviderPreferences.requiredPrivateRouting.apply(to: &body)
+        OpenRouterProviderPreferences.apply(to: &body)
 
         var request = URLRequest(url: endpoint)
         request.httpMethod = "POST"

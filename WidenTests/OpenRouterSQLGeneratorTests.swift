@@ -368,6 +368,67 @@ struct OpenRouterSQLGeneratorTests {
         #expect(metadata == nil)
     }
 
+    @Test func cancelledSettingsMetadataLookupRethrowsCancellationInsteadOfServingStaleCache()
+        async throws
+    {
+        let cacheURL = temporaryCacheURL()
+        let primingTransport = StubTransport([
+            .success((
+                catalogResponse(),
+                response(url: Self.apiBase.appendingPathComponent("models/user"), status: 200)
+            ))
+        ])
+        let primingService = catalogService(transport: primingTransport, cacheURL: cacheURL)
+        _ = try await primingService.availableModels(apiKey: "secret-key")
+
+        let transport = CancellationAwareTransport()
+        let service = catalogService(transport: transport, cacheURL: cacheURL)
+        let lookup = Task {
+            try await service.metadataSurfacingErrors(
+                apiKey: "secret-key",
+                modelID: Self.modelID,
+                forceRefresh: true
+            )
+        }
+        while transport.requests.isEmpty {
+            try await Task.sleep(nanoseconds: 1_000_000)
+        }
+
+        lookup.cancel()
+
+        await expectCancellation(lookup)
+    }
+
+    @Test func cancelledCatalogRefreshReplacesStaleStatusAndStopsLoading() {
+        let metadata = OpenRouterModelMetadata(
+            requestedID: Self.modelID,
+            id: Self.modelID,
+            canonicalModelID: "openai/gpt-5.5-20260423",
+            displayName: "GPT-5.5",
+            contextLength: 128_000,
+            maximumCompletionTokens: 4_096,
+            supportedParameters: [],
+            pricing: nil,
+            expiration: nil,
+            isAvailableToAPIKey: true,
+            capabilitySource: .authenticatedCatalog,
+            fetchedAt: Date(timeIntervalSince1970: 1)
+        )
+        var presentation = OpenRouterCatalogRefreshPresentation(
+            modelMetadata: metadata,
+            message: "Authenticated model metadata loaded.",
+            messageIsWarning: false,
+            isLoading: true
+        )
+
+        presentation.finish(with: .cancelled)
+
+        #expect(presentation.modelMetadata == metadata)
+        #expect(presentation.message == "OpenRouter model metadata refresh was cancelled.")
+        #expect(presentation.messageIsWarning)
+        #expect(!presentation.isLoading)
+    }
+
     @Test func invalidatingCanonicalModelIDRemovesCachedCapabilities() async throws {
         let transport = StubTransport([
             .success((
@@ -448,7 +509,7 @@ struct OpenRouterSQLGeneratorTests {
 
     @Test func privateRoutingPreferencesSetExactlyTheRequiredProviderBlock() throws {
         var body: [String: Any] = ["model": "openai/gpt-5.5"]
-        OpenRouterProviderPreferences.requiredPrivateRouting.apply(to: &body)
+        OpenRouterProviderPreferences.apply(to: &body)
         try OpenRouterTestSupport.expectPrivateRouting(inBody: body)
     }
 
@@ -1420,16 +1481,10 @@ struct OpenRouterSQLGeneratorTests {
                 response(url: Self.chatEndpoint, status: 200)
             )),
         ])
-        let service = catalogService(transport: transport)
-
-        let result = await OpenRouterConnectivityCheck(
-            apiKey: "test-key",
-            model: Self.modelID,
-            expectedCanonicalModelID: expectedModelID,
-            catalogService: service,
+        let result = await runConnectivityCheck(
             transport: transport,
-            requestBuilder: OpenRouterRequestBuilder(endpoint: Self.chatEndpoint)
-        ).run()
+            expectedCanonicalModelID: expectedModelID
+        )
 
         #expect(result.error?.category == .modelVersionMismatch)
         #expect(result.returnedModelID == returnedModelID)
@@ -1448,16 +1503,10 @@ struct OpenRouterSQLGeneratorTests {
                 response(url: Self.chatEndpoint, status: 200)
             )),
         ])
-        let service = catalogService(transport: transport)
-
-        let result = await OpenRouterConnectivityCheck(
-            apiKey: "test-key",
-            model: Self.modelID,
-            expectedCanonicalModelID: expectedModelID,
-            catalogService: service,
+        let result = await runConnectivityCheck(
             transport: transport,
-            requestBuilder: OpenRouterRequestBuilder(endpoint: Self.chatEndpoint)
-        ).run()
+            expectedCanonicalModelID: expectedModelID
+        )
 
         #expect(result.error == nil)
         #expect(result.selectedModelAvailable)
@@ -1473,16 +1522,10 @@ struct OpenRouterSQLGeneratorTests {
                 response(url: Self.apiBase.appendingPathComponent("models/user"), status: 200)
             )),
         ])
-        let service = catalogService(transport: transport)
-
-        let result = await OpenRouterConnectivityCheck(
-            apiKey: "test-key",
-            model: Self.modelID,
-            expectedCanonicalModelID: expectedModelID,
-            catalogService: service,
+        let result = await runConnectivityCheck(
             transport: transport,
-            requestBuilder: OpenRouterRequestBuilder(endpoint: Self.chatEndpoint)
-        ).run()
+            expectedCanonicalModelID: expectedModelID
+        )
 
         #expect(result.error?.category == .modelVersionMismatch)
         #expect(result.returnedModelID == returnedModelID)
@@ -1550,6 +1593,70 @@ struct OpenRouterSQLGeneratorTests {
         // A network-fresh mismatch is authoritative: no recovery refetch and
         // no billed completion request.
         #expect(transport.requests.map { $0.url?.path } == ["/api/v1/models/user"])
+    }
+
+    @Test func networkFreshCanonicalMismatchIsMemoizedForCatalogTTL() async {
+        let transport = StubTransport([
+            .success((
+                catalogResponse(id: Self.modelID, canonicalID: "openai/gpt-5.5-20260901"),
+                response(url: Self.apiBase.appendingPathComponent("models/user"), status: 200)
+            )),
+        ])
+        let service = catalogService(transport: transport, ttl: 60)
+
+        await expectCanonicalMismatch(service: service, expectedAttemptCount: 1)
+        await expectCanonicalMismatch(service: service, expectedAttemptCount: 0)
+
+        #expect(transport.requests.map { $0.url?.path } == ["/api/v1/models/user"])
+    }
+
+    @Test func cacheServedCanonicalMismatchRefetchesOnceBeforeMemoizing() async throws {
+        let transport = StubTransport([
+            .success((
+                catalogResponse(id: Self.modelID, canonicalID: "openai/gpt-5.5-20260901"),
+                response(url: Self.apiBase.appendingPathComponent("models/user"), status: 200)
+            )),
+            .success((
+                catalogResponse(id: Self.modelID, canonicalID: "openai/gpt-5.5-20260901"),
+                response(url: Self.apiBase.appendingPathComponent("models/user"), status: 200)
+            )),
+        ])
+        let service = catalogService(transport: transport, ttl: 60)
+        _ = try await service.availableModels(apiKey: "test-key", forceRefresh: true)
+
+        await expectCanonicalMismatch(service: service, expectedAttemptCount: 1)
+        await expectCanonicalMismatch(service: service, expectedAttemptCount: 0)
+
+        #expect(
+            transport.requests.map { $0.url?.path } == [
+                "/api/v1/models/user",
+                "/api/v1/models/user",
+            ]
+        )
+    }
+
+    @Test func confirmedCanonicalMismatchReverifiesAfterCatalogTTLExpires() async {
+        let transport = StubTransport([
+            .success((
+                catalogResponse(id: Self.modelID, canonicalID: "openai/gpt-5.5-20260901"),
+                response(url: Self.apiBase.appendingPathComponent("models/user"), status: 200)
+            )),
+            .success((
+                catalogResponse(id: Self.modelID, canonicalID: "openai/gpt-5.5-20260901"),
+                response(url: Self.apiBase.appendingPathComponent("models/user"), status: 200)
+            )),
+        ])
+        let service = catalogService(transport: transport, ttl: -1)
+
+        await expectCanonicalMismatch(service: service, expectedAttemptCount: 1)
+        await expectCanonicalMismatch(service: service, expectedAttemptCount: 1)
+
+        #expect(
+            transport.requests.map { $0.url?.path } == [
+                "/api/v1/models/user",
+                "/api/v1/models/user",
+            ]
+        )
     }
 
     @Test func preflightRecoversWhenStaleCacheHoldsPreviousCanonical() async throws {
@@ -1720,6 +1827,20 @@ struct OpenRouterSQLGeneratorTests {
             retryPolicy: retryPolicy,
             countCapabilityLookupHTTPAttempts: countCapabilityLookupHTTPAttempts
         )
+    }
+
+    private func runConnectivityCheck(
+        transport: StubTransport,
+        expectedCanonicalModelID: String
+    ) async -> OpenRouterConnectivityCheck.Result {
+        await OpenRouterConnectivityCheck(
+            apiKey: "test-key",
+            model: Self.modelID,
+            expectedCanonicalModelID: expectedCanonicalModelID,
+            catalogService: catalogService(transport: transport),
+            transport: transport,
+            requestBuilder: OpenRouterRequestBuilder(endpoint: Self.chatEndpoint)
+        ).run()
     }
 
     private func makeGenerator(transport: CancellationAwareTransport) -> OpenRouterSQLGenerator {
@@ -1968,6 +2089,27 @@ struct OpenRouterSQLGeneratorTests {
             return
         } catch {
             Issue.record("expected CancellationError, got \(error)")
+        }
+    }
+
+    private func expectCanonicalMismatch(
+        service: OpenRouterModelCatalogService,
+        expectedAttemptCount: Int
+    ) async {
+        do {
+            _ = try await service.validatedCapabilitiesForGeneration(
+                apiKey: "test-key",
+                modelID: Self.modelID,
+                expectedCanonicalModelID: "openai/gpt-5.5-20260423",
+                maximumHTTPRequests: nil
+            )
+            Issue.record("expected canonical rollover failure")
+        } catch let failure as OpenRouterFailure {
+            #expect(failure.category == .modelVersionMismatch)
+            #expect(failure.diagnostic.returnedModelID == "openai/gpt-5.5-20260901")
+            #expect(failure.diagnostic.attemptCount == expectedAttemptCount)
+        } catch {
+            Issue.record("expected OpenRouterFailure, got \(error)")
         }
     }
 

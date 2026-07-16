@@ -59,7 +59,9 @@ public enum TextToSQLReleaseGateModelPolicy {
 
     public struct Violation: LocalizedError, CustomStringConvertible, Equatable, Sendable {
         public var model: String?
-        public var pinnedModel: String
+        public var pinnedModel: String {
+            OpenRouterCatalog.productionProfile.requestedModelID
+        }
 
         public var description: String {
             guard let model else {
@@ -89,10 +91,7 @@ public enum TextToSQLReleaseGateModelPolicy {
         else { return }
         guard !isPinnedCloudRun(model: model, backendIncludesCloud: backendIncludesCloud)
         else { return }
-        throw Violation(
-            model: backendIncludesCloud ? model : nil,
-            pinnedModel: OpenRouterCatalog.productionProfile.requestedModelID
-        )
+        throw Violation(model: backendIncludesCloud ? model : nil)
     }
 
     /// Sink-time eligibility is deliberately stricter than the override used

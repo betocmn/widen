@@ -72,7 +72,7 @@ struct AIBackendToggle: View {
         switch appState.cloudBackendStatus {
         case .ready:
             if appState.cloudProvider == .openRouter {
-                return "Generate SQL with \(OpenRouterCatalog.productionProfile.displayName) via OpenRouter. \(OpenRouterCatalog.privateRoutingClaim) Inspected data values are sent only when this connection enables cloud data inspection."
+                return "Generate SQL with \(OpenRouterCatalog.productionProfile.displayName) via OpenRouter. \(OpenRouterProviderPreferences.privateRoutingClaim) Inspected data values are sent only when this connection enables cloud data inspection."
             }
             return "Generate SQL with \(CloudAIProvider.applePCC.displayName). Cloud sends your question and allowed schema metadata; inspected data values are sent only when this connection enables cloud data inspection."
         case .notConfigured(let message), .unavailable(let message):
