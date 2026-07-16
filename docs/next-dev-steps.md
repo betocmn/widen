@@ -569,8 +569,8 @@ network-fresh immediate failure, refresh cancellation, the consolidated
 canonical fixtures, the computed release pin, direct redaction, and all four
 resume-model override combinations.
 
-Validation passed with 224 focused tests in seven suites (224 passed, zero
-skipped or failed). The full run completed 1,123 tests in 49 suites: 1,081
+Validation passed with 225 focused tests in seven suites (225 passed, zero
+skipped or failed). The full run completed 1,124 tests in 49 suites: 1,082
 passed, 42 skipped, and zero failed. `make project` regenerated an unchanged
 project, `make eval-build` succeeded, and both working-tree and branch diff
 checks passed. No paid OpenRouter request was made. The six-call schema-tool
