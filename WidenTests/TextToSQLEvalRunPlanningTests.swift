@@ -347,6 +347,38 @@ struct TextToSQLEvalRunPlanningTests {
         #expect(text.contains("--case support.unresolved-by-assignee"))
     }
 
+    @Test func releaseResumeMakeArgumentsPreserveModelOverrideSemantics() throws {
+        let repoRoot = URL(fileURLWithPath: #filePath)
+            .deletingLastPathComponent()
+            .deletingLastPathComponent()
+
+        let pinned = try Self.releaseResumeDryRunCommand(repoRoot: repoRoot)
+        #expect(pinned.contains(#"--model "openai/gpt-5.5""#))
+        #expect(!pinned.contains("--allow-model-override"))
+
+        let inherited = try Self.releaseResumeDryRunCommand(
+            repoRoot: repoRoot,
+            assignments: ["ALLOW_MODEL_OVERRIDE=1"]
+        )
+        #expect(!inherited.contains("--model"))
+        #expect(inherited.contains("--allow-model-override"))
+
+        let explicit = try Self.releaseResumeDryRunCommand(
+            repoRoot: repoRoot,
+            assignments: ["ALLOW_MODEL_OVERRIDE=1", "MODEL=vendor/model"]
+        )
+        #expect(explicit.contains(#"--model "vendor/model""#))
+        #expect(explicit.contains("--allow-model-override"))
+
+        let environment = try Self.releaseResumeDryRunCommand(
+            repoRoot: repoRoot,
+            assignments: ["ALLOW_MODEL_OVERRIDE=1"],
+            environmentModel: "environment/model"
+        )
+        #expect(environment.contains(#"--model "environment/model""#))
+        #expect(environment.contains("--allow-model-override"))
+    }
+
     @Test func makefileKeepsExperimentalSchemaAgentFlagsFocused() throws {
         let testFile = URL(fileURLWithPath: #filePath)
         let makefile = testFile
@@ -531,6 +563,60 @@ struct TextToSQLEvalRunPlanningTests {
             line.hasPrefix("\t") || line.isEmpty
         }
         return recipeLines.joined(separator: "\n")
+    }
+
+    private static func releaseResumeDryRunCommand(
+        repoRoot: URL,
+        assignments: [String] = [],
+        environmentModel: String? = nil
+    ) throws -> String {
+        let process = Process()
+        process.executableURL = URL(fileURLWithPath: "/usr/bin/make")
+        process.currentDirectoryURL = repoRoot
+        process.arguments = [
+            "--no-print-directory",
+            "-n",
+            "eval-release-resume",
+            "RELEASE_VERSION=fixture",
+            "RESUME=fixture-run",
+        ] + assignments
+
+        var environment = ProcessInfo.processInfo.environment
+        for name in ["ALLOW_MODEL_OVERRIDE", "MAKEFLAGS", "MAKELEVEL", "MFLAGS", "MODEL"] {
+            environment.removeValue(forKey: name)
+        }
+        if let environmentModel {
+            environment["MODEL"] = environmentModel
+        }
+        process.environment = environment
+
+        let output = Pipe()
+        process.standardOutput = output
+        process.standardError = output
+        try process.run()
+        process.waitUntilExit()
+
+        let text = String(
+            decoding: output.fileHandleForReading.readDataToEndOfFile(),
+            as: UTF8.self
+        )
+        guard process.terminationStatus == 0 else {
+            throw NSError(
+                domain: "TextToSQLEvalRunPlanningTests",
+                code: Int(process.terminationStatus),
+                userInfo: [NSLocalizedDescriptionKey: text]
+            )
+        }
+        guard let command = text.split(separator: "\n").first(where: {
+            $0.contains("--resume-run")
+        }) else {
+            throw NSError(
+                domain: "TextToSQLEvalRunPlanningTests",
+                code: 1,
+                userInfo: [NSLocalizedDescriptionKey: "Make dry run omitted the release-resume command."]
+            )
+        }
+        return String(command)
     }
 
     private static func expectedKeys(
