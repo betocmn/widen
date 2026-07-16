@@ -1,9 +1,31 @@
 import SwiftUI
 
-private enum OpenRouterCatalogRefreshResult: Sendable {
+enum OpenRouterCatalogRefreshResult: Sendable {
     case metadata(OpenRouterModelMetadata?)
     case cancelled
     case failure(String)
+}
+
+struct OpenRouterCatalogRefreshPresentation: Equatable, Sendable {
+    var modelMetadata: OpenRouterModelMetadata?
+    var message: String?
+    var messageIsWarning: Bool
+    var isLoading: Bool
+
+    mutating func finish(with result: OpenRouterCatalogRefreshResult) {
+        switch result {
+        case .cancelled:
+            message = "OpenRouter model metadata refresh was cancelled."
+            messageIsWarning = true
+        case .failure(let providerMessage):
+            modelMetadata = nil
+            message = "Could not refresh OpenRouter model metadata: \(providerMessage)"
+            messageIsWarning = true
+        case .metadata:
+            preconditionFailure("Metadata refresh results use the metadata presentation path.")
+        }
+        isLoading = false
+    }
 }
 
 /// Configuration for the two LLM backends — the on-device model and the
@@ -427,16 +449,20 @@ struct LLMSettingsView: View {
                         catalogMessage = "OpenRouter did not return metadata for the fixed model."
                         catalogMessageIsWarning = true
                     }
-                case .cancelled:
-                    catalogMessage = "OpenRouter model metadata refresh was cancelled."
-                    catalogMessageIsWarning = true
-                case .failure(let message):
-                    modelMetadata = nil
-                    catalogMessage =
-                        "Could not refresh OpenRouter model metadata: \(message)"
-                    catalogMessageIsWarning = true
+                    isLoadingCatalog = false
+                case .cancelled, .failure:
+                    var presentation = OpenRouterCatalogRefreshPresentation(
+                        modelMetadata: modelMetadata,
+                        message: catalogMessage,
+                        messageIsWarning: catalogMessageIsWarning,
+                        isLoading: isLoadingCatalog
+                    )
+                    presentation.finish(with: result)
+                    modelMetadata = presentation.modelMetadata
+                    catalogMessage = presentation.message
+                    catalogMessageIsWarning = presentation.messageIsWarning
+                    isLoadingCatalog = presentation.isLoading
                 }
-                isLoadingCatalog = false
             }
         }
     }

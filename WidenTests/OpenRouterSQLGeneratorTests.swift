@@ -399,6 +399,36 @@ struct OpenRouterSQLGeneratorTests {
         await expectCancellation(lookup)
     }
 
+    @Test func cancelledCatalogRefreshReplacesStaleStatusAndStopsLoading() {
+        let metadata = OpenRouterModelMetadata(
+            requestedID: Self.modelID,
+            id: Self.modelID,
+            canonicalModelID: "openai/gpt-5.5-20260423",
+            displayName: "GPT-5.5",
+            contextLength: 128_000,
+            maximumCompletionTokens: 4_096,
+            supportedParameters: [],
+            pricing: nil,
+            expiration: nil,
+            isAvailableToAPIKey: true,
+            capabilitySource: .authenticatedCatalog,
+            fetchedAt: Date(timeIntervalSince1970: 1)
+        )
+        var presentation = OpenRouterCatalogRefreshPresentation(
+            modelMetadata: metadata,
+            message: "Authenticated model metadata loaded.",
+            messageIsWarning: false,
+            isLoading: true
+        )
+
+        presentation.finish(with: .cancelled)
+
+        #expect(presentation.modelMetadata == metadata)
+        #expect(presentation.message == "OpenRouter model metadata refresh was cancelled.")
+        #expect(presentation.messageIsWarning)
+        #expect(!presentation.isLoading)
+    }
+
     @Test func invalidatingCanonicalModelIDRemovesCachedCapabilities() async throws {
         let transport = StubTransport([
             .success((
