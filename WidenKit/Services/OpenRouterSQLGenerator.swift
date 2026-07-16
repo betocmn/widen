@@ -1545,14 +1545,19 @@ actor OpenRouterModelCatalogService {
 /// The only writer of the request `provider` block: every OpenRouter
 /// completion demands endpoints with zero data retention, no provider data
 /// collection, and full request-parameter support.
-struct OpenRouterProviderPreferences: Equatable, Sendable {
-    static let requiredPrivateRouting = OpenRouterProviderPreferences()
+enum OpenRouterProviderPreferences {
+    static let requireParameters = true
+    static let zdr = true
+    static let dataCollection = "deny"
 
-    let requireParameters = true
-    let zdr = true
-    let dataCollection = "deny"
+    /// The one user-facing sentence describing the private routing Widen
+    /// enforces on every OpenRouter completion. Interpolated by every view
+    /// that makes this claim so the wording cannot drift; keep aligned with
+    /// PRIVACY.md and the provider block below.
+    static let privateRoutingClaim =
+        "Widen requires OpenRouter endpoints that do not retain or collect the submitted question and schema context."
 
-    func apply(to body: inout [String: Any]) {
+    static func apply(to body: inout [String: Any]) {
         body["provider"] = [
             "require_parameters": requireParameters,
             "zdr": zdr,
@@ -1604,7 +1609,7 @@ struct OpenRouterRequestBuilder: Sendable {
         if mode == .strictJSONSchema {
             body["response_format"] = Self.responseFormat()
         }
-        OpenRouterProviderPreferences.requiredPrivateRouting.apply(to: &body)
+        OpenRouterProviderPreferences.apply(to: &body)
 
         var request = URLRequest(url: endpoint)
         request.httpMethod = "POST"

@@ -3052,26 +3052,16 @@ struct OpenRouterSchemaToolSQLAgentTests {
     @Test func toolChatParserRejectsUnexpectedCanonicalModelWhenEnforced() throws {
         let parser = OpenRouterToolChatParser()
         let returnedModelID = "openai/gpt-5.5-unevaluated"
-        let data = Self.jsonData([
-            "id": "cmpl-mismatch",
-            "model": returnedModelID,
-            "provider": "OpenAI",
-            "choices": [[
-                "index": 0,
-                "finish_reason": "tool_calls",
-                "message": [
-                    "role": "assistant",
-                    "tool_calls": [[
-                        "id": "call-1",
-                        "type": "function",
-                        "function": [
-                            "name": "search_schema",
-                            "arguments": #"{"query":"users"}"#,
-                        ],
-                    ]],
-                ],
-            ]],
-        ])
+        let data = Self.assistantToolCalls(
+            [
+                Self.toolCall(
+                    id: "call-1",
+                    name: "search_schema",
+                    arguments: ["query": "users"]
+                )
+            ],
+            model: returnedModelID
+        )
         let response = HTTPURLResponse(
             url: Self.chatEndpoint,
             statusCode: 200,
@@ -3098,26 +3088,16 @@ struct OpenRouterSchemaToolSQLAgentTests {
     @Test func toolChatParserAcceptsMatchingCanonicalModelWhenEnforced() throws {
         let parser = OpenRouterToolChatParser()
         let canonicalModelID = "openai/gpt-5.5-20260423"
-        let data = Self.jsonData([
-            "id": "cmpl-match",
-            "model": canonicalModelID,
-            "provider": "OpenAI",
-            "choices": [[
-                "index": 0,
-                "finish_reason": "tool_calls",
-                "message": [
-                    "role": "assistant",
-                    "tool_calls": [[
-                        "id": "call-1",
-                        "type": "function",
-                        "function": [
-                            "name": "search_schema",
-                            "arguments": #"{"query":"users"}"#,
-                        ],
-                    ]],
-                ],
-            ]],
-        ])
+        let data = Self.assistantToolCalls(
+            [
+                Self.toolCall(
+                    id: "call-1",
+                    name: "search_schema",
+                    arguments: ["query": "users"]
+                )
+            ],
+            model: canonicalModelID
+        )
         let response = HTTPURLResponse(
             url: Self.chatEndpoint,
             statusCode: 200,
@@ -3139,11 +3119,17 @@ struct OpenRouterSchemaToolSQLAgentTests {
     @Test func toolChatParserAcceptsAliasWithMatchingSelectedEndpointCanonicalModel() throws {
         let parser = OpenRouterToolChatParser()
         let canonicalModelID = "openai/gpt-5.5-20260423"
-        let data = Self.jsonData([
-            "id": "cmpl-router-match",
-            "model": Self.modelID,
-            "provider": "Azure",
-            "openrouter_metadata": [
+        let data = Self.assistantToolCalls(
+            [
+                Self.toolCall(
+                    id: "call-1",
+                    name: "search_schema",
+                    arguments: ["query": "users"]
+                )
+            ],
+            model: Self.modelID,
+            provider: "Azure",
+            openRouterMetadata: [
                 "requested": Self.modelID,
                 "endpoints": [
                     "available": [[
@@ -3152,23 +3138,8 @@ struct OpenRouterSchemaToolSQLAgentTests {
                         "selected": true,
                     ]],
                 ],
-            ],
-            "choices": [[
-                "index": 0,
-                "finish_reason": "tool_calls",
-                "message": [
-                    "role": "assistant",
-                    "tool_calls": [[
-                        "id": "call-1",
-                        "type": "function",
-                        "function": [
-                            "name": "search_schema",
-                            "arguments": #"{"query":"users"}"#,
-                        ],
-                    ]],
-                ],
-            ]],
-        ])
+            ]
+        )
         let response = HTTPURLResponse(
             url: Self.chatEndpoint,
             statusCode: 200,
@@ -3191,11 +3162,17 @@ struct OpenRouterSchemaToolSQLAgentTests {
     @Test func toolChatParserRejectsCanonicalModelWhenRouterMetadataConflicts() throws {
         let parser = OpenRouterToolChatParser()
         let canonicalModelID = "openai/gpt-5.5-20260423"
-        let data = Self.jsonData([
-            "id": "cmpl-router-conflict",
-            "model": canonicalModelID,
-            "provider": "Azure",
-            "openrouter_metadata": [
+        let data = Self.assistantToolCalls(
+            [
+                Self.toolCall(
+                    id: "call-1",
+                    name: "search_schema",
+                    arguments: ["query": "users"]
+                )
+            ],
+            model: canonicalModelID,
+            provider: "Azure",
+            openRouterMetadata: [
                 "requested": Self.modelID,
                 "endpoints": [
                     "available": [[
@@ -3204,23 +3181,8 @@ struct OpenRouterSchemaToolSQLAgentTests {
                         "selected": true,
                     ]],
                 ],
-            ],
-            "choices": [[
-                "index": 0,
-                "finish_reason": "tool_calls",
-                "message": [
-                    "role": "assistant",
-                    "tool_calls": [[
-                        "id": "call-1",
-                        "type": "function",
-                        "function": [
-                            "name": "search_schema",
-                            "arguments": #"{"query":"users"}"#,
-                        ],
-                    ]],
-                ],
-            ]],
-        ])
+            ]
+        )
         let response = HTTPURLResponse(
             url: Self.chatEndpoint,
             statusCode: 200,
@@ -4364,11 +4326,16 @@ struct OpenRouterSchemaToolSQLAgentTests {
         )
     }
 
-    private static func assistantToolCalls(_ calls: [[String: Any]]) -> Data {
-        jsonData([
+    private static func assistantToolCalls(
+        _ calls: [[String: Any]],
+        model: String = modelID,
+        provider: String = "OpenAI",
+        openRouterMetadata: [String: Any]? = nil
+    ) -> Data {
+        var body: [String: Any] = [
             "id": "cmpl-\(UUID().uuidString)",
-            "model": modelID,
-            "provider": "OpenAI",
+            "model": model,
+            "provider": provider,
             "choices": [
                 [
                     "index": 0,
@@ -4387,7 +4354,11 @@ struct OpenRouterSchemaToolSQLAgentTests {
                 "completion_tokens_details": ["reasoning_tokens": 1],
                 "cost": 0.00001,
             ],
-        ])
+        ]
+        if let openRouterMetadata {
+            body["openrouter_metadata"] = openRouterMetadata
+        }
+        return jsonData(body)
     }
 
     private static func assistantText(_ content: String) -> Data {

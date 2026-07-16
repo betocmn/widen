@@ -368,6 +368,37 @@ struct OpenRouterSQLGeneratorTests {
         #expect(metadata == nil)
     }
 
+    @Test func cancelledSettingsMetadataLookupRethrowsCancellationInsteadOfServingStaleCache()
+        async throws
+    {
+        let cacheURL = temporaryCacheURL()
+        let primingTransport = StubTransport([
+            .success((
+                catalogResponse(),
+                response(url: Self.apiBase.appendingPathComponent("models/user"), status: 200)
+            ))
+        ])
+        let primingService = catalogService(transport: primingTransport, cacheURL: cacheURL)
+        _ = try await primingService.availableModels(apiKey: "secret-key")
+
+        let transport = CancellationAwareTransport()
+        let service = catalogService(transport: transport, cacheURL: cacheURL)
+        let lookup = Task {
+            try await service.metadataSurfacingErrors(
+                apiKey: "secret-key",
+                modelID: Self.modelID,
+                forceRefresh: true
+            )
+        }
+        while transport.requests.isEmpty {
+            try await Task.sleep(nanoseconds: 1_000_000)
+        }
+
+        lookup.cancel()
+
+        await expectCancellation(lookup)
+    }
+
     @Test func invalidatingCanonicalModelIDRemovesCachedCapabilities() async throws {
         let transport = StubTransport([
             .success((
@@ -448,7 +479,7 @@ struct OpenRouterSQLGeneratorTests {
 
     @Test func privateRoutingPreferencesSetExactlyTheRequiredProviderBlock() throws {
         var body: [String: Any] = ["model": "openai/gpt-5.5"]
-        OpenRouterProviderPreferences.requiredPrivateRouting.apply(to: &body)
+        OpenRouterProviderPreferences.apply(to: &body)
         try OpenRouterTestSupport.expectPrivateRouting(inBody: body)
     }
 
@@ -1420,16 +1451,10 @@ struct OpenRouterSQLGeneratorTests {
                 response(url: Self.chatEndpoint, status: 200)
             )),
         ])
-        let service = catalogService(transport: transport)
-
-        let result = await OpenRouterConnectivityCheck(
-            apiKey: "test-key",
-            model: Self.modelID,
-            expectedCanonicalModelID: expectedModelID,
-            catalogService: service,
+        let result = await runConnectivityCheck(
             transport: transport,
-            requestBuilder: OpenRouterRequestBuilder(endpoint: Self.chatEndpoint)
-        ).run()
+            expectedCanonicalModelID: expectedModelID
+        )
 
         #expect(result.error?.category == .modelVersionMismatch)
         #expect(result.returnedModelID == returnedModelID)
@@ -1448,16 +1473,10 @@ struct OpenRouterSQLGeneratorTests {
                 response(url: Self.chatEndpoint, status: 200)
             )),
         ])
-        let service = catalogService(transport: transport)
-
-        let result = await OpenRouterConnectivityCheck(
-            apiKey: "test-key",
-            model: Self.modelID,
-            expectedCanonicalModelID: expectedModelID,
-            catalogService: service,
+        let result = await runConnectivityCheck(
             transport: transport,
-            requestBuilder: OpenRouterRequestBuilder(endpoint: Self.chatEndpoint)
-        ).run()
+            expectedCanonicalModelID: expectedModelID
+        )
 
         #expect(result.error == nil)
         #expect(result.selectedModelAvailable)
@@ -1473,16 +1492,10 @@ struct OpenRouterSQLGeneratorTests {
                 response(url: Self.apiBase.appendingPathComponent("models/user"), status: 200)
             )),
         ])
-        let service = catalogService(transport: transport)
-
-        let result = await OpenRouterConnectivityCheck(
-            apiKey: "test-key",
-            model: Self.modelID,
-            expectedCanonicalModelID: expectedModelID,
-            catalogService: service,
+        let result = await runConnectivityCheck(
             transport: transport,
-            requestBuilder: OpenRouterRequestBuilder(endpoint: Self.chatEndpoint)
-        ).run()
+            expectedCanonicalModelID: expectedModelID
+        )
 
         #expect(result.error?.category == .modelVersionMismatch)
         #expect(result.returnedModelID == returnedModelID)
@@ -1784,6 +1797,20 @@ struct OpenRouterSQLGeneratorTests {
             retryPolicy: retryPolicy,
             countCapabilityLookupHTTPAttempts: countCapabilityLookupHTTPAttempts
         )
+    }
+
+    private func runConnectivityCheck(
+        transport: StubTransport,
+        expectedCanonicalModelID: String
+    ) async -> OpenRouterConnectivityCheck.Result {
+        await OpenRouterConnectivityCheck(
+            apiKey: "test-key",
+            model: Self.modelID,
+            expectedCanonicalModelID: expectedCanonicalModelID,
+            catalogService: catalogService(transport: transport),
+            transport: transport,
+            requestBuilder: OpenRouterRequestBuilder(endpoint: Self.chatEndpoint)
+        ).run()
     }
 
     private func makeGenerator(transport: CancellationAwareTransport) -> OpenRouterSQLGenerator {
