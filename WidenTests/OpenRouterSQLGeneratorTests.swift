@@ -1552,6 +1552,70 @@ struct OpenRouterSQLGeneratorTests {
         #expect(transport.requests.map { $0.url?.path } == ["/api/v1/models/user"])
     }
 
+    @Test func networkFreshCanonicalMismatchIsMemoizedForCatalogTTL() async {
+        let transport = StubTransport([
+            .success((
+                catalogResponse(id: Self.modelID, canonicalID: "openai/gpt-5.5-20260901"),
+                response(url: Self.apiBase.appendingPathComponent("models/user"), status: 200)
+            )),
+        ])
+        let service = catalogService(transport: transport, ttl: 60)
+
+        await expectCanonicalMismatch(service: service, expectedAttemptCount: 1)
+        await expectCanonicalMismatch(service: service, expectedAttemptCount: 0)
+
+        #expect(transport.requests.map { $0.url?.path } == ["/api/v1/models/user"])
+    }
+
+    @Test func cacheServedCanonicalMismatchRefetchesOnceBeforeMemoizing() async throws {
+        let transport = StubTransport([
+            .success((
+                catalogResponse(id: Self.modelID, canonicalID: "openai/gpt-5.5-20260901"),
+                response(url: Self.apiBase.appendingPathComponent("models/user"), status: 200)
+            )),
+            .success((
+                catalogResponse(id: Self.modelID, canonicalID: "openai/gpt-5.5-20260901"),
+                response(url: Self.apiBase.appendingPathComponent("models/user"), status: 200)
+            )),
+        ])
+        let service = catalogService(transport: transport, ttl: 60)
+        _ = try await service.availableModels(apiKey: "test-key", forceRefresh: true)
+
+        await expectCanonicalMismatch(service: service, expectedAttemptCount: 1)
+        await expectCanonicalMismatch(service: service, expectedAttemptCount: 0)
+
+        #expect(
+            transport.requests.map { $0.url?.path } == [
+                "/api/v1/models/user",
+                "/api/v1/models/user",
+            ]
+        )
+    }
+
+    @Test func confirmedCanonicalMismatchReverifiesAfterCatalogTTLExpires() async {
+        let transport = StubTransport([
+            .success((
+                catalogResponse(id: Self.modelID, canonicalID: "openai/gpt-5.5-20260901"),
+                response(url: Self.apiBase.appendingPathComponent("models/user"), status: 200)
+            )),
+            .success((
+                catalogResponse(id: Self.modelID, canonicalID: "openai/gpt-5.5-20260901"),
+                response(url: Self.apiBase.appendingPathComponent("models/user"), status: 200)
+            )),
+        ])
+        let service = catalogService(transport: transport, ttl: -1)
+
+        await expectCanonicalMismatch(service: service, expectedAttemptCount: 1)
+        await expectCanonicalMismatch(service: service, expectedAttemptCount: 1)
+
+        #expect(
+            transport.requests.map { $0.url?.path } == [
+                "/api/v1/models/user",
+                "/api/v1/models/user",
+            ]
+        )
+    }
+
     @Test func preflightRecoversWhenStaleCacheHoldsPreviousCanonical() async throws {
         let cacheURL = temporaryCacheURL()
         let transport = StubTransport([
@@ -1968,6 +2032,27 @@ struct OpenRouterSQLGeneratorTests {
             return
         } catch {
             Issue.record("expected CancellationError, got \(error)")
+        }
+    }
+
+    private func expectCanonicalMismatch(
+        service: OpenRouterModelCatalogService,
+        expectedAttemptCount: Int
+    ) async {
+        do {
+            _ = try await service.validatedCapabilitiesForGeneration(
+                apiKey: "test-key",
+                modelID: Self.modelID,
+                expectedCanonicalModelID: "openai/gpt-5.5-20260423",
+                maximumHTTPRequests: nil
+            )
+            Issue.record("expected canonical rollover failure")
+        } catch let failure as OpenRouterFailure {
+            #expect(failure.category == .modelVersionMismatch)
+            #expect(failure.diagnostic.returnedModelID == "openai/gpt-5.5-20260901")
+            #expect(failure.diagnostic.attemptCount == expectedAttemptCount)
+        } catch {
+            Issue.record("expected OpenRouterFailure, got \(error)")
         }
     }
 
