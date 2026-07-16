@@ -569,14 +569,15 @@ network-fresh immediate failure, refresh cancellation, the consolidated
 canonical fixtures, the computed release pin, direct redaction, and all four
 resume-model override combinations.
 
-Validation passed with 224 focused tests in seven suites and all 1,123 tests
-in 49 suites. `make project` regenerated an unchanged project,
-`make eval-build` succeeded, and both working-tree and branch diff checks
-passed. No paid OpenRouter request was made. The six-call schema-tool limit,
-private routing, requested/canonical/routed-model enforcement, safety/schema/
-PostgreSQL validation, structured parsing, deterministic SQL review, frozen
-phrase heuristics, PR 59 timeout/tool-budget/interception behavior, and PR 60
-watch/rollover workflow remain unchanged.
+Validation passed with 224 focused tests in seven suites (224 passed, zero
+skipped or failed). The full run completed 1,123 tests in 49 suites: 1,081
+passed, 42 skipped, and zero failed. `make project` regenerated an unchanged
+project, `make eval-build` succeeded, and both working-tree and branch diff
+checks passed. No paid OpenRouter request was made. The six-call schema-tool
+limit, private routing, requested/canonical/routed-model enforcement, safety/
+schema/PostgreSQL validation, structured parsing, deterministic SQL review,
+frozen phrase heuristics, PR 59 timeout/tool-budget/interception behavior, and
+PR 60 watch/rollover workflow remain unchanged.
 
 ## Later / conditional
 

@@ -2222,12 +2222,13 @@ cache-served recovery, TTL expiry, network-fresh failure, refresh cancellation,
 canonical connectivity/tool-chat fixtures, computed release pins, redaction,
 and every default/override resume-model combination.
 
-The seven focused suites pass 224 tests, `make project` produces no generated
-diff, all 1,123 tests in 49 suites pass, `make eval-build` succeeds, and diff
-hygiene checks pass. No paid OpenRouter request was made. The six-call schema-
-tool budget and all private-routing, model-identity, validation, parsing,
-review, phrase-freeze, timeout/interception, canonical-watch, privacy, and
-credential boundaries remain intact.
+The seven focused suites pass 224 tests with zero skipped or failed. The full
+run completes 1,123 tests in 49 suites (1,081 passed, 42 skipped, zero failed).
+`make project` produces no generated diff, `make eval-build` succeeds, and
+diff hygiene checks pass. No paid OpenRouter request was made. The six-call
+schema-tool budget and all private-routing, model-identity, validation,
+parsing, review, phrase-freeze, timeout/interception, canonical-watch,
+privacy, and credential boundaries remain intact.
 
 ---
 
