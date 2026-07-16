@@ -31,10 +31,16 @@ Numbering continues from `docs/refactoring-plan.md`.
   credential-free public catalog check with drift-only issue creation,
   fail-closed operational handling, deterministic coverage, and a
   spend-accounted canonical rollover runbook.
+* ✅ **Done — PR 62 PR 55 hardening cleanups:** simplified the fixed private-
+  routing preferences, catalog refresh completion, canonical test fixtures,
+  release-policy/reporting code, and resume-model Make logic; removed one
+  redundant cache write; and bounded cache-served canonical-mismatch
+  reverification to once per catalog TTL while keeping network-fresh
+  mismatches fail-closed without another fetch.
 * ⏳ **Not done:** PR 58 clarification behavior (two funded attempts were
   reverted; the latest reached 12/12 clarification but failed the retained
-  over-clarification guardrail), structured plan validation or compilation,
-  and cleanup work.
+  over-clarification guardrail), and structured plan validation or
+  compilation.
 
 ## Where things stand
 
@@ -91,6 +97,12 @@ Numbering continues from `docs/refactoring-plan.md`.
   deduplicated rollover issue; lookup, transport, decoding, and invalid
   identity failures fail visibly without claiming drift. The live metadata
   check on 2026-07-15 confirmed the current pin.
+* PR 62 now remembers a confirmed cache-served canonical mismatch only for
+  that catalog snapshot and TTL. Repeated generations fail immediately from
+  the memo; TTL expiry or invalidation permits a fresh verification, while a
+  mismatch observed on a network-fresh lookup still fails immediately without
+  a second catalog request. The memo is memory-only and never stores an API
+  key.
 * Standing conclusions to respect: the intent-coverage phrase heuristics are
   frozen (PR 53); more force-SQL prompt pressure does not help (PR 52); the
   next accuracy lever is stable query planning / deterministic synthesis
@@ -108,7 +120,7 @@ Numbering continues from `docs/refactoring-plan.md`.
 2. ✅ Done — PR 56 retry: every criterion except zero internal schema-agent
    timeouts passed, so the bypass was reverted and PR 57 remains conditional
 3. ✅ Done — PR 60 canonical-version watch and rollover runbook
-4. PR 62 next: independent PR 55 hardening cleanups
+4. ✅ Done — PR 62 independent PR 55 hardening cleanups
 5. PR 58 remains open after two negative funded attempts; retry only with a
    genuinely narrower, pre-registered design that can preserve 12/12 without
    exceeding the retained over-clarification comparator
@@ -528,36 +540,43 @@ rollover non-regression.
 
 ## PR 62 — PR 55 hardening cleanups
 
-**Status: ⏳ Next independent cleanup.**
+**Status: ✅ Done [2026-07-16].**
 
-Deferred quality cleanups surfaced by the PR 55 review passes; none block the
-merge and none change behavior:
+The fixed private-routing policy is now a caseless enum with static
+functionality, and its user-facing privacy claim lives beside the enforced
+provider configuration. Catalog refresh computes one result and completes in
+one `MainActor` block; cancellation records an explicit final status instead
+of retaining stale text. The user-initiated model test no longer invalidates
+and writes the catalog immediately before its force-refreshing connectivity
+check. Connectivity canonical cases share a run helper, and tool-chat
+canonical cases use the model-aware `assistantToolCalls` and `toolCall`
+fixtures.
 
-* `OpenRouterProviderPreferences` is now a vacuous singleton struct (every
-  value is fixed) — collapse it to a caseless enum with statics, and move
-  `OpenRouterCatalog.privateRoutingClaim` next to it so the routing mechanism
-  and the user-facing privacy claim live in one place.
-* `refreshOpenRouterCatalog` repeats the guard/spinner boilerplate across
-  three `MainActor.run` blocks, and its cancellation path silently keeps
-  the previous status message — compute one result value and finish in a
-  single block.
-* The three connectivity-check canonical tests are ~25-line near-clones
-  (extract a run helper), and the tool-chat parser canonical tests hand-build
-  fixtures that the file's `assistantToolCalls`/`toolCall` helpers already
-  cover once they take a `model` parameter.
-* Pre-existing, user-initiated-only inefficiency: `testModel()` invalidates
-  the cache (with a disk write) immediately before the connectivity check
-  force-refreshes anyway.
-* During a live canonical rollover, each cache-served generation pays one
-  invalidate + catalog refetch before failing closed (bounded, but a
-  confirmed-mismatch memo on the catalog service could re-verify once per
-  TTL instead of once per generation). Network-fresh mismatches already skip
-  the refetch.
-* Micro-cleanups from the third review pass: `TextToSQLReleaseGateModelPolicy.Violation.pinnedModel`
-  can be computed instead of stored; the one-line `redactedProviderMessage`
-  wrapper in `ReleaseGateReporter` can be inlined; `validatedCapabilitiesForGeneration`'s
-  duplicated preflight calls could collapse into a two-iteration loop; the
-  `RESUME_MODEL_ARGS` make expression could become an explicit `ifeq` block.
+Generation preflight now uses a bounded two-pass loop. A confirmed canonical
+mismatch from a cache-served catalog snapshot is memoized in memory by API-key
+fingerprint and model identity, so subsequent generations fail closed without
+invalidating and refetching until that snapshot's TTL expires. An expired or
+explicitly invalidated snapshot can verify again. A network-fresh mismatch
+still fails immediately without a second fetch. Successful verification and
+relevant invalidation clear the memo; raw credentials and memo state are never
+persisted.
+
+The remaining review cleanups are also complete: release-gate violations
+compute the production pin, reporting calls the redactor directly, and the
+resume-model Make logic uses explicit nested `ifeq` branches. Deterministic
+coverage exercises memo reuse, cache-served one-time recovery, TTL expiry,
+network-fresh immediate failure, refresh cancellation, the consolidated
+canonical fixtures, the computed release pin, direct redaction, and all four
+resume-model override combinations.
+
+Validation passed with 224 focused tests in seven suites and all 1,123 tests
+in 49 suites. `make project` regenerated an unchanged project,
+`make eval-build` succeeded, and both working-tree and branch diff checks
+passed. No paid OpenRouter request was made. The six-call schema-tool limit,
+private routing, requested/canonical/routed-model enforcement, safety/schema/
+PostgreSQL validation, structured parsing, deterministic SQL review, frozen
+phrase heuristics, PR 59 timeout/tool-budget/interception behavior, and PR 60
+watch/rollover workflow remain unchanged.
 
 ## Later / conditional
 
