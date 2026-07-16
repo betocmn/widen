@@ -570,8 +570,30 @@ struct TextToSQLEvalRunPlanningTests {
         assignments: [String] = [],
         environmentModel: String? = nil
     ) throws -> String {
+        var environment = ProcessInfo.processInfo.environment
+        for name in ["ALLOW_MODEL_OVERRIDE", "MAKEFLAGS", "MAKELEVEL", "MFLAGS", "MODEL"] {
+            environment.removeValue(forKey: name)
+        }
+        if let environmentModel {
+            environment["MODEL"] = environmentModel
+        }
+        guard let makeURL = environment["PATH"]?
+            .split(separator: ":")
+            .map({ directory in
+                URL(fileURLWithPath: String(directory), isDirectory: true)
+                    .appendingPathComponent("make")
+            })
+            .first(where: { FileManager.default.isExecutableFile(atPath: $0.path) })
+        else {
+            throw NSError(
+                domain: "TextToSQLEvalRunPlanningTests",
+                code: 1,
+                userInfo: [NSLocalizedDescriptionKey: "Could not find make on PATH."]
+            )
+        }
+
         let process = Process()
-        process.executableURL = URL(fileURLWithPath: "/usr/bin/make")
+        process.executableURL = makeURL
         process.currentDirectoryURL = repoRoot
         process.arguments = [
             "--no-print-directory",
@@ -580,14 +602,6 @@ struct TextToSQLEvalRunPlanningTests {
             "RELEASE_VERSION=fixture",
             "RESUME=fixture-run",
         ] + assignments
-
-        var environment = ProcessInfo.processInfo.environment
-        for name in ["ALLOW_MODEL_OVERRIDE", "MAKEFLAGS", "MAKELEVEL", "MFLAGS", "MODEL"] {
-            environment.removeValue(forKey: name)
-        }
-        if let environmentModel {
-            environment["MODEL"] = environmentModel
-        }
         process.environment = environment
 
         let output = Pipe()
