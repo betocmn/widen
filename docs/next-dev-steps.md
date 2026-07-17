@@ -37,10 +37,10 @@ Numbering continues from `docs/refactoring-plan.md`.
   redundant cache write; and bounded cache-served canonical-mismatch
   reverification to once per catalog TTL while keeping network-fresh
   mismatches fail-closed without another fetch.
-* ⏳ **Not done:** PR 58 clarification behavior (two funded attempts were
-  reverted; the latest reached 12/12 clarification but failed the retained
-  over-clarification guardrail), and structured plan validation or
-  compilation.
+* ⏳ **Not done:** PR 58 now has a genuinely narrower offline candidate with
+  deterministic validation complete. Its paid conjunctive acceptance gate is
+  not authorized or run, so the behavior is not yet accepted; structured plan
+  validation or compilation also remains unimplemented.
 
 ## Where things stand
 
@@ -121,9 +121,9 @@ Numbering continues from `docs/refactoring-plan.md`.
    timeouts passed, so the bypass was reverted and PR 57 remains conditional
 3. ✅ Done — PR 60 canonical-version watch and rollover runbook
 4. ✅ Done — PR 62 independent PR 55 hardening cleanups
-5. PR 58 remains open after two negative funded attempts; retry only with a
-   genuinely narrower, pre-registered design that can preserve 12/12 without
-   exceeding the retained over-clarification comparator
+5. PR 58 has a narrower, pre-registered candidate that passed every offline
+   check; request fresh authorization for its conjunctive paid gate before
+   deciding whether to retain or revert it
 6. PR 57 only after a future bypass iteration clears every PR 56 criterion
 
 ---
@@ -269,25 +269,29 @@ routing, frozen heuristics.
 
 ## PR 58 — Clarification decision accuracy to 12/12
 
-**Status: two funded attempts complete, negative; implementation ⏳ Not
+**Status: narrower offline candidate complete; funded acceptance ⏳ Not
 done.** Commit `bfc4ea2` selectively enforced the existing high-confidence
 `mustClarify` terminal decision; commit `b3b69fe` reverted it after the first
 gate failed both criteria. Candidate `f356ba4` then fixed the identified
 wording and terminal-less budget paths and reached 12/12, but commit `e13f6aa`
-reverted it after the retained over-clarification guardrail failed. The frozen
-phrase heuristic set remains unchanged.
+reverted it after the retained over-clarification guardrail failed. Candidate
+`ddf4e12` implements the evidence-narrow two-sided policy pre-registered below
+and has passed every offline check. It is not accepted until a separately
+authorized paid gate passes both PR 58 criteria. The frozen phrase heuristic
+set remains unchanged.
 
 **Why:** The gate requires 100%; the retained PR 55 comparator and the
 post-PR 59 retry both sit at 11/12. The earlier 9/12 experiment had three
 operational misses, but the new sole miss was independent:
 `preseason.top-wins-ambiguous` repeat 3 returned SQL without a timeout, budget
-error, or app-side rejection. The two attempts below leave that retained-path
-miss unresolved pending a design that also preserves the comparator guardrail.
+error, or app-side rejection. The two funded attempts below were negative;
+the new offline candidate targets that miss while separately recovering a
+specific expected-SQL false-clarification family.
 
-**What:** Reproduce and triage the one independent clarification failure, then
-fix its specific decision behavior (prompt guidance or clarification policy
-fidelity for that ambiguity class). No new phrase heuristics — the PR 53
-freeze stands.
+**What:** Recover protected metric ambiguity only when existing structured
+intent, metric, schema-evidence, and terminal-state signals agree, while
+allowing SQL for a strictly evidenced anti-join false-positive family. No new
+phrase heuristics — the PR 53 freeze stands.
 
 **Acceptance (reconciled before the paid gate on 2026-07-14):** 12/12
 clarification decisions across three repeats, with the exclusive
@@ -397,6 +401,66 @@ the evaluated candidate rather than the later revert. A future retry needs a
 narrower way to recover the protected ambiguity class while reaching 12/12
 and an exclusive expected-SQL clarification bucket at or below 28 with margin
 for triage-precedence movement, plus fresh spend authorization.
+
+**Offline candidate and pre-registration 2026-07-17:** Commit `ddf4e12`
+implements a two-sided policy from the retained failure mechanics. Protected
+metric recovery now requires the existing `mustClarify` metric decision plus
+complete, subject-linked exact-search, described-table, exposed-column, and
+foreign-key evidence. A clean terminal SQL response can be converted to that
+clarification only when exactly one protected metric remains unresolved. The
+terminal-less path is limited to a standalone initial request with exactly six
+successful schema calls followed by a rejected seventh call, no inspection
+calls, default policy modes, and the same evidence/intent agreement; it never
+invokes an eighth call. Existing context or confirmed semantic bindings that
+define the metric close this branch.
+
+The SQL side is independently limited to an actual clean terminal response
+whose two referenced tables form one exact exposed foreign-key `LEFT JOIN`,
+with no join modifiers and one positive non-nullable joined-side `IS NULL`
+filter. The request must bind the retained and excluded entities to the
+correct join sides, and every other meaningful grounded request concept must
+bind to that anti-join trigger or those endpoints. Unrelated, schema-only, and
+protected-metric-only search overlap does not count as question-relevant
+evidence. This uses the existing vocabulary and adds no phrase list, prompt
+pressure, triage rule, scorer rule, or golden change.
+
+The registered expected movements are all three
+`saas.users-without-membership` repeats from clarification to SQL, taking the
+raw expected-SQL-to-clarification count from 33 to 30 and, if all other
+outcomes stay fixed, the exclusive bucket from 30 to 27. The registered
+protected outcomes are clarification for all four ambiguity cases across all
+three repeats, including the historical terminal-SQL miss and the exact
+six-success/rejected-seventh-call miss. Defined-metric, confirmed-binding,
+ungrounded, incomplete-evidence, unrelated-relationship, terminal
+clarification, terminal-less ordinary failure, cancellation, stale-schema,
+timeout, trailing-batch, attempted-eighth-call, routing, validation, scorer,
+and triage controls must not move. The retained comparator is PR 55 at 11/12
+clarification decisions and 28 exclusive false clarifications; the negative
+`f356ba4` comparator is 12/12, raw 33, and exclusive 30.
+
+Acceptance remains conjunctive: the complete private-routing 60-result,
+three-repeat gate for requested `openai/gpt-5.5` and expected canonical
+`openai/gpt-5.5-20260423` must produce 12/12 clarification decisions and an
+exclusive expected-SQL-got-clarification bucket no higher than 28, with a
+target below
+28. The reduction must be a real decision change rather than triage-precedence
+movement. Safety, schema validity, and PostgreSQL verification must remain
+100% on evaluated SQL, and private routing, requested/canonical/routed-model
+verification, structured parsing, forbidden bindings, repair progress,
+timeouts, and six-call tool-budget behavior must not regress. Semantic
+accuracy remains informational. If either PR 58 criterion fails, revert
+`ddf4e12` behavior and candidate-only tests, retain only sanitized evidence
+and roadmap notes, and leave PR 58 not done. Retain the candidate and mark PR
+58 done only if every criterion passes.
+
+The maximum newly authorized spend requested for that gate is **$4.00**.
+Historical authorization does not carry forward. No paid OpenRouter request
+was made while building or validating this candidate. Offline results are:
+the four core policy/validator/agent suites passed 407/407; the focused ten-
+suite matrix passed 565/565; `make project` regenerated identical tracked
+output; `make test` recorded 1,162 total, 1,120 passed, 42 skipped, and 0
+failed in the result bundle; `make eval-build` passed; and `git diff --check`
+passed.
 
 ## PR 59 — Tool-budget exhaustion bucket
 

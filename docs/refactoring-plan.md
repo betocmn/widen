@@ -2133,6 +2133,67 @@ retry needs a narrower recovery for the protected ambiguity class that reaches
 28 with margin for triage-precedence movement, followed by fresh spend
 authorization.
 
+### PR 58 narrower candidate [2026-07-17] — offline complete, funded gate pending
+
+Commit `ddf4e12` implements the smallest two-sided policy supported by the
+retained fixtures and sanitized failure evidence. Protected ambiguity recovery
+requires the existing structured `mustClarify` metric decision together with
+complete, subject-linked exact-search, described-table, exposed-column, and
+foreign-key evidence. It converts a clean terminal SQL response only when
+exactly one protected metric remains unresolved. Its terminal-less recovery is
+restricted to a standalone initial request with six successful schema calls,
+a rejected seventh call, no inspection calls, default diagnostics modes, and
+the same policy/evidence agreement; it returns a clarification directly and
+does not invoke an eighth call. Context or confirmed semantic bindings that
+define the metric keep the path closed.
+
+The other side permits SQL only for a clean two-table terminal response with
+one exact exposed foreign-key `LEFT JOIN`, no join modifiers, and one positive
+non-nullable joined-side `IS NULL` filter. The retained and excluded request
+entities must bind to the correct sides, and every additional meaningful
+grounded request concept must be represented by the anti-join trigger or one
+of those endpoint tables. Search provenance must come from exact identifiers
+linked to the question; schema-only and protected-metric-only overlap does not
+qualify. The implementation reuses existing intent, metric, schema-evidence,
+grounding, and terminal-state signals. It adds no phrase vocabulary, broad
+prompt guidance, scorer/triage rule, golden, seeded-data, backend, or routing
+change.
+
+The pre-registered expected movement is the three
+`saas.users-without-membership` false clarifications to SQL. That would reduce
+the raw expected-SQL-to-clarification count from 33 to 30 and, with all other
+results held fixed, the exclusive bucket from 30 to 27. All four protected
+ambiguity cases must clarify in each of three repeats, including the historical
+terminal-SQL miss and the exact six-success/rejected-seventh-call miss.
+Defined metrics and bindings, ungrounded or incomplete evidence, unrelated
+relationships, ordinary terminal-less failures, terminal clarification,
+cancellation, stale schema, timeout, trailing tool batches, attempted eighth
+calls, routing, validation, scorer, and triage are registered not to move. The
+retained comparator remains PR 55 at 11/12 and exclusive 28; the rejected
+`f356ba4` comparator was 12/12, raw 33, and exclusive 30.
+
+Acceptance is conjunctive: the complete private-routing 60-result,
+three-repeat gate for requested `openai/gpt-5.5` and expected canonical
+`openai/gpt-5.5-20260423` must reach 12/12 clarification decisions and an
+exclusive expected-SQL clarification bucket at or below 28, targeting below
+28 through genuine
+decision changes. Evaluated SQL must remain 100% safe, schema-valid, and
+PostgreSQL-verified, with no regression in private routing, requested/
+canonical/routed-model checks, structured parsing, forbidden bindings,
+repair progress, timeout classification, or the six-call budget. Semantic
+accuracy is informational. Failure of either PR 58 criterion requires
+reverting `ddf4e12` behavior and candidate-only tests while retaining only
+sanitized evidence and roadmap notes; success on every criterion permits
+retaining the behavior and marking PR 58 done.
+
+The requested fresh spend ceiling is $4.00. No historical authorization is
+being reused, and no paid OpenRouter request has been made for this candidate.
+Before requesting authorization, offline validation completed as follows: the
+four core suites passed 407/407; the focused ten-suite matrix passed 565/565;
+`make project` regenerated identical tracked output; the full result bundle
+recorded 1,162 total tests, 1,120 passed, 42 skipped, and 0 failed;
+`make eval-build` passed; and `git diff --check` passed.
+
 ### PR 59 funded acceptance measurement [2026-07-14] — ✅ Done
 
 The same complete gate supplied PR 59's pre-registered measurement:
@@ -2269,7 +2330,7 @@ PR 59 ✅ — implementation and funded acceptance measurement complete
 PR 56 ✅ — retry complete, negative, bypass reverted
 PR 60 ✅ — canonical-version watch and rollover runbook complete
 PR 62 ✅ — PR 55 hardening cleanup complete
-PR 58 ⏳ — two funded attempts negative; await a genuinely narrower design
+PR 58 ⏳ — narrower candidate offline-complete; fresh funded gate pending
 PR 57 ⏳ — conditional on a future bypass gate passing every criterion
 ```
 
