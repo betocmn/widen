@@ -105,6 +105,8 @@ public enum OpenRouterSchemaToolAppRejectionReason: String, Codable, Equatable, 
 
 public struct OpenRouterSchemaToolEvidenceSummary: Codable, Equatable, Sendable {
     public var searched: Bool
+    /// Exact-identifier hits from searches whose query overlaps the original question.
+    public var questionRelevantSearchedTableIDs: [String]
     public var describedTableIDs: [String]
     public var exposedColumnIDs: [String]
     public var exposedForeignKeyPathIDs: [String]
@@ -113,6 +115,7 @@ public struct OpenRouterSchemaToolEvidenceSummary: Codable, Equatable, Sendable 
 
     public init(
         searched: Bool = false,
+        questionRelevantSearchedTableIDs: [String] = [],
         describedTableIDs: [String] = [],
         exposedColumnIDs: [String] = [],
         exposedForeignKeyPathIDs: [String] = [],
@@ -120,11 +123,51 @@ public struct OpenRouterSchemaToolEvidenceSummary: Codable, Equatable, Sendable 
         inspectedValueToolUsed: Bool = false
     ) {
         self.searched = searched
+        self.questionRelevantSearchedTableIDs = questionRelevantSearchedTableIDs
         self.describedTableIDs = describedTableIDs
         self.exposedColumnIDs = exposedColumnIDs
         self.exposedForeignKeyPathIDs = exposedForeignKeyPathIDs
         self.inspectedConstraintToolUsed = inspectedConstraintToolUsed
         self.inspectedValueToolUsed = inspectedValueToolUsed
+    }
+
+    private enum CodingKeys: String, CodingKey {
+        case searched
+        case questionRelevantSearchedTableIDs
+        case describedTableIDs
+        case exposedColumnIDs
+        case exposedForeignKeyPathIDs
+        case inspectedConstraintToolUsed
+        case inspectedValueToolUsed
+    }
+
+    public init(from decoder: any Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        searched = try container.decodeIfPresent(Bool.self, forKey: .searched) ?? false
+        questionRelevantSearchedTableIDs = try container.decodeIfPresent(
+            [String].self,
+            forKey: .questionRelevantSearchedTableIDs
+        ) ?? []
+        describedTableIDs = try container.decodeIfPresent(
+            [String].self,
+            forKey: .describedTableIDs
+        ) ?? []
+        exposedColumnIDs = try container.decodeIfPresent(
+            [String].self,
+            forKey: .exposedColumnIDs
+        ) ?? []
+        exposedForeignKeyPathIDs = try container.decodeIfPresent(
+            [String].self,
+            forKey: .exposedForeignKeyPathIDs
+        ) ?? []
+        inspectedConstraintToolUsed = try container.decodeIfPresent(
+            Bool.self,
+            forKey: .inspectedConstraintToolUsed
+        ) ?? false
+        inspectedValueToolUsed = try container.decodeIfPresent(
+            Bool.self,
+            forKey: .inspectedValueToolUsed
+        ) ?? false
     }
 }
 

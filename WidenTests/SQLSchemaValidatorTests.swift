@@ -1958,6 +1958,1046 @@ struct SQLSchemaValidatorTests {
         #expect(enriched.referencedTables == ["public.users"])
     }
 
+    @Test(arguments: [1, 2, 3])
+    func terminalSQLWithUndefinedWinsClarifiesBeforeOrdinaryGroundingFallback(
+        repeatIndex: Int
+    ) {
+        let schema = makePreseasonWinnerSchema()
+        let question = "Tools with the most wins in the last two weeks"
+        let sql = """
+            SELECT t.id, t.name, COUNT(*) AS wins
+            FROM public.preseason_match_evaluation AS e
+            JOIN public.preseason_tool AS t ON e.winner_id = t.id
+            WHERE e.winner_id IS NOT NULL
+              AND e."createdAt" >= NOW() - INTERVAL '14 days'
+            GROUP BY t.id, t.name
+            ORDER BY COUNT(*) DESC
+            LIMIT 100
+            """
+        let grounding = GeneratedSQLPostprocessor.groundingEvaluation(
+            question: question,
+            sql: sql,
+            referencedTables: [
+                "public.preseason_match_evaluation",
+                "public.preseason_tool",
+            ],
+            schema: schema,
+            databaseContext: ""
+        )
+        #expect(grounding.pendingClarification?.concept.term == "wins")
+
+        let generation = SQLGenerationResult(
+            sql: sql,
+            explanation: "Counts evaluation rows by the selected winner.",
+            assumptions: [],
+            referencedTables: [],
+            confidence: 0.8,
+            riskLevel: .medium,
+            needsClarification: false,
+            clarificationQuestion: nil,
+            backendMetadata: schemaToolSQLMetadata(
+                describedTableIDs: [
+                    "public.preseason_match_evaluation",
+                    "public.preseason_tool",
+                ],
+                exposedColumnIDs: [
+                    "public.preseason_match_evaluation.winner_id",
+                    "public.preseason_match_evaluation.createdAt",
+                    "public.preseason_tool.id",
+                    "public.preseason_tool.name",
+                ],
+                exposedForeignKeyPathIDs: [
+                    "public.preseason_match_evaluation.winner_id->public.preseason_tool.id"
+                ],
+                sqlIntentCoverageDecision: .mustClarify
+            )
+        )
+
+        let enriched = GeneratedSQLPostprocessor.enriched(
+            generation,
+            question: question,
+            schema: schema,
+            databaseContext: ""
+        )
+
+        #expect(repeatIndex >= 1)
+        #expect(enriched.needsClarification)
+        #expect(enriched.sql.isEmpty)
+        #expect(enriched.clarificationQuestion == "What should count as one win?")
+        #expect(enriched.pendingClarification == nil)
+        #expect(enriched.backendMetadata?.agentTerminalOutcome == "clarify_fallback")
+        #expect(enriched.backendMetadata?.agentDiagnostics?.terminalAction == "sql")
+        #expect(
+            enriched.backendMetadata?.agentDiagnostics?.clarificationPolicyDecision
+                == "acceptableAmbiguity"
+        )
+    }
+
+    @Test func definedWinsMetricKeepsCleanTerminalSQL() {
+        let schema = makePreseasonWinnerSchema()
+        let question = "Which tools have the most wins in the last two weeks?"
+        let context = "Each evaluation with a non-null winner_id records one win. Use preseason_match_evaluation.createdAt as the time of the win."
+        let sql = """
+            SELECT t.id, t.name, COUNT(*) AS wins
+            FROM public.preseason_match_evaluation AS e
+            JOIN public.preseason_tool AS t ON e.winner_id = t.id
+            WHERE e.winner_id IS NOT NULL
+              AND e."createdAt" >= NOW() - INTERVAL '14 days'
+            GROUP BY t.id, t.name
+            ORDER BY COUNT(*) DESC
+            LIMIT 100
+            """
+        let generation = SQLGenerationResult(
+            sql: sql,
+            explanation: "Counts defined wins.",
+            assumptions: [],
+            referencedTables: [],
+            confidence: 0.8,
+            riskLevel: .medium,
+            needsClarification: false,
+            clarificationQuestion: nil,
+            backendMetadata: schemaToolSQLMetadata(
+                describedTableIDs: [
+                    "public.preseason_match_evaluation",
+                    "public.preseason_tool",
+                ],
+                exposedColumnIDs: [
+                    "public.preseason_match_evaluation.winner_id",
+                    "public.preseason_match_evaluation.createdAt",
+                    "public.preseason_tool.id",
+                    "public.preseason_tool.name",
+                ],
+                exposedForeignKeyPathIDs: [
+                    "public.preseason_match_evaluation.winner_id->public.preseason_tool.id"
+                ],
+                sqlIntentCoverageDecision: .covered
+            )
+        )
+
+        let enriched = GeneratedSQLPostprocessor.enriched(
+            generation,
+            question: question,
+            schema: schema,
+            databaseContext: context
+        )
+
+        #expect(!enriched.needsClarification)
+        #expect(enriched.sql == sql)
+        #expect(enriched.backendMetadata?.agentTerminalOutcome == "sql")
+    }
+
+    @Test func protectedMetricDoesNotMaskSecondUngroundedConcept() {
+        let schema = makePreseasonWinnerSchema()
+        let question = "Active tools with the most wins in the last two weeks"
+        let sql = """
+            SELECT t.id, t.name, COUNT(*) AS wins
+            FROM public.preseason_match_evaluation AS e
+            JOIN public.preseason_tool AS t ON e.winner_id = t.id
+            WHERE e.winner_id IS NOT NULL
+              AND t.status = 'active'
+              AND e."createdAt" >= NOW() - INTERVAL '14 days'
+            GROUP BY t.id, t.name
+            ORDER BY COUNT(*) DESC
+            LIMIT 100
+            """
+        let grounding = GeneratedSQLPostprocessor.groundingEvaluation(
+            question: question,
+            sql: sql,
+            referencedTables: [
+                "public.preseason_match_evaluation",
+                "public.preseason_tool",
+            ],
+            schema: schema,
+            databaseContext: ""
+        )
+        let unresolved = grounding.concepts.filter {
+            $0.required && ($0.state == .unsupported || $0.state == .ambiguous)
+        }
+        #expect(unresolved.contains { $0.term == "active" })
+        #expect(unresolved.contains { $0.term == "wins" })
+
+        let generation = SQLGenerationResult(
+            sql: sql,
+            explanation: "Counts filtered evaluation rows by winner.",
+            assumptions: [],
+            referencedTables: [],
+            confidence: 0.8,
+            riskLevel: .medium,
+            needsClarification: false,
+            clarificationQuestion: nil,
+            backendMetadata: schemaToolSQLMetadata(
+                describedTableIDs: [
+                    "public.preseason_match_evaluation",
+                    "public.preseason_tool",
+                ],
+                exposedColumnIDs: [
+                    "public.preseason_match_evaluation.winner_id",
+                    "public.preseason_match_evaluation.createdAt",
+                    "public.preseason_tool.id",
+                    "public.preseason_tool.name",
+                    "public.preseason_tool.status",
+                ],
+                exposedForeignKeyPathIDs: [
+                    "public.preseason_match_evaluation.winner_id->public.preseason_tool.id"
+                ],
+                sqlIntentCoverageDecision: .mustClarify
+            )
+        )
+
+        let enriched = GeneratedSQLPostprocessor.enriched(
+            generation,
+            question: question,
+            schema: schema,
+            databaseContext: ""
+        )
+
+        #expect(enriched.needsClarification)
+        #expect(enriched.sql.isEmpty)
+        #expect(enriched.clarificationQuestion?.contains("active") == true)
+        #expect(enriched.clarificationQuestion != "What should count as one win?")
+        #expect(enriched.backendMetadata?.agentTerminalOutcome == "sql")
+    }
+
+    @Test func protectedMetricSQLWithoutAgentTerminalStateIsNotReclassified() {
+        let schema = makePreseasonWinnerSchema()
+        let sql = """
+            SELECT t.id, t.name, COUNT(*) AS wins
+            FROM public.preseason_match_evaluation AS e
+            JOIN public.preseason_tool AS t ON e.winner_id = t.id
+            WHERE e.winner_id IS NOT NULL
+              AND e."createdAt" >= NOW() - INTERVAL '14 days'
+            GROUP BY t.id, t.name
+            ORDER BY COUNT(*) DESC
+            LIMIT 100
+            """
+        let generation = SQLGenerationResult(
+            sql: sql,
+            explanation: "Counts evaluation rows by winner.",
+            assumptions: [],
+            referencedTables: [],
+            confidence: 0.8,
+            riskLevel: .medium,
+            needsClarification: false,
+            clarificationQuestion: nil
+        )
+
+        let enriched = GeneratedSQLPostprocessor.enriched(
+            generation,
+            question: "Tools with the most wins in the last two weeks",
+            schema: schema,
+            databaseContext: ""
+        )
+
+        #expect(enriched.needsClarification)
+        #expect(enriched.sql.isEmpty)
+        #expect(enriched.clarificationQuestion?.contains("winner_id") == true)
+        #expect(enriched.backendMetadata == nil)
+
+        let terminalSQLWithGroundingDisabled = SQLGenerationResult(
+            sql: sql,
+            explanation: "Counts evaluation rows by winner.",
+            assumptions: [],
+            referencedTables: [],
+            confidence: 0.8,
+            riskLevel: .medium,
+            needsClarification: false,
+            clarificationQuestion: nil,
+            backendMetadata: schemaToolSQLMetadata(
+                describedTableIDs: [
+                    "public.preseason_match_evaluation",
+                    "public.preseason_tool",
+                ],
+                exposedColumnIDs: [
+                    "public.preseason_match_evaluation.winner_id",
+                    "public.preseason_match_evaluation.createdAt",
+                    "public.preseason_tool.id",
+                    "public.preseason_tool.name",
+                ],
+                exposedForeignKeyPathIDs: [
+                    "public.preseason_match_evaluation.winner_id->public.preseason_tool.id"
+                ],
+                sqlIntentCoverageDecision: .mustClarify
+            )
+        )
+        let disabled = GeneratedSQLPostprocessor.enriched(
+            terminalSQLWithGroundingDisabled,
+            question: "Tools with the most wins in the last two weeks",
+            schema: schema,
+            databaseContext: "",
+            allowGroundingClarification: false
+        )
+        #expect(!disabled.needsClarification)
+        #expect(disabled.sql == sql)
+    }
+
+    @Test func existingTerminalClarificationIsNotReclassified() {
+        var metadata = schemaToolSQLMetadata(
+            describedTableIDs: ["public.preseason_tool"],
+            exposedColumnIDs: ["public.preseason_tool.id"]
+        )
+        metadata.agentTerminalOutcome = "clarify"
+        metadata.agentDiagnostics?.terminalAction = "clarify"
+        let generation = SQLGenerationResult(
+            sql: "",
+            explanation: "Needs a metric definition.",
+            assumptions: [],
+            referencedTables: [],
+            confidence: 0.2,
+            riskLevel: .medium,
+            needsClarification: true,
+            clarificationQuestion: "Should one win require a selected winner?",
+            backendMetadata: metadata
+        )
+
+        let enriched = GeneratedSQLPostprocessor.enriched(
+            generation,
+            question: "Tools with the most wins in the last two weeks",
+            schema: makePreseasonWinnerSchema(),
+            databaseContext: ""
+        )
+
+        #expect(enriched.needsClarification)
+        #expect(enriched.sql.isEmpty)
+        #expect(enriched.clarificationQuestion == generation.clarificationQuestion)
+        #expect(enriched.backendMetadata == generation.backendMetadata)
+    }
+
+    @Test(arguments: [1, 2, 3])
+    func coveredMembershipAntiJoinSuppressesOnlyOrdinaryGroundingClarification(
+        repeatIndex: Int
+    ) {
+        let schema = makeSaaSUsersMembershipSchema(statusValues: ["active", "inactive"])
+        let question = "Users without an organization membership"
+        let sql: String
+        switch repeatIndex {
+        case 1:
+            sql = """
+                SELECT u.id, u.email
+                FROM public.app_user AS u
+                LEFT JOIN public.organization_membership AS m ON m.user_id = u.id
+                WHERE m.id IS NULL
+                ORDER BY u.id
+                LIMIT 100
+                """
+        case 2:
+            sql = """
+                SELECT u.email, u.id
+                FROM public.app_user AS u
+                LEFT JOIN public.organization_membership AS m
+                  ON m.user_id = u.id
+                WHERE m.id IS NULL
+                ORDER BY u.email
+                LIMIT 100
+                """
+        default:
+            sql = """
+                SELECT u.id, MAX(u.email) AS email
+                FROM public.app_user u
+                LEFT JOIN public.organization_membership m ON m.user_id = u.id
+                WHERE (m.id IS NULL)
+                GROUP BY u.id
+                ORDER BY u.id
+                LIMIT 100
+                """
+        }
+        let grounding = GeneratedSQLPostprocessor.groundingEvaluation(
+            question: question,
+            sql: sql,
+            referencedTables: [
+                "public.app_user",
+                "public.organization_membership",
+            ],
+            schema: schema,
+            databaseContext: ""
+        )
+        let pending = grounding.pendingClarification
+        #expect(pending != nil)
+
+        let generation = SQLGenerationResult(
+            sql: sql,
+            explanation: "Lists users without an organization membership.",
+            assumptions: [],
+            referencedTables: [],
+            confidence: 0.8,
+            riskLevel: .medium,
+            needsClarification: false,
+            clarificationQuestion: nil,
+            backendMetadata: schemaToolSQLMetadata(
+                describedTableIDs: [
+                    "public.app_user",
+                    "public.organization_membership",
+                ],
+                exposedColumnIDs: [
+                    "public.app_user.id",
+                    "public.app_user.email",
+                    "public.organization_membership.id",
+                    "public.organization_membership.user_id",
+                ],
+                exposedForeignKeyPathIDs: [
+                    "public.organization_membership.user_id->public.app_user.id"
+                ],
+                sqlIntentCoverageDecision: .covered
+            )
+        )
+
+        let enriched = GeneratedSQLPostprocessor.enriched(
+            generation,
+            question: question,
+            schema: schema,
+            databaseContext: ""
+        )
+
+        #expect(repeatIndex >= 1)
+        #expect(!enriched.needsClarification)
+        #expect(enriched.sql == sql)
+        #expect(enriched.groundingConcepts.count == grounding.concepts.count)
+        for (actual, expected) in zip(enriched.groundingConcepts, grounding.concepts) {
+            #expect(actual.term == expected.term)
+            #expect(actual.kind == expected.kind)
+            #expect(actual.state == expected.state)
+            #expect(actual.required == expected.required)
+        }
+        #expect(enriched.backendMetadata?.agentTerminalOutcome == "sql")
+    }
+
+    @Test func antiJoinDoesNotBypassRejectedLiteralGrounding() {
+        let schema = makeSaaSUsersMembershipSchema(statusValues: [])
+        let sql = """
+            SELECT u.id, u.email
+            FROM public.app_user AS u
+            LEFT JOIN public.organization_membership AS m
+              ON m.user_id = u.id AND m.status = 'active'
+            WHERE m.id IS NULL
+            ORDER BY u.id
+            LIMIT 100
+            """
+        let generation = SQLGenerationResult(
+            sql: sql,
+            explanation: "Lists users without an active membership.",
+            assumptions: [],
+            referencedTables: [],
+            confidence: 0.8,
+            riskLevel: .medium,
+            needsClarification: false,
+            clarificationQuestion: nil,
+            backendMetadata: schemaToolSQLMetadata(
+                describedTableIDs: [
+                    "public.app_user",
+                    "public.organization_membership",
+                ],
+                exposedColumnIDs: [
+                    "public.app_user.id",
+                    "public.app_user.email",
+                    "public.organization_membership.id",
+                    "public.organization_membership.user_id",
+                    "public.organization_membership.status",
+                ],
+                exposedForeignKeyPathIDs: [
+                    "public.organization_membership.user_id->public.app_user.id"
+                ],
+                sqlIntentCoverageDecision: .covered
+            )
+        )
+
+        let enriched = GeneratedSQLPostprocessor.enriched(
+            generation,
+            question: "Users without an active organization membership",
+            schema: schema,
+            databaseContext: ""
+        )
+
+        #expect(enriched.needsClarification)
+        #expect(enriched.sql.isEmpty)
+        #expect(enriched.groundingConcepts.contains {
+            $0.term == "active" && $0.required && $0.state == .unsupported
+        })
+    }
+
+    @Test func antiJoinMustRetainTheRequestedEntity() {
+        let schema = makeSaaSUsersMembershipSchema(statusValues: ["active", "inactive"])
+        let question = "Users without an organization membership"
+        let sql = """
+            SELECT o.id
+            FROM public.organization AS o
+            LEFT JOIN public.organization_membership AS m ON m.organization_id = o.id
+            WHERE m.id IS NULL
+            ORDER BY o.id
+            LIMIT 100
+            """
+        let generation = SQLGenerationResult(
+            sql: sql,
+            explanation: "Lists organizations without a membership.",
+            assumptions: [],
+            referencedTables: [],
+            confidence: 0.8,
+            riskLevel: .medium,
+            needsClarification: false,
+            clarificationQuestion: nil,
+            backendMetadata: schemaToolSQLMetadata(
+                describedTableIDs: [
+                    "public.organization",
+                    "public.organization_membership",
+                ],
+                exposedColumnIDs: [
+                    "public.organization.id",
+                    "public.organization_membership.id",
+                    "public.organization_membership.organization_id",
+                ],
+                exposedForeignKeyPathIDs: [
+                    "public.organization_membership.organization_id->public.organization.id"
+                ],
+                sqlIntentCoverageDecision: .covered
+            )
+        )
+        let coverage = SchemaToolAgentSQLIntentCoveragePolicy.evaluate(
+            question: question,
+            databaseContext: "",
+            evidence: generation.backendMetadata?.agentDiagnostics?.schemaEvidence
+                ?? OpenRouterSchemaToolEvidenceSummary(),
+            sql: sql
+        )
+        #expect(coverage.decision == .covered)
+        #expect(coverage.antiJoinCovered)
+
+        let enriched = GeneratedSQLPostprocessor.enriched(
+            generation,
+            question: question,
+            schema: schema,
+            databaseContext: ""
+        )
+
+        #expect(enriched.needsClarification)
+        #expect(enriched.sql.isEmpty)
+    }
+
+    @Test func antiJoinDoesNotMoveRequestedEntityModifierOntoExcludedRows() {
+        let schema = makeSaaSUsersMembershipSchema(statusValues: ["active", "inactive"])
+        let question = "Active users without an organization membership"
+        let sql = """
+            SELECT u.id, u.email
+            FROM public.app_user AS u
+            LEFT JOIN public.organization_membership AS m
+              ON m.user_id = u.id AND m.status = 'active'
+            WHERE m.id IS NULL
+            ORDER BY u.id
+            LIMIT 100
+            """
+        let generation = SQLGenerationResult(
+            sql: sql,
+            explanation: "Treats active as a membership modifier.",
+            assumptions: [],
+            referencedTables: [],
+            confidence: 0.8,
+            riskLevel: .medium,
+            needsClarification: false,
+            clarificationQuestion: nil,
+            backendMetadata: schemaToolSQLMetadata(
+                describedTableIDs: [
+                    "public.app_user",
+                    "public.organization_membership",
+                ],
+                exposedColumnIDs: [
+                    "public.app_user.id",
+                    "public.app_user.email",
+                    "public.organization_membership.id",
+                    "public.organization_membership.user_id",
+                    "public.organization_membership.status",
+                ],
+                exposedForeignKeyPathIDs: [
+                    "public.organization_membership.user_id->public.app_user.id"
+                ],
+                sqlIntentCoverageDecision: .covered
+            )
+        )
+        let coverage = SchemaToolAgentSQLIntentCoveragePolicy.evaluate(
+            question: question,
+            databaseContext: "",
+            evidence: generation.backendMetadata?.agentDiagnostics?.schemaEvidence
+                ?? OpenRouterSchemaToolEvidenceSummary(),
+            sql: sql
+        )
+        #expect(coverage.decision == .covered)
+        #expect(coverage.antiJoinCovered)
+
+        let enriched = GeneratedSQLPostprocessor.enriched(
+            generation,
+            question: question,
+            schema: schema,
+            databaseContext: ""
+        )
+
+        #expect(enriched.needsClarification)
+        #expect(enriched.sql.isEmpty)
+    }
+
+    @Test func antiJoinDoesNotOmitModifierHiddenByIncompleteEvidence() {
+        let schema = makeSaaSUsersMembershipSchema(statusValues: ["active", "inactive"])
+        let question = "Active users without an organization membership"
+        let sql = """
+            SELECT u.id, u.email
+            FROM public.app_user AS u
+            LEFT JOIN public.organization_membership AS m ON m.user_id = u.id
+            WHERE m.id IS NULL
+            ORDER BY u.id
+            LIMIT 100
+            """
+        let grounding = GeneratedSQLPostprocessor.groundingEvaluation(
+            question: question,
+            sql: sql,
+            referencedTables: [
+                "public.app_user",
+                "public.organization_membership",
+            ],
+            schema: schema,
+            databaseContext: ""
+        )
+        #expect(grounding.concepts.contains {
+            $0.term == "active" && $0.state == .grounded
+        })
+        let generation = SQLGenerationResult(
+            sql: sql,
+            explanation: "Omits the requested active modifier.",
+            assumptions: [],
+            referencedTables: [],
+            confidence: 0.8,
+            riskLevel: .medium,
+            needsClarification: false,
+            clarificationQuestion: nil,
+            backendMetadata: schemaToolSQLMetadata(
+                describedTableIDs: [
+                    "public.app_user",
+                    "public.organization_membership",
+                ],
+                exposedColumnIDs: [
+                    "public.app_user.id",
+                    "public.app_user.email",
+                    "public.organization_membership.id",
+                    "public.organization_membership.user_id",
+                ],
+                exposedForeignKeyPathIDs: [
+                    "public.organization_membership.user_id->public.app_user.id"
+                ],
+                sqlIntentCoverageDecision: .covered
+            )
+        )
+        let coverage = SchemaToolAgentSQLIntentCoveragePolicy.evaluate(
+            question: question,
+            databaseContext: "",
+            evidence: generation.backendMetadata?.agentDiagnostics?.schemaEvidence
+                ?? OpenRouterSchemaToolEvidenceSummary(),
+            sql: sql
+        )
+        #expect(coverage.decision == .covered)
+        #expect(coverage.antiJoinCovered)
+
+        let enriched = GeneratedSQLPostprocessor.enriched(
+            generation,
+            question: question,
+            schema: schema,
+            databaseContext: ""
+        )
+
+        #expect(enriched.needsClarification)
+        #expect(enriched.sql.isEmpty)
+    }
+
+    @Test func nullableJoinedColumnDoesNotProveRelationshipAbsence() {
+        let schema = makeSaaSUsersMembershipSchema(statusValues: ["active", "inactive"])
+        let sql = """
+            SELECT u.id, u.email
+            FROM public.app_user AS u
+            LEFT JOIN public.organization_membership AS m
+              ON m.user_id = u.id
+            WHERE m.note IS NULL
+            ORDER BY u.id
+            LIMIT 100
+            """
+        let generation = SQLGenerationResult(
+            sql: sql,
+            explanation: "Filters on a nullable membership note.",
+            assumptions: [],
+            referencedTables: [],
+            confidence: 0.8,
+            riskLevel: .medium,
+            needsClarification: false,
+            clarificationQuestion: nil,
+            backendMetadata: schemaToolSQLMetadata(
+                describedTableIDs: [
+                    "public.app_user",
+                    "public.organization_membership",
+                ],
+                exposedColumnIDs: [
+                    "public.app_user.id",
+                    "public.app_user.email",
+                    "public.organization_membership.id",
+                    "public.organization_membership.user_id",
+                    "public.organization_membership.note",
+                ],
+                exposedForeignKeyPathIDs: [
+                    "public.organization_membership.user_id->public.app_user.id"
+                ],
+                sqlIntentCoverageDecision: .covered
+            )
+        )
+
+        let enriched = GeneratedSQLPostprocessor.enriched(
+            generation,
+            question: "Users without an organization membership",
+            schema: schema,
+            databaseContext: ""
+        )
+
+        #expect(enriched.needsClarification)
+        #expect(enriched.sql.isEmpty)
+    }
+
+    @Test func nullPredicateInsideJoinDoesNotProveRelationshipAbsence() {
+        let schema = makeSaaSUsersMembershipSchema(statusValues: ["active", "inactive"])
+        let sql = """
+            SELECT u.id, u.email
+            FROM public.app_user AS u
+            LEFT JOIN public.organization_membership AS m
+              ON m.user_id = u.id AND m.id IS NULL
+            WHERE u.id IS NOT NULL
+            ORDER BY u.id
+            LIMIT 100
+            """
+        let generation = SQLGenerationResult(
+            sql: sql,
+            explanation: "Uses a null predicate inside the join condition.",
+            assumptions: [],
+            referencedTables: [],
+            confidence: 0.8,
+            riskLevel: .medium,
+            needsClarification: false,
+            clarificationQuestion: nil,
+            backendMetadata: schemaToolSQLMetadata(
+                describedTableIDs: [
+                    "public.app_user",
+                    "public.organization_membership",
+                ],
+                exposedColumnIDs: [
+                    "public.app_user.id",
+                    "public.app_user.email",
+                    "public.organization_membership.id",
+                    "public.organization_membership.user_id",
+                ],
+                exposedForeignKeyPathIDs: [
+                    "public.organization_membership.user_id->public.app_user.id"
+                ],
+                sqlIntentCoverageDecision: .covered
+            )
+        )
+
+        let enriched = GeneratedSQLPostprocessor.enriched(
+            generation,
+            question: "Users without an organization membership",
+            schema: schema,
+            databaseContext: ""
+        )
+
+        #expect(enriched.needsClarification)
+        #expect(enriched.sql.isEmpty)
+    }
+
+    @Test func antiJoinRequiresExactNullRejectedColumnEvidence() {
+        let schema = makeSaaSUsersMembershipSchema(statusValues: ["active", "inactive"])
+        let sql = """
+            SELECT u.id, u.email
+            FROM public.app_user AS u
+            LEFT JOIN public.organization_membership AS m
+              ON m.user_id = u.id
+            WHERE m.id IS NULL
+            ORDER BY u.id
+            LIMIT 100
+            """
+        let generation = SQLGenerationResult(
+            sql: sql,
+            explanation: "Lists users without a membership.",
+            assumptions: [],
+            referencedTables: [],
+            confidence: 0.8,
+            riskLevel: .medium,
+            needsClarification: false,
+            clarificationQuestion: nil,
+            backendMetadata: schemaToolSQLMetadata(
+                describedTableIDs: [
+                    "public.app_user",
+                    "public.organization_membership",
+                ],
+                exposedColumnIDs: [
+                    "public.app_user.id",
+                    "public.app_user.email",
+                    "public.organization_membership.user_id",
+                ],
+                exposedForeignKeyPathIDs: [
+                    "public.organization_membership.user_id->public.app_user.id"
+                ],
+                sqlIntentCoverageDecision: .covered
+            )
+        )
+
+        let enriched = GeneratedSQLPostprocessor.enriched(
+            generation,
+            question: "Users without an organization membership",
+            schema: schema,
+            databaseContext: ""
+        )
+
+        #expect(enriched.needsClarification)
+        #expect(enriched.sql.isEmpty)
+    }
+
+    @Test func unrelatedLeftJoinedRelationshipDoesNotSatisfyRequestedExclusion() {
+        let schema = makeSaaSUsersMembershipSchema(statusValues: ["active", "inactive"])
+        let sql = """
+            SELECT u.id, u.email
+            FROM public.app_user AS u
+            LEFT JOIN public.organization_membership AS m
+              ON m.user_id = u.id
+            LEFT JOIN public.user_profile AS p ON p.user_id = u.id
+            WHERE p.id IS NULL
+            ORDER BY u.id
+            LIMIT 100
+            """
+        let generation = SQLGenerationResult(
+            sql: sql,
+            explanation: "Null-rejects an unrelated profile relationship.",
+            assumptions: [],
+            referencedTables: [],
+            confidence: 0.8,
+            riskLevel: .medium,
+            needsClarification: false,
+            clarificationQuestion: nil,
+            backendMetadata: schemaToolSQLMetadata(
+                describedTableIDs: [
+                    "public.app_user",
+                    "public.organization_membership",
+                    "public.user_profile",
+                ],
+                exposedColumnIDs: [
+                    "public.app_user.id",
+                    "public.app_user.email",
+                    "public.organization_membership.id",
+                    "public.organization_membership.user_id",
+                    "public.user_profile.id",
+                    "public.user_profile.user_id",
+                ],
+                exposedForeignKeyPathIDs: [
+                    "public.organization_membership.user_id->public.app_user.id",
+                    "public.user_profile.user_id->public.app_user.id",
+                ],
+                sqlIntentCoverageDecision: .covered
+            )
+        )
+
+        let enriched = GeneratedSQLPostprocessor.enriched(
+            generation,
+            question: "Users without an organization membership",
+            schema: schema,
+            databaseContext: ""
+        )
+
+        #expect(enriched.needsClarification)
+        #expect(enriched.sql.isEmpty)
+    }
+
+    @Test func antiJoinEqualityMustMatchTheExposedRelationship() {
+        let schema = makeSaaSUsersMembershipSchema(statusValues: ["active", "inactive"])
+        let sql = """
+            SELECT u.id, u.email
+            FROM public.app_user AS u
+            LEFT JOIN public.organization_membership AS m
+              ON m.user_id = m.user_id
+            WHERE m.id IS NULL
+            ORDER BY u.id
+            LIMIT 100
+            """
+        let generation = SQLGenerationResult(
+            sql: sql,
+            explanation: "Uses a self-equality instead of the membership relationship.",
+            assumptions: [],
+            referencedTables: [],
+            confidence: 0.8,
+            riskLevel: .medium,
+            needsClarification: false,
+            clarificationQuestion: nil,
+            backendMetadata: schemaToolSQLMetadata(
+                describedTableIDs: [
+                    "public.app_user",
+                    "public.organization_membership",
+                ],
+                exposedColumnIDs: [
+                    "public.app_user.id",
+                    "public.app_user.email",
+                    "public.organization_membership.id",
+                    "public.organization_membership.user_id",
+                ],
+                exposedForeignKeyPathIDs: [
+                    "public.organization_membership.user_id->public.app_user.id"
+                ],
+                sqlIntentCoverageDecision: .covered
+            )
+        )
+
+        let enriched = GeneratedSQLPostprocessor.enriched(
+            generation,
+            question: "Users without an organization membership",
+            schema: schema,
+            databaseContext: ""
+        )
+
+        #expect(enriched.needsClarification)
+        #expect(enriched.sql.isEmpty)
+    }
+
+    @Test func disjunctiveNullPredicateDoesNotProveRelationshipAbsence() {
+        let schema = makeSaaSUsersMembershipSchema(statusValues: ["active", "inactive"])
+        let sql = """
+            SELECT u.id, u.email
+            FROM public.app_user AS u
+            LEFT JOIN public.organization_membership AS m
+              ON m.user_id = u.id
+            WHERE m.id IS NULL OR u.id > 0
+            ORDER BY u.id
+            LIMIT 100
+            """
+        let generation = SQLGenerationResult(
+            sql: sql,
+            explanation: "Uses a disjunctive null predicate.",
+            assumptions: [],
+            referencedTables: [],
+            confidence: 0.8,
+            riskLevel: .medium,
+            needsClarification: false,
+            clarificationQuestion: nil,
+            backendMetadata: schemaToolSQLMetadata(
+                describedTableIDs: [
+                    "public.app_user",
+                    "public.organization_membership",
+                ],
+                exposedColumnIDs: [
+                    "public.app_user.id",
+                    "public.app_user.email",
+                    "public.organization_membership.id",
+                    "public.organization_membership.user_id",
+                ],
+                exposedForeignKeyPathIDs: [
+                    "public.organization_membership.user_id->public.app_user.id"
+                ],
+                sqlIntentCoverageDecision: .covered
+            )
+        )
+
+        let enriched = GeneratedSQLPostprocessor.enriched(
+            generation,
+            question: "Users without an organization membership",
+            schema: schema,
+            databaseContext: ""
+        )
+
+        #expect(enriched.needsClarification)
+        #expect(enriched.sql.isEmpty)
+    }
+
+    @Test func antiJoinFilterLiteralMustBeRequested() {
+        let schema = makeSaaSUsersMembershipSchema(statusValues: ["active", "inactive"])
+        let sql = """
+            SELECT u.id, u.email
+            FROM public.app_user AS u
+            LEFT JOIN public.organization_membership AS m
+              ON m.user_id = u.id AND m.status = 'active'
+            WHERE m.id IS NULL
+            ORDER BY u.id
+            LIMIT 100
+            """
+        let generation = SQLGenerationResult(
+            sql: sql,
+            explanation: "Adds a valid but unrequested membership filter.",
+            assumptions: [],
+            referencedTables: [],
+            confidence: 0.8,
+            riskLevel: .medium,
+            needsClarification: false,
+            clarificationQuestion: nil,
+            backendMetadata: schemaToolSQLMetadata(
+                describedTableIDs: [
+                    "public.app_user",
+                    "public.organization_membership",
+                ],
+                exposedColumnIDs: [
+                    "public.app_user.id",
+                    "public.app_user.email",
+                    "public.organization_membership.id",
+                    "public.organization_membership.user_id",
+                    "public.organization_membership.status",
+                ],
+                exposedForeignKeyPathIDs: [
+                    "public.organization_membership.user_id->public.app_user.id"
+                ],
+                sqlIntentCoverageDecision: .covered
+            )
+        )
+
+        let enriched = GeneratedSQLPostprocessor.enriched(
+            generation,
+            question: "Users without an organization membership",
+            schema: schema,
+            databaseContext: ""
+        )
+
+        #expect(enriched.needsClarification)
+        #expect(enriched.sql.isEmpty)
+    }
+
+    @Test func antiJoinNeedsCorrectionDoesNotSuppressGroundingClarification() {
+        let schema = makeSaaSUsersMembershipSchema(statusValues: ["active", "inactive"])
+        let sql = """
+            SELECT u.id, u.email
+            FROM public.app_user AS u
+            JOIN public.organization_membership AS m ON m.user_id = u.id
+            WHERE m.status = 'active'
+            ORDER BY u.id
+            LIMIT 100
+            """
+        let generation = SQLGenerationResult(
+            sql: sql,
+            explanation: "Lists users with memberships.",
+            assumptions: [],
+            referencedTables: [],
+            confidence: 0.8,
+            riskLevel: .medium,
+            needsClarification: false,
+            clarificationQuestion: nil,
+            backendMetadata: schemaToolSQLMetadata(
+                describedTableIDs: [
+                    "public.app_user",
+                    "public.organization_membership",
+                ],
+                exposedColumnIDs: [
+                    "public.app_user.id",
+                    "public.app_user.email",
+                    "public.organization_membership.user_id",
+                    "public.organization_membership.status",
+                ],
+                exposedForeignKeyPathIDs: [
+                    "public.organization_membership.user_id->public.app_user.id"
+                ],
+                sqlIntentCoverageDecision: .needsCorrection
+            )
+        )
+
+        let enriched = GeneratedSQLPostprocessor.enriched(
+            generation,
+            question: "Users without an active organization membership",
+            schema: schema,
+            databaseContext: ""
+        )
+
+        #expect(enriched.needsClarification)
+        #expect(enriched.sql.isEmpty)
+    }
+
     @Test func nonMetricFilterTermsStillRequireGrounding() {
         let generation = SQLGenerationResult(
             sql: "SELECT id FROM public.users WHERE status = 'active'",
@@ -2565,7 +3605,8 @@ struct SQLSchemaValidatorTests {
         describedTableIDs: [String],
         exposedColumnIDs: [String],
         exposedForeignKeyPathIDs: [String] = [],
-        intentCoverageMode: SchemaToolAgentIntentCoverageMode = .diagnosticsOnly
+        intentCoverageMode: SchemaToolAgentIntentCoverageMode = .diagnosticsOnly,
+        sqlIntentCoverageDecision: SchemaToolAgentSQLIntentCoverageDecision? = nil
     ) -> OpenRouterGenerationMetadata {
         var metadata = OpenRouterGenerationMetadata(
             requestedModelID: "test/model",
@@ -2584,9 +3625,182 @@ struct SQLSchemaValidatorTests {
                 exposedColumnIDs: exposedColumnIDs,
                 exposedForeignKeyPathIDs: exposedForeignKeyPathIDs
             ),
-            intentCoverageMode: intentCoverageMode.rawValue
+            clarificationCorrectionMode:
+                SchemaToolAgentClarificationCorrectionMode.diagnosticsOnly.rawValue,
+            intentCoverageMode: intentCoverageMode.rawValue,
+            sqlIntentCoverageDecision: sqlIntentCoverageDecision?.rawValue ?? ""
         )
         return metadata
+    }
+
+    private func makeSaaSUsersMembershipSchema(statusValues: [String]) -> DatabaseSchema {
+        let statusConstraints: [ColumnValueConstraint]? = statusValues.isEmpty
+            ? nil
+            : [
+                ColumnValueConstraint(
+                    kind: .check,
+                    values: statusValues,
+                    expression: "CHECK (status IN ('active', 'inactive'))"
+                )
+            ]
+        return DatabaseSchema(
+            schemas: [SchemaInfo(name: "public")],
+            tables: [
+                TableInfo(
+                    schema: "public",
+                    name: "app_user",
+                    type: .baseTable,
+                    columns: [
+                        ColumnInfo(
+                            tableSchema: "public",
+                            tableName: "app_user",
+                            name: "id",
+                            dataType: "integer",
+                            isNullable: false,
+                            ordinalPosition: 1
+                        ),
+                        ColumnInfo(
+                            tableSchema: "public",
+                            tableName: "app_user",
+                            name: "email",
+                            dataType: "text",
+                            isNullable: false,
+                            ordinalPosition: 2
+                        ),
+                    ]
+                ),
+                TableInfo(
+                    schema: "public",
+                    name: "organization",
+                    type: .baseTable,
+                    columns: [
+                        ColumnInfo(
+                            tableSchema: "public",
+                            tableName: "organization",
+                            name: "id",
+                            dataType: "integer",
+                            isNullable: false,
+                            ordinalPosition: 1
+                        ),
+                    ]
+                ),
+                TableInfo(
+                    schema: "public",
+                    name: "organization_membership",
+                    type: .baseTable,
+                    columns: [
+                        ColumnInfo(
+                            tableSchema: "public",
+                            tableName: "organization_membership",
+                            name: "id",
+                            dataType: "integer",
+                            isNullable: false,
+                            ordinalPosition: 1
+                        ),
+                        ColumnInfo(
+                            tableSchema: "public",
+                            tableName: "organization_membership",
+                            name: "user_id",
+                            dataType: "integer",
+                            isNullable: false,
+                            ordinalPosition: 2
+                        ),
+                        ColumnInfo(
+                            tableSchema: "public",
+                            tableName: "organization_membership",
+                            name: "organization_id",
+                            dataType: "integer",
+                            isNullable: false,
+                            ordinalPosition: 3
+                        ),
+                        ColumnInfo(
+                            tableSchema: "public",
+                            tableName: "organization_membership",
+                            name: "status",
+                            dataType: "text",
+                            isNullable: false,
+                            ordinalPosition: 4,
+                            valueConstraints: statusConstraints
+                        ),
+                        ColumnInfo(
+                            tableSchema: "public",
+                            tableName: "organization_membership",
+                            name: "note",
+                            dataType: "text",
+                            isNullable: true,
+                            ordinalPosition: 5
+                        ),
+                    ]
+                ),
+                TableInfo(
+                    schema: "public",
+                    name: "user_profile",
+                    type: .baseTable,
+                    columns: [
+                        ColumnInfo(
+                            tableSchema: "public",
+                            tableName: "user_profile",
+                            name: "id",
+                            dataType: "integer",
+                            isNullable: false,
+                            ordinalPosition: 1
+                        ),
+                        ColumnInfo(
+                            tableSchema: "public",
+                            tableName: "user_profile",
+                            name: "user_id",
+                            dataType: "integer",
+                            isNullable: false,
+                            ordinalPosition: 2
+                        ),
+                    ]
+                ),
+            ],
+            foreignKeyConstraints: [
+                SchemaForeignKeyConstraintInfo(
+                    constraintName: "organization_membership_user_id_fkey",
+                    sourceSchema: "public",
+                    sourceTable: "organization_membership",
+                    targetSchema: "public",
+                    targetTable: "app_user",
+                    columnPairs: [
+                        SchemaForeignKeyColumnPair(
+                            sourceColumn: "user_id",
+                            targetColumn: "id",
+                            ordinalPosition: 1
+                        )
+                    ]
+                ),
+                SchemaForeignKeyConstraintInfo(
+                    constraintName: "organization_membership_organization_id_fkey",
+                    sourceSchema: "public",
+                    sourceTable: "organization_membership",
+                    targetSchema: "public",
+                    targetTable: "organization",
+                    columnPairs: [
+                        SchemaForeignKeyColumnPair(
+                            sourceColumn: "organization_id",
+                            targetColumn: "id",
+                            ordinalPosition: 1
+                        )
+                    ]
+                ),
+                SchemaForeignKeyConstraintInfo(
+                    constraintName: "user_profile_user_id_fkey",
+                    sourceSchema: "public",
+                    sourceTable: "user_profile",
+                    targetSchema: "public",
+                    targetTable: "app_user",
+                    columnPairs: [
+                        SchemaForeignKeyColumnPair(
+                            sourceColumn: "user_id",
+                            targetColumn: "id",
+                            ordinalPosition: 1
+                        )
+                    ]
+                )
+            ]
+        )
     }
 
     private func makeUsersOrdersStatusSchema() -> DatabaseSchema {
@@ -3064,6 +4278,7 @@ struct SQLSchemaValidatorTests {
                         column(table: "preseason_tool", name: "name", type: "text", ordinal: 2),
                         column(table: "preseason_tool", name: "slug", type: "text", ordinal: 3),
                         column(table: "preseason_tool", name: "createdAt", type: "timestamp with time zone", ordinal: 4),
+                        column(table: "preseason_tool", name: "status", type: "text", ordinal: 5),
                     ]
                 ),
             ],

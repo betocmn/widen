@@ -13,6 +13,8 @@ public struct SchemaToolAgentSQLIntentCoverageResult: Equatable, Sendable {
     public var unresolvedDecisionKinds: [SchemaToolAgentUnresolvedDecisionKind]
     public var clarificationQuestion: String?
     public var semanticMismatchCategory: String
+    public var antiJoinCovered: Bool
+    public var antiJoinTriggerTerms: [String]
 
     public init(
         decision: SchemaToolAgentSQLIntentCoverageDecision,
@@ -20,7 +22,9 @@ public struct SchemaToolAgentSQLIntentCoverageResult: Equatable, Sendable {
         missingSignals: [String] = [],
         unresolvedDecisionKinds: [SchemaToolAgentUnresolvedDecisionKind] = [],
         clarificationQuestion: String? = nil,
-        semanticMismatchCategory: String = "unknown mismatch"
+        semanticMismatchCategory: String = "unknown mismatch",
+        antiJoinCovered: Bool = false,
+        antiJoinTriggerTerms: [String] = []
     ) {
         self.decision = decision
         self.reason = reason
@@ -28,6 +32,8 @@ public struct SchemaToolAgentSQLIntentCoverageResult: Equatable, Sendable {
         self.unresolvedDecisionKinds = unresolvedDecisionKinds
         self.clarificationQuestion = clarificationQuestion
         self.semanticMismatchCategory = semanticMismatchCategory
+        self.antiJoinCovered = antiJoinCovered
+        self.antiJoinTriggerTerms = antiJoinTriggerTerms
     }
 }
 
@@ -35,16 +41,26 @@ public struct SchemaToolAgentSQLIntentCoverageResult: Equatable, Sendable {
 ///
 /// Records best-effort signals about whether generated SQL appears to cover
 /// the question's intent. Production runs both correction modes as
-/// `diagnosticsOnly`; enforcement exists only behind explicit experimental
-/// eval flags. The phrase and SQL-shape heuristics here are intentionally
-/// non-exhaustive: they are tuned for the eval suites, not for general
-/// natural-language coverage. Do not grow them into a semantic validator by
-/// adding rules for new phrasings or SQL forms — per
+/// `diagnosticsOnly`; broader `needsCorrection` enforcement exists only behind
+/// explicit experimental eval flags. The covered anti-join evidence is used by
+/// one narrow postprocessing decision. The phrase and SQL-shape heuristics here
+/// are intentionally non-exhaustive: they are tuned for the eval suites, not
+/// for general natural-language coverage. Do not grow them into a semantic
+/// validator by adding rules for new phrasings or SQL forms — per
 /// `docs/refactoring-plan.md`, Widen deliberately avoids a hardcoded
 /// natural-language parser and SQL conformance engine. Accuracy improvements
 /// belong in schema retrieval, bounded schema tools, PostgreSQL verification
 /// with repair, and the release-gate evals.
 public enum SchemaToolAgentSQLIntentCoveragePolicy {
+    static func protectedMetricTriggerTerms(in question: String) -> Set<String> {
+        IntentSignals(
+            question: question,
+            databaseContext: "",
+            evidence: OpenRouterSchemaToolEvidenceSummary(),
+            sql: ""
+        ).protectedMetricTriggerTerms
+    }
+
     public static func evaluate(
         question: String,
         databaseContext: String,
@@ -222,7 +238,9 @@ public enum SchemaToolAgentSQLIntentCoveragePolicy {
             return SchemaToolAgentSQLIntentCoverageResult(
                 decision: .covered,
                 reason: "terminal SQL covers deterministic intent signals",
-                semanticMismatchCategory: "unknown mismatch"
+                semanticMismatchCategory: "unknown mismatch",
+                antiJoinCovered: signals.requiresAntiJoin && signals.sqlIncludesAntiJoin,
+                antiJoinTriggerTerms: signals.antiJoinTriggerTerms.sorted()
             )
         }
 
@@ -297,8 +315,12 @@ public enum SchemaToolAgentSQLIntentCoveragePolicy {
         }
 
         var hasProtectedMetricAmbiguity: Bool {
-            questionTokens.intersection(Self.protectedMetricTerms).isEmpty == false
+            !protectedMetricTriggerTerms.isEmpty
                 && !contextDefinesMetric
+        }
+
+        var protectedMetricTriggerTerms: Set<String> {
+            questionTokens.intersection(Self.protectedMetricTerms)
         }
 
         var metricClarificationQuestion: String {
@@ -309,7 +331,7 @@ public enum SchemaToolAgentSQLIntentCoveragePolicy {
                 return "Which metric should define important feedback clusters?"
             }
             if questionTokens.contains("win") || questionTokens.contains("wins") {
-                return "Which metric should define wins?"
+                return "What should count as one win?"
             }
             return "Which metric should define this request?"
         }
@@ -730,10 +752,19 @@ public enum SchemaToolAgentSQLIntentCoveragePolicy {
             return Self.firstDateLiteral(in: databaseContext)
         }
 
+        var antiJoinTriggerTerms: Set<String> {
+            var terms = questionTokens.intersection(["without", "never"])
+            if lowerQuestion.range(
+                of: #"\bno\s+[a-z0-9_]+"#,
+                options: .regularExpression
+            ) != nil {
+                terms.insert("no")
+            }
+            return terms
+        }
+
         var requiresAntiJoin: Bool {
-            questionTokens.contains("without")
-                || questionTokens.contains("never")
-                || lowerQuestion.range(of: #"\bno\s+[a-z0-9_]+"#, options: .regularExpression) != nil
+            !antiJoinTriggerTerms.isEmpty
         }
 
         var sqlIncludesAntiJoin: Bool {

@@ -905,11 +905,74 @@ public final class OpenRouterSchemaToolSQLAgent: SQLGenerator, Sendable {
                         inspectionSession: inspectionSession
                     )
                     if case .schema(let schemaResult) = result {
-                        evidence.record(schemaResult)
+                        evidence.record(
+                            schemaResult,
+                            question: question,
+                            argumentsJSON: call.arguments
+                        )
                     }
                     if result.isSessionBudgetExceeded {
-                        diagnostics.appSideRejectionReason = .budgetExhausted
                         let inspectionTraces = await inspectionSession?.tracesSnapshot() ?? []
+                        let schemaTraces = await session.tracesSnapshot()
+                        let exactProductionSchemaBudgetExhaustion =
+                            context.mode == .initial
+                            && context.recentQuestions.isEmpty
+                            && context.originalQuestion == nil
+                            && context.conversationMessages.isEmpty
+                            && context.currentSQL == nil
+                            && context.lastRunError == nil
+                            && context.repairContext == nil
+                            && configuration.maximumSchemaToolCalls == 6
+                            && inspectionTraces.isEmpty
+                            && schemaTraces.count == 7
+                            && schemaTraces.prefix(6).allSatisfy {
+                                $0.outcome == .success && $0.errorCode == nil
+                            }
+                            && schemaTraces.last?.outcome == .error
+                            && schemaTraces.last?.errorCode == .sessionBudgetExceeded
+                        if exactProductionSchemaBudgetExhaustion,
+                            configuration.clarificationCorrectionMode == .diagnosticsOnly,
+                            configuration.intentCoverageMode == .diagnosticsOnly,
+                            let candidate = SchemaToolAgentProtectedMetricClarificationPolicy.evaluate(
+                                question: question,
+                                databaseContext: ([config.databaseContext]
+                                    + context.confirmedSemanticBindings)
+                                    .joined(separator: "\n"),
+                                evidence: evidence.summary(inspectionToolCalls: inspectionTraces),
+                                sql: ""
+                            )
+                        {
+                            try Task.checkCancellation()
+                            try await checkStaleSnapshot(expected: initialFingerprint)
+                            try Task.checkCancellation()
+                            try checkDeadline(deadline)
+                            diagnostics.appSideRejectionReason = .budgetExhausted
+                            diagnostics.recordClarificationPolicy(candidate.clarificationPolicy)
+                            diagnostics.recordSQLIntentCoverage(candidate.intentCoverage)
+                            diagnostics.terminalAction = TerminalAction.clarify.rawValue
+                            diagnostics.terminalQueryPlan = ""
+                            diagnostics.terminalValidationFailureReason =
+                                "budgetExhaustedWithProtectedAmbiguity"
+                            aggregate.terminalOutcome = "clarify_fallback"
+                            aggregate.agentDiagnostics = diagnostics.snapshot(
+                                evidence: evidence,
+                                inspectionToolCalls: inspectionTraces
+                            )
+                            return try await finalResult(
+                                TerminalResult(
+                                    action: .clarify,
+                                    sql: "",
+                                    clarificationQuestion: candidate.question,
+                                    queryPlan: ""
+                                ),
+                                schema: schema,
+                                context: context,
+                                aggregate: aggregate,
+                                session: session,
+                                inspectionSession: inspectionSession
+                            )
+                        }
+                        diagnostics.appSideRejectionReason = .budgetExhausted
                         let facts = SchemaToolAgentAnswerabilityPolicy.evaluate(
                             originalQuestion: question,
                             databaseContext: config.databaseContext,
@@ -2193,7 +2256,7 @@ private struct SchemaToolEvidenceLedger {
 
     private var schema: DatabaseSchema
     private(set) var hasSuccessfulSearch = false
-    private var searchedTables = Set<String>()
+    private var questionRelevantSearchedTables = Set<String>()
     private var describedTables = Set<String>()
     private var fullyDescribedTables = Set<String>()
     private var joinPathTables = Set<String>()
@@ -2207,11 +2270,15 @@ private struct SchemaToolEvidenceLedger {
         self.schema = schema
     }
 
-    mutating func record(_ result: SchemaToolResult) {
+    mutating func record(
+        _ result: SchemaToolResult,
+        question: String,
+        argumentsJSON: String
+    ) {
         guard result.success, let payload = result.payload else { return }
         switch result.toolName {
         case SchemaToolName.searchSchema.rawValue:
-            recordSearch(payload)
+            recordSearch(payload, question: question, argumentsJSON: argumentsJSON)
         case SchemaToolName.describeTables.rawValue:
             recordDescribe(payload)
         case SchemaToolName.findJoinPaths.rawValue:
@@ -2303,13 +2370,39 @@ private struct SchemaToolEvidenceLedger {
         )
     }
 
-    private mutating func recordSearch(_ payload: JSONValue) {
+    private mutating func recordSearch(
+        _ payload: JSONValue,
+        question: String,
+        argumentsJSON: String
+    ) {
         guard let hits = payload["hits"]?.arrayValue else { return }
         hasSuccessfulSearch = true
+        let arguments = try? JSONDecoder().decode(
+            JSONValue.self,
+            from: Data(argumentsJSON.utf8)
+        )
+        let queryTokens = Set(
+            SchemaSearchTokenizer.queryTokens(in: arguments?["query"]?.stringValue ?? "")
+        )
+        let questionTokens = Set(SchemaSearchTokenizer.queryTokens(in: question))
+        let sharedQueryAndQuestionTokens = queryTokens.intersection(questionTokens)
+        let unresolvedProtectedMetricTokens =
+            SchemaToolAgentSQLIntentCoveragePolicy.protectedMetricTriggerTerms(in: question)
         for hit in hits {
             guard let object = hit.objectValue else { continue }
             if let table = object["sql_name"]?.stringValue.flatMap(Self.normalizedSQLPath) {
-                searchedTables.insert(table)
+                let matchReasons = Set(
+                    object["match_reasons"]?.arrayValue?.compactMap(\.stringValue) ?? []
+                )
+                let schemaPrefix = table.split(separator: ".").dropLast().joined(separator: " ")
+                let schemaTokens = Set(SchemaSearchTokenizer.indexTokens(in: schemaPrefix))
+                let hasQuestionOverlapBeyondSchema = !sharedQueryAndQuestionTokens
+                    .subtracting(schemaTokens)
+                    .subtracting(unresolvedProtectedMetricTokens)
+                    .isEmpty
+                if hasQuestionOverlapBeyondSchema, matchReasons.contains("exact_identifier") {
+                    questionRelevantSearchedTables.insert(table)
+                }
                 recordColumns(object["columns"]?.arrayValue, table: table)
             } else {
                 recordColumns(object["columns"]?.arrayValue, table: nil)
@@ -2456,6 +2549,7 @@ private struct SchemaToolEvidenceLedger {
         ])
         return OpenRouterSchemaToolEvidenceSummary(
             searched: hasSuccessfulSearch,
+            questionRelevantSearchedTableIDs: Array(questionRelevantSearchedTables).sorted(),
             describedTableIDs: Array(describedTables).sorted(),
             exposedColumnIDs: Array(exposedColumns).sorted(),
             exposedForeignKeyPathIDs: Array(foreignKeyPathIDs).sorted(),

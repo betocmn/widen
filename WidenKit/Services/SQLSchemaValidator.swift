@@ -1998,12 +1998,56 @@ public enum GeneratedSQLPostprocessor {
             )
             copy.groundingConcepts = grounding.concepts
             if allowGroundingClarification,
+                let candidate = protectedMetricClarificationCandidate(
+                    question: question,
+                    databaseContext: databaseContext,
+                    schemaValidation: schemaValidation,
+                    grounding: grounding,
+                    generation: generation
+                )
+            {
+                copy.sql = ""
+                copy.explanation = candidate.question
+                copy.needsClarification = true
+                copy.clarificationQuestion = candidate.question
+                copy.clarificationOptions = []
+                copy.pendingClarificationID = nil
+                copy.pendingClarification = nil
+                copy.confidence = min(copy.confidence, 0.2)
+                copy.riskLevel = .medium
+                if var metadata = copy.backendMetadata,
+                    var diagnostics = metadata.agentDiagnostics
+                {
+                    diagnostics.sqlIntentCoverageDecision = candidate.intentCoverage.decision.rawValue
+                    diagnostics.sqlIntentCoverageReason = candidate.intentCoverage.reason
+                    diagnostics.sqlIntentCoverageMissingSignals = candidate.intentCoverage.missingSignals
+                    diagnostics.sqlIntentCoverageMismatchCategory =
+                        candidate.intentCoverage.semanticMismatchCategory
+                    diagnostics.clarificationPolicyDecision =
+                        candidate.clarificationPolicy.decision.rawValue
+                    diagnostics.clarificationPolicyReason = candidate.clarificationPolicy.reason
+                    diagnostics.databaseContextFactsUsed =
+                        candidate.clarificationPolicy.databaseContextFactsUsed
+                    diagnostics.evidenceSufficientForSQL =
+                        candidate.clarificationPolicy.evidenceSufficientForSQL
+                    diagnostics.unresolvedDecisionKinds =
+                        candidate.clarificationPolicy.unresolvedDecisionKinds.map(\.rawValue)
+                    metadata.agentTerminalOutcome = "clarify_fallback"
+                    metadata.agentDiagnostics = diagnostics
+                    copy.backendMetadata = metadata
+                }
+                return copy
+            }
+            if allowGroundingClarification,
                 let pending = grounding.pendingClarification
             {
                 if schemaToolEvidenceAllowsSQL(
                     question: question,
                     databaseContext: databaseContext,
                     schemaValidation: schemaValidation,
+                    grounding: grounding,
+                    schema: schema,
+                    confirmedSemanticBindings: confirmedSemanticBindings,
                     generation: generation
                 ) {
                     return copy
@@ -2017,6 +2061,7 @@ public enum GeneratedSQLPostprocessor {
                 copy.pendingClarification = pending
                 copy.confidence = min(copy.confidence, 0.2)
                 copy.riskLevel = .medium
+                return copy
             }
         }
         return copy
@@ -2026,16 +2071,15 @@ public enum GeneratedSQLPostprocessor {
         question: String,
         databaseContext: String,
         schemaValidation: SQLSchemaValidationResult,
+        grounding: SQLGroundingEvaluation,
+        schema: DatabaseSchema,
+        confirmedSemanticBindings: [String],
         generation: SQLGenerationResult
     ) -> Bool {
         guard let diagnostics = generation.backendMetadata?.agentDiagnostics,
             diagnostics.terminalToolSeen,
             diagnostics.terminalAction == "sql",
             diagnostics.appSideRejectionReason == nil,
-            [
-                SchemaToolAgentIntentCoverageMode.rejectOnlyExperimental.rawValue,
-                SchemaToolAgentIntentCoverageMode.correctAndRetryExperimental.rawValue,
-            ].contains(diagnostics.intentCoverageMode),
             !schemaValidation.referencedTables.isEmpty
         else {
             return false
@@ -2054,7 +2098,697 @@ public enum GeneratedSQLPostprocessor {
             evidence: evidence,
             sql: generation.sql
         )
-        return coverage.decision == .covered
+        if [
+            SchemaToolAgentIntentCoverageMode.rejectOnlyExperimental.rawValue,
+            SchemaToolAgentIntentCoverageMode.correctAndRetryExperimental.rawValue,
+        ].contains(diagnostics.intentCoverageMode) {
+            return coverage.decision == .covered
+        }
+
+        guard diagnostics.intentCoverageMode
+            == SchemaToolAgentIntentCoverageMode.diagnosticsOnly.rawValue,
+            diagnostics.clarificationCorrectionMode
+                == SchemaToolAgentClarificationCorrectionMode.diagnosticsOnly.rawValue,
+            generation.backendMetadata?.agentTerminalOutcome == "sql",
+            diagnostics.terminalValidationFailureReason == nil,
+            diagnostics.sqlIntentCoverageDecision
+                == SchemaToolAgentSQLIntentCoverageDecision.covered.rawValue,
+            evidence.searched,
+            !evidence.exposedColumnIDs.isEmpty,
+            !evidence.exposedForeignKeyPathIDs.isEmpty,
+            coverage.decision == .covered,
+            coverage.antiJoinCovered,
+            let antiJoin = relationshipSpecificAntiJoin(
+                generation.sql,
+                schemaValidation: schemaValidation,
+                schema: schema
+            ),
+            evidenceSupportsAntiJoin(
+                antiJoin,
+                question: question,
+                triggerTerms: coverage.antiJoinTriggerTerms,
+                evidence: evidence,
+                referencedTables: schemaValidation.referencedTables
+            ),
+            antiJoinQuestionConceptsAreBound(
+                antiJoin,
+                grounding: grounding,
+                triggerTerms: coverage.antiJoinTriggerTerms
+            ),
+            SchemaToolAgentAnswerabilityPolicy.answerableWithSQL(
+                question: question,
+                databaseContext: databaseContext,
+                evidence: evidence
+            ),
+            !hasRejectedSQLLiteral(
+                generation.sql,
+                referencedTables: schemaValidation.referencedTables,
+                schema: schema,
+                databaseContext: databaseContext,
+                confirmedSemanticBindings: confirmedSemanticBindings
+            )
+        else {
+            return false
+        }
+
+        let triggerTokens = Set(
+            coverage.antiJoinTriggerTerms.flatMap { SchemaIndex.tokens(in: $0) }
+        )
+        let unresolvedConcepts = grounding.concepts.filter {
+            $0.required && ($0.state == .unsupported || $0.state == .ambiguous)
+        }
+        return !triggerTokens.isEmpty
+            && !unresolvedConcepts.isEmpty
+            && unresolvedConcepts.allSatisfy { concept in
+                !Set(SchemaIndex.tokens(in: concept.term)).isDisjoint(with: triggerTokens)
+            }
+    }
+
+    private static func protectedMetricClarificationCandidate(
+        question: String,
+        databaseContext: String,
+        schemaValidation: SQLSchemaValidationResult,
+        grounding: SQLGroundingEvaluation,
+        generation: SQLGenerationResult
+    ) -> SchemaToolAgentProtectedMetricClarificationCandidate? {
+        guard let metadata = generation.backendMetadata,
+            metadata.agentTerminalOutcome == "sql",
+            let diagnostics = metadata.agentDiagnostics,
+            diagnostics.terminalToolSeen,
+            diagnostics.terminalAction == "sql",
+            diagnostics.appSideRejectionReason == nil,
+            diagnostics.terminalValidationFailureReason == nil,
+            diagnostics.clarificationCorrectionMode
+                == SchemaToolAgentClarificationCorrectionMode.diagnosticsOnly.rawValue,
+            diagnostics.intentCoverageMode
+                == SchemaToolAgentIntentCoverageMode.diagnosticsOnly.rawValue,
+            diagnostics.sqlIntentCoverageDecision
+                == SchemaToolAgentSQLIntentCoverageDecision.mustClarify.rawValue,
+            !schemaValidation.analysis.analysisIncomplete,
+            !schemaValidation.referencedTables.isEmpty
+        else {
+            return nil
+        }
+        let evidence = diagnostics.schemaEvidence
+        let describedTables = Set(evidence.describedTableIDs.map { $0.lowercased() })
+        guard evidence.searched,
+            !describedTables.isEmpty,
+            !evidence.exposedColumnIDs.isEmpty,
+            !evidence.exposedForeignKeyPathIDs.isEmpty,
+            schemaValidation.referencedTables.allSatisfy({ table in
+                describedTables.contains(table.lowercased())
+            })
+        else {
+            return nil
+        }
+        guard let candidate = SchemaToolAgentProtectedMetricClarificationPolicy.evaluate(
+            question: question,
+            databaseContext: databaseContext,
+            evidence: evidence,
+            sql: generation.sql,
+            requiredRelationshipTableIDs: schemaValidation.referencedTables
+        ) else {
+            return nil
+        }
+        let unresolvedConcepts = grounding.concepts.filter {
+            $0.required && ($0.state == .unsupported || $0.state == .ambiguous)
+        }
+        guard unresolvedConcepts.count == 1,
+            let unresolvedConcept = unresolvedConcepts.first,
+            unresolvedConcept.kind == .metric || unresolvedConcept.kind == .businessTerm,
+            !Set(SchemaIndex.tokens(in: unresolvedConcept.term)).isDisjoint(
+                with: Set(SchemaIndex.tokens(in: candidate.question))
+            )
+        else {
+            return nil
+        }
+        return candidate
+    }
+
+    private struct RelationshipSpecificAntiJoin {
+        var excludedTableID: String
+        var retainedTableID: String
+        var nullRejectedColumnID: String
+        var relationshipColumnIDs: Set<String>
+    }
+
+    private struct ResolvedAntiJoinColumn {
+        var tableID: String
+        var columnID: String
+    }
+
+    /// The intent policy's LEFT JOIN + IS NULL signal remains diagnostic. SQL
+    /// recovery additionally requires one exact relationship equality with no
+    /// joined-row filters, plus one positive non-nullable `WHERE ... IS NULL`
+    /// predicate. The retained and excluded relationship endpoints are later
+    /// bound to the two sides of the request.
+    private static func relationshipSpecificAntiJoin(
+        _ sql: String,
+        schemaValidation: SQLSchemaValidationResult,
+        schema: DatabaseSchema
+    ) -> RelationshipSpecificAntiJoin? {
+        let tokens = SQLToken.tokenize(sql)
+        guard !schemaValidation.analysis.analysisIncomplete, !tokens.isEmpty else {
+            return nil
+        }
+        let tokenIndexByStartOffset = Dictionary(
+            uniqueKeysWithValues: tokens.enumerated().map { ($0.element.startOffset, $0.offset) }
+        )
+        let tokenDepths = tokenDepths(tokens)
+        let schemaLookup = SchemaLookup(schema: schema)
+
+        for scope in schemaValidation.analysis.scopes {
+            for relation in scope.relations
+            where relation.role == .source && !relation.isDerived && !relation.isNaturalJoin
+            {
+                guard let relationStartOffset = relation.startOffset,
+                    let relationTokenIndex = tokenIndexByStartOffset[relationStartOffset],
+                    isRightSideOfLeftJoin(tokens, relationTokenIndex: relationTokenIndex),
+                    let table = schemaLookup.resolve(relation)
+                else {
+                    continue
+                }
+
+                guard let onRange = strictJoinConditionRange(
+                    tokens,
+                    tokenDepths: tokenDepths,
+                    relationTokenIndex: relationTokenIndex
+                ),
+                    let whereRange = strictWhereConditionRange(
+                        tokens,
+                        tokenDepths: tokenDepths,
+                        after: onRange
+                    ),
+                    let nullColumn = strictNullRejectedColumn(
+                        in: whereRange,
+                        tokens: tokens,
+                        scope: scope,
+                        relation: relation,
+                        table: table,
+                        tokenIndexByStartOffset: tokenIndexByStartOffset,
+                        schemaLookup: schemaLookup
+                    ),
+                    let joinProof = strictJoinProof(
+                        in: onRange,
+                        tokens: tokens,
+                        scope: scope,
+                        joinedRelation: relation,
+                        joinedTableID: table.qualifiedName,
+                        tokenIndexByStartOffset: tokenIndexByStartOffset,
+                        schemaLookup: schemaLookup
+                    )
+                else {
+                    continue
+                }
+                return RelationshipSpecificAntiJoin(
+                    excludedTableID: table.qualifiedName,
+                    retainedTableID: joinProof.retainedTableID,
+                    nullRejectedColumnID: nullColumn.columnID,
+                    relationshipColumnIDs: joinProof.relationshipColumnIDs
+                )
+            }
+        }
+        return nil
+    }
+
+    private static func strictJoinConditionRange(
+        _ tokens: [SQLToken],
+        tokenDepths: [Int],
+        relationTokenIndex: Int
+    ) -> Range<Int>? {
+        guard let depth = tokenDepths[safe: relationTokenIndex] else { return nil }
+        let terminators: Set<String> = [
+            "cross", "except", "fetch", "full", "group", "having", "inner", "intersect",
+            "join", "left", "limit", "natural", "offset", "order", "returning", "right",
+            "union", "where", "window",
+        ]
+        var onIndex: Int?
+        var cursor = relationTokenIndex + 1
+        while cursor < tokens.count {
+            guard tokenDepths[safe: cursor] == depth else {
+                cursor += 1
+                continue
+            }
+            let normalized = tokens[cursor].normalized
+            if normalized == "on" {
+                onIndex = cursor
+                break
+            }
+            if terminators.contains(normalized) || normalized == "using" {
+                return nil
+            }
+            cursor += 1
+        }
+        guard let onIndex else { return nil }
+        cursor = onIndex + 1
+        while cursor < tokens.count {
+            if tokenDepths[safe: cursor] == depth,
+                terminators.contains(tokens[cursor].normalized)
+            {
+                break
+            }
+            cursor += 1
+        }
+        return onIndex + 1 < cursor ? (onIndex + 1)..<cursor : nil
+    }
+
+    private static func strictWhereConditionRange(
+        _ tokens: [SQLToken],
+        tokenDepths: [Int],
+        after onRange: Range<Int>
+    ) -> Range<Int>? {
+        guard let lastOnIndex = onRange.last,
+            let depth = tokenDepths[safe: lastOnIndex]
+        else {
+            return nil
+        }
+        let terminators: Set<String> = [
+            "except", "fetch", "group", "having", "intersect", "limit", "offset", "order",
+            "returning", "union", "window",
+        ]
+        var cursor = onRange.upperBound
+        guard tokenDepths[safe: cursor] == depth,
+            tokens[safe: cursor]?.normalized == "where"
+        else {
+            return nil
+        }
+        let whereIndex = cursor
+        cursor += 1
+        while cursor < tokens.count {
+            if tokenDepths[safe: cursor] == depth,
+                terminators.contains(tokens[cursor].normalized)
+            {
+                break
+            }
+            cursor += 1
+        }
+        return whereIndex + 1 < cursor ? (whereIndex + 1)..<cursor : nil
+    }
+
+    private static func strictNullRejectedColumn(
+        in range: Range<Int>,
+        tokens: [SQLToken],
+        scope: SQLReferenceScope,
+        relation: SQLRelationReference,
+        table: TableInfo,
+        tokenIndexByStartOffset: [Int: Int],
+        schemaLookup: SchemaLookup
+    ) -> ResolvedAntiJoinColumn? {
+        guard let expressionRange = strippingBalancedOuterParentheses(range, tokens: tokens),
+            let column = scope.columns.first(where: { column in
+                guard columnQualifies(column, relation: relation),
+                    let startOffset = column.startOffset,
+                    let tokenIndex = tokenIndexByStartOffset[startOffset]
+                else {
+                    return false
+                }
+                return expressionRange.contains(tokenIndex)
+            }),
+            let columnOffset = column.startOffset,
+            let columnTokenIndex = tokenIndexByStartOffset[columnOffset],
+            let operandRange = qualifiedColumnTokenRange(
+                endingAt: columnTokenIndex,
+                tokens: tokens
+            ),
+            expressionRange.lowerBound == operandRange.lowerBound,
+            expressionRange.upperBound == operandRange.upperBound + 2,
+            tokens[safe: operandRange.upperBound]?.normalized == "is",
+            tokens[safe: operandRange.upperBound + 1]?.normalized == "null",
+            scope.columns.filter({ candidate in
+                guard let offset = candidate.startOffset,
+                    let index = tokenIndexByStartOffset[offset]
+                else {
+                    return false
+                }
+                return expressionRange.contains(index)
+            }).count == 1,
+            let schemaColumn = schemaLookup.column(
+                on: table,
+                named: column.name,
+                isQuoted: column.isQuoted
+            ),
+            !schemaColumn.isNullable
+        else {
+            return nil
+        }
+        return ResolvedAntiJoinColumn(
+            tableID: table.qualifiedName,
+            columnID: schemaColumn.id
+        )
+    }
+
+    private static func strictJoinProof(
+        in range: Range<Int>,
+        tokens: [SQLToken],
+        scope: SQLReferenceScope,
+        joinedRelation: SQLRelationReference,
+        joinedTableID: String,
+        tokenIndexByStartOffset: [Int: Int],
+        schemaLookup: SchemaLookup
+    ) -> (
+        relationshipColumnIDs: Set<String>,
+        retainedTableID: String
+    )? {
+        guard let segment = strippingBalancedOuterParentheses(range, tokens: tokens) else {
+            return nil
+        }
+        let columns = scope.columns.compactMap { column -> (SQLColumnReference, Int)? in
+            guard let offset = column.startOffset,
+                let index = tokenIndexByStartOffset[offset],
+                segment.contains(index)
+            else {
+                return nil
+            }
+            return (column, index)
+        }
+        guard columns.count == 2,
+            let first = resolvedAntiJoinColumn(
+                columns[0].0,
+                in: scope,
+                schemaLookup: schemaLookup
+            ),
+            let second = resolvedAntiJoinColumn(
+                columns[1].0,
+                in: scope,
+                schemaLookup: schemaLookup
+            ),
+            first.tableID.lowercased() != second.tableID.lowercased(),
+            isExactColumnEquality(
+                segment,
+                firstColumnIndex: columns[0].1,
+                secondColumnIndex: columns[1].1,
+                tokens: tokens
+            )
+        else {
+            return nil
+        }
+        let resolvedJoinedTableID: String
+        let retainedTableID: String
+        if columnQualifies(columns[0].0, relation: joinedRelation),
+            !columnQualifies(columns[1].0, relation: joinedRelation)
+        {
+            resolvedJoinedTableID = first.tableID
+            retainedTableID = second.tableID
+        } else if columnQualifies(columns[1].0, relation: joinedRelation),
+            !columnQualifies(columns[0].0, relation: joinedRelation)
+        {
+            resolvedJoinedTableID = second.tableID
+            retainedTableID = first.tableID
+        } else {
+            return nil
+        }
+        guard resolvedJoinedTableID.caseInsensitiveCompare(joinedTableID) == .orderedSame else {
+            return nil
+        }
+        return (
+            relationshipColumnIDs: [
+                first.columnID.lowercased(),
+                second.columnID.lowercased(),
+            ],
+            retainedTableID: retainedTableID
+        )
+    }
+
+    private static func strippingBalancedOuterParentheses(
+        _ range: Range<Int>,
+        tokens: [SQLToken]
+    ) -> Range<Int>? {
+        var result = range
+        while result.count >= 2,
+            tokens[safe: result.lowerBound]?.text == "(",
+            tokens[safe: result.upperBound - 1]?.text == ")"
+        {
+            var depth = 0
+            var closesAtEnd = false
+            for index in result {
+                if tokens[index].text == "(" {
+                    depth += 1
+                } else if tokens[index].text == ")" {
+                    depth -= 1
+                    if depth == 0 {
+                        closesAtEnd = index == result.upperBound - 1
+                        break
+                    }
+                    if depth < 0 { return nil }
+                }
+            }
+            guard closesAtEnd else { break }
+            result = (result.lowerBound + 1)..<(result.upperBound - 1)
+        }
+        return result.isEmpty ? nil : result
+    }
+
+    private static func qualifiedColumnTokenRange(
+        endingAt columnIndex: Int,
+        tokens: [SQLToken]
+    ) -> Range<Int>? {
+        guard tokens[safe: columnIndex]?.isIdentifierLike == true else { return nil }
+        var start = columnIndex
+        while start >= 2,
+            tokens[safe: start - 1]?.text == ".",
+            tokens[safe: start - 2]?.isIdentifierLike == true
+        {
+            start -= 2
+        }
+        return start..<(columnIndex + 1)
+    }
+
+    private static func isExactColumnEquality(
+        _ range: Range<Int>,
+        firstColumnIndex: Int,
+        secondColumnIndex: Int,
+        tokens: [SQLToken]
+    ) -> Bool {
+        guard let firstRange = qualifiedColumnTokenRange(
+            endingAt: firstColumnIndex,
+            tokens: tokens
+        ),
+            let secondRange = qualifiedColumnTokenRange(
+                endingAt: secondColumnIndex,
+                tokens: tokens
+            )
+        else {
+            return false
+        }
+        let ordered = [firstRange, secondRange].sorted { $0.lowerBound < $1.lowerBound }
+        return range.lowerBound == ordered[0].lowerBound
+            && ordered[0].upperBound + 1 == ordered[1].lowerBound
+            && tokens[safe: ordered[0].upperBound]?.text == "="
+            && range.upperBound == ordered[1].upperBound
+    }
+
+    private static func resolvedAntiJoinColumn(
+        _ column: SQLColumnReference,
+        in scope: SQLReferenceScope,
+        schemaLookup: SchemaLookup
+    ) -> ResolvedAntiJoinColumn? {
+        let matches = scope.relations.compactMap { relation -> ResolvedAntiJoinColumn? in
+            guard relation.role == .source,
+                !relation.isDerived,
+                columnQualifies(column, relation: relation),
+                let table = schemaLookup.resolve(relation),
+                let schemaColumn = schemaLookup.column(
+                    on: table,
+                    named: column.name,
+                    isQuoted: column.isQuoted
+                )
+            else {
+                return nil
+            }
+            return ResolvedAntiJoinColumn(
+                tableID: table.qualifiedName,
+                columnID: schemaColumn.id
+            )
+        }
+        return matches.count == 1 ? matches[0] : nil
+    }
+
+    private static func tokenDepths(_ tokens: [SQLToken]) -> [Int] {
+        var depths: [Int] = []
+        depths.reserveCapacity(tokens.count)
+        var depth = 0
+        for token in tokens {
+            if token.text == ")" {
+                depth = max(0, depth - 1)
+            }
+            depths.append(depth)
+            if token.text == "(" {
+                depth += 1
+            }
+        }
+        return depths
+    }
+
+    private static func isRightSideOfLeftJoin(
+        _ tokens: [SQLToken],
+        relationTokenIndex: Int
+    ) -> Bool {
+        var cursor = relationTokenIndex - 1
+        while cursor >= 0,
+            let modifier = tokens[safe: cursor]?.normalized,
+            modifier == "only" || modifier == "lateral"
+        {
+            cursor -= 1
+        }
+        guard tokens[safe: cursor]?.normalized == "join" else { return false }
+        cursor -= 1
+        if tokens[safe: cursor]?.normalized == "outer" {
+            cursor -= 1
+        }
+        return tokens[safe: cursor]?.normalized == "left"
+    }
+
+    private static func columnQualifies(
+        _ column: SQLColumnReference,
+        relation: SQLRelationReference
+    ) -> Bool {
+        guard let qualifier = column.qualifier else { return false }
+        if let alias = relation.alias {
+            return SQLIdentifierName(name: alias, isQuoted: relation.aliasIsQuoted).matches(
+                name: qualifier,
+                isQuoted: column.qualifierIsQuoted
+            )
+        }
+        if SQLIdentifierName(name: relation.name, isQuoted: relation.nameIsQuoted).matches(
+            name: qualifier,
+            isQuoted: column.qualifierIsQuoted
+        ) {
+            return true
+        }
+        guard let relationSchema = relation.schema else { return false }
+        let displayName = "\(relationSchema).\(relation.name)"
+        if relation.schemaIsQuoted || relation.nameIsQuoted || column.qualifierIsQuoted {
+            return qualifier == displayName
+        }
+        return qualifier.caseInsensitiveCompare(displayName) == .orderedSame
+    }
+
+    private static func evidenceSupportsAntiJoin(
+        _ antiJoin: RelationshipSpecificAntiJoin,
+        question: String,
+        triggerTerms: [String],
+        evidence: OpenRouterSchemaToolEvidenceSummary,
+        referencedTables: [String]
+    ) -> Bool {
+        let exposedColumns = Set(evidence.exposedColumnIDs.map { $0.lowercased() })
+        guard exposedColumns.contains(antiJoin.nullRejectedColumnID.lowercased()),
+            antiJoin.relationshipColumnIDs.isSubset(of: exposedColumns)
+        else {
+            return false
+        }
+        let questionTokens = SchemaSearchTokenizer.queryTokens(in: question)
+        let normalizedTriggers = Set(
+            triggerTerms.flatMap { SchemaSearchTokenizer.queryTokens(in: $0) }
+        )
+        guard let triggerIndex = questionTokens.firstIndex(where: normalizedTriggers.contains) else {
+            return false
+        }
+        let retainedEntityTokens = Set(questionTokens.prefix(upTo: triggerIndex))
+        let excludedRelationshipTokens = Set(questionTokens.suffix(from: triggerIndex + 1))
+        let retainedTableTokens = Set(
+            SchemaSearchTokenizer.indexTokens(in: tableNameComponent(antiJoin.retainedTableID))
+        )
+        let excludedTableTokens = Set(
+            SchemaSearchTokenizer.indexTokens(in: tableNameComponent(antiJoin.excludedTableID))
+        )
+        guard !retainedEntityTokens.isDisjoint(with: retainedTableTokens),
+            !excludedRelationshipTokens.isDisjoint(with: excludedTableTokens)
+        else {
+            return false
+        }
+        let referenced = Set(referencedTables.map { $0.lowercased() })
+        let retainedTable = antiJoin.retainedTableID.lowercased()
+        let excludedTable = antiJoin.excludedTableID.lowercased()
+        guard referenced == [retainedTable, excludedTable] else { return false }
+
+        return evidence.exposedForeignKeyPathIDs.contains { path in
+            guard let edge = exposedRelationshipEdge(path) else { return false }
+            let sourceTable = edge.sourceTableID.lowercased()
+            let targetTable = edge.targetTableID.lowercased()
+            guard sourceTable != targetTable,
+                exposedColumns.contains(edge.sourceColumnID.lowercased()),
+                exposedColumns.contains(edge.targetColumnID.lowercased()),
+                antiJoin.relationshipColumnIDs == [
+                    edge.sourceColumnID.lowercased(),
+                    edge.targetColumnID.lowercased(),
+                ]
+            else {
+                return false
+            }
+            return (sourceTable == excludedTable && targetTable == retainedTable)
+                || (targetTable == excludedTable && sourceTable == retainedTable)
+        }
+    }
+
+    private static func exposedRelationshipEdge(
+        _ path: String
+    ) -> (
+        sourceTableID: String,
+        sourceColumnID: String,
+        targetTableID: String,
+        targetColumnID: String
+    )? {
+        let endpoints = path.split(separator: "->", maxSplits: 1).map(String.init)
+        guard endpoints.count == 2,
+            let sourceTableID = tableID(forColumnID: endpoints[0]),
+            let targetTableID = tableID(forColumnID: endpoints[1])
+        else {
+            return nil
+        }
+        return (sourceTableID, endpoints[0], targetTableID, endpoints[1])
+    }
+
+    private static func antiJoinQuestionConceptsAreBound(
+        _ antiJoin: RelationshipSpecificAntiJoin,
+        grounding: SQLGroundingEvaluation,
+        triggerTerms: [String]
+    ) -> Bool {
+        let triggerTokens = Set(triggerTerms.flatMap { SchemaIndex.tokens(in: $0) })
+        let relationshipEntityTokens = Set(
+            SchemaIndex.tokens(in: tableNameComponent(antiJoin.retainedTableID))
+                + SchemaIndex.tokens(in: tableNameComponent(antiJoin.excludedTableID))
+        )
+        guard !triggerTokens.isEmpty, !relationshipEntityTokens.isEmpty else { return false }
+        return grounding.concepts
+            .filter { $0.state != .notRequired }
+            .allSatisfy { concept in
+                let conceptTokens = Set(SchemaIndex.tokens(in: concept.term))
+                return !conceptTokens.isEmpty
+                    && (!conceptTokens.isDisjoint(with: triggerTokens)
+                        || !conceptTokens.isDisjoint(with: relationshipEntityTokens))
+            }
+    }
+
+    private static func tableID(forColumnID columnID: String) -> String? {
+        guard let separator = columnID.lastIndex(of: ".") else { return nil }
+        let tableID = columnID[..<separator].trimmingCharacters(in: .whitespacesAndNewlines)
+        return tableID.isEmpty ? nil : tableID
+    }
+
+    private static func tableNameComponent(_ tableID: String) -> String {
+        tableID.split(separator: ".").last.map(String.init) ?? tableID
+    }
+
+    private static func hasRejectedSQLLiteral(
+        _ sql: String,
+        referencedTables: [String],
+        schema: DatabaseSchema,
+        databaseContext: String,
+        confirmedSemanticBindings: [String]
+    ) -> Bool {
+        let schemaAndContextTokens = referencedSchemaTokens(
+            referencedTables: referencedTables,
+            schema: schema
+        )
+        .union(Set(SchemaIndex.tokens(in: databaseContext)))
+        let literalProofTokens = schemaAndContextTokens
+            .union(semanticBindingDefinitionTokens(in: confirmedSemanticBindings))
+        return !literalValueTokenEvaluation(
+            in: sql,
+            referencedTables: referencedTables,
+            schema: schema,
+            availableTokens: literalProofTokens
+        ).rejected.isEmpty
     }
 
     private static func anchoredWindowClarification(
