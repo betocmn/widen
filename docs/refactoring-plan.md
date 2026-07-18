@@ -2133,7 +2133,7 @@ retry needs a narrower recovery for the protected ambiguity class that reaches
 28 with margin for triage-precedence movement, followed by fresh spend
 authorization.
 
-### PR 58 narrower candidate [2026-07-17] — offline complete, funded gate pending
+### PR 58 narrower candidate [2026-07-17] — funded negative, behavior reverted
 
 Commit `ddf4e12` implements the smallest two-sided policy supported by the
 retained fixtures and sanitized failure evidence. Protected ambiguity recovery
@@ -2176,8 +2176,7 @@ Acceptance is conjunctive: the complete private-routing 60-result,
 three-repeat gate for requested `openai/gpt-5.5` and expected canonical
 `openai/gpt-5.5-20260423` must reach 12/12 clarification decisions and an
 exclusive expected-SQL clarification bucket at or below 28, targeting below
-28 through genuine
-decision changes. Evaluated SQL must remain 100% safe, schema-valid, and
+28 through genuine decision changes. Evaluated SQL must remain 100% safe, schema-valid, and
 PostgreSQL-verified, with no regression in private routing, requested/
 canonical/routed-model checks, structured parsing, forbidden bindings,
 repair progress, timeout classification, or the six-call budget. Semantic
@@ -2186,13 +2185,67 @@ reverting `ddf4e12` behavior and candidate-only tests while retaining only
 sanitized evidence and roadmap notes; success on every criterion permits
 retaining the behavior and marking PR 58 done.
 
-The requested fresh spend ceiling is $4.00. No historical authorization is
-being reused, and no paid OpenRouter request has been made for this candidate.
-Before requesting authorization, offline validation completed as follows: the
-four core suites passed 407/407; the focused ten-suite matrix passed 565/565;
-`make project` regenerated identical tracked output; the full result bundle
-recorded 1,162 total tests, 1,120 passed, 42 skipped, and 0 failed;
-`make eval-build` passed; and `git diff --check` passed.
+The requested fresh spend ceiling was $4.00. No historical authorization was
+reused. Before requesting authorization, offline validation completed as
+follows: the four core suites passed 407/407; the focused ten-suite matrix
+passed 565/565; `make project` regenerated identical tracked output; the full
+result bundle recorded 1,162 total tests, 1,120 passed, 42 skipped, and 0
+failed; `make eval-build` passed; and `git diff --check` passed.
+
+Fresh authorization was granted on 2026-07-18. The first process was stopped
+after review identified that the runner's dollar limit is enforced between
+cases rather than as a provider-side hard cap. Provider usage was reconciled,
+the persisted partial run was resumed with reduced cumulative ceilings, and
+the complete 60/60 result used a conservatively accounted $3.286685. No paid
+request preceded authorization, and none was made after the complete gate.
+The requested model was `openai/gpt-5.5`, the expected canonical model was
+`openai/gpt-5.5-20260423`, the cloud agent was `tools`, and both schema-agent
+policy modes remained `diagnosticsOnly`.
+
+| Mechanical criterion | Retained PR 55 comparator | Third PR 58 attempt | Result |
+| --- | ---: | ---: | --- |
+| Clarification decisions | 11/12 | 10/12 | Fail (required 12/12) |
+| Exclusive expected-SQL clarification bucket | 28 | 31 | Fail (required `<= 28`) |
+| Raw expected-SQL-to-clarification decisions | 33 | 33 | Fail (required genuine reduction by at least 2; target 30) |
+| Registered membership controls moved to SQL | - | 0/3 | Fail (expected 3/3) |
+| Semantic end to end | 19/60 | 18/60 | Informational |
+
+All three `preseason.top-wins-ambiguous` repeats clarified correctly.
+`saas.healthy-accounts` passed only repeat 2; repeats 1 and 3 were tool-budget
+generation failures after seven schema-tool records, leaving clarification at
+10/12. All three `saas.users-without-membership` controls remained
+clarifications, so the raw false-clarification count stayed 33. Triage
+precedence assigned two `saas.active-users-by-org` false clarifications to the
+tool-budget category and left 31 in the exclusive bucket. This is no genuine
+decision reduction and fails both pre-registered PR 58 criteria.
+
+The run was complete with 0 missing, 0 budget-skipped, and 0 provider-budget-
+unavailable results. Safety, schema validity, and PostgreSQL verification were
+15/15; transport was 60/60; and repeated/no-progress repairs, model/tool
+protocol failures, missing or malformed terminal results, internal
+schema-agent timeouts, and timeout/cancellation classifications were all 0.
+The exclusive tool-budget bucket was 4. The sanitized reports do not publish
+separate current-run aggregate latency, forbidden-binding, returned/routed-
+model, or global interception totals, so historical values are not reused.
+
+Commit `5ee77da` mechanically reverted candidate `ddf4e12` and its tests,
+restoring all 12 affected source/test files exactly to `origin/main` while
+retaining the pre-registration and sanitized evidence. The retained tree
+therefore preserves the six-call budget, PR 53 heuristic freeze, private and
+canonical/routed-model protections, safety/schema/PostgreSQL validation,
+structured parsing and deterministic SQL review, PR 59 timeout/budget/
+interception behavior, PR 60 workflow, PR 62 hardening, and no PR 56 bypass.
+PR 58 remains not done. A future experiment should first add diagnostics-only,
+redacted rejection reasons for the strict anti-join and protected budget
+evidence gates; no new behavior should be proposed until deterministic replay
+proves at least two genuine false-clarification removals while preserving all
+protected cases.
+
+Post-revert validation passed: the focused ten-suite matrix recorded 527
+total, 527 passed, 0 skipped, and 0 failed; `make project` regenerated
+identical tracked output; the full result bundle recorded 1,124 total tests,
+1,082 passed, 42 skipped, and 0 failed; `make eval-build` passed; and
+`git diff --check` passed.
 
 ### PR 59 funded acceptance measurement [2026-07-14] — ✅ Done
 
@@ -2330,7 +2383,7 @@ PR 59 ✅ — implementation and funded acceptance measurement complete
 PR 56 ✅ — retry complete, negative, bypass reverted
 PR 60 ✅ — canonical-version watch and rollover runbook complete
 PR 62 ✅ — PR 55 hardening cleanup complete
-PR 58 ⏳ — narrower candidate offline-complete; fresh funded gate pending
+PR 58 ⏳ — third funded attempt negative; behavior reverted
 PR 57 ⏳ — conditional on a future bypass gate passing every criterion
 ```
 
