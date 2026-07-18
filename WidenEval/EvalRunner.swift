@@ -665,7 +665,6 @@ struct EvalRunner {
             "WidenEval/EvalRunner.swift",
             "WidenKit/Models/SQLGenerationResult.swift",
             "WidenKit/Services/TextToSQLPipeline.swift",
-            "WidenKit/Services/SQLSchemaValidator.swift",
             "WidenKit/Services/SQLGenerationFailure.swift",
             "WidenKit/Services/GeneratedSQLRepairSupport.swift",
             "WidenKit/Services/GeneratedSQLVerifier.swift",

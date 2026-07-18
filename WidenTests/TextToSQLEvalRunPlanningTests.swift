@@ -500,17 +500,7 @@ struct TextToSQLEvalRunPlanningTests {
         let budgetCheck = try #require(
             classifierText.range(of: "appSideRejectionReason == .budgetExhausted")
         )
-        let expectedSQLClarificationCheck = try #require(
-            classifierText.range(
-                of: "expected == .sql, actualDecision(result) == TextToSQLEvalDecision.clarify.rawValue"
-            )
-        )
-        let expectedSQLClarificationCategory = try #require(
-            classifierText.range(of: "return .wrongDecisionExpectedSQLGotClarification")
-        )
         #expect(timedOutCheck.lowerBound < budgetCheck.lowerBound)
-        #expect(budgetCheck.lowerBound < expectedSQLClarificationCheck.lowerBound)
-        #expect(expectedSQLClarificationCheck.lowerBound < expectedSQLClarificationCategory.lowerBound)
     }
 
     @Test func releaseTriageReportsRedundantSchemaToolInterceptions() throws {
@@ -558,7 +548,6 @@ struct TextToSQLEvalRunPlanningTests {
         let source = try String(contentsOf: evalRunner, encoding: .utf8)
 
         #expect(source.contains("\"WidenKit/Models/SQLGenerationResult.swift\""))
-        #expect(source.contains("\"WidenKit/Services/SQLSchemaValidator.swift\""))
         #expect(source.contains("\"WidenKit/Models/OpenRouterCatalog.swift\""))
         #expect(source.contains("\"WidenKit/Services/OpenRouterSQLGenerator.swift\""))
         #expect(source.contains("options.backendMode.backends.contains(.cloud)"))

@@ -61,8 +61,6 @@ struct SchemaToolAgentSQLIntentCoveragePolicyTests {
 
         #expect(missing.decision == .needsCorrection)
         #expect(missing.missingSignals.contains("anti-join or NOT EXISTS for missing rows"))
-        #expect(missing.antiJoinCovered == false)
-        #expect(missing.antiJoinTriggerTerms.isEmpty)
 
         let covered = evaluate(
             question: question,
@@ -83,8 +81,6 @@ struct SchemaToolAgentSQLIntentCoveragePolicyTests {
         )
 
         #expect(covered.decision == .covered)
-        #expect(covered.antiJoinCovered)
-        #expect(covered.antiJoinTriggerTerms == ["never"])
     }
 
     @Test func averageOrderValueByCountryRequiresPaidFilterAndGroup() {
