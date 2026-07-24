@@ -218,6 +218,7 @@ enum EvalExplicitOption: Hashable {
     case cloudAgentMode
     case schemaAgentClarificationCorrectionMode
     case schemaAgentIntentCoverageMode
+    case schemaAgentPlanConsistencyMode
     case model
     case suitePath
     case repeatCount
@@ -232,6 +233,7 @@ struct EvalCLIOptions {
     var schemaAgentClarificationCorrectionMode: SchemaToolAgentClarificationCorrectionMode =
         .diagnosticsOnly
     var schemaAgentIntentCoverageMode: SchemaToolAgentIntentCoverageMode = .diagnosticsOnly
+    var schemaAgentPlanConsistencyMode: SchemaToolAgentPlanConsistencyMode = .diagnosticsOnly
     var model: String = OpenRouterCatalog.productionProfile.requestedModelID
     var suitePath: String = "Evals/suites/text-to-sql-v1.json"
     var caseID: String?
@@ -270,6 +272,7 @@ struct EvalCLIOptions {
           --cloud-agent legacy|tools
           --schema-agent-clarification-correction disabled|diagnostics|experimental
           --schema-agent-intent-coverage disabled|diagnostics|reject-only|experimental
+          --schema-agent-plan-consistency disabled|diagnostics|experimental
           --model <openrouter-model-id>
           --suite <path>
           --case <case-id>
@@ -340,6 +343,13 @@ struct EvalCLIOptions {
                 }
                 options.schemaAgentIntentCoverageMode = mode
                 options.explicitOptions.insert(.schemaAgentIntentCoverageMode)
+            case "--schema-agent-plan-consistency":
+                let value = try nextValue(after: argument)
+                guard let mode = Self.planConsistencyMode(from: value) else {
+                    throw EvalCLIError.invalidValue(argument, value)
+                }
+                options.schemaAgentPlanConsistencyMode = mode
+                options.explicitOptions.insert(.schemaAgentPlanConsistencyMode)
             case "--model":
                 options.model = try nextValue(after: argument)
                 options.explicitOptions.insert(.model)
@@ -474,6 +484,22 @@ struct EvalCLIOptions {
         case "experimental", "correct-over-clarification-experimental",
             "correctOverClarificationExperimental":
             return .correctOverClarificationExperimental
+        default:
+            return nil
+        }
+    }
+
+    private static func planConsistencyMode(
+        from value: String
+    ) -> SchemaToolAgentPlanConsistencyMode? {
+        switch value {
+        case "disabled":
+            return .disabled
+        case "diagnostics", "diagnostics-only", "diagnosticsOnly":
+            return .diagnosticsOnly
+        case "experimental", "correct-and-retry-experimental",
+            "correctAndRetryExperimental":
+            return .correctAndRetryExperimental
         default:
             return nil
         }

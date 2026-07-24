@@ -273,6 +273,7 @@ public struct TextToSQLEvalResumeCompatibilityManifest: Equatable, Sendable {
     public var cloudAgentMode: String?
     public var schemaAgentClarificationCorrectionMode: String?
     public var schemaAgentIntentCoverageMode: String?
+    public var schemaAgentPlanConsistencyMode: String?
     public var semanticDatabaseEnabled: Bool
     public var scorerSourceHash: String
     public var semanticComparatorSourceHash: String?
@@ -290,6 +291,7 @@ public struct TextToSQLEvalResumeCompatibilityManifest: Equatable, Sendable {
         cloudAgentMode: String?,
         schemaAgentClarificationCorrectionMode: String? = nil,
         schemaAgentIntentCoverageMode: String? = nil,
+        schemaAgentPlanConsistencyMode: String? = nil,
         semanticDatabaseEnabled: Bool,
         scorerSourceHash: String,
         semanticComparatorSourceHash: String?,
@@ -306,6 +308,7 @@ public struct TextToSQLEvalResumeCompatibilityManifest: Equatable, Sendable {
         self.cloudAgentMode = cloudAgentMode
         self.schemaAgentClarificationCorrectionMode = schemaAgentClarificationCorrectionMode
         self.schemaAgentIntentCoverageMode = schemaAgentIntentCoverageMode
+        self.schemaAgentPlanConsistencyMode = schemaAgentPlanConsistencyMode
         self.semanticDatabaseEnabled = semanticDatabaseEnabled
         self.scorerSourceHash = scorerSourceHash
         self.semanticComparatorSourceHash = semanticComparatorSourceHash
@@ -385,6 +388,12 @@ public enum TextToSQLEvalResumeCompatibility {
             issues: &issues
         )
         compare(
+            "schema agent plan consistency mode",
+            normalizedSchemaAgentPlanConsistencyMode(previous.schemaAgentPlanConsistencyMode),
+            normalizedSchemaAgentPlanConsistencyMode(current.schemaAgentPlanConsistencyMode),
+            issues: &issues
+        )
+        compare(
             "semantic DB",
             String(previous.semanticDatabaseEnabled),
             String(current.semanticDatabaseEnabled),
@@ -456,6 +465,10 @@ public enum TextToSQLEvalResumeCompatibility {
 
     private static func normalizedSchemaAgentIntentCoverageMode(_ value: String?) -> String {
         value ?? SchemaToolAgentIntentCoverageMode.diagnosticsOnly.rawValue
+    }
+
+    private static func normalizedSchemaAgentPlanConsistencyMode(_ value: String?) -> String {
+        value ?? SchemaToolAgentPlanConsistencyMode.diagnosticsOnly.rawValue
     }
 }
 

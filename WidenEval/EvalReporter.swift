@@ -87,6 +87,7 @@ enum EvalReporter {
             "| Cloud agent | \(tableCell(run.manifest.cloudAgentMode ?? "-")) |",
             "| Schema agent clarification correction | \(tableCell(run.manifest.schemaAgentClarificationCorrectionMode ?? "-")) |",
             "| Schema agent intent coverage | \(tableCell(run.manifest.schemaAgentIntentCoverageMode ?? "-")) |",
+            "| Schema agent plan consistency | \(tableCell(run.manifest.schemaAgentPlanConsistencyMode ?? "-")) |",
             "| Model | \(tableCell(run.manifest.model ?? "-")) |",
             "| Expected canonical model | \(tableCell(run.manifest.expectedCanonicalModelID ?? "-")) |",
             "| OS | \(tableCell(run.manifest.osVersion)) |",

@@ -30,6 +30,7 @@ struct EvalRunManifest: Codable {
     var cloudAgentMode: String?
     var schemaAgentClarificationCorrectionMode: String?
     var schemaAgentIntentCoverageMode: String?
+    var schemaAgentPlanConsistencyMode: String?
     var model: String?
     var expectedCanonicalModelID: String?
     var osVersion: String
@@ -248,6 +249,9 @@ struct EvalRunner {
             schemaAgentIntentCoverageMode: options.usesCloudSchemaAgent
                 ? options.schemaAgentIntentCoverageMode.rawValue
                 : nil,
+            schemaAgentPlanConsistencyMode: options.usesCloudSchemaAgent
+                ? options.schemaAgentPlanConsistencyMode.rawValue
+                : nil,
             semanticDatabaseEnabled: options.semanticDatabase,
             scorerSourceHash: scorerSourceHash,
             semanticComparatorSourceHash: semanticComparatorSourceHash,
@@ -331,6 +335,9 @@ struct EvalRunner {
                     : nil,
                 schemaAgentIntentCoverageMode: options.usesCloudSchemaAgent
                     ? options.schemaAgentIntentCoverageMode.rawValue
+                    : nil,
+                schemaAgentPlanConsistencyMode: options.usesCloudSchemaAgent
+                    ? options.schemaAgentPlanConsistencyMode.rawValue
                     : nil,
                 model: options.backendMode == .local ? nil : options.model,
                 expectedCanonicalModelID: expectedCanonicalModelID,
@@ -554,6 +561,12 @@ struct EvalRunner {
             let mode = SchemaToolAgentIntentCoverageMode(rawValue: value)
         {
             options.schemaAgentIntentCoverageMode = mode
+        }
+        if let value = previousRun.manifest.schemaAgentPlanConsistencyMode,
+            !options.explicitOptions.contains(.schemaAgentPlanConsistencyMode),
+            let mode = SchemaToolAgentPlanConsistencyMode(rawValue: value)
+        {
+            options.schemaAgentPlanConsistencyMode = mode
         }
         if let model = previousRun.manifest.model, !options.explicitOptions.contains(.model) {
             options.model = model
@@ -1068,7 +1081,8 @@ struct EvalRunner {
                     expectedCanonicalModelID: expectedCanonicalModelID,
                     maximumHTTPAttempts: maximumHTTPAttempts,
                     clarificationCorrectionMode: options.schemaAgentClarificationCorrectionMode,
-                    intentCoverageMode: options.schemaAgentIntentCoverageMode
+                    intentCoverageMode: options.schemaAgentIntentCoverageMode,
+                    planConsistencyMode: options.schemaAgentPlanConsistencyMode
                 )
             }
             return OpenRouterSQLGenerator(
@@ -1662,6 +1676,7 @@ private extension EvalRunManifest {
             cloudAgentMode: cloudAgentMode,
             schemaAgentClarificationCorrectionMode: schemaAgentClarificationCorrectionMode,
             schemaAgentIntentCoverageMode: schemaAgentIntentCoverageMode,
+            schemaAgentPlanConsistencyMode: schemaAgentPlanConsistencyMode,
             semanticDatabaseEnabled: semanticDatabaseEnabled,
             scorerSourceHash: scorerSourceHash,
             semanticComparatorSourceHash: semanticComparatorSourceHash,
@@ -1828,6 +1843,7 @@ private struct EvalCloudSchemaToolSQLGenerator: SQLGenerator, Sendable {
     var maximumHTTPAttempts: Int?
     var clarificationCorrectionMode: SchemaToolAgentClarificationCorrectionMode
     var intentCoverageMode: SchemaToolAgentIntentCoverageMode
+    var planConsistencyMode: SchemaToolAgentPlanConsistencyMode
 
     func generateSQL(
         question: String,
@@ -1860,6 +1876,7 @@ private struct EvalCloudSchemaToolSQLGenerator: SQLGenerator, Sendable {
         var configuration = OpenRouterSchemaToolSQLAgentConfiguration.default
         configuration.clarificationCorrectionMode = clarificationCorrectionMode
         configuration.intentCoverageMode = intentCoverageMode
+        configuration.planConsistencyMode = planConsistencyMode
         if let maximumHTTPAttempts {
             configuration.maximumHTTPAttempts = min(
                 configuration.maximumHTTPAttempts,
