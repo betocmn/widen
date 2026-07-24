@@ -699,6 +699,71 @@ results. A future candidate pairing the Sol pin with an over-clarification
 remedy (or evaluating `gpt-5.6-sol-pro`) requires a fresh pre-registration
 and new spend authorization, and must not weaken fail-closed behavior.
 
+## PR 64 — Trusted schema-tool SQL with GPT-5.6 Sol Pro
+
+**Status: ⏳ Candidate prepared 2026-07-24; staged funded plan awaiting spend
+authorization.**
+
+**Why:** The PR 63 gate produced the diagnostics-only evidence that the
+exclusive expected-SQL clarification bucket is not model behavior. All 31
+false clarifications in the Sol run — and all 28 in the retained GPT-5.5
+comparator — carry a terminal agent decision of `sql` with a complete query
+plan; the grounded regeneration step then discards that SQL and emits a
+clarification. The PR 56 bypass demonstrated the fix on GPT-5.5 (bucket
+28 to 5, semantic 19 to 26) and was rejected twice solely on single
+90-second wall-clock timeouts (91.0 s and 93.7 s), a flake class GPT-5.6
+Sol also recorded once (its slowest completed case ran 94.7 s). Sol
+additionally showed the strongest decision profile yet measured: 12/12
+clarification decisions and a semantic-mismatch bucket of 5 with no
+behavior change.
+
+**What:** Branch `sol-pro-trusted-sql-gate`, three independently
+revertable commits on top of the PR 63 evidence:
+
+1. Cherry-pick of `bcaf957` (`fix: trust validated schema tool sql`) — the
+   exact twice-gated PR 56 bypass patch; its validator and pipeline suites
+   pass unchanged against current helpers.
+2. Production pin `openai/gpt-5.6-sol-pro` (canonical
+   `openai/gpt-5.6-sol-pro-20260709`, display "GPT-5.6 Sol Pro"), priced
+   identically to GPT-5.5 and GPT-5.6 Sol ($5/M prompt, $30/M completion),
+   with the same Makefile, fixture, and current-state doc updates as PR 63.
+3. `wallClockTimeoutSeconds` default 90 to 105: every observed genuine
+   completion killed by the 90-second deadline (91.0/93.7/94.7 s) finishes
+   inside 105, which still leaves a 15-second validation-repair margin
+   inside the unchanged 120-second eval case budget. Timeouts still fail
+   closed; the zero-internal-timeout criterion is unchanged.
+
+**Pre-registered acceptance criteria (conjunctive, unchanged from PR 63
+plus the PR 56 bypass-specific floors):** 60/60 complete; semantic
+end-to-end at least 20/60; clarification decisions at least 11/12;
+exclusive expected-SQL clarification at most 28; tool-budget triage at
+most 6; static schema failures at most 1; safety, schema, and PostgreSQL
+verification at 100% of evaluated SQL; transport and structured parsing at
+least 95%; zero forbidden bindings, repeated/no-progress repairs, eval
+timeouts, and internal schema-agent timeouts; private routing plus
+requested/routed/canonical verification on every completion. Report
+cumulative branch spend, per-result cost, P50/P95/max latency, and every
+triage bucket. Any failed criterion reverts the candidate commits and
+records the negative result.
+
+**Staged spend plan (pending authorization, $9.00 branch cap total):**
+
+1. Sol Pro transport smoke, $0.50 allocation:
+   `make eval-openrouter-smoke MODEL=openai/gpt-5.6-sol-pro REPEAT=3`.
+   Abort the branch if transport, parsing, routing verification, or the
+   canonical pin fail.
+2. Focused semantic probe, $3.00 ceiling: the ten historical
+   over-clarification cases, three repeats, seeded semantic grading, on
+   the candidate. Proceed to the full gate only if the released SQL
+   semantically passes at least 15/30 with zero internal timeouts.
+3. Full pinned gate, $4.50 cumulative ceiling:
+   `make eval-release-triage MODEL=openai/gpt-5.6-sol-pro`.
+4. $1.00 unallocated reserve inside the $9.00 cap; stage ceilings shrink
+   if earlier stages overrun so the branch cap holds.
+
+No completion request before the cap is explicitly authorized;
+`ALLOW_MODEL_OVERRIDE` stays unset for gate publication.
+
 ## Later / conditional
 
 * **PR 10 embeddings** — stays deferred unless a future triage shows required
