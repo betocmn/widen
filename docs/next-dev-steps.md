@@ -331,8 +331,10 @@ routing, frozen heuristics.
   recording, non-conforming fallback). The full suite passes 1,152 tests
   in 50 suites; `make eval-build` passes.
 
-**Funded validation probe (pre-registered, pending authorization, $1.50
-cap):** `make eval-db-cloud-agent MODEL=openai/gpt-5.5 REPEAT=1
+**Funded validation probe (pre-registered; authorized by the maintainer
+2026-07-24 before any completion request, with latitude to iterate the
+contract prompt and re-probe once if conformance falls below the 16/20
+reporting threshold — cumulative probe spend capped at $3.00):** `make eval-db-cloud-agent MODEL=openai/gpt-5.5 REPEAT=1
 MAX_CLOUD_COST_USD=1.50` on this branch — the pinned production model with
 every policy in diagnostics-only mode, exercising the new structured
 contract on all 20 cases with seeded semantic grading. Conjunctive
