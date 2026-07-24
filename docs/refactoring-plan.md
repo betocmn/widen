@@ -2133,6 +2133,120 @@ retry needs a narrower recovery for the protected ambiguity class that reaches
 28 with margin for triage-precedence movement, followed by fresh spend
 authorization.
 
+### PR 58 narrower candidate [2026-07-17] — funded negative, behavior reverted
+
+Commit `ddf4e12` implements the smallest two-sided policy supported by the
+retained fixtures and sanitized failure evidence. Protected ambiguity recovery
+requires the existing structured `mustClarify` metric decision together with
+complete, subject-linked exact-search, described-table, exposed-column, and
+foreign-key evidence. It converts a clean terminal SQL response only when
+exactly one protected metric remains unresolved. Its terminal-less recovery is
+restricted to a standalone initial request with six successful schema calls,
+a rejected seventh call, no inspection calls, default diagnostics modes, and
+the same policy/evidence agreement; it returns a clarification directly and
+does not invoke an eighth call. Context or confirmed semantic bindings that
+define the metric keep the path closed.
+
+The other side permits SQL only for a clean two-table terminal response with
+one exact exposed foreign-key `LEFT JOIN`, no join modifiers, and one positive
+non-nullable joined-side `IS NULL` filter. The retained and excluded request
+entities must bind to the correct sides, and every additional meaningful
+grounded request concept must be represented by the anti-join trigger or one
+of those endpoint tables. Search provenance must come from exact identifiers
+linked to the question; schema-only and protected-metric-only overlap does not
+qualify. The implementation reuses existing intent, metric, schema-evidence,
+grounding, and terminal-state signals. It adds no phrase vocabulary, broad
+prompt guidance, scorer/triage rule, golden, seeded-data, backend, or routing
+change.
+
+The pre-registered expected movement is the three
+`saas.users-without-membership` false clarifications to SQL. That would reduce
+the raw expected-SQL-to-clarification count from 33 to 30 and, with all other
+results held fixed, the exclusive bucket from 30 to 27. All four protected
+ambiguity cases must clarify in each of three repeats, including the historical
+terminal-SQL miss and the exact six-success/rejected-seventh-call miss.
+Defined metrics and bindings, ungrounded or incomplete evidence, unrelated
+relationships, ordinary terminal-less failures, terminal clarification,
+cancellation, stale schema, timeout, trailing tool batches, attempted eighth
+calls, routing, validation, scorer, and triage are registered not to move. The
+retained comparator remains PR 55 at 11/12 and exclusive 28; the rejected
+`f356ba4` comparator was 12/12, raw 33, and exclusive 30.
+
+Acceptance is conjunctive: the complete private-routing 60-result,
+three-repeat gate for requested `openai/gpt-5.5` and expected canonical
+`openai/gpt-5.5-20260423` must reach 12/12 clarification decisions and an
+exclusive expected-SQL clarification bucket at or below 28, targeting below
+28 through genuine decision changes. Evaluated SQL must remain 100% safe, schema-valid, and
+PostgreSQL-verified, with no regression in private routing, requested/
+canonical/routed-model checks, structured parsing, forbidden bindings,
+repair progress, timeout classification, or the six-call budget. Semantic
+accuracy is informational. Failure of either PR 58 criterion requires
+reverting `ddf4e12` behavior and candidate-only tests while retaining only
+sanitized evidence and roadmap notes; success on every criterion permits
+retaining the behavior and marking PR 58 done.
+
+The requested fresh spend ceiling was $4.00. No historical authorization was
+reused. Before requesting authorization, offline validation completed as
+follows: the four core suites passed 407/407; the focused ten-suite matrix
+passed 565/565; `make project` regenerated identical tracked output; the full
+result bundle recorded 1,162 total tests, 1,120 passed, 42 skipped, and 0
+failed; `make eval-build` passed; and `git diff --check` passed.
+
+Fresh authorization was granted on 2026-07-18. The first process was stopped
+after review identified that the runner's dollar limit is enforced between
+cases rather than as a provider-side hard cap. Provider usage was reconciled,
+the persisted partial run was resumed with reduced cumulative ceilings, and
+the complete 60/60 result used a conservatively accounted $3.286685. No paid
+request preceded authorization, and none was made after the complete gate.
+The requested model was `openai/gpt-5.5`, the expected canonical model was
+`openai/gpt-5.5-20260423`, the cloud agent was `tools`, and both schema-agent
+policy modes remained `diagnosticsOnly`.
+
+| Mechanical criterion | Retained PR 55 comparator | Third PR 58 attempt | Result |
+| --- | ---: | ---: | --- |
+| Clarification decisions | 11/12 | 10/12 | Fail (required 12/12) |
+| Exclusive expected-SQL clarification bucket | 28 | 31 | Fail (required `<= 28`) |
+| Raw expected-SQL-to-clarification decisions | 33 | 33 | Fail (required genuine reduction by at least 2; target 30) |
+| Registered membership controls moved to SQL | - | 0/3 | Fail (expected 3/3) |
+| Semantic end to end | 19/60 | 18/60 | Informational |
+
+All three `preseason.top-wins-ambiguous` repeats clarified correctly.
+`saas.healthy-accounts` passed only repeat 2; repeats 1 and 3 were tool-budget
+generation failures after seven schema-tool records, leaving clarification at
+10/12. All three `saas.users-without-membership` controls remained
+clarifications, so the raw false-clarification count stayed 33. Triage
+precedence assigned two `saas.active-users-by-org` false clarifications to the
+tool-budget category and left 31 in the exclusive bucket. This is no genuine
+decision reduction and fails both pre-registered PR 58 criteria.
+
+The run was complete with 0 missing, 0 budget-skipped, and 0 provider-budget-
+unavailable results. Safety, schema validity, and PostgreSQL verification were
+15/15; transport was 60/60; and repeated/no-progress repairs, model/tool
+protocol failures, missing or malformed terminal results, internal
+schema-agent timeouts, and timeout/cancellation classifications were all 0.
+The exclusive tool-budget bucket was 4. The sanitized reports do not publish
+separate current-run aggregate latency, forbidden-binding, returned/routed-
+model, or global interception totals, so historical values are not reused.
+
+Commit `5ee77da` mechanically reverted candidate `ddf4e12` and its tests,
+restoring all 12 affected source/test files exactly to `origin/main` while
+retaining the pre-registration and sanitized evidence. The retained tree
+therefore preserves the six-call budget, PR 53 heuristic freeze, private and
+canonical/routed-model protections, safety/schema/PostgreSQL validation,
+structured parsing and deterministic SQL review, PR 59 timeout/budget/
+interception behavior, PR 60 workflow, PR 62 hardening, and no PR 56 bypass.
+PR 58 remains not done. A future experiment should first add diagnostics-only,
+redacted rejection reasons for the strict anti-join and protected budget
+evidence gates; no new behavior should be proposed until deterministic replay
+proves at least two genuine false-clarification removals while preserving all
+protected cases.
+
+Post-revert validation passed: the focused ten-suite matrix recorded 527
+total, 527 passed, 0 skipped, and 0 failed; `make project` regenerated
+identical tracked output; the full result bundle recorded 1,124 total tests,
+1,082 passed, 42 skipped, and 0 failed; `make eval-build` passed; and
+`git diff --check` passed.
+
 ### PR 59 funded acceptance measurement [2026-07-14] — ✅ Done
 
 The same complete gate supplied PR 59's pre-registered measurement:
@@ -2269,7 +2383,7 @@ PR 59 ✅ — implementation and funded acceptance measurement complete
 PR 56 ✅ — retry complete, negative, bypass reverted
 PR 60 ✅ — canonical-version watch and rollover runbook complete
 PR 62 ✅ — PR 55 hardening cleanup complete
-PR 58 ⏳ — two funded attempts negative; await a genuinely narrower design
+PR 58 ⏳ — third funded attempt negative; behavior reverted
 PR 57 ⏳ — conditional on a future bypass gate passing every criterion
 ```
 
