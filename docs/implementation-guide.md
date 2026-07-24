@@ -58,7 +58,7 @@ make run       # build and open Debug app
 make test      # unit tests, gated integration tests skipped
 make test-db   # unit + local PostgreSQL integration tests
 make test-fm   # unit + Foundation Models smoke test
-make eval-release  # PR 12 release gate; defaults to the pinned GPT-5.5 profile
+make eval-release  # PR 12 release gate; defaults to the pinned GPT-5.6 Sol profile
 ```
 
 The app is ad-hoc signed for local development and App Sandbox is disabled in
@@ -475,7 +475,7 @@ There are five implementations:
   Foundation Models framework on eligible macOS 26+ Apple Silicon Macs.
 - `OpenRouterSQLGenerator`: cloud generation through OpenRouter's
   OpenAI-compatible chat-completions API. In the product it is constructed only
-  from `OpenRouterCatalog.productionProfile`, which pins the requested GPT-5.5
+  from `OpenRouterCatalog.productionProfile`, which pins the requested GPT-5.6 Sol
   alias and expected canonical version. A returned version mismatch fails with
   a typed `modelVersionMismatch` error. Every completion requires parameter-
   compatible zero-data-retention routing and denies provider data collection.

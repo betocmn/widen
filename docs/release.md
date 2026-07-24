@@ -105,7 +105,7 @@ identity failures also fail the workflow, but do not open a drift issue.
 ## OpenRouter Canonical Rollover
 
 Treat a canonical rollover as a new model version, not a routine constant
-update. The requested production alias must remain `openai/gpt-5.5`; the gate
+update. The requested production alias must remain `openai/gpt-5.6-sol`; the gate
 must exercise that alias so Widen verifies the route OpenRouter will actually
 use.
 
@@ -150,15 +150,15 @@ use.
    smoke and complete release gates:
 
    ```sh
-   make eval-openrouter-smoke MODEL=openai/gpt-5.5 REPEAT=3 MAX_CLOUD_COST_USD=<smoke-allocation>
-   make eval-release-triage MODEL=openai/gpt-5.5 RELEASE_VERSION=X.Y.Z MAX_CLOUD_COST_USD=<full-gate-cumulative-ceiling>
+   make eval-openrouter-smoke MODEL=openai/gpt-5.6-sol REPEAT=3 MAX_CLOUD_COST_USD=<smoke-allocation>
+   make eval-release-triage MODEL=openai/gpt-5.6-sol RELEASE_VERSION=X.Y.Z MAX_CLOUD_COST_USD=<full-gate-cumulative-ceiling>
    ```
 
    If the complete run is interrupted, resume its existing output directory
    instead of restarting completed cases:
 
    ```sh
-   make eval-release-resume RESUME=<run-directory> MODEL=openai/gpt-5.5 RELEASE_VERSION=X.Y.Z MAX_CLOUD_COST_USD=<full-gate-cumulative-ceiling>
+   make eval-release-resume RESUME=<run-directory> MODEL=openai/gpt-5.6-sol RELEASE_VERSION=X.Y.Z MAX_CLOUD_COST_USD=<full-gate-cumulative-ceiling>
    ```
 
    Reuse the same full-gate ceiling when persisted results account for every

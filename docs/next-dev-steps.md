@@ -136,6 +136,9 @@ Numbering continues from `docs/refactoring-plan.md`.
    healthy-account budget misses and why the intended anti-join controls did
    not move
 6. PR 57 only after a future bypass iteration clears every PR 56 criterion
+7. Done, negative — PR 63 GPT-5.6 Sol pin upgrade: the funded gate failed
+   the exclusive-clarification ceiling and the zero internal-timeout rule,
+   so the candidate pin was reverted and only evidence remains
 
 ---
 
@@ -709,6 +712,123 @@ schema/PostgreSQL validation, structured parsing, deterministic SQL review,
 frozen phrase heuristics, PR 59 timeout/tool-budget/interception behavior, and
 PR 60 watch/rollover workflow remain unchanged.
 
+## PR 63 — GPT-5.6 Sol production model upgrade
+
+**Status: Funded negative 2026-07-24; pin reverted, evidence retained.**
+
+**Why:** OpenRouter now lists the GPT-5.6 family. `openai/gpt-5.6-sol` is
+priced identically to the retained `openai/gpt-5.5` pin ($5/M prompt, $30/M
+completion, observed 2026-07-24) with the same 1,050,000-token context, so
+the upgrade is per-token cost-neutral. A newer-generation model is the kind
+of change that could move the semantic bucket, which is the current
+release-gate bottleneck, but that claim must be proven on the full gate, not
+assumed.
+
+**What:** Branch `upgrade-gpt-5.6-sol-pin` repins
+`OpenRouterCatalog.productionProfile` to requested `openai/gpt-5.6-sol`,
+expected canonical `openai/gpt-5.6-sol-20260709`, and display name
+"GPT-5.6 Sol", plus the Makefile pin, the deterministic fixtures that assert
+the production pin, and current-state wording in README, PRIVACY,
+CONTRIBUTING, `docs/release.md`, `Evals/README.md`, and
+`docs/implementation-guide.md`. No prompt, private-routing, safety, schema,
+PostgreSQL-verification, schema-tool-budget, frozen-heuristic, or
+release-gate-enforcement change is included.
+
+Offline validation on 2026-07-24: `make project` regenerated cleanly; the
+five focused canonical/routing/planning suites passed 212 tests; the full
+`make test` run passed; `make eval-build` succeeded; and the credential-free
+`--check-openrouter-canonical` metadata check observed canonical
+`openai/gpt-5.6-sol-20260709` for the requested alias (exit 0, no completion
+spend).
+
+**Pre-registered acceptance criteria (conjunctive, recorded before any
+completion request):** identical to the retained rollover non-regression
+criteria in `docs/release.md`, applied to the new alias:
+
+* 60/60 complete results.
+* Semantic end-to-end at least 20/60. The rollover floor is 19/60, but a
+  model swap follows the PR 55 incremental promotion precedent (GPT-5.6
+  Terra was not promoted despite clearing the floor), so the candidate must
+  strictly exceed the retained 2026-07-10 comparator's 19/60.
+* Clarification decisions at least 11/12.
+* Exclusive expected-SQL clarification at most 28.
+* Tool-budget triage at most 6 and static schema failures at most 1.
+* Safety, schema, and PostgreSQL verification at 100% for evaluated SQL.
+* Transport and structured parsing at least 95%.
+* Zero forbidden bindings, repeated/no-progress repairs, eval timeouts, and
+  internal schema-agent timeouts.
+* Private routing plus requested/routed/canonical model verification on
+  every completion request.
+
+Also report cumulative branch spend, total and per-result gate cost,
+P50/P95/maximum latency, semantic mismatches, and every triage bucket even
+where no threshold applies. If any criterion fails, revert the candidate pin,
+record the negative result, and do not merge; the cheaper `terra` and `luna`
+GPT-5.6 tiers may be evaluated only as separate pre-registered experiments.
+
+**Spend plan (authorized 2026-07-24):** total branch cap $5.00, smoke
+allocation $0.50 for `make eval-openrouter-smoke MODEL=openai/gpt-5.6-sol
+REPEAT=3`, one-case overrun reserve $0.10, and a full-gate cumulative
+ceiling of $4.00 for `make eval-release-triage MODEL=openai/gpt-5.6-sol`,
+sized against the $3.276305 and $3.521450 prior full-gate costs. The
+maintainer explicitly authorized this cap on 2026-07-24 before any
+completion request. After the smoke, the full-gate ceiling stays $4.00 only
+while actual smoke spend plus $4.00 plus the $0.10 reserve remains within
+the $5.00 branch cap; otherwise it shrinks to fit. `ALLOW_MODEL_OVERRIDE`
+stays unset so the gate exercises the production alias contract.
+
+**Smoke result 2026-07-24 — passed:** `make eval-openrouter-smoke
+MODEL=openai/gpt-5.6-sol REPEAT=3 MAX_CLOUD_COST_USD=0.50` completed 15/15
+with transport 15/15, structured parse 15/15, strictJSONSchema on every
+call, zero retries, returned model `openai/gpt-5.6-sol` verified on all 15
+completions, single ZDR provider, and $0.156745 spend against the $0.50
+allocation (P50 2,654 ms, P95 4,380 ms). Static-shape was 9/15 with the
+same two legacy-agent cases missing as the recorded 2026-06-25 GPT-5.5
+smoke (also 9/15, $0.181115), so decision behavior matches the incumbent's
+known smoke profile. Remaining full-gate ceiling stays $4.00: $0.156745
+smoke plus $4.00 plus the $0.10 reserve is within the $5.00 branch cap.
+
+Passing restores the existing beta cloud path on GPT-5.6 Sol. It does not
+satisfy the separate 90% semantic production-readiness gate and does not
+authorize removing beta wording.
+
+**Full-gate outcome 2026-07-24 — negative, pin reverted:** the complete
+`make eval-release-triage MODEL=openai/gpt-5.6-sol` run (60/60 results,
+commit `729755a`, run `.eval-results/20260724-040546-370`, recorded in
+`docs/evals/0.1.0.md` and `docs/evals/0.1.0-triage.md`) failed two of the
+pre-registered conjunctive criteria, so candidate `27ed6a0` was reverted in
+`3a653f5` and `openai/gpt-5.5` remains the retained pin:
+
+* Exclusive expected-SQL clarification was 31 against the ceiling of 28.
+* Internal schema-agent timeouts were 1 against the required zero: one
+  `saas.users-without-membership` repeat ended as a `generationFailure`
+  after four schema-tool calls, the same failure class that rejected the
+  PR 56 bypass retry.
+
+Every other criterion passed: semantic end-to-end 22/60 (above both the
+19/60 retained comparator and the amended 20/60 promotion bar),
+clarification decisions 12/12, semantic-mismatch triage 5 (retained
+comparator 6), tool-budget triage 1 (ceiling 6), static schema failures 0,
+safety and schema validity 15/15 evaluated SQL, PostgreSQL verification
+failures 0, transport 60/60, structured parsing 59/60 (98.3%), forbidden
+bindings 0, repeated/no-progress repairs 0, eval timeouts 0, and the
+returned model verified as `openai/gpt-5.6-sol` on all 60 completions via
+one ZDR provider with canonical enforcement active.
+
+Reported per the pre-registration: gate cost $2.941500 ($0.049025 per
+result, below the retained $0.058690833 comparator), latency P50 12,087 ms,
+P95 66,390 ms, maximum 94,735 ms; cumulative branch spend $3.098245
+($0.156745 smoke plus $2.941500 gate), within the $4.00 gate ceiling and
+the $5.00 branch authorization.
+
+Standing read for any retry: GPT-5.6 Sol's failure profile is almost
+entirely over-clarification, not SQL quality — it reached 12/12
+clarification accuracy, which three funded PR 58 attempts could not, and
+nearly halved the per-result cost, but falsely clarified 31 expected-SQL
+results. A future candidate pairing the Sol pin with an over-clarification
+remedy (or evaluating `gpt-5.6-sol-pro`) requires a fresh pre-registration
+and new spend authorization, and must not weaken fail-closed behavior.
+
 ## Later / conditional
 
 * **PR 10 embeddings** — stays deferred unless a future triage shows required
@@ -725,7 +845,7 @@ PR 60 watch/rollover workflow remain unchanged.
   passing `docs/evals/<version>.md` as the production-ready record.
 * **Second vetted model in the allowlist (formerly PR 61)** — dropped from
   planned work; keep as optional future work. If accounts whose OpenRouter
-  provider policies hide GPT-5.5's ZDR endpoints ever need a cloud path,
+  provider policies hide GPT-5.6 Sol's ZDR endpoints ever need a cloud path,
   evaluate one fallback candidate through the full release gate under
   identical private routing and add it to the profile list only if it meets
   or beats the pinned baseline with all hard gates green.
