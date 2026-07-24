@@ -1375,6 +1375,20 @@ retry waits for the endpoint to recover and runs with
 `MAX_CLOUD_COST_USD=0.45` so cumulative stage 1 spend stays within the
 $0.50 allocation.
 
+**Stage 1 second attempt 2026-07-24 — also operationally inconclusive:**
+after the endpoints listing reported the Azure ZDR endpoint healthy on
+two consecutive polls, run `.eval-results/20260724-132929-383` recorded
+14/15 typed `providerUnavailable` transport failures (HTTP 502, three
+attempts each) for $0.008965; the endpoint flipped back to degraded
+during the run and its EU sibling showed 0% recent uptime. The single
+completed result was again fully healthy (`strictJSONSchema`, returned
+model verified `openai/gpt-5.6-sol`, Azure ZDR). Every completion for
+this model routes through Azure, so the stage is blocked on an ongoing
+provider incident, not candidate behavior. Cumulative stage 1 spend is
+$0.055160 of $0.50. The next retry waits for a sustained healthy window
+(five consecutive healthy polls and 30-minute uptime at or above 97%)
+and runs with `MAX_CLOUD_COST_USD=0.44`.
+
 **Free validation record 2026-07-24 (no paid request made):**
 
 * `make project` regenerated an unchanged tracked tree.
