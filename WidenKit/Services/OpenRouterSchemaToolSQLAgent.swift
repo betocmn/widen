@@ -47,7 +47,7 @@ public struct OpenRouterSchemaToolSQLAgentConfiguration: Equatable, Sendable {
         wallClockTimeoutSeconds: TimeInterval = 105,
         clarificationCorrectionMode: SchemaToolAgentClarificationCorrectionMode = .diagnosticsOnly,
         intentCoverageMode: SchemaToolAgentIntentCoverageMode = .diagnosticsOnly,
-        planConsistencyMode: SchemaToolAgentPlanConsistencyMode = .correctAndRetryExperimental
+        planConsistencyMode: SchemaToolAgentPlanConsistencyMode = .diagnosticsOnly
     ) {
         self.maximumSchemaToolCalls = maximumSchemaToolCalls
         self.maximumRepairSchemaToolCalls = maximumRepairSchemaToolCalls
