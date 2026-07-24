@@ -99,7 +99,7 @@ struct TextToSQLEvalRunPlanningTests {
     @Test func compatibilityRejectsChangedOrMissingExpectedCanonicalModel() {
         let current = Self.compatibility()
         var changed = current
-        changed.expectedCanonicalModelID = "openai/gpt-5.5-unevaluated"
+        changed.expectedCanonicalModelID = "openai/gpt-5.6-sol-unevaluated"
         var legacy = current
         legacy.expectedCanonicalModelID = nil
 
@@ -353,7 +353,7 @@ struct TextToSQLEvalRunPlanningTests {
             .deletingLastPathComponent()
 
         let pinned = try Self.releaseResumeDryRunCommand(repoRoot: repoRoot)
-        #expect(pinned.contains(#"--model "openai/gpt-5.5""#))
+        #expect(pinned.contains(#"--model "openai/gpt-5.6-sol""#))
         #expect(!pinned.contains("--allow-model-override"))
 
         let inherited = try Self.releaseResumeDryRunCommand(
@@ -683,8 +683,8 @@ struct TextToSQLEvalRunPlanningTests {
             suiteVersion: "1",
             suiteFileHash: "suite-hash",
             schemaFixtureHashes: ["commerce": "schema-hash"],
-            model: "openai/gpt-5.5",
-            expectedCanonicalModelID: "openai/gpt-5.5-20260423",
+            model: "openai/gpt-5.6-sol",
+            expectedCanonicalModelID: "openai/gpt-5.6-sol-20260709",
             backendMode: "cloud",
             cloudAgentMode: "tools",
             semanticDatabaseEnabled: true,
