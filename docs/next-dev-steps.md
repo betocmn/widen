@@ -746,7 +746,8 @@ cumulative branch spend, per-result cost, P50/P95/max latency, and every
 triage bucket. Any failed criterion reverts the candidate commits and
 records the negative result.
 
-**Staged spend plan (pending authorization, $9.00 branch cap total):**
+**Staged spend plan (authorized by the maintainer 2026-07-24 before any
+completion request, $9.00 branch cap total):**
 
 1. Sol Pro transport smoke, $0.50 allocation:
    `make eval-openrouter-smoke MODEL=openai/gpt-5.6-sol-pro REPEAT=3`.
