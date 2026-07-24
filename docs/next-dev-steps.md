@@ -1352,6 +1352,12 @@ been spent on this branch):** total branch cap **$8.00**:
    Later stage ceilings shrink if an earlier stage overruns so the $8.00
    cap holds.
 
+**Authorization 2026-07-24:** the maintainer approved the $8.00 staged
+cap in one message after the pre-registration and free validation above
+were recorded and before any completion request. The stages execute
+exactly as pre-registered; any failed criterion stops paid work and
+triggers the revert rule.
+
 **Free validation record 2026-07-24 (no paid request made):**
 
 * `make project` regenerated an unchanged tracked tree.
