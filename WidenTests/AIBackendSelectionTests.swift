@@ -309,10 +309,10 @@ struct AIBackendSelectionTests {
         #expect(state.aiBackendMode == .cloud)
         #expect(state.activeBackendDisplayName.contains("via OpenRouter"))
         #expect(state.cloudProvider == .openRouter)
-        #expect(OpenRouterCatalog.productionProfile.requestedModelID == "openai/gpt-5.6-sol")
+        #expect(OpenRouterCatalog.productionProfile.requestedModelID == "openai/gpt-5.5")
         #expect(
             OpenRouterCatalog.productionProfile.expectedCanonicalModelID
-                == "openai/gpt-5.6-sol-20260709"
+                == "openai/gpt-5.5-20260423"
         )
     }
 

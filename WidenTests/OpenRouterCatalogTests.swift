@@ -188,7 +188,7 @@ struct OpenRouterCatalogTests {
         #expect(
             !TextToSQLReleaseGateModelPolicy.canPublishCommittedDocs(
                 model: profile.requestedModelID,
-                expectedCanonicalModelID: "openai/gpt-5.6-sol-unevaluated",
+                expectedCanonicalModelID: "openai/gpt-5.5-unevaluated",
                 backendIncludesCloud: true,
                 cloudEvaluatedResultCount: 1
             )
@@ -261,7 +261,7 @@ struct OpenRouterCatalogTests {
         #expect(observation.observedCanonicalModelID == profile.expectedCanonicalModelID)
         let request = try #require(transport.requests.only)
         #expect(request.httpMethod == "GET")
-        #expect(request.url?.path == "/api/v1/model/openai/gpt-5.6-sol")
+        #expect(request.url?.path == "/api/v1/model/openai/gpt-5.5")
         #expect(request.value(forHTTPHeaderField: "Authorization") == nil)
         #expect(request.value(forHTTPHeaderField: "X-Title") == "Widen Canonical Watch")
         #expect(request.value(forHTTPHeaderField: "Accept") == "application/json")
@@ -274,7 +274,7 @@ struct OpenRouterCatalogTests {
         let profile = OpenRouterCatalog.productionProfile
         let catalogEndpoint = Self.watchBaseURL.appendingPathComponent("models/user")
         let watchEndpoint = Self.watchEndpoint()
-        let rolledCanonicalModelID = "openai/gpt-5.6-sol-rolled"
+        let rolledCanonicalModelID = "openai/gpt-5.5-rolled"
         let transport = StubTransport([
             .success((
                 Self.catalogResponseData(
@@ -320,17 +320,17 @@ struct OpenRouterCatalogTests {
         #expect(transport.requests.count == 3)
         #expect(transport.requests[0].url?.path == "/api/v1/models/user")
         #expect(transport.requests[0].value(forHTTPHeaderField: "Authorization") != nil)
-        #expect(transport.requests[1].url?.path == "/api/v1/model/openai/gpt-5.6-sol")
+        #expect(transport.requests[1].url?.path == "/api/v1/model/openai/gpt-5.5")
         #expect(transport.requests[1].value(forHTTPHeaderField: "Authorization") == nil)
         #expect(transport.requests[1].value(forHTTPHeaderField: "Cache-Control") == "no-cache")
-        #expect(transport.requests[2].url?.path == "/api/v1/model/openai/gpt-5.6-sol")
+        #expect(transport.requests[2].url?.path == "/api/v1/model/openai/gpt-5.5")
         #expect(transport.requests[2].value(forHTTPHeaderField: "Authorization") == nil)
         #expect(transport.requests[2].value(forHTTPHeaderField: "Cache-Control") == "no-cache")
     }
 
     @Test func canonicalWatchReportsOnlyAConfirmedCanonicalMismatchAsDrift() async throws {
         let profile = OpenRouterCatalog.productionProfile
-        let observedCanonicalModelID = "openai/gpt-5.6-sol-rolled"
+        let observedCanonicalModelID = "openai/gpt-5.5-rolled"
         let transport = Self.watchTransport(
             id: profile.requestedModelID,
             canonicalModelID: observedCanonicalModelID
@@ -356,7 +356,7 @@ struct OpenRouterCatalogTests {
         await expectCanonicalWatchError(
             .unexpectedRequestedModel(profile.requestedModelID),
             data: Self.watchResponseData(
-                id: "OpenAI/gpt-5.6-sol",
+                id: "OpenAI/gpt-5.5",
                 canonicalModelID: profile.expectedCanonicalModelID
             )
         )
@@ -377,10 +377,10 @@ struct OpenRouterCatalogTests {
             .canonicalModelInvalid(profile.requestedModelID),
             data: Self.watchResponseData(
                 id: profile.requestedModelID,
-                canonicalModelID: "openai/gpt-5.6-sol rolled\nunsafe"
+                canonicalModelID: "openai/gpt-5.5 rolled\nunsafe"
             )
         )
-        for invalidID in ["garbage", "/", "openai/", "/gpt-5.6-sol", "openai//gpt-5.6-sol"] {
+        for invalidID in ["garbage", "/", "openai/", "/gpt-5.5", "openai//gpt-5.5"] {
             await expectCanonicalWatchError(
                 .canonicalModelInvalid(profile.requestedModelID),
                 data: Self.watchResponseData(
@@ -470,7 +470,7 @@ struct OpenRouterCatalogTests {
         watchBaseURL
             .appendingPathComponent("model")
             .appendingPathComponent("openai")
-            .appendingPathComponent("gpt-5.6-sol")
+            .appendingPathComponent("gpt-5.5")
     }
 
     private static func watchResponseData(
