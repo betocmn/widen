@@ -34,7 +34,10 @@ public struct OpenRouterSchemaToolSQLAgentConfiguration: Equatable, Sendable {
         maximumRepeatedToolCorrections: Int = 1,
         maximumHTTPAttempts: Int = 12,
         countCapabilityLookupHTTPAttempts: Bool = false,
-        wallClockTimeoutSeconds: TimeInterval = 90,
+        // 105 keeps a margin inside the 120-second eval case budget while
+        // clearing the observed 91.0/93.7/94.7-second genuine completions
+        // that a 90-second deadline converted into hard timeouts.
+        wallClockTimeoutSeconds: TimeInterval = 105,
         clarificationCorrectionMode: SchemaToolAgentClarificationCorrectionMode = .diagnosticsOnly,
         intentCoverageMode: SchemaToolAgentIntentCoverageMode = .diagnosticsOnly
     ) {
