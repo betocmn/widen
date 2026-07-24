@@ -1733,7 +1733,7 @@ struct OpenRouterSchemaToolSQLAgentTests {
         #expect(diagnostics?.terminalQueryPlan == "present; structured: false")
     }
 
-    @Test func planlessRetryAfterCorrectionIsAcceptedWithStickyRejection() async throws {
+    @Test func planlessRetryAfterCorrectionIsAcceptedWithoutSuccessFlag() async throws {
         let schema = Self.makeSupportTicketSchema()
         let sql = """
             SELECT AVG(first_response_at - created_at) AS average_first_response_time
@@ -1795,8 +1795,8 @@ struct OpenRouterSchemaToolSQLAgentTests {
         #expect(diagnostics?.planConsistencyDecision == "notEvaluated")
         #expect(diagnostics?.planConsistencyCorrectionAttempted == true)
         #expect(diagnostics?.planConsistencyCorrectionSucceeded == false)
-        #expect(diagnostics?.appSideRejectionReason == .planConsistencyRejected)
-        #expect(diagnostics?.terminalValidationFailureReason == "planConsistencyFailed")
+        #expect(diagnostics?.appSideRejectionReason == nil)
+        #expect(diagnostics?.terminalValidationFailureReason == nil)
     }
 
     @Test func acceptedClarifyAfterPlanCorrectionCarriesNoStalePlanDiagnostics() async throws {
