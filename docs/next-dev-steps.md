@@ -616,7 +616,10 @@ completion request):** identical to the retained rollover non-regression
 criteria in `docs/release.md`, applied to the new alias:
 
 * 60/60 complete results.
-* Semantic end-to-end at least 19/60.
+* Semantic end-to-end at least 20/60. The rollover floor is 19/60, but a
+  model swap follows the PR 55 incremental promotion precedent (GPT-5.6
+  Terra was not promoted despite clearing the floor), so the candidate must
+  strictly exceed the retained 2026-07-10 comparator's 19/60.
 * Clarification decisions at least 11/12.
 * Exclusive expected-SQL clarification at most 28.
 * Tool-budget triage at most 6 and static schema failures at most 1.
@@ -643,6 +646,17 @@ completion request. After the smoke, the full-gate ceiling stays $4.00 only
 while actual smoke spend plus $4.00 plus the $0.10 reserve remains within
 the $5.00 branch cap; otherwise it shrinks to fit. `ALLOW_MODEL_OVERRIDE`
 stays unset so the gate exercises the production alias contract.
+
+**Smoke result 2026-07-24 — passed:** `make eval-openrouter-smoke
+MODEL=openai/gpt-5.6-sol REPEAT=3 MAX_CLOUD_COST_USD=0.50` completed 15/15
+with transport 15/15, structured parse 15/15, strictJSONSchema on every
+call, zero retries, returned model `openai/gpt-5.6-sol` verified on all 15
+completions, single ZDR provider, and $0.156745 spend against the $0.50
+allocation (P50 2,654 ms, P95 4,380 ms). Static-shape was 9/15 with the
+same two legacy-agent cases missing as the recorded 2026-06-25 GPT-5.5
+smoke (also 9/15, $0.181115), so decision behavior matches the incumbent's
+known smoke profile. Remaining full-gate ceiling stays $4.00: $0.156745
+smoke plus $4.00 plus the $0.10 reserve is within the $5.00 branch cap.
 
 Passing restores the existing beta cloud path on GPT-5.6 Sol. It does not
 satisfy the separate 90% semantic production-readiness gate and does not
