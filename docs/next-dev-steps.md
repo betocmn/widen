@@ -633,14 +633,16 @@ where no threshold applies. If any criterion fails, revert the candidate pin,
 record the negative result, and do not merge; the cheaper `terra` and `luna`
 GPT-5.6 tiers may be evaluated only as separate pre-registered experiments.
 
-**Spend plan (pending authorization):** total branch cap $5.00, smoke
+**Spend plan (authorized 2026-07-24):** total branch cap $5.00, smoke
 allocation $0.50 for `make eval-openrouter-smoke MODEL=openai/gpt-5.6-sol
 REPEAT=3`, one-case overrun reserve $0.10, and a full-gate cumulative
 ceiling of $4.00 for `make eval-release-triage MODEL=openai/gpt-5.6-sol`,
-sized against the $3.276305 and $3.521450 prior full-gate costs. No paid
-request may be made before this cap is explicitly authorized, and
-`ALLOW_MODEL_OVERRIDE` stays unset so the gate exercises the production
-alias contract.
+sized against the $3.276305 and $3.521450 prior full-gate costs. The
+maintainer explicitly authorized this cap on 2026-07-24 before any
+completion request. After the smoke, the full-gate ceiling stays $4.00 only
+while actual smoke spend plus $4.00 plus the $0.10 reserve remains within
+the $5.00 branch cap; otherwise it shrinks to fit. `ALLOW_MODEL_OVERRIDE`
+stays unset so the gate exercises the production alias contract.
 
 Passing restores the existing beta cloud path on GPT-5.6 Sol. It does not
 satisfy the separate 90% semantic production-readiness gate and does not
