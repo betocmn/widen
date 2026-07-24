@@ -1389,6 +1389,18 @@ $0.055160 of $0.50. The next retry waits for a sustained healthy window
 (five consecutive healthy polls and 30-minute uptime at or above 97%)
 and runs with `MAX_CLOUD_COST_USD=0.44`.
 
+**Stage 1 outcome 2026-07-24 — passed on the third attempt:** after the
+Azure ZDR endpoint returned to status 0 at 100% 30-minute uptime, run
+`.eval-results/20260724-213833-073` completed 15/15 with transport
+15/15, structured parsing 15/15, `strictJSONSchema` on every call,
+returned model verified `openai/gpt-5.6-sol` on all 15 completions via
+the single Azure ZDR provider, and zero eval timeouts. Static-shape was
+9/15 with the same two legacy-agent misses as the recorded GPT-5.5 and
+Sol smoke fingerprints (reported, not gated). Attempt cost $0.157225;
+cumulative stage 1 spend $0.212385 of the $0.50 allocation, cumulative
+branch spend $0.212385 of $8.00. Every stage 1 criterion passed, so the
+plan proceeds to stage 2.
+
 **Free validation record 2026-07-24 (no paid request made):**
 
 * `make project` regenerated an unchanged tracked tree.
