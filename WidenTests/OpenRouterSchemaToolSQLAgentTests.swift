@@ -3981,6 +3981,21 @@ struct OpenRouterSchemaToolSQLAgentTests {
         #expect(OpenRouterSchemaToolSQLAgentConfiguration().maximumSchemaToolCalls == 6)
     }
 
+    @Test func defaultConfigurationEnforcesPlanConsistency() {
+        #expect(
+            OpenRouterSchemaToolSQLAgentConfiguration.default.planConsistencyMode
+                == .correctAndRetryExperimental
+        )
+        #expect(
+            OpenRouterSchemaToolSQLAgentConfiguration.default.clarificationCorrectionMode
+                == .diagnosticsOnly
+        )
+        #expect(
+            OpenRouterSchemaToolSQLAgentConfiguration.default.intentCoverageMode
+                == .diagnosticsOnly
+        )
+    }
+
     @Test func byteVariantDuplicateSchemaCallIsInterceptedWithoutBurningBudget() async throws {
         let schema = Self.makeSchema()
         let chatTransport = ScriptedTransport { request, index in
