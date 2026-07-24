@@ -79,7 +79,7 @@ struct OpenRouterSQLGeneratorTests {
 
     private static let chatEndpoint = URL(string: "https://openrouter.test/api/v1/chat/completions")!
     private static let apiBase = URL(string: "https://openrouter.test/api/v1")!
-    private static let modelID = "openai/gpt-5.6-sol-pro"
+    private static let modelID = "openai/gpt-5.6-sol"
 
     private let goodContent = """
         {"sql":"SELECT id FROM public.users LIMIT 100","explanation":"Lists user ids.","assumptions":["All users wanted"],"referencedTables":["public.users"],"confidence":0.9,"riskLevel":"low","needsClarification":false,"clarificationQuestion":null}
@@ -98,8 +98,8 @@ struct OpenRouterSQLGeneratorTests {
         let model = try #require(models.first)
         #expect(model.requestedID == Self.modelID)
         #expect(model.id == Self.modelID)
-        #expect(model.canonicalModelID == "openai/gpt-5.6-sol-pro")
-        #expect(model.displayName == "GPT-5.6 Sol Pro")
+        #expect(model.canonicalModelID == "openai/gpt-5.6-sol")
+        #expect(model.displayName == "GPT-5.6 Sol")
         #expect(model.contextLength == 128_000)
         #expect(model.maximumCompletionTokens == 4096)
         #expect(model.supportedParameters.contains("response_format"))
@@ -291,7 +291,7 @@ struct OpenRouterSQLGeneratorTests {
         let failure = OpenRouterResponseParser.failure(
             from: errorResponse(
                 errorType: "routing",
-                message: "No endpoints found for openai/gpt-5.6-sol-pro."
+                message: "No endpoints found for openai/gpt-5.6-sol."
             ),
             response: response(url: Self.chatEndpoint, status: 404),
             requestedModelID: Self.modelID,
@@ -403,8 +403,8 @@ struct OpenRouterSQLGeneratorTests {
         let metadata = OpenRouterModelMetadata(
             requestedID: Self.modelID,
             id: Self.modelID,
-            canonicalModelID: "openai/gpt-5.6-sol-pro-20260709",
-            displayName: "GPT-5.6 Sol Pro",
+            canonicalModelID: "openai/gpt-5.6-sol-20260709",
+            displayName: "GPT-5.6 Sol",
             contextLength: 128_000,
             maximumCompletionTokens: 4_096,
             supportedParameters: [],
@@ -508,7 +508,7 @@ struct OpenRouterSQLGeneratorTests {
     }
 
     @Test func privateRoutingPreferencesSetExactlyTheRequiredProviderBlock() throws {
-        var body: [String: Any] = ["model": "openai/gpt-5.6-sol-pro"]
+        var body: [String: Any] = ["model": "openai/gpt-5.6-sol"]
         OpenRouterProviderPreferences.apply(to: &body)
         try OpenRouterTestSupport.expectPrivateRouting(inBody: body)
     }
@@ -647,7 +647,7 @@ struct OpenRouterSQLGeneratorTests {
         #expect(stringResult.result.sql == "SELECT id FROM public.users LIMIT 100")
         #expect(stringResult.metadata.requestID == "req-1")
         #expect(stringResult.metadata.requestedModelID == Self.modelID)
-        #expect(stringResult.metadata.returnedModelID == "openai/gpt-5.6-sol-pro")
+        #expect(stringResult.metadata.returnedModelID == "openai/gpt-5.6-sol")
         #expect(stringResult.metadata.providerName == "OpenAI")
         #expect(stringResult.metadata.promptTokens == 11)
         #expect(stringResult.metadata.completionTokens == 22)
@@ -660,7 +660,7 @@ struct OpenRouterSQLGeneratorTests {
 
     @Test func parserRejectsUnexpectedCanonicalModelWhenEnforced() throws {
         let parser = OpenRouterResponseParser()
-        let returnedModelID = "openai/gpt-5.6-sol-pro-unevaluated"
+        let returnedModelID = "openai/gpt-5.6-sol-unevaluated"
 
         do {
             _ = try parser.parse(
@@ -670,7 +670,7 @@ struct OpenRouterSQLGeneratorTests {
                 mode: .strictJSONSchema,
                 requestCount: 1,
                 retryCount: 0,
-                expectedCanonicalModelID: "openai/gpt-5.6-sol-pro-20260709"
+                expectedCanonicalModelID: "openai/gpt-5.6-sol-20260709"
             )
             Issue.record("expected canonical model mismatch")
         } catch let failure as OpenRouterFailure {
@@ -683,7 +683,7 @@ struct OpenRouterSQLGeneratorTests {
 
     @Test func parserAcceptsAliasWhenRouterMetadataPinsExpectedCanonicalModel() throws {
         let parser = OpenRouterResponseParser()
-        let expectedCanonicalModelID = "openai/gpt-5.6-sol-pro-20260709"
+        let expectedCanonicalModelID = "openai/gpt-5.6-sol-20260709"
 
         let parsed = try parser.parse(
             data: chatResponse(
@@ -706,13 +706,13 @@ struct OpenRouterSQLGeneratorTests {
 
     @Test func parserRejectsAliasWithoutUnambiguousMatchingRouterMetadata() throws {
         let parser = OpenRouterResponseParser()
-        let expectedCanonicalModelID = "openai/gpt-5.6-sol-pro-20260709"
+        let expectedCanonicalModelID = "openai/gpt-5.6-sol-20260709"
         let responses = [
             chatResponse(content: goodContent),
             chatResponse(
                 content: goodContent,
                 openrouterMetadata: routerMetadata(
-                    requestedModelID: "openai/gpt-5.6-sol-pro-unevaluated",
+                    requestedModelID: "openai/gpt-5.6-sol-unevaluated",
                     selectedModelIDs: [expectedCanonicalModelID]
                 )
             ),
@@ -720,7 +720,7 @@ struct OpenRouterSQLGeneratorTests {
                 content: goodContent,
                 openrouterMetadata: routerMetadata(
                     requestedModelID: Self.modelID,
-                    selectedModelIDs: ["openai/gpt-5.6-sol-pro-unevaluated"]
+                    selectedModelIDs: ["openai/gpt-5.6-sol-unevaluated"]
                 )
             ),
             chatResponse(
@@ -732,7 +732,7 @@ struct OpenRouterSQLGeneratorTests {
             ),
             chatResponse(
                 content: goodContent,
-                model: "openai/gpt-5.6-sol-pro-unevaluated",
+                model: "openai/gpt-5.6-sol-unevaluated",
                 openrouterMetadata: routerMetadata(
                     requestedModelID: Self.modelID,
                     selectedModelIDs: [expectedCanonicalModelID]
@@ -760,13 +760,13 @@ struct OpenRouterSQLGeneratorTests {
 
     @Test func parserRejectsCanonicalModelWhenRouterMetadataConflicts() throws {
         let parser = OpenRouterResponseParser()
-        let expectedCanonicalModelID = "openai/gpt-5.6-sol-pro-20260709"
+        let expectedCanonicalModelID = "openai/gpt-5.6-sol-20260709"
         let responses = [
             chatResponse(
                 content: goodContent,
                 model: expectedCanonicalModelID,
                 openrouterMetadata: routerMetadata(
-                    requestedModelID: "openai/gpt-5.6-sol-pro-unevaluated",
+                    requestedModelID: "openai/gpt-5.6-sol-unevaluated",
                     selectedModelIDs: [expectedCanonicalModelID]
                 )
             ),
@@ -775,7 +775,7 @@ struct OpenRouterSQLGeneratorTests {
                 model: expectedCanonicalModelID,
                 openrouterMetadata: routerMetadata(
                     requestedModelID: Self.modelID,
-                    selectedModelIDs: ["openai/gpt-5.6-sol-pro-unevaluated"]
+                    selectedModelIDs: ["openai/gpt-5.6-sol-unevaluated"]
                 )
             ),
             chatResponse(
@@ -1046,7 +1046,7 @@ struct OpenRouterSQLGeneratorTests {
                 mode: .strictJSONSchema,
                 requestCount: 1,
                 retryCount: 0,
-                expectedCanonicalModelID: "openai/gpt-5.6-sol-pro-20260709"
+                expectedCanonicalModelID: "openai/gpt-5.6-sol-20260709"
             )
             Issue.record("expected provider error")
         } catch let failure as OpenRouterFailure {
@@ -1057,7 +1057,7 @@ struct OpenRouterSQLGeneratorTests {
 
     @Test func failedCompletionTakesPrecedenceOverCanonicalValidation() throws {
         let parser = OpenRouterResponseParser()
-        let expectedCanonicalModelID = "openai/gpt-5.6-sol-pro-20260709"
+        let expectedCanonicalModelID = "openai/gpt-5.6-sol-20260709"
 
         try expectFailure(.providerUnavailable) {
             try parser.parse(
@@ -1469,8 +1469,8 @@ struct OpenRouterSQLGeneratorTests {
     }
 
     @Test func connectivityCheckReportsCanonicalModelMismatch() async throws {
-        let expectedModelID = "openai/gpt-5.6-sol-pro-20260709"
-        let returnedModelID = "openai/gpt-5.6-sol-pro-unevaluated"
+        let expectedModelID = "openai/gpt-5.6-sol-20260709"
+        let returnedModelID = "openai/gpt-5.6-sol-unevaluated"
         let transport = StubTransport([
             .success((
                 catalogResponse(id: Self.modelID, canonicalID: expectedModelID),
@@ -1492,7 +1492,7 @@ struct OpenRouterSQLGeneratorTests {
     }
 
     @Test func connectivityCheckAcceptsMatchingCanonicalModel() async throws {
-        let expectedModelID = "openai/gpt-5.6-sol-pro-20260709"
+        let expectedModelID = "openai/gpt-5.6-sol-20260709"
         let transport = StubTransport([
             .success((
                 catalogResponse(id: Self.modelID, canonicalID: expectedModelID),
@@ -1514,8 +1514,8 @@ struct OpenRouterSQLGeneratorTests {
     }
 
     @Test func connectivityCheckRejectsCanonicalRolloverBeforeCompletionRequest() async throws {
-        let expectedModelID = "openai/gpt-5.6-sol-pro-20260709"
-        let returnedModelID = "openai/gpt-5.6-sol-pro-20260901"
+        let expectedModelID = "openai/gpt-5.6-sol-20260709"
+        let returnedModelID = "openai/gpt-5.6-sol-20260901"
         let transport = StubTransport([
             .success((
                 catalogResponse(id: Self.modelID, canonicalID: returnedModelID),
@@ -1534,7 +1534,7 @@ struct OpenRouterSQLGeneratorTests {
     }
 
     @Test func missingReturnedModelFailsClosedAsVersionMismatch() async throws {
-        let expectedModelID = "openai/gpt-5.6-sol-pro-20260709"
+        let expectedModelID = "openai/gpt-5.6-sol-20260709"
         let transport = StubTransport([
             .success((
                 catalogResponse(id: Self.modelID, canonicalID: expectedModelID),
@@ -1564,14 +1564,14 @@ struct OpenRouterSQLGeneratorTests {
     @Test func preflightRejectsCanonicalRolloverBeforeCompletionRequest() async throws {
         let transport = StubTransport([
             .success((
-                catalogResponse(id: Self.modelID, canonicalID: "openai/gpt-5.6-sol-pro-20260901"),
+                catalogResponse(id: Self.modelID, canonicalID: "openai/gpt-5.6-sol-20260901"),
                 response(url: Self.apiBase.appendingPathComponent("models/user"), status: 200)
             )),
         ])
         let generator = OpenRouterSQLGenerator(
             apiKey: "test-key",
             model: Self.modelID,
-            expectedCanonicalModelID: "openai/gpt-5.6-sol-pro-20260709",
+            expectedCanonicalModelID: "openai/gpt-5.6-sol-20260709",
             transport: transport,
             catalogService: catalogService(transport: transport),
             requestBuilder: OpenRouterRequestBuilder(endpoint: Self.chatEndpoint)
@@ -1586,7 +1586,7 @@ struct OpenRouterSQLGeneratorTests {
             Issue.record("expected canonical rollover failure")
         } catch let failure as OpenRouterFailure {
             #expect(failure.category == .modelVersionMismatch)
-            #expect(failure.diagnostic.returnedModelID == "openai/gpt-5.6-sol-pro-20260901")
+            #expect(failure.diagnostic.returnedModelID == "openai/gpt-5.6-sol-20260901")
             #expect(failure.diagnostic.attemptCount == 1)
         }
 
@@ -1598,7 +1598,7 @@ struct OpenRouterSQLGeneratorTests {
     @Test func networkFreshCanonicalMismatchIsMemoizedForCatalogTTL() async {
         let transport = StubTransport([
             .success((
-                catalogResponse(id: Self.modelID, canonicalID: "openai/gpt-5.6-sol-pro-20260901"),
+                catalogResponse(id: Self.modelID, canonicalID: "openai/gpt-5.6-sol-20260901"),
                 response(url: Self.apiBase.appendingPathComponent("models/user"), status: 200)
             )),
         ])
@@ -1613,11 +1613,11 @@ struct OpenRouterSQLGeneratorTests {
     @Test func cacheServedCanonicalMismatchRefetchesOnceBeforeMemoizing() async throws {
         let transport = StubTransport([
             .success((
-                catalogResponse(id: Self.modelID, canonicalID: "openai/gpt-5.6-sol-pro-20260901"),
+                catalogResponse(id: Self.modelID, canonicalID: "openai/gpt-5.6-sol-20260901"),
                 response(url: Self.apiBase.appendingPathComponent("models/user"), status: 200)
             )),
             .success((
-                catalogResponse(id: Self.modelID, canonicalID: "openai/gpt-5.6-sol-pro-20260901"),
+                catalogResponse(id: Self.modelID, canonicalID: "openai/gpt-5.6-sol-20260901"),
                 response(url: Self.apiBase.appendingPathComponent("models/user"), status: 200)
             )),
         ])
@@ -1638,11 +1638,11 @@ struct OpenRouterSQLGeneratorTests {
     @Test func confirmedCanonicalMismatchReverifiesAfterCatalogTTLExpires() async {
         let transport = StubTransport([
             .success((
-                catalogResponse(id: Self.modelID, canonicalID: "openai/gpt-5.6-sol-pro-20260901"),
+                catalogResponse(id: Self.modelID, canonicalID: "openai/gpt-5.6-sol-20260901"),
                 response(url: Self.apiBase.appendingPathComponent("models/user"), status: 200)
             )),
             .success((
-                catalogResponse(id: Self.modelID, canonicalID: "openai/gpt-5.6-sol-pro-20260901"),
+                catalogResponse(id: Self.modelID, canonicalID: "openai/gpt-5.6-sol-20260901"),
                 response(url: Self.apiBase.appendingPathComponent("models/user"), status: 200)
             )),
         ])
@@ -1663,15 +1663,15 @@ struct OpenRouterSQLGeneratorTests {
         let cacheURL = temporaryCacheURL()
         let transport = StubTransport([
             .success((
-                catalogResponse(id: Self.modelID, canonicalID: "openai/gpt-5.6-sol-pro-20260101"),
+                catalogResponse(id: Self.modelID, canonicalID: "openai/gpt-5.6-sol-20260101"),
                 response(url: Self.apiBase.appendingPathComponent("models/user"), status: 200)
             )),
             .success((
-                catalogResponse(id: Self.modelID, canonicalID: "openai/gpt-5.6-sol-pro-20260709"),
+                catalogResponse(id: Self.modelID, canonicalID: "openai/gpt-5.6-sol-20260709"),
                 response(url: Self.apiBase.appendingPathComponent("models/user"), status: 200)
             )),
             .success((
-                chatResponse(content: goodContent, model: "openai/gpt-5.6-sol-pro-20260709"),
+                chatResponse(content: goodContent, model: "openai/gpt-5.6-sol-20260709"),
                 response(url: Self.chatEndpoint, status: 200)
             )),
         ])
@@ -1681,7 +1681,7 @@ struct OpenRouterSQLGeneratorTests {
         let generator = OpenRouterSQLGenerator(
             apiKey: "test-key",
             model: Self.modelID,
-            expectedCanonicalModelID: "openai/gpt-5.6-sol-pro-20260709",
+            expectedCanonicalModelID: "openai/gpt-5.6-sol-20260709",
             transport: transport,
             catalogService: service,
             requestBuilder: OpenRouterRequestBuilder(endpoint: Self.chatEndpoint)
@@ -1705,22 +1705,22 @@ struct OpenRouterSQLGeneratorTests {
 
     @Test func preflightDefersToPostResponseCheckWithoutPositiveMetadata() throws {
         try OpenRouterCanonicalModelValidator.preflight(
-            catalogCanonicalModelID: "openai/gpt-5.6-sol-pro-20260901",
+            catalogCanonicalModelID: "openai/gpt-5.6-sol-20260901",
             capabilitySource: .staleCache,
-            expectedCanonicalModelID: "openai/gpt-5.6-sol-pro-20260709",
-            requestedModelID: "openai/gpt-5.6-sol-pro"
+            expectedCanonicalModelID: "openai/gpt-5.6-sol-20260709",
+            requestedModelID: "openai/gpt-5.6-sol"
         )
         try OpenRouterCanonicalModelValidator.preflight(
             catalogCanonicalModelID: nil,
             capabilitySource: .conservativeDefault,
-            expectedCanonicalModelID: "openai/gpt-5.6-sol-pro-20260709",
-            requestedModelID: "openai/gpt-5.6-sol-pro"
+            expectedCanonicalModelID: "openai/gpt-5.6-sol-20260709",
+            requestedModelID: "openai/gpt-5.6-sol"
         )
         try OpenRouterCanonicalModelValidator.preflight(
-            catalogCanonicalModelID: "openai/gpt-5.6-sol-pro-20260709",
+            catalogCanonicalModelID: "openai/gpt-5.6-sol-20260709",
             capabilitySource: .authenticatedCatalog,
-            expectedCanonicalModelID: "openai/gpt-5.6-sol-pro-20260709",
-            requestedModelID: "openai/gpt-5.6-sol-pro"
+            expectedCanonicalModelID: "openai/gpt-5.6-sol-20260709",
+            requestedModelID: "openai/gpt-5.6-sol"
         )
     }
 
@@ -1921,7 +1921,7 @@ struct OpenRouterSQLGeneratorTests {
         [
             "id": id,
             "canonical_slug": canonicalID ?? id,
-            "name": id == Self.modelID ? "GPT-5.6 Sol Pro" : id,
+            "name": id == Self.modelID ? "GPT-5.6 Sol" : id,
             "context_length": 128_000,
             "top_provider": [
                 "context_length": 128_000,
@@ -1940,7 +1940,7 @@ struct OpenRouterSQLGeneratorTests {
 
     private func chatResponse(
         content: Any?,
-        model: String? = "openai/gpt-5.6-sol-pro",
+        model: String? = "openai/gpt-5.6-sol",
         finishReason: String = "stop",
         refusal: String? = nil,
         choiceError: [String: Any]? = nil,
@@ -2026,7 +2026,7 @@ struct OpenRouterSQLGeneratorTests {
         }
         return jsonData([
             "id": "cmpl-1",
-            "model": "openai/gpt-5.6-sol-pro",
+            "model": "openai/gpt-5.6-sol",
             "provider": "OpenAI",
             "error": error,
         ])
@@ -2100,13 +2100,13 @@ struct OpenRouterSQLGeneratorTests {
             _ = try await service.validatedCapabilitiesForGeneration(
                 apiKey: "test-key",
                 modelID: Self.modelID,
-                expectedCanonicalModelID: "openai/gpt-5.6-sol-pro-20260709",
+                expectedCanonicalModelID: "openai/gpt-5.6-sol-20260709",
                 maximumHTTPRequests: nil
             )
             Issue.record("expected canonical rollover failure")
         } catch let failure as OpenRouterFailure {
             #expect(failure.category == .modelVersionMismatch)
-            #expect(failure.diagnostic.returnedModelID == "openai/gpt-5.6-sol-pro-20260901")
+            #expect(failure.diagnostic.returnedModelID == "openai/gpt-5.6-sol-20260901")
             #expect(failure.diagnostic.attemptCount == expectedAttemptCount)
         } catch {
             Issue.record("expected OpenRouterFailure, got \(error)")

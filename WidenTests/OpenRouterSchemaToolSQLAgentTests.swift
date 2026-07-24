@@ -259,7 +259,7 @@ struct OpenRouterSchemaToolSQLAgentTests {
         }
     }
 
-    private static let modelID = "openai/gpt-5.6-sol-pro"
+    private static let modelID = "openai/gpt-5.6-sol"
     private static let chatEndpoint = URL(string: "https://openrouter.test/api/v1/chat/completions")!
     private static let apiBase = URL(string: "https://openrouter.test/api/v1")!
     private static let connectionID = UUID(uuidString: "11111111-1111-1111-1111-111111111111")!
@@ -2954,7 +2954,7 @@ struct OpenRouterSchemaToolSQLAgentTests {
                 requestedModelID: Self.modelID,
                 requestCount: 1,
                 retryCount: 0,
-                expectedCanonicalModelID: "openai/gpt-5.6-sol-pro-20260709"
+                expectedCanonicalModelID: "openai/gpt-5.6-sol-20260709"
             )
             Issue.record("Expected provider failure")
         } catch let failure as OpenRouterFailure {
@@ -2965,7 +2965,7 @@ struct OpenRouterSchemaToolSQLAgentTests {
 
     @Test func toolChatFailedCompletionTakesPrecedenceOverCanonicalValidation() throws {
         let parser = OpenRouterToolChatParser()
-        let expectedCanonicalModelID = "openai/gpt-5.6-sol-pro-20260709"
+        let expectedCanonicalModelID = "openai/gpt-5.6-sol-20260709"
         let response = HTTPURLResponse(
             url: Self.chatEndpoint,
             statusCode: 200,
@@ -3051,7 +3051,7 @@ struct OpenRouterSchemaToolSQLAgentTests {
 
     @Test func toolChatParserRejectsUnexpectedCanonicalModelWhenEnforced() throws {
         let parser = OpenRouterToolChatParser()
-        let returnedModelID = "openai/gpt-5.6-sol-pro-unevaluated"
+        let returnedModelID = "openai/gpt-5.6-sol-unevaluated"
         let data = Self.assistantToolCalls(
             [
                 Self.toolCall(
@@ -3076,7 +3076,7 @@ struct OpenRouterSchemaToolSQLAgentTests {
                 requestedModelID: Self.modelID,
                 requestCount: 1,
                 retryCount: 0,
-                expectedCanonicalModelID: "openai/gpt-5.6-sol-pro-20260709"
+                expectedCanonicalModelID: "openai/gpt-5.6-sol-20260709"
             )
             Issue.record("Expected canonical model mismatch")
         } catch let failure as OpenRouterFailure {
@@ -3087,7 +3087,7 @@ struct OpenRouterSchemaToolSQLAgentTests {
 
     @Test func toolChatParserAcceptsMatchingCanonicalModelWhenEnforced() throws {
         let parser = OpenRouterToolChatParser()
-        let canonicalModelID = "openai/gpt-5.6-sol-pro-20260709"
+        let canonicalModelID = "openai/gpt-5.6-sol-20260709"
         let data = Self.assistantToolCalls(
             [
                 Self.toolCall(
@@ -3118,7 +3118,7 @@ struct OpenRouterSchemaToolSQLAgentTests {
 
     @Test func toolChatParserAcceptsAliasWithMatchingSelectedEndpointCanonicalModel() throws {
         let parser = OpenRouterToolChatParser()
-        let canonicalModelID = "openai/gpt-5.6-sol-pro-20260709"
+        let canonicalModelID = "openai/gpt-5.6-sol-20260709"
         let data = Self.assistantToolCalls(
             [
                 Self.toolCall(
@@ -3161,7 +3161,7 @@ struct OpenRouterSchemaToolSQLAgentTests {
 
     @Test func toolChatParserRejectsCanonicalModelWhenRouterMetadataConflicts() throws {
         let parser = OpenRouterToolChatParser()
-        let canonicalModelID = "openai/gpt-5.6-sol-pro-20260709"
+        let canonicalModelID = "openai/gpt-5.6-sol-20260709"
         let data = Self.assistantToolCalls(
             [
                 Self.toolCall(
@@ -3177,7 +3177,7 @@ struct OpenRouterSchemaToolSQLAgentTests {
                 "endpoints": [
                     "available": [[
                         "provider": "Azure",
-                        "model": "openai/gpt-5.6-sol-pro-unevaluated",
+                        "model": "openai/gpt-5.6-sol-unevaluated",
                         "selected": true,
                     ]],
                 ],
@@ -4510,7 +4510,7 @@ struct OpenRouterSchemaToolSQLAgentTests {
                 [
                     "id": modelID,
                     "canonical_slug": modelID,
-                    "name": "GPT-5.6 Sol Pro",
+                    "name": "GPT-5.6 Sol",
                     "context_length": 128_000,
                     "top_provider": [
                         "context_length": 128_000,
