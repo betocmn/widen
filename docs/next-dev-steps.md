@@ -37,11 +37,34 @@ Numbering continues from `docs/refactoring-plan.md`.
   redundant cache write; and bounded cache-served canonical-mismatch
   reverification to once per catalog TTL while keeping network-fresh
   mismatches fail-closed without another fetch.
+* ✅ **Done — PR 63 GPT-5.6 Sol pin gate (funded negative):** the complete
+  Sol full gate passed every pre-registered criterion except the exclusive
+  expected-SQL clarification ceiling (31 against 28) and the zero
+  internal-timeout rule, so the candidate pin was reverted in `3a653f5`.
+  The retained pin stays `openai/gpt-5.5`; sanitized evidence and the
+  strongest decision profile yet measured (12/12 clarification, semantic
+  mismatch 5) remain on record.
+* ✅ **Done — PR 64 trusted-SQL staged experiment (funded negative):** Sol
+  Pro failed stage 1 on cost and latency; the repinned Sol probe showed the
+  bypass mechanically eliminates false clarification (3/30 still
+  clarified) but releases semantically failing SQL (3/30 against the 15/30
+  floor, dominated by wrong projected columns), so `f16c9e8` reverted all
+  four candidate commits. The offline superset re-score confirmed the
+  failures are substantive, not comparator strictness.
+* ✅ **Done — PR 57 option 1 (diagnostics-only):** structured plan
+  validation and repair is implemented behind
+  `SchemaToolAgentPlanConsistencyMode` (default `diagnosticsOnly`) and its
+  funded probe passed on 2026-07-24: 20/20 complete, transport 20/20,
+  structured parsing 20/20, zero eval and internal schema-agent timeouts,
+  and conforming structured plans on all 15 SQL terminals.
+  `correctAndRetryExperimental` enforcement waits for the fresh
+  pre-registered gate candidate.
 * ⏳ **Not done:** PR 58 has now completed three negative funded attempts. The
   latest evidence-narrow candidate passed every offline check but failed both
   paid criteria at 10/12 clarification decisions and 31 exclusive false
   clarifications; its behavior and candidate-only tests were reverted.
-  Structured plan validation or compilation also remains unimplemented.
+  Plan compilation (PR 57 option 2) also remains unimplemented and still
+  requires an explicit architecture decision before any work.
 
 ## Where things stand
 
@@ -135,13 +158,23 @@ Numbering continues from `docs/refactoring-plan.md`.
    latest policy without new diagnostics-only evidence that explains both the
    healthy-account budget misses and why the intended anti-join controls did
    not move
-6. PR 57 option 1 is implemented with deterministic coverage after the
-   PR 63/64 evidence chain confirmed projection drift as the dominant
-   failure; next is its funded diagnostics probe, then a fresh
-   pre-registered Sol-plus-bypass-plus-enforcement gate candidate
+6. ✅ Done — PR 57 option 1 implemented and probe-validated: the
+   2026-07-24 funded diagnostics probe passed every conjunctive criterion
+   (20/20 complete, transport 20/20, structured parsing 20/20, zero
+   timeouts) with structured-plan conformance on all 15 SQL terminals, so
+   the diagnostics-only infrastructure is merged
 7. Done, negative — PR 63 GPT-5.6 Sol pin upgrade: the funded gate failed
    the exclusive-clarification ceiling and the zero internal-timeout rule,
    so the candidate pin was reverted and only evidence remains
+8. Done, negative — PR 64 trusted-SQL staged experiment: Sol Pro was
+   disqualified at stage 1 on cost and latency, and the stage 2 Sol probe
+   showed the bypass alone releases wrong-shaped SQL, so the candidate
+   was reverted with $7.14 of the $9.00 authorization unspent
+9. Next: the fresh pre-registered gate candidate combining the
+   `openai/gpt-5.6-sol` pin, the trusted schema-tool SQL bypass, the
+   105-second schema-agent wall-clock margin, and
+   `correctAndRetryExperimental` plan-consistency enforcement, with its
+   own conjunctive criteria and fresh spend authorization
 
 ---
 
