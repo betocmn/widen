@@ -37,10 +37,11 @@ Numbering continues from `docs/refactoring-plan.md`.
   redundant cache write; and bounded cache-served canonical-mismatch
   reverification to once per catalog TTL while keeping network-fresh
   mismatches fail-closed without another fetch.
-* ⏳ **Not done:** PR 58 clarification behavior (two funded attempts were
-  reverted; the latest reached 12/12 clarification but failed the retained
-  over-clarification guardrail), and structured plan validation or
-  compilation.
+* ⏳ **Not done:** PR 58 has now completed three negative funded attempts. The
+  latest evidence-narrow candidate passed every offline check but failed both
+  paid criteria at 10/12 clarification decisions and 31 exclusive false
+  clarifications; its behavior and candidate-only tests were reverted.
+  Structured plan validation or compilation also remains unimplemented.
 
 ## Where things stand
 
@@ -79,8 +80,11 @@ Numbering continues from `docs/refactoring-plan.md`.
 * Clarification was 11/12 in both the retained PR 55 comparator and the
   post-PR 59 PR 56-bypass retry. The retry's sole miss was
   `preseason.top-wins-ambiguous` repeat 3 returning SQL without a timeout,
-  budget error, or app-side rejection. Two later PR 58 attempts were rejected;
-  this miss still does not justify expanding the frozen phrase heuristics.
+  budget error, or app-side rejection. Three later PR 58 attempts were
+  rejected; the latest recovered this case in all three repeats but failed two
+  `saas.healthy-accounts` repeats through the retained tool-budget path and did
+  not reduce false clarifications. This still does not justify expanding the
+  frozen phrase heuristics.
 * The 2026-07-14 funded PR 58 attempt confirmed that the terminal ambiguity
   policy can override an otherwise accepted SQL response, but it failed the
   complete gate: clarification was 10/12 and the exclusive expected-SQL
@@ -92,6 +96,12 @@ Numbering continues from `docs/refactoring-plan.md`.
   clarification bucket, above the retained PR 55 ceiling of 28, so the
   conjunctive PR 58 acceptance rule rejected it too. Commit `e13f6aa` reverted
   candidate `f356ba4`; only sanitized evidence remains.
+* The 2026-07-18 evidence-narrow retry also failed both PR 58 criteria. It
+  reached 10/12 clarification decisions and 31 exclusive expected-SQL
+  clarifications. The raw false-clarification count remained 33, and all three
+  pre-registered `saas.users-without-membership` controls still clarified, so
+  no genuine reduction occurred. Commit `5ee77da` reverted candidate
+  `ddf4e12`; only sanitized reports and roadmap evidence remain.
 * PR 60 now checks the production alias-to-canonical mapping every day and on
   manual dispatch without an API key or completion. Confirmed drift opens one
   deduplicated rollover issue; lookup, transport, decoding, and invalid
@@ -121,9 +131,10 @@ Numbering continues from `docs/refactoring-plan.md`.
    timeouts passed, so the bypass was reverted and PR 57 remains conditional
 3. ✅ Done — PR 60 canonical-version watch and rollover runbook
 4. ✅ Done — PR 62 independent PR 55 hardening cleanups
-5. PR 58 remains open after two negative funded attempts; retry only with a
-   genuinely narrower, pre-registered design that can preserve 12/12 without
-   exceeding the retained over-clarification comparator
+5. PR 58 remains open after three negative funded attempts; do not retry the
+   latest policy without new diagnostics-only evidence that explains both the
+   healthy-account budget misses and why the intended anti-join controls did
+   not move
 6. PR 57 only after a future bypass iteration clears every PR 56 criterion
 7. Done, negative — PR 63 GPT-5.6 Sol pin upgrade: the funded gate failed
    the exclusive-clarification ceiling and the zero internal-timeout rule,
@@ -272,25 +283,32 @@ routing, frozen heuristics.
 
 ## PR 58 — Clarification decision accuracy to 12/12
 
-**Status: two funded attempts complete, negative; implementation ⏳ Not
+**Status: three funded attempts complete, negative; implementation ⏳ Not
 done.** Commit `bfc4ea2` selectively enforced the existing high-confidence
 `mustClarify` terminal decision; commit `b3b69fe` reverted it after the first
 gate failed both criteria. Candidate `f356ba4` then fixed the identified
 wording and terminal-less budget paths and reached 12/12, but commit `e13f6aa`
-reverted it after the retained over-clarification guardrail failed. The frozen
-phrase heuristic set remains unchanged.
+reverted it after the retained over-clarification guardrail failed. Candidate
+`ddf4e12` implemented the evidence-narrow two-sided policy pre-registered
+below and passed every offline check, but the complete funded gate failed both
+criteria. Commit `5ee77da` reverted its behavior and candidate-only tests. The
+frozen phrase heuristic set remains unchanged.
 
 **Why:** The gate requires 100%; the retained PR 55 comparator and the
 post-PR 59 retry both sit at 11/12. The earlier 9/12 experiment had three
 operational misses, but the new sole miss was independent:
 `preseason.top-wins-ambiguous` repeat 3 returned SQL without a timeout, budget
-error, or app-side rejection. The two attempts below leave that retained-path
-miss unresolved pending a design that also preserves the comparator guardrail.
+error, or app-side rejection. The latest candidate recovered that case in all
+three repeats, but its narrower evidence gate did not recover two protected
+budget misses and its SQL allowance moved none of the registered expected-SQL
+controls.
 
-**What:** Reproduce and triage the one independent clarification failure, then
-fix its specific decision behavior (prompt guidance or clarification policy
-fidelity for that ambiguity class). No new phrase heuristics — the PR 53
-freeze stands.
+**What next:** Add no product behavior yet. First obtain diagnostics-only,
+redacted reason codes that distinguish why the exact anti-join terminal
+responses failed the candidate's structured gate and why protected budget
+evidence remained incomplete. A future policy must prove at least two genuine
+false-clarification removals in deterministic replay while preserving all
+protected cases. No new phrase heuristics — the PR 53 freeze stands.
 
 **Acceptance (reconciled before the paid gate on 2026-07-14):** 12/12
 clarification decisions across three repeats, with the exclusive
@@ -400,6 +418,118 @@ the evaluated candidate rather than the later revert. A future retry needs a
 narrower way to recover the protected ambiguity class while reaching 12/12
 and an exclusive expected-SQL clarification bucket at or below 28 with margin
 for triage-precedence movement, plus fresh spend authorization.
+
+**Offline candidate and pre-registration 2026-07-17:** Commit `ddf4e12`
+implements a two-sided policy from the retained failure mechanics. Protected
+metric recovery now requires the existing `mustClarify` metric decision plus
+complete, subject-linked exact-search, described-table, exposed-column, and
+foreign-key evidence. A clean terminal SQL response can be converted to that
+clarification only when exactly one protected metric remains unresolved. The
+terminal-less path is limited to a standalone initial request with exactly six
+successful schema calls followed by a rejected seventh call, no inspection
+calls, default policy modes, and the same evidence/intent agreement; it never
+invokes an eighth call. Existing context or confirmed semantic bindings that
+define the metric close this branch.
+
+The SQL side is independently limited to an actual clean terminal response
+whose two referenced tables form one exact exposed foreign-key `LEFT JOIN`,
+with no join modifiers and one positive non-nullable joined-side `IS NULL`
+filter. The request must bind the retained and excluded entities to the
+correct join sides, and every other meaningful grounded request concept must
+bind to that anti-join trigger or those endpoints. Unrelated, schema-only, and
+protected-metric-only search overlap does not count as question-relevant
+evidence. This uses the existing vocabulary and adds no phrase list, prompt
+pressure, triage rule, scorer rule, or golden change.
+
+The registered expected movements are all three
+`saas.users-without-membership` repeats from clarification to SQL, taking the
+raw expected-SQL-to-clarification count from 33 to 30 and, if all other
+outcomes stay fixed, the exclusive bucket from 30 to 27. The registered
+protected outcomes are clarification for all four ambiguity cases across all
+three repeats, including the historical terminal-SQL miss and the exact
+six-success/rejected-seventh-call miss. Defined-metric, confirmed-binding,
+ungrounded, incomplete-evidence, unrelated-relationship, terminal
+clarification, terminal-less ordinary failure, cancellation, stale-schema,
+timeout, trailing-batch, attempted-eighth-call, routing, validation, scorer,
+and triage controls must not move. The retained comparator is PR 55 at 11/12
+clarification decisions and 28 exclusive false clarifications; the negative
+`f356ba4` comparator is 12/12, raw 33, and exclusive 30.
+
+Acceptance remains conjunctive: the complete private-routing 60-result,
+three-repeat gate for requested `openai/gpt-5.5` and expected canonical
+`openai/gpt-5.5-20260423` must produce 12/12 clarification decisions and an
+exclusive expected-SQL-got-clarification bucket no higher than 28, with a
+target below 28. The reduction must be a real decision change rather than triage-precedence
+movement. Safety, schema validity, and PostgreSQL verification must remain
+100% on evaluated SQL, and private routing, requested/canonical/routed-model
+verification, structured parsing, forbidden bindings, repair progress,
+timeouts, and six-call tool-budget behavior must not regress. Semantic
+accuracy remains informational. If either PR 58 criterion fails, revert
+`ddf4e12` behavior and candidate-only tests, retain only sanitized evidence
+and roadmap notes, and leave PR 58 not done. Retain the candidate and mark PR
+58 done only if every criterion passes.
+
+The maximum newly authorized spend requested for that gate was **$4.00**.
+Historical authorization did not carry forward. Before authorization, offline
+results were: the four core policy/validator/agent suites passed 407/407; the
+focused ten-suite matrix passed 565/565; `make project` regenerated identical
+tracked output; `make test` recorded 1,162 total, 1,120 passed, 42 skipped, and
+0 failed in the result bundle; `make eval-build` passed; and
+`git diff --check` passed.
+
+**Third funded outcome 2026-07-18 — negative, behavior reverted:** The fresh
+$4 authorization was granted after that pre-registration. The first gate
+process was interrupted when review confirmed that the runner's dollar limit
+is checked only between cases. Provider usage was reconciled, all interrupted
+results were resumed rather than rerun, and reduced cumulative runner ceilings
+left a reserve for the between-case boundary. The final complete gate used a
+conservatively accounted **$3.286685**, below authorization, and evaluated
+commit `820f197`, whose parent contains candidate `ddf4e12`.
+
+| Mechanical criterion | Retained PR 55 comparator | Third PR 58 attempt | Result |
+| --- | ---: | ---: | --- |
+| Clarification decisions | 11/12 | 10/12 | Fail (required 12/12) |
+| Exclusive expected-SQL clarification bucket | 28 | 31 | Fail (required `<= 28`) |
+| Raw expected-SQL-to-clarification decisions | 33 | 33 | Fail (required genuine reduction by at least 2; target 30) |
+| Registered membership controls moved to SQL | - | 0/3 | Fail (expected 3/3) |
+| Semantic end to end | 19/60 | 18/60 | Informational |
+
+`preseason.top-wins-ambiguous` clarified correctly in all three repeats, as
+did the other six protected best-customer and important-cluster results.
+`saas.healthy-accounts` clarified only once: repeats 1 and 3 ended as
+tool-budget generation failures after seven schema-tool records, so protected
+clarification accuracy was 10/12. All three
+`saas.users-without-membership` repeats still clarified. The raw false-
+clarification count therefore stayed at 33; triage precedence assigned two
+`saas.active-users-by-org` false clarifications to the tool-budget category,
+leaving 31 in the exclusive bucket. The registered SQL recovery produced no
+movement, and the exclusive result did not hide a genuine reduction.
+
+The run completed 60/60 with 0 missing, 0 budget-skipped, and 0 provider-
+budget-unavailable results. Safety, schema validity, and PostgreSQL
+verification were 15/15; transport was 60/60; repeated/no-progress repairs,
+model/tool protocol failures, missing or malformed terminal results, internal
+schema-agent timeouts, and timeout/cancellation classifications were all 0.
+The exclusive tool-budget category was 4: two active-user false
+clarifications and the two healthy-account generation failures. The committed
+sanitized report does not publish separate aggregate latency, forbidden-
+binding, returned/routed-model, or global interception totals, so prior-run
+values are not reused.
+
+Both conjunctive PR 58 criteria failed. Commit `5ee77da` mechanically reverted
+all `ddf4e12` behavior and candidate-only tests, restoring those 12 files to
+`origin/main` while retaining the pre-registration, sanitized reports, and
+this negative evidence. The six-call budget, PR 53 freeze, private and
+canonical/routed-model enforcement, safety/schema/PostgreSQL validation,
+structured parsing and deterministic review, PR 59 timeout/budget/
+interception behavior, PR 60 workflow, PR 62 hardening, and the absence of the
+PR 56 bypass remain unchanged. PR 58 is not done.
+
+Post-revert validation passed: the same focused ten-suite matrix recorded 527
+total, 527 passed, 0 skipped, and 0 failed; `make project` regenerated
+identical tracked output; `make test` recorded 1,124 total, 1,082 passed, 42
+skipped, and 0 failed; `make eval-build` passed; and `git diff --check`
+passed.
 
 ## PR 59 — Tool-budget exhaustion bucket
 
