@@ -701,8 +701,8 @@ and new spend authorization, and must not weaken fail-closed behavior.
 
 ## PR 64 — Trusted schema-tool SQL with GPT-5.6 Sol Pro
 
-**Status: ⏳ Candidate prepared 2026-07-24; staged funded plan awaiting spend
-authorization.**
+**Status: Funded negative at stage 2 on 2026-07-24; candidate reverted,
+evidence retained, $6.14 of the $9.00 authorization unspent.**
 
 **Why:** The PR 63 gate produced the diagnostics-only evidence that the
 exclusive expected-SQL clarification bucket is not model behavior. All 31
@@ -786,6 +786,41 @@ deadline), and decision profile (12/12 clarification, semantic-mismatch
 bucket 5) are already measured. Remaining stages run on Sol with ceilings
 restated inside the $9.00 cap: focused probe $2.00, full gate $4.50
 cumulative, reserve $1.97 after the $0.53 stage 1 spend.
+
+**Stage 2 outcome 2026-07-24 — negative; candidate reverted without a full
+gate:** the focused probe (`.eval-results/20260724-045437-557`, 30/30
+complete, $1.334325, P50 11,728 ms, P95 18,309 ms, zero internal
+schema-agent timeouts, transport and parsing 30/30) ran the ten historical
+over-clarification cases with the trusted-SQL bypass active on the Sol pin.
+The bypass mechanically eliminated the false-clarification failure mode:
+only 3 of 30 results still clarified, versus 30 of 30 for these cases in
+the retained comparator. But the released SQL passed the seeded semantic
+comparison in only 3 of 30 results against the pre-registered floor of 15,
+with the 24 mismatches dominated by the known projection-shape class (18
+`wrong projected columns` rows) that PR 56 first exposed on GPT-5.5. The
+go/no-go rule therefore stopped stage 3, and `f16c9e8` reverted the four
+candidate commits (`043afa7` bypass, `76d0fcb`/`9a3b08b` pins, `703afae`
+timeout margin). Total plan spend $1.864285 of $9.00; no further paid run
+under this authorization.
+
+**Standing read:** the exclusive expected-SQL clarification bucket is now
+fully explained end to end. The agent produces terminal SQL on every one of
+those results; the grounding step discards it; and that discarded SQL is
+not gate-passing — it computes plausible answers with the wrong projected
+column sets. Releasing it converts useless clarifications into confidently
+wrong-shaped results and cannot clear the gate on its own, on either
+GPT-5.5 (26/60 ceiling across two funded bypass gates) or GPT-5.6 Sol
+(3/30 on the released set). This reconfirms the PR 52/54/56 conclusion
+that stable query planning / deterministic projection synthesis (PR 57) is
+the accuracy lever, now with model-independent evidence. Two separately
+actionable follow-ups fall out of the evidence: (1) the 105-second
+wall-clock margin remains justified by three recorded genuine completions
+killed at 90 seconds and can proceed as its own diagnostics-backed PR;
+(2) whether the semantic comparator should accept supersets of the
+required projected columns is a product-contract decision — required-column
+coverage has measured 100% while `wrong projected columns` dominates every
+bypass mismatch bucket — and would need its own pre-registered evaluation
+if the maintainer chooses to relax it.
 
 ## Later / conditional
 
