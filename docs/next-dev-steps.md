@@ -829,6 +829,156 @@ results. A future candidate pairing the Sol pin with an over-clarification
 remedy (or evaluating `gpt-5.6-sol-pro`) requires a fresh pre-registration
 and new spend authorization, and must not weaken fail-closed behavior.
 
+## PR 64 — Trusted schema-tool SQL with GPT-5.6 Sol Pro
+
+**Status: Funded negative at stage 2 on 2026-07-24; candidate reverted,
+evidence retained, $7.14 of the $9.00 authorization unspent.**
+
+**Why:** The PR 63 gate produced the diagnostics-only evidence that the
+exclusive expected-SQL clarification bucket is not model behavior. All 31
+false clarifications in the Sol run — and all 28 in the retained GPT-5.5
+comparator — carry a terminal agent decision of `sql` with a complete query
+plan; the grounded regeneration step then discards that SQL and emits a
+clarification. The PR 56 bypass demonstrated the fix on GPT-5.5 (bucket
+28 to 5, semantic 19 to 26) and was rejected twice solely on single
+90-second wall-clock timeouts (91.0 s and 93.7 s), a flake class GPT-5.6
+Sol also recorded once (its slowest completed case ran 94.7 s). Sol
+additionally showed the strongest decision profile yet measured: 12/12
+clarification decisions and a semantic-mismatch bucket of 5 with no
+behavior change.
+
+**What:** Branch `sol-pro-trusted-sql-gate`, three independently
+revertable commits on top of the PR 63 evidence:
+
+1. Cherry-pick of `bcaf957` (`fix: trust validated schema tool sql`) — the
+   exact twice-gated PR 56 bypass patch; its validator and pipeline suites
+   pass unchanged against current helpers.
+2. Production pin `openai/gpt-5.6-sol-pro` (canonical
+   `openai/gpt-5.6-sol-pro-20260709`, display "GPT-5.6 Sol Pro"), priced
+   identically to GPT-5.5 and GPT-5.6 Sol ($5/M prompt, $30/M completion),
+   with the same Makefile, fixture, and current-state doc updates as PR 63.
+3. `wallClockTimeoutSeconds` default 90 to 105: every observed genuine
+   completion killed by the 90-second deadline (91.0/93.7/94.7 s) finishes
+   inside 105, which still leaves a 15-second validation-repair margin
+   inside the unchanged 120-second eval case budget. Timeouts still fail
+   closed; the zero-internal-timeout criterion is unchanged.
+
+**Pre-registered acceptance criteria (conjunctive, unchanged from PR 63
+plus the PR 56 bypass-specific floors):** 60/60 complete; semantic
+end-to-end at least 20/60; clarification decisions at least 11/12;
+exclusive expected-SQL clarification at most 28; tool-budget triage at
+most 6; static schema failures at most 1; safety, schema, and PostgreSQL
+verification at 100% of evaluated SQL; transport and structured parsing at
+least 95%; zero forbidden bindings, repeated/no-progress repairs, eval
+timeouts, and internal schema-agent timeouts; private routing plus
+requested/routed/canonical verification on every completion. Report
+cumulative branch spend, per-result cost, P50/P95/max latency, and every
+triage bucket. Any failed criterion reverts the candidate commits and
+records the negative result.
+
+**Staged spend plan (authorized by the maintainer 2026-07-24 before any
+completion request, $9.00 branch cap total):**
+
+1. Sol Pro transport smoke, $0.50 allocation:
+   `make eval-openrouter-smoke MODEL=openai/gpt-5.6-sol-pro REPEAT=3`.
+   Abort the branch if transport, parsing, routing verification, or the
+   canonical pin fail.
+2. Focused semantic probe, $3.00 ceiling: the ten historical
+   over-clarification cases, three repeats, seeded semantic grading, on
+   the candidate. Proceed to the full gate only if the released SQL
+   semantically passes at least 15/30 with zero internal timeouts.
+3. Full pinned gate, $4.50 cumulative ceiling:
+   `make eval-release-triage MODEL=openai/gpt-5.6-sol-pro`.
+4. $1.00 unallocated reserve inside the $9.00 cap; stage ceilings shrink
+   if earlier stages overrun so the branch cap holds.
+
+No completion request before the cap is explicitly authorized;
+`ALLOW_MODEL_OVERRIDE` stays unset for gate publication.
+
+**Stage 1 outcome 2026-07-24 — Sol Pro disqualified on cost and latency;
+candidate repinned to GPT-5.6 Sol before any stage 2 spend:** the Sol Pro
+smoke (`.eval-results/20260724-045102-415`) hit its $0.50 allocation at 12
+of 15 results ($0.529960). Everything evaluated was operationally clean —
+transport 12/12, structured parse 12/12, zero retries, returned model
+verified `openai/gpt-5.6-sol-pro` on all 12 via one ZDR provider — and the
+static-shape profile matched the incumbent's known smoke fingerprint. But
+Sol Pro consumed 94,625 tokens for 12 results versus Sol's 23,659 for 15
+(5.0x tokens and 4.2x cost per identical case: $0.044163 versus $0.010450)
+at 1.6x the latency (P50 4,355 ms versus 2,654 ms). Projected to the full
+pipeline that is a $12-15 gate — outside the remaining $8.47 authorization
+on its own — and a latency tail that projects past the 105-second deadline,
+the exact flake class this candidate exists to eliminate. Under the
+original cost-comparability rule and the branch cap, Sol Pro fails stage 1;
+`9a3b08b` repinned the candidate to `openai/gpt-5.6-sol` (canonical
+`openai/gpt-5.6-sol-20260709`), whose full-gate economics ($2.941500,
+$0.049025 per result), tail latency (maximum 94.7 s, inside the 105-second
+deadline), and decision profile (12/12 clarification, semantic-mismatch
+bucket 5) are already measured. Remaining stages run on Sol with ceilings
+restated inside the $9.00 cap: focused probe $2.00, full gate $4.50
+cumulative, reserve $1.97 after the $0.53 stage 1 spend.
+
+**Stage 2 outcome 2026-07-24 — negative; candidate reverted without a full
+gate:** the focused probe (`.eval-results/20260724-045437-557`, 30/30
+complete, $1.334325, P50 11,728 ms, P95 18,309 ms, zero internal
+schema-agent timeouts, transport and parsing 30/30) ran the ten historical
+over-clarification cases with the trusted-SQL bypass active on the Sol pin.
+The bypass mechanically eliminated the false-clarification failure mode:
+only 3 of 30 results still clarified, versus 30 of 30 for these cases in
+the retained comparator. But the released SQL passed the seeded semantic
+comparison in only 3 of 30 results against the pre-registered floor of 15,
+with the 24 mismatches dominated by the known projection-shape class (18
+`wrong projected columns` rows) that PR 56 first exposed on GPT-5.5. The
+go/no-go rule therefore stopped stage 3, and `f16c9e8` reverted the four
+candidate commits (`043afa7` bypass, `76d0fcb`/`9a3b08b` pins, `703afae`
+timeout margin). Total plan spend $1.864285 of $9.00; no further paid run
+under this authorization.
+
+**Standing read:** the exclusive expected-SQL clarification bucket is now
+fully explained end to end. The agent produces terminal SQL on every one of
+those results; the grounding step discards it; and that discarded SQL is
+not gate-passing — it computes plausible answers with the wrong projected
+column sets. Releasing it converts useless clarifications into confidently
+wrong-shaped results and cannot clear the gate on its own, on either
+GPT-5.5 (26/60 ceiling across two funded bypass gates) or GPT-5.6 Sol
+(3/30 on the released set). This reconfirms the PR 52/54/56 conclusion
+that stable query planning / deterministic projection synthesis (PR 57) is
+the accuracy lever, now with model-independent evidence. Two separately
+actionable follow-ups fall out of the evidence: (1) the 105-second
+wall-clock margin remains justified by three recorded genuine completions
+killed at 90 seconds and can proceed as its own diagnostics-backed PR;
+(2) whether the semantic comparator should accept supersets of the
+required projected columns is a product-contract decision — required-column
+coverage has measured 100% while `wrong projected columns` dominates every
+bypass mismatch bucket — and would need its own pre-registered evaluation
+if the maintainer chooses to relax it.
+
+**Offline superset re-score 2026-07-24 — the comparator question is
+answered; superset tolerance is not the lever:** a zero-completion-cost
+re-scorer (`.context/rescore/rescore.py`) re-provisioned the committed
+seeded fixtures on local PostgreSQL and re-executed the recorded golden and
+candidate SQL for all 42 executed results across the stage 2 probe and the
+PR 63 full gate. Method calibration was exact: the strict re-score
+reproduced the recorded semantic verdict 42/42 and the recorded mismatch
+subcategory 29/29, and reproduced all 26 recorded result digests. An
+independent adversarial pass with a separate Swift-faithful comparator
+confirmed every number. Under a superset-tolerant policy (candidate may
+project extra columns beyond the golden's required set, all other
+semantics unchanged), only 4 of the 29 result mismatches recover:
+`support.unclustered-feedback` (all three probe repeats) and
+`preseason.active-match-configs` repeat 1. The remaining failures are
+genuine: 22 records miss required columns outright or rename them outside
+the golden alias lists (name projected where email is required,
+`average_paid_order_value`-style aggregate aliases, omitted `slug`), two
+return row supersets (4 rows against a golden 2 on
+`saas.expiring-subscriptions`), and one is a value mismatch. Conclusion:
+the discarded terminal SQL fails for substantive reasons, not comparator
+strictness. Relaxing projection matching would recover about 14% of the
+mismatch bucket and cannot clear the gate; the levers remain deterministic
+projection/planning synthesis (PR 57) and, narrowly, whether specific
+near-miss aggregate aliases belong in the golden alias lists — a golden
+change that must be justified case by case, never as bulk loosening to fit
+observed model output.
+
 ## Later / conditional
 
 * **PR 10 embeddings** — stays deferred unless a future triage shows required
