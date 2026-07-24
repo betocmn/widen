@@ -1134,7 +1134,7 @@ funded-tested in isolation:
   keeping a 15-second margin inside the unchanged 120-second eval case
   budget.
 
-**What (four independently revertable commits on
+**What (independently revertable commit groups on
 `gate-experiment-gpt-5.6-sol-candidate`, reviewed against current `main`
 rather than blindly cherry-picked):**
 
@@ -1160,7 +1160,27 @@ rather than blindly cherry-picked):**
    default and confirming the clarification-correction and intent-coverage
    defaults remain `diagnosticsOnly`. Release-gate Make recipes stay
    flag-free and inherit enforcement through the defaults, so the gate
-   exercises exactly the configuration that would ship.
+   exercises exactly the configuration that would ship. Follow-ups
+   `8668bd7` (pins the diagnostics-only divergence test to its mode
+   explicitly instead of relying on the old default) and `7eca68c` (below)
+   revert with this commit. Two recorded side effects: resuming a
+   pre-candidate run now fails resume compatibility loudly instead of
+   silently mixing modes (the scorer-source hash independently blocks
+   cross-candidate resumes), and the focused
+   `eval-release-overclarification` recipe now inherits enforcement by
+   default, so its historical runs are no longer directly comparable.
+5. `7eca68c` — adversarial-review hardening found by the pre-paid review
+   pass: after a divergent plan drove the single correction, a planless or
+   non-conforming retried terminal was accepted while
+   `clearResolvedPlanConsistencyRejection()` unconditionally cleared the
+   rejection reason — allowing the bypass to trust SQL whose only
+   structured plan had diverged and was never re-verified. The rejection
+   now stays recorded unless the retry actually evaluates consistent; the
+   planless retry is still accepted (never errors) but flows through the
+   retained grounding path instead of the bypass. Deterministic coverage:
+   the planless-retry agent test now asserts the sticky rejection, and a
+   new validator test proves `planConsistencyRejected` metadata blocks the
+   trust decision.
 
 Composition safety: enforcement acts inside the agent before a terminal
 SQL response is accepted; the bypass acts later in the postprocessor and
@@ -1207,15 +1227,20 @@ artifacts and sanitized reports):**
 **Pre-registered acceptance criteria (conjunctive at every stage; recorded
 before any completion request; at least as strict as the recorded PR
 56/63/64 criteria):** any failed criterion at any stage stops all paid
-work, reverts `1060d81`, `705cf7a`, `882952e`, and `37461c9`, and records
-the negative result here with sanitized evidence only.
+work, reverts `7eca68c`, `8668bd7`, `1060d81`, `705cf7a`, `882952e`, and
+`37461c9`, and records the negative result here with sanitized evidence
+only.
 
 *Stage 1 — transport smoke:* `make eval-openrouter-smoke
-MODEL=openai/gpt-5.6-sol REPEAT=3 MAX_CLOUD_COST_USD=0.50`. Criteria:
-15/15 complete; transport 15/15; structured parsing 15/15; returned model
-verified `openai/gpt-5.6-sol` on every completion via ZDR-only routing
-with canonical enforcement active; zero eval and internal schema-agent
-timeouts; zero plan-consistency fail-closed rejections. Static-shape is
+MODEL=openai/gpt-5.6-sol REPEAT=3 MAX_CLOUD_COST_USD=0.50`. The smoke
+suite runs the legacy cloud generator, not the schema-tool agent, so it
+verifies the Sol alias contract on the candidate binary (transport,
+parsing, routing, canonical enforcement) and deliberately provides no
+evidence about enforcement, the bypass, or the 105-second margin — those
+are first exercised at stage 2. Criteria: 15/15 complete; transport
+15/15; structured parsing 15/15; returned model verified
+`openai/gpt-5.6-sol` on every completion via ZDR-only routing with
+canonical enforcement active; zero eval timeouts. Static-shape is
 reported against the known 9/15 Sol/GPT-5.5 smoke fingerprint but not
 gated.
 
@@ -1260,8 +1285,10 @@ the projection failure profile rather than moving it). Structured
 parsing, cost, latency, and the plan decision distribution are reported.
 
 *Stage 3 — full pinned gate:* `make eval-release-triage
-MODEL=openai/gpt-5.6-sol` (flag-free, pin-enforced,
-`ALLOW_MODEL_OVERRIDE` unset). Criteria, all required together:
+MODEL=openai/gpt-5.6-sol MAX_CLOUD_COST_USD=4.50` (flag-free otherwise,
+pin-enforced, `ALLOW_MODEL_OVERRIDE` unset; the explicit ceiling keeps
+the runner's between-case budget stop active for the stage). Criteria,
+all required together:
 
 1. 60/60 complete results, with zero missing, budget-skipped, or
    provider-budget-unavailable results.
@@ -1300,9 +1327,11 @@ distribution.
 
 **Decision rule:** all criteria are conjunctive; a pass at stages 1–3
 merges the candidate as the retained beta cloud path (the separate 90%
-semantic production-readiness gate stays unmet and beta wording stays).
-Any failure reverts the four candidate commits and retains only sanitized
-evidence and this record. The `gpt-5.6-sol-pro`, `terra`, and `luna`
+semantic production-readiness gate stays unmet and beta wording stays),
+and the acceptance record must also rewrite the "Where things stand"
+summary to the new pin and enforcement default so the roadmap's
+current-state text matches the shipped tree. Any failure reverts the
+candidate commits and retains only sanitized evidence and this record. The `gpt-5.6-sol-pro`, `terra`, and `luna`
 tiers stay out of scope; any future look at them needs its own
 pre-registration.
 
