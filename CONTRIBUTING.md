@@ -38,7 +38,7 @@ make build     # build the Debug app
 make test      # unit tests
 make test-db   # unit + local Postgres integration tests
 make run       # build and launch Widen.app
-make eval-release MODEL=openai/gpt-5.5  # PR 12 text-to-SQL release gate
+make eval-release MODEL=openai/gpt-5.6-sol-pro  # PR 12 text-to-SQL release gate
 ```
 
 The committed `Widen.xcodeproj` is generated. Edit `project.yml`, run

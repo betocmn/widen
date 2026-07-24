@@ -13,7 +13,7 @@ EVAL_XCODEBUILD := xcodebuild -project Widen.xcodeproj -scheme WidenEval -config
 
 APP := build/Build/Products/Debug/Widen.app
 EVAL := build/Build/Products/Debug/WidenEval
-PINNED_OPENROUTER_MODEL := openai/gpt-5.5
+PINNED_OPENROUTER_MODEL := openai/gpt-5.6-sol-pro
 MODEL ?= $(PINNED_OPENROUTER_MODEL)
 BACKEND ?= local
 RETRIEVER ?= both

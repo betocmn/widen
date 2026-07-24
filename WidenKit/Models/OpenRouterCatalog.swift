@@ -21,9 +21,9 @@ public struct OpenRouterProductionProfile: Equatable, Sendable {
 /// a new release-gate evaluation and an app update.
 public enum OpenRouterCatalog {
     public static let productionProfile = OpenRouterProductionProfile(
-        requestedModelID: "openai/gpt-5.5",
-        expectedCanonicalModelID: "openai/gpt-5.5-20260423",
-        displayName: "GPT-5.5"
+        requestedModelID: "openai/gpt-5.6-sol-pro",
+        expectedCanonicalModelID: "openai/gpt-5.6-sol-pro-20260709",
+        displayName: "GPT-5.6 Sol Pro"
     )
 
     /// The canonical version to enforce for a requested model ID. Evals may

@@ -63,7 +63,7 @@ configure in Settings.
 
 | Mode | Schema/question | Query results | Notes |
 | --- | ---: | ---: | --- |
-| Cloud mode | Question and allowed schema metadata are sent to the provider you choose | Stays on your Mac unless cloud data inspection is enabled for that connection | Default text-to-SQL backend. Fresh installs use the fixed OpenRouter GPT-5.5 profile and schema-tool agent. OpenRouter requests require zero-data-retention endpoints and deny provider data collection. |
+| Cloud mode | Question and allowed schema metadata are sent to the provider you choose | Stays on your Mac unless cloud data inspection is enabled for that connection | Default text-to-SQL backend. Fresh installs use the fixed OpenRouter GPT-5.6 Sol Pro profile and schema-tool agent. OpenRouter requests require zero-data-retention endpoints and deny provider data collection. |
 | Local mode | Stays on your Mac | Stays on your Mac | Optional on eligible macOS 26+ Apple Silicon Macs with Apple Intelligence enabled. Best suited to narrow requests over simple databases. |
 
 Passwords and API keys live in the macOS Keychain, never on disk in plaintext.
@@ -101,7 +101,7 @@ query sessions, and turning questions into SQL:
 - PostgreSQL only.
 - Early MVP, not full DataGrip/TablePlus/Postico feature parity.
 - Cloud text-to-SQL requires your own provider setup. Widen defaults to
-  OpenRouter with the fixed `openai/gpt-5.5` profile. Custom OpenRouter model
+  OpenRouter with the fixed `openai/gpt-5.6-sol-pro` profile. Custom OpenRouter model
   selection is not exposed; changing the evaluated model version requires a
   new app release and release-gate evaluation. Apple Private Cloud Compute
   support is planned when Apple's required OS and SDK support is available.
@@ -289,7 +289,7 @@ real `WIDEN_EVAL_OPENROUTER_API_KEY`, never from an all-unavailable run.
 Foundation Models cancellation is cooperative, so timed-out model work may
 continue in process until the framework returns.
 
-The release gate defaults to the same pinned GPT-5.5 profile as the app:
+The release gate defaults to the same pinned GPT-5.6 Sol Pro profile as the app:
 
 ```sh
 make eval-release
