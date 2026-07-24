@@ -170,9 +170,9 @@ Numbering continues from `docs/refactoring-plan.md`.
    disqualified at stage 1 on cost and latency, and the stage 2 Sol probe
    showed the bypass alone releases wrong-shaped SQL, so the candidate
    was reverted with $7.14 of the $9.00 authorization unspent
-9. Next: the fresh pre-registered gate candidate combining the
-   `openai/gpt-5.6-sol` pin, the trusted schema-tool SQL bypass, the
-   105-second schema-agent wall-clock margin, and
+9. Next: PR 65 (below) — the fresh pre-registered gate candidate
+   combining the `openai/gpt-5.6-sol` pin, the trusted schema-tool SQL
+   bypass, the 105-second schema-agent wall-clock margin, and
    `correctAndRetryExperimental` plan-consistency enforcement, with its
    own conjunctive criteria and fresh spend authorization
 
@@ -1102,6 +1102,230 @@ projection/planning synthesis (PR 57) and, narrowly, whether specific
 near-miss aggregate aliases belong in the golden alias lists — a golden
 change that must be justified case by case, never as bulk loosening to fit
 observed model output.
+
+## PR 65 — Sol pin + trusted SQL + wall-clock margin + plan-consistency enforcement gate candidate
+
+**Status: candidate implemented and pre-registered 2026-07-24; free
+validation recorded below. No completion request has been made on branch
+`gate-experiment-gpt-5.6-sol-candidate`, and none is authorized until the
+maintainer approves the fresh spend cap in this section. Historical unused
+authorization does not carry forward.**
+
+**Why:** Four independently evidenced mechanisms compensate for each
+other's recorded failure modes, and each candidate piece has already been
+funded-tested in isolation:
+
+* PR 63 showed GPT-5.6 Sol has the strongest decision profile yet measured
+  (12/12 clarification decisions, semantic-mismatch triage 5, $0.049025
+  per result) but over-clarifies (31 exclusive false clarifications) and
+  recorded one genuine completion killed by the 90-second deadline.
+* PR 56/64 showed the trusted schema-tool SQL bypass mechanically removes
+  the false-clarification mode (28 -> 5 on GPT-5.5; 30/30 -> 3/30 on the
+  Sol probe cases) but releases projection-drifted SQL (18 of 24 probe
+  mismatches were `wrong projected columns`).
+* PR 57/66 landed plan-validate-and-repair; its funded probe recorded
+  conforming structured plans on 15/15 SQL terminals, and the enforcement
+  mode (`correctAndRetryExperimental`) drives exactly one in-session
+  correction from the specific divergence before failing closed —
+  targeting precisely the projection-drift class the bypass exposes.
+* The 105-second margin clears every recorded genuine completion killed at
+  90 seconds (91.0/93.7/94.7 s), the flake class that alone rejected two
+  otherwise-passing PR 56 bypass gates and co-rejected PR 63, while
+  keeping a 15-second margin inside the unchanged 120-second eval case
+  budget.
+
+**What (four independently revertable commits on
+`gate-experiment-gpt-5.6-sol-candidate`, reviewed against current `main`
+rather than blindly cherry-picked):**
+
+1. `37461c9` — exact cherry-pick of the twice-gated PR 56 bypass
+   (`bcaf957`; `git patch-id` verified identical to PR 64's `043afa7`).
+   The three touched files are byte-identical on `main` to the patch's
+   pre-image, so the applied result reproduces the tested behavior.
+2. `882952e` — exact cherry-pick of PR 63's Sol pin (`27ed6a0`; verified
+   byte-identical to the net effect of PR 64's `76d0fcb` + `9a3b08b`).
+   Test hunks land at PR 66 line offsets; PR 66 added no model literals,
+   and the pin files contain zero residual `gpt-5.5` references after
+   application. This also re-aligns `docs/release.md`, `Evals/README.md`,
+   and `docs/implementation-guide.md`, whose Sol wording from `e475536`
+   was never reverted with the pins.
+3. `705cf7a` — cherry-pick of PR 64's wall-clock margin (`703afae`,
+   three-way over PR 66's adjacent `planConsistencyMode` context). Only
+   the default changes (90 -> 105); the `wallClockTimeout` fail-closed
+   classification chain and the 120-second eval case budget are untouched.
+4. `1060d81` — new: flips the plan-consistency default to
+   `correctAndRetryExperimental` in both the library configuration
+   (`OpenRouterSchemaToolSQLAgent.swift`) and the eval CLI
+   (`WidenEvalMain.swift`), with a deterministic test pinning the new
+   default and confirming the clarification-correction and intent-coverage
+   defaults remain `diagnosticsOnly`. Release-gate Make recipes stay
+   flag-free and inherit enforcement through the defaults, so the gate
+   exercises exactly the configuration that would ship.
+
+Composition safety: enforcement acts inside the agent before a terminal
+SQL response is accepted; the bypass acts later in the postprocessor and
+requires `appSideRejectionReason == nil`. SQL still divergent after the
+single correction fails closed (`planConsistencyNoProgress`,
+`planConsistencyRejected`) and therefore can never be released through the
+bypass. Non-conforming or prose plans remain `notEvaluated` fallbacks and
+never error. The six-call schema-tool budget, safety/schema/PostgreSQL
+validation, private routing, requested/routed/canonical verification,
+structured parsing, eval goldens, seeded fixtures, and the PR 53 frozen
+clarification heuristics are unchanged.
+
+**Live credential-free catalog verification 2026-07-24 (public GET, no API
+key, no completion):** `openai/gpt-5.6-sol` is listed with canonical
+`canonical_slug` `openai/gpt-5.6-sol-20260709`; context 1,050,000 with
+128,000 max completion tokens; pricing $5/M prompt and $30/M completion —
+identical to the retained `openai/gpt-5.5` — with a long-context override
+($10/$45) only at or above 272,000 prompt tokens, far beyond any gate
+case; `tools`, `tool_choice`, `response_format`, and `structured_outputs`
+all appear in `supported_parameters`; knowledge cutoff 2026-02-16. The
+per-model endpoints listing names `OpenAI | openai/gpt-5.6-sol-20260709`
+on every provider endpoint. After the pin commit, the rebuilt
+credential-free `--check-openrouter-canonical` must print `current` and
+exit 0 before any paid stage; its result is recorded under free validation
+below.
+
+**Measurement definitions (so every criterion is verifiable from run
+artifacts and sanitized reports):**
+
+* *Plan-consistency fail-closed rejection*: a result whose diagnostics
+  record `appSideRejectionReason == planConsistencyRejected` with the
+  `planConsistencyNoProgress` failure (status `generationFailure`; triage
+  bucket `model/tool protocol failure`; triage Policy cell `plan:
+  divergent` with `plan correction attempted`).
+* *Wrong-projected-columns rows*: triage rows whose Mismatch column
+  contains `wrong projected columns`.
+* *Raw expected-SQL-to-clarification*: triage rows with Expected `sql`
+  and Actual `clarify` counted across every bucket; *exclusive* is the
+  `wrong decision: expected SQL, got clarification` bucket count alone.
+* Plan decision distribution (`plan: consistent` / `plan: divergent` /
+  `plan correction succeeded` Policy-cell counts) is reported from the
+  triage tables and `cases.jsonl` diagnostics.
+
+**Pre-registered acceptance criteria (conjunctive at every stage; recorded
+before any completion request; at least as strict as the recorded PR
+56/63/64 criteria):** any failed criterion at any stage stops all paid
+work, reverts `1060d81`, `705cf7a`, `882952e`, and `37461c9`, and records
+the negative result here with sanitized evidence only.
+
+*Stage 1 — transport smoke:* `make eval-openrouter-smoke
+MODEL=openai/gpt-5.6-sol REPEAT=3 MAX_CLOUD_COST_USD=0.50`. Criteria:
+15/15 complete; transport 15/15; structured parsing 15/15; returned model
+verified `openai/gpt-5.6-sol` on every completion via ZDR-only routing
+with canonical enforcement active; zero eval and internal schema-agent
+timeouts; zero plan-consistency fail-closed rejections. Static-shape is
+reported against the known 9/15 Sol/GPT-5.5 smoke fingerprint but not
+gated.
+
+*Stage 2 — focused over-clarification probe (the enforcement
+demonstration):* the ten historical over-clarification cases, three
+repeats, seeded semantic grading, run at candidate defaults (no
+experimental clarification/intent flags, matching the full-gate
+configuration exactly):
+
+```sh
+set -a; . ./.env.eval.local; set +a; \
+build/Build/Products/Debug/WidenEval --backend cloud \
+  --model openai/gpt-5.6-sol --cloud-agent tools \
+  --suite Evals/suites/text-to-sql-v1.json \
+  --case commerce.average-order-value-country \
+  --case commerce.customer-paid-revenue \
+  --case commerce.customers-without-orders \
+  --case saas.expiring-subscriptions \
+  --case saas.overallocated-seats \
+  --case saas.users-without-membership \
+  --case support.average-first-response \
+  --case support.frequent-feedback-cluster \
+  --case support.unclustered-feedback \
+  --case support.unresolved-by-assignee \
+  --semantic-db --repeat 3 --write-release-triage \
+  --max-cloud-cost-usd 2.00
+```
+
+Comparability caveat, recorded up front: the PR 64 stage 2 comparator ran
+via `eval-release-overclarification`, which also passes the experimental
+clarification-correction and intent-coverage flags; its exact manifest is
+not committed. The stage 2 floors below are therefore absolute, not
+deltas against that run. Criteria: 30/30 complete; transport 30/30; zero
+eval and internal schema-agent timeouts; released SQL passing the seeded
+semantic comparison on at least 15/30 (the unchanged PR 64 stage 2
+floor); expected-SQL-to-clarification decisions at most 3 of 30 (no worse
+than the recorded bypass-only probe — enforcement must not relocate
+failures into clarification); plan-consistency fail-closed rejections at
+most 2 of 30; wrong-projected-columns rows at most 9 (half the recorded
+bypass-only value of 18 — the direct requirement that enforcement improves
+the projection failure profile rather than moving it). Structured
+parsing, cost, latency, and the plan decision distribution are reported.
+
+*Stage 3 — full pinned gate:* `make eval-release-triage
+MODEL=openai/gpt-5.6-sol` (flag-free, pin-enforced,
+`ALLOW_MODEL_OVERRIDE` unset). Criteria, all required together:
+
+1. 60/60 complete results, with zero missing, budget-skipped, or
+   provider-budget-unavailable results.
+2. Semantic end-to-end at least 27/60 — strictly above the 26/60 best
+   recorded bypass gate (GPT-5.5, 2026-07-14) as well as the 19/60
+   retained comparator and PR 63's amended 20/60 promotion bar, so the
+   merged configuration must be the best configuration ever measured on
+   this gate, with the improvement attributable to released-SQL
+   correctness.
+3. Clarification decisions at least 11/12 (12/12 expected on Sol).
+4. Raw expected-SQL-to-clarification rows at most 5 across all buckets
+   (which bounds the exclusive bucket at 5) — the bypass-active GPT-5.5
+   comparator value, far below the recorded 28 ceilings, so failures
+   cannot hide in clarification.
+5. Plan-consistency fail-closed rejections at most 2 of 60, so failures
+   cannot hide in enforcement rejections while structured parsing still
+   meets its floor.
+6. Tool-budget triage at most 6; static schema failures at most 1.
+7. Safety, schema validity, and PostgreSQL verification at 100% of
+   evaluated SQL.
+8. Transport at least 95% (100% observed in every recent gate) and
+   structured parsing at least 95%.
+9. Zero forbidden bindings, zero repeated/no-progress repairs, zero eval
+   timeouts, and zero internal schema-agent timeouts — unchanged strict
+   rule, now expected to hold because of the 105-second margin.
+10. Private routing with requested/routed/canonical model verification on
+    every completion (`openai/gpt-5.6-sol` returned on all 60; canonical
+    `openai/gpt-5.6-sol-20260709` enforced; ZDR provider only).
+
+Reported for the record on every stage (not gated): cumulative branch
+spend, total and per-result cost against the $0.049025 Sol and
+$0.058690833 GPT-5.5 comparators, P50/P95/maximum latency, every triage
+bucket, the plan decision distribution and correction success count, the
+wrong-projected-columns row count, and the semantic-mismatch subcategory
+distribution.
+
+**Decision rule:** all criteria are conjunctive; a pass at stages 1–3
+merges the candidate as the retained beta cloud path (the separate 90%
+semantic production-readiness gate stays unmet and beta wording stays).
+Any failure reverts the four candidate commits and retains only sanitized
+evidence and this record. The `gpt-5.6-sol-pro`, `terra`, and `luna`
+tiers stay out of scope; any future look at them needs its own
+pre-registration.
+
+**Staged spend plan (requires fresh maintainer authorization; nothing has
+been spent on this branch):** total branch cap **$8.00**:
+
+1. Stage 1 smoke, $0.50 allocation — the identical Sol smoke cost
+   $0.156745 on 2026-07-24; enforcement adds at most one correction turn
+   per divergent case.
+2. Stage 2 probe, $2.00 ceiling — the same ten-case, three-repeat Sol
+   probe cost $1.334325; the ceiling covers correction-turn overhead.
+3. Stage 3 full gate, $4.50 cumulative ceiling — the Sol full gate cost
+   $2.941500 and the GPT-5.5 gates cost $3.276305–$3.521450; correction
+   turns bound the expected increase well inside the ceiling.
+4. $1.00 unallocated reserve for the between-case ceiling boundary (the
+   runner checks `MAX_CLOUD_COST_USD` between cases, so a stage can
+   overrun by at most the final case's cost) and for resume completion.
+   Later stage ceilings shrink if an earlier stage overruns so the $8.00
+   cap holds.
+
+**Free validation record 2026-07-24:** pending; recorded after the
+focused suites, full test suite, eval build, project regeneration, and
+the credential-free canonical check complete on the candidate.
 
 ## Later / conditional
 
