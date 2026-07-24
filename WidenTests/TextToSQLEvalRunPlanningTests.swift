@@ -390,6 +390,7 @@ struct TextToSQLEvalRunPlanningTests {
         let releaseRecipe = try #require(Self.makefileRecipe(named: "eval-release", in: text))
         #expect(!releaseRecipe.contains("--schema-agent-clarification-correction"))
         #expect(!releaseRecipe.contains("--schema-agent-intent-coverage"))
+        #expect(!releaseRecipe.contains("--schema-agent-plan-consistency"))
 
         let focusedRecipe = try #require(
             Self.makefileRecipe(named: "eval-release-overclarification", in: text)
@@ -402,6 +403,7 @@ struct TextToSQLEvalRunPlanningTests {
         )
         #expect(!sqlShapeRecipe.contains("--schema-agent-clarification-correction"))
         #expect(!sqlShapeRecipe.contains("--schema-agent-intent-coverage"))
+        #expect(!sqlShapeRecipe.contains("--schema-agent-plan-consistency"))
     }
 
     @Test func canonicalModelWatchIsScheduledLeastPrivilegeAndDriftOnly() throws {

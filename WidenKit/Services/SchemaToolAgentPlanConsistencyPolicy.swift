@@ -266,10 +266,12 @@ public struct SchemaToolAgentStructuredQueryPlan: Equatable, Sendable {
 /// conformance engine.
 public enum SchemaToolAgentPlanConsistencyPolicy {
     public static func evaluate(
-        sql: String,
+        sql rawSQL: String,
         plan: SchemaToolAgentStructuredQueryPlan,
         inspectedTableNames: Set<String>
     ) -> SchemaToolAgentPlanConsistencyResult {
+        let sql = SQLShape.strippedOfComments(rawSQL)
+        let cteNames = SQLShape.commonTableExpressionNames(in: sql)
         var divergences: [String] = []
 
         let sqlOutputNames = SQLShape.topLevelOutputNames(in: sql)
@@ -290,8 +292,11 @@ public enum SchemaToolAgentPlanConsistencyPolicy {
         }
 
         for aggregation in plan.aggregation {
-            let function = normalizedIdentifier(aggregation.function)
-            guard !function.isEmpty else { continue }
+            guard
+                let function = SQLShape.leadingIdentifierToken(
+                    in: normalizedIdentifier(aggregation.function)
+                )
+            else { continue }
             if !SQLShape.containsFunctionCall(named: function, in: sql) {
                 divergences.append(
                     "plan aggregation \(function)(...) AS \(normalizedIdentifier(aggregation.alias)) has no matching \(function)( call in the SQL"
@@ -305,7 +310,10 @@ public enum SchemaToolAgentPlanConsistencyPolicy {
             if !SQLShape.referencesIdentifier(table, in: sql) {
                 divergences.append("plan join table \(table) is not referenced in the SQL")
             }
-            if !inspectedTableNames.isEmpty, !isInspected(table, in: inspectedTableNames) {
+            if !inspectedTableNames.isEmpty,
+                !cteNames.contains(table),
+                !isInspected(table, in: inspectedTableNames)
+            {
                 divergences.append("plan join table \(table) was not inspected with schema tools")
             }
         }
@@ -399,6 +407,7 @@ public enum SchemaToolAgentPlanConsistencyPolicy {
 
         static func outputName(forSelectExpression expression: String) -> String {
             var trimmed = expression.trimmingCharacters(in: .whitespacesAndNewlines)
+            trimmed = strippedOfDistinctOnPrefix(trimmed)
             if let match = trimmed.range(
                 of: #"^(distinct|all)\s+"#,
                 options: [.regularExpression, .caseInsensitive]
@@ -409,12 +418,205 @@ public enum SchemaToolAgentPlanConsistencyPolicy {
             if let aliasRange = lastTopLevelAliasRange(in: trimmed) {
                 return normalizedIdentifier(String(trimmed[aliasRange]))
             }
+            if let bareAlias = trailingBareAlias(in: trimmed) {
+                return bareAlias
+            }
             let normalized = normalizedIdentifier(trimmed)
             if let functionName = leadingFunctionName(in: normalized) {
                 return functionName
             }
             guard isPlainColumnPath(normalized) else { return "" }
             return normalized.split(separator: ".").last.map(String.init) ?? ""
+        }
+
+        /// PostgreSQL allows `SELECT expr alias` without AS. A trailing
+        /// identifier separated by top-level whitespace is that bare alias
+        /// when the character before the whitespace can end an operand and
+        /// the token is not a keyword that legally trails an expression.
+        private static func trailingBareAlias(in expression: String) -> String? {
+            var depth = 0
+            var quote: Character?
+            var index = expression.startIndex
+            var lastWhitespaceEnd: String.Index?
+            var lastSignificantBeforeWhitespace: Character?
+            var pendingSignificant: Character?
+            while index < expression.endIndex {
+                let character = expression[index]
+                if let activeQuote = quote {
+                    if character == activeQuote { quote = nil }
+                    pendingSignificant = character
+                    index = expression.index(after: index)
+                    continue
+                }
+                switch character {
+                case "'", "\"":
+                    quote = character
+                    pendingSignificant = character
+                case "(":
+                    depth += 1
+                    pendingSignificant = character
+                case ")":
+                    depth = max(0, depth - 1)
+                    pendingSignificant = character
+                default:
+                    if depth == 0, character == " " || character == "\n" || character == "\t" {
+                        var end = expression.index(after: index)
+                        while end < expression.endIndex,
+                            expression[end] == " " || expression[end] == "\n"
+                                || expression[end] == "\t"
+                        {
+                            end = expression.index(after: end)
+                        }
+                        lastWhitespaceEnd = end
+                        lastSignificantBeforeWhitespace = pendingSignificant
+                        index = end
+                        continue
+                    }
+                    pendingSignificant = character
+                }
+                index = expression.index(after: index)
+            }
+            guard depth == 0, quote == nil,
+                let tokenStart = lastWhitespaceEnd, tokenStart < expression.endIndex,
+                let before = lastSignificantBeforeWhitespace,
+                before.isLetter || before.isNumber || before == "_" || before == ")"
+                    || before == "]" || before == "\""
+            else { return nil }
+            let token = String(expression[tokenStart...])
+            guard
+                token.range(
+                    of: #"^("[^"]+"|[a-zA-Z_][a-zA-Z0-9_]*)$"#,
+                    options: .regularExpression
+                ) != nil
+            else { return nil }
+            let normalized = normalizedIdentifier(token)
+            let excluded: Set<String> = [
+                "null", "true", "false", "end", "asc", "desc", "unknown", "default", "from",
+            ]
+            guard !excluded.contains(normalized) else { return nil }
+            return normalized
+        }
+
+        private static func strippedOfDistinctOnPrefix(_ expression: String) -> String {
+            guard
+                let match = expression.range(
+                    of: #"^distinct\s+on\s*\("#,
+                    options: [.regularExpression, .caseInsensitive]
+                )
+            else { return expression }
+            var depth = 1
+            var quote: Character?
+            var index = match.upperBound
+            while index < expression.endIndex, depth > 0 {
+                let character = expression[index]
+                if let activeQuote = quote {
+                    if character == activeQuote { quote = nil }
+                } else {
+                    switch character {
+                    case "'", "\"": quote = character
+                    case "(": depth += 1
+                    case ")": depth -= 1
+                    default: break
+                    }
+                }
+                index = expression.index(after: index)
+            }
+            guard depth == 0 else { return expression }
+            return String(expression[index...]).trimmingCharacters(in: .whitespacesAndNewlines)
+        }
+
+        /// Removes `--` line comments and nested `/* */` block comments while
+        /// preserving string literals and quoted identifiers, so comment text
+        /// can never corrupt quote/depth tracking or match clause keywords.
+        static func strippedOfComments(_ sql: String) -> String {
+            var output = ""
+            output.reserveCapacity(sql.count)
+            var index = sql.startIndex
+            var quote: Character?
+            var blockDepth = 0
+            while index < sql.endIndex {
+                let character = sql[index]
+                let next = sql.index(after: index) < sql.endIndex
+                    ? sql[sql.index(after: index)]
+                    : nil
+                if blockDepth > 0 {
+                    if character == "*", next == "/" {
+                        blockDepth -= 1
+                        index = sql.index(index, offsetBy: 2)
+                        if blockDepth == 0 { output.append(" ") }
+                        continue
+                    }
+                    if character == "/", next == "*" {
+                        blockDepth += 1
+                        index = sql.index(index, offsetBy: 2)
+                        continue
+                    }
+                    index = sql.index(after: index)
+                    continue
+                }
+                if let activeQuote = quote {
+                    if character == activeQuote { quote = nil }
+                    output.append(character)
+                    index = sql.index(after: index)
+                    continue
+                }
+                if character == "'" || character == "\"" {
+                    quote = character
+                    output.append(character)
+                    index = sql.index(after: index)
+                    continue
+                }
+                if character == "-", next == "-" {
+                    while index < sql.endIndex, sql[index] != "\n" {
+                        index = sql.index(after: index)
+                    }
+                    output.append(" ")
+                    continue
+                }
+                if character == "/", next == "*" {
+                    blockDepth = 1
+                    index = sql.index(index, offsetBy: 2)
+                    continue
+                }
+                output.append(character)
+                index = sql.index(after: index)
+            }
+            return output
+        }
+
+        /// Names defined by `WITH name [ (cols) ] AS (` — exempt from the
+        /// schema-evidence binding rule because they are query-local, not
+        /// base tables.
+        static func commonTableExpressionNames(in sql: String) -> Set<String> {
+            var names = Set<String>()
+            var searchStart = sql.startIndex
+            while searchStart < sql.endIndex,
+                let match = sql.range(
+                    of: #"(?i)(?<![a-z0-9_])([a-z_][a-z0-9_]*)\s*(?:\([^()]*\))?\s+as\s*\("#,
+                    options: .regularExpression,
+                    range: searchStart..<sql.endIndex
+                )
+            {
+                let matched = String(sql[match])
+                if let nameMatch = matched.range(
+                    of: #"^[a-zA-Z_][a-zA-Z0-9_]*"#,
+                    options: .regularExpression
+                ) {
+                    names.insert(normalizedIdentifier(String(matched[nameMatch])))
+                }
+                searchStart = match.upperBound
+            }
+            return names
+        }
+
+        static func leadingIdentifierToken(in value: String) -> String? {
+            guard
+                let match = value.range(
+                    of: #"^[a-z_][a-z0-9_]*"#,
+                    options: .regularExpression
+                )
+            else { return nil }
+            return String(value[match])
         }
 
         static func containsFunctionCall(named function: String, in sql: String) -> Bool {

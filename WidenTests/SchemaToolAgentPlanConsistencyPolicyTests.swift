@@ -289,6 +289,122 @@ struct SchemaToolAgentPlanConsistencyPolicyTests {
         #expect(result.decision == .consistent)
     }
 
+    // MARK: - Comment, alias, and dialect robustness
+
+    @Test func lineCommentWithApostropheDoesNotCorruptClauseDetection() {
+        let result = evaluate(
+            sql: """
+                SELECT t.id, t.name, COUNT(m.id) AS wins
+                FROM public.preseason_tool t
+                JOIN public.preseason_match_config m ON m.tool_id = t.id
+                -- don't count archived battles
+                WHERE m.archived_at IS NULL
+                GROUP BY t.id, t.name
+                ORDER BY wins DESC
+                LIMIT 5
+                """,
+            plan: plan(
+                joins: ["public.preseason_tool", "public.preseason_match_config"],
+                projection: [("t.id", ""), ("t.name", "")],
+                aggregation: [("COUNT", "wins")],
+                grouping: ["t.id", "t.name"],
+                ordering: ["wins DESC"],
+                limit: 5
+            )
+        )
+        #expect(result.decision == .consistent)
+    }
+
+    @Test func commentKeywordsDoNotSatisfyOrDefeatClauseRules() {
+        let missingOrder = evaluate(
+            sql: "SELECT c.name FROM public.customers c -- order by name later",
+            plan: plan(joins: ["public.customers"], projection: [("c.name", "")], ordering: ["c.name"])
+        )
+        #expect(missingOrder.decision == .divergent)
+
+        let realLimit = evaluate(
+            sql: """
+                SELECT c.name FROM public.customers c
+                /* limit to active customers */
+                LIMIT 10
+                """,
+            plan: plan(joins: ["public.customers"], projection: [("c.name", "")], limit: 10)
+        )
+        #expect(realLimit.decision == .consistent)
+    }
+
+    @Test func nestedBlockCommentBeforeSelectIsIgnored() {
+        let result = evaluate(
+            sql: "/* outer /* select nested */ comment */ SELECT c.name FROM public.customers c",
+            plan: plan(joins: ["public.customers"], projection: [("c.name", "")])
+        )
+        #expect(result.decision == .consistent)
+    }
+
+    @Test func bareAliasWithoutASNamesTheColumn() {
+        let aggregate = evaluate(
+            sql: "SELECT COUNT(*) total FROM public.orders",
+            plan: plan(joins: ["public.orders"], aggregation: [("COUNT", "total")])
+        )
+        #expect(aggregate.decision == .consistent)
+
+        let column = evaluate(
+            sql: "SELECT c.customer_id cid FROM public.customers c",
+            plan: plan(joins: ["public.customers"], projection: [("c.customer_id", "cid")])
+        )
+        #expect(column.decision == .consistent)
+    }
+
+    @Test func operatorOperandIsNotMistakenForBareAlias() {
+        let result = evaluate(
+            sql: "SELECT o.price * o.quantity AS line_total FROM public.orders o",
+            plan: plan(joins: ["public.orders"], projection: [("o.price * o.quantity", "line_total")])
+        )
+        #expect(result.decision == .consistent)
+    }
+
+    @Test func distinctOnProjectionNamesResolve() {
+        let result = evaluate(
+            sql: """
+                SELECT DISTINCT ON (r.customer_id) r.customer_id, r.created_at
+                FROM public.orders r
+                ORDER BY r.customer_id, r.created_at DESC
+                """,
+            plan: plan(
+                joins: ["public.orders"],
+                projection: [("r.customer_id", ""), ("r.created_at", "")],
+                ordering: ["r.customer_id", "r.created_at DESC"]
+            )
+        )
+        #expect(result.decision == .consistent)
+    }
+
+    @Test func decoratedAggregationFunctionSpellingStillMatches() {
+        let result = evaluate(
+            sql: "SELECT COUNT(DISTINCT o.customer_id) AS buyers FROM public.orders o",
+            plan: plan(joins: ["public.orders"], aggregation: [("COUNT(DISTINCT)", "buyers")])
+        )
+        #expect(result.decision == .consistent)
+    }
+
+    @Test func cteJoinEntryIsExemptFromInspectionRule() {
+        let result = evaluate(
+            sql: """
+                WITH recent_orders AS (
+                    SELECT o.customer_id FROM public.orders o WHERE o.created_at > CURRENT_DATE - 30
+                )
+                SELECT c.name FROM public.customers c
+                JOIN recent_orders r ON r.customer_id = c.id
+                """,
+            plan: plan(
+                joins: ["public.customers", "recent_orders"],
+                projection: [("c.name", "")]
+            ),
+            inspected: ["public.customers", "public.orders"]
+        )
+        #expect(result.decision == .consistent)
+    }
+
     // MARK: - Divergence reporting
 
     @Test func reportsEveryDivergenceWithFirstAsReason() {

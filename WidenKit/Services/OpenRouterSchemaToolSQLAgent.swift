@@ -711,6 +711,7 @@ public final class OpenRouterSchemaToolSQLAgent: SQLGenerator, Sendable {
                             finalTerminalResult = terminalResult
                             aggregate.terminalOutcome = "clarify"
                         }
+                        diagnostics.resetPlanConsistencyForClarifyTerminal()
                         aggregate.agentDiagnostics = diagnostics.snapshot(
                             evidence: evidence,
                             inspectionToolCalls: await inspectionSession?.tracesSnapshot() ?? []
@@ -810,6 +811,7 @@ public final class OpenRouterSchemaToolSQLAgent: SQLGenerator, Sendable {
                                     queryPlan: ""
                                 )
                                 diagnostics.terminalQueryPlan = ""
+                                diagnostics.resetPlanConsistencyForClarifyTerminal()
                                 aggregate.terminalOutcome = "clarify_fallback"
                                 aggregate.agentDiagnostics = diagnostics.snapshot(
                                     evidence: evidence,
@@ -831,8 +833,7 @@ public final class OpenRouterSchemaToolSQLAgent: SQLGenerator, Sendable {
                                     sql: terminalResult.sql,
                                     plan: structuredPlan,
                                     inspectedTableNames: Set(
-                                        evidence.summary(inspectionToolCalls: inspectionTraces)
-                                            .describedTableIDs
+                                        evidence.validationTableUniverse
                                             .map(SchemaToolAgentPlanConsistencyPolicy.normalizedIdentifier)
                                     )
                                 )
@@ -880,7 +881,10 @@ public final class OpenRouterSchemaToolSQLAgent: SQLGenerator, Sendable {
                         if intentCoverageCorrections > 0 {
                             diagnostics.intentCoverageCorrectionSucceeded = true
                         }
-                        if planConsistencyCorrections > 0 {
+                        if planConsistencyCorrections > 0,
+                            diagnostics.planConsistencyDecision
+                                == SchemaToolAgentPlanConsistencyDecision.consistent.rawValue
+                        {
                             diagnostics.planConsistencyCorrectionSucceeded = true
                         }
                         diagnostics.clearResolvedPlanConsistencyRejection()
@@ -1714,7 +1718,7 @@ public final class OpenRouterSchemaToolSQLAgent: SQLGenerator, Sendable {
                                 "additionalProperties": false,
                                 "required": ["table", "role"],
                                 "properties": [
-                                    "table": ["type": "string", "maxLength": 200],
+                                    "table": ["type": "string", "minLength": 1, "maxLength": 200],
                                     "role": ["type": "string", "maxLength": 200],
                                 ],
                             ],
@@ -1722,7 +1726,7 @@ public final class OpenRouterSchemaToolSQLAgent: SQLGenerator, Sendable {
                         "filters": [
                             "type": "array",
                             "maxItems": 16,
-                            "items": ["type": "string", "maxLength": 200],
+                            "items": ["type": "string", "minLength": 1, "maxLength": 200],
                         ],
                         "projection": [
                             "type": "array",
@@ -1732,7 +1736,7 @@ public final class OpenRouterSchemaToolSQLAgent: SQLGenerator, Sendable {
                                 "additionalProperties": false,
                                 "required": ["expression"],
                                 "properties": [
-                                    "expression": ["type": "string", "maxLength": 200],
+                                    "expression": ["type": "string", "minLength": 1, "maxLength": 200],
                                     "alias": ["type": "string", "maxLength": 120],
                                 ],
                             ],
@@ -1745,27 +1749,27 @@ public final class OpenRouterSchemaToolSQLAgent: SQLGenerator, Sendable {
                                 "additionalProperties": false,
                                 "required": ["function", "alias"],
                                 "properties": [
-                                    "function": ["type": "string", "maxLength": 40],
+                                    "function": ["type": "string", "minLength": 1, "maxLength": 40],
                                     "column": ["type": "string", "maxLength": 200],
-                                    "alias": ["type": "string", "maxLength": 120],
+                                    "alias": ["type": "string", "minLength": 1, "maxLength": 120],
                                 ],
                             ],
                         ],
                         "grouping": [
                             "type": "array",
                             "maxItems": 16,
-                            "items": ["type": "string", "maxLength": 200],
+                            "items": ["type": "string", "minLength": 1, "maxLength": 200],
                         ],
                         "ordering": [
                             "type": "array",
                             "maxItems": 16,
-                            "items": ["type": "string", "maxLength": 200],
+                            "items": ["type": "string", "minLength": 1, "maxLength": 200],
                         ],
                         "limit": ["type": "integer", "minimum": 1, "maximum": 100000],
                         "date_anchors": [
                             "type": "array",
                             "maxItems": 16,
-                            "items": ["type": "string", "maxLength": 200],
+                            "items": ["type": "string", "minLength": 1, "maxLength": 200],
                         ],
                     ],
                 ],
@@ -2300,6 +2304,13 @@ private struct OpenRouterSchemaToolAgentDiagnosticState {
         planConsistencyDivergences = []
     }
 
+    mutating func resetPlanConsistencyForClarifyTerminal() {
+        planConsistencyDecision = ""
+        planConsistencyReason = ""
+        planConsistencyDivergences = []
+        clearResolvedPlanConsistencyRejection()
+    }
+
     mutating func clearResolvedPlanConsistencyRejection() {
         if appSideRejectionReason == .planConsistencyRejected {
             appSideRejectionReason = nil
@@ -2403,6 +2414,10 @@ private struct SchemaToolEvidenceLedger {
             }
             return "\(prefix) \(message). \(OpenRouterSchemaToolSQLAgent.strictTerminalCorrection)"
         }
+    }
+
+    var validationTableUniverse: Set<String> {
+        describedTables.union(joinPathTables)
     }
 
     private var schema: DatabaseSchema

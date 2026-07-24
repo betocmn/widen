@@ -811,6 +811,8 @@ enum TextToSQLReleaseTriageReporter {
             guard let diagnostics,
                 !diagnostics.clarificationPolicyDecision.isEmpty
                     || !diagnostics.sqlIntentCoverageDecision.isEmpty
+                    || !diagnostics.planConsistencyDecision.isEmpty
+                    || diagnostics.planConsistencyCorrectionAttempted
             else { return "-" }
             var parts: [String] = []
             if !diagnostics.clarificationPolicyDecision.isEmpty {

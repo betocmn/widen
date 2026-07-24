@@ -693,6 +693,7 @@ struct EvalRunner {
                 "WidenKit/Services/OpenRouterSchemaToolSQLAgent.swift",
                 "WidenKit/Services/OpenRouterToolChatProtocol.swift",
                 "WidenKit/Services/SchemaToolAgentClarificationPolicy.swift",
+                "WidenKit/Services/SchemaToolAgentPlanConsistencyPolicy.swift",
                 "WidenKit/Services/SchemaToolAgentSQLIntentCoveragePolicy.swift",
                 "WidenKit/Services/SchemaToolSession.swift",
             ] : [])

@@ -722,6 +722,7 @@ enum QueryPlanReportSummary {
         ("grouping", ["group"]),
         ("ordering", ["order"]),
         ("limit", ["limit"]),
+        ("aggregation", ["aggregation", "aggregate"]),
         ("date anchors", ["date anchor", "date", "time window"]),
     ]
 
@@ -730,7 +731,7 @@ enum QueryPlanReportSummary {
         guard !trimmed.isEmpty else { return nil }
 
         let lowercased = trimmed.lowercased()
-        if lowercased.hasPrefix("present; chars:") {
+        if lowercased.hasPrefix("present; chars:") || lowercased.hasPrefix("present; structured:") {
             return trimmed
         }
 
