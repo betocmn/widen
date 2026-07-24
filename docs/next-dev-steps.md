@@ -1352,9 +1352,27 @@ been spent on this branch):** total branch cap **$8.00**:
    Later stage ceilings shrink if an earlier stage overruns so the $8.00
    cap holds.
 
-**Free validation record 2026-07-24:** pending; recorded after the
-focused suites, full test suite, eval build, project regeneration, and
-the credential-free canonical check complete on the candidate.
+**Free validation record 2026-07-24 (no paid request made):**
+
+* `make project` regenerated an unchanged tracked tree.
+* The nine candidate-relevant suites (schema validator, pipeline,
+  catalog, backend selection, generator, schema-tool agent, eval run
+  planning, plan-consistency policy, release gate) passed 444 tests; the
+  four suites touched by the review hardening re-passed 309 tests.
+* `make test` passed 1,173 tests in 50 suites; `make eval-build` passed;
+  `git diff --check` is clean.
+* The rebuilt candidate binary's credential-free
+  `--check-openrouter-canonical` printed `current` for requested
+  `openai/gpt-5.6-sol` with observed canonical
+  `openai/gpt-5.6-sol-20260709` and exited 0 — no API key, no
+  completion.
+* An adversarial multi-agent review of the full candidate diff (four
+  lenses, each confirmed finding independently verified) produced the
+  `7eca68c` laundering fix, restored the stage 3 runner ceiling to the
+  pre-registered command, and corrected the smoke stage's vacuous
+  enforcement criterion. A claimed silent resume-mode downgrade was
+  refuted: cross-candidate resumes fail closed on the scorer-source
+  hash and the pinned resume model before any case runs.
 
 ## Later / conditional
 
