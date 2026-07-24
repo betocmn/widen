@@ -1465,6 +1465,265 @@ struct OpenRouterSchemaToolSQLAgentTests {
         #expect(result.backendMetadata?.agentDiagnostics?.terminalValidationFailureReason == nil)
     }
 
+    @Test func structuredPlanDivergenceReceivesPlanCorrection() async throws {
+        let schema = Self.makeSupportTicketSchema()
+        let sql = """
+            SELECT AVG(first_response_at - created_at) AS average_first_response_time
+            FROM public.support_ticket
+            WHERE first_response_at IS NOT NULL
+            """
+        let chatTransport = ScriptedTransport { request, index in
+            switch index {
+            case 1:
+                return Self.assistantToolCalls([
+                    Self.toolCall(id: "search-tickets", name: "search_schema", arguments: [
+                        "query": "support ticket first response",
+                        "limit": 4,
+                    ]),
+                ])
+            case 2:
+                let tickets = try Self.tableHandle(named: #""public"."support_ticket""#, in: request)
+                return Self.assistantToolCalls([
+                    Self.toolCall(id: "describe-tickets", name: "describe_tables", arguments: [
+                        "table_ids": [tickets],
+                    ]),
+                ])
+            case 3:
+                return Self.assistantToolCalls([
+                    Self.terminalSQLWithPlan(
+                        id: "terminal-divergent",
+                        sql: sql,
+                        plan: Self.ticketPlan(alias: "avg_first_response")
+                    ),
+                ])
+            case 4:
+                let body = try Self.requestBodyText(request)
+                #expect(body.contains("plan_sql_divergence"))
+                #expect(body.contains("avg_first_response"))
+                #expect(body.contains("submit_text_to_sql_result(action='sql')"))
+                return Self.assistantToolCalls([
+                    Self.terminalSQLWithPlan(
+                        id: "terminal-consistent",
+                        sql: sql,
+                        plan: Self.ticketPlan(alias: "average_first_response_time")
+                    ),
+                ])
+            default:
+                throw URLError(.badServerResponse)
+            }
+        }
+        let agent = makeAgent(
+            schema: schema,
+            chatTransport: chatTransport,
+            configuration: OpenRouterSchemaToolSQLAgentConfiguration(
+                maximumSchemaToolCalls: 4,
+                maximumHTTPAttempts: 8,
+                wallClockTimeoutSeconds: 10,
+                planConsistencyMode: .correctAndRetryExperimental
+            )
+        )
+
+        let result = try await agent.generateSQL(
+            question: "Average first response time",
+            schema: schema,
+            context: SQLGenerationContext(),
+            config: SQLGenerationConfig()
+        )
+
+        #expect(!result.needsClarification)
+        let diagnostics = result.backendMetadata?.agentDiagnostics
+        #expect(diagnostics?.planConsistencyMode == "correctAndRetryExperimental")
+        #expect(diagnostics?.planConsistencyDecision == "consistent")
+        #expect(diagnostics?.planConsistencyCorrectionAttempted == true)
+        #expect(diagnostics?.planConsistencyCorrectionSucceeded == true)
+        #expect(diagnostics?.appSideRejectionReason == nil)
+        #expect(diagnostics?.terminalValidationFailureReason == nil)
+        #expect(diagnostics?.terminalQueryPlan.contains("structured: true") == true)
+    }
+
+    @Test func structuredPlanDivergenceWithoutProgressFailsClosed() async throws {
+        let schema = Self.makeSupportTicketSchema()
+        let sql = """
+            SELECT AVG(first_response_at - created_at) AS average_first_response_time
+            FROM public.support_ticket
+            WHERE first_response_at IS NOT NULL
+            """
+        let chatTransport = ScriptedTransport { request, index in
+            switch index {
+            case 1:
+                return Self.assistantToolCalls([
+                    Self.toolCall(id: "search-tickets", name: "search_schema", arguments: [
+                        "query": "support ticket first response",
+                        "limit": 4,
+                    ]),
+                ])
+            case 2:
+                let tickets = try Self.tableHandle(named: #""public"."support_ticket""#, in: request)
+                return Self.assistantToolCalls([
+                    Self.toolCall(id: "describe-tickets", name: "describe_tables", arguments: [
+                        "table_ids": [tickets],
+                    ]),
+                ])
+            case 3:
+                return Self.assistantToolCalls([
+                    Self.terminalSQLWithPlan(
+                        id: "terminal-divergent-1",
+                        sql: sql,
+                        plan: Self.ticketAggregationPlan(alias: "avg_first_response")
+                    ),
+                ])
+            case 4:
+                return Self.assistantToolCalls([
+                    Self.terminalSQLWithPlan(
+                        id: "terminal-divergent-2",
+                        sql: sql,
+                        plan: Self.ticketAggregationPlan(alias: "avg_first_response")
+                    ),
+                ])
+            default:
+                throw URLError(.badServerResponse)
+            }
+        }
+        let agent = makeAgent(
+            schema: schema,
+            chatTransport: chatTransport,
+            configuration: OpenRouterSchemaToolSQLAgentConfiguration(
+                maximumSchemaToolCalls: 4,
+                maximumHTTPAttempts: 8,
+                wallClockTimeoutSeconds: 10,
+                planConsistencyMode: .correctAndRetryExperimental
+            )
+        )
+
+        do {
+            _ = try await agent.generateSQL(
+                question: "Average first response time",
+                schema: schema,
+                context: SQLGenerationContext(),
+                config: SQLGenerationConfig()
+            )
+            Issue.record("Expected a plan-consistency no-progress failure.")
+        } catch let failure as OpenRouterSchemaToolAgentFailure {
+            #expect(failure.category == .planConsistencyNoProgress)
+        }
+    }
+
+    @Test func diagnosticsOnlyModeRecordsPlanDivergenceWithoutBehaviorChange() async throws {
+        let schema = Self.makeSupportTicketSchema()
+        let sql = """
+            SELECT AVG(first_response_at - created_at) AS average_first_response_time
+            FROM public.support_ticket
+            WHERE first_response_at IS NOT NULL
+            """
+        let chatTransport = ScriptedTransport { request, index in
+            switch index {
+            case 1:
+                return Self.assistantToolCalls([
+                    Self.toolCall(id: "search-tickets", name: "search_schema", arguments: [
+                        "query": "support ticket first response",
+                        "limit": 4,
+                    ]),
+                ])
+            case 2:
+                let tickets = try Self.tableHandle(named: #""public"."support_ticket""#, in: request)
+                return Self.assistantToolCalls([
+                    Self.toolCall(id: "describe-tickets", name: "describe_tables", arguments: [
+                        "table_ids": [tickets],
+                    ]),
+                ])
+            case 3:
+                return Self.assistantToolCalls([
+                    Self.terminalSQLWithPlan(
+                        id: "terminal-divergent",
+                        sql: sql,
+                        plan: Self.ticketAggregationPlan(alias: "avg_first_response")
+                    ),
+                ])
+            default:
+                throw URLError(.badServerResponse)
+            }
+        }
+        let agent = makeAgent(schema: schema, chatTransport: chatTransport)
+
+        let result = try await agent.generateSQL(
+            question: "Average first response time",
+            schema: schema,
+            context: SQLGenerationContext(),
+            config: SQLGenerationConfig()
+        )
+
+        #expect(!result.needsClarification)
+        let diagnostics = result.backendMetadata?.agentDiagnostics
+        #expect(diagnostics?.planConsistencyMode == "diagnosticsOnly")
+        #expect(diagnostics?.planConsistencyDecision == "divergent")
+        #expect(diagnostics?.planConsistencyDivergences.isEmpty == false)
+        #expect(diagnostics?.planConsistencyCorrectionAttempted == false)
+        #expect(diagnostics?.appSideRejectionReason == nil)
+    }
+
+    @Test func nonConformingStructuredPlanFallsBackWithoutCorrection() async throws {
+        let schema = Self.makeSupportTicketSchema()
+        let sql = """
+            SELECT AVG(first_response_at - created_at) AS average_first_response_time
+            FROM public.support_ticket
+            WHERE first_response_at IS NOT NULL
+            """
+        let chatTransport = ScriptedTransport { request, index in
+            switch index {
+            case 1:
+                return Self.assistantToolCalls([
+                    Self.toolCall(id: "search-tickets", name: "search_schema", arguments: [
+                        "query": "support ticket first response",
+                        "limit": 4,
+                    ]),
+                ])
+            case 2:
+                let tickets = try Self.tableHandle(named: #""public"."support_ticket""#, in: request)
+                return Self.assistantToolCalls([
+                    Self.toolCall(id: "describe-tickets", name: "describe_tables", arguments: [
+                        "table_ids": [tickets],
+                    ]),
+                ])
+            case 3:
+                return Self.assistantToolCalls([
+                    Self.terminalSQLWithPlan(
+                        id: "terminal-nonconforming",
+                        sql: sql,
+                        plan: Self.ticketAggregationPlan(
+                            alias: "average_first_response_time",
+                            extraKey: "notes"
+                        )
+                    ),
+                ])
+            default:
+                throw URLError(.badServerResponse)
+            }
+        }
+        let agent = makeAgent(
+            schema: schema,
+            chatTransport: chatTransport,
+            configuration: OpenRouterSchemaToolSQLAgentConfiguration(
+                maximumSchemaToolCalls: 4,
+                maximumHTTPAttempts: 8,
+                wallClockTimeoutSeconds: 10,
+                planConsistencyMode: .correctAndRetryExperimental
+            )
+        )
+
+        let result = try await agent.generateSQL(
+            question: "Average first response time",
+            schema: schema,
+            context: SQLGenerationContext(),
+            config: SQLGenerationConfig()
+        )
+
+        #expect(!result.needsClarification)
+        let diagnostics = result.backendMetadata?.agentDiagnostics
+        #expect(diagnostics?.planConsistencyDecision == "notEvaluated")
+        #expect(diagnostics?.planConsistencyCorrectionAttempted == false)
+        #expect(diagnostics?.terminalQueryPlan == "present; structured: false")
+    }
+
     @Test func schemaCallsAfterSufficientEvidenceReceiveTerminalRequiredCorrection() async throws {
         let schema = Self.makePreseasonSchema()
         let sql = """
@@ -4432,6 +4691,43 @@ struct OpenRouterSchemaToolSQLAgentTests {
             id: id,
             name: OpenRouterSchemaToolSQLAgent.terminalToolName,
             arguments: arguments
+        )
+    }
+
+    private static func ticketPlan(alias: String) -> [String: Any] {
+        [
+            "joins": [["table": "public.support_ticket", "role": "tickets"]],
+            "aggregation": [["function": "AVG", "alias": alias]],
+        ]
+    }
+
+    private static func ticketAggregationPlan(
+        alias: String,
+        extraKey: String? = nil
+    ) -> [String: Any] {
+        var plan: [String: Any] = [
+            "aggregation": [["function": "AVG", "alias": alias]]
+        ]
+        if let extraKey {
+            plan[extraKey] = "unknown contract key"
+        }
+        return plan
+    }
+
+    private static func terminalSQLWithPlan(
+        id: String,
+        sql: String,
+        plan: [String: Any]
+    ) -> [String: Any] {
+        Self.toolCall(
+            id: id,
+            name: OpenRouterSchemaToolSQLAgent.terminalToolName,
+            arguments: [
+                "action": "sql",
+                "sql": sql,
+                "clarification_question": "",
+                "query_plan": plan,
+            ]
         )
     }
 
