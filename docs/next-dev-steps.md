@@ -765,6 +765,28 @@ completion request, $9.00 branch cap total):**
 No completion request before the cap is explicitly authorized;
 `ALLOW_MODEL_OVERRIDE` stays unset for gate publication.
 
+**Stage 1 outcome 2026-07-24 — Sol Pro disqualified on cost and latency;
+candidate repinned to GPT-5.6 Sol before any stage 2 spend:** the Sol Pro
+smoke (`.eval-results/20260724-045102-415`) hit its $0.50 allocation at 12
+of 15 results ($0.529960). Everything evaluated was operationally clean —
+transport 12/12, structured parse 12/12, zero retries, returned model
+verified `openai/gpt-5.6-sol-pro` on all 12 via one ZDR provider — and the
+static-shape profile matched the incumbent's known smoke fingerprint. But
+Sol Pro consumed 94,625 tokens for 12 results versus Sol's 23,659 for 15
+(5.0x tokens and 4.2x cost per identical case: $0.044163 versus $0.010450)
+at 1.6x the latency (P50 4,355 ms versus 2,654 ms). Projected to the full
+pipeline that is a $12-15 gate — outside the remaining $8.47 authorization
+on its own — and a latency tail that projects past the 105-second deadline,
+the exact flake class this candidate exists to eliminate. Under the
+original cost-comparability rule and the branch cap, Sol Pro fails stage 1;
+`9a3b08b` repinned the candidate to `openai/gpt-5.6-sol` (canonical
+`openai/gpt-5.6-sol-20260709`), whose full-gate economics ($2.941500,
+$0.049025 per result), tail latency (maximum 94.7 s, inside the 105-second
+deadline), and decision profile (12/12 clarification, semantic-mismatch
+bucket 5) are already measured. Remaining stages run on Sol with ceilings
+restated inside the $9.00 cap: focused probe $2.00, full gate $4.50
+cumulative, reserve $1.97 after the $0.53 stage 1 spend.
+
 ## Later / conditional
 
 * **PR 10 embeddings** — stays deferred unless a future triage shows required
