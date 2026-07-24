@@ -1358,6 +1358,23 @@ were recorded and before any completion request. The stages execute
 exactly as pre-registered; any failed criterion stops paid work and
 triggers the revert rule.
 
+**Stage 1 first attempt 2026-07-24 — operationally inconclusive; retried
+within the stage allocation:** run `.eval-results/20260724-124012-313`
+completed 15/15 results for $0.046195, but 10 were typed
+`providerUnavailable` transport failures (HTTP 502 after three attempts
+each) inside a 76-second window, while the credential-free endpoints
+listing showed the Azure ZDR endpoint degraded (status -2, 88.7% uptime
+over the prior 30 minutes). All five completed completions were healthy:
+`strictJSONSchema` on every call, returned model verified
+`openai/gpt-5.6-sol` on the ZDR provider, transport and parsing clean,
+and the sole `wrongDecision` matches the known ungated static-shape
+fingerprint. Because the transport criteria cannot be evaluated against
+provider-outage evidence, this attempt is neither a pass nor a candidate
+negative, following the recorded PR 56 first-attempt precedent. The
+retry waits for the endpoint to recover and runs with
+`MAX_CLOUD_COST_USD=0.45` so cumulative stage 1 spend stays within the
+$0.50 allocation.
+
 **Free validation record 2026-07-24 (no paid request made):**
 
 * `make project` regenerated an unchanged tracked tree.
