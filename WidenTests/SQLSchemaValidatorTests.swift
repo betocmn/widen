@@ -1990,6 +1990,35 @@ struct SQLSchemaValidatorTests {
         #expect(enriched.pendingClarification?.concept.term == "active")
     }
 
+    @Test func planRejectedSchemaToolSQLDoesNotSuppressGroundingClarification() {
+        let generation = SQLGenerationResult(
+            sql: "SELECT COUNT(*) FROM public.users WHERE status = 'active'",
+            explanation: "Counts active users.",
+            assumptions: [],
+            referencedTables: [],
+            confidence: 1,
+            riskLevel: .low,
+            needsClarification: false,
+            clarificationQuestion: nil,
+            backendMetadata: schemaToolSQLMetadata(
+                describedTableIDs: ["public.users"],
+                exposedColumnIDs: ["public.users.id", "public.users.status"],
+                appSideRejectionReason: .planConsistencyRejected
+            )
+        )
+
+        let enriched = GeneratedSQLPostprocessor.enriched(
+            generation,
+            question: "how many active users do we have?",
+            schema: makeUsersUnconstrainedStatusSchema(),
+            databaseContext: ""
+        )
+
+        #expect(enriched.needsClarification)
+        #expect(enriched.sql.isEmpty)
+        #expect(enriched.pendingClarification?.concept.term == "active")
+    }
+
     @Test func undescribedSchemaToolTableDoesNotSuppressGroundingClarification() {
         let generation = SQLGenerationResult(
             sql: "SELECT COUNT(*) FROM public.users WHERE status = 'active'",

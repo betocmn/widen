@@ -890,7 +890,16 @@ public final class OpenRouterSchemaToolSQLAgent: SQLGenerator, Sendable {
                         {
                             diagnostics.planConsistencyCorrectionSucceeded = true
                         }
-                        diagnostics.clearResolvedPlanConsistencyRejection()
+                        // A planless or non-conforming retry after a plan-consistency
+                        // correction is still accepted, but the unresolved rejection
+                        // stays recorded so downstream trust decisions cannot treat
+                        // the divergence as resolved.
+                        if planConsistencyCorrections == 0
+                            || diagnostics.planConsistencyDecision
+                                == SchemaToolAgentPlanConsistencyDecision.consistent.rawValue
+                        {
+                            diagnostics.clearResolvedPlanConsistencyRejection()
+                        }
                         aggregate.agentDiagnostics = diagnostics.snapshot(
                             evidence: evidence,
                             inspectionToolCalls: await inspectionSession?.tracesSnapshot() ?? []
