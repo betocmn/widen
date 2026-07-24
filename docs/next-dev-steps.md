@@ -245,9 +245,9 @@ evidence remain.
 
 ## PR 57 — Plan-then-compile SQL synthesis for covered shapes
 
-**Status: option 1 implemented 2026-07-24 on branch `plan-validate-repair`
-with deterministic coverage; funded validation probe awaiting spend
-authorization.** The earlier sequencing rule made PR 57 conditional on a
+**Status: option 1 implemented and probe-validated 2026-07-24; merged as
+diagnostics-only infrastructure. Enforcement waits for the follow-on
+pre-registered gate candidate.** The earlier sequencing rule made PR 57 conditional on a
 passing bypass iteration; the maintainer directed implementation now because
 the PR 63/64 evidence chain (Sol gate triage plus the calibrated offline
 superset re-score) established model-independently that projection-shape
@@ -348,6 +348,29 @@ any enforcement experiment. The follow-on candidate — Sol pin, trusted-SQL
 bypass, 105-second margin, and `correctAndRetryExperimental` plan
 consistency through the complete release gate — requires its own fresh
 pre-registration and authorization after this probe's evidence is recorded.
+
+**Probe outcome 2026-07-24 — passed; one authorized lenience improvement
+applied:** run `.eval-results/20260724-085024-125` (pinned GPT-5.5,
+$1.264485 of the $1.50 stage cap; cumulative probe spend $1.264485 of the
+$3.00 authorization). 20/20 complete, transport 20/20, structured parsing
+20/20, zero eval and internal schema-agent timeouts, P50 14,856 ms, P95
+25,770 ms, max 27,606 ms. All 15 SQL terminals emitted conforming
+structured plans; 13 evaluated consistent and 2 divergent, with the
+decision and semantic profile at the retained comparator's single-repeat
+expectation (6/20 end-to-end, clarification 4/4, 11 expected-SQL
+clarification statuses unchanged in character). Both divergences were the
+same contract-usage quirk rather than SQL drift: the model wrote a full
+join description or an "as alias" phrase into the join `table` field, so
+the evidence-binding rule could not match the actually-inspected table.
+The authorized improvement extracts the leading qualified identifier from
+the join table field before both join rules and skips entries without one;
+deterministic tests reproduce both recorded shapes, and both recorded
+divergences deterministically become consistent because their leading
+identifiers name tables the acceptance gate had already verified. The
+instruction text now asks for exact inspected table names in joins. With
+every conjunctive probe criterion green and conformance at 100%, the
+diagnostics-only infrastructure merges; enforcement stays behind the
+follow-on candidate's own pre-registration.
 
 ## PR 58 — Clarification decision accuracy to 12/12
 

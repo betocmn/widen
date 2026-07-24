@@ -405,6 +405,41 @@ struct SchemaToolAgentPlanConsistencyPolicyTests {
         #expect(result.decision == .consistent)
     }
 
+    @Test func joinTableWithTrailingProseValidatesLeadingIdentifier() {
+        let described = evaluate(
+            sql: "SELECT c.name FROM public.customers c JOIN public.orders o ON o.customer_id = c.id",
+            plan: plan(
+                joins: [
+                    "public.customers",
+                    "public.orders joined to public.customers on orders.customer_id = customers.id",
+                ],
+                projection: [("c.name", "")]
+            ),
+            inspected: ["public.customers", "public.orders"]
+        )
+        #expect(described.decision == .consistent)
+
+        let aliased = evaluate(
+            sql: "SELECT t.name FROM public.preseason_tool t LIMIT 5",
+            plan: plan(
+                joins: ["public.preseason_tool as t"],
+                projection: [("t.name", "")],
+                limit: 5
+            ),
+            inspected: ["public.preseason_tool"]
+        )
+        #expect(aliased.decision == .consistent)
+    }
+
+    @Test func joinTableWithoutLeadingIdentifierIsSkipped() {
+        let result = evaluate(
+            sql: "SELECT c.name FROM public.customers c",
+            plan: plan(joins: ["(unknown)"], projection: [("c.name", "")]),
+            inspected: ["public.customers"]
+        )
+        #expect(result.decision == .consistent)
+    }
+
     // MARK: - Divergence reporting
 
     @Test func reportsEveryDivergenceWithFirstAsReason() {

@@ -305,8 +305,14 @@ public enum SchemaToolAgentPlanConsistencyPolicy {
         }
 
         for join in plan.joins {
-            let table = normalizedIdentifier(join.table)
-            guard !table.isEmpty else { continue }
+            // Models sometimes write a whole join description or an "x AS
+            // alias" phrase into the table field; the leading qualified
+            // identifier is the table under validation.
+            guard
+                let table = SQLShape.leadingQualifiedIdentifier(
+                    in: normalizedIdentifier(join.table)
+                )
+            else { continue }
             if !SQLShape.referencesIdentifier(table, in: sql) {
                 divergences.append("plan join table \(table) is not referenced in the SQL")
             }
@@ -607,6 +613,16 @@ public enum SchemaToolAgentPlanConsistencyPolicy {
                 searchStart = match.upperBound
             }
             return names
+        }
+
+        static func leadingQualifiedIdentifier(in value: String) -> String? {
+            guard
+                let match = value.range(
+                    of: #"^[a-z_][a-z0-9_]*(\.[a-z_][a-z0-9_]*){0,2}"#,
+                    options: .regularExpression
+                )
+            else { return nil }
+            return String(value[match])
         }
 
         static func leadingIdentifierToken(in value: String) -> String? {
