@@ -14,6 +14,12 @@ public enum SchemaToolAgentIntentCoverageMode: String, Codable, Equatable, Senda
     case correctAndRetryExperimental
 }
 
+public enum SchemaToolAgentPlanConsistencyMode: String, Codable, Equatable, Sendable {
+    case disabled
+    case diagnosticsOnly
+    case correctAndRetryExperimental
+}
+
 public struct OpenRouterSchemaToolSQLAgentConfiguration: Equatable, Sendable {
     public var maximumSchemaToolCalls: Int
     public var maximumRepairSchemaToolCalls: Int
@@ -25,6 +31,7 @@ public struct OpenRouterSchemaToolSQLAgentConfiguration: Equatable, Sendable {
     public var wallClockTimeoutSeconds: TimeInterval
     public var clarificationCorrectionMode: SchemaToolAgentClarificationCorrectionMode
     public var intentCoverageMode: SchemaToolAgentIntentCoverageMode
+    public var planConsistencyMode: SchemaToolAgentPlanConsistencyMode
 
     public init(
         maximumSchemaToolCalls: Int = 6,
@@ -36,7 +43,8 @@ public struct OpenRouterSchemaToolSQLAgentConfiguration: Equatable, Sendable {
         countCapabilityLookupHTTPAttempts: Bool = false,
         wallClockTimeoutSeconds: TimeInterval = 90,
         clarificationCorrectionMode: SchemaToolAgentClarificationCorrectionMode = .diagnosticsOnly,
-        intentCoverageMode: SchemaToolAgentIntentCoverageMode = .diagnosticsOnly
+        intentCoverageMode: SchemaToolAgentIntentCoverageMode = .diagnosticsOnly,
+        planConsistencyMode: SchemaToolAgentPlanConsistencyMode = .diagnosticsOnly
     ) {
         self.maximumSchemaToolCalls = maximumSchemaToolCalls
         self.maximumRepairSchemaToolCalls = maximumRepairSchemaToolCalls
@@ -48,6 +56,7 @@ public struct OpenRouterSchemaToolSQLAgentConfiguration: Equatable, Sendable {
         self.wallClockTimeoutSeconds = wallClockTimeoutSeconds
         self.clarificationCorrectionMode = clarificationCorrectionMode
         self.intentCoverageMode = intentCoverageMode
+        self.planConsistencyMode = planConsistencyMode
     }
 
     public static let `default` = OpenRouterSchemaToolSQLAgentConfiguration()
@@ -68,6 +77,7 @@ public struct OpenRouterSchemaToolAgentFailure: Error, LocalizedError, Equatable
         case terminalResultMalformed
         case overcautiousClarificationNoProgress
         case intentCoverageNoProgress
+        case planConsistencyNoProgress
         case terminalRequiredAfterSufficientEvidenceNoProgress
         case safetyValidation
         case uninspectedSchemaObjects
@@ -118,6 +128,7 @@ public struct OpenRouterSchemaToolAgentFailure: Error, LocalizedError, Equatable
             .schemaValidation
         case .schemaToolCallBudgetExhausted, .schemaToolByteBudgetExhausted,
             .overcautiousClarificationNoProgress, .intentCoverageNoProgress,
+            .planConsistencyNoProgress,
             .terminalRequiredAfterSufficientEvidenceNoProgress:
             .modelGeneration
         case .wallClockTimeout:
@@ -367,6 +378,7 @@ public final class OpenRouterSchemaToolSQLAgent: SQLGenerator, Sendable {
         var diagnostics = OpenRouterSchemaToolAgentDiagnosticState()
         diagnostics.clarificationCorrectionMode = configuration.clarificationCorrectionMode.rawValue
         diagnostics.intentCoverageMode = configuration.intentCoverageMode.rawValue
+        diagnostics.planConsistencyMode = configuration.planConsistencyMode.rawValue
         var seenProviderCallIDs = Set<String>()
         var seenToolSignatures = Set<String>()
         var executedSchemaCallSignatures = Set<String>()
@@ -377,6 +389,7 @@ public final class OpenRouterSchemaToolSQLAgent: SQLGenerator, Sendable {
         var uninspectedSQLCorrections = 0
         var overClarificationCorrections = 0
         var intentCoverageCorrections = 0
+        var planConsistencyCorrections = 0
         var terminalRequiredAfterSufficientEvidence = false
         var terminalRequiredCorrections = 0
         let deadline = Date().addingTimeInterval(configuration.wallClockTimeoutSeconds)
@@ -698,6 +711,7 @@ public final class OpenRouterSchemaToolSQLAgent: SQLGenerator, Sendable {
                             finalTerminalResult = terminalResult
                             aggregate.terminalOutcome = "clarify"
                         }
+                        diagnostics.resetPlanConsistencyForClarifyTerminal()
                         aggregate.agentDiagnostics = diagnostics.snapshot(
                             evidence: evidence,
                             inspectionToolCalls: await inspectionSession?.tracesSnapshot() ?? []
@@ -797,6 +811,7 @@ public final class OpenRouterSchemaToolSQLAgent: SQLGenerator, Sendable {
                                     queryPlan: ""
                                 )
                                 diagnostics.terminalQueryPlan = ""
+                                diagnostics.resetPlanConsistencyForClarifyTerminal()
                                 aggregate.terminalOutcome = "clarify_fallback"
                                 aggregate.agentDiagnostics = diagnostics.snapshot(
                                     evidence: evidence,
@@ -812,6 +827,52 @@ public final class OpenRouterSchemaToolSQLAgent: SQLGenerator, Sendable {
                                 )
                             }
                         }
+                        if configuration.planConsistencyMode != .disabled {
+                            if let structuredPlan = terminalResult.structuredQueryPlan {
+                                let planConsistency = SchemaToolAgentPlanConsistencyPolicy.evaluate(
+                                    sql: terminalResult.sql,
+                                    plan: structuredPlan,
+                                    inspectedTableNames: Set(
+                                        evidence.validationTableUniverse
+                                            .map(SchemaToolAgentPlanConsistencyPolicy.normalizedIdentifier)
+                                    )
+                                )
+                                diagnostics.recordPlanConsistency(planConsistency)
+                                if configuration.planConsistencyMode == .correctAndRetryExperimental,
+                                    planConsistency.decision == .divergent
+                                {
+                                    diagnostics.appSideRejectionReason = .planConsistencyRejected
+                                    diagnostics.terminalValidationFailureReason = "planConsistencyFailed"
+                                    if planConsistencyCorrections < 1 {
+                                        planConsistencyCorrections += 1
+                                        terminalRequiredAfterSufficientEvidence = true
+                                        diagnostics.planConsistencyCorrectionAttempted = true
+                                        messages.append(
+                                            toolErrorResponse(
+                                                call: terminal,
+                                                code: "plan_sql_divergence",
+                                                message: planConsistency.reason
+                                            )
+                                        )
+                                        messages.append(
+                                            correction(
+                                                Self.planConsistencyCorrection(
+                                                    divergences: planConsistency.divergences
+                                                )
+                                            )
+                                        )
+                                        continue
+                                    }
+                                    throw await agentFailure(
+                                        .planConsistencyNoProgress,
+                                        "The model resubmitted SQL that diverges from its own query plan.",
+                                        session: session
+                                    )
+                                }
+                            } else {
+                                diagnostics.recordPlanConsistencyNotEvaluated()
+                            }
+                        }
                         aggregate.terminalOutcome = "sql"
                         if overClarificationCorrections > 0 {
                             diagnostics.overClarificationCorrectionSucceeded = true
@@ -820,6 +881,13 @@ public final class OpenRouterSchemaToolSQLAgent: SQLGenerator, Sendable {
                         if intentCoverageCorrections > 0 {
                             diagnostics.intentCoverageCorrectionSucceeded = true
                         }
+                        if planConsistencyCorrections > 0,
+                            diagnostics.planConsistencyDecision
+                                == SchemaToolAgentPlanConsistencyDecision.consistent.rawValue
+                        {
+                            diagnostics.planConsistencyCorrectionSucceeded = true
+                        }
+                        diagnostics.clearResolvedPlanConsistencyRejection()
                         aggregate.agentDiagnostics = diagnostics.snapshot(
                             evidence: evidence,
                             inspectionToolCalls: await inspectionSession?.tracesSnapshot() ?? []
@@ -1547,7 +1615,8 @@ public final class OpenRouterSchemaToolSQLAgent: SQLGenerator, Sendable {
         case .unsupportedTools, .repeatedToolCallNoProgress, .httpAttemptBudgetExhausted,
             .modelTurnBudgetExhausted, .wallClockTimeout,
             .overcautiousClarificationNoProgress,
-            .intentCoverageNoProgress, .terminalRequiredAfterSufficientEvidenceNoProgress,
+            .intentCoverageNoProgress, .planConsistencyNoProgress,
+            .terminalRequiredAfterSufficientEvidenceNoProgress,
             .safetyValidation, .uninspectedSchemaObjects, .staleSchemaSnapshot,
             .cancellation, .openRouterRequestFailure:
             false
@@ -1618,7 +1687,7 @@ public final class OpenRouterSchemaToolSQLAgent: SQLGenerator, Sendable {
 
     private static let terminalToolDefinition = OpenRouterToolDefinition(
         name: terminalToolName,
-        description: "Finish the SQL generation by submitting exactly one SQL statement or exactly one clarification question. Include a concise redacted query_plan when submitting SQL.",
+        description: "Finish the SQL generation by submitting exactly one SQL statement or exactly one clarification question. Include a structured query_plan object that matches the SQL when submitting SQL.",
         parameters: [
             "type": "object",
             "additionalProperties": false,
@@ -1637,21 +1706,90 @@ public final class OpenRouterSchemaToolSQLAgent: SQLGenerator, Sendable {
                     "maxLength": 280,
                 ],
                 "query_plan": [
-                    "type": "string",
-                    "maxLength": 2000,
+                    "type": "object",
+                    "additionalProperties": false,
+                    "properties": [
+                        "grain": ["type": "string", "maxLength": 200],
+                        "joins": [
+                            "type": "array",
+                            "maxItems": 16,
+                            "items": [
+                                "type": "object",
+                                "additionalProperties": false,
+                                "required": ["table", "role"],
+                                "properties": [
+                                    "table": ["type": "string", "minLength": 1, "maxLength": 200],
+                                    "role": ["type": "string", "maxLength": 200],
+                                ],
+                            ],
+                        ],
+                        "filters": [
+                            "type": "array",
+                            "maxItems": 16,
+                            "items": ["type": "string", "minLength": 1, "maxLength": 200],
+                        ],
+                        "projection": [
+                            "type": "array",
+                            "maxItems": 16,
+                            "items": [
+                                "type": "object",
+                                "additionalProperties": false,
+                                "required": ["expression"],
+                                "properties": [
+                                    "expression": ["type": "string", "minLength": 1, "maxLength": 200],
+                                    "alias": ["type": "string", "maxLength": 120],
+                                ],
+                            ],
+                        ],
+                        "aggregation": [
+                            "type": "array",
+                            "maxItems": 16,
+                            "items": [
+                                "type": "object",
+                                "additionalProperties": false,
+                                "required": ["function", "alias"],
+                                "properties": [
+                                    "function": ["type": "string", "minLength": 1, "maxLength": 40],
+                                    "column": ["type": "string", "maxLength": 200],
+                                    "alias": ["type": "string", "minLength": 1, "maxLength": 120],
+                                ],
+                            ],
+                        ],
+                        "grouping": [
+                            "type": "array",
+                            "maxItems": 16,
+                            "items": ["type": "string", "minLength": 1, "maxLength": 200],
+                        ],
+                        "ordering": [
+                            "type": "array",
+                            "maxItems": 16,
+                            "items": ["type": "string", "minLength": 1, "maxLength": 200],
+                        ],
+                        "limit": ["type": "integer", "minimum": 1, "maximum": 100000],
+                        "date_anchors": [
+                            "type": "array",
+                            "maxItems": 16,
+                            "items": ["type": "string", "minLength": 1, "maxLength": 200],
+                        ],
+                    ],
                 ],
             ],
         ]
     )
 
     fileprivate static let strictTerminalCorrection =
-        "Finish by calling submit_text_to_sql_result exactly once. Use action='sql' only if you can produce validated SQL from inspected schema, and include query_plan with grain, joins, filters, projection, grouping, ordering, limit, and date anchors. Otherwise use action='clarify' with one concise database-specific question."
+        "Finish by calling submit_text_to_sql_result exactly once. Use action='sql' only if you can produce validated SQL from inspected schema, and include a structured query_plan object with grain, joins, filters, projection, aggregation, grouping, ordering, limit, and date_anchors. Otherwise use action='clarify' with one concise database-specific question."
     fileprivate static let schemaSearchCorrection =
-        "Call search_schema before finishing. After inspecting schema, call submit_text_to_sql_result exactly once. Use action='sql' only if you can produce validated SQL from inspected schema, and include query_plan with grain, joins, filters, projection, grouping, ordering, limit, and date anchors. Otherwise use action='clarify' with one concise database-specific question."
+        "Call search_schema before finishing. After inspecting schema, call submit_text_to_sql_result exactly once. Use action='sql' only if you can produce validated SQL from inspected schema, and include a structured query_plan object with grain, joins, filters, projection, aggregation, grouping, ordering, limit, and date_anchors. Otherwise use action='clarify' with one concise database-specific question."
     fileprivate static let overClarificationCorrection =
         "The schema evidence and database context are sufficient to answer with SQL. Do not ask the user to confirm facts already supplied. Finish by calling submit_text_to_sql_result with action='sql' and a concise query_plan. Use only inspected tables, columns, and join paths. If a genuinely unresolved database decision remains, name that exact unresolved metric, relationship, status value, or time field."
     fileprivate static let terminalRequiredAfterSufficientEvidenceCorrection =
         "The schema evidence is already sufficient for a terminal result. Stop calling schema tools. Finish by calling submit_text_to_sql_result with action='sql' and a concise query_plan, or action='clarify' only if you name one concrete unresolved database decision."
+
+    fileprivate static func planConsistencyCorrection(divergences: [String]) -> String {
+        let details = divergences.prefix(4).joined(separator: "; ")
+        return "The submitted SQL and query_plan disagree: \(details). Resubmit submit_text_to_sql_result(action='sql') exactly once with SQL and a structured query_plan that agree, using only inspected schema objects. Do not ask for clarification."
+    }
 
     fileprivate static func intentCoverageCorrection(missingSignals: [String]) -> String {
         let missing = missingSignals.isEmpty
@@ -1692,7 +1830,7 @@ public final class OpenRouterSchemaToolSQLAgent: SQLGenerator, Sendable {
         - when ranking or counting entities, project and group by the entity table's stable id plus one human-readable label; prefer name over slug, and include slug only when the user asks for slugs or no name/title label exists;
         - keep entity identity output column names canonical, for example SELECT t.id, t.name instead of renaming them to tool_id or tool_name;
         - alias aggregate metrics with the user's metric term when clear, for example COUNT(*) AS wins for a wins question;
-        - when returning SQL, include a concise redacted query_plan covering grain, joins/roles, filters, projection/aliases/units, grouping, ordering, limit, and date anchors;
+        - when returning SQL, include a structured query_plan object covering grain, joins (exact inspected table name plus role), filters, projection (expression/alias), aggregation (function/column/alias), grouping, ordering, limit, and date_anchors, and keep it consistent with the SQL;
         - do not infer business meaning from connectivity alone;
         - do not ask for clarification when database context already defines the needed metric, row/event, time column, and relationship;
         - relative time phrases such as "last two weeks" define the time window; do not ask what the number means when the time unit is present;
@@ -1721,7 +1859,7 @@ public final class OpenRouterSchemaToolSQLAgent: SQLGenerator, Sendable {
         - when ranking or counting entities, project and group by the entity table's stable id plus one human-readable label; prefer name over slug, and include slug only when the user asks for slugs or no name/title label exists;
         - keep entity identity output column names canonical, for example SELECT t.id, t.name instead of renaming them to tool_id or tool_name;
         - alias aggregate metrics with the user's metric term when clear, for example COUNT(*) AS wins for a wins question;
-        - when returning SQL, include a concise redacted query_plan covering grain, joins/roles, filters, projection/aliases/units, grouping, ordering, limit, and date anchors;
+        - when returning SQL, include a structured query_plan object covering grain, joins (exact inspected table name plus role), filters, projection (expression/alias), aggregation (function/column/alias), grouping, ordering, limit, and date_anchors, and keep it consistent with the SQL;
         - preserve projection intent: for person/customer/user entities include email when inspected, keep money `_cents` aggregates in cents with a `_cents` alias unless dollars are requested, and use count-like aliases for COUNT metrics;
         - preserve requested intent in SQL: status/boolean filters, anti-joins for missing rows, AVG for averages, GROUP BY for per/by requests, count/order/limit for top/frequent requests, and explicit date anchors from the question or database context;
         - never replace an explicit date/time anchor with NOW(), CURRENT_DATE, or other moving current-time expressions;
@@ -1747,6 +1885,21 @@ public final class OpenRouterSchemaToolSQLAgent: SQLGenerator, Sendable {
         var sql: String
         var clarificationQuestion: String
         var queryPlan: String
+        var structuredQueryPlan: SchemaToolAgentStructuredQueryPlan?
+
+        init(
+            action: TerminalAction,
+            sql: String,
+            clarificationQuestion: String,
+            queryPlan: String,
+            structuredQueryPlan: SchemaToolAgentStructuredQueryPlan? = nil
+        ) {
+            self.action = action
+            self.sql = sql
+            self.clarificationQuestion = clarificationQuestion
+            self.queryPlan = queryPlan
+            self.structuredQueryPlan = structuredQueryPlan
+        }
     }
 
     private static let queryPlanSummarySections: [(label: String, needles: [String])] = [
@@ -1799,9 +1952,15 @@ public final class OpenRouterSchemaToolSQLAgent: SQLGenerator, Sendable {
         else {
             throw OpenRouterSchemaToolAgentFailure(category: .terminalResultMalformed, message: "Terminal arguments are invalid.")
         }
-        guard object["query_plan"] == nil || object["query_plan"]?.stringValue != nil else {
-            throw OpenRouterSchemaToolAgentFailure(category: .terminalResultMalformed, message: "Terminal query_plan must be a string.")
+        guard
+            object["query_plan"] == nil
+                || object["query_plan"]?.stringValue != nil
+                || object["query_plan"]?.objectValue != nil
+        else {
+            throw OpenRouterSchemaToolAgentFailure(category: .terminalResultMalformed, message: "Terminal query_plan must be a string or object.")
         }
+        let structuredQueryPlan = object["query_plan"]
+            .flatMap(SchemaToolAgentStructuredQueryPlan.decode(from:))
         let trimmedSQL = sql.trimmingCharacters(in: .whitespacesAndNewlines)
         let trimmedQuestion = question.trimmingCharacters(in: .whitespacesAndNewlines)
         let trimmedQueryPlan = (object["query_plan"]?.stringValue ?? "")
@@ -1819,12 +1978,34 @@ public final class OpenRouterSchemaToolSQLAgent: SQLGenerator, Sendable {
                 throw OpenRouterSchemaToolAgentFailure(category: .terminalResultMalformed, message: "Clarification terminal result invariant failed.")
             }
         }
+        let queryPlanSummary: String
+        if action != .sql {
+            queryPlanSummary = ""
+        } else if let structuredQueryPlan {
+            queryPlanSummary = structuredQueryPlanSummary(for: structuredQueryPlan)
+        } else if object["query_plan"]?.objectValue != nil {
+            queryPlanSummary = "present; structured: false"
+        } else {
+            queryPlanSummary = redactedQueryPlanSummary(for: trimmedQueryPlan)
+        }
         return TerminalResult(
             action: action,
             sql: trimmedSQL,
             clarificationQuestion: trimmedQuestion,
-            queryPlan: action == .sql ? redactedQueryPlanSummary(for: trimmedQueryPlan) : ""
+            queryPlan: queryPlanSummary,
+            structuredQueryPlan: action == .sql ? structuredQueryPlan : nil
         )
+    }
+
+    private static func structuredQueryPlanSummary(
+        for plan: SchemaToolAgentStructuredQueryPlan
+    ) -> String {
+        var parts = ["present", "structured: true"]
+        let sections = plan.sectionLabels
+        if !sections.isEmpty {
+            parts.append("sections: \(sections.joined(separator: ", "))")
+        }
+        return parts.joined(separator: "; ")
     }
 }
 
@@ -2034,6 +2215,12 @@ private struct OpenRouterSchemaToolAgentDiagnosticState {
     var sqlIntentCoverageMismatchCategory = ""
     var intentCoverageCorrectionAttempted = false
     var intentCoverageCorrectionSucceeded = false
+    var planConsistencyMode = ""
+    var planConsistencyDecision = ""
+    var planConsistencyReason = ""
+    var planConsistencyDivergences: [String] = []
+    var planConsistencyCorrectionAttempted = false
+    var planConsistencyCorrectionSucceeded = false
 
     mutating func recordFailureCategory(_ category: OpenRouterSchemaToolAgentFailure.Category) {
         if category == .wallClockTimeout {
@@ -2064,6 +2251,8 @@ private struct OpenRouterSchemaToolAgentDiagnosticState {
             appSideRejectionReason = .clarificationRejected
         case .intentCoverageNoProgress:
             appSideRejectionReason = .intentCoverageRejected
+        case .planConsistencyNoProgress:
+            appSideRejectionReason = .planConsistencyRejected
         case .repeatedToolCallNoProgress, .staleSchemaSnapshot, .cancellation,
             .openRouterRequestFailure:
             break
@@ -2100,6 +2289,34 @@ private struct OpenRouterSchemaToolAgentDiagnosticState {
         sqlIntentCoverageMismatchCategory = result.semanticMismatchCategory
         if !result.unresolvedDecisionKinds.isEmpty {
             unresolvedDecisionKinds = result.unresolvedDecisionKinds.map(\.rawValue)
+        }
+    }
+
+    mutating func recordPlanConsistency(_ result: SchemaToolAgentPlanConsistencyResult) {
+        planConsistencyDecision = result.decision.rawValue
+        planConsistencyReason = result.reason
+        planConsistencyDivergences = result.divergences
+    }
+
+    mutating func recordPlanConsistencyNotEvaluated() {
+        planConsistencyDecision = SchemaToolAgentPlanConsistencyDecision.notEvaluated.rawValue
+        planConsistencyReason = "no conforming structured query plan was submitted"
+        planConsistencyDivergences = []
+    }
+
+    mutating func resetPlanConsistencyForClarifyTerminal() {
+        planConsistencyDecision = ""
+        planConsistencyReason = ""
+        planConsistencyDivergences = []
+        clearResolvedPlanConsistencyRejection()
+    }
+
+    mutating func clearResolvedPlanConsistencyRejection() {
+        if appSideRejectionReason == .planConsistencyRejected {
+            appSideRejectionReason = nil
+        }
+        if terminalValidationFailureReason == "planConsistencyFailed" {
+            terminalValidationFailureReason = nil
         }
     }
 
@@ -2150,7 +2367,13 @@ private struct OpenRouterSchemaToolAgentDiagnosticState {
             sqlIntentCoverageMissingSignals: sqlIntentCoverageMissingSignals,
             sqlIntentCoverageMismatchCategory: sqlIntentCoverageMismatchCategory,
             intentCoverageCorrectionAttempted: intentCoverageCorrectionAttempted,
-            intentCoverageCorrectionSucceeded: intentCoverageCorrectionSucceeded
+            intentCoverageCorrectionSucceeded: intentCoverageCorrectionSucceeded,
+            planConsistencyMode: planConsistencyMode,
+            planConsistencyDecision: planConsistencyDecision,
+            planConsistencyReason: planConsistencyReason,
+            planConsistencyDivergences: planConsistencyDivergences,
+            planConsistencyCorrectionAttempted: planConsistencyCorrectionAttempted,
+            planConsistencyCorrectionSucceeded: planConsistencyCorrectionSucceeded
         )
     }
 }
@@ -2183,12 +2406,18 @@ private struct SchemaToolEvidenceLedger {
                 prefix = "Fix the invalid SQL binding using only owner candidates already exposed by schema tools."
             case .intentCoverageRejected:
                 prefix = "Preserve the requested SQL intent before returning a terminal result."
+            case .planConsistencyRejected:
+                prefix = "Keep the SQL and the structured query_plan consistent before returning a terminal result."
             case .unsupportedAction, .malformedTerminal, .budgetExhausted, .timedOut,
                 .clarificationRejected:
                 prefix = "Use schema tools and validator feedback before returning SQL."
             }
             return "\(prefix) \(message). \(OpenRouterSchemaToolSQLAgent.strictTerminalCorrection)"
         }
+    }
+
+    var validationTableUniverse: Set<String> {
+        describedTables.union(joinPathTables)
     }
 
     private var schema: DatabaseSchema

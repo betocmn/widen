@@ -135,7 +135,10 @@ Numbering continues from `docs/refactoring-plan.md`.
    latest policy without new diagnostics-only evidence that explains both the
    healthy-account budget misses and why the intended anti-join controls did
    not move
-6. PR 57 only after a future bypass iteration clears every PR 56 criterion
+6. PR 57 option 1 is implemented with deterministic coverage after the
+   PR 63/64 evidence chain confirmed projection drift as the dominant
+   failure; next is its funded diagnostics probe, then a fresh
+   pre-registered Sol-plus-bypass-plus-enforcement gate candidate
 7. Done, negative — PR 63 GPT-5.6 Sol pin upgrade: the funded gate failed
    the exclusive-clarification ceiling and the zero internal-timeout rule,
    so the candidate pin was reverted and only evidence remains
@@ -242,9 +245,15 @@ evidence remain.
 
 ## PR 57 — Plan-then-compile SQL synthesis for covered shapes
 
-**Status: re-triage ✅ Done; implementation ⏳ Not started.** PR 57 is not
-next because the post-PR 59 bypass retry failed and was reverted. It remains
-conditional on a future bypass iteration passing every promotion criterion.
+**Status: option 1 implemented and probe-validated 2026-07-24; merged as
+diagnostics-only infrastructure. Enforcement waits for the follow-on
+pre-registered gate candidate.** The earlier sequencing rule made PR 57 conditional on a
+passing bypass iteration; the maintainer directed implementation now because
+the PR 63/64 evidence chain (Sol gate triage plus the calibrated offline
+superset re-score) established model-independently that projection-shape
+drift — not clarification behavior and not comparator strictness — is the
+dominant accuracy failure, which is exactly the failure class option 1
+validates.
 
 **Why:** Semantic result mismatch was 6 on the retained PR 55 behavior and
 grew to the largest experimental bucket, 28 in the 2026-07-13 experiment and
@@ -280,6 +289,88 @@ must fall back to current behavior, never error.
 
 **Do not change:** eval goldens, seeded data, backend defaults, privacy
 routing, frozen heuristics.
+
+**Implementation record 2026-07-24 (option 1, plan-validate-and-repair):**
+
+* The terminal tool's `query_plan` is promoted from a prose string to a
+  structured object contract — grain, joins (table/role), filters,
+  projection (expression/alias), aggregation (function/column/alias),
+  grouping, ordering, limit, date_anchors — declared in the terminal tool
+  schema and decoded by `SchemaToolAgentStructuredQueryPlan.decode`
+  (`WidenKit/Services/SchemaToolAgentPlanConsistencyPolicy.swift`).
+  Decoding is all-or-nothing and bounded; any unknown key, wrong type, or
+  exceeded cap makes the plan non-conforming. Non-conforming or prose plans
+  fall back to the existing redacted summary diagnostics and never error.
+* `SchemaToolAgentPlanConsistencyPolicy.evaluate` deterministically checks
+  the terminal SQL against its own plan: symmetric projection output-name
+  comparison (aliases, plain column paths, PostgreSQL default function
+  naming, DISTINCT/ALL stripped), aggregation function-call presence,
+  plan-join tables referenced in the SQL and present in described schema
+  evidence, top-level GROUP BY/ORDER BY presence when the plan declares
+  grouping/ordering, and top-level LIMIT value equality. Free-prose
+  sections (grain, filters, date anchors) are deliberately not validation
+  inputs. Identifiers compare case-insensitively with quotes stripped.
+* A new `SchemaToolAgentPlanConsistencyMode` (disabled | diagnosticsOnly |
+  correctAndRetryExperimental) defaults to diagnosticsOnly, so the app and
+  default eval runs record decisions without changing behavior. In the
+  experimental mode a divergence drives exactly one in-session correction
+  (`plan_sql_divergence` tool error plus a specific-divergence correction
+  prompt, mirroring the intent-coverage single-correction pattern); a
+  second divergence fails closed with the new typed
+  `planConsistencyNoProgress` category and `planConsistencyRejected`
+  rejection reason.
+* Plumbing follows the existing policy-mode pattern end to end: agent
+  configuration, `--schema-agent-plan-consistency` eval flag, run manifest
+  field with resume inheritance and nil-normalized resume compatibility,
+  run-header rows in the summary/gate/triage reports, a `plan:` entry in
+  the triage Policy cell, and lenient backward-compatible diagnostics
+  decoding. Release-gate Make recipes remain flag-free.
+* Deterministic coverage: 25 policy tests (decoder conformance bounds and
+  every validation rule) plus 4 agent integration tests
+  (correction-then-success, correction-then-fail-closed, diagnostics-only
+  recording, non-conforming fallback). The full suite passes 1,152 tests
+  in 50 suites; `make eval-build` passes.
+
+**Funded validation probe (pre-registered; authorized by the maintainer
+2026-07-24 before any completion request, with latitude to iterate the
+contract prompt and re-probe once if conformance falls below the 16/20
+reporting threshold — cumulative probe spend capped at $3.00):** `make eval-db-cloud-agent MODEL=openai/gpt-5.5 REPEAT=1
+MAX_CLOUD_COST_USD=1.50` on this branch — the pinned production model with
+every policy in diagnostics-only mode, exercising the new structured
+contract on all 20 cases with seeded semantic grading. Conjunctive
+criteria: 20/20 complete results, transport 100%, structured parsing at
+least 95%, zero eval and internal schema-agent timeouts. Reported (not
+gated): structured-plan conformance rate on SQL terminals, plan-consistency
+decision distribution, and the decision/semantic profile against the
+retained comparator's same-case expectations. A conformance rate below
+16/20 SQL terminals sends the contract prompt back for iteration before
+any enforcement experiment. The follow-on candidate — Sol pin, trusted-SQL
+bypass, 105-second margin, and `correctAndRetryExperimental` plan
+consistency through the complete release gate — requires its own fresh
+pre-registration and authorization after this probe's evidence is recorded.
+
+**Probe outcome 2026-07-24 — passed; one authorized lenience improvement
+applied:** run `.eval-results/20260724-085024-125` (pinned GPT-5.5,
+$1.264485 of the $1.50 stage cap; cumulative probe spend $1.264485 of the
+$3.00 authorization). 20/20 complete, transport 20/20, structured parsing
+20/20, zero eval and internal schema-agent timeouts, P50 14,856 ms, P95
+25,770 ms, max 27,606 ms. All 15 SQL terminals emitted conforming
+structured plans; 13 evaluated consistent and 2 divergent, with the
+decision and semantic profile at the retained comparator's single-repeat
+expectation (6/20 end-to-end, clarification 4/4, 11 expected-SQL
+clarification statuses unchanged in character). Both divergences were the
+same contract-usage quirk rather than SQL drift: the model wrote a full
+join description or an "as alias" phrase into the join `table` field, so
+the evidence-binding rule could not match the actually-inspected table.
+The authorized improvement extracts the leading qualified identifier from
+the join table field before both join rules and skips entries without one;
+deterministic tests reproduce both recorded shapes, and both recorded
+divergences deterministically become consistent because their leading
+identifiers name tables the acceptance gate had already verified. The
+instruction text now asks for exact inspected table names in joins. With
+every conjunctive probe criterion green and conformance at 100%, the
+diagnostics-only infrastructure merges; enforcement stays behind the
+follow-on candidate's own pre-registration.
 
 ## PR 58 — Clarification decision accuracy to 12/12
 

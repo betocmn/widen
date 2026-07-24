@@ -146,6 +146,7 @@ enum TextToSQLReleaseGateReporter {
             "| Cloud agent | \(tableCell(run.manifest.cloudAgentMode ?? "-")) |",
             "| Schema agent clarification correction | \(tableCell(run.manifest.schemaAgentClarificationCorrectionMode ?? "-")) |",
             "| Schema agent intent coverage | \(tableCell(run.manifest.schemaAgentIntentCoverageMode ?? "-")) |",
+            "| Schema agent plan consistency | \(tableCell(run.manifest.schemaAgentPlanConsistencyMode ?? "-")) |",
             "| Model | \(tableCell(run.manifest.model ?? "-")) |",
             "| Expected canonical model | \(tableCell(run.manifest.expectedCanonicalModelID ?? "-")) |",
             "| Repeats | \(run.manifest.repeatCount) |",
@@ -464,6 +465,7 @@ enum TextToSQLReleaseTriageReporter {
             "| Cloud agent | \(tableCell(run.manifest.cloudAgentMode ?? "-")) |",
             "| Schema agent clarification correction | \(tableCell(run.manifest.schemaAgentClarificationCorrectionMode ?? "-")) |",
             "| Schema agent intent coverage | \(tableCell(run.manifest.schemaAgentIntentCoverageMode ?? "-")) |",
+            "| Schema agent plan consistency | \(tableCell(run.manifest.schemaAgentPlanConsistencyMode ?? "-")) |",
             "| Model | \(tableCell(run.manifest.model ?? "-")) |",
             "| Expected canonical model | \(tableCell(run.manifest.expectedCanonicalModelID ?? "-")) |",
             "| Results | \(run.results.count) |",
@@ -809,6 +811,8 @@ enum TextToSQLReleaseTriageReporter {
             guard let diagnostics,
                 !diagnostics.clarificationPolicyDecision.isEmpty
                     || !diagnostics.sqlIntentCoverageDecision.isEmpty
+                    || !diagnostics.planConsistencyDecision.isEmpty
+                    || diagnostics.planConsistencyCorrectionAttempted
             else { return "-" }
             var parts: [String] = []
             if !diagnostics.clarificationPolicyDecision.isEmpty {
@@ -835,6 +839,16 @@ enum TextToSQLReleaseTriageReporter {
                     diagnostics.intentCoverageCorrectionSucceeded
                         ? "intent correction succeeded"
                         : "intent correction attempted"
+                )
+            }
+            if !diagnostics.planConsistencyDecision.isEmpty {
+                parts.append("plan: " + diagnostics.planConsistencyDecision)
+            }
+            if diagnostics.planConsistencyCorrectionAttempted {
+                parts.append(
+                    diagnostics.planConsistencyCorrectionSucceeded
+                        ? "plan correction succeeded"
+                        : "plan correction attempted"
                 )
             }
             return parts.joined(separator: "; ")

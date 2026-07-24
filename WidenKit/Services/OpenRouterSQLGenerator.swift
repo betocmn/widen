@@ -96,6 +96,7 @@ public enum OpenRouterSchemaToolAppRejectionReason: String, Codable, Equatable, 
     case uninspectedObject
     case invalidSQL
     case intentCoverageRejected
+    case planConsistencyRejected
     case unsupportedAction
     case malformedTerminal
     case budgetExhausted
@@ -156,6 +157,12 @@ public struct OpenRouterSchemaToolAgentDiagnostics: Codable, Equatable, Sendable
     public var sqlIntentCoverageMismatchCategory: String
     public var intentCoverageCorrectionAttempted: Bool
     public var intentCoverageCorrectionSucceeded: Bool
+    public var planConsistencyMode: String
+    public var planConsistencyDecision: String
+    public var planConsistencyReason: String
+    public var planConsistencyDivergences: [String]
+    public var planConsistencyCorrectionAttempted: Bool
+    public var planConsistencyCorrectionSucceeded: Bool
 
     public init(
         logicalTurnCount: Int? = nil,
@@ -184,7 +191,13 @@ public struct OpenRouterSchemaToolAgentDiagnostics: Codable, Equatable, Sendable
         sqlIntentCoverageMissingSignals: [String] = [],
         sqlIntentCoverageMismatchCategory: String = "",
         intentCoverageCorrectionAttempted: Bool = false,
-        intentCoverageCorrectionSucceeded: Bool = false
+        intentCoverageCorrectionSucceeded: Bool = false,
+        planConsistencyMode: String = "",
+        planConsistencyDecision: String = "",
+        planConsistencyReason: String = "",
+        planConsistencyDivergences: [String] = [],
+        planConsistencyCorrectionAttempted: Bool = false,
+        planConsistencyCorrectionSucceeded: Bool = false
     ) {
         self.logicalTurnCount = logicalTurnCount
         self.terminalToolSeen = terminalToolSeen
@@ -213,6 +226,12 @@ public struct OpenRouterSchemaToolAgentDiagnostics: Codable, Equatable, Sendable
         self.sqlIntentCoverageMismatchCategory = sqlIntentCoverageMismatchCategory
         self.intentCoverageCorrectionAttempted = intentCoverageCorrectionAttempted
         self.intentCoverageCorrectionSucceeded = intentCoverageCorrectionSucceeded
+        self.planConsistencyMode = planConsistencyMode
+        self.planConsistencyDecision = planConsistencyDecision
+        self.planConsistencyReason = planConsistencyReason
+        self.planConsistencyDivergences = planConsistencyDivergences
+        self.planConsistencyCorrectionAttempted = planConsistencyCorrectionAttempted
+        self.planConsistencyCorrectionSucceeded = planConsistencyCorrectionSucceeded
     }
 
     private enum CodingKeys: String, CodingKey {
@@ -243,6 +262,12 @@ public struct OpenRouterSchemaToolAgentDiagnostics: Codable, Equatable, Sendable
         case sqlIntentCoverageMismatchCategory
         case intentCoverageCorrectionAttempted
         case intentCoverageCorrectionSucceeded
+        case planConsistencyMode
+        case planConsistencyDecision
+        case planConsistencyReason
+        case planConsistencyDivergences
+        case planConsistencyCorrectionAttempted
+        case planConsistencyCorrectionSucceeded
     }
 
     public init(from decoder: any Decoder) throws {
@@ -342,6 +367,30 @@ public struct OpenRouterSchemaToolAgentDiagnostics: Codable, Equatable, Sendable
         intentCoverageCorrectionSucceeded = try container.decodeIfPresent(
             Bool.self,
             forKey: .intentCoverageCorrectionSucceeded
+        ) ?? false
+        planConsistencyMode = try container.decodeIfPresent(
+            String.self,
+            forKey: .planConsistencyMode
+        ) ?? ""
+        planConsistencyDecision = try container.decodeIfPresent(
+            String.self,
+            forKey: .planConsistencyDecision
+        ) ?? ""
+        planConsistencyReason = try container.decodeIfPresent(
+            String.self,
+            forKey: .planConsistencyReason
+        ) ?? ""
+        planConsistencyDivergences = try container.decodeIfPresent(
+            [String].self,
+            forKey: .planConsistencyDivergences
+        ) ?? []
+        planConsistencyCorrectionAttempted = try container.decodeIfPresent(
+            Bool.self,
+            forKey: .planConsistencyCorrectionAttempted
+        ) ?? false
+        planConsistencyCorrectionSucceeded = try container.decodeIfPresent(
+            Bool.self,
+            forKey: .planConsistencyCorrectionSucceeded
         ) ?? false
     }
 }
