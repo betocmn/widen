@@ -1456,6 +1456,53 @@ only this evidence and the sanitized run reports in the uncommitted run
 directory remain. Total plan spend $1.898464 of the $8.00 cap; no
 further paid run under this authorization.
 
+**Offline mismatch classification 2026-07-24 (zero completion cost;
+independently re-derived and adversarially confirmed per case):** every
+one of the 21 stage 2 semantic mismatches was classified against the
+committed suite goldens and the recorded run artifacts, uniform across
+the three repeats of each case:
+
+* `commerce.customer-paid-revenue` — genuine: the candidate selects
+  `name` where the golden requires `email` (no alias can bridge a
+  different underlying column), with two latent errors behind it (a LEFT
+  JOIN returning 6 rows against the golden's 3 paid-status rows, and a
+  cents-to-currency division in two repeats).
+* `commerce.average-order-value-country` — genuine value error dressed
+  as a near-miss: the aggregate name `average_paid_order_value` falls
+  just outside the alias list, but the value is divided by 100.0, so a
+  rename alone cannot recover it.
+* `commerce.customers-without-orders` — genuine: `email` is simply never
+  computed; the anti-join row selection itself is correct.
+* `support.unresolved-by-assignee` — pure alias near-miss, value
+  identity proven by reconstructing the comparator's digest preimages:
+  candidate and golden rows are byte-identical except the count column
+  is named `unresolved_tickets` instead of `unresolved_ticket_count` /
+  `ticket_count` / `count`. Adding that one alias would convert all
+  three repeats to passes with no value-level change. This is the exact
+  narrow class the PR 64 standing read contemplated; the golden is
+  unchanged pending the maintainer's case-by-case decision.
+* `support.unclustered-feedback` — superset-only, confirming the PR 64
+  offline re-score: all required outputs present under canonical names
+  plus an extra `cluster_id`; recovery requires the per-case
+  `allowExtraCandidateColumns` product decision, not an alias.
+* `saas.expiring-subscriptions` — mixed and genuine: an extra column
+  plus a dropped active-status filter that reproduces the suite's
+  negative control (4 rows against the golden's 2).
+* `saas.overallocated-seats` — alias near-miss (`seat_usage`) whose
+  values almost certainly match, but every repeat also appends an extra
+  derived over-allocation column, so an alias addition alone still fails
+  the extra-column rule.
+
+Robustness conclusion: even if the maintainer approved both candidate
+golden decisions (the `unresolved_tickets` alias and superset tolerance
+for `support.unclustered-feedback`), stage 2 would have scored at most
+14/30 against the pre-registered 15/30 floor. The PR 65 rejection is
+therefore robust to every defensible comparator choice, and 15 of the
+21 mismatch rows are substantive model errors — wrong columns, dropped
+filters, unit conversions, invented derived columns — that only
+deterministic projection synthesis (PR 57 option 2) or a different
+model could remove.
+
 **Free validation record 2026-07-24 (no paid request made):**
 
 * `make project` regenerated an unchanged tracked tree.
