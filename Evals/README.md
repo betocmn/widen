@@ -127,7 +127,7 @@ diffs, if added later, must stay under `.eval-results/`.
 ## Release Gate
 
 `make eval-release` is the PR 12 release gate and defaults to the fixed
-production alias `openai/gpt-5.5`. Engineering comparisons must opt in with
+production alias `openai/gpt-5.6-sol`. Engineering comparisons must opt in with
 `make eval-release MODEL=<model> ALLOW_MODEL_OVERRIDE=1`; direct CLI runs that
 publish release-gate or triage docs equally require `--allow-model-override`
 for a non-pinned `--model` (including offline `--triage-release` re-runs).

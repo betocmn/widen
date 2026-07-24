@@ -125,6 +125,8 @@ Numbering continues from `docs/refactoring-plan.md`.
    genuinely narrower, pre-registered design that can preserve 12/12 without
    exceeding the retained over-clarification comparator
 6. PR 57 only after a future bypass iteration clears every PR 56 criterion
+7. PR 63 GPT-5.6 Sol pin upgrade: candidate and offline checks are complete;
+   run the funded smoke plus full gate once its spend cap is authorized
 
 ---
 
@@ -579,6 +581,71 @@ schema/PostgreSQL validation, structured parsing, deterministic SQL review,
 frozen phrase heuristics, PR 59 timeout/tool-budget/interception behavior, and
 PR 60 watch/rollover workflow remain unchanged.
 
+## PR 63 — GPT-5.6 Sol production model upgrade
+
+**Status: ⏳ Candidate prepared 2026-07-24; funded gate awaiting spend
+authorization.**
+
+**Why:** OpenRouter now lists the GPT-5.6 family. `openai/gpt-5.6-sol` is
+priced identically to the retained `openai/gpt-5.5` pin ($5/M prompt, $30/M
+completion, observed 2026-07-24) with the same 1,050,000-token context, so
+the upgrade is per-token cost-neutral. A newer-generation model is the kind
+of change that could move the semantic bucket, which is the current
+release-gate bottleneck, but that claim must be proven on the full gate, not
+assumed.
+
+**What:** Branch `upgrade-gpt-5.6-sol-pin` repins
+`OpenRouterCatalog.productionProfile` to requested `openai/gpt-5.6-sol`,
+expected canonical `openai/gpt-5.6-sol-20260709`, and display name
+"GPT-5.6 Sol", plus the Makefile pin, the deterministic fixtures that assert
+the production pin, and current-state wording in README, PRIVACY,
+CONTRIBUTING, `docs/release.md`, `Evals/README.md`, and
+`docs/implementation-guide.md`. No prompt, private-routing, safety, schema,
+PostgreSQL-verification, schema-tool-budget, frozen-heuristic, or
+release-gate-enforcement change is included.
+
+Offline validation on 2026-07-24: `make project` regenerated cleanly; the
+five focused canonical/routing/planning suites passed 212 tests; the full
+`make test` run passed; `make eval-build` succeeded; and the credential-free
+`--check-openrouter-canonical` metadata check observed canonical
+`openai/gpt-5.6-sol-20260709` for the requested alias (exit 0, no completion
+spend).
+
+**Pre-registered acceptance criteria (conjunctive, recorded before any
+completion request):** identical to the retained rollover non-regression
+criteria in `docs/release.md`, applied to the new alias:
+
+* 60/60 complete results.
+* Semantic end-to-end at least 19/60.
+* Clarification decisions at least 11/12.
+* Exclusive expected-SQL clarification at most 28.
+* Tool-budget triage at most 6 and static schema failures at most 1.
+* Safety, schema, and PostgreSQL verification at 100% for evaluated SQL.
+* Transport and structured parsing at least 95%.
+* Zero forbidden bindings, repeated/no-progress repairs, eval timeouts, and
+  internal schema-agent timeouts.
+* Private routing plus requested/routed/canonical model verification on
+  every completion request.
+
+Also report cumulative branch spend, total and per-result gate cost,
+P50/P95/maximum latency, semantic mismatches, and every triage bucket even
+where no threshold applies. If any criterion fails, revert the candidate pin,
+record the negative result, and do not merge; the cheaper `terra` and `luna`
+GPT-5.6 tiers may be evaluated only as separate pre-registered experiments.
+
+**Spend plan (pending authorization):** total branch cap $5.00, smoke
+allocation $0.50 for `make eval-openrouter-smoke MODEL=openai/gpt-5.6-sol
+REPEAT=3`, one-case overrun reserve $0.10, and a full-gate cumulative
+ceiling of $4.00 for `make eval-release-triage MODEL=openai/gpt-5.6-sol`,
+sized against the $3.276305 and $3.521450 prior full-gate costs. No paid
+request may be made before this cap is explicitly authorized, and
+`ALLOW_MODEL_OVERRIDE` stays unset so the gate exercises the production
+alias contract.
+
+Passing restores the existing beta cloud path on GPT-5.6 Sol. It does not
+satisfy the separate 90% semantic production-readiness gate and does not
+authorize removing beta wording.
+
 ## Later / conditional
 
 * **PR 10 embeddings** — stays deferred unless a future triage shows required
@@ -595,7 +662,7 @@ PR 60 watch/rollover workflow remain unchanged.
   passing `docs/evals/<version>.md` as the production-ready record.
 * **Second vetted model in the allowlist (formerly PR 61)** — dropped from
   planned work; keep as optional future work. If accounts whose OpenRouter
-  provider policies hide GPT-5.5's ZDR endpoints ever need a cloud path,
+  provider policies hide GPT-5.6 Sol's ZDR endpoints ever need a cloud path,
   evaluate one fallback candidate through the full release gate under
   identical private routing and add it to the profile list only if it meets
   or beats the pinned baseline with all hard gates green.
