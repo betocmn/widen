@@ -155,6 +155,14 @@ struct SchemaToolAgentPlanConsistencyPolicyTests {
         #expect(result.decision == .consistent)
     }
 
+    @Test func distinctProjectionMatchesPlanColumn() {
+        let result = evaluate(
+            sql: "SELECT DISTINCT c.country FROM public.customers c",
+            plan: plan(joins: ["public.customers"], projection: [("c.country", "")])
+        )
+        #expect(result.decision == .consistent)
+    }
+
     @Test func skipsProjectionRuleWhenPlanHasNoProjection() {
         let result = evaluate(
             sql: "SELECT c.name, c.email FROM public.customers c",

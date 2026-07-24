@@ -398,7 +398,13 @@ public enum SchemaToolAgentPlanConsistencyPolicy {
         }
 
         static func outputName(forSelectExpression expression: String) -> String {
-            let trimmed = expression.trimmingCharacters(in: .whitespacesAndNewlines)
+            var trimmed = expression.trimmingCharacters(in: .whitespacesAndNewlines)
+            if let match = trimmed.range(
+                of: #"^(distinct|all)\s+"#,
+                options: [.regularExpression, .caseInsensitive]
+            ) {
+                trimmed = String(trimmed[match.upperBound...])
+            }
             guard !trimmed.isEmpty, trimmed != "*" else { return "" }
             if let aliasRange = lastTopLevelAliasRange(in: trimmed) {
                 return normalizedIdentifier(String(trimmed[aliasRange]))
