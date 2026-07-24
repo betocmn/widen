@@ -1643,16 +1643,7 @@ struct OpenRouterSchemaToolSQLAgentTests {
                 throw URLError(.badServerResponse)
             }
         }
-        let agent = makeAgent(
-            schema: schema,
-            chatTransport: chatTransport,
-            configuration: OpenRouterSchemaToolSQLAgentConfiguration(
-                maximumSchemaToolCalls: 4,
-                maximumHTTPAttempts: 8,
-                wallClockTimeoutSeconds: 10,
-                planConsistencyMode: .diagnosticsOnly
-            )
-        )
+        let agent = makeAgent(schema: schema, chatTransport: chatTransport)
 
         let result = try await agent.generateSQL(
             question: "Average first response time",
