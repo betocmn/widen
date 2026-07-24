@@ -702,7 +702,7 @@ and new spend authorization, and must not weaken fail-closed behavior.
 ## PR 64 — Trusted schema-tool SQL with GPT-5.6 Sol Pro
 
 **Status: Funded negative at stage 2 on 2026-07-24; candidate reverted,
-evidence retained, $6.14 of the $9.00 authorization unspent.**
+evidence retained, $7.14 of the $9.00 authorization unspent.**
 
 **Why:** The PR 63 gate produced the diagnostics-only evidence that the
 exclusive expected-SQL clarification bucket is not model behavior. All 31
