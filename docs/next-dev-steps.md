@@ -822,6 +822,33 @@ coverage has measured 100% while `wrong projected columns` dominates every
 bypass mismatch bucket — and would need its own pre-registered evaluation
 if the maintainer chooses to relax it.
 
+**Offline superset re-score 2026-07-24 — the comparator question is
+answered; superset tolerance is not the lever:** a zero-completion-cost
+re-scorer (`.context/rescore/rescore.py`) re-provisioned the committed
+seeded fixtures on local PostgreSQL and re-executed the recorded golden and
+candidate SQL for all 42 executed results across the stage 2 probe and the
+PR 63 full gate. Method calibration was exact: the strict re-score
+reproduced the recorded semantic verdict 42/42 and the recorded mismatch
+subcategory 29/29, and reproduced all 26 recorded result digests. An
+independent adversarial pass with a separate Swift-faithful comparator
+confirmed every number. Under a superset-tolerant policy (candidate may
+project extra columns beyond the golden's required set, all other
+semantics unchanged), only 4 of the 29 result mismatches recover:
+`support.unclustered-feedback` (all three probe repeats) and
+`preseason.active-match-configs` repeat 1. The remaining failures are
+genuine: 22 records miss required columns outright or rename them outside
+the golden alias lists (name projected where email is required,
+`average_paid_order_value`-style aggregate aliases, omitted `slug`), two
+return row supersets (4 rows against a golden 2 on
+`saas.expiring-subscriptions`), and one is a value mismatch. Conclusion:
+the discarded terminal SQL fails for substantive reasons, not comparator
+strictness. Relaxing projection matching would recover about 14% of the
+mismatch bucket and cannot clear the gate; the levers remain deterministic
+projection/planning synthesis (PR 57) and, narrowly, whether specific
+near-miss aggregate aliases belong in the golden alias lists — a golden
+change that must be justified case by case, never as bulk loosening to fit
+observed model output.
+
 ## Later / conditional
 
 * **PR 10 embeddings** — stays deferred unless a future triage shows required
