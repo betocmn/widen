@@ -59,6 +59,18 @@ Numbering continues from `docs/refactoring-plan.md`.
   and conforming structured plans on all 15 SQL terminals.
   `correctAndRetryExperimental` enforcement waits for the fresh
   pre-registered gate candidate.
+* ✅ **Done — PR 65 conjunctive gate candidate (funded negative):** the
+  Sol pin + trusted-SQL bypass + 105-second margin +
+  `correctAndRetryExperimental` enforcement candidate passed its
+  transport smoke but failed the stage 2 enforcement demonstration
+  conjunctively (released semantic 8/30 against the 15/30 floor;
+  wrong-projected-columns 15 against the ceiling of 9) even though
+  enforcement worked mechanically: 30/30 conforming plans, all
+  divergences corrected in-session, zero divergent releases, and false
+  clarifications collapsed to 1/30. The projection errors originate in
+  the model's own plan, so self-consistency enforcement cannot reach
+  them. All candidate commits were reverted; the retained pin stays
+  `openai/gpt-5.5`.
 * ⏳ **Not done:** PR 58 has now completed three negative funded attempts. The
   latest evidence-narrow candidate passed every offline check but failed both
   paid criteria at 10/12 clarification decisions and 31 exclusive false
@@ -170,11 +182,18 @@ Numbering continues from `docs/refactoring-plan.md`.
    disqualified at stage 1 on cost and latency, and the stage 2 Sol probe
    showed the bypass alone releases wrong-shaped SQL, so the candidate
    was reverted with $7.14 of the $9.00 authorization unspent
-9. Next: PR 65 (below) — the fresh pre-registered gate candidate
-   combining the `openai/gpt-5.6-sol` pin, the trusted schema-tool SQL
-   bypass, the 105-second schema-agent wall-clock margin, and
-   `correctAndRetryExperimental` plan-consistency enforcement, with its
-   own conjunctive criteria and fresh spend authorization
+9. Done, negative — PR 65 conjunctive gate candidate (Sol pin, trusted
+   SQL, 105-second margin, plan-consistency enforcement): stage 1
+   passed after an Azure ZDR incident cleared, but the stage 2
+   enforcement demonstration failed both conjunctive floors (released
+   semantic 8/30 against 15/30; wrong-projected-columns 15 against 9),
+   proving the projection errors originate in the model's plan itself;
+   the candidate was reverted with $6.10 of $8.00 unspent
+10. Next: decide the two levers the PR 64/65 evidence chain leaves
+    open — case-by-case golden aggregate-alias review (a product
+    decision, never bulk loosening) and PR 57 option 2 plan compilation
+    (requires an explicit architecture decision recorded in the
+    refactoring plan)
 
 ---
 
@@ -1105,11 +1124,10 @@ observed model output.
 
 ## PR 65 — Sol pin + trusted SQL + wall-clock margin + plan-consistency enforcement gate candidate
 
-**Status: candidate implemented and pre-registered 2026-07-24; free
-validation recorded below. No completion request has been made on branch
-`gate-experiment-gpt-5.6-sol-candidate`, and none is authorized until the
-maintainer approves the fresh spend cap in this section. Historical unused
-authorization does not carry forward.**
+**Status: funded negative at stage 2 on 2026-07-24; candidate commits
+reverted, evidence retained, $6.10 of the $8.00 authorization unspent.
+The retained pin stays `openai/gpt-5.5` and the plan-consistency default
+stays `diagnosticsOnly`.**
 
 **Why:** Four independently evidenced mechanisms compensate for each
 other's recorded failure modes, and each candidate piece has already been
@@ -1400,6 +1418,43 @@ Sol smoke fingerprints (reported, not gated). Attempt cost $0.157225;
 cumulative stage 1 spend $0.212385 of the $0.50 allocation, cumulative
 branch spend $0.212385 of $8.00. Every stage 1 criterion passed, so the
 plan proceeds to stage 2.
+
+**Stage 2 outcome 2026-07-24 — negative; candidate rejected without a
+full gate:** run `.eval-results/20260724-213952-979` executed the
+pre-registered command exactly (ten cases, three repeats, seeded
+semantic grading, candidate defaults, $1.686079 of the $2.00 ceiling;
+cumulative branch spend $1.898464 of $8.00; P50 12,792 ms, P95
+22,800 ms, max 27,052 ms). The operational criteria all passed: 30/30
+complete, transport 30/30, structured parsing 30/30, zero eval and
+internal schema-agent timeouts, expected-SQL-to-clarification 1 of 30
+(an app-side `invalidSQL` rejection on `support.average-first-response`
+repeat 1, unrelated to plan consistency), and zero plan-consistency
+fail-closed rejections. But both enforcement-demonstration criteria
+failed conjunctively:
+
+* Released SQL passed the seeded semantic comparison on 8/30 against
+  the pre-registered floor of 15/30.
+* The triage Mismatch column recorded 15 `wrong projected columns` rows
+  against the ceiling of 9 (plus six extra-column rows;
+  21 semantic result mismatches in total: 15 `missingCandidateColumn`,
+  6 `unexpectedExtraColumns`, uniform across repeats of seven cases).
+
+The mechanism evidence is decisive about why: all 30 SQL terminals
+emitted conforming structured plans, the three divergences that occurred
+were corrected successfully in-session, no divergent SQL was released,
+and every released query matched its own plan — yet the released SQL
+still projected the wrong column sets. The projection errors originate
+in the model's plan itself, so plan-versus-SQL consistency enforcement
+cannot reach them. Against the bypass-only comparator the enforcement
+improved every profile metric (semantic 3/30 -> 8/30, residual
+clarifications 3/30 -> 1/30, wrong-projected-columns 18 -> 15) while
+mechanically eliminating the false-clarification failure mode, but the
+conjunctive floors were registered precisely so that a directional
+improvement of this size would not merge. Stage 3 therefore did not
+run, and the candidate commits were reverted per the decision rule;
+only this evidence and the sanitized run reports in the uncommitted run
+directory remain. Total plan spend $1.898464 of the $8.00 cap; no
+further paid run under this authorization.
 
 **Free validation record 2026-07-24 (no paid request made):**
 
