@@ -11,7 +11,7 @@ Widen's schema-tool agent. Widen has no hosted backend of its own; cloud
 requests go directly from your Mac to the provider you configure in
 Settings > LLM.
 
-The OpenRouter text-to-SQL profile is fixed to the evaluated GPT-5.5 alias and
+The OpenRouter text-to-SQL profile is fixed to the evaluated GPT-5.6 Sol alias and
 canonical version shipped with the app. Users cannot enter an arbitrary model
 ID or disable the connected-session schema-tool path. A model-version change
 requires a new app release and release-gate evaluation.
