@@ -48,7 +48,7 @@ struct LLMSettingsView: View {
         @Bindable var appState = appState
 
         Form {
-            Section("Cloud LLM") {
+            Section("Cloud LLM — Beta") {
                 Picker("Provider", selection: $appState.cloudProvider) {
                     ForEach(CloudAIProvider.allCases) { provider in
                         Text(provider.displayName).tag(provider)
