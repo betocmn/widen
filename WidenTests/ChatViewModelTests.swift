@@ -195,6 +195,48 @@ struct ChatViewModelTests {
         #expect(context?.lastRunError == "Query failed: syntax error at or near \"30\"")
     }
 
+    @Test func generationErrorsAreExcludedFromLastRunErrorContext() async {
+        let chatVM = ChatViewModel()
+        let generator = RecordingGenerator(result: makeGeneration())
+
+        // A transport failure from the previous generation attempt: nothing
+        // ran, so the retry must not present it to the model as a run error.
+        chatVM.messages = [
+            ChatMessage(role: .user, text: "show users")
+        ]
+        chatVM.appendGenerationError("SQL generation failed: Provider returned error")
+        chatVM.input = "show users"
+
+        await chatVM.submit(
+            schema: makeSchema(),
+            generator: generator,
+            config: SQLGenerationConfig(),
+            queryVM: QueryResultViewModel()
+        )
+
+        #expect(generator.recordedContext?.lastRunError == nil)
+    }
+
+    @Test func runErrorsStillFeedLastRunErrorContext() async {
+        let chatVM = ChatViewModel()
+        let generator = RecordingGenerator(result: makeGeneration())
+
+        chatVM.messages = [
+            ChatMessage(role: .user, text: "show users")
+        ]
+        chatVM.appendRunError("Query failed: division by zero")
+        chatVM.input = "the query is failing"
+
+        await chatVM.submit(
+            schema: makeSchema(),
+            generator: generator,
+            config: SQLGenerationConfig(),
+            queryVM: QueryResultViewModel()
+        )
+
+        #expect(generator.recordedContext?.lastRunError == "Query failed: division by zero")
+    }
+
     @Test func submitWithFreshSessionPassesEmptyContext() async {
         let chatVM = ChatViewModel()
         let generator = RecordingGenerator(result: makeGeneration())

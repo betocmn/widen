@@ -233,6 +233,7 @@ struct ChatModeView: View {
             MessageBubbleView(
                 message: message,
                 onRetryWrite: retryWriteAction(for: message),
+                onRetryGeneration: retryGenerationAction(for: message),
                 onClarificationOptionSelected: selectClarificationOption
             )
         }
@@ -257,6 +258,29 @@ struct ChatModeView: View {
             Task {
                 await controller.retryFailedWrite(
                     appState: appState, failedSQL: failedSQL, error: message.text)
+            }
+        }
+    }
+
+    /// Only a retryable generation error that is the newest message owns its
+    /// "Try Again" button — the same retirement rule as failed writes, so
+    /// the button always resubmits the question the user is looking at.
+    private var lastRetryableGenerationErrorID: UUID? {
+        guard let last = controller.chatVM.messages.last,
+            last.role == .error, last.retryQuestion != nil
+        else { return nil }
+        return last.id
+    }
+
+    private func retryGenerationAction(for message: ChatMessage) -> (() -> Void)? {
+        guard message.id == lastRetryableGenerationErrorID,
+            let question = message.retryQuestion
+        else {
+            return nil
+        }
+        return {
+            Task {
+                await controller.resubmitQuestion(question, appState: appState)
             }
         }
     }

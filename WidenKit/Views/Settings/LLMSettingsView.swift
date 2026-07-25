@@ -304,7 +304,10 @@ struct LLMSettingsView: View {
                     statusRow("Latency", "\(modelTestResult.latencyMs) ms")
                     statusRow("Retries", "\(modelTestResult.retryCount)")
                     if let error = modelTestResult.error {
-                        statusRow("Error", "\(error.category.rawValue): \(error.message)")
+                        // Human label on the surface; the raw category and
+                        // provider message stay hoverable for diagnostics.
+                        statusRow("Error", SQLGenerationErrorCopy.testModelLabel(for: error.category))
+                            .help("\(error.category.rawValue): \(error.message)")
                     }
                 }
                 .font(.callout)

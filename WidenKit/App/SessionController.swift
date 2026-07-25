@@ -160,7 +160,7 @@ public final class SessionController: Identifiable {
             appState.schemaForGeneration(startingGeneration, connectionID: connectionID)
             ?? appState.promptSchema(for: connectionID)
         guard let schema = repairSchema, !schema.tables.isEmpty else {
-            chatVM.appendRunError(
+            chatVM.appendGenerationError(
                 "I could not retry because the database schema is no longer available."
             )
             appState.sessionDidChange(sessionID)
@@ -241,7 +241,7 @@ public final class SessionController: Identifiable {
                 allowGroundingClarification: false
             )
         } catch {
-            chatVM.appendRunError(error.localizedDescription)
+            chatVM.appendGenerationError(SQLGenerationErrorCopy.chatText(for: error))
             return
         }
 
@@ -272,6 +272,15 @@ public final class SessionController: Identifiable {
         queryVM.setGeneration(visibleGeneration, schema: schema)
     }
 
+    /// "Try Again" for a transient generation failure: resubmits the
+    /// recorded question through the normal submit path, exactly as if the
+    /// user typed it again.
+    public func resubmitQuestion(_ question: String, appState: AppState) async {
+        guard !queryVM.isRunning, !chatVM.isGenerating else { return }
+        chatVM.input = question
+        await submit(appState: appState)
+    }
+
     /// Wipes the transcript, the SQL preview, and the per-run result cache.
     public func clearConversation() {
         guard queryVM.clear() else { return }
@@ -295,7 +304,7 @@ public final class SessionController: Identifiable {
         let question = chatVM.input.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !question.isEmpty, !chatVM.isGenerating, !queryVM.isRunning else { return }
         guard let schema = appState.promptSchema(for: connectionID), !schema.tables.isEmpty else {
-            chatVM.appendRunError(
+            chatVM.appendGenerationError(
                 "Connect to a database and load its schema before asking questions."
             )
             return
@@ -356,7 +365,8 @@ public final class SessionController: Identifiable {
                 .trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
                 ? nil : queryVM.sqlText,
             lastRunError: queryVM.runError
-                ?? (chatVM.messages.last?.role == .error ? chatVM.messages.last?.text : nil),
+                ?? (chatVM.messages.last?.isQueryRunError == true
+                    ? chatVM.messages.last?.text : nil),
             confirmedSemanticBindings: confirmedBindings
         )
         let connection = appState.connection(for: connectionID)
@@ -443,12 +453,18 @@ public final class SessionController: Identifiable {
                     appendAssistantGeneration(generation)
                 }
             case .failed(let failure):
-                chatVM.appendRunError(failure.localizedDescription)
+                chatVM.appendGenerationError(
+                    SQLGenerationErrorCopy.chatText(for: failure),
+                    retryQuestion: SQLGenerationErrorCopy.isRetryable(failure) ? question : nil
+                )
             }
         } catch is CancellationError {
             return
         } catch {
-            chatVM.appendRunError(error.localizedDescription)
+            chatVM.appendGenerationError(
+                SQLGenerationErrorCopy.chatText(for: error),
+                retryQuestion: SQLGenerationErrorCopy.isRetryable(error) ? question : nil
+            )
         }
     }
 
@@ -646,7 +662,7 @@ public final class SessionController: Identifiable {
             ?? appState.promptSchema(for: connectionID)
         guard let schema = repairSchema, !schema.tables.isEmpty else {
             restoreStartingGeneration()
-            chatVM.appendRunError(
+            chatVM.appendGenerationError(
                 "I could not retry because the database schema is no longer available."
             )
             appState.sessionDidChange(sessionID)
@@ -744,7 +760,7 @@ public final class SessionController: Identifiable {
                     appState: appState
                 )
                 restoreStartingGeneration(schema: schema)
-                chatVM.appendRunError(error.localizedDescription)
+                chatVM.appendGenerationError(SQLGenerationErrorCopy.chatText(for: error))
                 appState.sessionDidChange(sessionID)
                 return
             }

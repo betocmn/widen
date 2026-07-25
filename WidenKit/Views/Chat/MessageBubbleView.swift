@@ -10,6 +10,9 @@ struct MessageBubbleView: View {
     /// Present on a failed-write error bubble: asks the model to repair the
     /// query and refill the editor (without running it).
     var onRetryWrite: (() -> Void)? = nil
+    /// Present on a transient generation-failure bubble: resubmits the
+    /// question that failed.
+    var onRetryGeneration: (() -> Void)? = nil
     var onClarificationOptionSelected: ((PendingClarification, ClarificationOption) -> Void)? = nil
 
     var body: some View {
@@ -93,9 +96,9 @@ struct MessageBubbleView: View {
                 clarificationOptions(pending)
                     .padding(.top, 4)
             }
-            if message.role == .error, let onRetryWrite {
+            if message.role == .error, let retry = onRetryWrite ?? onRetryGeneration {
                 Button("Try Again", systemImage: "arrow.clockwise") {
-                    onRetryWrite()
+                    retry()
                 }
                 .buttonStyle(.bordered)
                 .controlSize(.small)
