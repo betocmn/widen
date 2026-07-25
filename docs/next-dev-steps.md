@@ -189,11 +189,18 @@ Numbering continues from `docs/refactoring-plan.md`.
    semantic 8/30 against 15/30; wrong-projected-columns 15 against 9),
    proving the projection errors originate in the model's plan itself;
    the candidate was reverted with $6.10 of $8.00 unspent
-10. Next: decide the two levers the PR 64/65 evidence chain leaves
-    open — case-by-case golden aggregate-alias review (a product
-    decision, never bulk loosening) and PR 57 option 2 plan compilation
-    (requires an explicit architecture decision recorded in the
-    refactoring plan)
+10. ✅ Done — case-by-case golden review: on 2026-07-25 the maintainer
+    approved exactly two changes justified by the PR 65 mismatch
+    classification — the `unresolved_tickets` alias for
+    `support.unresolved-by-assignee` (value identity proven by digest
+    preimage reconstruction) and `allowExtraCandidateColumns` for
+    `support.unclustered-feedback` only (the extra output is the filter
+    column itself, and the PR 64 superset re-score already isolated this
+    case). No other golden, fixture, or comparator rule changed; bulk
+    loosening remains prohibited
+11. PR 57 option 2 plan compilation stays open and deferred until after
+    the launch window; it requires an explicit architecture decision
+    recorded in the refactoring plan before any work
 
 ---
 

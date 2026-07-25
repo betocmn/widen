@@ -285,7 +285,8 @@
               "canonicalName": "unresolved_ticket_count",
               "aliases": [
                 "ticket_count",
-                "count"
+                "count",
+                "unresolved_tickets"
               ]
             }
           ],
@@ -371,7 +372,8 @@
               "id": "opposite-null-filter",
               "sql": "SELECT id, body, created_at FROM public.feedback_item WHERE cluster_id IS NOT NULL ORDER BY created_at DESC LIMIT 100"
             }
-          ]
+          ],
+          "allowExtraCandidateColumns": true
         }
       }
     },
