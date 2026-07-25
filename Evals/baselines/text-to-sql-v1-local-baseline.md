@@ -1,36 +1,47 @@
 # Text-to-SQL Eval Baseline
 
-> Stale baseline: this file predates `production-pipeline-static-shape` eval
-> mode and must not be treated as current. Regenerate with
-> `make eval-local REPEAT=3` when a real local Foundation Models run is
-> available on the machine.
-
-**Evaluation scope:** A static-shape pass verifies the decision, SQL safety, schema references, and configured structural expectations. It does not establish result-set or semantic correctness.
+**Evaluation scope:** The eval invokes the shared production text-to-SQL pipeline through local validation and validation-only repair, then applies a static-shape score to the final decision. It does not establish result-set or semantic correctness.
 
 ## Run
 
 | Field | Value |
 | --- | --- |
 | Suite | text-to-sql-v1 v1 |
-| Evaluation mode | static-shape |
-| Commit | 8c6fc129ceb0686ac3ee8c9e966d82bf70ce3a31 |
-| Started | 2026-06-23T03:26:45Z |
-| Finished | 2026-06-23T03:32:17Z |
+| Evaluation mode | production-pipeline-static-shape |
+| Run ID | 38B0DC69-1962-4F67-B5B0-9F1B29C3EEAE |
+| Parent run ID | - |
+| Resumed from | - |
+| Commit | 125a06d725bae028158e6c94b15787e80c9a8b4c |
+| Started | 2026-07-25T03:33:01Z |
+| Finished | 2026-07-25T03:38:43Z |
 | Backend | local |
+| Cloud agent | - |
+| Schema agent clarification correction | - |
+| Schema agent intent coverage | - |
+| Schema agent plan consistency | - |
 | Model | - |
+| Expected canonical model | - |
 | OS | Version 26.5.1 (Build 25F80) |
 | Architecture | arm64 |
 | Cases | 20 |
 | Repeats | 3 |
+| Case timeout | 120.0 seconds |
+| Complete | Yes |
+| Expected results | 60 |
+| Completed results | 60 |
+| Missing results | 0 |
+| Skipped by budget | 0 |
+| Provider budget unavailable | 0 |
+| Budget stop | - |
 
 ## Baseline Compatibility Hashes
 
-These deterministic hashes establish baseline compatibility for the suite, scorer, and schema fixtures. The commit that adds a baseline cannot be recorded in that baseline's own committed content.
+These deterministic hashes establish baseline compatibility for the suite, pipeline/scorer sources, and schema fixtures. The commit that adds a baseline cannot be recorded in that baseline's own committed content.
 
 | Artifact | SHA-256 |
 | --- | --- |
-| Suite file | 74bb7bc43ad81cdc23e7aedcd7186576ce8daa2e28dae07862e361ee11fd8137 |
-| Scorer source (static-shape-v1) | dbd18ee26df8a80a60033681ab52559ff81abb211b61a2478d47bb7b5007724f |
+| Suite file | 69c9324b505f62ee4e23a1c5c306120dc9b28108e75e95974ae78ef7fc25c96e |
+| Pipeline/scorer sources (production-pipeline-static-shape-v1) | 97609ae722e30923d76cd1c9374dd4d3a06d70e3d11f3fdfaa9b49cce20baf35 |
 
 ## Schema Fixture Hashes
 
@@ -46,143 +57,177 @@ These deterministic hashes establish baseline compatibility for the suite, score
 | Metric | Value |
 | --- | --- |
 | Results | 60 |
-| Passed | 9 |
-| Static-shape pass rate | 15.0% |
+| Passed | 12 |
+| Static-shape pass rate | 20.0% |
+| Semantic end-to-end passed | - |
+| Semantic end-to-end pass rate | - |
+| SQL semantic pass rate | - |
+| Clarification decision pass rate | - |
+| Overall end-to-end pass rate | - |
+| Semantic environment available | - |
+| Semantic execution attempted | - |
+| Semantic result equivalent | - |
+| Golden execution succeeded | - |
+| Candidate execution succeeded | - |
 | Backend available | 60/60 |
 | Transport success | 60/60 evaluated |
-| Structured response parsed | 60/60 evaluated |
-| Decision matches | 48/60 |
-| Safety valid | 48/48 evaluated |
-| Schema valid | 24/48 evaluated |
+| Structured response parsed | 30/60 evaluated |
+| Decision matches | 15/30 |
+| Safety valid | 9/9 evaluated |
+| Schema valid | 9/9 evaluated |
+| PostgreSQL verification attempted pass rate | - |
 | Forbidden binding violations | 0 |
-| Average required-table coverage | 72.9% (48 SQL results evaluated) |
-| Average required-column coverage | 67.1% (48 SQL results evaluated) |
-| Total model calls | 60 |
-| Avg estimated initial prompt characters | 2001 |
-| Max estimated initial prompt characters | 5164 |
-| Token usage | unavailable |
-| Estimated cloud cost | unavailable |
+| Average required-table coverage | 100.0% (9 SQL results evaluated) |
+| Average required-column coverage | 100.0% (9 SQL results evaluated) |
+| Total model calls | 84 |
+| Schema-tool calls | - |
+| Inspection-tool calls | - |
+| Agent logical model turns | - |
+| Agent HTTP attempts | - |
+| Tool-budget failures | - |
+| Repeated repair fingerprint/no-progress repairs | 0 |
+| Avg estimated initial prompt characters | 2013 |
+| Max estimated initial prompt characters | 5243 |
+| Token usage | - |
+| Estimated cloud cost | - |
 
 ### Latency
 
 | Metric | Milliseconds |
 | --- | ---: |
-| Min | 3226 |
-| Average | 5531.2 |
-| P50 | 5036 |
-| P95 | 7798 |
-| Max | 8328 |
+| Min | 3192 |
+| Average | 5677.1 |
+| P50 | 4994 |
+| P95 | 8066 |
+| Max | 10877 |
 
 ## Status Counts
 
 | Status | Count |
 | --- | ---: |
-| passed | 9 |
+| passed | 12 |
 | semanticReviewRequired | 0 |
-| wrongDecision | 12 |
+| semanticEnvironmentUnavailable | 0 |
+| fixtureInvalid | 0 |
+| wrongDecision | 15 |
 | invalidSQL | 0 |
-| wrongSchemaObjects | 39 |
+| wrongSchemaObjects | 3 |
 | contextWindowFailure | 0 |
-| generationFailure | 0 |
+| generationFailure | 27 |
+| evalTimeout | 0 |
 | transportFailure | 0 |
-| parseFailure | 0 |
+| paymentRequired | 0 |
+| providerLimit | 0 |
+| skippedBudgetLimit | 0 |
+| parseFailure | 3 |
 | backendUnavailable | 0 |
+
+## PostgreSQL Verification Status Counts
+
+| Status | Count |
+| --- | ---: |
+| notAvailable | 9 |
+| skippedNoConnection | 0 |
+| skippedNonRead | 0 |
+| skippedStaticValidationFailed | 27 |
+| passed | 0 |
+| failed | 0 |
 
 ## Repeat Stability
 
 | Backend | Stable passes | Cases | Stable pass rate | Flaky cases |
 | --- | ---: | ---: | ---: | --- |
-| local | 3 | 20 | 15.0% | - |
+| local | 4 | 20 | 20.0% | - |
 
 ## Per Case Repeat Stability
 
 | Case | Backend | Pass count | Statuses |
 | --- | --- | ---: | --- |
-| commerce.average-order-value-country | local | 0/3 | wrongSchemaObjects, wrongSchemaObjects, wrongSchemaObjects |
-| commerce.best-customers | local | 0/3 | wrongDecision, wrongDecision, wrongDecision |
-| commerce.customer-paid-revenue | local | 0/3 | wrongSchemaObjects, wrongSchemaObjects, wrongSchemaObjects |
-| commerce.customers-without-orders | local | 0/3 | wrongSchemaObjects, wrongSchemaObjects, wrongSchemaObjects |
+| commerce.average-order-value-country | local | 0/3 | generationFailure, generationFailure, generationFailure |
+| commerce.best-customers | local | 3/3 | passed, passed, passed |
+| commerce.customer-paid-revenue | local | 0/3 | wrongDecision, wrongDecision, wrongDecision |
+| commerce.customers-without-orders | local | 0/3 | generationFailure, generationFailure, generationFailure |
 | commerce.recent-orders | local | 3/3 | passed, passed, passed |
-| preseason.active-match-configs | local | 0/3 | wrongSchemaObjects, wrongSchemaObjects, wrongSchemaObjects |
-| preseason.latest-failed-runs | local | 0/3 | wrongSchemaObjects, wrongSchemaObjects, wrongSchemaObjects |
-| preseason.top-wins-ambiguous | local | 0/3 | wrongDecision, wrongDecision, wrongDecision |
-| preseason.top-wins-defined | local | 0/3 | wrongSchemaObjects, wrongSchemaObjects, wrongSchemaObjects |
+| preseason.active-match-configs | local | 0/3 | generationFailure, generationFailure, generationFailure |
+| preseason.latest-failed-runs | local | 3/3 | passed, passed, passed |
+| preseason.top-wins-ambiguous | local | 0/3 | generationFailure, generationFailure, generationFailure |
+| preseason.top-wins-defined | local | 0/3 | parseFailure, parseFailure, parseFailure |
 | preseason.verified-tools | local | 0/3 | wrongSchemaObjects, wrongSchemaObjects, wrongSchemaObjects |
-| saas.active-users-by-org | local | 0/3 | wrongSchemaObjects, wrongSchemaObjects, wrongSchemaObjects |
-| saas.expiring-subscriptions | local | 3/3 | passed, passed, passed |
-| saas.healthy-accounts | local | 0/3 | wrongDecision, wrongDecision, wrongDecision |
-| saas.overallocated-seats | local | 0/3 | wrongSchemaObjects, wrongSchemaObjects, wrongSchemaObjects |
-| saas.users-without-membership | local | 0/3 | wrongSchemaObjects, wrongSchemaObjects, wrongSchemaObjects |
-| support.average-first-response | local | 0/3 | wrongSchemaObjects, wrongSchemaObjects, wrongSchemaObjects |
-| support.frequent-feedback-cluster | local | 0/3 | wrongSchemaObjects, wrongSchemaObjects, wrongSchemaObjects |
-| support.important-cluster | local | 0/3 | wrongDecision, wrongDecision, wrongDecision |
-| support.unclustered-feedback | local | 3/3 | passed, passed, passed |
-| support.unresolved-by-assignee | local | 0/3 | wrongSchemaObjects, wrongSchemaObjects, wrongSchemaObjects |
+| saas.active-users-by-org | local | 0/3 | generationFailure, generationFailure, generationFailure |
+| saas.expiring-subscriptions | local | 0/3 | wrongDecision, wrongDecision, wrongDecision |
+| saas.healthy-accounts | local | 0/3 | generationFailure, generationFailure, generationFailure |
+| saas.overallocated-seats | local | 0/3 | generationFailure, generationFailure, generationFailure |
+| saas.users-without-membership | local | 0/3 | generationFailure, generationFailure, generationFailure |
+| support.average-first-response | local | 0/3 | generationFailure, generationFailure, generationFailure |
+| support.frequent-feedback-cluster | local | 0/3 | wrongDecision, wrongDecision, wrongDecision |
+| support.important-cluster | local | 3/3 | passed, passed, passed |
+| support.unclustered-feedback | local | 0/3 | wrongDecision, wrongDecision, wrongDecision |
+| support.unresolved-by-assignee | local | 0/3 | wrongDecision, wrongDecision, wrongDecision |
 
 ## Per Case
 
-| Case | Backend | Repeat | Status | Diagnostics |
-| --- | --- | ---: | --- | --- |
-| commerce.average-order-value-country | local | 1 | wrongSchemaObjects | missing tables: public.customers; missing columns: public.customers.country, public.customers.id, public.orders.customer_id; missing ops: join; schema: Schema validation failed: column customer_country is not on public.orders. Schema validation failed: column customer_country is not on public.orders. |
-| commerce.average-order-value-country | local | 2 | wrongSchemaObjects | missing tables: public.customers; missing columns: public.customers.country, public.customers.id, public.orders.customer_id; missing ops: join; schema: Schema validation failed: column customer_country is not on public.orders. Schema validation failed: column customer_country is not on public.orders. |
-| commerce.average-order-value-country | local | 3 | wrongSchemaObjects | missing tables: public.customers; missing columns: public.customers.country, public.customers.id, public.orders.customer_id; missing ops: join; schema: Schema validation failed: column customer_country is not on public.orders. Schema validation failed: column customer_country is not on public.orders. |
-| commerce.best-customers | local | 1 | wrongDecision | - |
-| commerce.best-customers | local | 2 | wrongDecision | - |
-| commerce.best-customers | local | 3 | wrongDecision | - |
-| commerce.customer-paid-revenue | local | 1 | wrongSchemaObjects | missing tables: public.customers; missing columns: public.customers.id; missing ops: join |
-| commerce.customer-paid-revenue | local | 2 | wrongSchemaObjects | missing tables: public.customers; missing columns: public.customers.id; missing ops: join |
-| commerce.customer-paid-revenue | local | 3 | wrongSchemaObjects | missing tables: public.customers; missing columns: public.customers.id; missing ops: join |
-| commerce.customers-without-orders | local | 1 | wrongSchemaObjects | missing tables: public.orders; missing columns: public.orders.customer_id; missing ops: left-join; schema: Schema validation failed: column customer_id is not on public.customers. |
-| commerce.customers-without-orders | local | 2 | wrongSchemaObjects | missing tables: public.orders; missing columns: public.orders.customer_id; missing ops: left-join; schema: Schema validation failed: column customer_id is not on public.customers. |
-| commerce.customers-without-orders | local | 3 | wrongSchemaObjects | missing tables: public.orders; missing columns: public.orders.customer_id; missing ops: left-join; schema: Schema validation failed: column customer_id is not on public.customers. |
-| commerce.recent-orders | local | 1 | passed | - |
-| commerce.recent-orders | local | 2 | passed | - |
-| commerce.recent-orders | local | 3 | passed | - |
-| preseason.active-match-configs | local | 1 | wrongSchemaObjects | missing tables: public.preseason_tool, public.preseason_category; missing columns: public.preseason_match_config.tool_a_id, public.preseason_match_config.tool_b_id, public.preseason_match_config.category_id, public.preseason_match_config.is_active, public.preseason_tool.id, public.preseason_category.id; missing ops: limit; schema: Schema validation failed: column name is not on public.preseason_match_config. Schema validation failed: column slug is not on public.preseason_match_config. Schema validation failed: column is_active is not on public.preseason_match_batch. Schema validation failed: column createdAt must be quoted as "createdAt" on public.preseason_match_batch. Schema validation failed: column is_active is not on public.preseason_match_batch. Schema validation failed: column name is not on public.preseason_match_config. Schema validation failed: column slug is not on public.preseason_match_config. |
-| preseason.active-match-configs | local | 2 | wrongSchemaObjects | missing tables: public.preseason_tool, public.preseason_category; missing columns: public.preseason_match_config.tool_a_id, public.preseason_match_config.tool_b_id, public.preseason_match_config.category_id, public.preseason_match_config.is_active, public.preseason_tool.id, public.preseason_category.id; missing ops: limit; schema: Schema validation failed: column name is not on public.preseason_match_config. Schema validation failed: column slug is not on public.preseason_match_config. Schema validation failed: column is_active is not on public.preseason_match_batch. Schema validation failed: column createdAt must be quoted as "createdAt" on public.preseason_match_batch. Schema validation failed: column is_active is not on public.preseason_match_batch. Schema validation failed: column name is not on public.preseason_match_config. Schema validation failed: column slug is not on public.preseason_match_config. |
-| preseason.active-match-configs | local | 3 | wrongSchemaObjects | missing tables: public.preseason_tool, public.preseason_category; missing columns: public.preseason_match_config.tool_a_id, public.preseason_match_config.tool_b_id, public.preseason_match_config.category_id, public.preseason_match_config.is_active, public.preseason_tool.id, public.preseason_category.id; missing ops: limit; schema: Schema validation failed: column name is not on public.preseason_match_config. Schema validation failed: column slug is not on public.preseason_match_config. Schema validation failed: column is_active is not on public.preseason_match_batch. Schema validation failed: column createdAt must be quoted as "createdAt" on public.preseason_match_batch. Schema validation failed: column is_active is not on public.preseason_match_batch. Schema validation failed: column name is not on public.preseason_match_config. Schema validation failed: column slug is not on public.preseason_match_config. |
-| preseason.latest-failed-runs | local | 1 | wrongSchemaObjects | schema: Schema validation failed: column createdAt must be quoted as "createdAt" on public.preseason_benchmark_run. |
-| preseason.latest-failed-runs | local | 2 | wrongSchemaObjects | schema: Schema validation failed: column createdAt must be quoted as "createdAt" on public.preseason_benchmark_run. |
-| preseason.latest-failed-runs | local | 3 | wrongSchemaObjects | schema: Schema validation failed: column createdAt must be quoted as "createdAt" on public.preseason_benchmark_run. |
-| preseason.top-wins-ambiguous | local | 1 | wrongDecision | - |
-| preseason.top-wins-ambiguous | local | 2 | wrongDecision | - |
-| preseason.top-wins-ambiguous | local | 3 | wrongDecision | - |
-| preseason.top-wins-defined | local | 1 | wrongSchemaObjects | missing tables: public.preseason_tool; missing columns: public.preseason_match_evaluation.createdAt, public.preseason_tool.id; missing ops: count, relative-time-filter; schema: Schema validation failed: column tool_a_id is not on public.preseason_match_evaluation. Schema validation failed: column tool_a_id is not on public.preseason_match_evaluation. |
-| preseason.top-wins-defined | local | 2 | wrongSchemaObjects | missing tables: public.preseason_tool; missing columns: public.preseason_match_evaluation.createdAt, public.preseason_tool.id; missing ops: count, relative-time-filter; schema: Schema validation failed: column tool_a_id is not on public.preseason_match_evaluation. Schema validation failed: column tool_a_id is not on public.preseason_match_evaluation. |
-| preseason.top-wins-defined | local | 3 | wrongSchemaObjects | missing tables: public.preseason_tool; missing columns: public.preseason_match_evaluation.createdAt, public.preseason_tool.id; missing ops: count, relative-time-filter; schema: Schema validation failed: column tool_a_id is not on public.preseason_match_evaluation. Schema validation failed: column tool_a_id is not on public.preseason_match_evaluation. |
-| preseason.verified-tools | local | 1 | wrongSchemaObjects | missing ops: limit |
-| preseason.verified-tools | local | 2 | wrongSchemaObjects | missing ops: limit |
-| preseason.verified-tools | local | 3 | wrongSchemaObjects | missing ops: limit |
-| saas.active-users-by-org | local | 1 | wrongSchemaObjects | missing tables: public.organization, public.app_user; missing columns: public.organization.id, public.organization_membership.user_id, public.app_user.id, public.app_user.last_seen_at; missing ops: join |
-| saas.active-users-by-org | local | 2 | wrongSchemaObjects | missing tables: public.organization, public.app_user; missing columns: public.organization.id, public.organization_membership.user_id, public.app_user.id, public.app_user.last_seen_at; missing ops: join |
-| saas.active-users-by-org | local | 3 | wrongSchemaObjects | missing tables: public.organization, public.app_user; missing columns: public.organization.id, public.organization_membership.user_id, public.app_user.id, public.app_user.last_seen_at; missing ops: join |
-| saas.expiring-subscriptions | local | 1 | passed | - |
-| saas.expiring-subscriptions | local | 2 | passed | - |
-| saas.expiring-subscriptions | local | 3 | passed | - |
-| saas.healthy-accounts | local | 1 | wrongDecision | - |
-| saas.healthy-accounts | local | 2 | wrongDecision | - |
-| saas.healthy-accounts | local | 3 | wrongDecision | - |
-| saas.overallocated-seats | local | 1 | wrongSchemaObjects | missing tables: public.organization_membership; missing columns: public.organization.id, public.organization_membership.organization_id, public.organization_membership.status; missing ops: count, group, join; schema: Schema validation failed: column organization_id is not on public.organization. Schema validation failed: column seats_used is not on public.organization. |
-| saas.overallocated-seats | local | 2 | wrongSchemaObjects | missing tables: public.organization_membership; missing columns: public.organization.id, public.organization_membership.organization_id, public.organization_membership.status; missing ops: count, group, join; schema: Schema validation failed: column organization_id is not on public.organization. Schema validation failed: column seats_used is not on public.organization. |
-| saas.overallocated-seats | local | 3 | wrongSchemaObjects | missing tables: public.organization_membership; missing columns: public.organization.id, public.organization_membership.organization_id, public.organization_membership.status; missing ops: count, group, join; schema: Schema validation failed: column organization_id is not on public.organization. Schema validation failed: column seats_used is not on public.organization. |
-| saas.users-without-membership | local | 1 | wrongSchemaObjects | missing columns: public.organization_membership.user_id; schema: Schema validation failed: column app_user_id is not on public.organization_membership. |
-| saas.users-without-membership | local | 2 | wrongSchemaObjects | missing columns: public.organization_membership.user_id; schema: Schema validation failed: column app_user_id is not on public.organization_membership. |
-| saas.users-without-membership | local | 3 | wrongSchemaObjects | missing columns: public.organization_membership.user_id; schema: Schema validation failed: column app_user_id is not on public.organization_membership. |
-| support.average-first-response | local | 1 | wrongSchemaObjects | schema: Schema validation failed: column first_response_at is not an output column of last_30_days; project it from the CTE or do not reference it outside the CTE. Schema validation failed: column created_at is not an output column of last_30_days; project it from the CTE or do not reference it outside the CTE. |
-| support.average-first-response | local | 2 | wrongSchemaObjects | schema: Schema validation failed: column first_response_at is not an output column of last_30_days; project it from the CTE or do not reference it outside the CTE. Schema validation failed: column created_at is not an output column of last_30_days; project it from the CTE or do not reference it outside the CTE. |
-| support.average-first-response | local | 3 | wrongSchemaObjects | schema: Schema validation failed: column first_response_at is not an output column of last_30_days; project it from the CTE or do not reference it outside the CTE. Schema validation failed: column created_at is not an output column of last_30_days; project it from the CTE or do not reference it outside the CTE. |
-| support.frequent-feedback-cluster | local | 1 | wrongSchemaObjects | missing tables: public.feedback_cluster; missing columns: public.feedback_cluster.id; missing ops: join |
-| support.frequent-feedback-cluster | local | 2 | wrongSchemaObjects | missing tables: public.feedback_cluster; missing columns: public.feedback_cluster.id; missing ops: join |
-| support.frequent-feedback-cluster | local | 3 | wrongSchemaObjects | missing tables: public.feedback_cluster; missing columns: public.feedback_cluster.id; missing ops: join |
-| support.important-cluster | local | 1 | wrongDecision | - |
-| support.important-cluster | local | 2 | wrongDecision | - |
-| support.important-cluster | local | 3 | wrongDecision | - |
-| support.unclustered-feedback | local | 1 | passed | - |
-| support.unclustered-feedback | local | 2 | passed | - |
-| support.unclustered-feedback | local | 3 | passed | - |
-| support.unresolved-by-assignee | local | 1 | wrongSchemaObjects | missing ops: count |
-| support.unresolved-by-assignee | local | 2 | wrongSchemaObjects | missing ops: count |
-| support.unresolved-by-assignee | local | 3 | wrongSchemaObjects | missing ops: count |
+| Case | Backend | Repeat | Static Status | PostgreSQL Verification | Semantic Status | Semantic Result | Diagnostics |
+| --- | --- | ---: | --- | --- | --- | --- | --- |
+| commerce.average-order-value-country | local | 1 | generationFailure | skippedStaticValidationFailed | - | - | SQL generation failed: On-device experimental mode has already used this request's two model-call budget. Try a narrower question or switch to Cloud. |
+| commerce.average-order-value-country | local | 2 | generationFailure | skippedStaticValidationFailed | - | - | SQL generation failed: On-device experimental mode has already used this request's two model-call budget. Try a narrower question or switch to Cloud. |
+| commerce.average-order-value-country | local | 3 | generationFailure | skippedStaticValidationFailed | - | - | SQL generation failed: On-device experimental mode has already used this request's two model-call budget. Try a narrower question or switch to Cloud. |
+| commerce.best-customers | local | 1 | passed | - | - | - | - |
+| commerce.best-customers | local | 2 | passed | - | - | - | - |
+| commerce.best-customers | local | 3 | passed | - | - | - | - |
+| commerce.customer-paid-revenue | local | 1 | wrongDecision | - | - | - | - |
+| commerce.customer-paid-revenue | local | 2 | wrongDecision | - | - | - | - |
+| commerce.customer-paid-revenue | local | 3 | wrongDecision | - | - | - | - |
+| commerce.customers-without-orders | local | 1 | generationFailure | skippedStaticValidationFailed | - | - | SQL generation failed: On-device experimental mode has already used this request's two model-call budget. Try a narrower question or switch to Cloud. |
+| commerce.customers-without-orders | local | 2 | generationFailure | skippedStaticValidationFailed | - | - | SQL generation failed: On-device experimental mode has already used this request's two model-call budget. Try a narrower question or switch to Cloud. |
+| commerce.customers-without-orders | local | 3 | generationFailure | skippedStaticValidationFailed | - | - | SQL generation failed: On-device experimental mode has already used this request's two model-call budget. Try a narrower question or switch to Cloud. |
+| commerce.recent-orders | local | 1 | passed | notAvailable | - | - | - |
+| commerce.recent-orders | local | 2 | passed | notAvailable | - | - | - |
+| commerce.recent-orders | local | 3 | passed | notAvailable | - | - | - |
+| preseason.active-match-configs | local | 1 | generationFailure | skippedStaticValidationFailed | - | - | SQL generation failed: On-device experimental mode has already used this request's two model-call budget. Try a narrower question or switch to Cloud. |
+| preseason.active-match-configs | local | 2 | generationFailure | skippedStaticValidationFailed | - | - | SQL generation failed: On-device experimental mode has already used this request's two model-call budget. Try a narrower question or switch to Cloud. |
+| preseason.active-match-configs | local | 3 | generationFailure | skippedStaticValidationFailed | - | - | SQL generation failed: On-device experimental mode has already used this request's two model-call budget. Try a narrower question or switch to Cloud. |
+| preseason.latest-failed-runs | local | 1 | passed | notAvailable | - | - | - |
+| preseason.latest-failed-runs | local | 2 | passed | notAvailable | - | - | - |
+| preseason.latest-failed-runs | local | 3 | passed | notAvailable | - | - | - |
+| preseason.top-wins-ambiguous | local | 1 | generationFailure | skippedStaticValidationFailed | - | - | SQL generation failed: On-device experimental mode has already used this request's two model-call budget. Try a narrower question or switch to Cloud. |
+| preseason.top-wins-ambiguous | local | 2 | generationFailure | skippedStaticValidationFailed | - | - | SQL generation failed: On-device experimental mode has already used this request's two model-call budget. Try a narrower question or switch to Cloud. |
+| preseason.top-wins-ambiguous | local | 3 | generationFailure | skippedStaticValidationFailed | - | - | SQL generation failed: On-device experimental mode has already used this request's two model-call budget. Try a narrower question or switch to Cloud. |
+| preseason.top-wins-defined | local | 1 | parseFailure | - | - | - | SQL generation failed: Failed to deserialize a Generable type from model output |
+| preseason.top-wins-defined | local | 2 | parseFailure | - | - | - | SQL generation failed: Failed to deserialize a Generable type from model output |
+| preseason.top-wins-defined | local | 3 | parseFailure | - | - | - | SQL generation failed: Failed to deserialize a Generable type from model output |
+| preseason.verified-tools | local | 1 | wrongSchemaObjects | notAvailable | - | - | missing ops: limit |
+| preseason.verified-tools | local | 2 | wrongSchemaObjects | notAvailable | - | - | missing ops: limit |
+| preseason.verified-tools | local | 3 | wrongSchemaObjects | notAvailable | - | - | missing ops: limit |
+| saas.active-users-by-org | local | 1 | generationFailure | skippedStaticValidationFailed | - | - | SQL generation failed: On-device experimental mode has already used this request's two model-call budget. Try a narrower question or switch to Cloud. |
+| saas.active-users-by-org | local | 2 | generationFailure | skippedStaticValidationFailed | - | - | SQL generation failed: On-device experimental mode has already used this request's two model-call budget. Try a narrower question or switch to Cloud. |
+| saas.active-users-by-org | local | 3 | generationFailure | skippedStaticValidationFailed | - | - | SQL generation failed: On-device experimental mode has already used this request's two model-call budget. Try a narrower question or switch to Cloud. |
+| saas.expiring-subscriptions | local | 1 | wrongDecision | - | - | - | - |
+| saas.expiring-subscriptions | local | 2 | wrongDecision | - | - | - | - |
+| saas.expiring-subscriptions | local | 3 | wrongDecision | - | - | - | - |
+| saas.healthy-accounts | local | 1 | generationFailure | skippedStaticValidationFailed | - | - | SQL generation failed: On-device experimental mode has already used this request's two model-call budget. Try a narrower question or switch to Cloud. |
+| saas.healthy-accounts | local | 2 | generationFailure | skippedStaticValidationFailed | - | - | SQL generation failed: On-device experimental mode has already used this request's two model-call budget. Try a narrower question or switch to Cloud. |
+| saas.healthy-accounts | local | 3 | generationFailure | skippedStaticValidationFailed | - | - | SQL generation failed: On-device experimental mode has already used this request's two model-call budget. Try a narrower question or switch to Cloud. |
+| saas.overallocated-seats | local | 1 | generationFailure | skippedStaticValidationFailed | - | - | SQL generation failed: On-device experimental mode has already used this request's two model-call budget. Try a narrower question or switch to Cloud. |
+| saas.overallocated-seats | local | 2 | generationFailure | skippedStaticValidationFailed | - | - | SQL generation failed: On-device experimental mode has already used this request's two model-call budget. Try a narrower question or switch to Cloud. |
+| saas.overallocated-seats | local | 3 | generationFailure | skippedStaticValidationFailed | - | - | SQL generation failed: On-device experimental mode has already used this request's two model-call budget. Try a narrower question or switch to Cloud. |
+| saas.users-without-membership | local | 1 | generationFailure | skippedStaticValidationFailed | - | - | SQL generation failed: On-device experimental mode has already used this request's two model-call budget. Try a narrower question or switch to Cloud. |
+| saas.users-without-membership | local | 2 | generationFailure | skippedStaticValidationFailed | - | - | SQL generation failed: On-device experimental mode has already used this request's two model-call budget. Try a narrower question or switch to Cloud. |
+| saas.users-without-membership | local | 3 | generationFailure | skippedStaticValidationFailed | - | - | SQL generation failed: On-device experimental mode has already used this request's two model-call budget. Try a narrower question or switch to Cloud. |
+| support.average-first-response | local | 1 | generationFailure | skippedStaticValidationFailed | - | - | SQL generation failed: On-device experimental mode has already used this request's two model-call budget. Try a narrower question or switch to Cloud. |
+| support.average-first-response | local | 2 | generationFailure | skippedStaticValidationFailed | - | - | SQL generation failed: On-device experimental mode has already used this request's two model-call budget. Try a narrower question or switch to Cloud. |
+| support.average-first-response | local | 3 | generationFailure | skippedStaticValidationFailed | - | - | SQL generation failed: On-device experimental mode has already used this request's two model-call budget. Try a narrower question or switch to Cloud. |
+| support.frequent-feedback-cluster | local | 1 | wrongDecision | - | - | - | - |
+| support.frequent-feedback-cluster | local | 2 | wrongDecision | - | - | - | - |
+| support.frequent-feedback-cluster | local | 3 | wrongDecision | - | - | - | - |
+| support.important-cluster | local | 1 | passed | - | - | - | - |
+| support.important-cluster | local | 2 | passed | - | - | - | - |
+| support.important-cluster | local | 3 | passed | - | - | - | - |
+| support.unclustered-feedback | local | 1 | wrongDecision | - | - | - | - |
+| support.unclustered-feedback | local | 2 | wrongDecision | - | - | - | - |
+| support.unclustered-feedback | local | 3 | wrongDecision | - | - | - | - |
+| support.unresolved-by-assignee | local | 1 | wrongDecision | - | - | - | - |
+| support.unresolved-by-assignee | local | 2 | wrongDecision | - | - | - | - |
+| support.unresolved-by-assignee | local | 3 | wrongDecision | - | - | - | - |
 
 Estimated initial prompts and raw model output are intentionally omitted from this summary.
 The estimated initial prompt character metrics are pre-call estimates from the eval runner, not the exact model prompt after discovery, truncation, or retry behavior.

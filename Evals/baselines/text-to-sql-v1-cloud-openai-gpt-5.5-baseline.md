@@ -4,6 +4,8 @@
 > mode and must not be treated as current. Regenerate only with a real
 > `WIDEN_EVAL_OPENROUTER_API_KEY`; never replace it with an
 > all-`backendUnavailable` run.
+> Current pinned-cloud evidence lives in the committed release-gate docs at
+> `docs/evals/0.1.0.md` and `docs/evals/0.1.0-triage.md`.
 
 **Evaluation scope:** A static-shape pass verifies the decision, SQL safety, schema references, and configured structural expectations. It does not establish result-set or semantic correctness.
 
