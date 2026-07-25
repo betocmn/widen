@@ -1532,6 +1532,30 @@ model could remove.
   refuted: cross-candidate resumes fail closed on the scorer-source
   hash and the pinned resume model before any case runs.
 
+## Evidence refresh 2026-07-25 — committed gate docs re-match the shipping pin
+
+The maintainer authorized a $4.50 evidence-refresh gate so the committed
+`docs/evals/0.1.0.md` / `0.1.0-triage.md` — which had recorded the
+rejected Sol candidate run — again describe the retained
+`openai/gpt-5.5` pin, now with the approved case-by-case golden review
+applied. The first attempt (`.eval-results/20260725-024622-069`)
+completed 27/60 cleanly ($1.539285) and then recorded 33
+`providerLimit` refusals when the OpenRouter key's total spending limit
+was reached; the truncated docs were not committed. After the maintainer
+raised the key limit, `make eval-release-resume` reused all 27 results
+and completed the remaining 33 (`.eval-results/20260725-031932-495`).
+
+Final refreshed evidence: 60/60 complete, semantic end-to-end 20/60
+(retained pre-golden comparator 19/60), clarification decisions 11/12,
+safety and schema validity 15/15 of evaluated SQL, transport 60/60,
+zero internal schema-agent timeouts, zero repeated/no-progress repairs,
+tool-budget triage 3, and the gate honestly recorded as **Failed**
+against the 90% production bar — text-to-SQL stays beta. Total run cost
+$3.838330 within the $4.50 authorization; requested and returned model
+`openai/gpt-5.5` with private routing and canonical enforcement on
+every completion. This run is a comparator/evidence refresh, not a
+pre-registered experiment; no acceptance decision hangs on it.
+
 ## Later / conditional
 
 * **PR 10 embeddings** — stays deferred unless a future triage shows required
