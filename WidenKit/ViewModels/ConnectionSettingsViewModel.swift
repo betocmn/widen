@@ -38,7 +38,9 @@ public final class ConnectionSettingsViewModel {
     public var host = "localhost"
     public var portText = "5432"
     public var database = ""
-    public var username = "postgres"
+    /// Defaults to the macOS username — the default role for Postgres.app
+    /// and Homebrew local installs, where a "postgres" role rarely exists.
+    public var username = NSUserName()
     public var password = ""
     public var sslMode: SSLMode = .disable
     public var rowLimitText = "100"
@@ -274,7 +276,7 @@ public final class ConnectionSettingsViewModel {
         host = "localhost"
         portText = "5432"
         database = ""
-        username = "postgres"
+        username = NSUserName()
         password = ""
         sslMode = .disable
         rowLimitText = "100"

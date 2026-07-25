@@ -438,7 +438,7 @@ struct ConnectionSettingsViewModelTests {
 
         #expect(!viewModel.hasUnsavedChanges)
         #expect(viewModel.name.isEmpty)
-        #expect(viewModel.username == "postgres")
+        #expect(viewModel.username == NSUserName())
 
         viewModel.database = "widen_test"
         #expect(viewModel.hasUnsavedChanges)
