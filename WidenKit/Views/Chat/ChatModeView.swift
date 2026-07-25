@@ -18,12 +18,19 @@ struct ChatModeView: View {
 
         VStack(spacing: 0) {
             if let message = appState.modelAvailabilityMessage {
-                Label(message, systemImage: "exclamationmark.triangle")
-                    .font(.caption)
-                    .foregroundStyle(.orange)
-                    .frame(maxWidth: .infinity, alignment: .leading)
-                    .padding(.horizontal, 12)
-                    .padding(.top, 8)
+                HStack(spacing: 8) {
+                    Label(message, systemImage: "exclamationmark.triangle")
+                        .font(.caption)
+                        .foregroundStyle(.orange)
+                    Spacer(minLength: 8)
+                    Button("Open LLM Settings…") {
+                        appState.openSettings(tab: .llm)
+                    }
+                    .controlSize(.small)
+                }
+                .frame(maxWidth: .infinity, alignment: .leading)
+                .padding(.horizontal, 12)
+                .padding(.top, 8)
             }
 
             if !isEmpty, let schemaStatus {
@@ -120,18 +127,45 @@ struct ChatModeView: View {
         }
     }
 
+    /// True when the default OpenRouter cloud path cannot generate yet — the
+    /// empty state then leads with key setup instead of inviting questions
+    /// it cannot answer.
+    private var needsCloudSetup: Bool {
+        !appState.useMockAI
+            && appState.aiBackendMode == .cloud
+            && appState.cloudProvider == .openRouter
+            && appState.cloudBackendStatus != .ready
+    }
+
     private var emptyHint: some View {
         VStack(spacing: 10) {
             if let schemaStatus {
                 SchemaEmptyStatusView(status: schemaStatus) {
                     Task { await appState.refreshSchema(for: controller.connectionID) }
                 }
+            } else if needsCloudSetup {
+                Text("Cloud SQL generation needs an OpenRouter API key")
+                    .font(.title3)
+                    .foregroundStyle(.secondary)
+                Button("Open LLM Settings…") {
+                    appState.openSettings(tab: .llm)
+                }
+                .widenGlassButtonStyle()
+                .hoverBrightness()
+                Text("or paste SQL to run it directly.")
+                    .font(.callout)
+                    .foregroundStyle(.tertiary)
+                    .multilineTextAlignment(.center)
             } else {
                 Text("Ask your database anything")
                     .font(.title3)
                     .foregroundStyle(.secondary)
                 Text("Type a question in plain English, or paste SQL to run it as-is.")
                     .font(.callout)
+                    .foregroundStyle(.tertiary)
+                    .multilineTextAlignment(.center)
+                Text("Text-to-SQL is in beta — review every query before running it.")
+                    .font(.caption)
                     .foregroundStyle(.tertiary)
                     .multilineTextAlignment(.center)
             }

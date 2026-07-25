@@ -141,6 +141,11 @@ struct DatabasesSettingsView: View {
     private var editorPane: some View {
         if selection != nil {
             ConnectionEditorForm(viewModel: editor, onCancel: cancelEdits) { saved in
+                // Saving the very first database also selects it in the main
+                // window so its schema loads visibly behind Settings.
+                if isAddingNew && appState.connections.count == 1 {
+                    appState.selectDatabase(saved.id)
+                }
                 isAddingNew = false
                 selection = .connection(saved.id)
             }
