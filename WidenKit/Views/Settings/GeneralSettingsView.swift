@@ -46,6 +46,12 @@ struct GeneralSettingsView: View {
                 Text(privacyCopy)
                     .font(.callout)
                     .foregroundStyle(.secondary)
+                Link(
+                    "Read the full privacy policy…",
+                    destination: URL(
+                        string: "https://github.com/betocmn/widen/blob/main/PRIVACY.md")!
+                )
+                .font(.callout)
             }
         }
         .formStyle(.grouped)

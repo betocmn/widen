@@ -470,8 +470,9 @@ public final class AppState {
 
     // MARK: - Launch
 
-    /// Called once at launch: loads connections and sessions, restores the
-    /// selection, and surfaces Settings when no database is configured yet.
+    /// Called once at launch: loads the saved connections, schemas, and
+    /// sessions. Nothing auto-opens — a fresh install starts on the welcome
+    /// screen, whose Add Database button leads to Settings › Databases.
     public func onLaunch() async {
         guard !didLaunch else { return }
         didLaunch = true

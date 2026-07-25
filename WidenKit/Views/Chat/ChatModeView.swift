@@ -18,12 +18,19 @@ struct ChatModeView: View {
 
         VStack(spacing: 0) {
             if let message = appState.modelAvailabilityMessage {
-                Label(message, systemImage: "exclamationmark.triangle")
-                    .font(.caption)
-                    .foregroundStyle(.orange)
-                    .frame(maxWidth: .infinity, alignment: .leading)
-                    .padding(.horizontal, 12)
-                    .padding(.top, 8)
+                HStack(spacing: 8) {
+                    Label(message, systemImage: "exclamationmark.triangle")
+                        .font(.caption)
+                        .foregroundStyle(.orange)
+                    Spacer(minLength: 8)
+                    Button("Open LLM Settings…") {
+                        appState.openSettings(tab: .llm)
+                    }
+                    .controlSize(.small)
+                }
+                .frame(maxWidth: .infinity, alignment: .leading)
+                .padding(.horizontal, 12)
+                .padding(.top, 8)
             }
 
             if !isEmpty, let schemaStatus {
@@ -120,18 +127,45 @@ struct ChatModeView: View {
         }
     }
 
+    /// True when the default OpenRouter cloud path cannot generate yet — the
+    /// empty state then leads with key setup instead of inviting questions
+    /// it cannot answer.
+    private var needsCloudSetup: Bool {
+        !appState.useMockAI
+            && appState.aiBackendMode == .cloud
+            && appState.cloudProvider == .openRouter
+            && appState.cloudBackendStatus != .ready
+    }
+
     private var emptyHint: some View {
         VStack(spacing: 10) {
             if let schemaStatus {
                 SchemaEmptyStatusView(status: schemaStatus) {
                     Task { await appState.refreshSchema(for: controller.connectionID) }
                 }
+            } else if needsCloudSetup {
+                Text("Cloud SQL generation needs an OpenRouter API key")
+                    .font(.title3)
+                    .foregroundStyle(.secondary)
+                Button("Open LLM Settings…") {
+                    appState.openSettings(tab: .llm)
+                }
+                .widenGlassButtonStyle()
+                .hoverBrightness()
+                Text("or paste SQL to run it directly.")
+                    .font(.callout)
+                    .foregroundStyle(.tertiary)
+                    .multilineTextAlignment(.center)
             } else {
                 Text("Ask your database anything")
                     .font(.title3)
                     .foregroundStyle(.secondary)
                 Text("Type a question in plain English, or paste SQL to run it as-is.")
                     .font(.callout)
+                    .foregroundStyle(.tertiary)
+                    .multilineTextAlignment(.center)
+                Text("Text-to-SQL is in beta — review every query before running it.")
+                    .font(.caption)
                     .foregroundStyle(.tertiary)
                     .multilineTextAlignment(.center)
             }
@@ -233,6 +267,7 @@ struct ChatModeView: View {
             MessageBubbleView(
                 message: message,
                 onRetryWrite: retryWriteAction(for: message),
+                onRetryGeneration: retryGenerationAction(for: message),
                 onClarificationOptionSelected: selectClarificationOption
             )
         }
@@ -257,6 +292,29 @@ struct ChatModeView: View {
             Task {
                 await controller.retryFailedWrite(
                     appState: appState, failedSQL: failedSQL, error: message.text)
+            }
+        }
+    }
+
+    /// Only a retryable generation error that is the newest message owns its
+    /// "Try Again" button — the same retirement rule as failed writes, so
+    /// the button always resubmits the question the user is looking at.
+    private var lastRetryableGenerationErrorID: UUID? {
+        guard let last = controller.chatVM.messages.last,
+            last.role == .error, last.retryQuestion != nil
+        else { return nil }
+        return last.id
+    }
+
+    private func retryGenerationAction(for message: ChatMessage) -> (() -> Void)? {
+        guard message.id == lastRetryableGenerationErrorID,
+            let question = message.retryQuestion
+        else {
+            return nil
+        }
+        return {
+            Task {
+                await controller.resubmitQuestion(question, appState: appState)
             }
         }
     }

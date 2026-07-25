@@ -5,13 +5,10 @@
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
 [![PRs Welcome](https://img.shields.io/badge/PRs-welcome-brightgreen.svg)](CONTRIBUTING.md)
 
-Widen is an open-source macOS Postgres GUI for macOS 14+. It reads your schema
-and can draft SQL from a question using a cloud model you configure. On eligible
-macOS 26+ Apple Silicon Macs, Widen can also use Apple's on-device Foundation
-Model. It shows the SQL before anything runs, so you can review or edit it first.
+Open-source, native Postgres GUI for macOS. Ask questions in English; review
+the SQL before it runs.
 
-No Widen backend. No account. No analytics. Cloud-first for text-to-SQL, with
-manual SQL and optional local AI still available where supported.
+<!-- hero screenshot: docs/images/hero.png — capture before launch -->
 
 [Download for Mac](https://github.com/betocmn/widen/releases/latest/download/Widen.dmg)
 · [Build from source](#build-and-run)
@@ -20,53 +17,58 @@ manual SQL and optional local AI still available where supported.
 · [Security](SECURITY.md)
 · [Release notes](https://github.com/betocmn/widen/releases/latest)
 
-`macOS 14+` · `Cloud-first text-to-SQL` · `Optional local AI on macOS 26+` ·
-`No backend` · `No account` · `MIT` · `Postgres-only MVP`
+`macOS 14+` · `Text-to-SQL: beta` · `Cloud-first text-to-SQL` ·
+`Optional local AI on macOS 26+` · `No backend` · `No account` · `MIT` ·
+`Postgres-only MVP`
 
-## What makes this new?
-
-Widen turns schema-aware questions into SQL you can inspect before running.
-Cloud generation is the default text-to-SQL path because it works on older
-supported Macs and can handle broader schemas. Starting with macOS 26,
-supported Apple Silicon Macs can also run Apple's Foundation Model on-device
-for an optional local mode.
+Widen is an open-source, native Postgres GUI for macOS 14+. It reads your
+schema and can draft SQL from a question using a cloud model you configure. On
+eligible macOS 26+ Apple Silicon Macs, Widen can also use Apple's on-device
+Foundation Model. It shows the SQL before anything runs, so you can review or
+edit it first.
 
 It is not an autonomous database agent. Widen drafts SQL, validates it, and
-waits for you to decide whether to run it.
-
-## Install
-
-Download the latest signed and notarized DMG:
-
-```text
-https://github.com/betocmn/widen/releases/latest/download/Widen.dmg
-```
-
-Open `Widen.dmg`, drag Widen into Applications, and launch it. Sparkle updates
-are served from GitHub Releases.
-
-## Compatibility
-
-| Requirement | Notes |
-| --- | --- |
-| macOS 14 or later | Required to install and launch Widen. |
-| Apple Silicon | Required only for Apple's optional on-device Foundation Model. |
-| Apple Intelligence enabled | Required only for local AI generation. Manual SQL and cloud models still work without it. |
-| PostgreSQL | Widen is Postgres-only today. [Postgres.app](https://postgresapp.com) works well for local testing. |
-| Xcode 26 | Needed when building from source. |
+waits for you to decide whether to run it. Text-to-SQL is beta: it must pass a
+published release gate before we describe it as production-ready, and that
+gate currently fails — see
+[why text-to-SQL is beta](#why-text-to-sql-is-beta-and-how-well-know-it-isnt).
 
 ## What leaves your Mac?
 
-Out of the box, Widen can browse schemas and run manual SQL with only the
-PostgreSQL connection you configure. Cloud text-to-SQL requires a provider you
-configure in Settings.
+No Widen backend. No account. No analytics. Out of the box, Widen can browse
+schemas and run manual SQL with only the PostgreSQL connection you configure.
+Cloud text-to-SQL requires a provider you configure in Settings; cloud
+generation is the default text-to-SQL path because it works on older supported
+Macs and can handle broader schemas.
 
 | Mode | Schema/question | Query results | Notes |
 | --- | ---: | ---: | --- |
-| Cloud mode | Question and allowed schema metadata are sent to the provider you choose | Stays on your Mac unless cloud data inspection is enabled for that connection | Default text-to-SQL backend. Fresh installs use the fixed OpenRouter GPT-5.5 profile and schema-tool agent. OpenRouter requests require zero-data-retention endpoints and deny provider data collection. |
+| Cloud mode | Question and allowed schema metadata are sent to the provider you choose | Stays on your Mac unless cloud data inspection is enabled for that connection | Default text-to-SQL backend. Fresh installs default to the fixed OpenRouter GPT-5.5 profile (you supply the OpenRouter API key) and schema-tool agent. OpenRouter requests require zero-data-retention endpoints and deny provider data collection. |
 | Local mode | Stays on your Mac | Stays on your Mac | Optional on eligible macOS 26+ Apple Silicon Macs with Apple Intelligence enabled. Best suited to narrow requests over simple databases. |
 
 Passwords and API keys live in the macOS Keychain, never on disk in plaintext.
+
+## Why text-to-SQL is beta (and how we'll know it isn't)
+
+Text-to-SQL ships behind a hard release gate: 60 pinned-model gate results
+with at least 90% end-to-end semantic pass rate, 100% safety validity, 100%
+schema validity, 100% clarification decision accuracy, at least 95% transport
+reliability, and zero repeated-repair failures. The gate currently fails on
+semantic pass rate, so text-to-SQL stays beta and should not be described as
+production-ready until it passes.
+
+The cloud model is pinned to the evaluated `openai/gpt-5.5` version. If the
+provider's alias starts resolving to a version Widen has not evaluated, cloud
+generation fails closed rather than silently running an unevaluated model.
+
+We publish negative results: pre-registered, paid gate experiments that fail
+their criteria are reverted and documented. See
+[how we gate releases](docs/evals/how-we-gate.md) for the design and the
+experiment log, and the [release-gate report](docs/evals/0.1.0.md) for the
+committed numbers. Run the gate yourself with `make eval-release`;
+contributor-facing eval mechanics live in [Evals/README.md](Evals/README.md).
+Manual SQL editing, schema browsing, and normal database work remain
+supported independently of AI backend configuration.
 
 ## Review before run
 
@@ -84,84 +86,24 @@ the same deterministic safety validator:
 If you only want reads, connect with a read-only Postgres user. The app-level
 guardrails are useful, but database permissions are the real boundary.
 
-## Built for people who live in Postgres
+## Install
 
-Widen is a lightweight, native Postgres workbench for browsing schemas, keeping
-query sessions, and turning questions into SQL:
+Download the latest signed and notarized DMG:
 
-- Configure any number of PostgreSQL connections in Settings.
-- Browse the selected database's schemas, tables, columns, types, and foreign
-  keys in the inspector.
-- Keep persistent chat + SQL + results sessions that survive restarts.
-- Switch between Cloud and Local from the toolbar when local AI is available.
-- Use a modern macOS interface with light/dark appearance and Liquid Glass on macOS 26+.
-
-## Known limitations
-
-- PostgreSQL only.
-- Early MVP, not full DataGrip/TablePlus/Postico feature parity.
-- Cloud text-to-SQL requires your own provider setup. Widen defaults to
-  OpenRouter with the fixed `openai/gpt-5.5` profile. Custom OpenRouter model
-  selection is not exposed; changing the evaluated model version requires a
-  new app release and release-gate evaluation. Apple Private Cloud Compute
-  support is planned when Apple's required OS and SDK support is available.
-- The optional local Foundation Model requires eligible macOS 26+ Apple Silicon
-  hardware and has a small context window; very large schemas are truncated
-  whole-table-at-a-time before prompting.
-- Results are rendered as text values; typed grid behavior is still limited.
-- Export is CSV-only today.
-- No SQL syntax highlighting yet.
-- Query results are not persisted across restarts. Transcripts, SQL text, and
-  generation metadata are persisted; rerun a session's query to repopulate the
-  grid.
-
-## Build and run
-
-The Makefile pins `DEVELOPER_DIR` to `/Applications/Xcode-26.app`. If your
-Xcode 26 lives elsewhere (e.g. it is your default `/Applications/Xcode.app`),
-override it: `make build DEVELOPER_DIR=/Applications/Xcode.app/Contents/Developer`.
-
-```sh
-make project   # regenerate Widen.xcodeproj from project.yml (needs xcodegen)
-make build     # build the app (Debug)
-make run       # build and launch Widen.app
-make test      # unit tests
-make test-db   # unit + Postgres integration tests (needs the sample DB below)
-make test-fm   # unit + on-device Foundation Models smoke test
-make xcode     # open the project in Xcode 26
+```text
+https://github.com/betocmn/widen/releases/latest/download/Widen.dmg
 ```
 
-The committed `Widen.xcodeproj` is generated - edit `project.yml` and run
-`make project` instead of editing project settings by hand. If you open the
-project in Xcode directly, make sure it is **Xcode 26**, not an older default
-Xcode. Widen targets macOS 14, while optional Foundation Models code is compiled
-behind macOS 26 availability checks.
+Open `Widen.dmg`, drag Widen into Applications, and launch it. Sparkle updates
+are served from GitHub Releases.
 
-## Release packaging
-
-Release packaging is automated for Developer ID distribution. Debug stays ad-hoc
-signed for local development. The release script reads local signing,
-notarizing, bundle ID, and Sparkle values from environment variables or
-`.env.release.local`:
-
-```sh
-cp .env.release.example .env.release.local
-make release-mac
-```
-
-See [docs/release.md](docs/release.md) for the full signed DMG, Sparkle, and
-static website release runbook.
-
-For codebase onboarding and implementation details, see
-[docs/implementation-guide.md](docs/implementation-guide.md).
-
-## Open source
-
-Widen is MIT licensed and developed in the open. Start with
-[CONTRIBUTING.md](CONTRIBUTING.md) for local setup, testing expectations, and
-the safety/privacy rules contributors should preserve. See
-[PRIVACY.md](PRIVACY.md) for the data-flow summary and [SECURITY.md](SECURITY.md)
-for vulnerability reporting.
+| Requirement | Notes |
+| --- | --- |
+| macOS 14 or later | Required to install and launch Widen. |
+| Apple Silicon | Required only for Apple's optional on-device Foundation Model. |
+| Apple Intelligence enabled | Required only for local AI generation. Manual SQL and cloud models still work without it. |
+| PostgreSQL | Widen is Postgres-only today. [Postgres.app](https://postgresapp.com) works well for local testing. |
+| Xcode 26 | Needed when building from source. |
 
 ## Sample database for exploring the app
 
@@ -208,11 +150,16 @@ plus a few rows. Good first questions to try:
 
 ## Connecting
 
-On first launch Widen opens Settings › Databases. For a default Postgres.app
-setup: host `localhost`, port `5432`, database `widen_test`, username = your
-macOS username, empty password (Postgres.app uses trust auth locally), SSL
-mode Disabled. Add as many databases as you like with the "+" button;
-deleting one warns you first — its sessions are deleted with it.
+On first launch, click Add Database to open Settings › Databases. For a
+default Postgres.app setup: host `localhost`, port `5432`, database
+`widen_test`, username = your macOS username, empty password (Postgres.app
+uses trust auth locally), SSL mode Disabled. Add as many databases as you like
+with the "+" button; deleting one warns you first — its sessions are deleted
+with it.
+
+Postgres.app asks once per client app before allowing a connection. If a
+connection seems to hang, check Postgres.app's Settings > Client Applications
+and allow Widen.
 
 > **Safety tip:** Widen runs the SQL you approve, including writes — it never
 > auto-runs a write, and DELETE or UPDATE-without-WHERE asks you to confirm
@@ -222,6 +169,38 @@ deleting one warns you first — its sessions are deleted with it.
 Non-secret connection settings are stored in
 `~/Library/Application Support/Widen/connections.json`; passwords are stored
 in the macOS Keychain (service `Widen`).
+
+## Built for people who live in Postgres
+
+Widen is a lightweight, native Postgres workbench for browsing schemas, keeping
+query sessions, and turning questions into SQL:
+
+- Configure any number of PostgreSQL connections in Settings.
+- Browse the selected database's schemas, tables, columns, types, and foreign
+  keys in the inspector.
+- Keep persistent chat + SQL + results sessions that survive restarts.
+- Switch between Cloud and Local from the toolbar when local AI is available.
+- Use a modern macOS interface with light/dark appearance and Liquid Glass on macOS 26+.
+
+## Known limitations
+
+- PostgreSQL only.
+- Early MVP, not full DataGrip/TablePlus/Postico feature parity.
+- Cloud text-to-SQL is beta and requires your own provider setup. Widen
+  defaults to OpenRouter with the fixed `openai/gpt-5.5` profile (you supply
+  the OpenRouter API key). Custom OpenRouter model selection is not exposed;
+  changing the evaluated model version requires a new app release and
+  release-gate evaluation. Apple Private Cloud Compute support is planned
+  when Apple's required OS and SDK support is available.
+- The optional local Foundation Model requires eligible macOS 26+ Apple Silicon
+  hardware and has a small context window; very large schemas are truncated
+  whole-table-at-a-time before prompting.
+- Results are rendered as text values; typed grid behavior is still limited.
+- Export is CSV-only today.
+- No SQL syntax highlighting yet.
+- Query results are not persisted across restarts. Transcripts, SQL text, and
+  generation metadata are persisted; rerun a session's query to repopulate the
+  grid.
 
 ## Sessions
 
@@ -272,70 +251,54 @@ Keyboard: **Enter** in the composer submits (Option+Enter for a newline);
 **Cmd+Enter** runs the active SQL; **Cmd+N** starts a new session; **Cmd+R**
 refreshes the active database's schema; **Cmd+,** opens Settings.
 
-## Text-to-SQL evals
+## Build and run
 
-`WidenEval` provides native static-shape and seeded-Postgres semantic evals for
-generated SQL under [Evals](Evals). A static-shape pass verifies the decision,
-SQL safety, schema references, and configured structural expectations. Seeded
-Postgres evals execute safe candidates against synthetic fixtures and compare
-result sets.
-
-The committed baselines record deterministic hashes for the suite, scorer
-source, and schema fixtures so future runs can detect compatibility drift.
-Each case defaults to a 120-second eval-only timeout and reports `evalTimeout`
-instead of transport failure when the timeout cancels the pipeline. Baselines
-from older evaluation modes are stale; regenerate cloud baselines only with a
-real `WIDEN_EVAL_OPENROUTER_API_KEY`, never from an all-unavailable run.
-Foundation Models cancellation is cooperative, so timed-out model work may
-continue in process until the framework returns.
-
-The release gate defaults to the same pinned GPT-5.5 profile as the app:
+The Makefile pins `DEVELOPER_DIR` to `/Applications/Xcode-26.app`. If your
+Xcode 26 lives elsewhere (e.g. it is your default `/Applications/Xcode.app`),
+override it: `make build DEVELOPER_DIR=/Applications/Xcode.app/Contents/Developer`.
 
 ```sh
-make eval-release
+make project   # regenerate Widen.xcodeproj from project.yml (needs xcodegen)
+make build     # build the app (Debug)
+make run       # build and launch Widen.app
+make test      # unit tests
+make test-db   # unit + Postgres integration tests (needs a local Postgres server)
+make test-fm   # unit + on-device Foundation Models smoke test
+make xcode     # open the project in Xcode 26
 ```
 
-It runs the 20-case suite three times against the same OpenRouter schema-tool
-path used by the default product experience, with seeded Postgres semantic
-grading. Engineering comparisons must opt in with
-`MODEL=<id> ALLOW_MODEL_OVERRIDE=1`; their gate and triage reports stay in the
-run directory rather than replacing committed release docs. A pinned gate
-writes the normal `.eval-results/` artifacts, writes `docs/evals/<version>.md`,
-and exits nonzero unless the release thresholds pass.
-Cloud/OpenRouter is the default text-to-SQL path, but text-to-SQL remains beta
-and should not be described as production-ready until that gate passes. Manual
-SQL editing, schema browsing, and normal database work remain supported
-independently of AI backend configuration.
+The committed `Widen.xcodeproj` is generated - edit `project.yml` and run
+`make project` instead of editing project settings by hand. If you open the
+project in Xcode directly, make sure it is **Xcode 26**, not an older default
+Xcode. Widen targets macOS 14, while optional Foundation Models code is compiled
+behind macOS 26 availability checks.
 
-## Development notes and caveats
+## Release packaging
 
-- **Ad-hoc code signing.** Debug builds are signed "to run locally". After a
-  rebuild, the first Keychain access shows a confirmation prompt - choose
-  "Always Allow" (it re-appears after rebuilds because the binary's signature
-  changed). For a stable signature, create a self-signed code-signing
-  certificate and set `CODE_SIGN_IDENTITY` in `project.yml`.
-- **Postgres.app client permissions.** Postgres.app asks per client app
-  before allowing a connection. If a connection seems to hang, check
-  Postgres.app's Settings > Client Applications and allow Widen.
-- **App Sandbox is disabled today.** Developer ID apps can ship outside the
-  sandbox, but database permissions remain the real safety boundary. If you
-  work on sandboxing, enable the outgoing-network-client entitlement and test
-  local Postgres, remote Postgres, Keychain access, and Sparkle updates.
-- **SSL modes:** "Prefer"/"Require" encrypt the connection but skip
-  certificate verification - local-development semantics for self-signed
-  certs. "Disabled" is the default for local Postgres.
-- **Model availability** is checked before each generation. If the cloud model
-  is not configured, Widen says so without blocking schema browsing or manual
-  SQL. If Local is selected and Apple Intelligence is off or the model is not
-  downloaded, Widen says so and you can switch back to Cloud or keep writing SQL
-  manually.
-- The on-device Foundation Models context window is small (~4k tokens). Very
-  large schemas are truncated whole-table-at-a-time in the prompt; Widen
-  retries once with a tighter budget if the window is exceeded. Cloud models
-  get a much larger schema budget.
-- **Apple Private Cloud Compute** is not part of the default product path yet.
-  Support is planned when Apple's required OS and SDK support is available. On
-  current builds, use OpenRouter for cloud generation instead.
+Release packaging is automated for Developer ID distribution. Debug stays ad-hoc
+signed for local development. The release script reads local signing,
+notarizing, bundle ID, and Sparkle values from environment variables or
+`.env.release.local`:
+
+```sh
+cp .env.release.example .env.release.local
+make release-mac
+```
+
+See [docs/release.md](docs/release.md) for the full signed DMG, Sparkle, and
+static website release runbook.
+
+For codebase onboarding, implementation details, and development caveats
+(local code signing, sandbox status, SSL modes), see
+[docs/implementation-guide.md](docs/implementation-guide.md).
+
+## Open source
+
+Widen is MIT licensed and developed in the open. Start with
+[CONTRIBUTING.md](CONTRIBUTING.md) for local setup, testing expectations, and
+the safety/privacy rules contributors should preserve. See
+[PRIVACY.md](PRIVACY.md) for the data-flow summary and [SECURITY.md](SECURITY.md)
+for vulnerability reporting.
 
 ## License
 

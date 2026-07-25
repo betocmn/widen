@@ -14,6 +14,16 @@ public struct ChatMessage: Identifiable, Codable, Equatable, Sendable {
         case result
     }
 
+    /// Which stage produced an `.error` message. Distinguishes real
+    /// query-run failures (useful as `<last_run_error>` prompt context) from
+    /// generation and transport failures — feeding those back would make the
+    /// model "repair" SQL that never ran. Optional so transcripts persisted
+    /// before origins were recorded still decode.
+    public enum ErrorOrigin: String, Codable, Equatable, Sendable {
+        case queryRun
+        case generation
+    }
+
     /// Outcome of one finished query run. `sql` snapshots the statement that
     /// produced it, so the record stays meaningful after the editor moves on.
     public struct RunSummary: Codable, Equatable, Sendable {
@@ -66,6 +76,12 @@ public struct ChatMessage: Identifiable, Codable, Equatable, Sendable {
     /// the failing SQL the "Try Again" button asks the model to repair. Writes
     /// never auto-retry, so the retry is a one-shot, execution-free regenerate.
     public var failedWriteSQL: String?
+    /// Present on `.error` messages recorded after origins were introduced:
+    /// which stage failed. `nil` on older persisted transcripts.
+    public var errorOrigin: ErrorOrigin?
+    /// Present on `.error` messages from a transient generation failure: the
+    /// user question the "Try Again" button resubmits.
+    public var retryQuestion: String?
     /// Present on assistant clarification messages that can be resolved by
     /// choosing an option or by replying in free form.
     public var pendingClarification: PendingClarification?
@@ -77,6 +93,8 @@ public struct ChatMessage: Identifiable, Codable, Equatable, Sendable {
         generation: SQLGenerationResult? = nil,
         runSummary: RunSummary? = nil,
         failedWriteSQL: String? = nil,
+        errorOrigin: ErrorOrigin? = nil,
+        retryQuestion: String? = nil,
         pendingClarification: PendingClarification? = nil
     ) {
         self.id = UUID()
@@ -85,6 +103,8 @@ public struct ChatMessage: Identifiable, Codable, Equatable, Sendable {
         self.generation = generation
         self.runSummary = runSummary
         self.failedWriteSQL = failedWriteSQL
+        self.errorOrigin = errorOrigin
+        self.retryQuestion = retryQuestion
         self.pendingClarification = pendingClarification
         self.timestamp = Date()
     }
@@ -138,6 +158,14 @@ extension SQLConversationMessage.Role {
 }
 
 extension ChatMessage {
+    /// True for errors eligible to feed `<last_run_error>` prompt context.
+    /// Generation and transport errors are excluded — only real query-run
+    /// failures should steer the next generation. Untagged errors (from
+    /// transcripts persisted before origins) keep flowing as run errors.
+    var isQueryRunError: Bool {
+        role == .error && errorOrigin != .generation
+    }
+
     var promptContextText: String {
         var lines = [text]
         if let generation {

@@ -48,7 +48,7 @@ struct LLMSettingsView: View {
         @Bindable var appState = appState
 
         Form {
-            Section("Cloud LLM") {
+            Section("Cloud LLM — Beta") {
                 Picker("Provider", selection: $appState.cloudProvider) {
                     ForEach(CloudAIProvider.allCases) { provider in
                         Text(provider.displayName).tag(provider)
@@ -304,7 +304,10 @@ struct LLMSettingsView: View {
                     statusRow("Latency", "\(modelTestResult.latencyMs) ms")
                     statusRow("Retries", "\(modelTestResult.retryCount)")
                     if let error = modelTestResult.error {
-                        statusRow("Error", "\(error.category.rawValue): \(error.message)")
+                        // Human label on the surface; the raw category and
+                        // provider message stay hoverable for diagnostics.
+                        statusRow("Error", SQLGenerationErrorCopy.testModelLabel(for: error.category))
+                            .help("\(error.category.rawValue): \(error.message)")
                     }
                 }
                 .font(.callout)

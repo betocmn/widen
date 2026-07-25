@@ -126,7 +126,7 @@ diffs, if added later, must stay under `.eval-results/`.
 
 ## Release Gate
 
-`make eval-release` is the PR 12 release gate and defaults to the fixed
+`make eval-release` is the release gate and defaults to the fixed
 production alias `openai/gpt-5.5`. Engineering comparisons must opt in with
 `make eval-release MODEL=<model> ALLOW_MODEL_OVERRIDE=1`; direct CLI runs that
 publish release-gate or triage docs equally require `--allow-model-override`
@@ -171,4 +171,5 @@ The local index is persisted under
 metadata only: exact table and column names, comments, types, constraints,
 enum/check values, and grouped FK edges. It does not contain database row data,
 credentials, database context, user questions, prompts, model output, or
-generated SQL, and PR 5 does not send indexed content over the network.
+generated SQL, and the schema-index feature does not send indexed content
+over the network.

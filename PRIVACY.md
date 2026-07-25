@@ -58,10 +58,12 @@ That includes:
 - Session transcripts, SQL text, and generation metadata.
 - Cached schema snapshots.
 - A plaintext `generation.log` debug log containing the full prompt and model
-  outcome for each local, OpenRouter, or Private Cloud Compute generation.
+  outcome for each local, OpenRouter, or Private Cloud Compute (future)
+  generation.
 
-The generation log can include schema context, saved database context, recent
-questions, SQL, and validation or database error text. Delete
+The generation log is local-only; Widen never uploads it. It can include
+schema context, saved database context, recent questions, SQL, and validation
+or database error text. Delete
 `~/Library/Application Support/Widen/generation.log` to remove it; Widen will
 recreate the file when another generation runs. Widen does not persist query
 result tables across restarts.

@@ -108,6 +108,17 @@ struct ConnectionEditorForm: View {
                         }
                     }
 
+                    if case .failure(let message) = viewModel.testState {
+                        MessagePanel(systemImage: "xmark.octagon.fill", color: .red) {
+                            VStack(alignment: .leading, spacing: 4) {
+                                Text("Test Connection failed")
+                                    .font(.callout.weight(.semibold))
+                                Text(message)
+                                    .font(.callout)
+                            }
+                        }
+                    }
+
                     if let saveError = viewModel.saveError {
                         MessagePanel(systemImage: "xmark.octagon.fill", color: .red) {
                             Text(saveError)

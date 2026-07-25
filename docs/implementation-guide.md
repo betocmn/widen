@@ -58,13 +58,13 @@ make run       # build and open Debug app
 make test      # unit tests, gated integration tests skipped
 make test-db   # unit + local PostgreSQL integration tests
 make test-fm   # unit + Foundation Models smoke test
-make eval-release  # PR 12 release gate; defaults to the pinned GPT-5.5 profile
+make eval-release  # release gate; defaults to the pinned GPT-5.5 profile
 ```
 
 The app is ad-hoc signed for local development and App Sandbox is disabled in
-the MVP so it can connect to local PostgreSQL without provisioning. See the
-README for user-facing caveats around Keychain prompts and Postgres.app client
-permissions.
+the MVP so it can connect to local PostgreSQL without provisioning. See
+Development Notes And Caveats below for the Keychain-prompt and Postgres.app
+client-permission consequences.
 
 ### Dual toolchains: Xcode 26 and Xcode 27 beta
 
@@ -90,6 +90,36 @@ and reports PCC as unavailable below macOS 27. Everything outside
 `PrivateCloudComputeSQLGenerator.swift` reaches PCC only through the
 always-compiled `PCCSupport` facade — keep it that way, or Xcode 26 builds
 break.
+
+## Development Notes And Caveats
+
+- **Ad-hoc code signing.** Debug builds are signed "to run locally". After a
+  rebuild, the first Keychain access shows a confirmation prompt - choose
+  "Always Allow" (it re-appears after rebuilds because the binary's signature
+  changed). For a stable signature, create a self-signed code-signing
+  certificate and set `CODE_SIGN_IDENTITY` in `project.yml`.
+- **Postgres.app client permissions.** Postgres.app asks per client app
+  before allowing a connection. If a connection seems to hang, check
+  Postgres.app's Settings > Client Applications and allow Widen.
+- **App Sandbox is disabled today.** Developer ID apps can ship outside the
+  sandbox, but database permissions remain the real safety boundary. If you
+  work on sandboxing, enable the outgoing-network-client entitlement and test
+  local Postgres, remote Postgres, Keychain access, and Sparkle updates.
+- **SSL modes:** "Prefer"/"Require" encrypt the connection but skip
+  certificate verification - local-development semantics for self-signed
+  certs. "Disabled" is the default for local Postgres.
+- **Model availability** is checked before each generation. If the cloud model
+  is not configured, Widen says so without blocking schema browsing or manual
+  SQL. If Local is selected and Apple Intelligence is off or the model is not
+  downloaded, Widen says so and you can switch back to Cloud or keep writing SQL
+  manually.
+- The on-device Foundation Models context window is small (~4k tokens). Very
+  large schemas are truncated whole-table-at-a-time in the prompt; Widen
+  retries once with a tighter budget if the window is exceeded. Cloud models
+  get a much larger schema budget.
+- **Apple Private Cloud Compute** is not part of the default product path yet.
+  Support is planned when Apple's required OS and SDK support is available. On
+  current builds, use OpenRouter for cloud generation instead.
 
 ## Runtime Object Graph
 
