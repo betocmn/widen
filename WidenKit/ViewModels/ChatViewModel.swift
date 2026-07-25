@@ -53,7 +53,21 @@ public final class ChatViewModel {
     }
 
     func appendRunError(_ message: String) {
-        messages.append(ChatMessage(role: .error, text: message))
+        messages.append(ChatMessage(role: .error, text: message, errorOrigin: .queryRun))
+    }
+
+    /// Records a failed generation. Tagged so `lastRunError` prompt context
+    /// never treats a pipeline or transport failure as a SQL run failure.
+    /// `retryQuestion` marks transient failures whose bubble offers a
+    /// "Try Again" button that resubmits the question.
+    func appendGenerationError(_ message: String, retryQuestion: String? = nil) {
+        messages.append(
+            ChatMessage(
+                role: .error,
+                text: message,
+                errorOrigin: .generation,
+                retryQuestion: retryQuestion
+            ))
     }
 
     func appendActivity(_ message: String) {
@@ -64,7 +78,13 @@ public final class ChatViewModel {
     /// "Try Again" button that asks the model to repair the query without
     /// executing it — writes never auto-retry.
     func appendWriteRunError(_ message: String, failedSQL: String) {
-        messages.append(ChatMessage(role: .error, text: message, failedWriteSQL: failedSQL))
+        messages.append(
+            ChatMessage(
+                role: .error,
+                text: message,
+                failedWriteSQL: failedSQL,
+                errorOrigin: .queryRun
+            ))
     }
 
     func beginGeneration(status: String? = nil) {
@@ -92,11 +112,9 @@ public final class ChatViewModel {
         let question = input.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !question.isEmpty, !isGenerating, !queryVM.isRunning else { return }
         guard let schema, !schema.tables.isEmpty else {
-            messages.append(
-                ChatMessage(
-                    role: .error,
-                    text: "Connect to a database and load its schema before asking questions."
-                ))
+            appendGenerationError(
+                "Connect to a database and load its schema before asking questions."
+            )
             return
         }
 
@@ -111,7 +129,7 @@ public final class ChatViewModel {
                 .trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
                 ? nil : queryVM.sqlText,
             lastRunError: queryVM.runError
-                ?? (messages.last?.role == .error ? messages.last?.text : nil)
+                ?? (messages.last?.isQueryRunError == true ? messages.last?.text : nil)
         )
 
         input = ""
@@ -143,12 +161,18 @@ public final class ChatViewModel {
                         pendingClarification: result.pendingClarification
                     ))
             case .failed(let failure):
-                messages.append(ChatMessage(role: .error, text: failure.localizedDescription))
+                appendGenerationError(
+                    SQLGenerationErrorCopy.chatText(for: failure),
+                    retryQuestion: SQLGenerationErrorCopy.isRetryable(failure) ? question : nil
+                )
             }
         } catch is CancellationError {
             return
         } catch {
-            messages.append(ChatMessage(role: .error, text: error.localizedDescription))
+            appendGenerationError(
+                SQLGenerationErrorCopy.chatText(for: error),
+                retryQuestion: SQLGenerationErrorCopy.isRetryable(error) ? question : nil
+            )
         }
     }
 

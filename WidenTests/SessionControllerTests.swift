@@ -374,6 +374,28 @@ struct SessionControllerTests {
         }
     }
 
+    private final class FailOnceThenResultGenerator: SQLGenerator, @unchecked Sendable {
+        private let failure: OpenRouterFailure
+        private let result: SQLGenerationResult
+        private(set) var contexts: [SQLGenerationContext] = []
+
+        init(failure: OpenRouterFailure, result: SQLGenerationResult) {
+            self.failure = failure
+            self.result = result
+        }
+
+        func generateSQL(
+            question: String,
+            schema: DatabaseSchema,
+            context: SQLGenerationContext,
+            config: SQLGenerationConfig
+        ) async throws -> SQLGenerationResult {
+            contexts.append(context)
+            guard contexts.count > 1 else { throw failure }
+            return result
+        }
+    }
+
     private final class SuspendedRepairGenerator: SQLGenerator, @unchecked Sendable {
         private var continuation: CheckedContinuation<SQLGenerationResult, any Error>?
         private(set) var contexts: [SQLGenerationContext] = []
@@ -2629,6 +2651,62 @@ struct SessionControllerTests {
         #expect(controller.queryVM.sqlText == badRead.sql)
         #expect(controller.queryVM.generation?.sql == badRead.sql)
         #expect(controller.chatVM.messages.last?.text.contains("data-modifying query") == true)
+    }
+
+    @Test func submitProviderOutageAppendsMappedRetryableGenerationError() async {
+        let connectionID = UUID()
+        let (state, dir) = makeState(connectionID: connectionID, connected: false)
+        defer { try? FileManager.default.removeItem(at: dir) }
+        state.schemas[connectionID] = makeSchema()
+        let generator = FailOnceThenResultGenerator(
+            failure: OpenRouterFailure(
+                category: .providerUnavailable,
+                message: "Provider returned error",
+                httpStatus: 502
+            ),
+            result: makeGeneration(sql: "SELECT id FROM public.users LIMIT 100")
+        )
+        state.sqlGeneratorOverride = generator
+        let controller = makeController(connectionID: connectionID)
+        controller.chatVM.input = "show users"
+
+        await controller.submit(appState: state)
+
+        let error = controller.chatVM.messages.last
+        #expect(error?.role == .error)
+        #expect(error?.errorOrigin == .generation)
+        #expect(error?.retryQuestion == "show users")
+        #expect(error?.text.contains("temporary outage") == true)
+        // The raw provider text stays available as the detail line.
+        #expect(error?.text.contains("Provider returned error") == true)
+    }
+
+    @Test func resubmitAfterOutageDoesNotFeedTransportErrorAsLastRunError() async {
+        let connectionID = UUID()
+        let (state, dir) = makeState(connectionID: connectionID, connected: false)
+        defer { try? FileManager.default.removeItem(at: dir) }
+        state.schemas[connectionID] = makeSchema()
+        let generator = FailOnceThenResultGenerator(
+            failure: OpenRouterFailure(
+                category: .providerUnavailable,
+                message: "Provider returned error",
+                httpStatus: 502
+            ),
+            result: makeGeneration(sql: "SELECT id FROM public.users LIMIT 100")
+        )
+        state.sqlGeneratorOverride = generator
+        let controller = makeController(connectionID: connectionID)
+        controller.chatVM.input = "show users"
+
+        await controller.submit(appState: state)
+        await controller.resubmitQuestion("show users", appState: state)
+
+        // The retry regenerates without treating the transport failure as a
+        // SQL run error — nothing ran, so nothing needs "repairing".
+        #expect(generator.contexts.count == 2)
+        #expect(generator.contexts[1].lastRunError == nil)
+        #expect(conversationRoles(controller.chatVM.messages) == [.user, .error, .user, .assistant])
+        #expect(controller.queryVM.sqlText == "SELECT id FROM public.users LIMIT 100")
     }
 
     @Test func runSummaryDecodesLegacyJSONWithoutKindAsRead() throws {
