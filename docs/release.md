@@ -77,41 +77,16 @@ The script:
      --account "$SPARKLE_ACCOUNT" -p
    ```
 
-## OpenRouter Canonical-Version Watch
-
-The `OpenRouter Canonical Watch` workflow runs every day at 08:23 UTC and can
-also be started manually. It reads the requested alias and expected canonical
-ID directly from `OpenRouterCatalog.productionProfile`, performs one public
-single-model catalog lookup, and compares OpenRouter's `canonical_slug` with
-the pin. The lookup bypasses Widen's catalog cache, stale fallback, and the
-local URL cache while requesting upstream revalidation. It uses no API key or
-completion request, so it has no OpenRouter completion spend. OpenRouter or
-its CDN can still briefly serve edge-cached catalog metadata; confirm a
-reported rollover again before changing the pin.
-
-Run the same check locally with:
-
-```sh
-make eval-build
-build/Build/Products/Debug/WidenEval --check-openrouter-canonical
-```
-
-Exit status `0` means the pin is current, `2` means a valid canonical mismatch
-was confirmed, and `1` means the lookup failed without proving drift. On
-confirmed drift, the workflow opens one deduplicated rollover issue and then
-fails visibly. HTTP, transport, malformed-response, missing-model, and invalid
-identity failures also fail the workflow, but do not open a drift issue.
-
 ## OpenRouter Canonical Rollover
 
-Treat a canonical rollover as a new model version, not a routine constant
-update. The requested production alias must remain `openai/gpt-5.5`; the gate
-must exercise that alias so Widen verifies the route OpenRouter will actually
-use.
+Treat a canonical rollover reported by Widen's runtime model-version checks as
+a new model version, not a routine constant update. The requested production
+alias must remain `openai/gpt-5.5`; the gate must exercise that alias so Widen
+verifies the route OpenRouter will actually use.
 
-1. Manually rerun `OpenRouter Canonical Watch` and the local command above to
-   confirm the same network mismatch. Record the old expected and newly
-   observed canonical IDs in the rollover issue.
+1. Confirm the mismatch with a fresh OpenRouter public-model metadata lookup
+   and the in-app model test. Record the old expected and newly observed
+   canonical IDs in the rollover issue.
 2. Choose the target patch version, obtain explicit authorization for the
    paid gate, and record one total authorized cap, a small smoke allocation,
    a one-case overrun reserve, and the conjunctive non-regression criteria
@@ -198,8 +173,9 @@ use.
 10. Inspect the draft and verify that it contains exactly the three expected
     assets, then publish it. After publishing, verify the latest appcast/DMG
     URLs, perform the Sparkle end-to-end update test from an older build,
-    rerun the canonical watch green on `main`, and close the rollover issue
-    with links to the sanitized gate and release.
+    verify the public catalog and in-app model test accept the new canonical
+    version, and close the rollover issue with links to the sanitized gate and
+    release.
 
 Passing these rollover non-regression criteria restores the existing beta
 cloud path for the new canonical version. It does not satisfy the separate
