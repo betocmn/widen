@@ -1436,23 +1436,9 @@ actor OpenRouterModelCatalogService {
         )
     }
 
-    /// A one-shot lookup for automation that bypasses Widen's catalog cache,
-    /// stale fallback, and the local URL cache while requesting upstream
-    /// revalidation. The public endpoint needs no spend-capable credential.
-    func freshPublicModel(modelID: String) async throws -> OpenRouterModelMetadata? {
-        try await fetchSingleModel(
-            apiKey: nil,
-            modelID: modelID,
-            title: "Widen Canonical Watch",
-            revalidate: true
-        )
-    }
-
     private func fetchSingleModel(
-        apiKey: String?,
-        modelID: String,
-        title: String = "Widen",
-        revalidate: Bool = false
+        apiKey: String,
+        modelID: String
     ) async throws
         -> OpenRouterModelMetadata?
     {
@@ -1464,15 +1450,9 @@ actor OpenRouterModelCatalogService {
                 .appendingPathComponent(parts[0])
                 .appendingPathComponent(parts[1])
         )
-        if revalidate {
-            request.cachePolicy = .reloadIgnoringLocalCacheData
-            request.setValue("no-cache", forHTTPHeaderField: "Cache-Control")
-        }
         request.httpMethod = "GET"
-        if let apiKey {
-            request.setValue("Bearer \(apiKey)", forHTTPHeaderField: "Authorization")
-        }
-        request.setValue(title, forHTTPHeaderField: "X-Title")
+        request.setValue("Bearer \(apiKey)", forHTTPHeaderField: "Authorization")
+        request.setValue("Widen", forHTTPHeaderField: "X-Title")
         request.setValue("application/json", forHTTPHeaderField: "Accept")
         let (data, response) = try await transport.send(request)
         guard (200..<300).contains(response.statusCode) else {

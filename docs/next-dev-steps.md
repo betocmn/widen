@@ -27,10 +27,6 @@ Numbering continues from `docs/refactoring-plan.md`.
   no longer consume the six-call budget, which stays at six. The post-PR 59
   full gate completed the bucket, cost, latency, timeout-reporting, and
   counter-population acceptance measurement.
-* ✅ **Done — PR 60 canonical-version watch:** added a daily/manual,
-  credential-free public catalog check with drift-only issue creation,
-  fail-closed operational handling, deterministic coverage, and a
-  spend-accounted canonical rollover runbook.
 * ✅ **Done — PR 62 PR 55 hardening cleanups:** simplified the fixed private-
   routing preferences, catalog refresh completion, canonical test fixtures,
   release-policy/reporting code, and resume-model Make logic; removed one
@@ -137,11 +133,6 @@ Numbering continues from `docs/refactoring-plan.md`.
   pre-registered `saas.users-without-membership` controls still clarified, so
   no genuine reduction occurred. Commit `5ee77da` reverted candidate
   `ddf4e12`; only sanitized reports and roadmap evidence remain.
-* PR 60 now checks the production alias-to-canonical mapping every day and on
-  manual dispatch without an API key or completion. Confirmed drift opens one
-  deduplicated rollover issue; lookup, transport, decoding, and invalid
-  identity failures fail visibly without claiming drift. The live metadata
-  check on 2026-07-15 confirmed the current pin.
 * PR 62 now remembers a confirmed cache-served canonical mismatch only for
   that catalog snapshot and TTL. Repeated generations fail immediately from
   the memo; TTL expiry or invalidation permits a fresh verification, while a
@@ -164,32 +155,31 @@ Numbering continues from `docs/refactoring-plan.md`.
    latency criteria pass
 2. ✅ Done — PR 56 retry: every criterion except zero internal schema-agent
    timeouts passed, so the bypass was reverted and PR 57 remains conditional
-3. ✅ Done — PR 60 canonical-version watch and rollover runbook
-4. ✅ Done — PR 62 independent PR 55 hardening cleanups
-5. PR 58 remains open after three negative funded attempts; do not retry the
+3. ✅ Done — PR 62 independent PR 55 hardening cleanups
+4. PR 58 remains open after three negative funded attempts; do not retry the
    latest policy without new diagnostics-only evidence that explains both the
    healthy-account budget misses and why the intended anti-join controls did
    not move
-6. ✅ Done — PR 57 option 1 implemented and probe-validated: the
+5. ✅ Done — PR 57 option 1 implemented and probe-validated: the
    2026-07-24 funded diagnostics probe passed every conjunctive criterion
    (20/20 complete, transport 20/20, structured parsing 20/20, zero
    timeouts) with structured-plan conformance on all 15 SQL terminals, so
    the diagnostics-only infrastructure is merged
-7. Done, negative — PR 63 GPT-5.6 Sol pin upgrade: the funded gate failed
+6. Done, negative — PR 63 GPT-5.6 Sol pin upgrade: the funded gate failed
    the exclusive-clarification ceiling and the zero internal-timeout rule,
    so the candidate pin was reverted and only evidence remains
-8. Done, negative — PR 64 trusted-SQL staged experiment: Sol Pro was
+7. Done, negative — PR 64 trusted-SQL staged experiment: Sol Pro was
    disqualified at stage 1 on cost and latency, and the stage 2 Sol probe
    showed the bypass alone releases wrong-shaped SQL, so the candidate
    was reverted with $7.14 of the $9.00 authorization unspent
-9. Done, negative — PR 65 conjunctive gate candidate (Sol pin, trusted
+8. Done, negative — PR 65 conjunctive gate candidate (Sol pin, trusted
    SQL, 105-second margin, plan-consistency enforcement): stage 1
    passed after an Azure ZDR incident cleared, but the stage 2
    enforcement demonstration failed both conjunctive floors (released
    semantic 8/30 against 15/30; wrong-projected-columns 15 against 9),
    proving the projection errors originate in the model's plan itself;
    the candidate was reverted with $6.10 of $8.00 unspent
-10. ✅ Done — case-by-case golden review: on 2026-07-25 the maintainer
+9. ✅ Done — case-by-case golden review: on 2026-07-25 the maintainer
     approved exactly two changes justified by the PR 65 mismatch
     classification — the `unresolved_tickets` alias for
     `support.unresolved-by-assignee` (value identity proven by digest
@@ -198,7 +188,7 @@ Numbering continues from `docs/refactoring-plan.md`.
     column itself, and the PR 64 superset re-score already isolated this
     case). No other golden, fixture, or comparator rule changed; bulk
     loosening remains prohibited
-11. PR 57 option 2 plan compilation stays open and deferred until after
+10. PR 57 option 2 plan compilation stays open and deferred until after
     the launch window; it requires an explicit architecture decision
     recorded in the refactoring plan before any work
 
@@ -672,8 +662,8 @@ all `ddf4e12` behavior and candidate-only tests, restoring those 12 files to
 this negative evidence. The six-call budget, PR 53 freeze, private and
 canonical/routed-model enforcement, safety/schema/PostgreSQL validation,
 structured parsing and deterministic review, PR 59 timeout/budget/
-interception behavior, PR 60 workflow, PR 62 hardening, and the absence of the
-PR 56 bypass remain unchanged. PR 58 is not done.
+interception behavior, PR 62 hardening, and the absence of the PR 56 bypass
+remain unchanged. PR 58 is not done.
 
 Post-revert validation passed: the same focused ten-suite matrix recorded 527
 total, 527 passed, 0 skipped, and 0 failed; `make project` regenerated
@@ -781,46 +771,6 @@ cancellation bucket and eval-timeout status stayed zero. PR 59 therefore
 passes its acceptance criteria even though the observed internal timeout
 independently fails PR 56's stricter zero-timeout rule.
 
-## PR 60 — Canonical-version watch and rollover runbook
-
-**Status: ✅ Done.**
-
-**Why:** The app fails closed if OpenRouter rolls `openai/gpt-5.5` to a new
-canonical version; users then need an app update. Today nothing warns the
-team before users hit it.
-
-**What:** A scheduled check (CI cron) that fetches the OpenRouter catalog and
-compares `canonical_slug` for the pinned model against
-`OpenRouterCatalog.productionProfile.expectedCanonicalModelID`; on drift it
-opens an issue. Add a rollover section to `docs/release.md`: run the release
-gate on the new canonical, update the profile constant, ship a Sparkle
-release. The in-app pre-flight and eval-side enforcement added in PR 55
-already fail loudly (after one self-healing cache refresh), and Settings warns
-when the catalog canonical has rolled; this PR is about the team hearing it
-before users do.
-
-**Outcome 2026-07-15:** The default-branch workflow runs daily at 08:23 UTC
-and on manual dispatch. It reads both production IDs directly from
-`OpenRouterCatalog.productionProfile`, performs one public single-model
-lookup without an API key or completion, bypasses Widen/local cache state,
-requests upstream revalidation, and accepts drift only when the response
-model identity and canonical ID are strictly validated. The CLI exits `0`
-for current, `2` for confirmed drift, and `1` for an operational failure.
-
-Confirmed drift creates at most one open issue identified by a stable hidden
-marker and then fails the workflow. Operational failures suppress provider
-output, create no issue, and still fail visibly. Tests cover current and
-rolled canonicals, missing/unexpected/malformed identities, invalid model-ID
-shapes, HTTP/transport/decoding failures, a primed local catalog cache, no
-credential or request body, workflow permissions/scheduling/deduplication,
-and both failure paths. `make project`, 205 focused tests in five suites, all
-1,117 tests in 49 suites, and `make eval-build` pass. The live metadata-only
-check returned current for `openai/gpt-5.5-20260423`; no paid OpenRouter
-request was made. The release runbook now pre-registers rollover criteria,
-preserves the requested alias and enforcement layers, accounts for cumulative
-branch spend and resumable gate ceilings, and keeps beta exit separate from
-rollover non-regression.
-
 ## PR 62 — PR 55 hardening cleanups
 
 **Status: ✅ Done [2026-07-16].**
@@ -859,8 +809,8 @@ project, `make eval-build` succeeded, and both working-tree and branch diff
 checks passed. No paid OpenRouter request was made. The six-call schema-tool
 limit, private routing, requested/canonical/routed-model enforcement, safety/
 schema/PostgreSQL validation, structured parsing, deterministic SQL review,
-frozen phrase heuristics, PR 59 timeout/tool-budget/interception behavior, and
-PR 60 watch/rollover workflow remain unchanged.
+frozen phrase heuristics, and PR 59 timeout/tool-budget/interception behavior
+remain unchanged.
 
 ## PR 63 — GPT-5.6 Sol production model upgrade
 
@@ -886,10 +836,9 @@ release-gate-enforcement change is included.
 
 Offline validation on 2026-07-24: `make project` regenerated cleanly; the
 five focused canonical/routing/planning suites passed 212 tests; the full
-`make test` run passed; `make eval-build` succeeded; and the credential-free
-`--check-openrouter-canonical` metadata check observed canonical
-`openai/gpt-5.6-sol-20260709` for the requested alias (exit 0, no completion
-spend).
+`make test` run passed; `make eval-build` succeeded; and a credential-free
+public metadata check observed canonical `openai/gpt-5.6-sol-20260709` for the
+requested alias, with no completion spend.
 
 **Pre-registered acceptance criteria (conjunctive, recorded before any
 completion request):** identical to the retained rollover non-regression
@@ -1227,10 +1176,9 @@ identical to the retained `openai/gpt-5.5` — with a long-context override
 case; `tools`, `tool_choice`, `response_format`, and `structured_outputs`
 all appear in `supported_parameters`; knowledge cutoff 2026-02-16. The
 per-model endpoints listing names `OpenAI | openai/gpt-5.6-sol-20260709`
-on every provider endpoint. After the pin commit, the rebuilt
-credential-free `--check-openrouter-canonical` must print `current` and
-exit 0 before any paid stage; its result is recorded under free validation
-below.
+on every provider endpoint. After the pin commit, fresh public metadata must
+confirm the expected canonical version before any paid stage; its result is
+recorded under free validation below.
 
 **Measurement definitions (so every criterion is verifiable from run
 artifacts and sanitized reports):**
@@ -1519,11 +1467,9 @@ model could remove.
   four suites touched by the review hardening re-passed 309 tests.
 * `make test` passed 1,173 tests in 50 suites; `make eval-build` passed;
   `git diff --check` is clean.
-* The rebuilt candidate binary's credential-free
-  `--check-openrouter-canonical` printed `current` for requested
-  `openai/gpt-5.6-sol` with observed canonical
-  `openai/gpt-5.6-sol-20260709` and exited 0 — no API key, no
-  completion.
+* A credential-free public metadata check confirmed requested
+  `openai/gpt-5.6-sol` resolved to canonical
+  `openai/gpt-5.6-sol-20260709` — no API key and no completion.
 * An adversarial multi-agent review of the full candidate diff (four
   lenses, each confirmed finding independently verified) produced the
   `7eca68c` laundering fix, restored the stage 3 runner ceiling to the
