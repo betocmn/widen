@@ -498,6 +498,67 @@ struct TextToSQLEvalRunPlanningTests {
         }
     }
 
+    @Test func widenEvalRejectsRemovedBackendsWithClearMessages() throws {
+        let repoRoot = URL(fileURLWithPath: #filePath)
+            .deletingLastPathComponent()
+            .deletingLastPathComponent()
+        let mainText = try String(
+            contentsOf: repoRoot.appendingPathComponent("WidenEval/WidenEvalMain.swift"),
+            encoding: .utf8
+        )
+
+        #expect(mainText.contains(#"static let removedRawValues: Set<String> = ["local", "both"]"#))
+        let backendStart = try #require(mainText.range(of: #"case "--backend":"#))
+        let backendText = String(mainText[backendStart.upperBound...])
+        let removedCheck = try #require(
+            backendText.range(of: "if EvalBackendMode.removedRawValues.contains(value) {")
+        )
+        let removedThrow = try #require(
+            backendText.range(of: "throw EvalCLIError.removedBackend(value)")
+        )
+        let rawValueParse = try #require(
+            backendText.range(of: "EvalBackendMode(rawValue: value)")
+        )
+        #expect(removedCheck.lowerBound < removedThrow.lowerBound)
+        #expect(removedThrow.lowerBound < rawValueParse.lowerBound)
+        #expect(
+            mainText.contains(
+                #""--backend \(backendMode) is no longer supported because the on-device backend was removed; use --backend cloud.""#
+            )
+        )
+
+        // A DecodingError's localized description is generic, so the CLI prints
+        // its context instead; that is where the removed-backend message lives.
+        let decodingCatch = try #require(mainText.range(of: "} catch let error as DecodingError {"))
+        let genericCatch = try #require(
+            mainText.range(of: "} catch {", range: decodingCatch.upperBound..<mainText.endIndex)
+        )
+        let decodingHandler = String(mainText[decodingCatch.upperBound..<genericCatch.lowerBound])
+        #expect(decodingHandler.contains(#"fputs("WidenEval failed: \(error.contextDescription)\n", stderr)"#))
+        #expect(decodingHandler.contains("exit(1)"))
+        let contextStart = try #require(mainText.range(of: "var contextDescription: String {"))
+        #expect(mainText[contextStart.upperBound...].contains("context.debugDescription"))
+
+        let runnerText = try String(
+            contentsOf: repoRoot.appendingPathComponent("WidenEval/EvalRunner.swift"),
+            encoding: .utf8
+        )
+        let resumeStart = try #require(
+            runnerText.range(of: "private mutating func applyResumeDefaults(")
+        )
+        let resumeText = String(runnerText[resumeStart.upperBound...])
+        let resumeBackendParse = try #require(
+            resumeText.range(of: "EvalBackendMode(rawValue: previousRun.manifest.backendMode)")
+        )
+        let resumeRemovedCheck = try #require(
+            resumeText.range(
+                of: "EvalBackendMode.removedRawValues.contains(previousRun.manifest.backendMode)"
+                    + "\n                        ? TextToSQLEvalBackend.removedOnDeviceBackendMessage"
+            )
+        )
+        #expect(resumeBackendParse.lowerBound < resumeRemovedCheck.lowerBound)
+    }
+
     @Test func cloudEvalResultShapedLike0_1_0Decodes() throws {
         let result = try JSONDecoder().decode(
             TextToSQLEvalResult.self,
