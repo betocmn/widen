@@ -284,4 +284,132 @@ struct AppStateSchemaTests {
         #expect(schemaVM.tables(in: nil, schemaName: "analytics").isEmpty)
         #expect(schemaVM.tables(in: schema, schemaName: nil).isEmpty)
     }
+
+    @Test func schemaFingerprintIsReusedUntilTheSchemasChange() async throws {
+        let (state, dir) = makeState()
+        defer { try? FileManager.default.removeItem(at: dir) }
+        let id = UUID()
+        let schema = makeSchema(schemas: ["analytics", "public"])
+        state.schemas[id] = schema
+        let publicOnly = state.schemaFingerprintProvider(connectionID: id, selectedSchemas: ["public"])
+        let both = state.schemaFingerprintProvider(
+            connectionID: id,
+            selectedSchemas: ["analytics", "public"]
+        )
+
+        let fingerprint = try await publicOnly()
+        for _ in 0..<5 {
+            #expect(try await publicOnly() == fingerprint)
+        }
+        #expect(state.schemaFingerprintComputationCount == 1)
+        // The cached value is the one the agent hashes for its own snapshot.
+        let expected = try SchemaSearchIndexStore.cacheKey(
+            for: SchemaSearchSnapshot(
+                connectionID: id,
+                selectedSchemas: ["public"],
+                schema: schema.filtered(toSchema: "public")
+            )
+        ).schemaFingerprint
+        #expect(fingerprint == expected)
+
+        // Another scope is hashed and cached on its own.
+        let bothFingerprint = try await both()
+        #expect(try await both() == bothFingerprint)
+        #expect(bothFingerprint != fingerprint)
+        #expect(state.schemaFingerprintComputationCount == 2)
+
+        // A refresh with a changed schema invalidates every cached value.
+        var refreshed = schema
+        refreshed.tables.append(
+            TableInfo(schema: "public", name: "invoices", type: .baseTable, columns: [])
+        )
+        state.schemas[id] = refreshed
+        let refreshedFingerprint = try await publicOnly()
+        #expect(refreshedFingerprint != fingerprint)
+        #expect(try await publicOnly() == refreshedFingerprint)
+        #expect(state.schemaFingerprintComputationCount == 3)
+        #expect(try await both() != bothFingerprint)
+        #expect(state.schemaFingerprintComputationCount == 4)
+
+        // A refresh that loads the same schema hashes again but matches.
+        state.schemas[id] = refreshed
+        #expect(try await publicOnly() == refreshedFingerprint)
+        #expect(state.schemaFingerprintComputationCount == 5)
+
+        state.schemas[id] = nil
+        #expect(try await publicOnly() == "")
+        #expect(state.schemaFingerprintComputationCount == 5)
+    }
+
+    @Test func schemaToolAgentStillDetectsARefreshAfterCaching() async throws {
+        let (state, dir) = makeState()
+        defer { try? FileManager.default.removeItem(at: dir) }
+        let id = UUID()
+        let schema = makeSchema(schemas: ["public"])
+        state.schemas[id] = schema
+        let provider = state.schemaFingerprintProvider(connectionID: id, selectedSchemas: ["public"])
+        _ = try await provider()
+
+        // Unchanged: the agent's first turn passes the stale check from the
+        // cache and reaches the provider, which rejects the key.
+        let currentTransport = RecordingTransport { request, _ in
+            (
+                Data(#"{"error":{"message":"Invalid bearer credential.","type":"authentication_error","code":"invalid_bearer_credential"}}"#.utf8),
+                RecordingTransport.response(to: request, status: 401)
+            )
+        }
+        do {
+            _ = try await makeAgent(
+                connectionID: id,
+                directory: dir,
+                transport: currentTransport,
+                currentSchemaFingerprint: provider
+            ).generateSQL(question: "List users", schema: schema, config: SQLGenerationConfig())
+            Issue.record("expected the rejected key to fail the generation")
+        } catch let failure as SchemaToolAgentFailure {
+            #expect(failure.category == .cloudRequestFailure)
+        }
+        #expect(currentTransport.requests.count == 1)
+        #expect(state.schemaFingerprintComputationCount == 1)
+
+        // Refreshed mid-generation: the agent still holds the old snapshot,
+        // so it fails as stale before sending anything.
+        var refreshed = schema
+        refreshed.tables.append(
+            TableInfo(schema: "public", name: "invoices", type: .baseTable, columns: [])
+        )
+        state.schemas[id] = refreshed
+        let staleTransport = RecordingTransport()
+        do {
+            _ = try await makeAgent(
+                connectionID: id,
+                directory: dir,
+                transport: staleTransport,
+                currentSchemaFingerprint: provider
+            ).generateSQL(question: "List users", schema: schema, config: SQLGenerationConfig())
+            Issue.record("expected a stale schema snapshot")
+        } catch let failure as SchemaToolAgentFailure {
+            #expect(failure.category == .staleSchemaSnapshot)
+        }
+        #expect(staleTransport.requests.isEmpty)
+    }
+
+    private func makeAgent(
+        connectionID: UUID,
+        directory: URL,
+        transport: RecordingTransport,
+        currentSchemaFingerprint: @escaping @Sendable () async throws -> String
+    ) -> SchemaToolSQLAgent {
+        SchemaToolSQLAgent(
+            apiKey: "pai-test",
+            profile: .particleTest,
+            connectionID: connectionID,
+            selectedSchemas: ["public"],
+            transport: transport,
+            indexStore: SchemaSearchIndexStore(
+                directory: directory.appendingPathComponent("schema-index", isDirectory: true)
+            ),
+            currentSchemaFingerprint: currentSchemaFingerprint
+        )
+    }
 }

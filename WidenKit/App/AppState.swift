@@ -60,7 +60,12 @@ public final class AppState {
     public var connectionStates: [UUID: ConnectionStatus] = [:]
     /// Schema cache per connection. Kept across disconnects so reconnecting
     /// is instant; dropped when the connection's endpoint changes.
-    public var schemas: [UUID: DatabaseSchema] = [:]
+    public var schemas: [UUID: DatabaseSchema] = [:] {
+        didSet { schemaRevision &+= 1 }
+    }
+    /// Bumped on every change to `schemas`, so a cached schema fingerprint
+    /// is reused only while the schemas it hashed are unchanged.
+    @ObservationIgnored private var schemaRevision = 0
     public var loadingSchemas: Set<UUID> = []
     private var services: [UUID: PostgresService] = [:]
 
@@ -319,27 +324,66 @@ public final class AppState {
         return names.sorted()
     }
 
-    private func schemaFingerprintProvider(
+    private struct SchemaFingerprintKey: Hashable {
+        var connectionID: UUID
+        var selectedSchemas: [String]
+    }
+
+    /// Fingerprints hashed while `schemaRevision` was
+    /// `schemaFingerprintCacheRevision`.
+    @ObservationIgnored private var schemaFingerprintCache: [SchemaFingerprintKey: String] = [:]
+    @ObservationIgnored private var schemaFingerprintCacheRevision = 0
+    /// Test seam: how many times a scoped schema has been hashed.
+    @ObservationIgnored private(set) var schemaFingerprintComputationCount = 0
+
+    /// The schema-tool agent calls this on every turn and tool call, and
+    /// fails as stale when the answer no longer matches its starting
+    /// snapshot.
+    func schemaFingerprintProvider(
         connectionID: UUID,
         selectedSchemas: [String]
     ) -> @Sendable () async throws -> String {
         { [weak self] in
             try await MainActor.run {
-                guard let self, let schema = self.schemas[connectionID] else { return "" }
-                let scopedSchema: DatabaseSchema
-                if selectedSchemas.count == 1, let name = selectedSchemas.first {
-                    scopedSchema = schema.filtered(toSchema: name)
-                } else {
-                    scopedSchema = schema
-                }
-                let snapshot = SchemaSearchSnapshot(
+                guard let self else { return "" }
+                return try self.schemaFingerprint(
                     connectionID: connectionID,
-                    selectedSchemas: selectedSchemas,
-                    schema: scopedSchema
+                    selectedSchemas: selectedSchemas
                 )
-                return try SchemaSearchIndexStore.cacheKey(for: snapshot).schemaFingerprint
             }
         }
+    }
+
+    /// Hashing the whole scoped schema on the main actor is costly, so the
+    /// fingerprint is reused until `schemas` changes.
+    private func schemaFingerprint(
+        connectionID: UUID,
+        selectedSchemas: [String]
+    ) throws -> String {
+        guard let schema = schemas[connectionID] else { return "" }
+        if schemaFingerprintCacheRevision != schemaRevision {
+            schemaFingerprintCache.removeAll()
+            schemaFingerprintCacheRevision = schemaRevision
+        }
+        let key = SchemaFingerprintKey(connectionID: connectionID, selectedSchemas: selectedSchemas)
+        if let cached = schemaFingerprintCache[key] {
+            return cached
+        }
+        let scopedSchema: DatabaseSchema
+        if selectedSchemas.count == 1, let name = selectedSchemas.first {
+            scopedSchema = schema.filtered(toSchema: name)
+        } else {
+            scopedSchema = schema
+        }
+        let snapshot = SchemaSearchSnapshot(
+            connectionID: connectionID,
+            selectedSchemas: selectedSchemas,
+            schema: scopedSchema
+        )
+        let fingerprint = try SchemaSearchIndexStore.cacheKey(for: snapshot).schemaFingerprint
+        schemaFingerprintComputationCount += 1
+        schemaFingerprintCache[key] = fingerprint
+        return fingerprint
     }
 
     /// Label for the backend now serving generations, phrased to follow
