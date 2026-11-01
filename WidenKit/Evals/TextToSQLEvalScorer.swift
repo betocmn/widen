@@ -136,10 +136,12 @@ public enum TextToSQLEvalCaseRunner {
             lock.withLock {
                 usage.httpAttemptCount += event.httpAttemptCount
                 Self.add(event.promptTokens, to: &usage.promptTokens)
+                Self.add(event.cachedPromptTokens, to: &usage.cachedPromptTokens)
                 Self.add(event.completionTokens, to: &usage.completionTokens)
                 Self.add(event.reasoningTokens, to: &usage.reasoningTokens)
                 Self.add(event.totalTokens, to: &usage.totalTokens)
                 Self.add(event.costUSD, to: &usage.costUSD)
+                usage.costSource = CloudCostSource.combined(usage.costSource, event.costSource)
             }
         }
 

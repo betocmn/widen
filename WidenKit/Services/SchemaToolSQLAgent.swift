@@ -247,7 +247,7 @@ public final class SchemaToolSQLAgent: SQLGenerator, Sendable {
         context: SQLGenerationContext,
         config: SQLGenerationConfig
     ) async throws -> SQLGenerationResult {
-        var aggregate = AgentMetadataAccumulator(requestedModelID: model)
+        var aggregate = AgentMetadataAccumulator(profile: profile)
         let availableHTTPAttempts = configuration.countCapabilityLookupHTTPAttempts
             ? HTTPAttemptBudget.remaining(
                 maximumHTTPAttempts: configuration.maximumHTTPAttempts,
@@ -1082,7 +1082,10 @@ public final class SchemaToolSQLAgent: SQLGenerator, Sendable {
             usageSink?(.httpAttempts(1))
             do {
                 let (data, response) = try await sendWithDeadline(built.request, deadline: deadline)
-                if let reportedUsage = CloudSQLResponseParser.reportedUsage(from: data) {
+                if let reportedUsage = CloudSQLResponseParser.reportedUsage(
+                    from: data,
+                    profile: profile
+                ) {
                     usageSink?(reportedUsage.generationUsageEvent)
                 }
                 let retryAfter = retryPolicy.retryAfter(from: response)
@@ -3100,15 +3103,20 @@ private struct SchemaToolEvidenceLedger {
 
 private struct AgentMetadataAccumulator {
     var requestedModelID: String
+    var providerID: String
+    var reasoningEffort: String?
     var logicalTurnCount = 0
     var httpAttemptCount = 0
     var retryCount = 0
     var promptTokens = 0
+    var cachedPromptTokens = 0
     var completionTokens = 0
     var reasoningTokens = 0
     var totalTokens = 0
     var costUSD = 0.0
+    var costSource: String?
     var hasPromptTokens = false
+    var hasCachedPromptTokens = false
     var hasCompletionTokens = false
     var hasReasoningTokens = false
     var hasTotalTokens = false
@@ -3121,10 +3129,20 @@ private struct AgentMetadataAccumulator {
     var terminalOutcome: String?
     var agentDiagnostics: SchemaToolAgentDiagnostics?
 
+    init(profile: CloudModelProfile) {
+        requestedModelID = profile.requestedModelID
+        providerID = profile.provider.rawValue
+        reasoningEffort = profile.policy(for: .agentTurn).reasoningEffort?.rawValue
+    }
+
     mutating func record(_ metadata: CloudGenerationMetadata) {
         if let value = metadata.promptTokens {
             promptTokens += value
             hasPromptTokens = true
+        }
+        if let value = metadata.cachedPromptTokens {
+            cachedPromptTokens += value
+            hasCachedPromptTokens = true
         }
         if let value = metadata.completionTokens {
             completionTokens += value
@@ -3142,6 +3160,7 @@ private struct AgentMetadataAccumulator {
             costUSD += value
             hasCost = true
         }
+        costSource = CloudCostSource.combined(costSource, metadata.costSource)
         append(metadata.finishReason, to: &finishReasons)
         append(metadata.completionID, to: &completionIDs)
         append(metadata.requestID, to: &requestIDs)
@@ -3153,6 +3172,10 @@ private struct AgentMetadataAccumulator {
         if let value = diagnostic.promptTokens {
             promptTokens += value
             hasPromptTokens = true
+        }
+        if let value = diagnostic.cachedPromptTokens {
+            cachedPromptTokens += value
+            hasCachedPromptTokens = true
         }
         if let value = diagnostic.completionTokens {
             completionTokens += value
@@ -3170,6 +3193,7 @@ private struct AgentMetadataAccumulator {
             costUSD += value
             hasCost = true
         }
+        costSource = CloudCostSource.combined(costSource, diagnostic.costSource)
         append(diagnostic.completionID, to: &completionIDs)
         append(diagnostic.requestID, to: &requestIDs)
         append(diagnostic.returnedModelID, to: &returnedModelIDs)
@@ -3182,19 +3206,23 @@ private struct AgentMetadataAccumulator {
         inspectionToolCalls: [DatabaseInspectionToolCallTrace]
     ) -> CloudGenerationMetadata {
         var metadata = CloudGenerationMetadata(
+            providerID: providerID,
             requestedModelID: requestedModelID,
             returnedModelID: returnedModelIDs.last,
             providerName: providerNames.last,
             completionID: completionIDs.last,
             requestID: requestIDs.last,
             structuredOutputMode: .promptOnlyJSON,
+            reasoningEffort: reasoningEffort,
             requestCount: httpAttemptCount,
             retryCount: retryCount,
             promptTokens: hasPromptTokens ? promptTokens : nil,
+            cachedPromptTokens: hasCachedPromptTokens ? cachedPromptTokens : nil,
             completionTokens: hasCompletionTokens ? completionTokens : nil,
             reasoningTokens: hasReasoningTokens ? reasoningTokens : nil,
             totalTokens: hasTotalTokens ? totalTokens : nil,
             costUSD: hasCost ? costUSD : nil,
+            costSource: costSource,
             serviceTier: nil,
             finishReason: finishReasons.last,
             nativeFinishReason: nil

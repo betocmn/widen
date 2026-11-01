@@ -435,6 +435,56 @@ struct SchemaToolSQLAgentTests {
         #expect(lastMessages.allSatisfy { $0["name"] == nil })
     }
 
+    @Test func particleAgentEstimatesCostAcrossTurnsFromTokenPricing() async throws {
+        let schema = Self.makeSchema()
+        let chatTransport = ScriptedTransport { request, index in
+            switch index {
+            case 1:
+                return Self.particleToolCalls([
+                    Self.toolCall(id: "search-1", name: "search_schema", arguments: [
+                        "query": "users",
+                        "limit": 4,
+                    ]),
+                ])
+            case 2:
+                let tableID = try Self.tableHandle(named: #""public"."users""#, in: request)
+                return Self.particleToolCalls([
+                    Self.toolCall(id: "describe-1", name: "describe_tables", arguments: [
+                        "table_ids": [tableID],
+                    ]),
+                ])
+            default:
+                return Self.particleToolCalls([
+                    Self.terminalSQL(
+                        id: "terminal-1",
+                        sql: "SELECT id, name FROM public.users ORDER BY id LIMIT 100"
+                    ),
+                ])
+            }
+        }
+        let agent = makeAgent(schema: schema, chatTransport: chatTransport)
+
+        let result = try await agent.generateSQL(
+            question: "List users",
+            schema: schema,
+            context: SQLGenerationContext(),
+            config: SQLGenerationConfig()
+        )
+
+        let metadata = try #require(result.backendMetadata)
+        #expect(metadata.agentLogicalTurnCount == 3)
+        // Each turn: 6 uncached and 4 cached prompt tokens, and 5 completion
+        // tokens, at Particle-1's $0.25 / $0.03 / $1.00 per 1M tokens.
+        let perTurn = (6 * 0.25 + 4 * 0.03 + 5 * 1.00) / 1_000_000
+        #expect(abs((metadata.costUSD ?? 0) - 3 * perTurn) < 1e-12)
+        #expect(metadata.costSource == "estimatedPeakList")
+        #expect(metadata.cachedPromptTokens == 12)
+        #expect(metadata.promptTokens == 30)
+        #expect(metadata.providerID == "particle")
+        #expect(metadata.reasoningEffort == "high")
+        #expect(metadata.responseFormatType == nil)
+    }
+
     @Test func multipleSchemaCallsInOneAssistantTurnExecuteInDeclaredOrder() async throws {
         let schema = Self.makeSchema()
         let chatTransport = ScriptedTransport { request, index in
@@ -4852,6 +4902,32 @@ struct SchemaToolSQLAgentTests {
             body["openrouter_metadata"] = openRouterMetadata
         }
         return jsonData(body)
+    }
+
+    /// A Particle-1 tool-call turn: cached prompt tokens and no `usage.cost`.
+    private static func particleToolCalls(_ calls: [[String: Any]]) -> Data {
+        jsonData([
+            "id": "chatcmpl-\(UUID().uuidString)",
+            "object": "chat.completion",
+            "model": returnedModelID,
+            "choices": [
+                [
+                    "index": 0,
+                    "finish_reason": "tool_calls",
+                    "message": [
+                        "role": "assistant",
+                        "tool_calls": calls,
+                    ],
+                ],
+            ],
+            "usage": [
+                "prompt_tokens": 10,
+                "completion_tokens": 5,
+                "total_tokens": 15,
+                "prompt_tokens_details": ["cached_tokens": 4],
+                "completion_tokens_details": ["reasoning_tokens": 1],
+            ],
+        ])
     }
 
     private static func assistantText(_ content: String) -> Data {

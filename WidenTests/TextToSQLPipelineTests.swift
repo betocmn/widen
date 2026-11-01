@@ -268,7 +268,9 @@ struct TextToSQLPipelineTests {
         costUSD: Double,
         totalTokens: Int,
         requestCount: Int = 1,
-        retryCount: Int = 0
+        retryCount: Int = 0,
+        cachedPromptTokens: Int? = nil,
+        costSource: String? = nil
     ) -> CloudGenerationMetadata {
         CloudGenerationMetadata(
             requestedModelID: "test/model",
@@ -280,10 +282,12 @@ struct TextToSQLPipelineTests {
             requestCount: requestCount,
             retryCount: retryCount,
             promptTokens: totalTokens / 2,
+            cachedPromptTokens: cachedPromptTokens,
             completionTokens: totalTokens - (totalTokens / 2),
             reasoningTokens: nil,
             totalTokens: totalTokens,
             costUSD: costUSD,
+            costSource: costSource,
             serviceTier: nil,
             finishReason: "stop",
             nativeFinishReason: nil
@@ -1229,6 +1233,82 @@ struct TextToSQLPipelineTests {
         #expect(abs((failure.backendMetadata?.costUSD ?? 0) - 0.03) < 0.000_001)
         #expect(generator.contexts.count == 2)
         #expect(result.trace.modelCalls == 2)
+    }
+
+    @Test func repairUsageSumsCachedTokensAndKeepsAnEstimatedCostSource() async throws {
+        let estimated = CloudCostSource.estimatedPeakList.rawValue
+        let repaired = ScriptedGenerator([
+            .success(
+                generation(
+                    sql: "SELECT missing FROM public.users",
+                    backendMetadata: backendMetadata(
+                        costUSD: 0.01,
+                        totalTokens: 10,
+                        cachedPromptTokens: 4,
+                        costSource: estimated
+                    )
+                )
+            ),
+            .success(
+                generation(
+                    sql: "SELECT id FROM public.users LIMIT 100",
+                    backendMetadata: backendMetadata(
+                        costUSD: 0.02,
+                        totalTokens: 20,
+                        cachedPromptTokens: 6,
+                        costSource: CloudCostSource.reported.rawValue
+                    )
+                )
+            ),
+        ])
+
+        let success = try await run(repaired)
+
+        guard case .sql(let repairedGeneration) = success.finalDecision else {
+            Issue.record("expected repaired SQL decision")
+            return
+        }
+        #expect(repairedGeneration.backendMetadata?.cachedPromptTokens == 10)
+        #expect(repairedGeneration.backendMetadata?.costSource == estimated)
+        #expect(abs((repairedGeneration.backendMetadata?.costUSD ?? 0) - 0.03) < 0.000_001)
+
+        let failedRepair = ScriptedGenerator([
+            .success(
+                generation(
+                    sql: "SELECT missing FROM public.users",
+                    backendMetadata: backendMetadata(
+                        costUSD: 0.01,
+                        totalTokens: 10,
+                        cachedPromptTokens: 4,
+                        costSource: estimated
+                    )
+                )
+            ),
+            .failure(
+                CloudRequestFailure(
+                    category: .providerUnavailable,
+                    message: "Provider failed after billing the request.",
+                    requestedModelID: "test/model",
+                    promptTokens: 10,
+                    cachedPromptTokens: 6,
+                    completionTokens: 10,
+                    totalTokens: 20,
+                    costUSD: 0.02,
+                    costSource: estimated,
+                    attemptCount: 1
+                )
+            ),
+        ])
+
+        let failure = try await run(failedRepair)
+
+        guard case .failed(let failed) = failure.finalDecision else {
+            Issue.record("expected failure decision")
+            return
+        }
+        #expect(failed.backendMetadata?.cachedPromptTokens == 10)
+        #expect(failed.backendMetadata?.costSource == estimated)
+        #expect(abs((failed.backendMetadata?.costUSD ?? 0) - 0.03) < 0.000_001)
     }
 
     @Test func unsafeWriteRepairForReadIsRejected() async throws {

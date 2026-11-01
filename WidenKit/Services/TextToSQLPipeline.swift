@@ -1838,6 +1838,7 @@ private extension CloudGenerationMetadata {
         guard let priorMetadata else { return self }
 
         var copy = self
+        copy.providerID = copy.providerID ?? priorMetadata.providerID
         copy.requestedModelID = copy.requestedModelID.isEmpty
             ? priorMetadata.requestedModelID
             : copy.requestedModelID
@@ -1845,12 +1846,19 @@ private extension CloudGenerationMetadata {
         copy.providerName = copy.providerName ?? priorMetadata.providerName
         copy.completionID = copy.completionID ?? priorMetadata.completionID
         copy.requestID = copy.requestID ?? priorMetadata.requestID
+        copy.responseFormatType = copy.responseFormatType ?? priorMetadata.responseFormatType
+        copy.reasoningEffort = copy.reasoningEffort ?? priorMetadata.reasoningEffort
         copy.retryCount += priorMetadata.retryCount
         copy.promptTokens = Self.sum(priorMetadata.promptTokens, copy.promptTokens)
+        copy.cachedPromptTokens = Self.sum(
+            priorMetadata.cachedPromptTokens,
+            copy.cachedPromptTokens
+        )
         copy.completionTokens = Self.sum(priorMetadata.completionTokens, copy.completionTokens)
         copy.reasoningTokens = Self.sum(priorMetadata.reasoningTokens, copy.reasoningTokens)
         copy.totalTokens = Self.sum(priorMetadata.totalTokens, copy.totalTokens)
         copy.costUSD = Self.sum(priorMetadata.costUSD, copy.costUSD)
+        copy.costSource = CloudCostSource.combined(priorMetadata.costSource, copy.costSource)
         copy.serviceTier = copy.serviceTier ?? priorMetadata.serviceTier
         copy.finishReason = copy.finishReason ?? priorMetadata.finishReason
         copy.nativeFinishReason = copy.nativeFinishReason ?? priorMetadata.nativeFinishReason
@@ -1915,10 +1923,12 @@ private extension CloudGenerationMetadata {
             requestCount: max(0, diagnostic.attemptCount),
             retryCount: max(0, diagnostic.attemptCount - 1),
             promptTokens: diagnostic.promptTokens,
+            cachedPromptTokens: diagnostic.cachedPromptTokens,
             completionTokens: diagnostic.completionTokens,
             reasoningTokens: diagnostic.reasoningTokens,
             totalTokens: diagnostic.totalTokens,
             costUSD: diagnostic.costUSD,
+            costSource: diagnostic.costSource,
             serviceTier: nil,
             finishReason: nil,
             nativeFinishReason: nil

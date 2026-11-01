@@ -1,6 +1,32 @@
 import Foundation
 
+/// Where a request's `costUSD` came from. Metadata and diagnostics store the
+/// raw value as a plain string, so a source added later never stops an older
+/// build from reading saved sessions.
+enum CloudCostSource: String, CaseIterable, Sendable {
+    /// The provider reported `usage.cost`.
+    case reported
+    /// Estimated from the profile's peak list prices, so an upper bound.
+    case estimatedPeakList
+
+    /// The source of a cost summed from two parts. A total with any
+    /// estimated part is itself an estimate.
+    static func combined(_ first: String?, _ second: String?) -> String? {
+        guard let first else { return second }
+        guard let second, second != first else { return first }
+        return estimatedPeakList.rawValue
+    }
+}
+
 struct ChatCompletionUsage: Decodable, Equatable, Sendable {
+    struct PromptDetails: Decodable, Equatable, Sendable {
+        let cachedTokens: Int?
+
+        private enum CodingKeys: String, CodingKey {
+            case cachedTokens = "cached_tokens"
+        }
+    }
+
     struct CompletionDetails: Decodable, Equatable, Sendable {
         let reasoningTokens: Int?
 
@@ -12,25 +38,61 @@ struct ChatCompletionUsage: Decodable, Equatable, Sendable {
     let promptTokens: Int?
     let completionTokens: Int?
     let totalTokens: Int?
+    let promptTokensDetails: PromptDetails?
     let completionTokensDetails: CompletionDetails?
     let cost: Double?
+    /// Set by `priced(by:)` when the provider reports no `usage.cost`.
+    private(set) var estimatedCostUSD: Double? = nil
 
     private enum CodingKeys: String, CodingKey {
         case promptTokens = "prompt_tokens"
         case completionTokens = "completion_tokens"
         case totalTokens = "total_tokens"
+        case promptTokensDetails = "prompt_tokens_details"
         case completionTokensDetails = "completion_tokens_details"
         case cost
+    }
+
+    var cachedTokens: Int? {
+        promptTokensDetails?.cachedTokens
+    }
+
+    /// The reported `usage.cost`, or else the estimate from `priced(by:)`.
+    var costUSD: Double? {
+        cost ?? estimatedCostUSD
+    }
+
+    var costSource: String? {
+        if cost != nil { return CloudCostSource.reported.rawValue }
+        return estimatedCostUSD == nil ? nil : CloudCostSource.estimatedPeakList.rawValue
+    }
+
+    /// Adds a cost estimate from the profile's prices when the provider
+    /// reports token counts but no `usage.cost`. A reported cost always wins.
+    func priced(by profile: CloudModelProfile) -> ChatCompletionUsage {
+        guard cost == nil,
+            let pricing = profile.pricing,
+            promptTokens != nil || completionTokens != nil
+        else { return self }
+        var copy = self
+        copy.estimatedCostUSD = pricing.estimatedCostUSD(
+            prompt: promptTokens ?? 0,
+            cached: cachedTokens ?? 0,
+            completion: completionTokens ?? 0
+        )
+        return copy
     }
 
     var generationUsageEvent: SQLGenerationUsageEvent {
         SQLGenerationUsageEvent(
             httpAttemptCount: 0,
             promptTokens: promptTokens,
+            cachedPromptTokens: cachedTokens,
             completionTokens: completionTokens,
             reasoningTokens: completionTokensDetails?.reasoningTokens,
             totalTokens: totalTokens,
-            costUSD: cost
+            costUSD: costUSD,
+            costSource: costSource
         )
     }
 }
@@ -40,19 +102,31 @@ struct ChatCompletionUsageEnvelope: Decodable {
 }
 
 public struct CloudGenerationMetadata: Codable, Equatable, Sendable {
+    /// The profile's `CloudModelProviderID` raw value.
+    public var providerID: String?
     public var requestedModelID: String
     public var returnedModelID: String?
     public var providerName: String?
     public var completionID: String?
     public var requestID: String?
     public var structuredOutputMode: StructuredOutputMode
+    /// The `response_format` type sent, such as `json_object`. A json_object
+    /// request is still `promptOnlyJSON`, because only its syntax is checked.
+    public var responseFormatType: String?
+    /// The `reasoning_effort` sent; nil when the field was omitted.
+    public var reasoningEffort: String?
     public var requestCount: Int
     public var retryCount: Int
     public var promptTokens: Int?
+    /// Prompt tokens served from the provider's prompt cache.
+    public var cachedPromptTokens: Int?
     public var completionTokens: Int?
     public var reasoningTokens: Int?
     public var totalTokens: Int?
     public var costUSD: Double?
+    /// A `CloudCostSource` raw value: `reported`, or `estimatedPeakList` for
+    /// a local upper-bound estimate.
+    public var costSource: String?
     public var serviceTier: String?
     public var finishReason: String?
     public var nativeFinishReason: String?
@@ -83,10 +157,13 @@ public struct CloudRequestFailureDiagnostic: Codable, Equatable, Sendable {
     public var retryAfterSeconds: Double?
     public var suggestedWaitSeconds: Double?
     public var promptTokens: Int?
+    public var cachedPromptTokens: Int?
     public var completionTokens: Int?
     public var reasoningTokens: Int?
     public var totalTokens: Int?
     public var costUSD: Double?
+    /// A `CloudCostSource` raw value.
+    public var costSource: String?
     public var attemptCount: Int
 
     /// `providerErrorType` keeps its original `openRouterErrorType` key so
@@ -104,10 +181,12 @@ public struct CloudRequestFailureDiagnostic: Codable, Equatable, Sendable {
         case retryAfterSeconds
         case suggestedWaitSeconds
         case promptTokens
+        case cachedPromptTokens
         case completionTokens
         case reasoningTokens
         case totalTokens
         case costUSD
+        case costSource
         case attemptCount
     }
 }
@@ -155,10 +234,12 @@ public struct CloudRequestFailure: Error, LocalizedError, Equatable, Sendable {
         retryAfterSeconds: Double? = nil,
         suggestedWaitSeconds: Double? = nil,
         promptTokens: Int? = nil,
+        cachedPromptTokens: Int? = nil,
         completionTokens: Int? = nil,
         reasoningTokens: Int? = nil,
         totalTokens: Int? = nil,
         costUSD: Double? = nil,
+        costSource: String? = nil,
         attemptCount: Int = 1
     ) {
         self.category = category
@@ -176,10 +257,12 @@ public struct CloudRequestFailure: Error, LocalizedError, Equatable, Sendable {
             retryAfterSeconds: retryAfterSeconds,
             suggestedWaitSeconds: suggestedWaitSeconds,
             promptTokens: promptTokens,
+            cachedPromptTokens: cachedPromptTokens,
             completionTokens: completionTokens,
             reasoningTokens: reasoningTokens,
             totalTokens: totalTokens,
             costUSD: costUSD,
+            costSource: costSource,
             attemptCount: attemptCount
         )
     }
@@ -215,10 +298,12 @@ public struct CloudRequestFailure: Error, LocalizedError, Equatable, Sendable {
         guard let usage else { return self }
         var copy = self
         copy.diagnostic.promptTokens = usage.promptTokens
+        copy.diagnostic.cachedPromptTokens = usage.cachedTokens
         copy.diagnostic.completionTokens = usage.completionTokens
         copy.diagnostic.reasoningTokens = usage.completionTokensDetails?.reasoningTokens
         copy.diagnostic.totalTokens = usage.totalTokens
-        copy.diagnostic.costUSD = usage.cost
+        copy.diagnostic.costUSD = usage.costUSD
+        copy.diagnostic.costSource = usage.costSource
         return copy
     }
 
@@ -353,36 +438,44 @@ extension CloudRequestFailure.Category {
 
 struct ChatCompletionUsageAccumulator {
     var promptTokens: Int?
+    var cachedPromptTokens: Int?
     var completionTokens: Int?
     var reasoningTokens: Int?
     var totalTokens: Int?
     var costUSD: Double?
+    var costSource: String?
 
     mutating func record(_ diagnostic: CloudRequestFailureDiagnostic) {
         Self.add(diagnostic.promptTokens, to: &promptTokens)
+        Self.add(diagnostic.cachedPromptTokens, to: &cachedPromptTokens)
         Self.add(diagnostic.completionTokens, to: &completionTokens)
         Self.add(diagnostic.reasoningTokens, to: &reasoningTokens)
         Self.add(diagnostic.totalTokens, to: &totalTokens)
         Self.add(diagnostic.costUSD, to: &costUSD)
+        costSource = CloudCostSource.combined(costSource, diagnostic.costSource)
     }
 
     func merging(into metadata: CloudGenerationMetadata) -> CloudGenerationMetadata {
         var copy = metadata
         copy.promptTokens = Self.sum(promptTokens, copy.promptTokens)
+        copy.cachedPromptTokens = Self.sum(cachedPromptTokens, copy.cachedPromptTokens)
         copy.completionTokens = Self.sum(completionTokens, copy.completionTokens)
         copy.reasoningTokens = Self.sum(reasoningTokens, copy.reasoningTokens)
         copy.totalTokens = Self.sum(totalTokens, copy.totalTokens)
         copy.costUSD = Self.sum(costUSD, copy.costUSD)
+        copy.costSource = CloudCostSource.combined(costSource, copy.costSource)
         return copy
     }
 
     func applying(to failure: CloudRequestFailure) -> CloudRequestFailure {
         var copy = failure
         copy.diagnostic.promptTokens = promptTokens
+        copy.diagnostic.cachedPromptTokens = cachedPromptTokens
         copy.diagnostic.completionTokens = completionTokens
         copy.diagnostic.reasoningTokens = reasoningTokens
         copy.diagnostic.totalTokens = totalTokens
         copy.diagnostic.costUSD = costUSD
+        copy.diagnostic.costSource = costSource
         return copy
     }
 

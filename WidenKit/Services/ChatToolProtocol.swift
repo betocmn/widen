@@ -291,7 +291,7 @@ struct ChatToolParser: Sendable {
         retryCount: Int,
         expectedCanonicalModelID: String? = nil
     ) throws -> ParsedTurn {
-        let reportedUsage = CloudSQLResponseParser.reportedUsage(from: data)
+        let reportedUsage = CloudSQLResponseParser.reportedUsage(from: data, profile: profile)
         if !(200..<300).contains(response.statusCode) {
             throw CloudSQLResponseParser.failure(
                 from: data,
@@ -458,20 +458,25 @@ struct ChatToolParser: Sendable {
         } catch let failure as CloudRequestFailure {
             throw failure.withReportedUsage(reportedUsage)
         }
+        let usage = completion.usage?.priced(by: profile)
         let metadata = CloudGenerationMetadata(
+            providerID: profile.provider.rawValue,
             requestedModelID: requestedModelID,
             returnedModelID: completion.model,
             providerName: completion.provider ?? completion.openrouterMetadata?.selectedProvider,
             completionID: completion.id,
             requestID: requestID,
             structuredOutputMode: .promptOnlyJSON,
+            reasoningEffort: profile.policy(for: .agentTurn).reasoningEffort?.rawValue,
             requestCount: requestCount,
             retryCount: retryCount,
-            promptTokens: completion.usage?.promptTokens,
-            completionTokens: completion.usage?.completionTokens,
-            reasoningTokens: completion.usage?.completionTokensDetails?.reasoningTokens,
-            totalTokens: completion.usage?.totalTokens,
-            costUSD: completion.usage?.cost,
+            promptTokens: usage?.promptTokens,
+            cachedPromptTokens: usage?.cachedTokens,
+            completionTokens: usage?.completionTokens,
+            reasoningTokens: usage?.completionTokensDetails?.reasoningTokens,
+            totalTokens: usage?.totalTokens,
+            costUSD: usage?.costUSD,
+            costSource: usage?.costSource,
             serviceTier: completion.serviceTier,
             finishReason: choice.finishReason,
             nativeFinishReason: choice.nativeFinishReason

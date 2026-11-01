@@ -289,10 +289,13 @@ extension SQLGenerationResult {
 struct SQLGenerationUsageEvent: Equatable, Sendable {
     var httpAttemptCount: Int
     var promptTokens: Int?
+    var cachedPromptTokens: Int?
     var completionTokens: Int?
     var reasoningTokens: Int?
     var totalTokens: Int?
     var costUSD: Double?
+    /// A `CloudCostSource` raw value.
+    var costSource: String?
 
     static func httpAttempts(_ count: Int) -> SQLGenerationUsageEvent {
         SQLGenerationUsageEvent(

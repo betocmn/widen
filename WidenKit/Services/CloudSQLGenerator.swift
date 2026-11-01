@@ -48,6 +48,10 @@ struct ChatCompletionRequestBuilder: Sendable {
     struct BuiltRequest: Sendable {
         var request: URLRequest
         var mode: StructuredOutputMode
+        /// The `response_format` type sent, if any.
+        var responseFormatType: String?
+        /// The `reasoning_effort` sent, if any.
+        var reasoningEffort: String?
     }
 
     func build(
@@ -82,12 +86,15 @@ struct ChatCompletionRequestBuilder: Sendable {
         } else if mode == .promptOnlyJSON {
             body["max_tokens"] = policy.maxCompletionTokens
         }
+        var responseFormatType: String?
         if mode == .strictJSONSchema {
             body["response_format"] = Self.responseFormat()
+            responseFormatType = "json_schema"
         } else if policy.responseFormat == .jsonObject, capabilities.supportsResponseFormat {
             // json_object is checked for syntax only, so the schema stays
             // prompt-enforced and the result is still promptOnlyJSON.
             body["response_format"] = ["type": "json_object"]
+            responseFormatType = "json_object"
         }
         if let reasoningEffort = policy.reasoningEffort {
             body["reasoning_effort"] = reasoningEffort.rawValue
@@ -101,7 +108,12 @@ struct ChatCompletionRequestBuilder: Sendable {
 
         var request = try profile.authorizedRequest(profile.chatCompletionsURL, apiKey: apiKey)
         request.httpBody = try JSONSerialization.data(withJSONObject: body)
-        return BuiltRequest(request: request, mode: mode)
+        return BuiltRequest(
+            request: request,
+            mode: mode,
+            responseFormatType: responseFormatType,
+            reasoningEffort: policy.reasoningEffort?.rawValue
+        )
     }
 
     func buildTinyJSONTest(
@@ -285,7 +297,7 @@ struct CloudSQLResponseParser: Sendable {
         retryCount: Int,
         expectedCanonicalModelID: String? = nil
     ) throws -> ParsedResult {
-        let reportedUsage = Self.reportedUsage(from: data)
+        let reportedUsage = Self.reportedUsage(from: data, profile: profile)
         if !(200..<300).contains(response.statusCode) {
             throw Self.failure(
                 from: data,
@@ -498,7 +510,9 @@ struct CloudSQLResponseParser: Sendable {
             ).withReportedUsage(reportedUsage)
         }
 
+        let usage = completion.usage?.priced(by: profile)
         let metadata = CloudGenerationMetadata(
+            providerID: profile.provider.rawValue,
             requestedModelID: requestedModelID,
             returnedModelID: completion.model,
             providerName: completion.provider ?? completion.openrouterMetadata?.selectedProvider,
@@ -507,11 +521,13 @@ struct CloudSQLResponseParser: Sendable {
             structuredOutputMode: mode,
             requestCount: requestCount,
             retryCount: retryCount,
-            promptTokens: completion.usage?.promptTokens,
-            completionTokens: completion.usage?.completionTokens,
-            reasoningTokens: completion.usage?.completionTokensDetails?.reasoningTokens,
-            totalTokens: completion.usage?.totalTokens,
-            costUSD: completion.usage?.cost,
+            promptTokens: usage?.promptTokens,
+            cachedPromptTokens: usage?.cachedTokens,
+            completionTokens: usage?.completionTokens,
+            reasoningTokens: usage?.completionTokensDetails?.reasoningTokens,
+            totalTokens: usage?.totalTokens,
+            costUSD: usage?.costUSD,
+            costSource: usage?.costSource,
             serviceTier: completion.serviceTier,
             finishReason: choice.finishReason,
             nativeFinishReason: choice.nativeFinishReason
@@ -542,12 +558,14 @@ struct CloudSQLResponseParser: Sendable {
         return nil
     }
 
-    static func reportedUsage(from data: Data) -> ChatCompletionUsage? {
+    /// The response's usage, priced by the profile when the provider reports
+    /// no cost.
+    static func reportedUsage(from data: Data, profile: CloudModelProfile) -> ChatCompletionUsage? {
         guard let envelope = try? JSONDecoder().decode(
             ChatCompletionUsageEnvelope.self,
             from: data
         ) else { return nil }
-        return envelope.usage
+        return envelope.usage?.priced(by: profile)
     }
 
     static func failure(
@@ -1042,6 +1060,7 @@ public final class CloudSQLGenerator: SQLGenerator, Sendable {
         capabilities: CloudModelCapabilities
     ) -> CloudGenerationMetadata {
         CloudGenerationMetadata(
+            providerID: profile.provider.rawValue,
             requestedModelID: model,
             returnedModelID: nil,
             providerName: nil,
@@ -1104,7 +1123,10 @@ public final class CloudSQLGenerator: SQLGenerator, Sendable {
             do {
                 usageSink?(.httpAttempts(1))
                 let (data, response) = try await transport.send(built.request)
-                if let reportedUsage = CloudSQLResponseParser.reportedUsage(from: data) {
+                if let reportedUsage = CloudSQLResponseParser.reportedUsage(
+                    from: data,
+                    profile: profile
+                ) {
                     usageSink?(reportedUsage.generationUsageEvent)
                 }
                 let retryAfter = retryPolicy.retryAfter(from: response)
@@ -1119,6 +1141,8 @@ public final class CloudSQLGenerator: SQLGenerator, Sendable {
                         expectedCanonicalModelID: expectedCanonicalModelID
                     )
                     parsed.metadata = failedUsage.merging(into: parsed.metadata)
+                    parsed.metadata.responseFormatType = built.responseFormatType
+                    parsed.metadata.reasoningEffort = built.reasoningEffort
                     parsed.result.backendMetadata = parsed.metadata
                     return parsed
                 } catch var failure as CloudRequestFailure {

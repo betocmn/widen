@@ -77,6 +77,19 @@ struct CloudSQLGeneratorTests {
         }
     }
 
+    private final class UsageEventRecorder: @unchecked Sendable {
+        private let lock = NSLock()
+        private var recorded: [SQLGenerationUsageEvent] = []
+
+        var events: [SQLGenerationUsageEvent] {
+            lock.withLock { recorded }
+        }
+
+        func record(_ event: SQLGenerationUsageEvent) {
+            lock.withLock { recorded.append(event) }
+        }
+    }
+
     private static let chatEndpoint = URL(string: "https://openrouter.test/api/v1/chat/completions")!
     private static let particleChatEndpoint = CloudModelProfile.particleTest.chatCompletionsURL
     private static let particleModelID = CloudModelProfile.particleTest.requestedModelID
@@ -1339,8 +1352,191 @@ struct CloudSQLGeneratorTests {
         #expect(result.backendMetadata?.completionTokens == 44)
         #expect(result.backendMetadata?.reasoningTokens == 6)
         #expect(result.backendMetadata?.totalTokens == 66)
-        // Particle reports no usage.cost; only OpenRouter's reported cost sums.
-        #expect(result.backendMetadata?.costUSD == (profile.reportsUsageCost ? 0.00024 : nil))
+        // OpenRouter reports usage.cost. Particle doesn't, so each attempt's
+        // 11 prompt and 22 completion tokens are priced at $0.25 and $1.00
+        // per 1M tokens.
+        let expectedCost = profile.reportsUsageCost ? 0.00024 : 2 * (11 * 0.25 + 22 * 1.00) / 1_000_000
+        #expect(abs((result.backendMetadata?.costUSD ?? 0) - expectedCost) < 1e-12)
+        #expect(
+            result.backendMetadata?.costSource
+                == (profile.reportsUsageCost ? "reported" : "estimatedPeakList")
+        )
+    }
+
+    @Test func particlePricingBillsCachedPromptTokensEightTimesCheaper() throws {
+        let pricing = try #require(CloudModelProfile.particle.pricing)
+        let uncached = pricing.estimatedCostUSD(prompt: 1_000_000, cached: 0, completion: 0)
+        let cached = pricing.estimatedCostUSD(prompt: 1_000_000, cached: 1_000_000, completion: 0)
+
+        #expect(abs(uncached - 0.25) < 1e-12)
+        #expect(abs(cached - 0.03) < 1e-12)
+        #expect(cached * 8 < uncached)
+        #expect(abs(pricing.estimatedCostUSD(prompt: 0, cached: 0, completion: 1_000_000) - 1.00) < 1e-12)
+        // 2,000 uncached, 8,000 cached and 1,000 completion tokens.
+        #expect(
+            abs(pricing.estimatedCostUSD(prompt: 10_000, cached: 8_000, completion: 1_000) - 0.00174)
+                < 1e-12
+        )
+        #expect(pricing.estimatedCostUSD(prompt: 0, cached: 0, completion: 0) == 0)
+    }
+
+    @Test func reportedUsageCostWinsOverTheTokenEstimate() throws {
+        let reported = try JSONDecoder().decode(
+            ChatCompletionUsage.self,
+            from: Data(
+                #"{"prompt_tokens":1000,"completion_tokens":100,"prompt_tokens_details":{"cached_tokens":400},"cost":0.5}"#.utf8
+            )
+        ).priced(by: .particleTest)
+        #expect(reported.cachedTokens == 400)
+        #expect(reported.costUSD == 0.5)
+        #expect(reported.costSource == "reported")
+
+        let unreported = try JSONDecoder().decode(
+            ChatCompletionUsage.self,
+            from: Data(#"{"prompt_tokens":1000,"completion_tokens":100}"#.utf8)
+        )
+        #expect(unreported.costUSD == nil)
+        #expect(unreported.costSource == nil)
+        // An OpenRouter profile has no prices, so it never estimates.
+        #expect(unreported.priced(by: .openRouterTest).costUSD == nil)
+        let estimated = unreported.priced(by: .particleTest)
+        #expect(abs((estimated.costUSD ?? 0) - (1000 * 0.25 + 100 * 1.00) / 1_000_000) < 1e-12)
+        #expect(estimated.costSource == "estimatedPeakList")
+
+        let parsed = try CloudSQLResponseParser(profile: .particleTest).parse(
+            data: particleChatResponse(content: goodContent, cost: 0.5),
+            response: response(url: Self.particleChatEndpoint, status: 200),
+            requestedModelID: Self.particleModelID,
+            mode: .promptOnlyJSON,
+            requestCount: 1,
+            retryCount: 0
+        )
+        #expect(parsed.metadata.costUSD == 0.5)
+        #expect(parsed.metadata.costSource == "reported")
+    }
+
+    @Test func costSourceOfASumIsAnEstimateWhenAnyPartIs() {
+        let reported = CloudCostSource.reported.rawValue
+        let estimated = CloudCostSource.estimatedPeakList.rawValue
+
+        #expect(CloudCostSource.combined(nil, nil) == nil)
+        #expect(CloudCostSource.combined(reported, nil) == reported)
+        #expect(CloudCostSource.combined(nil, estimated) == estimated)
+        #expect(CloudCostSource.combined(reported, reported) == reported)
+        #expect(CloudCostSource.combined(reported, estimated) == estimated)
+        #expect(CloudCostSource.combined(estimated, reported) == estimated)
+    }
+
+    @Test func particleUsageEventCarriesTheTokenCostEstimate() async throws {
+        let (generator, _) = makeGenerator(
+            profile: .particleTest,
+            chatResults: [
+                .success((particleChatResponse(content: goodContent, cachedTokens: 8), response(url: Self.particleChatEndpoint, status: 200))),
+            ]
+        )
+        let events = UsageEventRecorder()
+        var config = SQLGenerationConfig()
+        config.usageSink = { events.record($0) }
+
+        let result = try await generator.generateSQL(
+            question: "show users",
+            schema: makeSchema(),
+            config: config
+        )
+
+        // 3 uncached and 8 cached prompt tokens, and 22 completion tokens.
+        let expectedCost = (3 * 0.25 + 8 * 0.03 + 22 * 1.00) / 1_000_000
+        let usage = try #require(events.events.first { $0.httpAttemptCount == 0 })
+        #expect(usage.promptTokens == 11)
+        #expect(usage.cachedPromptTokens == 8)
+        #expect(abs((usage.costUSD ?? 0) - expectedCost) < 1e-12)
+        #expect(usage.costSource == "estimatedPeakList")
+
+        let metadata = try #require(result.backendMetadata)
+        #expect(metadata.cachedPromptTokens == 8)
+        #expect(metadata.costUSD == usage.costUSD)
+        #expect(metadata.costSource == "estimatedPeakList")
+        #expect(metadata.providerID == "particle")
+        #expect(metadata.reasoningEffort == "high")
+        #expect(metadata.structuredOutputMode == .promptOnlyJSON)
+        #expect(metadata.responseFormatType == "json_object")
+    }
+
+    @Test func failedParticleCompletionsKeepTheirEstimatedCost() async throws {
+        let (generator, transport) = makeGenerator(
+            profile: .particleTest,
+            chatResults: Array(
+                repeating: .success((particleChatResponse(content: "", cachedTokens: 4), response(url: Self.particleChatEndpoint, status: 200, headers: ["Retry-After": "0"]))),
+                count: 2
+            )
+        )
+
+        do {
+            _ = try await generator.generateSQL(
+                question: "show users",
+                schema: makeSchema(),
+                config: SQLGenerationConfig()
+            )
+            Issue.record("expected empty content failure")
+        } catch let failure as CloudRequestFailure {
+            #expect(failure.category == .noContent)
+            #expect(failure.diagnostic.attemptCount == 2)
+            // Each billed attempt: 7 uncached and 4 cached prompt tokens, and
+            // 22 completion tokens.
+            let perAttempt = (7 * 0.25 + 4 * 0.03 + 22 * 1.00) / 1_000_000
+            #expect(abs((failure.diagnostic.costUSD ?? 0) - 2 * perAttempt) < 1e-12)
+            #expect(failure.diagnostic.costSource == "estimatedPeakList")
+            #expect(failure.diagnostic.cachedPromptTokens == 8)
+            #expect(failure.diagnostic.promptTokens == 22)
+        }
+        #expect(transport.requests.count == 2)
+    }
+
+    @Test func costAndRequestSettingFieldsRoundTripAndStayOmittedWhenNil() throws {
+        let bare = CloudGenerationMetadata(
+            requestedModelID: Self.particleModelID,
+            structuredOutputMode: .promptOnlyJSON,
+            requestCount: 1,
+            retryCount: 0
+        )
+        let bareObject = try #require(
+            JSONSerialization.jsonObject(with: JSONEncoder().encode(bare)) as? [String: Any]
+        )
+        #expect(Set(bareObject.keys) == ["requestedModelID", "structuredOutputMode", "requestCount", "retryCount"])
+
+        var metadata = bare
+        metadata.providerID = "particle"
+        metadata.responseFormatType = "json_object"
+        metadata.reasoningEffort = "high"
+        metadata.cachedPromptTokens = 8
+        metadata.costUSD = 0.001
+        metadata.costSource = "estimatedPeakList"
+        let data = try JSONEncoder().encode(metadata)
+        let object = try #require(JSONSerialization.jsonObject(with: data) as? [String: Any])
+        #expect(object["providerID"] as? String == "particle")
+        #expect(object["responseFormatType"] as? String == "json_object")
+        #expect(object["reasoningEffort"] as? String == "high")
+        #expect(object["cachedPromptTokens"] as? Int == 8)
+        #expect(object["costSource"] as? String == "estimatedPeakList")
+        #expect(try JSONDecoder().decode(CloudGenerationMetadata.self, from: data) == metadata)
+
+        let failure = CloudRequestFailure(
+            category: .noContent,
+            message: "Empty.",
+            cachedPromptTokens: 8,
+            costUSD: 0.001,
+            costSource: "estimatedPeakList"
+        )
+        let diagnosticData = try JSONEncoder().encode(failure.diagnostic)
+        let diagnostic = try #require(
+            JSONSerialization.jsonObject(with: diagnosticData) as? [String: Any]
+        )
+        #expect(diagnostic["cachedPromptTokens"] as? Int == 8)
+        #expect(diagnostic["costSource"] as? String == "estimatedPeakList")
+        #expect(
+            try JSONDecoder().decode(CloudRequestFailureDiagnostic.self, from: diagnosticData)
+                == failure.diagnostic
+        )
     }
 
     @Test func repairCompletionRequiresPrivateRouting() async throws {
@@ -2151,11 +2347,26 @@ struct CloudSQLGeneratorTests {
     }
 
     /// A Particle-1 completion: the `particle-ai/particle-1` model, cached and
-    /// reasoning token details, and no `usage.cost`.
-    private func particleChatResponse(content: Any?, finishReason: String = "stop") -> Data {
+    /// reasoning token details, and no `usage.cost` unless one is given.
+    private func particleChatResponse(
+        content: Any?,
+        finishReason: String = "stop",
+        cachedTokens: Int = 0,
+        cost: Double? = nil
+    ) -> Data {
         var message: [String: Any] = ["role": "assistant"]
         if let content {
             message["content"] = content
+        }
+        var usage: [String: Any] = [
+            "prompt_tokens": 11,
+            "completion_tokens": 22,
+            "total_tokens": 33,
+            "prompt_tokens_details": ["cached_tokens": cachedTokens],
+            "completion_tokens_details": ["reasoning_tokens": 3],
+        ]
+        if let cost {
+            usage["cost"] = cost
         }
         return jsonData([
             "id": "chatcmpl-1",
@@ -2164,13 +2375,7 @@ struct CloudSQLGeneratorTests {
             "choices": [
                 ["index": 0, "finish_reason": finishReason, "message": message],
             ],
-            "usage": [
-                "prompt_tokens": 11,
-                "completion_tokens": 22,
-                "total_tokens": 33,
-                "prompt_tokens_details": ["cached_tokens": 0],
-                "completion_tokens_details": ["reasoning_tokens": 3],
-            ],
+            "usage": usage,
         ])
     }
 

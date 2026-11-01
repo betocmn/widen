@@ -74,6 +74,15 @@ public struct CloudModelPricing: Equatable, Sendable {
         self.cachedInput = cachedInput
         self.output = output
     }
+
+    /// The cost of one request at these prices. Cached prompt tokens are
+    /// billed at the cached rate and the rest of the prompt at the input
+    /// rate; reasoning tokens are already part of the completion tokens.
+    public func estimatedCostUSD(prompt: Int, cached: Int, completion: Int) -> Double {
+        let uncachedPrompt = Double(max(0, prompt - cached)) * input
+        let cachedPrompt = Double(max(0, cached)) * cachedInput
+        return (uncachedPrompt + cachedPrompt + Double(max(0, completion)) * output) / 1_000_000
+    }
 }
 
 public enum CloudCapabilityResolution: Equatable, Sendable {
