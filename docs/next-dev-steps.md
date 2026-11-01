@@ -334,7 +334,50 @@ same bucket that dominated the 0.1.0 comparator.
 
 #### Stage 2
 
-Pending.
+Recorded 2026-11-01. **Validity failed (structured parsing 56/60, required
+≥ 57/60), so paid work stopped** as preregistered, pending the maintainer's
+decision. The run itself completed; its gate report and triage were kept out
+of `docs/evals/` (saved beside the run artifacts) because the preregistered
+rule publishes them only when validity holds.
+
+`make eval-release-triage RELEASE_VERSION=0.2.0 MAX_CLOUD_COST_USD=1.40` at
+commit `88e145b` (reserve $0.10, since 3 × Stage 1's highest per-result cost
+is $0.022):
+
+| Check | Observed | Required |
+| --- | --- | --- |
+| Complete | 60/60 | 60/60 |
+| Transport | 60/60 | ≥ 57/60 |
+| Structured parsing | **56/60** | ≥ 57/60 |
+| Eval timeouts / internal schema-agent timeouts | 0 / 0 | 0 / 0 |
+| Returned model `particle-ai/particle-1` | 60/60 | 60/60 |
+| Tools agent | 60/60 | 60/60 |
+| Cost reported | 60/60 (`estimatedPeakList`) | all |
+
+All four unparsed results are schema-tool budget exhaustion, not malformed
+Particle output: `saas.healthy-accounts` ×3 (the model asked for a seventh
+schema call against the six-call limit) and `preseason.top-wins-defined`
+repeat 3 (byte budget). The scorer counts a run that ends without a terminal
+answer as unparsed. There were no protocol, malformed-JSON or transport
+failures.
+
+The gate verdict, reported for the record (not published):
+
+| Criterion | Particle-1 (this run) | GPT-5.5 (0.1.0) |
+| --- | --- | --- |
+| End-to-end semantic pass rate | 16/60 (27%) | 20/60 (33%) |
+| Safety / schema validity | 14/14 / 14/14 | 15/15 / 15/15 |
+| Clarification decision accuracy | 7/12 (58%) | 11/12 (92%) |
+| Transport reliability | 60/60 | 60/60 |
+| Repeated/no-progress repairs | 0 | 0 |
+| Triage: expected SQL, got clarification | 28 | 31 |
+| Triage: tool budget exhausted | 5 | 3 |
+| Triage: semantic result mismatch | 4 | 6 |
+| Cost | $0.140936 ($0.0023 per result; upper bound) | $3.838330 ($0.064 per result) |
+| Latency P50 / P95 / max | 7.4 s / 15.5 s / 19.1 s | - |
+
+Prompt-cache hit rate was 55.7% (409,344 of 734,901 prompt tokens). The
+highest per-result cost was $0.0054.
 
 #### Stage 3
 
@@ -356,7 +399,7 @@ column after each command and record the larger figure.
 | 1 | `make eval-smoke` (medium) | $0.05 | $0.0176 | $0.0432 |
 | 1 | `make eval-db-cloud-agent` (high) | $0.04 | $0.0125 | $0.0557 |
 | 1 | `make eval-db-cloud-agent` (medium) | $0.03 | $0.0115 | $0.0672 |
-| 2 | `make eval-release-triage` | 1.50 − reserve | - | - |
+| 2 | `make eval-release-triage` | $1.40 | $0.1409 | $0.2081 |
 | 3 | `make eval-release-triage` | Stage 3 formula | - | - |
 
 ## Completed and remaining work
