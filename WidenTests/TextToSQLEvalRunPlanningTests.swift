@@ -570,6 +570,19 @@ struct TextToSQLEvalRunPlanningTests {
         #expect(environment.contains("--allow-model-override"))
     }
 
+    @Test func releaseResumeWritesTheCommittedTriageWithTheGateReport() throws {
+        let repoRoot = URL(fileURLWithPath: #filePath)
+            .deletingLastPathComponent()
+            .deletingLastPathComponent()
+
+        // Resume never inherits the triage version from the manifest, so the
+        // target passes it; otherwise docs/evals/ would pair a resumed gate
+        // report with a triage from an earlier run, or with none.
+        let command = try Self.releaseResumeDryRunCommand(repoRoot: repoRoot)
+        #expect(command.contains(#"--release-gate-version "fixture""#))
+        #expect(command.contains(#"--write-release-triage --release-triage-version "fixture""#))
+    }
+
     @Test func makefileKeepsExperimentalSchemaAgentFlagsFocused() throws {
         let testFile = URL(fileURLWithPath: #filePath)
         let makefile = testFile

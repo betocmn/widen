@@ -206,6 +206,8 @@ eval-release-sql-shape: eval-build
 	$(EVAL) --model "$(MODEL)" --cloud-agent tools --suite Evals/suites/text-to-sql-v1.json --case commerce.average-order-value-country --case commerce.customer-paid-revenue --case commerce.customers-without-orders --case preseason.active-match-configs --case preseason.verified-tools --case saas.expiring-subscriptions --case saas.overallocated-seats --case support.frequent-feedback-cluster --case support.unclustered-feedback --case support.unresolved-by-assignee --semantic-db --repeat 3 --write-release-triage $(CLOUD_COST_ARGS)
 
 ## Resume a previous release-gate run without rerunning completed cases.
+## Like eval-release-triage, it also writes the committed triage copy, so the
+## gate report and triage in docs/evals/ come from the same resumed run.
 ## The pinned model is passed explicitly so resume compatibility rejects a
 ## non-production manifest; an ALLOW_MODEL_OVERRIDE=1 resume without an
 ## explicit MODEL inherits the manifest model instead, matching how the
@@ -220,7 +222,7 @@ eval-release-resume: eval-build
 	@test -n "$(RESUME)" || (echo "error: RESUME is required" >&2; exit 1)
 	$(REQUIRE_PINNED_MODEL)
 	@set -a; if [ -f .env.eval.local ]; then . ./.env.eval.local; fi; set +a; \
-	$(EVAL) --resume-run "$(RESUME)" --resume-missing $(RESUME_MODEL_ARGS) --release-gate-version "$(RELEASE_VERSION)" --write-release-triage $(MODEL_OVERRIDE_ARGS) $(CLOUD_COST_ARGS)
+	$(EVAL) --resume-run "$(RESUME)" --resume-missing $(RESUME_MODEL_ARGS) --release-gate-version "$(RELEASE_VERSION)" --write-release-triage --release-triage-version "$(RELEASE_VERSION)" $(MODEL_OVERRIDE_ARGS) $(CLOUD_COST_ARGS)
 
 ## Run one seeded Postgres semantic eval case
 eval-db-case: eval-build

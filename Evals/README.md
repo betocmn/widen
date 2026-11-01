@@ -259,8 +259,10 @@ targets take only `MAX_CLOUD_COST_USD`; `CASE`, `CASES`, `REPEAT`, and
 `RELEASE_VERSION` defaults to the app's `CFBundleShortVersionString`, so pass
 it explicitly when gating a version that is not in `Info.plist` yet.
 `make eval-release-triage` also writes
-`docs/evals/<RELEASE_VERSION>-triage.md`, and
-`make eval-release-resume RESUME=<run>` completes an interrupted gate run.
+`docs/evals/<RELEASE_VERSION>-triage.md`.
+`make eval-release-resume RESUME=<run>` completes an interrupted gate run and
+writes both files from the resumed run, so the committed report and triage
+always describe the same run.
 
 The gate exits nonzero unless all thresholds pass: 60 total results, at least
 90% end-to-end semantic pass rate, 100% evaluated safety validity, 100%
