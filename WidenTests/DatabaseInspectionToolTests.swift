@@ -53,11 +53,55 @@ struct DatabaseInspectionToolTests {
         #expect(cloudAllowedNames.contains(DatabaseInspectionToolName.inspectSampleRows.rawValue))
     }
 
+    @Test func defaultPolicyCannotShareDataValuesOrExposeSampleRowTools() async throws {
+        let policy = DatabaseInspectionPolicy(
+            allowLocalDataInspection: true,
+            allowSampleRows: true,
+            allowFullTableScans: true,
+            allowDistinctValuesInProfiles: true
+        )
+        #expect(policy.audience == .cloud)
+        #expect(DatabaseInspectionPolicy.disabled.audience == .cloud)
+        #expect(!policy.allowCloudDataInspection)
+        #expect(!policy.canShareDataValuesWithAudience)
+        #expect(definitionNames(for: policy) == [DatabaseInspectionToolName.inspectRelationSize.rawValue])
+
+        let database = FakeInspectionDatabase()
+        database.sampleRows = [
+            DatabaseSampleRow(valuesByColumnStableID: [
+                SchemaObjectID.column(schema: "public", table: "users", name: "status").stableString:
+                    .text("active", cap: 160)
+            ])
+        ]
+        let session = try makeSession(policy: policy, database: database)
+        let users = try await requireHandle(session, .table(schema: "public", name: "users"))
+        let status = try await requireHandle(session, .column(schema: "public", table: "users", name: "status"))
+
+        let sample = try await invoke(
+            session,
+            id: "default-sample",
+            tool: .inspectSampleRows,
+            arguments: ["table_id": .string(users), "column_ids": [.string(status)]]
+        )
+        let distinct = try await invoke(
+            session,
+            id: "default-distinct",
+            tool: .inspectDistinctValues,
+            arguments: ["table_id": .string(users), "column_id": .string(status)]
+        )
+
+        #expect(sample.error?.code == .policyDenied)
+        #expect(distinct.error?.code == .policyDenied)
+        #expect(database.sampleRowsCallCount == 0)
+        #expect(database.distinctValuesCallCount == 0)
+    }
+
     @Test func policyClampsRowAndDistinctLimitsAboveZero() async throws {
         let policy = DatabaseInspectionPolicy(
             allowLocalDataInspection: true,
             allowSampleRows: true,
             allowFullTableScans: true,
+            audience: .local,
             maximumReturnedRows: 0,
             maximumDistinctValues: 0,
             maximumSampleColumns: 0

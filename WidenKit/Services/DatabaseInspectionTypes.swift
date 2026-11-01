@@ -183,7 +183,7 @@ public struct DatabaseInspectionPolicy: Codable, Equatable, Sendable {
         allowSampleRows: Bool = false,
         allowFullTableScans: Bool = false,
         allowDistinctValuesInProfiles: Bool = false,
-        audience: DatabaseInspectionResultAudience = .local,
+        audience: DatabaseInspectionResultAudience = .cloud,
         maximumCallCount: Int = 4,
         maximumResultBytes: Int = 8_000,
         maximumSessionResultBytes: Int = 20_000,
