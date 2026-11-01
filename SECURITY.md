@@ -22,7 +22,7 @@ Helpful private report details include:
 - Affected Widen version or commit.
 - macOS and Xcode version if relevant.
 - Steps to reproduce with a minimal schema or mocked data.
-- Whether the issue affects local mode, cloud mode, database execution,
+- Whether the issue affects text-to-SQL (Particle), database execution,
   Keychain storage, update delivery, or release signing.
 - Any known workaround.
 
@@ -32,7 +32,8 @@ Important boundaries Widen aims to preserve:
 
 - Database passwords and API keys stay in the macOS Keychain.
 - Query results are not sent to model providers by Widen.
-- Local mode should not send schema or prompts to a Widen backend.
+- Prompts and schema metadata go only to Particle, never to a Widen backend.
+- Pasted connection details are parsed locally and never sent to a model.
 - Generated SQL must be visible and reviewed before execution.
 - SQL execution must continue through deterministic validation and database
   transaction limits.

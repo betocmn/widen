@@ -38,7 +38,7 @@ make build     # build the Debug app
 make test      # unit tests
 make test-db   # unit + local Postgres integration tests
 make run       # build and launch Widen.app
-make eval-release MODEL=openai/gpt-5.5  # PR 12 text-to-SQL release gate
+make eval-release  # text-to-SQL release gate (pinned Particle-1)
 ```
 
 The committed `Widen.xcodeproj` is generated. Edit `project.yml`, run
@@ -53,13 +53,13 @@ Run the narrowest test set that covers your change:
   should include focused unit tests.
 - Database behavior changes should run `make test-db` when you have local
   PostgreSQL available.
-- Foundation Models behavior should run `make test-fm` only on an eligible Mac
-  with macOS 26+, Apple Intelligence enabled, and local model support.
-- Text-to-SQL release changes should run `make eval-release` (it defaults to
-  the pinned production model) when the OpenRouter and local PostgreSQL eval
-  environment is available. The gate rejects other models; engineering
-  comparisons need `MODEL=<model> ALLOW_MODEL_OVERRIDE=1` and do not update
-  the committed release docs' meaning.
+- Text-to-SQL release changes should run `make eval-release` (it runs the
+  pinned Particle-1 model) when `WIDEN_EVAL_PARTICLE_API_KEY` is set in
+  `.env.eval.local` and local PostgreSQL is available. The gate is paid; never
+  print or commit `.env.eval.local`. OpenRouter comparisons run on the non-gate
+  eval targets with `MODEL=openai/gpt-5.5` and `WIDEN_EVAL_OPENROUTER_API_KEY`.
+  The gate targets reject other models unless you add `ALLOW_MODEL_OVERRIDE=1`,
+  and such runs never update the committed release docs.
 
 If you cannot run an expected test locally, say that in the pull request.
 
@@ -72,9 +72,11 @@ If you cannot run an expected test locally, say that in the pull request.
 - Keep SQL validation deterministic and covered by tests.
 - Do not add analytics, telemetry, crash reporting, or network calls without a
   visible user-facing reason and README/privacy documentation.
-- Cloud text-to-SQL may send the question and allowed schema metadata to the
-  selected provider. Inspected data values require explicit per-connection
-  cloud data inspection opt-in.
+- Text-to-SQL may send the question and allowed schema metadata to Particle.
+  Inspected data values require explicit per-connection cloud data inspection
+  opt-in.
+- Keep paste-autofill deterministic and local: pasted connection details can
+  contain credentials and must never reach a model.
 - Prefer read-only database guidance in docs and examples.
 
 ## Pull Request Checklist

@@ -35,7 +35,7 @@ body:
         - Mac model:
         - Xcode version, if building from source:
         - PostgreSQL version:
-        - AI mode: local / cloud / manual SQL only
+        - Text-to-SQL: Particle-1 / manual SQL only
     validations:
       required: true
   - type: textarea
