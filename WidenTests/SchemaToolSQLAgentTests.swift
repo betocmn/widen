@@ -15,7 +15,7 @@ struct OpenRouterSchemaToolSQLAgentTests {
     @Test func diagnosticsDecodeOlderPayloadWithoutQueryPlan() throws {
         let data = Data(#"{"terminalToolSeen":true,"terminalAction":"sql"}"#.utf8)
 
-        let diagnostics = try JSONDecoder().decode(OpenRouterSchemaToolAgentDiagnostics.self, from: data)
+        let diagnostics = try JSONDecoder().decode(SchemaToolAgentDiagnostics.self, from: data)
 
         #expect(diagnostics.terminalToolSeen)
         #expect(diagnostics.terminalAction == "sql")

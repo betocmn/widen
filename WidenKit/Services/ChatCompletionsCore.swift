@@ -67,7 +67,7 @@ public struct OpenRouterGenerationMetadata: Codable, Equatable, Sendable {
     public var agentRequestIDs: [String]?
     public var agentReturnedModelIDs: [String]?
     public var agentProviderNames: [String]?
-    public var agentDiagnostics: OpenRouterSchemaToolAgentDiagnostics?
+    public var agentDiagnostics: SchemaToolAgentDiagnostics?
 }
 
 public struct OpenRouterFailureDiagnostic: Codable, Equatable, Sendable {

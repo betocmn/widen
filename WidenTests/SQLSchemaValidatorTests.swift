@@ -2575,10 +2575,10 @@ struct SQLSchemaValidatorTests {
         )
         metadata.agentSelectionReason = "tools"
         metadata.agentTerminalOutcome = "sql"
-        metadata.agentDiagnostics = OpenRouterSchemaToolAgentDiagnostics(
+        metadata.agentDiagnostics = SchemaToolAgentDiagnostics(
             terminalToolSeen: true,
             terminalAction: "sql",
-            schemaEvidence: OpenRouterSchemaToolEvidenceSummary(
+            schemaEvidence: SchemaToolEvidenceSummary(
                 searched: true,
                 describedTableIDs: describedTableIDs,
                 exposedColumnIDs: exposedColumnIDs,

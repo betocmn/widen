@@ -2199,7 +2199,7 @@ private struct OpenRouterSchemaToolAgentDiagnosticState {
     var redundantDuplicateToolCallCount = 0
     var redundantZeroResultSearchCount = 0
     var redundantJoinPathCallCount = 0
-    var appSideRejectionReason: OpenRouterSchemaToolAppRejectionReason?
+    var appSideRejectionReason: SchemaToolAppRejectionReason?
     var clarificationCorrectionMode = ""
     var intentCoverageMode = ""
     var clarificationPolicyDecision = ""
@@ -2339,8 +2339,8 @@ private struct OpenRouterSchemaToolAgentDiagnosticState {
     func snapshot(
         evidence: SchemaToolEvidenceLedger,
         inspectionToolCalls: [DatabaseInspectionToolCallTrace]
-    ) -> OpenRouterSchemaToolAgentDiagnostics {
-        OpenRouterSchemaToolAgentDiagnostics(
+    ) -> SchemaToolAgentDiagnostics {
+        SchemaToolAgentDiagnostics(
             logicalTurnCount: logicalTurnCount,
             terminalToolSeen: terminalToolSeen,
             terminalAction: terminalAction,
@@ -2384,7 +2384,7 @@ private struct SchemaToolEvidenceLedger {
         var message: String
         var category: OpenRouterSchemaToolAgentFailure.Category
         var reasonCode: String
-        var rejectionReason: OpenRouterSchemaToolAppRejectionReason
+        var rejectionReason: SchemaToolAppRejectionReason
 
         var errorCode: String {
             switch category {
@@ -2677,13 +2677,13 @@ private struct SchemaToolEvidenceLedger {
 
     func summary(
         inspectionToolCalls: [DatabaseInspectionToolCallTrace]
-    ) -> OpenRouterSchemaToolEvidenceSummary {
+    ) -> SchemaToolEvidenceSummary {
         let valueToolNames = Set([
             DatabaseInspectionToolName.inspectColumnProfile.rawValue,
             DatabaseInspectionToolName.inspectDistinctValues.rawValue,
             DatabaseInspectionToolName.inspectSampleRows.rawValue,
         ])
-        return OpenRouterSchemaToolEvidenceSummary(
+        return SchemaToolEvidenceSummary(
             searched: hasSuccessfulSearch,
             describedTableIDs: Array(describedTables).sorted(),
             exposedColumnIDs: Array(exposedColumns).sorted(),
@@ -2906,7 +2906,7 @@ private struct SchemaToolEvidenceLedger {
         _ message: String,
         category: OpenRouterSchemaToolAgentFailure.Category = .uninspectedSchemaObjects,
         reasonCode: String,
-        rejectionReason: OpenRouterSchemaToolAppRejectionReason = .uninspectedObject
+        rejectionReason: SchemaToolAppRejectionReason = .uninspectedObject
     ) -> ValidationResult {
         ValidationResult(
             accepted: false,
@@ -3122,7 +3122,7 @@ private struct OpenRouterAgentMetadataAccumulator {
     var returnedModelIDs: [String] = []
     var providerNames: [String] = []
     var terminalOutcome: String?
-    var agentDiagnostics: OpenRouterSchemaToolAgentDiagnostics?
+    var agentDiagnostics: SchemaToolAgentDiagnostics?
 
     mutating func record(_ metadata: OpenRouterGenerationMetadata) {
         if let value = metadata.promptTokens {

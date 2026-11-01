@@ -799,7 +799,7 @@ enum TextToSQLReleaseTriageReporter {
         }
 
         private static func policySummary(
-            _ diagnostics: OpenRouterSchemaToolAgentDiagnostics?
+            _ diagnostics: SchemaToolAgentDiagnostics?
         ) -> String {
             guard let diagnostics,
                 !diagnostics.clarificationPolicyDecision.isEmpty
@@ -862,7 +862,7 @@ enum TextToSQLReleaseTriageReporter {
             return SchemaToolAgentSQLIntentCoveragePolicy.semanticMismatchCategory(
                 question: evalCase?.question ?? "",
                 databaseContext: evalCase?.databaseContext ?? "",
-                evidence: diagnostics?.schemaEvidence ?? OpenRouterSchemaToolEvidenceSummary(),
+                evidence: diagnostics?.schemaEvidence ?? SchemaToolEvidenceSummary(),
                 sql: result.generatedSQL ?? "",
                 comparatorMismatchCategory: result.metrics.semanticMismatchCategory
             )

@@ -1,6 +1,6 @@
 import Foundation
 
-public enum OpenRouterSchemaToolAppRejectionReason: String, Codable, CaseIterable, Equatable, Sendable {
+public enum SchemaToolAppRejectionReason: String, Codable, CaseIterable, Equatable, Sendable {
     case uninspectedObject
     case invalidSQL
     case intentCoverageRejected
@@ -12,7 +12,7 @@ public enum OpenRouterSchemaToolAppRejectionReason: String, Codable, CaseIterabl
     case clarificationRejected
 }
 
-public struct OpenRouterSchemaToolEvidenceSummary: Codable, Equatable, Sendable {
+public struct SchemaToolEvidenceSummary: Codable, Equatable, Sendable {
     public var searched: Bool
     public var describedTableIDs: [String]
     public var exposedColumnIDs: [String]
@@ -37,7 +37,7 @@ public struct OpenRouterSchemaToolEvidenceSummary: Codable, Equatable, Sendable 
     }
 }
 
-public struct OpenRouterSchemaToolAgentDiagnostics: Codable, Equatable, Sendable {
+public struct SchemaToolAgentDiagnostics: Codable, Equatable, Sendable {
     public var logicalTurnCount: Int?
     public var terminalToolSeen: Bool
     public var terminalAction: String?
@@ -48,8 +48,8 @@ public struct OpenRouterSchemaToolAgentDiagnostics: Codable, Equatable, Sendable
     public var redundantDuplicateToolCallCount: Int
     public var redundantZeroResultSearchCount: Int
     public var redundantJoinPathCallCount: Int
-    public var schemaEvidence: OpenRouterSchemaToolEvidenceSummary
-    public var appSideRejectionReason: OpenRouterSchemaToolAppRejectionReason?
+    public var schemaEvidence: SchemaToolEvidenceSummary
+    public var appSideRejectionReason: SchemaToolAppRejectionReason?
     public var clarificationCorrectionMode: String
     public var intentCoverageMode: String
     public var clarificationPolicyDecision: String
@@ -83,8 +83,8 @@ public struct OpenRouterSchemaToolAgentDiagnostics: Codable, Equatable, Sendable
         redundantDuplicateToolCallCount: Int = 0,
         redundantZeroResultSearchCount: Int = 0,
         redundantJoinPathCallCount: Int = 0,
-        schemaEvidence: OpenRouterSchemaToolEvidenceSummary = OpenRouterSchemaToolEvidenceSummary(),
-        appSideRejectionReason: OpenRouterSchemaToolAppRejectionReason? = nil,
+        schemaEvidence: SchemaToolEvidenceSummary = SchemaToolEvidenceSummary(),
+        appSideRejectionReason: SchemaToolAppRejectionReason? = nil,
         clarificationCorrectionMode: String = "",
         intentCoverageMode: String = "",
         clarificationPolicyDecision: String = "",
@@ -209,11 +209,11 @@ public struct OpenRouterSchemaToolAgentDiagnostics: Codable, Equatable, Sendable
             forKey: .redundantJoinPathCallCount
         ) ?? 0
         schemaEvidence = try container.decodeIfPresent(
-            OpenRouterSchemaToolEvidenceSummary.self,
+            SchemaToolEvidenceSummary.self,
             forKey: .schemaEvidence
-        ) ?? OpenRouterSchemaToolEvidenceSummary()
+        ) ?? SchemaToolEvidenceSummary()
         appSideRejectionReason = try container.decodeIfPresent(
-            OpenRouterSchemaToolAppRejectionReason.self,
+            SchemaToolAppRejectionReason.self,
             forKey: .appSideRejectionReason
         )
         clarificationCorrectionMode = try container.decodeIfPresent(

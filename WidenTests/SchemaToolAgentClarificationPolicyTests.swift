@@ -188,7 +188,7 @@ struct SchemaToolAgentClarificationPolicyTests {
         question: String,
         databaseContext: String = "",
         clarification: String,
-        evidence: OpenRouterSchemaToolEvidenceSummary
+        evidence: SchemaToolEvidenceSummary
     ) -> SchemaToolAgentClarificationPolicyResult {
         SchemaToolAgentClarificationPolicy.evaluate(
             originalQuestion: question,
@@ -202,8 +202,8 @@ struct SchemaToolAgentClarificationPolicyTests {
     private func evidence(
         columns: [String],
         joinPaths: [String] = []
-    ) -> OpenRouterSchemaToolEvidenceSummary {
-        OpenRouterSchemaToolEvidenceSummary(
+    ) -> SchemaToolEvidenceSummary {
+        SchemaToolEvidenceSummary(
             searched: true,
             describedTableIDs: ["public.example"],
             exposedColumnIDs: columns,

@@ -334,7 +334,7 @@ struct SessionStoreTests {
                 == ["strictJSONSchema", "promptOnlyJSON"]
         )
         #expect(
-            OpenRouterSchemaToolAppRejectionReason.allCases.map(\.rawValue) == [
+            SchemaToolAppRejectionReason.allCases.map(\.rawValue) == [
                 "uninspectedObject",
                 "invalidSQL",
                 "intentCoverageRejected",
