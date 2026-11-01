@@ -60,6 +60,6 @@ struct GeneralSettingsView: View {
 
     private var privacyCopy: String {
         LLMSettingsView.privacyCopy
-            + " Query results never leave your Mac unless you allow inspected values. Widen has no backend of its own."
+            + " Query result rows never leave your Mac unless you allow inspected values. Widen has no backend of its own."
     }
 }
