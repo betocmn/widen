@@ -118,8 +118,8 @@ public struct TextToSQLPipelineFailure: Error, LocalizedError, Codable, Equatabl
     public var category: TextToSQLFailureCategory
     public var message: String
     public var validationIssueIDs: [String]
-    public var openRouterFailure: OpenRouterFailureDiagnostic?
-    public var backendMetadata: OpenRouterGenerationMetadata?
+    public var openRouterFailure: CloudRequestFailureDiagnostic?
+    public var backendMetadata: CloudGenerationMetadata?
     public var databaseDiagnostic: DatabaseDiagnostic?
     public var verificationStatus: SQLVerificationStatus?
 
@@ -128,8 +128,8 @@ public struct TextToSQLPipelineFailure: Error, LocalizedError, Codable, Equatabl
         category: TextToSQLFailureCategory,
         message: String,
         validationIssueIDs: [String] = [],
-        openRouterFailure: OpenRouterFailureDiagnostic? = nil,
-        backendMetadata: OpenRouterGenerationMetadata? = nil,
+        openRouterFailure: CloudRequestFailureDiagnostic? = nil,
+        backendMetadata: CloudGenerationMetadata? = nil,
         databaseDiagnostic: DatabaseDiagnostic? = nil,
         verificationStatus: SQLVerificationStatus? = nil
     ) {
@@ -1497,12 +1497,12 @@ public struct TextToSQLPipeline: TextToSQLRunning {
     private func generationFailure(
         _ error: any Error,
         stage: TextToSQLStage,
-        priorBackendMetadata: OpenRouterGenerationMetadata? = nil
+        priorBackendMetadata: CloudGenerationMetadata? = nil
     ) -> TextToSQLPipelineFailure {
         if let failure = SQLGenerationFailure.typed(error) {
-            let openRouterDiagnostic: OpenRouterFailureDiagnostic?
-            let backendMetadata: OpenRouterGenerationMetadata?
-            if case .openRouter(let openRouterFailure) = failure {
+            let openRouterDiagnostic: CloudRequestFailureDiagnostic?
+            let backendMetadata: CloudGenerationMetadata?
+            if case .cloudRequest(let openRouterFailure) = failure {
                 openRouterDiagnostic = openRouterFailure.diagnostic
                 backendMetadata = nil
             } else if case .httpBudgetExhausted(let budgetFailure) = failure {
@@ -1523,7 +1523,7 @@ public struct TextToSQLPipeline: TextToSQLRunning {
             let accumulatedMetadata = backendMetadata
                 .map { $0.accumulatingPipelineUsage(from: priorBackendMetadata) }
                 ?? openRouterDiagnostic.flatMap {
-                    OpenRouterGenerationMetadata.pipelineFailureMetadata(
+                    CloudGenerationMetadata.pipelineFailureMetadata(
                         from: $0,
                         prior: priorBackendMetadata
                     )
@@ -1802,7 +1802,7 @@ private extension SQLGenerationResult {
     }
 
     func accumulatingBackendUsage(
-        from priorMetadata: OpenRouterGenerationMetadata?
+        from priorMetadata: CloudGenerationMetadata?
     ) -> SQLGenerationResult {
         var copy = self
         if let backendMetadata {
@@ -1815,7 +1815,7 @@ private extension SQLGenerationResult {
 
     static func pipelineClarification(
         _ question: String,
-        backendMetadata: OpenRouterGenerationMetadata? = nil
+        backendMetadata: CloudGenerationMetadata? = nil
     ) -> SQLGenerationResult {
         SQLGenerationResult(
             sql: "",
@@ -1831,10 +1831,10 @@ private extension SQLGenerationResult {
     }
 }
 
-private extension OpenRouterGenerationMetadata {
+private extension CloudGenerationMetadata {
     func accumulatingPipelineUsage(
-        from priorMetadata: OpenRouterGenerationMetadata?
-    ) -> OpenRouterGenerationMetadata {
+        from priorMetadata: CloudGenerationMetadata?
+    ) -> CloudGenerationMetadata {
         guard let priorMetadata else { return self }
 
         var copy = self
@@ -1899,13 +1899,13 @@ private extension OpenRouterGenerationMetadata {
     }
 
     static func pipelineFailureMetadata(
-        from diagnostic: OpenRouterFailureDiagnostic,
-        prior: OpenRouterGenerationMetadata?
-    ) -> OpenRouterGenerationMetadata? {
+        from diagnostic: CloudRequestFailureDiagnostic,
+        prior: CloudGenerationMetadata?
+    ) -> CloudGenerationMetadata? {
         guard let requestedModelID = diagnostic.requestedModelID ?? prior?.requestedModelID else {
             return nil
         }
-        let current = OpenRouterGenerationMetadata(
+        let current = CloudGenerationMetadata(
             requestedModelID: requestedModelID,
             returnedModelID: diagnostic.returnedModelID,
             providerName: diagnostic.providerName,

@@ -1,11 +1,11 @@
 import Foundation
 
-public enum OpenRouterStructuredOutputMode: String, Codable, CaseIterable, Equatable, Sendable {
+public enum StructuredOutputMode: String, Codable, CaseIterable, Equatable, Sendable {
     case strictJSONSchema
     case promptOnlyJSON
 }
 
-public struct OpenRouterModelCapabilities: Codable, Equatable, Sendable {
+public struct CloudModelCapabilities: Codable, Equatable, Sendable {
     public var supportsResponseFormat: Bool
     public var supportsStructuredOutputs: Bool
     public var supportsTools: Bool
@@ -20,8 +20,8 @@ public struct OpenRouterModelCapabilities: Codable, Equatable, Sendable {
     public var fetchedAt: Date
     public var canonicalModelID: String? = nil
 
-    public static func conservative(fetchedAt: Date = Date()) -> OpenRouterModelCapabilities {
-        OpenRouterModelCapabilities(
+    public static func conservative(fetchedAt: Date = Date()) -> CloudModelCapabilities {
+        CloudModelCapabilities(
             supportsResponseFormat: false,
             supportsStructuredOutputs: false,
             supportsTools: false,
@@ -48,7 +48,7 @@ struct OpenRouterRequestBuilder: Sendable {
 
     struct BuiltRequest: Sendable {
         var request: URLRequest
-        var mode: OpenRouterStructuredOutputMode
+        var mode: StructuredOutputMode
     }
 
     func build(
@@ -56,9 +56,9 @@ struct OpenRouterRequestBuilder: Sendable {
         model: String,
         instructions: String,
         prompt: String,
-        capabilities: OpenRouterModelCapabilities
+        capabilities: CloudModelCapabilities
     ) throws -> BuiltRequest {
-        let mode: OpenRouterStructuredOutputMode =
+        let mode: StructuredOutputMode =
             capabilities.supportsStructuredOutputs ? .strictJSONSchema : .promptOnlyJSON
         var body: [String: Any] = [
             "model": model,
@@ -96,7 +96,7 @@ struct OpenRouterRequestBuilder: Sendable {
     func buildTinyJSONTest(
         apiKey: String,
         model: String,
-        capabilities: OpenRouterModelCapabilities
+        capabilities: CloudModelCapabilities
     ) throws -> BuiltRequest {
         try build(
             apiKey: apiKey,
@@ -112,7 +112,7 @@ struct OpenRouterRequestBuilder: Sendable {
         )
     }
 
-    private func cappedCompletionTokens(_ capabilities: OpenRouterModelCapabilities) -> Int {
+    private func cappedCompletionTokens(_ capabilities: CloudModelCapabilities) -> Int {
         min(Self.completionTokenBudget, max(16, capabilities.maximumCompletionTokens ?? Self.completionTokenBudget))
     }
 
@@ -148,7 +148,7 @@ struct OpenRouterRequestBuilder: Sendable {
 struct OpenRouterResponseParser: Sendable {
     struct ParsedResult: Sendable {
         var result: SQLGenerationResult
-        var metadata: OpenRouterGenerationMetadata
+        var metadata: CloudGenerationMetadata
     }
 
     private struct ChatResponse: Decodable {
@@ -163,7 +163,7 @@ struct OpenRouterResponseParser: Sendable {
             let message: Message?
             let finishReason: String?
             let nativeFinishReason: String?
-            let error: OpenRouterAPIErrorEnvelope.APIError?
+            let error: ChatCompletionErrorEnvelope.APIError?
 
             private enum CodingKeys: String, CodingKey {
                 case index
@@ -179,8 +179,8 @@ struct OpenRouterResponseParser: Sendable {
         let provider: String?
         let serviceTier: String?
         let choices: [Choice]
-        let usage: OpenRouterReportedUsage?
-        let error: OpenRouterAPIErrorEnvelope.APIError?
+        let usage: ChatCompletionUsage?
+        let error: ChatCompletionErrorEnvelope.APIError?
         let openrouterMetadata: OpenRouterRouterMetadata?
 
         private enum CodingKeys: String, CodingKey {
@@ -201,8 +201,8 @@ struct OpenRouterResponseParser: Sendable {
             provider = try container.decodeIfPresent(String.self, forKey: .provider)
             serviceTier = try container.decodeIfPresent(String.self, forKey: .serviceTier)
             choices = try container.decodeIfPresent([Choice].self, forKey: .choices) ?? []
-            usage = try container.decodeIfPresent(OpenRouterReportedUsage.self, forKey: .usage)
-            error = try container.decodeIfPresent(OpenRouterAPIErrorEnvelope.APIError.self, forKey: .error)
+            usage = try container.decodeIfPresent(ChatCompletionUsage.self, forKey: .usage)
+            error = try container.decodeIfPresent(ChatCompletionErrorEnvelope.APIError.self, forKey: .error)
             openrouterMetadata = try container.decodeIfPresent(
                 OpenRouterRouterMetadata.self,
                 forKey: .openrouterMetadata
@@ -258,7 +258,7 @@ struct OpenRouterResponseParser: Sendable {
         data: Data,
         response: HTTPURLResponse,
         requestedModelID: String,
-        mode: OpenRouterStructuredOutputMode,
+        mode: StructuredOutputMode,
         requestCount: Int,
         retryCount: Int,
         expectedCanonicalModelID: String? = nil
@@ -279,7 +279,7 @@ struct OpenRouterResponseParser: Sendable {
         do {
             completion = try JSONDecoder().decode(ChatResponse.self, from: data)
         } catch {
-            throw OpenRouterFailure(
+            throw CloudRequestFailure(
                 category: .malformedStructuredResponse,
                 message: "OpenRouter returned a malformed response envelope.",
                 httpStatus: response.statusCode,
@@ -301,7 +301,7 @@ struct OpenRouterResponseParser: Sendable {
             ).withReportedUsage(reportedUsage)
         }
         guard let choice = completion.choices.first else {
-            throw OpenRouterFailure(
+            throw CloudRequestFailure(
                 category: .noContent,
                 message: "OpenRouter returned no choices.",
                 httpStatus: response.statusCode,
@@ -326,7 +326,7 @@ struct OpenRouterResponseParser: Sendable {
             ).withReportedUsage(reportedUsage)
         }
         if choice.finishReason == "error" {
-            throw OpenRouterFailure(
+            throw CloudRequestFailure(
                 category: .providerUnavailable,
                 message: "The provider ended generation with an error.",
                 httpStatus: response.statusCode,
@@ -339,7 +339,7 @@ struct OpenRouterResponseParser: Sendable {
             ).withReportedUsage(reportedUsage)
         }
         if choice.finishReason == "length" {
-            throw OpenRouterFailure(
+            throw CloudRequestFailure(
                 category: .maxTokensExceeded,
                 message: "The provider stopped because the completion token limit was reached.",
                 httpStatus: response.statusCode,
@@ -352,7 +352,7 @@ struct OpenRouterResponseParser: Sendable {
             ).withReportedUsage(reportedUsage)
         }
         if choice.finishReason == "content_filter" {
-            throw OpenRouterFailure(
+            throw CloudRequestFailure(
                 category: .contentPolicy,
                 message: "The provider stopped because of a content policy filter.",
                 httpStatus: response.statusCode,
@@ -365,7 +365,7 @@ struct OpenRouterResponseParser: Sendable {
             ).withReportedUsage(reportedUsage)
         }
         if let refusal = choice.message?.refusal, !refusal.isEmpty {
-            throw OpenRouterFailure(
+            throw CloudRequestFailure(
                 category: .refusal,
                 message: "The provider refused the request.",
                 httpStatus: response.statusCode,
@@ -381,7 +381,7 @@ struct OpenRouterResponseParser: Sendable {
             .trimmingCharacters(in: .whitespacesAndNewlines),
             !content.isEmpty
         else {
-            throw OpenRouterFailure(
+            throw CloudRequestFailure(
                 category: .noContent,
                 message: "OpenRouter returned empty assistant content.",
                 httpStatus: response.statusCode,
@@ -405,7 +405,7 @@ struct OpenRouterResponseParser: Sendable {
                 providerName: completion.provider ?? completion.openrouterMetadata?.selectedProvider,
                 attemptCount: requestCount
             )
-        } catch let failure as OpenRouterFailure {
+        } catch let failure as CloudRequestFailure {
             throw failure.withReportedUsage(reportedUsage)
         }
         let objectData: Data
@@ -414,7 +414,7 @@ struct OpenRouterResponseParser: Sendable {
             objectData = Data(content.utf8)
         case .promptOnlyJSON:
             guard let data = Self.promptOnlyJSONObjectData(from: content) else {
-                throw OpenRouterFailure(
+                throw CloudRequestFailure(
                     category: .malformedStructuredResponse,
                     message: "The cloud model did not return a JSON object.",
                     httpStatus: response.statusCode,
@@ -433,7 +433,7 @@ struct OpenRouterResponseParser: Sendable {
         do {
             generated = try JSONDecoder().decode(CloudGeneratedSQLResponse.self, from: objectData)
         } catch {
-            throw OpenRouterFailure(
+            throw CloudRequestFailure(
                 category: .malformedStructuredResponse,
                 message: "The cloud model returned malformed structured JSON.",
                 httpStatus: response.statusCode,
@@ -451,7 +451,7 @@ struct OpenRouterResponseParser: Sendable {
         let clarificationQuestion = generated.clarificationQuestion?
             .trimmingCharacters(in: .whitespacesAndNewlines)
         guard needsClarification || !sql.isEmpty else {
-            throw OpenRouterFailure(
+            throw CloudRequestFailure(
                 category: .malformedStructuredResponse,
                 message: "The cloud model returned empty SQL without a clarification.",
                 httpStatus: response.statusCode,
@@ -464,7 +464,7 @@ struct OpenRouterResponseParser: Sendable {
             ).withReportedUsage(reportedUsage)
         }
         guard !needsClarification || clarificationQuestion?.isEmpty == false else {
-            throw OpenRouterFailure(
+            throw CloudRequestFailure(
                 category: .malformedStructuredResponse,
                 message: "The cloud model requested clarification without a question.",
                 httpStatus: response.statusCode,
@@ -477,7 +477,7 @@ struct OpenRouterResponseParser: Sendable {
             ).withReportedUsage(reportedUsage)
         }
 
-        let metadata = OpenRouterGenerationMetadata(
+        let metadata = CloudGenerationMetadata(
             requestedModelID: requestedModelID,
             returnedModelID: completion.model,
             providerName: completion.provider ?? completion.openrouterMetadata?.selectedProvider,
@@ -510,9 +510,9 @@ struct OpenRouterResponseParser: Sendable {
         return ParsedResult(result: result, metadata: metadata)
     }
 
-    static func reportedUsage(from data: Data) -> OpenRouterReportedUsage? {
+    static func reportedUsage(from data: Data) -> ChatCompletionUsage? {
         guard let envelope = try? JSONDecoder().decode(
-            OpenRouterReportedUsageEnvelope.self,
+            ChatCompletionUsageEnvelope.self,
             from: data
         ) else { return nil }
         return envelope.usage
@@ -524,11 +524,11 @@ struct OpenRouterResponseParser: Sendable {
         requestedModelID: String?,
         attemptCount: Int,
         retryAfterSeconds: Double? = nil
-    ) -> OpenRouterFailure {
+    ) -> CloudRequestFailure {
         let requestID = response.value(forHTTPHeaderField: "X-Request-Id")
             ?? response.value(forHTTPHeaderField: "X-Request-ID")
             ?? response.value(forHTTPHeaderField: "X-Generation-Id")
-        if let envelope = try? JSONDecoder().decode(OpenRouterAPIErrorEnvelope.self, from: data),
+        if let envelope = try? JSONDecoder().decode(ChatCompletionErrorEnvelope.self, from: data),
             let apiError = envelope.error
         {
             let effectiveHTTPStatus = apiError.httpStatusCode ?? response.statusCode
@@ -546,8 +546,8 @@ struct OpenRouterResponseParser: Sendable {
             return failure
         }
         let message = HTTPURLResponse.localizedString(forStatusCode: response.statusCode)
-        return OpenRouterFailure(
-            category: OpenRouterFailure.category(
+        return CloudRequestFailure(
+            category: CloudRequestFailure.category(
                 errorType: nil,
                 providerCode: nil,
                 httpStatus: response.statusCode,
@@ -563,7 +563,7 @@ struct OpenRouterResponseParser: Sendable {
     }
 
     static func failure(
-        apiError: OpenRouterAPIErrorEnvelope.APIError,
+        apiError: ChatCompletionErrorEnvelope.APIError,
         httpStatus: Int?,
         completionID: String?,
         requestID: String?,
@@ -571,7 +571,7 @@ struct OpenRouterResponseParser: Sendable {
         returnedModelID: String?,
         providerName: String?,
         attemptCount: Int
-    ) -> OpenRouterFailure {
+    ) -> CloudRequestFailure {
         let message = apiError.message ?? "OpenRouter returned an error."
         let effectiveHTTPStatus = apiError.httpStatusCode ?? httpStatus
         var displayMessage = safeMessage(message)
@@ -579,8 +579,8 @@ struct OpenRouterResponseParser: Sendable {
             displayMessage =
                 "No OpenRouter endpoint met Widen's private-routing requirements for this model. Widen requires zero data retention, no provider data collection, and full request-parameter support, and fails closed rather than relaxing them. \(displayMessage)"
         }
-        return OpenRouterFailure(
-            category: OpenRouterFailure.category(
+        return CloudRequestFailure(
+            category: CloudRequestFailure.category(
                 errorType: apiError.metadata?.errorType,
                 providerCode: apiError.metadata?.providerCode,
                 httpStatus: effectiveHTTPStatus,
@@ -588,7 +588,7 @@ struct OpenRouterResponseParser: Sendable {
             ),
             message: displayMessage,
             httpStatus: effectiveHTTPStatus,
-            openRouterErrorType: apiError.metadata?.errorType,
+            providerErrorType: apiError.metadata?.errorType,
             providerCode: apiError.metadata?.providerCode,
             completionID: completionID,
             requestID: requestID,
@@ -685,12 +685,12 @@ struct OpenRouterConnectivityCheck: Sendable {
     struct Result: Equatable, Sendable {
         var keyAccepted: Bool
         var selectedModelAvailable: Bool
-        var capabilities: OpenRouterModelCapabilities
+        var capabilities: CloudModelCapabilities
         var returnedModelID: String?
         var providerName: String?
         var latencyMs: Int
         var retryCount: Int
-        var error: OpenRouterFailure?
+        var error: CloudRequestFailure?
     }
 
     let apiKey: String
@@ -750,7 +750,7 @@ struct OpenRouterConnectivityCheck: Sendable {
                 retryCount: parsed.retryCount,
                 error: nil
             )
-        } catch let failure as OpenRouterFailure {
+        } catch let failure as CloudRequestFailure {
             return Result(
                 keyAccepted: failure.category != .authentication,
                 selectedModelAvailable: failure.category != .modelNotFound
@@ -763,7 +763,7 @@ struct OpenRouterConnectivityCheck: Sendable {
                 error: failure
             )
         } catch {
-            let failure = OpenRouterFailure(
+            let failure = CloudRequestFailure(
                 category: .networkTransport,
                 message: error.localizedDescription,
                 requestedModelID: model
@@ -795,9 +795,9 @@ public final class OpenRouterSQLGenerator: SQLGenerator, Sendable {
     private let catalogService: OpenRouterModelCatalogService
     private let requestBuilder: OpenRouterRequestBuilder
     private let parser = OpenRouterResponseParser()
-    private let retryPolicy: OpenRouterRetryPolicy
+    private let retryPolicy: ChatCompletionRetryPolicy
     private let countCapabilityLookupHTTPAttempts: Bool
-    private let preResolvedCapabilities: OpenRouterModelCapabilities?
+    private let preResolvedCapabilities: CloudModelCapabilities?
 
     public init(
         apiKey: String,
@@ -814,7 +814,7 @@ public final class OpenRouterSQLGenerator: SQLGenerator, Sendable {
         self.transport = transport
         self.catalogService = .shared
         self.requestBuilder = OpenRouterRequestBuilder(endpoint: endpoint)
-        self.retryPolicy = OpenRouterRetryPolicy(maxAttempts: maximumHTTPAttempts)
+        self.retryPolicy = ChatCompletionRetryPolicy(maxAttempts: maximumHTTPAttempts)
         self.countCapabilityLookupHTTPAttempts = countCapabilityLookupHTTPAttempts
         self.preResolvedCapabilities = nil
     }
@@ -826,9 +826,9 @@ public final class OpenRouterSQLGenerator: SQLGenerator, Sendable {
         transport: any HTTPTransport,
         catalogService: OpenRouterModelCatalogService,
         requestBuilder: OpenRouterRequestBuilder,
-        retryPolicy: OpenRouterRetryPolicy = OpenRouterRetryPolicy(),
+        retryPolicy: ChatCompletionRetryPolicy = ChatCompletionRetryPolicy(),
         countCapabilityLookupHTTPAttempts: Bool = false,
-        preResolvedCapabilities: OpenRouterModelCapabilities? = nil
+        preResolvedCapabilities: CloudModelCapabilities? = nil
     ) {
         self.apiKey = apiKey
         self.model = model
@@ -860,18 +860,18 @@ public final class OpenRouterSQLGenerator: SQLGenerator, Sendable {
         let prompt = bundle.prompt
         let started = Date()
         let availableHTTPAttempts = countCapabilityLookupHTTPAttempts
-            ? OpenRouterHTTPAttemptBudget.remaining(
+            ? HTTPAttemptBudget.remaining(
                 maximumHTTPAttempts: retryPolicy.maxAttempts,
                 contextModelCallCount: context.modelCallCount
             )
             : retryPolicy.maxAttempts
         guard availableHTTPAttempts > 0 else {
-            throw OpenRouterHTTPAttemptBudgetExhausted(
+            throw HTTPAttemptBudgetExhausted(
                 message: "OpenRouter HTTP-attempt budget exhausted before generation."
             )
         }
         let capabilityLookupHTTPAttempts: Int
-        let capabilities: OpenRouterModelCapabilities
+        let capabilities: CloudModelCapabilities
         if let preResolvedCapabilities {
             // Pre-resolved capabilities were already validated by the caller:
             // the schema-tool agent's legacy fallback passes capabilities it
@@ -902,7 +902,7 @@ public final class OpenRouterSQLGenerator: SQLGenerator, Sendable {
         if countCapabilityLookupHTTPAttempts,
             capabilityLookupHTTPAttempts >= availableHTTPAttempts
         {
-            throw OpenRouterHTTPAttemptBudgetExhausted(
+            throw HTTPAttemptBudgetExhausted(
                 message: "OpenRouter HTTP-attempt budget exhausted before chat completion.",
                 backendMetadata: budgetMetadata(
                     requestCount: capabilityLookupHTTPAttempts,
@@ -941,7 +941,7 @@ public final class OpenRouterSQLGenerator: SQLGenerator, Sendable {
             return result
         } catch is CancellationError {
             throw CancellationError()
-        } catch let failure as OpenRouterFailure {
+        } catch let failure as CloudRequestFailure {
             let recordedFailure = capabilityLookupHTTPAttempts > 0
                 ? failure.withAttemptCount(failure.diagnostic.attemptCount + capabilityLookupHTTPAttempts)
                 : failure
@@ -973,7 +973,7 @@ public final class OpenRouterSQLGenerator: SQLGenerator, Sendable {
                     callCount: max(1, context.modelCallCount),
                     stopReason: "networkTransport"
                 ))
-            throw OpenRouterFailure(
+            throw CloudRequestFailure(
                 category: .networkTransport,
                 message: error.localizedDescription,
                 requestedModelID: model,
@@ -982,8 +982,8 @@ public final class OpenRouterSQLGenerator: SQLGenerator, Sendable {
         }
     }
 
-    fileprivate func testTinyCompletion(capabilities: OpenRouterModelCapabilities) async throws
-        -> OpenRouterGenerationMetadata
+    fileprivate func testTinyCompletion(capabilities: CloudModelCapabilities) async throws
+        -> CloudGenerationMetadata
     {
         let built = try requestBuilder.buildTinyJSONTest(
             apiKey: apiKey,
@@ -996,9 +996,9 @@ public final class OpenRouterSQLGenerator: SQLGenerator, Sendable {
 
     private func budgetMetadata(
         requestCount: Int,
-        capabilities: OpenRouterModelCapabilities
-    ) -> OpenRouterGenerationMetadata {
-        OpenRouterGenerationMetadata(
+        capabilities: CloudModelCapabilities
+    ) -> CloudGenerationMetadata {
+        CloudGenerationMetadata(
             requestedModelID: model,
             returnedModelID: nil,
             providerName: nil,
@@ -1023,7 +1023,7 @@ public final class OpenRouterSQLGenerator: SQLGenerator, Sendable {
     private func performRequest(
         instructions: String,
         prompt: String,
-        capabilities: OpenRouterModelCapabilities,
+        capabilities: CloudModelCapabilities,
         maximumHTTPAttempts: Int? = nil,
         usageSink: (@Sendable (SQLGenerationUsageEvent) -> Void)? = nil
     ) async throws -> OpenRouterResponseParser.ParsedResult {
@@ -1048,13 +1048,13 @@ public final class OpenRouterSQLGenerator: SQLGenerator, Sendable {
         maximumHTTPAttempts: Int? = nil,
         usageSink: (@Sendable (SQLGenerationUsageEvent) -> Void)? = nil
     ) async throws -> OpenRouterResponseParser.ParsedResult {
-        let effectiveRetryPolicy = OpenRouterRetryPolicy(
+        let effectiveRetryPolicy = ChatCompletionRetryPolicy(
             maxAttempts: maximumHTTPAttempts.map { min(retryPolicy.maxAttempts, max(1, $0)) }
                 ?? retryPolicy.maxAttempts
         )
         var attempt = 1
         var noContentRetries = 0
-        var failedUsage = OpenRouterUsageAccumulator()
+        var failedUsage = ChatCompletionUsageAccumulator()
         while true {
             try Task.checkCancellation()
             do {
@@ -1077,7 +1077,7 @@ public final class OpenRouterSQLGenerator: SQLGenerator, Sendable {
                     parsed.metadata = failedUsage.merging(into: parsed.metadata)
                     parsed.result.backendMetadata = parsed.metadata
                     return parsed
-                } catch var failure as OpenRouterFailure {
+                } catch var failure as CloudRequestFailure {
                     failure.diagnostic.retryAfterSeconds = retryAfter
                     failedUsage.record(failure.diagnostic)
                     if failure.category == .noContent { noContentRetries += 1 }
@@ -1090,7 +1090,7 @@ public final class OpenRouterSQLGenerator: SQLGenerator, Sendable {
                         try await Task.sleep(nanoseconds: UInt64(delay * 1_000_000_000))
                         continue
                     }
-                    if let retryAfter, retryAfter > OpenRouterRetryPolicy.retryAfterCap,
+                    if let retryAfter, retryAfter > ChatCompletionRetryPolicy.retryAfterCap,
                         failure.category == .rateLimited
                     {
                         failure.diagnostic.suggestedWaitSeconds = retryAfter
@@ -1103,7 +1103,7 @@ public final class OpenRouterSQLGenerator: SQLGenerator, Sendable {
                 if error.code == .cancelled, Task.isCancelled {
                     throw CancellationError()
                 }
-                let failure = OpenRouterFailure.map(error, requestedModelID: requestedModelID, attempt: attempt)
+                let failure = CloudRequestFailure.map(error, requestedModelID: requestedModelID, attempt: attempt)
                 if let delay = effectiveRetryPolicy.retryDelay(
                     for: failure,
                     attempt: attempt,

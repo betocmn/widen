@@ -123,7 +123,7 @@ public struct SQLGenerationResult: Codable, Equatable, Sendable {
     public var clarificationOptions: [ClarificationOption]
     public var pendingClarificationID: UUID?
     public var pendingClarification: PendingClarification?
-    public var backendMetadata: OpenRouterGenerationMetadata?
+    public var backendMetadata: CloudGenerationMetadata?
     public var schemaToolCalls: [SchemaToolCallTrace]
     public var inspectionToolCalls: [DatabaseInspectionToolCallTrace]
 
@@ -162,7 +162,7 @@ public struct SQLGenerationResult: Codable, Equatable, Sendable {
         clarificationOptions: [ClarificationOption] = [],
         pendingClarificationID: UUID? = nil,
         pendingClarification: PendingClarification? = nil,
-        backendMetadata: OpenRouterGenerationMetadata? = nil,
+        backendMetadata: CloudGenerationMetadata? = nil,
         schemaToolCalls: [SchemaToolCallTrace] = [],
         inspectionToolCalls: [DatabaseInspectionToolCallTrace] = []
     ) {
@@ -226,7 +226,7 @@ public struct SQLGenerationResult: Codable, Equatable, Sendable {
         // written by a newer build) drops the diagnostics, never the whole
         // saved session.
         backendMetadata = try? container.decodeIfPresent(
-            OpenRouterGenerationMetadata.self,
+            CloudGenerationMetadata.self,
             forKey: .backendMetadata
         )
         schemaToolCalls = (try? container.decodeIfPresent(

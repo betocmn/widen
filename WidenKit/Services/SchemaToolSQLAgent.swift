@@ -88,16 +88,16 @@ public struct OpenRouterSchemaToolAgentFailure: Error, LocalizedError, Equatable
 
     public var category: Category
     public var message: String
-    public var openRouterFailure: OpenRouterFailure?
-    public var backendMetadata: OpenRouterGenerationMetadata?
+    public var openRouterFailure: CloudRequestFailure?
+    public var backendMetadata: CloudGenerationMetadata?
     public var schemaToolCalls: [SchemaToolCallTrace]
     public var inspectionToolCalls: [DatabaseInspectionToolCallTrace]
 
     public init(
         category: Category,
         message: String,
-        openRouterFailure: OpenRouterFailure? = nil,
-        backendMetadata: OpenRouterGenerationMetadata? = nil,
+        openRouterFailure: CloudRequestFailure? = nil,
+        backendMetadata: CloudGenerationMetadata? = nil,
         schemaToolCalls: [SchemaToolCallTrace] = [],
         inspectionToolCalls: [DatabaseInspectionToolCallTrace] = []
     ) {
@@ -157,7 +157,7 @@ public final class OpenRouterSchemaToolSQLAgent: SQLGenerator, Sendable {
     private let catalogService: OpenRouterModelCatalogService
     private let requestBuilder: OpenRouterToolChatRequestBuilder
     private let parser = OpenRouterToolChatParser()
-    private let retryPolicy = OpenRouterRetryPolicy()
+    private let retryPolicy = ChatCompletionRetryPolicy()
     private let sessionFactory: SchemaToolSessionFactory
     private let databaseInspectionSessionFactory: DatabaseInspectionToolSessionFactory
     private let databaseInspectionPolicy: DatabaseInspectionPolicy
@@ -249,7 +249,7 @@ public final class OpenRouterSchemaToolSQLAgent: SQLGenerator, Sendable {
     ) async throws -> SQLGenerationResult {
         var aggregate = OpenRouterAgentMetadataAccumulator(requestedModelID: model)
         let availableHTTPAttempts = configuration.countCapabilityLookupHTTPAttempts
-            ? OpenRouterHTTPAttemptBudget.remaining(
+            ? HTTPAttemptBudget.remaining(
                 maximumHTTPAttempts: configuration.maximumHTTPAttempts,
                 contextModelCallCount: context.modelCallCount
             )
@@ -267,7 +267,7 @@ public final class OpenRouterSchemaToolSQLAgent: SQLGenerator, Sendable {
                 backendMetadata: metadata
             )
         }
-        let capabilities: OpenRouterModelCapabilities
+        let capabilities: CloudModelCapabilities
         if configuration.countCapabilityLookupHTTPAttempts {
             let lookup = try await catalogService.validatedCapabilitiesForGeneration(
                 apiKey: apiKey,
@@ -315,7 +315,7 @@ public final class OpenRouterSchemaToolSQLAgent: SQLGenerator, Sendable {
                     transport: transport,
                     catalogService: catalogService,
                     requestBuilder: OpenRouterRequestBuilder(endpoint: requestBuilder.endpoint),
-                    retryPolicy: OpenRouterRetryPolicy(
+                    retryPolicy: ChatCompletionRetryPolicy(
                         maxAttempts: max(
                             1,
                             availableHTTPAttempts - aggregate.httpAttemptCount
@@ -335,14 +335,14 @@ public final class OpenRouterSchemaToolSQLAgent: SQLGenerator, Sendable {
                     context: context,
                     config: config
                 )
-            } catch let failure as OpenRouterFailure
+            } catch let failure as CloudRequestFailure
                 where configuration.countCapabilityLookupHTTPAttempts
                     && aggregate.httpAttemptCount > 0
             {
                 throw failure.withAttemptCount(
                     failure.diagnostic.attemptCount + aggregate.httpAttemptCount
                 )
-            } catch var failure as OpenRouterHTTPAttemptBudgetExhausted
+            } catch var failure as HTTPAttemptBudgetExhausted
                 where configuration.countCapabilityLookupHTTPAttempts
                     && aggregate.httpAttemptCount > 0
             {
@@ -437,7 +437,7 @@ public final class OpenRouterSchemaToolSQLAgent: SQLGenerator, Sendable {
                     )
                 } catch is CancellationError {
                     throw CancellationError()
-                } catch let failure as OpenRouterFailure {
+                } catch let failure as CloudRequestFailure {
                     if failure.category == .unsupportedFeature {
                         await catalogService.invalidate(apiKey: apiKey, modelID: model)
                         throw await agentFailure(
@@ -1057,7 +1057,7 @@ public final class OpenRouterSchemaToolSQLAgent: SQLGenerator, Sendable {
     private func performRequest(
         messages: [OpenRouterToolChatMessage],
         tools: [OpenRouterToolDefinition],
-        capabilities: OpenRouterModelCapabilities,
+        capabilities: CloudModelCapabilities,
         aggregate: inout OpenRouterAgentMetadataAccumulator,
         maximumHTTPAttempts: Int,
         deadline: Date,
@@ -1100,7 +1100,7 @@ public final class OpenRouterSchemaToolSQLAgent: SQLGenerator, Sendable {
                     )
                     aggregate.record(parsed.metadata)
                     return parsed
-                } catch var failure as OpenRouterFailure {
+                } catch var failure as CloudRequestFailure {
                     failure.diagnostic.retryAfterSeconds = retryAfter
                     aggregate.record(failure.diagnostic)
                     if failure.category == .noContent { noContentRetries += 1 }
@@ -1117,7 +1117,7 @@ public final class OpenRouterSchemaToolSQLAgent: SQLGenerator, Sendable {
                         try await sleep(delay, deadline: deadline)
                         continue
                     }
-                    if let retryAfter, retryAfter > OpenRouterRetryPolicy.retryAfterCap,
+                    if let retryAfter, retryAfter > ChatCompletionRetryPolicy.retryAfterCap,
                         failure.category == .rateLimited
                     {
                         failure.diagnostic.suggestedWaitSeconds = retryAfter
@@ -1133,7 +1133,7 @@ public final class OpenRouterSchemaToolSQLAgent: SQLGenerator, Sendable {
                 if let timeout = Self.wallClockTimeoutFailure(for: error, deadline: deadline) {
                     throw timeout
                 }
-                let failure = OpenRouterFailure.map(
+                let failure = CloudRequestFailure.map(
                     error,
                     requestedModelID: model,
                     attempt: attempt
@@ -1373,7 +1373,7 @@ public final class OpenRouterSchemaToolSQLAgent: SQLGenerator, Sendable {
     }
 
     private static func canUseLegacyForKnownUnsupportedTools(
-        _ capabilities: OpenRouterModelCapabilities
+        _ capabilities: CloudModelCapabilities
     ) -> Bool {
         switch capabilities.capabilitySource {
         case .authenticatedCatalog, .singleModelLookup:
@@ -1647,7 +1647,7 @@ public final class OpenRouterSchemaToolSQLAgent: SQLGenerator, Sendable {
         _ category: OpenRouterSchemaToolAgentFailure.Category,
         _ message: String,
         session: SchemaToolSession,
-        openRouterFailure: OpenRouterFailure? = nil
+        openRouterFailure: CloudRequestFailure? = nil
     ) async -> OpenRouterSchemaToolAgentFailure {
         OpenRouterSchemaToolAgentFailure(
             category: category,
@@ -3124,7 +3124,7 @@ private struct OpenRouterAgentMetadataAccumulator {
     var terminalOutcome: String?
     var agentDiagnostics: SchemaToolAgentDiagnostics?
 
-    mutating func record(_ metadata: OpenRouterGenerationMetadata) {
+    mutating func record(_ metadata: CloudGenerationMetadata) {
         if let value = metadata.promptTokens {
             promptTokens += value
             hasPromptTokens = true
@@ -3152,7 +3152,7 @@ private struct OpenRouterAgentMetadataAccumulator {
         append(metadata.providerName, to: &providerNames)
     }
 
-    mutating func record(_ diagnostic: OpenRouterFailureDiagnostic) {
+    mutating func record(_ diagnostic: CloudRequestFailureDiagnostic) {
         if let value = diagnostic.promptTokens {
             promptTokens += value
             hasPromptTokens = true
@@ -3183,8 +3183,8 @@ private struct OpenRouterAgentMetadataAccumulator {
         contextModelCallCount: Int,
         schemaToolCalls: [SchemaToolCallTrace],
         inspectionToolCalls: [DatabaseInspectionToolCallTrace]
-    ) -> OpenRouterGenerationMetadata {
-        var metadata = OpenRouterGenerationMetadata(
+    ) -> CloudGenerationMetadata {
+        var metadata = CloudGenerationMetadata(
             requestedModelID: requestedModelID,
             returnedModelID: returnedModelIDs.last,
             providerName: providerNames.last,

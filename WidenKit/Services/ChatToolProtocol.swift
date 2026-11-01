@@ -51,7 +51,7 @@ struct OpenRouterToolChatRequestBuilder: Sendable {
 
     struct BuiltRequest: Sendable {
         var request: URLRequest
-        var mode: OpenRouterStructuredOutputMode
+        var mode: StructuredOutputMode
     }
 
     func build(
@@ -59,7 +59,7 @@ struct OpenRouterToolChatRequestBuilder: Sendable {
         model: String,
         messages: [OpenRouterToolChatMessage],
         tools: [OpenRouterToolDefinition],
-        capabilities: OpenRouterModelCapabilities,
+        capabilities: CloudModelCapabilities,
         requireToolChoice: Bool = true
     ) throws -> BuiltRequest {
         var body: [String: Any] = [
@@ -93,7 +93,7 @@ struct OpenRouterToolChatRequestBuilder: Sendable {
         return BuiltRequest(request: request, mode: .promptOnlyJSON)
     }
 
-    private func cappedCompletionTokens(_ capabilities: OpenRouterModelCapabilities) -> Int {
+    private func cappedCompletionTokens(_ capabilities: CloudModelCapabilities) -> Int {
         min(Self.completionTokenBudget, max(16, capabilities.maximumCompletionTokens ?? Self.completionTokenBudget))
     }
 
@@ -151,7 +151,7 @@ struct OpenRouterToolChatParser: Sendable {
     struct ParsedTurn: Sendable {
         var content: String?
         var toolCalls: [OpenRouterToolCall]
-        var metadata: OpenRouterGenerationMetadata
+        var metadata: CloudGenerationMetadata
     }
 
     private struct ChatResponse: Decodable {
@@ -185,7 +185,7 @@ struct OpenRouterToolChatParser: Sendable {
             let message: Message?
             let finishReason: String?
             let nativeFinishReason: String?
-            let error: OpenRouterAPIErrorEnvelope.APIError?
+            let error: ChatCompletionErrorEnvelope.APIError?
 
             private enum CodingKeys: String, CodingKey {
                 case index
@@ -201,8 +201,8 @@ struct OpenRouterToolChatParser: Sendable {
         let provider: String?
         let serviceTier: String?
         let choices: [Choice]
-        let usage: OpenRouterReportedUsage?
-        let error: OpenRouterAPIErrorEnvelope.APIError?
+        let usage: ChatCompletionUsage?
+        let error: ChatCompletionErrorEnvelope.APIError?
         let openrouterMetadata: OpenRouterRouterMetadata?
 
         private enum CodingKeys: String, CodingKey {
@@ -223,8 +223,8 @@ struct OpenRouterToolChatParser: Sendable {
             provider = try container.decodeIfPresent(String.self, forKey: .provider)
             serviceTier = try container.decodeIfPresent(String.self, forKey: .serviceTier)
             choices = try container.decodeIfPresent([Choice].self, forKey: .choices) ?? []
-            usage = try container.decodeIfPresent(OpenRouterReportedUsage.self, forKey: .usage)
-            error = try container.decodeIfPresent(OpenRouterAPIErrorEnvelope.APIError.self, forKey: .error)
+            usage = try container.decodeIfPresent(ChatCompletionUsage.self, forKey: .usage)
+            error = try container.decodeIfPresent(ChatCompletionErrorEnvelope.APIError.self, forKey: .error)
             openrouterMetadata = try container.decodeIfPresent(
                 OpenRouterRouterMetadata.self,
                 forKey: .openrouterMetadata
@@ -289,7 +289,7 @@ struct OpenRouterToolChatParser: Sendable {
         do {
             completion = try JSONDecoder().decode(ChatResponse.self, from: data)
         } catch {
-            throw OpenRouterFailure(
+            throw CloudRequestFailure(
                 category: .malformedStructuredResponse,
                 message: "OpenRouter returned a malformed response envelope.",
                 httpStatus: response.statusCode,
@@ -311,7 +311,7 @@ struct OpenRouterToolChatParser: Sendable {
             ).withReportedUsage(reportedUsage)
         }
         guard let choice = completion.choices.first else {
-            throw OpenRouterFailure(
+            throw CloudRequestFailure(
                 category: .noContent,
                 message: "OpenRouter returned no choices.",
                 httpStatus: response.statusCode,
@@ -336,7 +336,7 @@ struct OpenRouterToolChatParser: Sendable {
             ).withReportedUsage(reportedUsage)
         }
         if choice.finishReason == "error" {
-            throw OpenRouterFailure(
+            throw CloudRequestFailure(
                 category: .providerUnavailable,
                 message: "The provider ended generation with an error.",
                 httpStatus: response.statusCode,
@@ -349,7 +349,7 @@ struct OpenRouterToolChatParser: Sendable {
             ).withReportedUsage(reportedUsage)
         }
         if choice.finishReason == "length" {
-            throw OpenRouterFailure(
+            throw CloudRequestFailure(
                 category: .maxTokensExceeded,
                 message: "The provider stopped because the completion token limit was reached.",
                 httpStatus: response.statusCode,
@@ -362,7 +362,7 @@ struct OpenRouterToolChatParser: Sendable {
             ).withReportedUsage(reportedUsage)
         }
         if choice.finishReason == "content_filter" {
-            throw OpenRouterFailure(
+            throw CloudRequestFailure(
                 category: .contentPolicy,
                 message: "The provider stopped because of a content policy filter.",
                 httpStatus: response.statusCode,
@@ -375,7 +375,7 @@ struct OpenRouterToolChatParser: Sendable {
             ).withReportedUsage(reportedUsage)
         }
         if let refusal = choice.message?.refusal, !refusal.isEmpty {
-            throw OpenRouterFailure(
+            throw CloudRequestFailure(
                 category: .refusal,
                 message: "The provider refused the request.",
                 httpStatus: response.statusCode,
@@ -396,7 +396,7 @@ struct OpenRouterToolChatParser: Sendable {
                 !name.isEmpty,
                 let arguments = call.function?.arguments
             else {
-                throw OpenRouterFailure(
+                throw CloudRequestFailure(
                     category: .malformedStructuredResponse,
                     message: "The cloud model returned a malformed tool call.",
                     httpStatus: response.statusCode,
@@ -414,7 +414,7 @@ struct OpenRouterToolChatParser: Sendable {
             .trimmingCharacters(in: .whitespacesAndNewlines)
             .nilIfEmpty
         guard !toolCalls.isEmpty || content != nil else {
-            throw OpenRouterFailure(
+            throw CloudRequestFailure(
                 category: .noContent,
                 message: "OpenRouter returned empty assistant content.",
                 httpStatus: response.statusCode,
@@ -438,10 +438,10 @@ struct OpenRouterToolChatParser: Sendable {
                 providerName: completion.provider ?? completion.openrouterMetadata?.selectedProvider,
                 attemptCount: requestCount
             )
-        } catch let failure as OpenRouterFailure {
+        } catch let failure as CloudRequestFailure {
             throw failure.withReportedUsage(reportedUsage)
         }
-        let metadata = OpenRouterGenerationMetadata(
+        let metadata = CloudGenerationMetadata(
             requestedModelID: requestedModelID,
             returnedModelID: completion.model,
             providerName: completion.provider ?? completion.openrouterMetadata?.selectedProvider,

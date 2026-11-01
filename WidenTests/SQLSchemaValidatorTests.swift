@@ -2566,8 +2566,8 @@ struct SQLSchemaValidatorTests {
         exposedColumnIDs: [String],
         exposedForeignKeyPathIDs: [String] = [],
         intentCoverageMode: SchemaToolAgentIntentCoverageMode = .diagnosticsOnly
-    ) -> OpenRouterGenerationMetadata {
-        var metadata = OpenRouterGenerationMetadata(
+    ) -> CloudGenerationMetadata {
+        var metadata = CloudGenerationMetadata(
             requestedModelID: "test/model",
             structuredOutputMode: .promptOnlyJSON,
             requestCount: 1,

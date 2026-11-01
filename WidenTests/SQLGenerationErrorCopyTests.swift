@@ -8,7 +8,7 @@ struct SQLGenerationErrorCopyTests {
     private let modelName = OpenRouterCatalog.productionProfile.displayName
 
     private func pipelineFailure(
-        openRouterCategory: OpenRouterFailure.Category? = nil,
+        openRouterCategory: CloudRequestFailure.Category? = nil,
         message: String
     ) -> TextToSQLPipelineFailure {
         TextToSQLPipelineFailure(
@@ -16,19 +16,19 @@ struct SQLGenerationErrorCopyTests {
             category: .transport,
             message: message,
             openRouterFailure: openRouterCategory.map {
-                OpenRouterFailure(category: $0, message: message).diagnostic
+                CloudRequestFailure(category: $0, message: message).diagnostic
             }
         )
     }
 
     @Test(arguments: [
-        OpenRouterFailure.Category.providerUnavailable,
+        CloudRequestFailure.Category.providerUnavailable,
         .providerOverloaded,
         .serverFailure,
         .timeout,
         .rateLimited,
     ])
-    func transientProviderFailuresGetOutageCopyAndRetry(category: OpenRouterFailure.Category) {
+    func transientProviderFailuresGetOutageCopyAndRetry(category: CloudRequestFailure.Category) {
         let failure = pipelineFailure(
             openRouterCategory: category,
             message: "SQL generation failed: OpenRouter returned HTTP 502."
@@ -145,7 +145,7 @@ struct SQLGenerationErrorCopyTests {
     }
 
     @Test func thrownOpenRouterErrorsMapThroughTypedCategory() {
-        let error = OpenRouterFailure(
+        let error = CloudRequestFailure(
             category: .providerUnavailable,
             message: "Provider returned error",
             httpStatus: 502
@@ -178,13 +178,13 @@ struct SQLGenerationErrorCopyTests {
     }
 
     @Test(arguments: [
-        (OpenRouterFailure.Category.providerUnavailable, "Provider outage"),
+        (CloudRequestFailure.Category.providerUnavailable, "Provider outage"),
         (.authentication, "API key rejected"),
         (.paymentRequired, "Out of credits"),
         (.modelVersionMismatch, "Model version changed"),
         (.malformedStructuredResponse, "Malformed model response"),
     ])
-    func testModelLabelsAreHumanReadable(category: OpenRouterFailure.Category, label: String) {
+    func testModelLabelsAreHumanReadable(category: CloudRequestFailure.Category, label: String) {
         #expect(SQLGenerationErrorCopy.testModelLabel(for: category) == label)
     }
 }

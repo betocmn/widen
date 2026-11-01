@@ -10,7 +10,7 @@ import Foundation
 public enum SQLGenerationErrorCopy {
     /// Provider-side failures a plain retry of the same question is likely
     /// to resolve. These earn the "Try Again" button on the error bubble.
-    private static let transientCategories: Set<OpenRouterFailure.Category> = [
+    private static let transientCategories: Set<CloudRequestFailure.Category> = [
         .providerUnavailable, .providerOverloaded, .serverFailure, .timeout, .rateLimited,
     ]
 
@@ -54,7 +54,7 @@ public enum SQLGenerationErrorCopy {
 
     /// Short human label for the Settings › LLM "Test Model" error row. The
     /// raw category and provider message stay available in the row tooltip.
-    public static func testModelLabel(for category: OpenRouterFailure.Category) -> String {
+    public static func testModelLabel(for category: CloudRequestFailure.Category) -> String {
         switch category {
         case .authentication:
             "API key rejected"
@@ -106,7 +106,7 @@ public enum SQLGenerationErrorCopy {
     }
 
     private static func mappedText(
-        openRouterCategory: OpenRouterFailure.Category?,
+        openRouterCategory: CloudRequestFailure.Category?,
         message: String
     ) -> String? {
         // ZDR routing failures already explain the fail-closed policy, but
@@ -175,7 +175,7 @@ public enum SQLGenerationErrorCopy {
     }
 
     private static func isRetryable(
-        openRouterCategory: OpenRouterFailure.Category?,
+        openRouterCategory: CloudRequestFailure.Category?,
         message: String
     ) -> Bool {
         if message.contains("private-routing requirements") {
@@ -192,9 +192,9 @@ public enum SQLGenerationErrorCopy {
 
     private static func openRouterCategory(
         of failure: SQLGenerationFailure
-    ) -> OpenRouterFailure.Category? {
+    ) -> CloudRequestFailure.Category? {
         switch failure {
-        case .openRouter(let openRouterFailure):
+        case .cloudRequest(let openRouterFailure):
             openRouterFailure.category
         case .schemaToolAgent(let agentFailure):
             agentFailure.openRouterFailure?.category

@@ -1,6 +1,6 @@
 import Foundation
 
-struct OpenRouterReportedUsage: Decodable, Equatable, Sendable {
+struct ChatCompletionUsage: Decodable, Equatable, Sendable {
     struct CompletionDetails: Decodable, Equatable, Sendable {
         let reasoningTokens: Int?
 
@@ -35,17 +35,17 @@ struct OpenRouterReportedUsage: Decodable, Equatable, Sendable {
     }
 }
 
-struct OpenRouterReportedUsageEnvelope: Decodable {
-    let usage: OpenRouterReportedUsage?
+struct ChatCompletionUsageEnvelope: Decodable {
+    let usage: ChatCompletionUsage?
 }
 
-public struct OpenRouterGenerationMetadata: Codable, Equatable, Sendable {
+public struct CloudGenerationMetadata: Codable, Equatable, Sendable {
     public var requestedModelID: String
     public var returnedModelID: String?
     public var providerName: String?
     public var completionID: String?
     public var requestID: String?
-    public var structuredOutputMode: OpenRouterStructuredOutputMode
+    public var structuredOutputMode: StructuredOutputMode
     public var requestCount: Int
     public var retryCount: Int
     public var promptTokens: Int?
@@ -70,10 +70,10 @@ public struct OpenRouterGenerationMetadata: Codable, Equatable, Sendable {
     public var agentDiagnostics: SchemaToolAgentDiagnostics?
 }
 
-public struct OpenRouterFailureDiagnostic: Codable, Equatable, Sendable {
-    public var category: OpenRouterFailure.Category
+public struct CloudRequestFailureDiagnostic: Codable, Equatable, Sendable {
+    public var category: CloudRequestFailure.Category
     public var httpStatus: Int?
-    public var openRouterErrorType: String?
+    public var providerErrorType: String?
     public var providerCode: String?
     public var completionID: String?
     public var requestID: String?
@@ -88,9 +88,31 @@ public struct OpenRouterFailureDiagnostic: Codable, Equatable, Sendable {
     public var totalTokens: Int?
     public var costUSD: Double?
     public var attemptCount: Int
+
+    /// `providerErrorType` keeps its original `openRouterErrorType` key so
+    /// saved pipeline failures and eval results still decode.
+    private enum CodingKeys: String, CodingKey {
+        case category
+        case httpStatus
+        case providerErrorType = "openRouterErrorType"
+        case providerCode
+        case completionID
+        case requestID
+        case requestedModelID
+        case returnedModelID
+        case providerName
+        case retryAfterSeconds
+        case suggestedWaitSeconds
+        case promptTokens
+        case completionTokens
+        case reasoningTokens
+        case totalTokens
+        case costUSD
+        case attemptCount
+    }
 }
 
-public struct OpenRouterFailure: Error, LocalizedError, Equatable, Sendable {
+public struct CloudRequestFailure: Error, LocalizedError, Equatable, Sendable {
     public enum Category: String, Codable, CaseIterable, Equatable, Sendable {
         case authentication
         case paymentRequired
@@ -117,13 +139,13 @@ public struct OpenRouterFailure: Error, LocalizedError, Equatable, Sendable {
 
     public var category: Category
     public var message: String
-    public var diagnostic: OpenRouterFailureDiagnostic
+    public var diagnostic: CloudRequestFailureDiagnostic
 
     public init(
         category: Category,
         message: String,
         httpStatus: Int? = nil,
-        openRouterErrorType: String? = nil,
+        providerErrorType: String? = nil,
         providerCode: String? = nil,
         completionID: String? = nil,
         requestID: String? = nil,
@@ -141,10 +163,10 @@ public struct OpenRouterFailure: Error, LocalizedError, Equatable, Sendable {
     ) {
         self.category = category
         self.message = message
-        self.diagnostic = OpenRouterFailureDiagnostic(
+        self.diagnostic = CloudRequestFailureDiagnostic(
             category: category,
             httpStatus: httpStatus,
-            openRouterErrorType: openRouterErrorType,
+            providerErrorType: providerErrorType,
             providerCode: providerCode,
             completionID: completionID,
             requestID: requestID,
@@ -183,13 +205,13 @@ public struct OpenRouterFailure: Error, LocalizedError, Equatable, Sendable {
         }
     }
 
-    func withAttemptCount(_ count: Int) -> OpenRouterFailure {
+    func withAttemptCount(_ count: Int) -> CloudRequestFailure {
         var copy = self
         copy.diagnostic.attemptCount = count
         return copy
     }
 
-    func withReportedUsage(_ usage: OpenRouterReportedUsage?) -> OpenRouterFailure {
+    func withReportedUsage(_ usage: ChatCompletionUsage?) -> CloudRequestFailure {
         guard let usage else { return self }
         var copy = self
         copy.diagnostic.promptTokens = usage.promptTokens
@@ -323,20 +345,20 @@ public struct OpenRouterFailure: Error, LocalizedError, Equatable, Sendable {
     }
 }
 
-extension OpenRouterFailure.Category {
+extension CloudRequestFailure.Category {
     var isProviderBudgetUnavailable: Bool {
         self == .paymentRequired || self == .providerLimit
     }
 }
 
-struct OpenRouterUsageAccumulator {
+struct ChatCompletionUsageAccumulator {
     var promptTokens: Int?
     var completionTokens: Int?
     var reasoningTokens: Int?
     var totalTokens: Int?
     var costUSD: Double?
 
-    mutating func record(_ diagnostic: OpenRouterFailureDiagnostic) {
+    mutating func record(_ diagnostic: CloudRequestFailureDiagnostic) {
         Self.add(diagnostic.promptTokens, to: &promptTokens)
         Self.add(diagnostic.completionTokens, to: &completionTokens)
         Self.add(diagnostic.reasoningTokens, to: &reasoningTokens)
@@ -344,7 +366,7 @@ struct OpenRouterUsageAccumulator {
         Self.add(diagnostic.costUSD, to: &costUSD)
     }
 
-    func merging(into metadata: OpenRouterGenerationMetadata) -> OpenRouterGenerationMetadata {
+    func merging(into metadata: CloudGenerationMetadata) -> CloudGenerationMetadata {
         var copy = metadata
         copy.promptTokens = Self.sum(promptTokens, copy.promptTokens)
         copy.completionTokens = Self.sum(completionTokens, copy.completionTokens)
@@ -354,7 +376,7 @@ struct OpenRouterUsageAccumulator {
         return copy
     }
 
-    func applying(to failure: OpenRouterFailure) -> OpenRouterFailure {
+    func applying(to failure: CloudRequestFailure) -> CloudRequestFailure {
         var copy = failure
         copy.diagnostic.promptTokens = promptTokens
         copy.diagnostic.completionTokens = completionTokens
@@ -385,7 +407,7 @@ struct OpenRouterUsageAccumulator {
     }
 }
 
-struct OpenRouterAPIErrorEnvelope: Decodable {
+struct ChatCompletionErrorEnvelope: Decodable {
     struct APIError: Decodable {
         struct Metadata: Decodable {
             let errorType: String?
@@ -430,7 +452,7 @@ struct OpenRouterAPIErrorEnvelope: Decodable {
     }
 }
 
-struct OpenRouterRetryPolicy: Sendable {
+struct ChatCompletionRetryPolicy: Sendable {
     static let defaultMaxAttempts = 3
     static let retryAfterCap: TimeInterval = 15
 
@@ -441,7 +463,7 @@ struct OpenRouterRetryPolicy: Sendable {
     }
 
     func retryDelay(
-        for failure: OpenRouterFailure,
+        for failure: CloudRequestFailure,
         attempt: Int,
         noContentRetries: Int
     ) -> TimeInterval? {
@@ -468,7 +490,7 @@ struct OpenRouterRetryPolicy: Sendable {
         return nil
     }
 
-    private func isRetryable(_ category: OpenRouterFailure.Category) -> Bool {
+    private func isRetryable(_ category: CloudRequestFailure.Category) -> Bool {
         switch category {
         case .rateLimited, .providerOverloaded, .providerUnavailable, .timeout, .networkTransport,
             .serverFailure, .noContent:
@@ -489,17 +511,17 @@ struct OpenRouterRetryPolicy: Sendable {
     }()
 }
 
-extension OpenRouterFailure {
+extension CloudRequestFailure {
     /// Maps a URLSession transport error to a chat-completion failure. Shared
     /// by the one-shot generator and the schema-tool agent.
     static func map(
         _ error: URLError,
         requestedModelID: String,
         attempt: Int
-    ) -> OpenRouterFailure {
+    ) -> CloudRequestFailure {
         switch error.code {
         case .timedOut:
-            return OpenRouterFailure(
+            return CloudRequestFailure(
                 category: .timeout,
                 message: "The cloud request timed out.",
                 requestedModelID: requestedModelID,
@@ -507,14 +529,14 @@ extension OpenRouterFailure {
             )
         case .notConnectedToInternet, .networkConnectionLost, .cannotFindHost,
             .cannotConnectToHost, .dnsLookupFailed:
-            return OpenRouterFailure(
+            return CloudRequestFailure(
                 category: .networkTransport,
                 message: "No internet connection. Check your network and try again.",
                 requestedModelID: requestedModelID,
                 attemptCount: attempt
             )
         default:
-            return OpenRouterFailure(
+            return CloudRequestFailure(
                 category: .networkTransport,
                 message: error.localizedDescription,
                 requestedModelID: requestedModelID,

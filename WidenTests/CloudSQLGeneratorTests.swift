@@ -182,7 +182,7 @@ struct OpenRouterSQLGeneratorTests {
         do {
             _ = try await expiredService.availableModels(apiKey: "secret-key")
             Issue.record("expected authentication failure")
-        } catch let failure as OpenRouterFailure {
+        } catch let failure as CloudRequestFailure {
             #expect(failure.category == .authentication)
         }
         #expect(authFailureTransport.requests.count == 1)
@@ -210,7 +210,7 @@ struct OpenRouterSQLGeneratorTests {
                 modelID: Self.modelID
             )
             Issue.record("expected authentication failure")
-        } catch let failure as OpenRouterFailure {
+        } catch let failure as CloudRequestFailure {
             #expect(failure.category == .authentication)
         }
     }
@@ -234,7 +234,7 @@ struct OpenRouterSQLGeneratorTests {
     }
 
     @Test func keyLimitExceededClassifiesAsProviderBudget() {
-        let category = OpenRouterFailure.category(
+        let category = CloudRequestFailure.category(
             errorType: nil,
             providerCode: nil,
             httpStatus: 403,
@@ -246,7 +246,7 @@ struct OpenRouterSQLGeneratorTests {
 
     @Test func envelopedKeyLimitErrorsClassifyAsProviderBudget() {
         #expect(
-            OpenRouterFailure.category(
+            CloudRequestFailure.category(
                 errorType: nil,
                 providerCode: nil,
                 httpStatus: 200,
@@ -270,7 +270,7 @@ struct OpenRouterSQLGeneratorTests {
 
     @Test func keyLimitMessageDoesNotReclassifyAuthenticationOrServerFailures() {
         #expect(
-            OpenRouterFailure.category(
+            CloudRequestFailure.category(
                 errorType: nil,
                 providerCode: nil,
                 httpStatus: 401,
@@ -278,7 +278,7 @@ struct OpenRouterSQLGeneratorTests {
             ) == .authentication
         )
         #expect(
-            OpenRouterFailure.category(
+            CloudRequestFailure.category(
                 errorType: nil,
                 providerCode: nil,
                 httpStatus: 500,
@@ -514,7 +514,7 @@ struct OpenRouterSQLGeneratorTests {
     }
 
     @Test func requestBuilderUsesStrictModeOnlyWhenAdvertised() throws {
-        var capabilities = OpenRouterModelCapabilities.conservative()
+        var capabilities = CloudModelCapabilities.conservative()
         capabilities.supportsResponseFormat = true
         capabilities.supportsStructuredOutputs = true
         capabilities.supportsTemperature = true
@@ -543,7 +543,7 @@ struct OpenRouterSQLGeneratorTests {
     }
 
     @Test func strictSchemaOmitsUnadvertisedTokenCaps() throws {
-        var capabilities = OpenRouterModelCapabilities.conservative()
+        var capabilities = CloudModelCapabilities.conservative()
         capabilities.supportsStructuredOutputs = true
 
         let built = try OpenRouterRequestBuilder(endpoint: Self.chatEndpoint).build(
@@ -562,7 +562,7 @@ struct OpenRouterSQLGeneratorTests {
     }
 
     @Test func responseFormatWithoutStructuredOutputsUsesPromptMode() throws {
-        var capabilities = OpenRouterModelCapabilities.conservative()
+        var capabilities = CloudModelCapabilities.conservative()
         capabilities.supportsResponseFormat = true
         capabilities.supportsTemperature = true
 
@@ -583,7 +583,7 @@ struct OpenRouterSQLGeneratorTests {
     }
 
     @Test func maxTokensFallbackIsUsedOnlyWhenAdvertised() throws {
-        var capabilities = OpenRouterModelCapabilities.conservative()
+        var capabilities = CloudModelCapabilities.conservative()
         capabilities.supportsMaxTokens = true
         capabilities.maximumCompletionTokens = 16_000
 
@@ -618,7 +618,7 @@ struct OpenRouterSQLGeneratorTests {
                 config: SQLGenerationConfig()
             )
             Issue.record("expected unsupported feature")
-        } catch let failure as OpenRouterFailure {
+        } catch let failure as CloudRequestFailure {
             #expect(failure.category == .unsupportedFeature)
         }
 
@@ -673,7 +673,7 @@ struct OpenRouterSQLGeneratorTests {
                 expectedCanonicalModelID: "openai/gpt-5.5-20260423"
             )
             Issue.record("expected canonical model mismatch")
-        } catch let failure as OpenRouterFailure {
+        } catch let failure as CloudRequestFailure {
             #expect(failure.category == .modelVersionMismatch)
             #expect(failure.pipelineCategory == .backendUnavailable)
             #expect(failure.diagnostic.requestedModelID == Self.modelID)
@@ -752,7 +752,7 @@ struct OpenRouterSQLGeneratorTests {
                     expectedCanonicalModelID: expectedCanonicalModelID
                 )
                 Issue.record("expected incomplete or conflicting canonical evidence to fail")
-            } catch let failure as OpenRouterFailure {
+            } catch let failure as CloudRequestFailure {
                 #expect(failure.category == .modelVersionMismatch)
             }
         }
@@ -800,7 +800,7 @@ struct OpenRouterSQLGeneratorTests {
                     expectedCanonicalModelID: expectedCanonicalModelID
                 )
                 Issue.record("expected contradictory canonical evidence to fail")
-            } catch let failure as OpenRouterFailure {
+            } catch let failure as CloudRequestFailure {
                 #expect(failure.category == .modelVersionMismatch)
             }
         }
@@ -819,7 +819,7 @@ struct OpenRouterSQLGeneratorTests {
                 retryCount: 0
             )
             Issue.record("expected malformed envelope failure")
-        } catch let failure as OpenRouterFailure {
+        } catch let failure as CloudRequestFailure {
             #expect(failure.category == .malformedStructuredResponse)
             #expect(failure.diagnostic.httpStatus == 200)
             #expect(failure.diagnostic.requestedModelID == Self.modelID)
@@ -849,7 +849,7 @@ struct OpenRouterSQLGeneratorTests {
                 retryCount: 0
             )
             Issue.record("expected malformed envelope failure")
-        } catch let failure as OpenRouterFailure {
+        } catch let failure as CloudRequestFailure {
             #expect(failure.category == .malformedStructuredResponse)
             #expect(failure.diagnostic.promptTokens == 4)
             #expect(failure.diagnostic.completionTokens == 5)
@@ -892,7 +892,7 @@ struct OpenRouterSQLGeneratorTests {
                 retryCount: 0
             )
             Issue.record("expected strict JSON parse failure")
-        } catch let failure as OpenRouterFailure {
+        } catch let failure as CloudRequestFailure {
             #expect(failure.category == .malformedStructuredResponse)
         }
     }
@@ -913,7 +913,7 @@ struct OpenRouterSQLGeneratorTests {
                 retryCount: 1
             )
             Issue.record("expected rate limit failure")
-        } catch let failure as OpenRouterFailure {
+        } catch let failure as CloudRequestFailure {
             #expect(failure.category == .rateLimited)
             #expect(failure.diagnostic.httpStatus == 429)
             #expect(failure.diagnostic.attemptCount == 2)
@@ -1003,7 +1003,7 @@ struct OpenRouterSQLGeneratorTests {
                 retryCount: 0
             )
             Issue.record("expected provider error")
-        } catch let failure as OpenRouterFailure {
+        } catch let failure as CloudRequestFailure {
             #expect(failure.category == .providerUnavailable)
             #expect(failure.diagnostic.providerCode == "overloaded")
         }
@@ -1049,7 +1049,7 @@ struct OpenRouterSQLGeneratorTests {
                 expectedCanonicalModelID: "openai/gpt-5.5-20260423"
             )
             Issue.record("expected provider error")
-        } catch let failure as OpenRouterFailure {
+        } catch let failure as CloudRequestFailure {
             #expect(failure.category == .providerUnavailable)
             #expect(failure.diagnostic.providerCode == "overloaded")
         }
@@ -1117,7 +1117,7 @@ struct OpenRouterSQLGeneratorTests {
     }
 
     @Test func everyTypedFailureCategoryIsReachable() {
-        let cases: [(String?, Int?, String?, OpenRouterFailure.Category)] = [
+        let cases: [(String?, Int?, String?, CloudRequestFailure.Category)] = [
             ("invalid_api_key", 400, nil, .authentication),
             ("insufficient_credits", 400, nil, .paymentRequired),
             ("provider_limit_exceeded", 429, nil, .providerLimit),
@@ -1151,12 +1151,12 @@ struct OpenRouterSQLGeneratorTests {
         ]
         for (type, status, message, category) in cases {
             #expect(
-                OpenRouterFailure.category(errorType: type, httpStatus: status, message: message)
+                CloudRequestFailure.category(errorType: type, httpStatus: status, message: message)
                     == category
             )
         }
         #expect(
-            OpenRouterFailure.category(
+            CloudRequestFailure.category(
                 errorType: nil,
                 providerCode: "provider_limit",
                 httpStatus: 400,
@@ -1164,7 +1164,7 @@ struct OpenRouterSQLGeneratorTests {
             ) == .providerLimit
         )
         #expect(
-            OpenRouterFailure.category(
+            CloudRequestFailure.category(
                 errorType: "rate_limit_exceeded",
                 providerCode: "provider_limit",
                 httpStatus: 429,
@@ -1172,7 +1172,7 @@ struct OpenRouterSQLGeneratorTests {
             ) == .providerLimit
         )
         #expect(
-            OpenRouterFailure.category(
+            CloudRequestFailure.category(
                 errorType: "rate_limit_exceeded",
                 providerCode: "credits",
                 httpStatus: 429,
@@ -1181,20 +1181,66 @@ struct OpenRouterSQLGeneratorTests {
         )
 
         #expect(
-            OpenRouterFailure(category: .noContent, message: "empty").category == .noContent
+            CloudRequestFailure(category: .noContent, message: "empty").category == .noContent
         )
         #expect(
-            OpenRouterFailure(category: .malformedStructuredResponse, message: "bad").category
+            CloudRequestFailure(category: .malformedStructuredResponse, message: "bad").category
                 == .malformedStructuredResponse
         )
         #expect(
-            OpenRouterFailure(category: .networkTransport, message: "offline").category
+            CloudRequestFailure(category: .networkTransport, message: "offline").category
                 == .networkTransport
         )
     }
 
+    @Test func failureDiagnosticKeepsItsSavedJSONKeys() throws {
+        let failure = CloudRequestFailure(
+            category: .paymentRequired,
+            message: "Payment required.",
+            httpStatus: 402,
+            providerErrorType: "insufficient_credits",
+            providerCode: "credits",
+            completionID: "gen-1",
+            requestID: "req-1",
+            requestedModelID: Self.modelID,
+            returnedModelID: Self.modelID,
+            providerName: "OpenAI",
+            retryAfterSeconds: 1,
+            suggestedWaitSeconds: 2,
+            promptTokens: 10,
+            completionTokens: 5,
+            reasoningTokens: 1,
+            totalTokens: 15,
+            costUSD: 0.01,
+            attemptCount: 2
+        )
+
+        // Saved pipeline failures and eval results wrote these keys; the
+        // renamed providerErrorType must still encode as openRouterErrorType.
+        let data = try JSONEncoder().encode(failure.diagnostic)
+        let object = try #require(JSONSerialization.jsonObject(with: data) as? [String: Any])
+        #expect(object["openRouterErrorType"] as? String == "insufficient_credits")
+        #expect(
+            Set(object.keys) == [
+                "category", "httpStatus", "openRouterErrorType", "providerCode", "completionID",
+                "requestID", "requestedModelID", "returnedModelID", "providerName",
+                "retryAfterSeconds", "suggestedWaitSeconds", "promptTokens", "completionTokens",
+                "reasoningTokens", "totalTokens", "costUSD", "attemptCount",
+            ]
+        )
+        #expect(
+            try JSONDecoder().decode(CloudRequestFailureDiagnostic.self, from: data) == failure.diagnostic
+        )
+
+        let saved = Data(
+            #"{"category":"paymentRequired","openRouterErrorType":"insufficient_credits","attemptCount":1}"#.utf8
+        )
+        let decoded = try JSONDecoder().decode(CloudRequestFailureDiagnostic.self, from: saved)
+        #expect(decoded.providerErrorType == "insufficient_credits")
+    }
+
     @Test func retryAfterSecondsHTTPDateAndCapAreHandled() {
-        let policy = OpenRouterRetryPolicy()
+        let policy = ChatCompletionRetryPolicy()
         let seconds = policy.retryAfter(
             from: response(url: Self.chatEndpoint, status: 429, headers: ["Retry-After": "3"])
         )
@@ -1204,7 +1250,7 @@ struct OpenRouterSQLGeneratorTests {
             from: response(url: Self.chatEndpoint, status: 429, headers: ["Retry-After": httpDate])
         )
         let capped = policy.retryDelay(
-            for: OpenRouterFailure(
+            for: CloudRequestFailure(
                 category: .rateLimited,
                 message: "slow down",
                 retryAfterSeconds: 30
@@ -1219,8 +1265,8 @@ struct OpenRouterSQLGeneratorTests {
     }
 
     @Test func retryPolicyHonorsMaximumHTTPAttempts() {
-        let policy = OpenRouterRetryPolicy(maxAttempts: 1)
-        let failure = OpenRouterFailure(
+        let policy = ChatCompletionRetryPolicy(maxAttempts: 1)
+        let failure = CloudRequestFailure(
             category: .rateLimited,
             message: "Retry later.",
             httpStatus: 429
@@ -1315,14 +1361,14 @@ struct OpenRouterSQLGeneratorTests {
         do {
             _ = try await makeGenerator(
                 transport: transport,
-                retryPolicy: OpenRouterRetryPolicy(maxAttempts: 1)
+                retryPolicy: ChatCompletionRetryPolicy(maxAttempts: 1)
             ).generateSQL(
                 question: "show users",
                 schema: makeSchema(),
                 config: SQLGenerationConfig()
             )
             Issue.record("expected provider availability failure")
-        } catch let failure as OpenRouterFailure {
+        } catch let failure as CloudRequestFailure {
             #expect(failure.category == .providerUnavailable)
         }
 
@@ -1364,7 +1410,7 @@ struct OpenRouterSQLGeneratorTests {
                 config: SQLGenerationConfig()
             )
             Issue.record("expected provider failure")
-        } catch let failure as OpenRouterFailure {
+        } catch let failure as CloudRequestFailure {
             #expect(failure.category == .providerUnavailable)
             #expect(failure.diagnostic.attemptCount == 3)
         }
@@ -1415,7 +1461,7 @@ struct OpenRouterSQLGeneratorTests {
     }
 
     @Test func testModelPayloadContainsNoDatabaseContextOrSchema() throws {
-        var capabilities = OpenRouterModelCapabilities.conservative()
+        var capabilities = CloudModelCapabilities.conservative()
         capabilities.supportsStructuredOutputs = true
         let request = try OpenRouterRequestBuilder(endpoint: Self.chatEndpoint).buildTinyJSONTest(
             apiKey: "test-key",
@@ -1584,7 +1630,7 @@ struct OpenRouterSQLGeneratorTests {
                 config: SQLGenerationConfig()
             )
             Issue.record("expected canonical rollover failure")
-        } catch let failure as OpenRouterFailure {
+        } catch let failure as CloudRequestFailure {
             #expect(failure.category == .modelVersionMismatch)
             #expect(failure.diagnostic.returnedModelID == "openai/gpt-5.5-20260901")
             #expect(failure.diagnostic.attemptCount == 1)
@@ -1730,7 +1776,7 @@ struct OpenRouterSQLGeneratorTests {
         ])
         let generator = makeGenerator(
             transport: transport,
-            retryPolicy: OpenRouterRetryPolicy(maxAttempts: 1),
+            retryPolicy: ChatCompletionRetryPolicy(maxAttempts: 1),
             countCapabilityLookupHTTPAttempts: true
         )
 
@@ -1742,7 +1788,7 @@ struct OpenRouterSQLGeneratorTests {
                 config: SQLGenerationConfig()
             )
             Issue.record("Expected HTTP-attempt budget exhaustion.")
-        } catch let failure as OpenRouterHTTPAttemptBudgetExhausted {
+        } catch let failure as HTTPAttemptBudgetExhausted {
             #expect(failure.backendMetadata?.requestCount == 1)
             #expect(transport.requests.map { $0.url?.path } == ["/api/v1/models/user"])
         }
@@ -1762,7 +1808,7 @@ struct OpenRouterSQLGeneratorTests {
         ])
         let generator = makeGenerator(
             transport: transport,
-            retryPolicy: OpenRouterRetryPolicy(maxAttempts: 3),
+            retryPolicy: ChatCompletionRetryPolicy(maxAttempts: 3),
             countCapabilityLookupHTTPAttempts: true
         )
 
@@ -1774,7 +1820,7 @@ struct OpenRouterSQLGeneratorTests {
                 config: SQLGenerationConfig()
             )
             Issue.record("Expected HTTP-attempt budget exhaustion.")
-        } catch let failure as OpenRouterHTTPAttemptBudgetExhausted {
+        } catch let failure as HTTPAttemptBudgetExhausted {
             #expect(failure.backendMetadata?.requestCount == 1)
             #expect(transport.requests.map { $0.url?.path } == ["/api/v1/models/user"])
         }
@@ -1787,7 +1833,7 @@ struct OpenRouterSQLGeneratorTests {
         ])
         let generator = makeGenerator(
             transport: transport,
-            retryPolicy: OpenRouterRetryPolicy(maxAttempts: 2),
+            retryPolicy: ChatCompletionRetryPolicy(maxAttempts: 2),
             countCapabilityLookupHTTPAttempts: true
         )
 
@@ -1799,7 +1845,7 @@ struct OpenRouterSQLGeneratorTests {
                 config: SQLGenerationConfig()
             )
             Issue.record("Expected OpenRouter failure.")
-        } catch let failure as OpenRouterFailure {
+        } catch let failure as CloudRequestFailure {
             #expect(failure.category == .rateLimited)
             #expect(failure.diagnostic.attemptCount == 2)
             #expect(
@@ -1814,7 +1860,7 @@ struct OpenRouterSQLGeneratorTests {
     private func makeGenerator(
         transport: StubTransport,
         model: String = Self.modelID,
-        retryPolicy: OpenRouterRetryPolicy = OpenRouterRetryPolicy(),
+        retryPolicy: ChatCompletionRetryPolicy = ChatCompletionRetryPolicy(),
         countCapabilityLookupHTTPAttempts: Bool = false
     ) -> OpenRouterSQLGenerator {
         OpenRouterSQLGenerator(
@@ -2070,13 +2116,13 @@ struct OpenRouterSQLGeneratorTests {
     }
 
     private func expectFailure(
-        _ category: OpenRouterFailure.Category,
+        _ category: CloudRequestFailure.Category,
         operation: () throws -> OpenRouterResponseParser.ParsedResult
     ) throws {
         do {
             _ = try operation()
             Issue.record("expected \(category)")
-        } catch let failure as OpenRouterFailure {
+        } catch let failure as CloudRequestFailure {
             #expect(failure.category == category)
         }
     }
@@ -2104,12 +2150,12 @@ struct OpenRouterSQLGeneratorTests {
                 maximumHTTPRequests: nil
             )
             Issue.record("expected canonical rollover failure")
-        } catch let failure as OpenRouterFailure {
+        } catch let failure as CloudRequestFailure {
             #expect(failure.category == .modelVersionMismatch)
             #expect(failure.diagnostic.returnedModelID == "openai/gpt-5.5-20260901")
             #expect(failure.diagnostic.attemptCount == expectedAttemptCount)
         } catch {
-            Issue.record("expected OpenRouterFailure, got \(error)")
+            Issue.record("expected CloudRequestFailure, got \(error)")
         }
     }
 

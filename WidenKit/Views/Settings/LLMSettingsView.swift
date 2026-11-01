@@ -505,12 +505,12 @@ struct LLMSettingsView: View {
 private struct OpenRouterModelTestResult: Equatable {
     var keyAccepted: Bool
     var selectedModelAvailable: Bool
-    var capabilities: OpenRouterModelCapabilities
+    var capabilities: CloudModelCapabilities
     var returnedModelID: String?
     var providerName: String?
     var latencyMs: Int
     var retryCount: Int
-    var error: OpenRouterFailure?
+    var error: CloudRequestFailure?
 
     init(_ result: OpenRouterConnectivityCheck.Result) {
         keyAccepted = result.keyAccepted

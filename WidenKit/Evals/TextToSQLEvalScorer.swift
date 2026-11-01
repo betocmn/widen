@@ -406,10 +406,10 @@ public enum TextToSQLEvalCaseRunner {
         let typed = SQLGenerationFailure.typed(error)
         let status = typed.map(status(for:)) ?? .transportFailure
         let budgetSkipped = status == .skippedBudgetLimit
-        let openRouterDiagnostic: OpenRouterFailureDiagnostic?
-        let backendMetadata: OpenRouterGenerationMetadata?
+        let openRouterDiagnostic: CloudRequestFailureDiagnostic?
+        let backendMetadata: CloudGenerationMetadata?
         let trace: TextToSQLTrace?
-        if let typed, case .openRouter(let failure) = typed {
+        if let typed, case .cloudRequest(let failure) = typed {
             openRouterDiagnostic = failure.diagnostic
             backendMetadata = nil
             trace = nil
@@ -551,8 +551,8 @@ public enum TextToSQLEvalCaseRunner {
 
     private static func failureModelCallCount(
         trace: TextToSQLTrace,
-        openRouterFailure: OpenRouterFailureDiagnostic?,
-        backendMetadata: OpenRouterGenerationMetadata? = nil
+        openRouterFailure: CloudRequestFailureDiagnostic?,
+        backendMetadata: CloudGenerationMetadata? = nil
     ) -> Int? {
         if let agentAttemptCount = backendMetadata?.agentHTTPAttemptCount {
             // Pipeline aggregation makes the agent total cumulative across
@@ -590,7 +590,7 @@ public enum TextToSQLEvalCaseRunner {
 
     private static func status(for failure: SQLGenerationFailure) -> TextToSQLEvalCaseStatus {
         switch failure {
-        case .openRouter(let failure):
+        case .cloudRequest(let failure):
             return status(for: failure.category) ?? status(for: failure.pipelineCategory)
         case .httpBudgetExhausted:
             return .skippedBudgetLimit
@@ -606,7 +606,7 @@ public enum TextToSQLEvalCaseRunner {
     }
 
     private static func status(
-        for category: OpenRouterFailure.Category
+        for category: CloudRequestFailure.Category
     ) -> TextToSQLEvalCaseStatus? {
         switch category {
         case .paymentRequired:
@@ -1291,7 +1291,7 @@ private struct EvalPostgresVerificationSnapshot {
 
 private extension TextToSQLEvalMetrics {
     func withOpenRouterAgentMetadata(
-        _ metadata: OpenRouterGenerationMetadata?,
+        _ metadata: CloudGenerationMetadata?,
         trace: TextToSQLTrace?
     ) -> TextToSQLEvalMetrics {
         var copy = self

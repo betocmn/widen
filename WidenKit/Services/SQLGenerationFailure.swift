@@ -1,6 +1,6 @@
 import Foundation
 
-enum OpenRouterHTTPAttemptBudget {
+enum HTTPAttemptBudget {
     static func remaining(
         maximumHTTPAttempts: Int,
         contextModelCallCount: Int
@@ -10,13 +10,13 @@ enum OpenRouterHTTPAttemptBudget {
     }
 }
 
-public struct OpenRouterHTTPAttemptBudgetExhausted: Error, LocalizedError, Equatable, Sendable {
+public struct HTTPAttemptBudgetExhausted: Error, LocalizedError, Equatable, Sendable {
     public var message: String
-    public var backendMetadata: OpenRouterGenerationMetadata?
+    public var backendMetadata: CloudGenerationMetadata?
 
     public init(
         message: String,
-        backendMetadata: OpenRouterGenerationMetadata? = nil
+        backendMetadata: CloudGenerationMetadata? = nil
     ) {
         self.message = message
         self.backendMetadata = backendMetadata
@@ -36,8 +36,8 @@ public enum SQLGenerationFailure: Error, LocalizedError, Equatable, Sendable {
     case contextWindow(String)
     case structuredResponseParsing(String)
     case generation(String)
-    case openRouter(OpenRouterFailure)
-    case httpBudgetExhausted(OpenRouterHTTPAttemptBudgetExhausted)
+    case cloudRequest(CloudRequestFailure)
+    case httpBudgetExhausted(HTTPAttemptBudgetExhausted)
     case schemaToolAgent(OpenRouterSchemaToolAgentFailure)
 
     public var errorDescription: String? {
@@ -49,7 +49,7 @@ public enum SQLGenerationFailure: Error, LocalizedError, Equatable, Sendable {
             .structuredResponseParsing(let detail),
             .generation(let detail):
             "SQL generation failed: \(detail)"
-        case .openRouter(let failure):
+        case .cloudRequest(let failure):
             failure.localizedDescription
         case .httpBudgetExhausted(let failure):
             failure.localizedDescription
@@ -66,7 +66,7 @@ public enum SQLGenerationFailure: Error, LocalizedError, Equatable, Sendable {
             .structuredResponseParsing(let detail),
             .generation(let detail):
             detail
-        case .openRouter(let failure):
+        case .cloudRequest(let failure):
             failure.message
         case .httpBudgetExhausted(let failure):
             failure.message
@@ -87,7 +87,7 @@ public enum SQLGenerationFailure: Error, LocalizedError, Equatable, Sendable {
             .structuredResponseParsing
         case .generation:
             .modelGeneration
-        case .openRouter(let failure):
+        case .cloudRequest(let failure):
             failure.pipelineCategory
         case .httpBudgetExhausted:
             .httpBudgetExhausted
@@ -100,10 +100,10 @@ public enum SQLGenerationFailure: Error, LocalizedError, Equatable, Sendable {
         if let failure = error as? SQLGenerationFailure {
             return failure
         }
-        if let failure = error as? OpenRouterFailure {
-            return .openRouter(failure)
+        if let failure = error as? CloudRequestFailure {
+            return .cloudRequest(failure)
         }
-        if let failure = error as? OpenRouterHTTPAttemptBudgetExhausted {
+        if let failure = error as? HTTPAttemptBudgetExhausted {
             return .httpBudgetExhausted(failure)
         }
         if let failure = error as? OpenRouterSchemaToolAgentFailure {

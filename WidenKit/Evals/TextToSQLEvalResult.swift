@@ -230,7 +230,7 @@ public struct TextToSQLEvalDiagnostics: Codable, Equatable, Sendable {
         safetyErrors: [String] = [],
         schemaErrors: [String] = [],
         errorMessage: String? = nil,
-        openRouterFailure: OpenRouterFailureDiagnostic? = nil,
+        openRouterFailure: CloudRequestFailureDiagnostic? = nil,
         postgresVerificationDiagnostic: DatabaseDiagnostic? = nil
     ) {
         self.missingTables = missingTables
@@ -241,7 +241,7 @@ public struct TextToSQLEvalDiagnostics: Codable, Equatable, Sendable {
         self.errorMessage = errorMessage
         self.openRouterFailureCategory = openRouterFailure?.category.rawValue
         self.openRouterHTTPStatus = openRouterFailure?.httpStatus
-        self.openRouterErrorType = openRouterFailure?.openRouterErrorType
+        self.openRouterErrorType = openRouterFailure?.providerErrorType
         self.openRouterProviderCode = openRouterFailure?.providerCode
         self.openRouterCompletionID = openRouterFailure?.completionID
         self.openRouterRequestID = openRouterFailure?.requestID

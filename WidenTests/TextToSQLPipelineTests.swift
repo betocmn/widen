@@ -244,7 +244,7 @@ struct TextToSQLPipelineTests {
         needsClarification: Bool = false,
         clarificationQuestion: String? = nil,
         generationCallCount: Int? = nil,
-        backendMetadata: OpenRouterGenerationMetadata? = nil,
+        backendMetadata: CloudGenerationMetadata? = nil,
         schemaToolCalls: [SchemaToolCallTrace] = [],
         inspectionToolCalls: [DatabaseInspectionToolCallTrace] = []
     ) -> SQLGenerationResult {
@@ -269,8 +269,8 @@ struct TextToSQLPipelineTests {
         totalTokens: Int,
         requestCount: Int = 1,
         retryCount: Int = 0
-    ) -> OpenRouterGenerationMetadata {
-        OpenRouterGenerationMetadata(
+    ) -> CloudGenerationMetadata {
+        CloudGenerationMetadata(
             requestedModelID: "test/model",
             returnedModelID: "test/model-version",
             providerName: "TestProvider",
@@ -1202,7 +1202,7 @@ struct TextToSQLPipelineTests {
                 )
             ),
             .failure(
-                OpenRouterFailure(
+                CloudRequestFailure(
                     category: .providerUnavailable,
                     message: "Provider failed after billing the request.",
                     requestedModelID: "test/model",
@@ -1371,7 +1371,7 @@ struct TextToSQLPipelineTests {
         ),
         (
             SQLGenerationFailure.httpBudgetExhausted(
-                OpenRouterHTTPAttemptBudgetExhausted(message: "HTTP budget exhausted.")
+                HTTPAttemptBudgetExhausted(message: "HTTP budget exhausted.")
             ),
             TextToSQLFailureCategory.httpBudgetExhausted
         ),

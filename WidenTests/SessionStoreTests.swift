@@ -330,7 +330,7 @@ struct SessionStoreTests {
         // removing, or renaming one loses saved data on rollback.
         #expect(SQLRiskLevel.allCases.map(\.rawValue) == ["low", "medium", "high"])
         #expect(
-            OpenRouterStructuredOutputMode.allCases.map(\.rawValue)
+            StructuredOutputMode.allCases.map(\.rawValue)
                 == ["strictJSONSchema", "promptOnlyJSON"]
         )
         #expect(

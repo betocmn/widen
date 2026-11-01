@@ -18,8 +18,8 @@ struct TextToSQLCallBudgetTests {
         #expect(agent.maximumRepeatedToolCorrections == 1)
         #expect(agent.wallClockTimeoutSeconds == 90)
 
-        #expect(OpenRouterRetryPolicy.defaultMaxAttempts == 3)
-        #expect(OpenRouterRetryPolicy().maxAttempts == 3)
+        #expect(ChatCompletionRetryPolicy.defaultMaxAttempts == 3)
+        #expect(ChatCompletionRetryPolicy().maxAttempts == 3)
 
         #expect(GeneratedSQLRepairSupport.localModelCallBudget == 3)
         #expect(GeneratedSQLRepairSupport.verificationRepairModelCallBudget == 1)

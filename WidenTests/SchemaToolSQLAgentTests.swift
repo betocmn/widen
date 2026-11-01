@@ -175,7 +175,7 @@ struct OpenRouterSchemaToolSQLAgentTests {
                 riskLevel: .low,
                 needsClarification: false,
                 clarificationQuestion: nil,
-                backendMetadata: OpenRouterGenerationMetadata(
+                backendMetadata: CloudGenerationMetadata(
                     requestedModelID: OpenRouterSchemaToolSQLAgentTests.modelID,
                     structuredOutputMode: .promptOnlyJSON,
                     requestCount: 1,
@@ -2952,7 +2952,7 @@ struct OpenRouterSchemaToolSQLAgentTests {
                 config: SQLGenerationConfig()
             )
             Issue.record("Expected fallback OpenRouter failure")
-        } catch let failure as OpenRouterFailure {
+        } catch let failure as CloudRequestFailure {
             #expect(failure.category == .rateLimited)
             #expect(failure.diagnostic.attemptCount == 2)
             #expect(catalogTransport.requests.map { $0.url?.path } == ["/api/v1/models/user"])
@@ -3304,10 +3304,10 @@ struct OpenRouterSchemaToolSQLAgentTests {
                 retryCount: 0
             )
             Issue.record("Expected typed OpenRouter failure")
-        } catch let failure as OpenRouterFailure {
+        } catch let failure as CloudRequestFailure {
             #expect(failure.category == .unsupportedFeature)
             #expect(failure.diagnostic.httpStatus == 400)
-            #expect(failure.diagnostic.openRouterErrorType == "unsupported_parameter")
+            #expect(failure.diagnostic.providerErrorType == "unsupported_parameter")
             #expect(failure.diagnostic.providerCode == "bad_parameter")
             #expect(failure.diagnostic.completionID == "cmpl-error")
             #expect(failure.diagnostic.requestID == "req-typed-error")
@@ -3350,7 +3350,7 @@ struct OpenRouterSchemaToolSQLAgentTests {
                 expectedCanonicalModelID: "openai/gpt-5.5-20260423"
             )
             Issue.record("Expected provider failure")
-        } catch let failure as OpenRouterFailure {
+        } catch let failure as CloudRequestFailure {
             #expect(failure.category == .providerUnavailable)
             #expect(failure.diagnostic.providerCode == "overloaded")
         }
@@ -3365,7 +3365,7 @@ struct OpenRouterSchemaToolSQLAgentTests {
             httpVersion: "HTTP/1.1",
             headerFields: nil
         )!
-        let cases: [(OpenRouterFailure.Category, Data)] = [
+        let cases: [(CloudRequestFailure.Category, Data)] = [
             (
                 .providerUnavailable,
                 Self.jsonData([
@@ -3434,7 +3434,7 @@ struct OpenRouterSchemaToolSQLAgentTests {
                     expectedCanonicalModelID: expectedCanonicalModelID
                 )
                 Issue.record("Expected \(expectedCategory) failure")
-            } catch let failure as OpenRouterFailure {
+            } catch let failure as CloudRequestFailure {
                 #expect(failure.category == expectedCategory)
             } catch {
                 Issue.record("Unexpected error: \(error)")
@@ -3472,7 +3472,7 @@ struct OpenRouterSchemaToolSQLAgentTests {
                 expectedCanonicalModelID: "openai/gpt-5.5-20260423"
             )
             Issue.record("Expected canonical model mismatch")
-        } catch let failure as OpenRouterFailure {
+        } catch let failure as CloudRequestFailure {
             #expect(failure.category == .modelVersionMismatch)
             #expect(failure.diagnostic.returnedModelID == returnedModelID)
         }
@@ -3593,7 +3593,7 @@ struct OpenRouterSchemaToolSQLAgentTests {
                 expectedCanonicalModelID: canonicalModelID
             )
             Issue.record("Expected contradictory canonical evidence to fail")
-        } catch let failure as OpenRouterFailure {
+        } catch let failure as CloudRequestFailure {
             #expect(failure.category == .modelVersionMismatch)
         }
     }

@@ -375,11 +375,11 @@ struct SessionControllerTests {
     }
 
     private final class FailOnceThenResultGenerator: SQLGenerator, @unchecked Sendable {
-        private let failure: OpenRouterFailure
+        private let failure: CloudRequestFailure
         private let result: SQLGenerationResult
         private(set) var contexts: [SQLGenerationContext] = []
 
-        init(failure: OpenRouterFailure, result: SQLGenerationResult) {
+        init(failure: CloudRequestFailure, result: SQLGenerationResult) {
             self.failure = failure
             self.result = result
         }
@@ -2659,7 +2659,7 @@ struct SessionControllerTests {
         defer { try? FileManager.default.removeItem(at: dir) }
         state.schemas[connectionID] = makeSchema()
         let generator = FailOnceThenResultGenerator(
-            failure: OpenRouterFailure(
+            failure: CloudRequestFailure(
                 category: .providerUnavailable,
                 message: "Provider returned error",
                 httpStatus: 502
@@ -2687,7 +2687,7 @@ struct SessionControllerTests {
         defer { try? FileManager.default.removeItem(at: dir) }
         state.schemas[connectionID] = makeSchema()
         let generator = FailOnceThenResultGenerator(
-            failure: OpenRouterFailure(
+            failure: CloudRequestFailure(
                 category: .providerUnavailable,
                 message: "Provider returned error",
                 httpStatus: 502

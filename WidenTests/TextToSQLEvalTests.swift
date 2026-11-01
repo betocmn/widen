@@ -51,7 +51,7 @@ struct TextToSQLEvalTests {
                     generationCallCount: 1
                 )
             }
-            throw OpenRouterFailure(
+            throw CloudRequestFailure(
                 category: .rateLimited,
                 message: "Rate limit exceeded.",
                 httpStatus: 429,
@@ -68,7 +68,7 @@ struct TextToSQLEvalTests {
             context: SQLGenerationContext,
             config: SQLGenerationConfig
         ) async throws -> SQLGenerationResult {
-            var metadata = OpenRouterGenerationMetadata(
+            var metadata = CloudGenerationMetadata(
                 requestedModelID: "test/model",
                 returnedModelID: "test/returned",
                 providerName: "TestProvider",
@@ -120,7 +120,7 @@ struct TextToSQLEvalTests {
             config: SQLGenerationConfig
         ) async throws -> SQLGenerationResult {
             if context.mode == .initial {
-                var metadata = OpenRouterGenerationMetadata(
+                var metadata = CloudGenerationMetadata(
                     requestedModelID: "test/model",
                     structuredOutputMode: .promptOnlyJSON,
                     requestCount: 1,
@@ -141,7 +141,7 @@ struct TextToSQLEvalTests {
                     backendMetadata: metadata
                 )
             }
-            var metadata = OpenRouterGenerationMetadata(
+            var metadata = CloudGenerationMetadata(
                 requestedModelID: "test/model",
                 structuredOutputMode: .promptOnlyJSON,
                 requestCount: 1,
@@ -940,11 +940,11 @@ struct TextToSQLEvalTests {
             evalCase: evalCase,
             schema: makeCommerceSchema(),
             generator: ThrowingGenerator(
-                error: OpenRouterFailure(
+                error: CloudRequestFailure(
                     category: .paymentRequired,
                     message: "Payment required.",
                     httpStatus: 402,
-                    openRouterErrorType: "insufficient_credits",
+                    providerErrorType: "insufficient_credits",
                     providerCode: "credits",
                     requestedModelID: "test/model"
                 )
@@ -970,10 +970,10 @@ struct TextToSQLEvalTests {
             evalCase: evalCase,
             schema: makeCommerceSchema(),
             generator: ThrowingGenerator(
-                error: OpenRouterFailure(
+                error: CloudRequestFailure(
                     category: .providerLimit,
                     message: "Provider limit.",
-                    openRouterErrorType: "provider_limit_exceeded",
+                    providerErrorType: "provider_limit_exceeded",
                     providerCode: "provider_limit",
                     requestedModelID: "test/model"
                 )
@@ -1015,7 +1015,7 @@ struct TextToSQLEvalTests {
             question: "Show the 10 most recent orders",
             expected: TextToSQLEvalExpectation(decision: .sql)
         )
-        let metadata = OpenRouterGenerationMetadata(
+        let metadata = CloudGenerationMetadata(
             requestedModelID: "test/model",
             structuredOutputMode: .promptOnlyJSON,
             requestCount: 2,
@@ -1026,7 +1026,7 @@ struct TextToSQLEvalTests {
             evalCase: evalCase,
             schema: makeCommerceSchema(),
             generator: ThrowingGenerator(
-                error: OpenRouterHTTPAttemptBudgetExhausted(
+                error: HTTPAttemptBudgetExhausted(
                     message: "OpenRouter HTTP-attempt budget exhausted.",
                     backendMetadata: metadata
                 )
@@ -1259,7 +1259,7 @@ struct TextToSQLEvalTests {
             question: "Show the 10 most recent orders",
             expected: TextToSQLEvalExpectation(decision: .sql)
         )
-        let failure = OpenRouterFailure(
+        let failure = CloudRequestFailure(
             category: .malformedStructuredResponse,
             message: "Malformed completion.",
             requestedModelID: "test/model",
@@ -1430,7 +1430,7 @@ struct TextToSQLEvalTests {
             question: "Show the 10 most recent orders",
             expected: TextToSQLEvalExpectation(decision: .sql)
         )
-        var metadata = OpenRouterGenerationMetadata(
+        var metadata = CloudGenerationMetadata(
             requestedModelID: "test/model",
             structuredOutputMode: .promptOnlyJSON,
             requestCount: 1,

@@ -9,7 +9,7 @@ public enum OpenRouterCapabilitySource: String, Codable, Equatable, Sendable {
 }
 
 struct OpenRouterModelCapabilitiesLookup: Equatable, Sendable {
-    var capabilities: OpenRouterModelCapabilities
+    var capabilities: CloudModelCapabilities
     var httpRequestCount: Int
 }
 
@@ -34,9 +34,9 @@ public struct OpenRouterModelMetadata: Codable, Identifiable, Equatable, Sendabl
     public var capabilitySource: OpenRouterCapabilitySource
     public var fetchedAt: Date
 
-    public var capabilities: OpenRouterModelCapabilities {
+    public var capabilities: CloudModelCapabilities {
         let parameters = Set(supportedParameters.map { $0.lowercased() })
-        return OpenRouterModelCapabilities(
+        return CloudModelCapabilities(
             supportsResponseFormat: parameters.contains("response_format"),
             supportsStructuredOutputs: parameters.contains("structured_outputs"),
             supportsTools: parameters.contains("tools"),
@@ -86,7 +86,7 @@ enum OpenRouterCanonicalModelValidator {
             capabilitySource: capabilitySource,
             expectedCanonicalModelID: expectedCanonicalModelID
         ) else { return }
-        throw OpenRouterFailure(
+        throw CloudRequestFailure(
             category: .modelVersionMismatch,
             message: "OpenRouter reports the fixed model now resolves to an unevaluated version. Update Widen before using this cloud model.",
             requestedModelID: requestedModelID,
@@ -123,7 +123,7 @@ enum OpenRouterCanonicalModelValidator {
                 : returnedModelID == nil
                     ? "OpenRouter did not report which model version served this request, so Widen cannot confirm it matches the evaluated version. Try again, and update Widen if this persists."
                     : "OpenRouter resolved the fixed model to an unevaluated version. Update Widen before using this cloud model."
-            throw OpenRouterFailure(
+            throw CloudRequestFailure(
                 category: .modelVersionMismatch,
                 message: message,
                 httpStatus: httpStatus,
@@ -203,7 +203,7 @@ actor OpenRouterModelCatalogService {
         var canonicalModelID: String?
         var capabilitySource: OpenRouterCapabilitySource
 
-        init(capabilities: OpenRouterModelCapabilities) {
+        init(capabilities: CloudModelCapabilities) {
             fetchedAt = capabilities.fetchedAt
             canonicalModelID = capabilities.canonicalModelID
             capabilitySource = capabilities.capabilitySource
@@ -390,7 +390,7 @@ actor OpenRouterModelCatalogService {
     }
 
     func capabilitiesForGeneration(apiKey: String, modelID: String) async
-        -> OpenRouterModelCapabilities
+        -> CloudModelCapabilities
     {
         guard let metadata = await metadata(apiKey: apiKey, modelID: modelID) else {
             return .conservative()
@@ -450,7 +450,7 @@ actor OpenRouterModelCatalogService {
                     confirmedCanonicalMismatches[memoKey] = nil
                 }
                 return lookup
-            } catch let failure as OpenRouterFailure
+            } catch let failure as CloudRequestFailure
                 where failure.category == .modelVersionMismatch
             {
                 let snapshot = CanonicalMismatchSnapshot(capabilities: lookup.capabilities)
@@ -742,7 +742,7 @@ actor OpenRouterModelCatalogService {
     }
 
     private func canServeStaleCatalog(after error: any Error) -> Bool {
-        if let failure = error as? OpenRouterFailure {
+        if let failure = error as? CloudRequestFailure {
             switch failure.category {
             case .rateLimited, .providerOverloaded, .providerUnavailable, .timeout,
                 .networkTransport, .serverFailure:
