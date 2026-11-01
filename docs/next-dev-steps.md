@@ -379,6 +379,14 @@ The gate verdict, reported for the record (not published):
 Prompt-cache hit rate was 55.7% (409,344 of 734,901 prompt tokens). The
 highest per-result cost was $0.0054.
 
+**Maintainer decision (2026-11-02):** the parsing shortfall came only from
+schema-tool budget exhaustion, which the extra-calls layer targets, so the
+maintainer accepted this run as Stage 3's comparator and authorized Stage 3.
+Its gate report and triage are now published as `docs/evals/0.2.0.md` and
+`docs/evals/0.2.0-triage.md`. The maintainer also authorized up to $10 more
+for further accuracy work on this branch, raising the branch cap to $15.00;
+each new paid experiment is still preregistered here before any spend.
+
 #### Stage 3
 
 Pending.
