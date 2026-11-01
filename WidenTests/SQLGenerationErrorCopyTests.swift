@@ -5,114 +5,190 @@ import Testing
 
 @Suite("SQLGenerationErrorCopy")
 struct SQLGenerationErrorCopyTests {
-    private let modelName = CloudModelCatalog.productionProfile.displayName
+    /// One row of the copy table: a Particle failure, a phrase its copy must
+    /// contain, and whether it earns "Try Again".
+    struct CopyCase: Sendable, CustomTestStringConvertible {
+        var category: CloudRequestFailure.Category
+        var providerCode: String?
+        var httpStatus: Int?
+        var copy: String
+        var retryable: Bool
+
+        var testDescription: String {
+            "\(category.rawValue) \(providerCode ?? "-")"
+        }
+    }
+
+    static let copyTable: [CopyCase] = [
+        CopyCase(
+            category: .authentication,
+            providerCode: "invalid_bearer_credential",
+            httpStatus: 401,
+            copy: "Particle rejected your API key. Re-enter it in Settings › LLM, or create a new key at platform.particle.ai.",
+            retryable: false
+        ),
+        CopyCase(
+            category: .paymentRequired,
+            providerCode: "insufficient_credits",
+            httpStatus: 402,
+            copy: "Your Particle account is out of credits. Add credits at platform.particle.ai, then try again.",
+            retryable: false
+        ),
+        CopyCase(
+            category: .permissionDenied,
+            providerCode: "insufficient_scope",
+            httpStatus: 403,
+            copy: "Your Particle API key isn't allowed to run inference. Create a key with inference access at platform.particle.ai and save it in Settings › LLM.",
+            retryable: false
+        ),
+        CopyCase(
+            category: .rateLimited,
+            providerCode: "fleet_capacity_exhausted",
+            httpStatus: 429,
+            copy: "Particle-1 is having a temporary outage. Your question is safe — try again in a moment.",
+            retryable: true
+        ),
+        CopyCase(
+            category: .serverFailure,
+            providerCode: "internal_error",
+            httpStatus: 500,
+            copy: "Particle-1 is having a temporary outage. Your question is safe — try again in a moment.",
+            retryable: true
+        ),
+        CopyCase(
+            category: .providerUnavailable,
+            providerCode: "invalid_upstream_response",
+            httpStatus: 502,
+            copy: "Particle-1 is having a temporary outage. Your question is safe — try again in a moment.",
+            retryable: true
+        ),
+        CopyCase(
+            category: .providerOverloaded,
+            httpStatus: 503,
+            copy: "Particle-1 is having a temporary outage. Your question is safe — try again in a moment.",
+            retryable: true
+        ),
+        CopyCase(
+            category: .timeout,
+            httpStatus: 504,
+            copy: "Particle-1 is having a temporary outage. Your question is safe — try again in a moment.",
+            retryable: true
+        ),
+        CopyCase(
+            category: .malformedStructuredResponse,
+            providerCode: "invalid_model_output",
+            httpStatus: 502,
+            copy: "Particle-1 returned a response Widen couldn't use. Try again, or rephrase the question.",
+            retryable: true
+        ),
+        CopyCase(
+            category: .malformedStructuredResponse,
+            copy: "Particle-1 returned a response Widen couldn't use. Try again, or rephrase the question.",
+            retryable: true
+        ),
+        CopyCase(
+            category: .modelVersionMismatch,
+            copy: "Particle answered with a model other than Particle-1 (particle-ai/particle-1), so Widen discarded the response. Check Settings › General › Check for Updates Now…; you can still browse schemas and run SQL.",
+            retryable: false
+        ),
+        CopyCase(
+            category: .contextWindow,
+            providerCode: "request_too_large",
+            httpStatus: 413,
+            copy: "This request is too large for Particle-1. Narrow the open schema or ask about fewer tables.",
+            retryable: false
+        ),
+        CopyCase(
+            category: .modelNotFound,
+            providerCode: "model_not_found",
+            httpStatus: 404,
+            copy: "Particle-1 isn't available to your key right now. Check platform.particle.ai.",
+            retryable: false
+        ),
+        CopyCase(
+            category: .providerLimit,
+            httpStatus: 403,
+            copy: "Your API key reached its usage limit. Raise the limit with your provider, then try again.",
+            retryable: false
+        ),
+    ]
+
+    private static func cloudFailure(_ copyCase: CopyCase, message: String) -> CloudRequestFailure {
+        CloudRequestFailure(
+            category: copyCase.category,
+            message: message,
+            httpStatus: copyCase.httpStatus,
+            providerCode: copyCase.providerCode
+        )
+    }
 
     private func pipelineFailure(
-        openRouterCategory: CloudRequestFailure.Category? = nil,
+        cloudFailure: CloudRequestFailure? = nil,
         message: String
     ) -> TextToSQLPipelineFailure {
         TextToSQLPipelineFailure(
             stage: .modelGeneration,
             category: .transport,
             message: message,
-            openRouterFailure: openRouterCategory.map {
-                CloudRequestFailure(category: $0, message: message).diagnostic
-            }
+            openRouterFailure: cloudFailure?.diagnostic
         )
     }
 
-    @Test(arguments: [
-        CloudRequestFailure.Category.providerUnavailable,
-        .providerOverloaded,
-        .serverFailure,
-        .timeout,
-        .rateLimited,
-    ])
-    func transientProviderFailuresGetOutageCopyAndRetry(category: CloudRequestFailure.Category) {
+    @Test(arguments: copyTable)
+    func pipelineFailuresGetTheirTableCopy(copyCase: CopyCase) {
+        let detail = "SQL generation failed: Particle returned HTTP \(copyCase.httpStatus ?? 200)."
         let failure = pipelineFailure(
-            openRouterCategory: category,
-            message: "SQL generation failed: OpenRouter returned HTTP 502."
+            cloudFailure: Self.cloudFailure(copyCase, message: detail),
+            message: detail
         )
 
-        let text = SQLGenerationErrorCopy.chatText(for: failure)
-        #expect(text.contains("temporary outage"))
-        #expect(text.contains("try again in a moment"))
-        // The original technical message survives as the detail line.
-        #expect(text.contains("OpenRouter returned HTTP 502."))
-        #expect(SQLGenerationErrorCopy.isRetryable(failure))
+        #expect(SQLGenerationErrorCopy.chatText(for: failure) == "\(copyCase.copy)\n\nDetail: \(detail)")
+        #expect(SQLGenerationErrorCopy.isRetryable(failure) == copyCase.retryable)
     }
 
-    @Test func authenticationFailurePointsAtSettings() {
-        let failure = pipelineFailure(
-            openRouterCategory: .authentication,
-            message: "SQL generation failed: No auth credentials found"
+    @Test(arguments: copyTable)
+    func thrownFailuresGetTheSameCopy(copyCase: CopyCase) {
+        let error = Self.cloudFailure(copyCase, message: "Provider returned error")
+
+        let text = SQLGenerationErrorCopy.chatText(for: error)
+        #expect(text.hasPrefix(copyCase.copy))
+        #expect(text.hasSuffix("Detail: SQL generation failed: Provider returned error"))
+        #expect(SQLGenerationErrorCopy.isRetryable(error) == copyCase.retryable)
+        #expect(SQLGenerationErrorCopy.cloudFailureCategory(of: error) == copyCase.category)
+    }
+
+    @Test func copyNamesNoRetiredProvider() {
+        for copyCase in Self.copyTable {
+            let lowered = copyCase.copy.lowercased()
+            #expect(!lowered.contains("openrouter"))
+            #expect(!lowered.contains("openai"))
+            #expect(!lowered.contains("zero-data-retention"))
+        }
+    }
+
+    @Test func agentFailureWithCloudCauseUsesTheCauseCopy() {
+        let error = SchemaToolAgentFailure(
+            category: .cloudRequestFailure,
+            message: "The schema-tool agent's model request failed.",
+            cloudFailure: CloudRequestFailure(
+                category: .malformedStructuredResponse,
+                message: "The cloud model returned a malformed tool call."
+            )
         )
 
-        let text = SQLGenerationErrorCopy.chatText(for: failure)
-        #expect(text.contains("Particle rejected your API key"))
-        #expect(text.contains("Settings › LLM"))
-        #expect(text.contains("platform.particle.ai"))
-        #expect(!text.contains("openrouter"))
-        #expect(text.contains("No auth credentials found"))
+        let text = SQLGenerationErrorCopy.chatText(for: error)
+        #expect(text.contains("returned a response Widen couldn't use"))
+        #expect(SQLGenerationErrorCopy.isRetryable(error))
+        #expect(SQLGenerationErrorCopy.cloudFailureCategory(of: error) == .malformedStructuredResponse)
+    }
+
+    @Test func formerPrivateRoutingWordingIsNoLongerSpecial() {
+        let message =
+            "SQL generation failed: No endpoint met Widen's private-routing requirements for this model."
+        let failure = pipelineFailure(message: message)
+
+        #expect(SQLGenerationErrorCopy.chatText(for: failure) == message)
         #expect(!SQLGenerationErrorCopy.isRetryable(failure))
-    }
-
-    @Test func paymentRequiredFailureSaysOutOfCredits() {
-        let failure = pipelineFailure(
-            openRouterCategory: .paymentRequired,
-            message: "SQL generation failed: Insufficient credits"
-        )
-
-        let text = SQLGenerationErrorCopy.chatText(for: failure)
-        #expect(text.contains("Your Particle account is out of credits"))
-        #expect(text.contains("platform.particle.ai"))
-        #expect(!SQLGenerationErrorCopy.isRetryable(failure))
-    }
-
-    @Test func providerLimitFailureSaysKeyLimit() {
-        let failure = pipelineFailure(
-            openRouterCategory: .providerLimit,
-            message: "SQL generation failed: Key limit exceeded"
-        )
-
-        let text = SQLGenerationErrorCopy.chatText(for: failure)
-        #expect(text.contains("spending or usage limit"))
-        #expect(!text.contains("openrouter"))
-        #expect(!SQLGenerationErrorCopy.isRetryable(failure))
-    }
-
-    @Test func modelIdentityMismatchExplainsTheDiscardAndUpdatePath() {
-        let failure = pipelineFailure(
-            openRouterCategory: .modelVersionMismatch,
-            message:
-                "SQL generation failed: Particle answered with particle-ai/particle-2 instead of particle-ai/particle-1."
-        )
-
-        let text = SQLGenerationErrorCopy.chatText(for: failure)
-        #expect(text.contains("model other than \(modelName) (particle-ai/particle-1)"))
-        #expect(text.contains("discarded the response"))
-        #expect(text.contains("Check for Updates Now"))
-        #expect(text.contains("run SQL directly"))
-        #expect(text.contains("particle-ai/particle-2"))
-        #expect(!text.contains("OpenAI"))
-        #expect(!SQLGenerationErrorCopy.isRetryable(failure))
-    }
-
-    @Test func privateRoutingFailureLeadsWithTransientFraming() {
-        // The ZDR routing failure arrives with the fixed prefix injected by
-        // CloudSQLGenerator, under a non-retryable category (404).
-        let failure = pipelineFailure(
-            openRouterCategory: .modelNotFound,
-            message:
-                "SQL generation failed: No OpenRouter endpoint met Widen's private-routing requirements for this model. Widen requires zero data retention, no provider data collection, and full request-parameter support, and fails closed rather than relaxing them. No endpoints found matching your data policy."
-        )
-
-        let text = SQLGenerationErrorCopy.chatText(for: failure)
-        #expect(text.contains("zero-data-retention guarantee"))
-        #expect(text.contains("usually a temporary provider outage"))
-        #expect(text.contains("never relaxes this privacy requirement"))
-        #expect(text.contains("No endpoints found matching your data policy."))
-        #expect(SQLGenerationErrorCopy.isRetryable(failure))
     }
 
     @Test func schemaAgentTimeoutGetsExplorationCopyAndRetry() {
@@ -127,7 +203,7 @@ struct SQLGenerationErrorCopyTests {
     }
 
     @Test(arguments: [
-        "SQL generation failed: The schema-tool agent exhausted its OpenRouter HTTP-attempt budget.",
+        "SQL generation failed: The schema-tool agent exhausted its HTTP-attempt budget.",
         "SQL generation failed: The schema-tool agent exhausted its model-turn budget.",
         "SQL generation failed: Schema or inspection tool call budget exhausted.",
         "SQL generation failed: Schema or inspection tool byte budget exhausted.",
@@ -140,25 +216,18 @@ struct SQLGenerationErrorCopyTests {
         #expect(!SQLGenerationErrorCopy.isRetryable(failure))
     }
 
-    @Test func unmappedFailuresPassThroughUnchanged() {
+    @Test(arguments: [
+        CloudRequestFailure.Category.networkTransport, .invalidRequest, .unsupportedFeature, .refusal,
+    ])
+    func unmappedFailuresPassThroughUnchanged(category: CloudRequestFailure.Category) {
         let message = "SQL generation failed: No internet connection. Check your network and try again."
-        let failure = pipelineFailure(openRouterCategory: .networkTransport, message: message)
+        let failure = pipelineFailure(
+            cloudFailure: CloudRequestFailure(category: category, message: message),
+            message: message
+        )
 
         #expect(SQLGenerationErrorCopy.chatText(for: failure) == message)
         #expect(!SQLGenerationErrorCopy.isRetryable(failure))
-    }
-
-    @Test func thrownOpenRouterErrorsMapThroughTypedCategory() {
-        let error = CloudRequestFailure(
-            category: .providerUnavailable,
-            message: "Provider returned error",
-            httpStatus: 502
-        )
-
-        let text = SQLGenerationErrorCopy.chatText(for: error)
-        #expect(text.contains("temporary outage"))
-        #expect(text.contains("Provider returned error"))
-        #expect(SQLGenerationErrorCopy.isRetryable(error))
     }
 
     @Test func thrownAgentTimeoutMapsToExplorationCopy() {
@@ -179,16 +248,27 @@ struct SQLGenerationErrorCopyTests {
             SQLGenerationErrorCopy.chatText(for: error)
                 == "SQL generation failed: The model returned no SQL.")
         #expect(!SQLGenerationErrorCopy.isRetryable(error))
+        #expect(SQLGenerationErrorCopy.cloudFailureCategory(of: error) == nil)
     }
 
     @Test(arguments: [
-        (CloudRequestFailure.Category.providerUnavailable, "Provider outage"),
-        (.authentication, "API key rejected"),
-        (.paymentRequired, "Out of credits"),
-        (.modelVersionMismatch, "Model version changed"),
-        (.malformedStructuredResponse, "Malformed model response"),
-    ])
-    func testModelLabelsAreHumanReadable(category: CloudRequestFailure.Category, label: String) {
-        #expect(SQLGenerationErrorCopy.testModelLabel(for: category) == label)
+        (CloudRequestFailure.Category.authentication, "invalid_bearer_credential", "API key rejected"),
+        (.paymentRequired, "insufficient_credits", "Out of credits"),
+        (.permissionDenied, "insufficient_scope", "No inference access"),
+        (.permissionDenied, nil, "Access denied"),
+        (.rateLimited, "fleet_capacity_exhausted", "Particle at capacity"),
+        (.rateLimited, nil, "Rate limited"),
+        (.malformedStructuredResponse, "INVALID_MODEL_OUTPUT", "Invalid model output"),
+        (.malformedStructuredResponse, nil, "Malformed model response"),
+        (.providerUnavailable, "invalid_upstream_response", "Particle outage"),
+        (.modelVersionMismatch, nil, "Another model answered"),
+        (.contextWindow, "request_too_large", "Request too large for the model"),
+    ] as [(CloudRequestFailure.Category, String?, String)])
+    func testConnectionLabelsAreHumanReadable(
+        category: CloudRequestFailure.Category,
+        providerCode: String?,
+        label: String
+    ) {
+        #expect(SQLGenerationErrorCopy.testConnectionLabel(for: category, providerCode: providerCode) == label)
     }
 }

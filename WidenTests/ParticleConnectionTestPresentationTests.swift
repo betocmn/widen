@@ -171,7 +171,7 @@ struct ParticleConnectionTestPresentationTests {
         let returned = presentation.rows.first { $0.title == "Returned model" }
         #expect(returned?.value == "particle-ai/particle-2 — mismatch")
         #expect(returned?.isWarning == true)
-        #expect(Self.value("Inference", in: presentation) == "Model version changed")
+        #expect(Self.value("Inference", in: presentation) == "Another model answered")
         #expect(!presentation.succeeded)
     }
 

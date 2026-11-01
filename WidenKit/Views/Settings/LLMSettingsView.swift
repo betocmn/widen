@@ -70,7 +70,10 @@ struct ParticleConnectionTestPresentation: Equatable {
             rows.append(
                 Row(
                     title: "Inference",
-                    value: SQLGenerationErrorCopy.testModelLabel(for: error.category),
+                    value: SQLGenerationErrorCopy.testConnectionLabel(
+                        for: error.category,
+                        providerCode: error.diagnostic.providerCode
+                    ),
                     isWarning: true
                 )
             )
@@ -93,7 +96,10 @@ struct ParticleConnectionTestPresentation: Equatable {
             rows.append(
                 Row(
                     title: "Error",
-                    value: SQLGenerationErrorCopy.testModelLabel(for: error.category),
+                    value: SQLGenerationErrorCopy.testConnectionLabel(
+                        for: error.category,
+                        providerCode: error.diagnostic.providerCode
+                    ),
                     help: Self.diagnostics(for: error),
                     isWarning: true
                 )
