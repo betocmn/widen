@@ -1133,7 +1133,7 @@ public final class OpenRouterSchemaToolSQLAgent: SQLGenerator, Sendable {
                 if let timeout = Self.wallClockTimeoutFailure(for: error, deadline: deadline) {
                     throw timeout
                 }
-                let failure = OpenRouterSQLGenerator.mapForAgent(
+                let failure = OpenRouterFailure.map(
                     error,
                     requestedModelID: model,
                     attempt: attempt
@@ -3225,38 +3225,5 @@ private struct OpenRouterAgentMetadataAccumulator {
 private extension Array where Element: Hashable {
     var hasDuplicates: Bool {
         Set(self).count != count
-    }
-}
-
-private extension OpenRouterSQLGenerator {
-    static func mapForAgent(
-        _ error: URLError,
-        requestedModelID: String,
-        attempt: Int
-    ) -> OpenRouterFailure {
-        switch error.code {
-        case .timedOut:
-            return OpenRouterFailure(
-                category: .timeout,
-                message: "The cloud request timed out.",
-                requestedModelID: requestedModelID,
-                attemptCount: attempt
-            )
-        case .notConnectedToInternet, .networkConnectionLost, .cannotFindHost,
-            .cannotConnectToHost, .dnsLookupFailed:
-            return OpenRouterFailure(
-                category: .networkTransport,
-                message: "No internet connection. Check your network and try again.",
-                requestedModelID: requestedModelID,
-                attemptCount: attempt
-            )
-        default:
-            return OpenRouterFailure(
-                category: .networkTransport,
-                message: error.localizedDescription,
-                requestedModelID: requestedModelID,
-                attemptCount: attempt
-            )
-        }
     }
 }

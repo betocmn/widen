@@ -715,6 +715,9 @@ struct TextToSQLEvalRunPlanningTests {
         #expect(oneShotPaths.contains("WidenKit/Models/SQLGenerationResult.swift"))
         #expect(oneShotPaths.contains("WidenKit/Models/CloudModelProfile.swift"))
         #expect(oneShotPaths.contains("WidenKit/Services/CloudSQLGenerator.swift"))
+        #expect(oneShotPaths.contains("WidenKit/Services/ChatCompletionsCore.swift"))
+        #expect(oneShotPaths.contains("WidenKit/Services/SchemaToolAgentDiagnostics.swift"))
+        #expect(oneShotPaths.contains("WidenKit/Services/OpenRouterEvalSupport.swift"))
         #expect(oneShotPaths.contains("WidenKit/Services/HTTPTransport.swift"))
         // The scorer's safety, schema and reference metrics, and the pipeline's
         // GeneratedSQLPostprocessor grounding, come from these validators.

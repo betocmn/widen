@@ -32,6 +32,9 @@ public enum TextToSQLEvalSourceManifest {
             "WidenKit/Models/CloudModelProfile.swift",
             "WidenKit/Services/HTTPTransport.swift",
             "WidenKit/Services/CloudSQLGenerator.swift",
+            "WidenKit/Services/ChatCompletionsCore.swift",
+            "WidenKit/Services/SchemaToolAgentDiagnostics.swift",
+            "WidenKit/Services/OpenRouterEvalSupport.swift",
         ] + (includesSchemaToolAgent ? [
             "WidenKit/Services/SchemaToolSQLAgent.swift",
             "WidenKit/Services/ChatToolProtocol.swift",
