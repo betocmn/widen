@@ -3,7 +3,7 @@ import Foundation
 /// Where a request's `costUSD` came from. Metadata and diagnostics store the
 /// raw value as a plain string, so a source added later never stops an older
 /// build from reading saved sessions.
-enum CloudCostSource: String, CaseIterable, Sendable {
+public enum CloudCostSource: String, CaseIterable, Sendable {
     /// The provider reported `usage.cost`.
     case reported
     /// Estimated from the profile's peak list prices, so an upper bound.
@@ -11,7 +11,7 @@ enum CloudCostSource: String, CaseIterable, Sendable {
 
     /// The source of a cost summed from two parts. A total with any
     /// estimated part is itself an estimate.
-    static func combined(_ first: String?, _ second: String?) -> String? {
+    public static func combined(_ first: String?, _ second: String?) -> String? {
         guard let first else { return second }
         guard let second, second != first else { return first }
         return estimatedPeakList.rawValue

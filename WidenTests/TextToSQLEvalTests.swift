@@ -185,6 +185,8 @@ struct TextToSQLEvalTests {
     }
 
     private struct UsageReportingHangingGenerator: SQLGenerator {
+        var costSource: String? = nil
+
         func generateSQL(
             question: String,
             schema: DatabaseSchema,
@@ -199,7 +201,8 @@ struct TextToSQLEvalTests {
                     completionTokens: 8,
                     reasoningTokens: 2,
                     totalTokens: 20,
-                    costUSD: 0.02
+                    costUSD: 0.02,
+                    costSource: costSource
                 )
             )
             try await Task.sleep(nanoseconds: 60_000_000_000)
@@ -1280,6 +1283,106 @@ struct TextToSQLEvalTests {
         #expect(result.status == .parseFailure)
         #expect(result.metrics.tokenUsage == 9)
         #expect(result.metrics.estimatedCloudCostUSD == 0.25)
+    }
+
+    @Test func evalMetricsRecordTheSourceOfTheirCost() async {
+        let evalCase = TextToSQLEvalCase(
+            id: "commerce.recent-orders",
+            schemaFixture: "commerce",
+            question: "Show the 10 most recent orders",
+            expected: TextToSQLEvalExpectation(decision: .sql)
+        )
+        let estimated = CloudCostSource.estimatedPeakList.rawValue
+        let reported = CloudCostSource.reported.rawValue
+        var metadata = CloudGenerationMetadata(
+            requestedModelID: "particle-1",
+            structuredOutputMode: .promptOnlyJSON,
+            requestCount: 1,
+            retryCount: 0
+        )
+        metadata.totalTokens = 150
+        metadata.costUSD = 0.000_066
+        metadata.costSource = estimated
+        let scored = TextToSQLEvalScorer.score(
+            evalCase: evalCase,
+            schema: makeCommerceSchema(),
+            generation: SQLGenerationResult(
+                sql: "SELECT id FROM public.orders LIMIT 100",
+                explanation: "Lists orders.",
+                assumptions: [],
+                referencedTables: ["public.orders"],
+                confidence: 0.8,
+                riskLevel: .low,
+                needsClarification: false,
+                clarificationQuestion: nil,
+                backendMetadata: metadata
+            ),
+            options: TextToSQLEvalRunOptions(backend: .cloud, model: "particle-1"),
+            latencyMs: 12
+        )
+        #expect(scored.metrics.estimatedCloudCostUSD == 0.000_066)
+        #expect(scored.metrics.estimatedCloudCostSource == estimated)
+
+        let failed = await TextToSQLEvalCaseRunner.run(
+            evalCase: evalCase,
+            schema: makeCommerceSchema(),
+            generator: ThrowingGenerator(
+                error: CloudRequestFailure(
+                    category: .malformedStructuredResponse,
+                    message: "Malformed completion.",
+                    requestedModelID: "test/model",
+                    totalTokens: 9,
+                    costUSD: 0.25,
+                    costSource: reported
+                )
+            ),
+            options: TextToSQLEvalRunOptions(backend: .cloud, model: "test/model")
+        )
+        #expect(failed.metrics.estimatedCloudCostUSD == 0.25)
+        #expect(failed.metrics.estimatedCloudCostSource == reported)
+
+        let unpriced = await TextToSQLEvalCaseRunner.run(
+            evalCase: evalCase,
+            schema: makeCommerceSchema(),
+            generator: ThrowingGenerator(
+                error: CloudRequestFailure(
+                    category: .malformedStructuredResponse,
+                    message: "Malformed completion.",
+                    requestedModelID: "test/model",
+                    totalTokens: 9
+                )
+            ),
+            options: TextToSQLEvalRunOptions(backend: .cloud, model: "test/model")
+        )
+        #expect(unpriced.metrics.tokenUsage == 9)
+        #expect(unpriced.metrics.estimatedCloudCostUSD == nil)
+        #expect(unpriced.metrics.estimatedCloudCostSource == nil)
+    }
+
+    @Test func caseTimeoutKeepsTheSourceOfObservedCost() async {
+        let evalCase = TextToSQLEvalCase(
+            id: "commerce.recent-orders",
+            schemaFixture: "commerce",
+            question: "Show the 10 most recent orders",
+            expected: TextToSQLEvalExpectation(decision: .sql)
+        )
+
+        let result = await TextToSQLEvalCaseRunner.run(
+            evalCase: evalCase,
+            schema: makeCommerceSchema(),
+            generator: UsageReportingHangingGenerator(
+                costSource: CloudCostSource.estimatedPeakList.rawValue
+            ),
+            options: TextToSQLEvalRunOptions(
+                backend: .cloud,
+                model: "particle-1",
+                caseTimeoutSeconds: 0.01
+            )
+        )
+
+        #expect(result.status == .evalTimeout)
+        #expect(result.metrics.estimatedCloudCostUSD == 0.02)
+        #expect(result.metrics.estimatedCloudCostSource == CloudCostSource.estimatedPeakList.rawValue)
     }
 
     @Test func localStructuredDecodeFailureCountsAsParseFailure() async {

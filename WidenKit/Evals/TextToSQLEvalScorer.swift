@@ -357,7 +357,8 @@ public enum TextToSQLEvalCaseRunner {
                     ? observedUsage.httpAttemptCount : nil,
                 estimatedInitialPromptCharacters: options.estimatedInitialPromptCharacters,
                 tokenUsage: observedUsage.totalTokens,
-                estimatedCloudCostUSD: observedUsage.costUSD
+                estimatedCloudCostUSD: observedUsage.costUSD,
+                estimatedCloudCostSource: observedUsage.costSource
             ),
             diagnostics: TextToSQLEvalDiagnostics(
                 errorMessage:
@@ -390,7 +391,8 @@ public enum TextToSQLEvalCaseRunner {
                 },
                 estimatedInitialPromptCharacters: options.estimatedInitialPromptCharacters,
                 tokenUsage: observedUsage?.totalTokens,
-                estimatedCloudCostUSD: observedUsage?.costUSD
+                estimatedCloudCostUSD: observedUsage?.costUSD,
+                estimatedCloudCostSource: observedUsage?.costSource
             ),
             diagnostics: TextToSQLEvalDiagnostics(
                 errorMessage: "Eval case \(evalCase.id) was cancelled."
@@ -461,6 +463,10 @@ public enum TextToSQLEvalCaseRunner {
                 tokenUsage: backendMetadata?.totalTokens ?? openRouterDiagnostic?.totalTokens,
                 estimatedCloudCostUSD: backendMetadata?.costUSD
                     ?? openRouterDiagnostic?.costUSD,
+                estimatedCloudCostSource: costSource(
+                    metadata: backendMetadata,
+                    failure: openRouterDiagnostic
+                ),
                 openRouterStructuredOutputMode: backendMetadata?.structuredOutputMode.rawValue,
                 openRouterRetryCount: backendMetadata?.retryCount
                     ?? openRouterDiagnostic.map { max(0, $0.attemptCount - 1) },
@@ -530,6 +536,10 @@ public enum TextToSQLEvalCaseRunner {
                     ?? failure.openRouterFailure?.totalTokens,
                 estimatedCloudCostUSD: backendMetadata?.costUSD
                     ?? failure.openRouterFailure?.costUSD,
+                estimatedCloudCostSource: costSource(
+                    metadata: backendMetadata,
+                    failure: failure.openRouterFailure
+                ),
                 openRouterStructuredOutputMode: backendMetadata?.structuredOutputMode.rawValue,
                 openRouterRetryCount: backendMetadata?.retryCount
                     ?? failure.openRouterFailure.map { max(0, $0.attemptCount - 1) },
@@ -572,6 +582,15 @@ public enum TextToSQLEvalCaseRunner {
         }
         guard trace.modelCalls > 0 else { return attemptCount }
         return trace.modelCalls + max(0, attemptCount - 1)
+    }
+
+    /// The source of the cost a failure result records, which is the
+    /// metadata's cost when it has one and the request failure's otherwise.
+    private static func costSource(
+        metadata: CloudGenerationMetadata?,
+        failure: CloudRequestFailureDiagnostic?
+    ) -> String? {
+        metadata?.costUSD != nil ? metadata?.costSource : failure?.costSource
     }
 
     private static func agentFailureTrace(
@@ -699,6 +718,7 @@ public enum TextToSQLEvalScorer {
                     estimatedInitialPromptCharacters: options.estimatedInitialPromptCharacters,
                     tokenUsage: backendMetadata?.totalTokens,
                     estimatedCloudCostUSD: backendMetadata?.costUSD,
+                    estimatedCloudCostSource: backendMetadata?.costSource,
                     openRouterStructuredOutputMode: backendMetadata?.structuredOutputMode.rawValue,
                     openRouterRetryCount: backendMetadata?.retryCount,
                     openRouterRequestedModelID: backendMetadata?.requestedModelID,
@@ -736,6 +756,7 @@ public enum TextToSQLEvalScorer {
                     estimatedInitialPromptCharacters: options.estimatedInitialPromptCharacters,
                     tokenUsage: backendMetadata?.totalTokens,
                     estimatedCloudCostUSD: backendMetadata?.costUSD,
+                    estimatedCloudCostSource: backendMetadata?.costSource,
                     openRouterStructuredOutputMode: backendMetadata?.structuredOutputMode.rawValue,
                     openRouterRetryCount: backendMetadata?.retryCount,
                     openRouterRequestedModelID: backendMetadata?.requestedModelID,
@@ -771,6 +792,7 @@ public enum TextToSQLEvalScorer {
                     estimatedInitialPromptCharacters: options.estimatedInitialPromptCharacters,
                     tokenUsage: backendMetadata?.totalTokens,
                     estimatedCloudCostUSD: backendMetadata?.costUSD,
+                    estimatedCloudCostSource: backendMetadata?.costSource,
                     openRouterStructuredOutputMode: backendMetadata?.structuredOutputMode.rawValue,
                     openRouterRetryCount: backendMetadata?.retryCount,
                     openRouterRequestedModelID: backendMetadata?.requestedModelID,
@@ -850,6 +872,7 @@ public enum TextToSQLEvalScorer {
                 estimatedInitialPromptCharacters: options.estimatedInitialPromptCharacters,
                 tokenUsage: backendMetadata?.totalTokens,
                 estimatedCloudCostUSD: backendMetadata?.costUSD,
+                estimatedCloudCostSource: backendMetadata?.costSource,
                 openRouterStructuredOutputMode: backendMetadata?.structuredOutputMode.rawValue,
                 openRouterRetryCount: backendMetadata?.retryCount,
                 openRouterRequestedModelID: backendMetadata?.requestedModelID,

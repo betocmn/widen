@@ -272,6 +272,7 @@ enum EvalReporter {
             "| Max estimated initial prompt characters | \(maxPromptSize) |",
             "| Token usage | \(tokenUsage) |",
             "| Estimated cloud cost | \(cloudCost) |",
+            "| Estimated cloud cost source | \(tableCell(summary.estimatedCloudCostSource ?? "-")) |",
             "",
             "### Latency",
             "",

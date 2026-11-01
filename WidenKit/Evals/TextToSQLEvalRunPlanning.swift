@@ -191,6 +191,27 @@ public struct TextToSQLEvalBudgetLimits: Equatable, Sendable {
         self.maxHTTPAttempts = maxHTTPAttempts
         self.maxCompletedResults = maxCompletedResults
     }
+
+    /// Throws before any request when a cloud-cost budget is set for a
+    /// profile that neither reports `usage.cost` nor has prices to estimate
+    /// it from tokens, because that budget could never be enforced.
+    public func validateCostAccounting(for profile: CloudModelProfile) throws {
+        guard maxCloudCostUSD != nil, profile.pricing == nil, !profile.reportsUsageCost else {
+            return
+        }
+        throw TextToSQLEvalCostAccountingError.unpricedProfile(displayName: profile.displayName)
+    }
+}
+
+public enum TextToSQLEvalCostAccountingError: LocalizedError, Equatable, Sendable {
+    case unpricedProfile(displayName: String)
+
+    public var errorDescription: String? {
+        switch self {
+        case .unpricedProfile(let displayName):
+            "--max-cloud-cost-usd cannot be enforced for \(displayName): it reports no request cost and has no token prices to estimate one. Run without a cost budget, or bound the run with --max-http-attempts."
+        }
+    }
 }
 
 public struct TextToSQLEvalBudgetState: Equatable, Sendable {
@@ -198,6 +219,10 @@ public struct TextToSQLEvalBudgetState: Equatable, Sendable {
     public private(set) var cloudCostUSD: Decimal
     public private(set) var httpAttempts: Int
     public private(set) var completedResults: Int
+    /// Set when a cloud-cost budget is in force and a result used tokens but
+    /// recorded no cost, so the budget can no longer be enforced. The run
+    /// stops and fails instead of spending past a cap it cannot see.
+    public private(set) var costAccountingFailure: String?
 
     public init(
         limits: TextToSQLEvalBudgetLimits,
@@ -207,12 +232,16 @@ public struct TextToSQLEvalBudgetState: Equatable, Sendable {
         self.cloudCostUSD = 0
         self.httpAttempts = 0
         self.completedResults = 0
+        self.costAccountingFailure = nil
         for result in seedResults {
             record(result)
         }
     }
 
     public func stopReasonBeforeNextResult(backend: TextToSQLEvalBackend) -> String? {
+        if let costAccountingFailure {
+            return costAccountingFailure
+        }
         if let maxCompletedResults = limits.maxCompletedResults,
             completedResults >= maxCompletedResults
         {
@@ -222,7 +251,7 @@ public struct TextToSQLEvalBudgetState: Equatable, Sendable {
         if let maxHTTPAttempts = limits.maxHTTPAttempts,
             httpAttempts >= maxHTTPAttempts
         {
-            return "Eval OpenRouter HTTP-attempt budget reached (\(httpAttempts)/\(maxHTTPAttempts))."
+            return "Eval provider HTTP-attempt budget reached (\(httpAttempts)/\(maxHTTPAttempts))."
         }
         if let maxCloudCostUSD = limits.maxCloudCostUSD,
             cloudCostUSD >= maxCloudCostUSD
@@ -246,6 +275,12 @@ public struct TextToSQLEvalBudgetState: Equatable, Sendable {
         guard result.backend == .cloud else { return }
         if let cost = result.metrics.estimatedCloudCostUSD {
             cloudCostUSD += Decimal(cost)
+        } else if limits.maxCloudCostUSD != nil,
+            costAccountingFailure == nil,
+            let tokens = result.metrics.tokenUsage,
+            tokens > 0
+        {
+            costAccountingFailure = "Eval cloud-cost budget cannot be enforced: \(result.caseID) (repeat \(result.repeatIndex)) used \(tokens) tokens but recorded no cost."
         }
         let attemptCounts = [
             result.metrics.modelCallCount,

@@ -349,6 +349,137 @@ struct TextToSQLEvalRunPlanningTests {
         )
     }
 
+    @Test func cloudCostBudgetStopsWhenAResultUsesTokensWithoutACost() {
+        var state = TextToSQLEvalBudgetState(
+            limits: TextToSQLEvalBudgetLimits(
+                maxCloudCostUSD: Decimal(string: "1.00"),
+                maxCompletedResults: 1
+            )
+        )
+        state.record(
+            Self.result(
+                caseID: "case.priced",
+                repeatIndex: 1,
+                status: .wrongDecision,
+                tokenUsage: 80,
+                estimatedCloudCostUSD: 0.01
+            )
+        )
+        #expect(state.costAccountingFailure == nil)
+
+        state.record(
+            Self.result(caseID: "case.unpriced", repeatIndex: 2, status: .passed, tokenUsage: 120)
+        )
+        state.record(
+            Self.result(caseID: "case.later", repeatIndex: 1, status: .passed, tokenUsage: 40)
+        )
+
+        let expected = "Eval cloud-cost budget cannot be enforced: case.unpriced (repeat 2) used 120 tokens but recorded no cost."
+        #expect(state.costAccountingFailure == expected)
+        #expect(state.cloudCostUSD == Decimal(string: "0.01"))
+        // It is reported ahead of the completed-result budget that is also spent.
+        #expect(state.stopReasonBeforeNextResult(backend: .cloud) == expected)
+    }
+
+    @Test func resumedResultWithTokensButNoCostStopsTheRunBeforeItsFirstRequest() {
+        let state = TextToSQLEvalBudgetState(
+            limits: TextToSQLEvalBudgetLimits(maxCloudCostUSD: Decimal(string: "1.00")),
+            seedResults: [
+                Self.result(caseID: "case.a", repeatIndex: 1, status: .passed, tokenUsage: 9),
+            ]
+        )
+
+        #expect(
+            state.stopReasonBeforeNextResult(backend: .cloud)
+                == "Eval cloud-cost budget cannot be enforced: case.a (repeat 1) used 9 tokens but recorded no cost."
+        )
+    }
+
+    @Test func tokensWithoutACostDoNotStopARunWithoutACostBudget() {
+        var state = TextToSQLEvalBudgetState(
+            limits: TextToSQLEvalBudgetLimits(maxHTTPAttempts: 10, maxCompletedResults: 10)
+        )
+        state.record(
+            Self.result(caseID: "case.a", repeatIndex: 1, status: .passed, tokenUsage: 120)
+        )
+
+        #expect(state.costAccountingFailure == nil)
+        #expect(state.stopReasonBeforeNextResult(backend: .cloud) == nil)
+    }
+
+    @Test func resultsWithoutTokensNeverFailCostAccounting() {
+        var state = TextToSQLEvalBudgetState(
+            limits: TextToSQLEvalBudgetLimits(maxCloudCostUSD: Decimal(string: "1.00"))
+        )
+        // Skipped, unavailable and token-less results record neither tokens nor cost.
+        state.record(Self.result(caseID: "case.skipped", repeatIndex: 1, status: .skippedBudgetLimit))
+        state.record(Self.result(caseID: "case.down", repeatIndex: 1, status: .backendUnavailable))
+        state.record(Self.result(caseID: "case.zero", repeatIndex: 1, status: .passed, tokenUsage: 0))
+
+        #expect(state.costAccountingFailure == nil)
+        #expect(state.stopReasonBeforeNextResult(backend: .cloud) == nil)
+    }
+
+    @Test func cloudCostBudgetIsRefusedUpFrontForAProfileWithNoCostAccounting() throws {
+        let capped = TextToSQLEvalBudgetLimits(maxCloudCostUSD: Decimal(string: "0.25"))
+        // Particle is priced from tokens; OpenRouter reports usage.cost.
+        try capped.validateCostAccounting(for: .particleTest)
+        try capped.validateCostAccounting(for: .openRouterTest)
+
+        var unpriced = CloudModelProfile.openRouterTest.requestingModel("vendor/unpriced")
+        unpriced.displayName = "vendor/unpriced"
+        unpriced.pricing = nil
+        unpriced.reportsUsageCost = false
+        #expect(throws: TextToSQLEvalCostAccountingError.unpricedProfile(displayName: "vendor/unpriced")) {
+            try capped.validateCostAccounting(for: unpriced)
+        }
+        let message = TextToSQLEvalCostAccountingError.unpricedProfile(displayName: "vendor/unpriced")
+            .localizedDescription
+        #expect(message.hasPrefix("--max-cloud-cost-usd cannot be enforced for vendor/unpriced:"))
+
+        // Without a cost budget there is nothing to enforce.
+        try TextToSQLEvalBudgetLimits(maxHTTPAttempts: 4).validateCostAccounting(for: unpriced)
+    }
+
+    @Test func evalRunnerRefusesUnpricedCostBudgetsAndFailsAfterWritingArtifacts() throws {
+        let repoRoot = URL(fileURLWithPath: #filePath)
+            .deletingLastPathComponent()
+            .deletingLastPathComponent()
+        let runnerText = try String(
+            contentsOf: repoRoot.appendingPathComponent("WidenEval/EvalRunner.swift"),
+            encoding: .utf8
+        )
+
+        // The precheck runs once the profile is known and before any request.
+        let settings = try #require(runnerText.range(of: "try TextToSQLEvalCloudSettings("))
+        let precheck = try #require(
+            runnerText.range(
+                of: "try runner.options.budgetLimits.validateCostAccounting(for: cloud.profile)"
+            )
+        )
+        let runResolved = try #require(
+            runnerText.range(of: "return try await runner.runResolved(resumeRun: resumeRun, cloud: cloud)")
+        )
+        #expect(settings.lowerBound < precheck.lowerBound)
+        #expect(precheck.lowerBound < runResolved.lowerBound)
+
+        // A blind cost cap stops the loop like any budget, then fails the run
+        // once every remaining slot is written as skipped.
+        let loopStop = try #require(
+            runnerText.range(of: "budgetStopReason = costAccountingFailure")
+        )
+        let failure = try #require(
+            runnerText.range(of: "throw EvalRunnerError.costAccountingUnavailable(")
+        )
+        let finalRun = try #require(
+            runnerText.range(
+                of: "return makeRun(finishedAt: ISO8601DateFormatter().string(from: Date()))"
+            )
+        )
+        #expect(loopStop.lowerBound < failure.lowerBound)
+        #expect(failure.lowerBound < finalRun.lowerBound)
+    }
+
     @Test func httpBudgetStopsCloudAndReportsRemainingAttempts() {
         let reused = [
             Self.result(
@@ -366,7 +497,7 @@ struct TextToSQLEvalRunPlanningTests {
 
         #expect(state.httpAttempts == 2)
         #expect(state.remainingHTTPAttempts(for: .cloud) == 0)
-        #expect(state.stopReasonBeforeNextResult(backend: .cloud) == "Eval OpenRouter HTTP-attempt budget reached (2/2).")
+        #expect(state.stopReasonBeforeNextResult(backend: .cloud) == "Eval provider HTTP-attempt budget reached (2/2).")
     }
 
     @Test func httpBudgetUsesCumulativeModelCallsForRepairedAgentResults() {
@@ -386,7 +517,7 @@ struct TextToSQLEvalRunPlanningTests {
         )
 
         #expect(state.httpAttempts == 3)
-        #expect(state.stopReasonBeforeNextResult(backend: .cloud) == "Eval OpenRouter HTTP-attempt budget reached (3/3).")
+        #expect(state.stopReasonBeforeNextResult(backend: .cloud) == "Eval provider HTTP-attempt budget reached (3/3).")
     }
 
     @Test func makefileContainsFocusedReleaseCommands() throws {
@@ -1041,6 +1172,7 @@ struct TextToSQLEvalRunPlanningTests {
         endToEndPassed: Bool? = nil,
         modelCallCount: Int? = nil,
         openRouterHTTPAttempts: Int? = nil,
+        tokenUsage: Int? = nil,
         estimatedCloudCostUSD: Double? = nil
     ) -> TextToSQLEvalResult {
         TextToSQLEvalResult(
@@ -1056,6 +1188,7 @@ struct TextToSQLEvalRunPlanningTests {
                 decisionMatches: status == .passed,
                 latencyMs: 1,
                 modelCallCount: modelCallCount,
+                tokenUsage: tokenUsage,
                 estimatedCloudCostUSD: estimatedCloudCostUSD,
                 openRouterAgentHTTPAttemptCount: openRouterHTTPAttempts,
                 endToEndPassed: endToEndPassed

@@ -123,6 +123,8 @@ struct EvalRunSummary: Codable {
     var totalModelCalls: Int?
     var totalTokenUsage: Int?
     var estimatedCloudCostUSD: Double?
+    /// A `CloudCostSource` raw value; an estimate when any result's cost was.
+    var estimatedCloudCostSource: String?
     var totalSchemaToolCalls: Int?
     var totalInspectionToolCalls: Int?
     var totalAgentModelTurns: Int?
@@ -180,6 +182,7 @@ struct EvalRunner {
             requestedModelID: runner.options.model,
             reasoningEffortOverride: runner.options.reasoningEffort
         )
+        try runner.options.budgetLimits.validateCostAccounting(for: cloud.profile)
         return try await runner.runResolved(resumeRun: resumeRun, cloud: cloud)
     }
 
@@ -298,7 +301,9 @@ struct EvalRunner {
             limits: options.budgetLimits,
             seedResults: results
         )
-        var budgetStopReason: String?
+        // A resumed result that used tokens without a cost stops the run
+        // before its first request.
+        var budgetStopReason: String? = budgetTracker.costAccountingFailure
         var backendStates: [TextToSQLEvalBackend: EvalBackendRuntime] = [:]
         var semanticPreparation: SemanticPreparation?
         if options.semanticDatabase {
@@ -542,12 +547,24 @@ struct EvalRunner {
                 if options.stopBeforeProviderLimit, result.status.isProviderBudgetUnavailable {
                     budgetStopReason = "\(cloud.profile.provider.displayName) provider budget was unavailable."
                 }
+                if let costAccountingFailure = budgetTracker.costAccountingFailure {
+                    budgetStopReason = costAccountingFailure
+                }
                 try writePartialArtifacts()
             }
             await semanticPreparation?.cleanup()
         } catch {
             await semanticPreparation?.cleanup()
             throw error
+        }
+
+        // The remaining results were skipped and the partial artifacts are
+        // written; fail so a cost cap that went blind never looks satisfied.
+        if let costAccountingFailure = budgetTracker.costAccountingFailure {
+            throw EvalRunnerError.costAccountingUnavailable(
+                costAccountingFailure,
+                artifactsPath: outputDirectory.path
+            )
         }
 
         return makeRun(finishedAt: ISO8601DateFormatter().string(from: Date()))
@@ -1252,6 +1269,8 @@ struct EvalRunner {
         let modelCalls = results.compactMap(\.metrics.modelCallCount)
         let tokenUsage = results.compactMap(\.metrics.tokenUsage)
         let cloudCosts = results.compactMap(\.metrics.estimatedCloudCostUSD)
+        let cloudCostSource = results.compactMap(\.metrics.estimatedCloudCostSource)
+            .reduce(String?.none) { CloudCostSource.combined($0, $1) }
         let schemaToolCalls = results.compactMap(\.metrics.openRouterSchemaToolCallCount)
         let inspectionToolCalls = results.compactMap(\.metrics.openRouterInspectionToolCallCount)
         let agentModelTurns = results.compactMap(\.metrics.openRouterAgentLogicalTurnCount)
@@ -1433,6 +1452,7 @@ struct EvalRunner {
             totalModelCalls: modelCalls.isEmpty ? nil : modelCalls.reduce(0, +),
             totalTokenUsage: tokenUsage.isEmpty ? nil : tokenUsage.reduce(0, +),
             estimatedCloudCostUSD: cloudCosts.isEmpty ? nil : cloudCosts.reduce(0, +),
+            estimatedCloudCostSource: cloudCostSource,
             totalSchemaToolCalls: schemaToolCalls.isEmpty ? nil : schemaToolCalls.reduce(0, +),
             totalInspectionToolCalls: inspectionToolCalls.isEmpty ? nil : inspectionToolCalls.reduce(0, +),
             totalAgentModelTurns: agentModelTurns.isEmpty ? nil : agentModelTurns.reduce(0, +),
@@ -1614,6 +1634,7 @@ enum EvalRunnerError: LocalizedError {
     case missingCase(String)
     case missingSchemaFixture(String)
     case invalidResumeRun(String)
+    case costAccountingUnavailable(String, artifactsPath: String)
 
     var errorDescription: String? {
         switch self {
@@ -1623,6 +1644,8 @@ enum EvalRunnerError: LocalizedError {
             "No schema fixture loaded for \(fixture)."
         case .invalidResumeRun(let message):
             message
+        case .costAccountingUnavailable(let reason, let artifactsPath):
+            "\(reason) Any remaining cases were skipped; the run's artifacts are in \(artifactsPath)."
         }
     }
 }

@@ -71,6 +71,11 @@ public struct TextToSQLEvalMetrics: Codable, Equatable, Sendable {
     public var estimatedInitialPromptCharacters: Int?
     public var tokenUsage: Int?
     public var estimatedCloudCostUSD: Double?
+    /// A `CloudCostSource` raw value for `estimatedCloudCostUSD`: `reported`
+    /// by the provider, or `estimatedPeakList` from token prices (an upper
+    /// bound). Nil when no cost was recorded, and in results written before
+    /// the source was recorded.
+    public var estimatedCloudCostSource: String?
     public var openRouterStructuredOutputMode: String?
     public var openRouterRetryCount: Int?
     public var openRouterRequestedModelID: String?
@@ -119,6 +124,7 @@ public struct TextToSQLEvalMetrics: Codable, Equatable, Sendable {
         estimatedInitialPromptCharacters: Int? = nil,
         tokenUsage: Int? = nil,
         estimatedCloudCostUSD: Double? = nil,
+        estimatedCloudCostSource: String? = nil,
         openRouterStructuredOutputMode: String? = nil,
         openRouterRetryCount: Int? = nil,
         openRouterRequestedModelID: String? = nil,
@@ -166,6 +172,7 @@ public struct TextToSQLEvalMetrics: Codable, Equatable, Sendable {
         self.estimatedInitialPromptCharacters = estimatedInitialPromptCharacters
         self.tokenUsage = tokenUsage
         self.estimatedCloudCostUSD = estimatedCloudCostUSD
+        self.estimatedCloudCostSource = estimatedCloudCostSource
         self.openRouterStructuredOutputMode = openRouterStructuredOutputMode
         self.openRouterRetryCount = openRouterRetryCount
         self.openRouterRequestedModelID = openRouterRequestedModelID
