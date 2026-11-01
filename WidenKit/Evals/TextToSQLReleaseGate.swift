@@ -33,11 +33,12 @@ public enum TextToSQLReleaseArtifactVersionPolicy {
 }
 
 /// Runs that publish committed release-gate or triage docs must evaluate the
-/// pinned production model. Enforced at the eval CLI so a future Makefile
-/// target or direct binary invocation cannot bypass the Makefile guard.
+/// pinned production model, Particle-1: requested as `particle-1` and
+/// verified as `particle-ai/particle-1`. Enforced at the eval CLI so a future
+/// Makefile target or direct binary invocation cannot bypass the Makefile
+/// guard.
 public enum TextToSQLReleaseGateModelPolicy {
     public enum CommittedDocIneligibility: Equatable, Sendable, CustomStringConvertible {
-        case cloudBackendRequired
         case pinnedModelRequired(actual: String?)
         case expectedReturnedModelRequired(actual: String?)
         /// The run sent a reasoning effort other than the production
@@ -47,16 +48,15 @@ public enum TextToSQLReleaseGateModelPolicy {
         case cloudEvaluationRequired
 
         public var description: String {
-            let profile = CloudModelCatalog.productionProfile
+            let profile = TextToSQLReleaseGateModelPolicy.pinnedProfile
+            let pinned = TextToSQLReleaseGateModelPolicy.pinnedModelArgument
             switch self {
-            case .cloudBackendRequired:
-                return "the run does not include the cloud backend"
             case .pinnedModelRequired(let actual):
-                return "the requested model is \(actual ?? "missing"), not the pinned model \(profile.requestedModelID)"
+                return "the requested model is \(actual ?? "missing"), not the pinned \(pinned)"
             case .expectedReturnedModelRequired(let actual):
-                return "the manifest expected returned model is \(actual ?? "missing"), not \(profile.expectedReturnedModelID ?? "missing")"
+                return "the manifest expected returned model is \(actual ?? "missing"), not \(profile.expectedReturnedModelID ?? "missing") for \(pinned)"
             case .productionReasoningEffortRequired(let actual, let expected):
-                return "the run's reasoning effort is \(actual ?? "unset"), not the production \(expected ?? "unset") for \(profile.requestedModelID)"
+                return "the run's reasoning effort is \(actual ?? "unset"), not the production \(expected ?? "unset") for \(pinned)"
             case .cloudEvaluationRequired:
                 return "the run has no backend-available cloud results"
             }
@@ -68,20 +68,32 @@ public enum TextToSQLReleaseGateModelPolicy {
         /// Set when the pinned model ran with an eval-only `--reasoning-effort`.
         public var reasoningEffortOverride: ReasoningEffort? = nil
         public var pinnedModel: String {
-            CloudModelCatalog.productionProfile.requestedModelID
+            TextToSQLReleaseGateModelPolicy.pinnedProfile.requestedModelID
         }
 
         public var description: String {
+            let pinned = TextToSQLReleaseGateModelPolicy.pinnedModelArgument
             if let reasoningEffortOverride {
-                return "Release-gate and triage docs require the production reasoning effort for \(pinnedModel), but --reasoning-effort \(reasoningEffortOverride.rawValue) overrides it; pass --allow-model-override to run an engineering comparison."
+                return "Release-gate and triage docs require \(pinned) at its production reasoning effort, but --reasoning-effort \(reasoningEffortOverride.rawValue) overrides it; pass --allow-model-override to run an engineering comparison."
             }
             guard let model else {
-                return "Release-gate and triage docs require a cloud run using the pinned production model \(pinnedModel); pass --allow-model-override to run an engineering comparison."
+                return "Release-gate and triage docs require \(pinned), but the run recorded no model; pass --allow-model-override to run an engineering comparison."
             }
-            return "Release-gate and triage docs require the pinned production model \(pinnedModel) but got \(model); pass --allow-model-override to run an engineering comparison."
+            return "Release-gate and triage docs require \(pinned) but got MODEL=\(model); pass --allow-model-override to run an engineering comparison."
         }
 
         public var errorDescription: String? { description }
+    }
+
+    /// The profile committed release-gate and triage docs must evaluate.
+    static var pinnedProfile: CloudModelProfile {
+        CloudModelCatalog.productionProfile
+    }
+
+    /// How messages name the pinned model: the Makefile variable that selects
+    /// it, plus its display name.
+    static var pinnedModelArgument: String {
+        "MODEL=\(pinnedProfile.requestedModelID) (\(pinnedProfile.displayName))"
     }
 
     /// `reasoningEffortOverride` is the eval-only `--reasoning-effort`. It
@@ -90,7 +102,6 @@ public enum TextToSQLReleaseGateModelPolicy {
     public static func validate(
         model: String?,
         reasoningEffortOverride: ReasoningEffort? = nil,
-        backendIncludesCloud: Bool,
         releaseGateVersion: String?,
         releaseTriageVersion: String?,
         allowModelOverride: Bool
@@ -104,8 +115,8 @@ public enum TextToSQLReleaseGateModelPolicy {
         guard releaseGateVersion != nil || releaseTriageVersion != nil,
             !allowModelOverride
         else { return }
-        guard isPinnedCloudRun(model: model, backendIncludesCloud: backendIncludesCloud) else {
-            throw Violation(model: backendIncludesCloud ? model : nil)
+        guard model == pinnedProfile.requestedModelID else {
+            throw Violation(model: model)
         }
         if let reasoningEffortOverride {
             throw Violation(model: model, reasoningEffortOverride: reasoningEffortOverride)
@@ -119,7 +130,6 @@ public enum TextToSQLReleaseGateModelPolicy {
         expectedReturnedModelID: String?,
         reasoningEffort: String?,
         callSite: CloudCallSite,
-        backendIncludesCloud: Bool,
         cloudEvaluatedResultCount: Int
     ) -> Bool {
         committedDocIneligibility(
@@ -127,7 +137,6 @@ public enum TextToSQLReleaseGateModelPolicy {
             expectedReturnedModelID: expectedReturnedModelID,
             reasoningEffort: reasoningEffort,
             callSite: callSite,
-            backendIncludesCloud: backendIncludesCloud,
             cloudEvaluatedResultCount: cloudEvaluatedResultCount
         ) == nil
     }
@@ -140,11 +149,9 @@ public enum TextToSQLReleaseGateModelPolicy {
         expectedReturnedModelID: String?,
         reasoningEffort: String?,
         callSite: CloudCallSite,
-        backendIncludesCloud: Bool,
         cloudEvaluatedResultCount: Int
     ) -> CommittedDocIneligibility? {
-        let profile = CloudModelCatalog.productionProfile
-        guard backendIncludesCloud else { return .cloudBackendRequired }
+        let profile = pinnedProfile
         guard model == profile.requestedModelID else {
             return .pinnedModelRequired(actual: model)
         }
@@ -164,14 +171,6 @@ public enum TextToSQLReleaseGateModelPolicy {
             return .cloudEvaluationRequired
         }
         return nil
-    }
-
-    private static func isPinnedCloudRun(
-        model: String?,
-        backendIncludesCloud: Bool
-    ) -> Bool {
-        backendIncludesCloud
-            && model == CloudModelCatalog.productionProfile.requestedModelID
     }
 }
 

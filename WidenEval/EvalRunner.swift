@@ -173,7 +173,6 @@ struct EvalRunner {
         try TextToSQLReleaseGateModelPolicy.validate(
             model: runner.options.model,
             reasoningEffortOverride: runner.options.reasoningEffort,
-            backendIncludesCloud: runner.options.backendMode.backends.contains(.cloud),
             releaseGateVersion: runner.options.releaseGateVersion,
             releaseTriageVersion: runner.options.releaseTriageVersion,
             allowModelOverride: runner.options.allowModelOverride

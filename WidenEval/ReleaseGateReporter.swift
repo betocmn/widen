@@ -10,10 +10,6 @@ struct TextToSQLReleaseGateOutput {
 
 extension EvalRun {
     var committedDocIneligibility: TextToSQLReleaseGateModelPolicy.CommittedDocIneligibility? {
-        let backendIncludesCloud = manifest.backendMode == TextToSQLEvalBackend.cloud.rawValue
-            || manifest.backendMode == "both"
-            || backendSummaries[.cloud] != nil
-            || results.contains { $0.backend == .cloud }
         let cloudEvaluatedResultCount = results.filter {
             $0.backend == .cloud
                 && $0.metrics.backendAvailable
@@ -24,7 +20,6 @@ extension EvalRun {
             expectedReturnedModelID: manifest.expectedCanonicalModelID,
             reasoningEffort: manifest.reasoningEffort,
             callSite: manifest.cloudCallSite,
-            backendIncludesCloud: backendIncludesCloud,
             cloudEvaluatedResultCount: cloudEvaluatedResultCount
         )
     }
@@ -420,8 +415,6 @@ enum TextToSQLReleaseTriageReporter {
         // same pinned-model and reasoning-effort policy as evaluated runs —
         // and even with the override, a non-pinned or non-default-effort run
         // never replaces the committed copy.
-        let backendIncludesCloud = runFile.manifest.backendMode == "cloud"
-            || runFile.manifest.backendMode == "both"
         var reasoningEffortOverride: ReasoningEffort?
         if copyVersion != nil {
             reasoningEffortOverride = try TextToSQLEvalCloudSettings.resumedReasoningEffortOverride(
@@ -433,7 +426,6 @@ enum TextToSQLReleaseTriageReporter {
         try TextToSQLReleaseGateModelPolicy.validate(
             model: runFile.manifest.model,
             reasoningEffortOverride: reasoningEffortOverride,
-            backendIncludesCloud: backendIncludesCloud,
             releaseGateVersion: nil,
             releaseTriageVersion: copyVersion,
             allowModelOverride: allowModelOverride

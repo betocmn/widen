@@ -117,6 +117,7 @@
 		92175B834D98973A909CD346 /* GeneralSettingsView.swift in Sources */ = {isa = PBXBuildFile; fileRef = E15C23EAA90F2205B06AA400 /* GeneralSettingsView.swift */; };
 		9289CD3666919AC9B9DD88AD /* SchemaInspectorView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 725DE507622217A36A82A235 /* SchemaInspectorView.swift */; };
 		945C5CE81A388F43EE3709DC /* SessionTitleTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 7DB60DBB4528001882E57C20 /* SessionTitleTests.swift */; };
+		9563F7BA01F5DD24177722CE /* TextToSQLReleaseGateModelPolicyTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = FCB8DB98A1C5CDAF831967F6 /* TextToSQLReleaseGateModelPolicyTests.swift */; };
 		95C4FF484AC2966B3FF8971C /* DatabaseInspectionToolTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 178F1F239B7C7143E46A5942 /* DatabaseInspectionToolTests.swift */; };
 		974A50A3A65A15698A331AE2 /* ConnectionStoreTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 4D7DC9491F74000AE5458E39 /* ConnectionStoreTests.swift */; };
 		97765290AC859F9923EF7B20 /* ChatViewModelTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 590FC9E47C8F0984E7168920 /* ChatViewModelTests.swift */; };
@@ -419,6 +420,7 @@
 		FAB87AEC0D7FB2704EEB1D6B /* TextToSQLCallBudgetTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = TextToSQLCallBudgetTests.swift; sourceTree = "<group>"; };
 		FAEB9A30055B7E3FE372CD61 /* SessionControllerTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SessionControllerTests.swift; sourceTree = "<group>"; };
 		FBE2B999F82D93E601D7C399 /* WidenEvalMain.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = WidenEvalMain.swift; sourceTree = "<group>"; };
+		FCB8DB98A1C5CDAF831967F6 /* TextToSQLReleaseGateModelPolicyTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = TextToSQLReleaseGateModelPolicyTests.swift; sourceTree = "<group>"; };
 		FCF3C2EF50A072862B381856 /* OpenRouterEvalSupport.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = OpenRouterEvalSupport.swift; sourceTree = "<group>"; };
 		FD6D77AD2B6861577977E11B /* ReleaseGateReporter.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ReleaseGateReporter.swift; sourceTree = "<group>"; };
 		FEC43F6189EAC735ECEFA3AF /* TextToSQLEvalCloudSettings.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = TextToSQLEvalCloudSettings.swift; sourceTree = "<group>"; };
@@ -591,6 +593,7 @@
 				75C9ADC5A2BB99F1A285E93F /* TextToSQLEvalTests.swift */,
 				5D6DE8BABDC2AA42689D9801 /* TextToSQLEvalUsageTotalsTests.swift */,
 				380C5B84E053C4AF68EC7A81 /* TextToSQLPipelineTests.swift */,
+				FCB8DB98A1C5CDAF831967F6 /* TextToSQLReleaseGateModelPolicyTests.swift */,
 				CA6E6D42BAE2927B3A51C880 /* TextToSQLReleaseGateTests.swift */,
 				F7F5CFF578647CD40E63C22D /* TextToSQLSemanticComparatorTests.swift */,
 				25C6B47E5418CF6D55AE34FD /* WidenKitTests.swift */,
@@ -972,6 +975,7 @@
 				8432645D4538EF778466DCCB /* TextToSQLEvalTests.swift in Sources */,
 				9EC19C0120074C3EFBDEC787 /* TextToSQLEvalUsageTotalsTests.swift in Sources */,
 				79DB4DFE593F21CAE576DF64 /* TextToSQLPipelineTests.swift in Sources */,
+				9563F7BA01F5DD24177722CE /* TextToSQLReleaseGateModelPolicyTests.swift in Sources */,
 				E0828EFA93076964AA8A6C13 /* TextToSQLReleaseGateTests.swift in Sources */,
 				EE50BE11675F01AF64D8FF3E /* TextToSQLSemanticComparatorTests.swift in Sources */,
 				ACB000D582647340280E01A3 /* WidenKitTests.swift in Sources */,
