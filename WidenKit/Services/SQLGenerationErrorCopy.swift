@@ -52,6 +52,11 @@ public enum SQLGenerationErrorCopy {
         )
     }
 
+    /// The provider failure category behind a thrown generation error, if any.
+    static func cloudFailureCategory(of error: any Error) -> CloudRequestFailure.Category? {
+        SQLGenerationFailure.typed(error).flatMap(openRouterCategory(of:))
+    }
+
     /// Short human label for the Settings › LLM "Test Model" error row. The
     /// raw category and provider message stay available in the row tooltip.
     public static func testModelLabel(for category: CloudRequestFailure.Category) -> String {
@@ -105,6 +110,11 @@ public enum SQLGenerationErrorCopy {
         CloudModelCatalog.productionProfile.displayName
     }
 
+    private static var expectedModelID: String {
+        let profile = CloudModelCatalog.productionProfile
+        return profile.expectedReturnedModelID ?? profile.requestedModelID
+    }
+
     private static func mappedText(
         openRouterCategory: CloudRequestFailure.Category?,
         message: String
@@ -123,29 +133,29 @@ public enum SQLGenerationErrorCopy {
         if let openRouterCategory {
             if transientCategories.contains(openRouterCategory) {
                 return withDetail(
-                    "OpenRouter's servers for \(modelName) are having a temporary outage. Your question is safe — try again in a moment.",
+                    "\(modelName) is having a temporary outage. Your question is safe — try again in a moment.",
                     message
                 )
             }
             switch openRouterCategory {
             case .authentication:
                 return withDetail(
-                    "OpenRouter rejected your API key. Re-enter it in Settings › LLM, or create a new one at openrouter.ai/keys.",
+                    "Particle rejected your API key. Re-enter it in Settings › LLM, or create a new key at platform.particle.ai.",
                     message
                 )
             case .paymentRequired:
                 return withDetail(
-                    "Your OpenRouter account is out of credits. Add credits at openrouter.ai, then try again.",
+                    "Your Particle account is out of credits. Add credits at platform.particle.ai, then try again.",
                     message
                 )
             case .providerLimit:
                 return withDetail(
-                    "Your OpenRouter key hit its spending or usage limit. Raise the limit at openrouter.ai, then try again.",
+                    "Your API key hit its spending or usage limit. Raise the limit with your provider, then try again.",
                     message
                 )
             case .modelVersionMismatch:
                 return withDetail(
-                    "OpenAI shipped a new \(modelName) version that Widen hasn't verified yet, so cloud SQL generation is paused to protect accuracy. Check Settings › General › Check for Updates Now… — a Widen update re-enables it. You can still browse schemas and run SQL directly.",
+                    "Particle answered with a model other than \(modelName) (\(expectedModelID)), so Widen discarded the response. Check Settings › General › Check for Updates Now…; you can still browse schemas and run SQL directly.",
                     message
                 )
             default:

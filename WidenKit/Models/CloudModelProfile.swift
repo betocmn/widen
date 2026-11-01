@@ -401,10 +401,11 @@ extension URLSessionTransport {
     }
 }
 
-/// The fixed cloud production profile. Changing either model ID requires
-/// a new release-gate evaluation and an app update.
+/// The fixed cloud production profile: Particle-1, the only model the app
+/// builds. Changing either model ID requires a new release-gate evaluation
+/// and an app update.
 public enum CloudModelCatalog {
-    public static let productionProfile: CloudModelProfile = .openRouterGPT55
+    public static let productionProfile: CloudModelProfile = .particle
 
     /// The profile an eval runs for a requested model, which also decides the
     /// provider: `particle-1` is Particle-1, and an OpenRouter `vendor/model`

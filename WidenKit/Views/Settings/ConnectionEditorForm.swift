@@ -135,10 +135,8 @@ struct ConnectionEditorForm: View {
             actionBar
         }
         .sheet(isPresented: $showAutofillSheet) {
-            if let parser = appState.connectionDetailsParser {
-                ConnectionAutofillSheet(viewModel: viewModel, parser: parser) {
-                    showAutofillSheet = false
-                }
+            ConnectionAutofillSheet(viewModel: viewModel, parser: appState.connectionDetailsParser) {
+                showAutofillSheet = false
             }
         }
     }
@@ -239,9 +237,8 @@ struct ConnectionEditorForm: View {
         .padding(.vertical, 7)
     }
 
-    /// Opens the paste-autofill sheet. Parsing stays local: structured URLs
-    /// and key-value entries are deterministic, and free-form text uses the
-    /// on-device model when available.
+    /// Opens the paste-autofill sheet. Parsing is deterministic and local:
+    /// pasted text can contain credentials, so it never reaches a model.
     private var autofillButton: some View {
         Button {
             showAutofillSheet = true
@@ -249,11 +246,7 @@ struct ConnectionEditorForm: View {
             Label("Paste Details…", systemImage: "doc.on.clipboard")
                 .font(.callout)
         }
-        .disabled(appState.connectionAutofillUnavailableMessage != nil)
-        .help(
-            appState.connectionAutofillUnavailableMessage
-                ?? "Paste a connection URL or .env details to fill this form locally. Nothing leaves this Mac."
-        )
+        .help("Paste a connection URL or .env details to fill this form locally. Nothing leaves this Mac.")
     }
 
     private var actionBar: some View {

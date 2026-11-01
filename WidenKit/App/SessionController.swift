@@ -435,9 +435,11 @@ public final class SessionController: Identifiable {
             }
             switch run.finalDecision {
             case .sql(let generation):
+                appState.noteTextToSQLOutcome(.answered)
                 appendAssistantGeneration(generation)
                 queryVM.setGeneration(generation, schema: schema)
             case .clarification(let generation):
+                appState.noteTextToSQLOutcome(.answered)
                 if let clarification = generation.clarificationQuestion,
                     !clarification.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
                 {
@@ -453,6 +455,7 @@ public final class SessionController: Identifiable {
                     appendAssistantGeneration(generation)
                 }
             case .failed(let failure):
+                appState.noteTextToSQLOutcome(.failed(failure.openRouterFailure?.category))
                 chatVM.appendGenerationError(
                     SQLGenerationErrorCopy.chatText(for: failure),
                     retryQuestion: SQLGenerationErrorCopy.isRetryable(failure) ? question : nil
@@ -461,6 +464,9 @@ public final class SessionController: Identifiable {
         } catch is CancellationError {
             return
         } catch {
+            appState.noteTextToSQLOutcome(
+                .failed(SQLGenerationErrorCopy.cloudFailureCategory(of: error))
+            )
             chatVM.appendGenerationError(
                 SQLGenerationErrorCopy.chatText(for: error),
                 retryQuestion: SQLGenerationErrorCopy.isRetryable(error) ? question : nil

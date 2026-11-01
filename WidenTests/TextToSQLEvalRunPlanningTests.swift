@@ -544,7 +544,7 @@ struct TextToSQLEvalRunPlanningTests {
             .deletingLastPathComponent()
 
         let pinned = try Self.releaseResumeDryRunCommand(repoRoot: repoRoot)
-        #expect(pinned.contains(#"--model "openai/gpt-5.5""#))
+        #expect(pinned.contains(#"--model "particle-1""#))
         #expect(!pinned.contains("--allow-model-override"))
 
         let inherited = try Self.releaseResumeDryRunCommand(
@@ -662,7 +662,7 @@ struct TextToSQLEvalRunPlanningTests {
             assignments: ["CASE=commerce.fixture"],
             commandContaining: "--case commerce.fixture"
         )
-        #expect(caseCommand.contains(#"--backend cloud --model "openai/gpt-5.5""#))
+        #expect(caseCommand.contains(#"--backend cloud --model "particle-1""#))
 
         let databaseCaseCommand = try Self.makeDryRunCommand(
             repoRoot: repoRoot,
@@ -670,7 +670,7 @@ struct TextToSQLEvalRunPlanningTests {
             assignments: ["CASE=commerce.fixture", "BACKEND=cloud"],
             commandContaining: "--case commerce.fixture"
         )
-        #expect(databaseCaseCommand.contains(#"--backend cloud --model "openai/gpt-5.5" --semantic-db"#))
+        #expect(databaseCaseCommand.contains(#"--backend cloud --model "particle-1" --semantic-db"#))
     }
 
     @Test func makefileRejectsRemovedBackendInsteadOfRunningPaidCloudEval() throws {

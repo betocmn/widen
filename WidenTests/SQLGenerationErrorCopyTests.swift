@@ -49,9 +49,10 @@ struct SQLGenerationErrorCopyTests {
         )
 
         let text = SQLGenerationErrorCopy.chatText(for: failure)
-        #expect(text.contains("OpenRouter rejected your API key"))
+        #expect(text.contains("Particle rejected your API key"))
         #expect(text.contains("Settings › LLM"))
-        #expect(text.contains("openrouter.ai/keys"))
+        #expect(text.contains("platform.particle.ai"))
+        #expect(!text.contains("openrouter"))
         #expect(text.contains("No auth credentials found"))
         #expect(!SQLGenerationErrorCopy.isRetryable(failure))
     }
@@ -63,8 +64,8 @@ struct SQLGenerationErrorCopyTests {
         )
 
         let text = SQLGenerationErrorCopy.chatText(for: failure)
-        #expect(text.contains("out of credits"))
-        #expect(text.contains("openrouter.ai"))
+        #expect(text.contains("Your Particle account is out of credits"))
+        #expect(text.contains("platform.particle.ai"))
         #expect(!SQLGenerationErrorCopy.isRetryable(failure))
     }
 
@@ -76,21 +77,24 @@ struct SQLGenerationErrorCopyTests {
 
         let text = SQLGenerationErrorCopy.chatText(for: failure)
         #expect(text.contains("spending or usage limit"))
+        #expect(!text.contains("openrouter"))
         #expect(!SQLGenerationErrorCopy.isRetryable(failure))
     }
 
-    @Test func canonicalMismatchFailureExplainsPauseAndUpdatePath() {
+    @Test func modelIdentityMismatchExplainsTheDiscardAndUpdatePath() {
         let failure = pipelineFailure(
             openRouterCategory: .modelVersionMismatch,
             message:
-                "SQL generation failed: OpenRouter reports the fixed model now resolves to an unevaluated version. Update Widen before using this cloud model."
+                "SQL generation failed: Particle answered with particle-ai/particle-2 instead of particle-ai/particle-1."
         )
 
         let text = SQLGenerationErrorCopy.chatText(for: failure)
-        #expect(text.contains("new \(modelName) version that Widen hasn't verified yet"))
+        #expect(text.contains("model other than \(modelName) (particle-ai/particle-1)"))
+        #expect(text.contains("discarded the response"))
         #expect(text.contains("Check for Updates Now"))
         #expect(text.contains("run SQL directly"))
-        #expect(text.contains("unevaluated version"))
+        #expect(text.contains("particle-ai/particle-2"))
+        #expect(!text.contains("OpenAI"))
         #expect(!SQLGenerationErrorCopy.isRetryable(failure))
     }
 

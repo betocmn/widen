@@ -58,8 +58,6 @@ public struct MainView: View {
     public init() {}
 
     public var body: some View {
-        @Bindable var appState = appState
-
         let sidebarIsAvailable = adaptivePanelMode != .detailOnly
         let inspectorIsAvailable = adaptivePanelMode == .allPanels
         let effectiveColumnVisibility = Binding<NavigationSplitViewVisibility>(
@@ -140,7 +138,7 @@ public struct MainView: View {
                     breadcrumb
                 }
                 ToolbarItem(placement: .navigation) {
-                    AIBackendToggle()
+                    ParticleStatusChip()
                 }
                 ToolbarItem(placement: .primaryAction) {
                     SchemaInspectorToggle(isAvailable: inspectorIsAvailable)
@@ -194,16 +192,6 @@ public struct MainView: View {
         }
         .onChange(of: appState.openSettingsRequest) {
             openSettings()
-        }
-        .alert(item: $appState.llmCompatibilityAlert) { alert in
-            Alert(
-                title: Text(alert.title),
-                message: Text(alert.message),
-                primaryButton: .default(Text("Open LLM Settings")) {
-                    appState.openSettings(tab: .llm)
-                },
-                secondaryButton: .cancel(Text("Dismiss"))
-            )
         }
         .onReceive(
             NotificationCenter.default.publisher(for: NSApplication.willTerminateNotification)

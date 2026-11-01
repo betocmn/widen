@@ -127,14 +127,10 @@ struct ChatModeView: View {
         }
     }
 
-    /// True when the default OpenRouter cloud path cannot generate yet — the
-    /// empty state then leads with key setup instead of inviting questions
-    /// it cannot answer.
+    /// True when Particle-1 cannot generate yet — the empty state then leads
+    /// with key setup instead of inviting questions it cannot answer.
     private var needsCloudSetup: Bool {
-        !appState.useMockAI
-            && appState.aiBackendMode == .cloud
-            && appState.cloudProvider == .openRouter
-            && appState.cloudBackendStatus != .ready
+        appState.textToSQLStatus.needsAttention && !appState.useMockAI
     }
 
     private var emptyHint: some View {
@@ -144,7 +140,7 @@ struct ChatModeView: View {
                     Task { await appState.refreshSchema(for: controller.connectionID) }
                 }
             } else if needsCloudSetup {
-                Text("Cloud SQL generation needs an OpenRouter API key")
+                Text("Text-to-SQL needs a Particle API key")
                     .font(.title3)
                     .foregroundStyle(.secondary)
                 Button("Open LLM Settings…") {

@@ -1,15 +1,18 @@
 import Foundation
 import Security
 
-/// Stores connection passwords and the OpenRouter API key as
-/// generic-password items in the login keychain.
+/// Stores connection passwords and the Particle API key as generic-password
+/// items in the login keychain.
 ///
 /// The data-protection keychain (`kSecUseDataProtectionKeychain`) is
 /// intentionally not used: it requires real code-signing entitlements, which an
 /// ad-hoc signed development build does not have.
 public struct KeychainService: Sendable {
     public static let service = "Widen"
-    static let openRouterAccount = "openrouter-api-key"
+    static let particleAccount = "particle-api-key"
+    /// The retired OpenRouter key's account. It is only ever deleted; its
+    /// value is never read, so it can never end up in the Particle slot.
+    static let legacyOpenRouterAccount = "openrouter-api-key"
 
     private enum CachedSecret: Sendable {
         case missing
@@ -55,18 +58,24 @@ public struct KeychainService: Sendable {
         try deleteSecret(account: Self.account(for: connectionID))
     }
 
-    // MARK: - OpenRouter API key
+    // MARK: - Particle API key
 
-    public func saveOpenRouterAPIKey(_ key: String) throws {
-        try saveSecret(key, account: Self.openRouterAccount)
+    public func saveParticleAPIKey(_ key: String) throws {
+        try saveSecret(key, account: Self.particleAccount)
     }
 
-    public func loadOpenRouterAPIKey() throws -> String? {
-        try loadSecret(account: Self.openRouterAccount)
+    public func loadParticleAPIKey() throws -> String? {
+        try loadSecret(account: Self.particleAccount)
     }
 
-    public func deleteOpenRouterAPIKey() throws {
-        try deleteSecret(account: Self.openRouterAccount)
+    public func deleteParticleAPIKey() throws {
+        try deleteSecret(account: Self.particleAccount)
+    }
+
+    // MARK: - Retired OpenRouter API key
+
+    public func deleteLegacyOpenRouterAPIKey() throws {
+        try deleteSecret(account: Self.legacyOpenRouterAccount)
     }
 
     // MARK: - Generic secrets

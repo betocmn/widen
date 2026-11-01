@@ -14,8 +14,8 @@ EVAL_XCODEBUILD := xcodebuild -project Widen.xcodeproj -scheme WidenEval -config
 
 APP := build/Build/Products/Debug/Widen.app
 EVAL := build/Build/Products/Debug/WidenEval
-PINNED_OPENROUTER_MODEL := openai/gpt-5.5
-MODEL ?= $(PINNED_OPENROUTER_MODEL)
+PINNED_MODEL := particle-1
+MODEL ?= $(PINNED_MODEL)
 RETRIEVER ?= both
 CLOUD_AGENT ?= tools
 
@@ -54,7 +54,7 @@ endif
 # production model. Engineering comparisons must opt in explicitly. The same
 # rule is enforced inside WidenEval (--allow-model-override), so direct binary
 # invocations cannot bypass it either.
-REQUIRE_PINNED_MODEL = @test "$(MODEL)" = "$(PINNED_OPENROUTER_MODEL)" || test "$(ALLOW_MODEL_OVERRIDE)" = "1" || { echo "error: release gate requires MODEL=$(PINNED_OPENROUTER_MODEL) but got MODEL=$(MODEL); set ALLOW_MODEL_OVERRIDE=1 to run an engineering comparison" >&2; exit 1; }
+REQUIRE_PINNED_MODEL = @test "$(MODEL)" = "$(PINNED_MODEL)" || test "$(ALLOW_MODEL_OVERRIDE)" = "1" || { echo "error: release gate requires MODEL=$(PINNED_MODEL) (Particle-1) but got MODEL=$(MODEL); set ALLOW_MODEL_OVERRIDE=1 to run an engineering comparison" >&2; exit 1; }
 MODEL_OVERRIDE_ARGS = $(if $(filter 1,$(ALLOW_MODEL_OVERRIDE)),--allow-model-override,)
 
 .PHONY: project build test test-db eval-build eval-cloud eval-cloud-agent eval-case eval-cloud-agent-case eval-retrieval eval-retrieval-case eval-schema-tools eval-inspection-tools eval-db-cloud eval-db-cloud-agent eval-db-cloud-agent-case eval-release eval-release-triage eval-release-preseason eval-release-overclarification eval-release-sql-shape eval-release-resume eval-db-case eval-openrouter-smoke eval-provider-probe setup run run-conductor release release-mac xcode clean
