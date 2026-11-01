@@ -111,12 +111,6 @@ public final class AppState {
     private static let useMockAIKey = "WidenUseMockAI"
     private static let selectedSessionKey = "WidenSelectedSessionID"
 
-    private static let openRouterModelIDKey = "WidenOpenRouterModelID"
-    private static let openRouterSchemaToolAgentEnabledKey =
-        "WidenOpenRouterSchemaToolAgentEnabled"
-    private static let legacyExperimentalCloudSchemaAgentEnabledKey =
-        "WidenExperimentalCloudSchemaAgentEnabled"
-
     static let missingParticleAPIKeyMessage = "Add a Particle API key in Settings › LLM."
 
     /// Test seam, mirrors `titleGeneratorOverride`: `.some(value)` replaces
@@ -391,23 +385,34 @@ public final class AppState {
     /// nil in the app, where each agent uses the default index directory;
     /// the test initializer points it at the temporary directory.
     private let schemaSearchIndexStore: SchemaSearchIndexStore?
+    private let retiredAIStateCleanup: RetiredAIStateCleanup
     private let introspection = SchemaIntrospectionService()
     private var saveTask: Task<Void, Never>?
     private var didLaunch = false
 
     public init() {
-        self.connectionStore = ConnectionStore()
+        let connectionStore = ConnectionStore()
+        self.connectionStore = connectionStore
         self.sessionStore = SessionStore()
         self.schemaStore = SchemaStore()
         self.semanticBindingStore = DatabaseSemanticBindingStore()
         self.schemaSearchIndexStore = nil
+        self.retiredAIStateCleanup = RetiredAIStateCleanup(
+            defaults: .standard,
+            applicationSupportDirectory: connectionStore.fileURL.deletingLastPathComponent(),
+            deleteLegacyOpenRouterAPIKey: { try KeychainService().deleteLegacyOpenRouterAPIKey() }
+        )
     }
 
-    /// Test initializer: points both stores at a temporary directory.
+    /// Test initializer: points both stores at a temporary directory. Unless a
+    /// test injects its own `retiredAIStateCleanup`, the launch cleanup runs
+    /// against that directory with a no-op Keychain deleter, so tests that
+    /// call `onLaunch` never touch the real Keychain.
     init(
         connectionStore: ConnectionStore, sessionStore: SessionStore,
         schemaStore: SchemaStore,
-        semanticBindingStore: DatabaseSemanticBindingStore? = nil
+        semanticBindingStore: DatabaseSemanticBindingStore? = nil,
+        retiredAIStateCleanup: RetiredAIStateCleanup? = nil
     ) {
         let directory = connectionStore.fileURL.deletingLastPathComponent()
         self.connectionStore = connectionStore
@@ -418,17 +423,25 @@ public final class AppState {
         self.schemaSearchIndexStore = SchemaSearchIndexStore(
             directory: directory.appendingPathComponent("schema-indexes", isDirectory: true)
         )
+        self.retiredAIStateCleanup =
+            retiredAIStateCleanup
+            ?? RetiredAIStateCleanup(
+                defaults: .standard,
+                applicationSupportDirectory: directory,
+                deleteLegacyOpenRouterAPIKey: {}
+            )
     }
 
     // MARK: - Launch
 
-    /// Called once at launch: loads the saved connections, schemas, and
-    /// sessions. Nothing auto-opens — a fresh install starts on the welcome
-    /// screen, whose Add Database button leads to Settings › Databases.
+    /// Called once at launch: removes the retired AI backends' leftovers,
+    /// then loads the saved connections, schemas, and sessions. Nothing
+    /// auto-opens — a fresh install starts on the welcome screen, whose Add
+    /// Database button leads to Settings › Databases.
     public func onLaunch() async {
         guard !didLaunch else { return }
         didLaunch = true
-        removeObsoleteOpenRouterPreferences()
+        retiredAIStateCleanup.run()
         do {
             connections = try connectionStore.load()
         } catch {
@@ -460,12 +473,6 @@ public final class AppState {
 
         UserDefaults.standard.removeObject(forKey: Self.selectedSessionKey)
         sidebarSelection = nil
-    }
-
-    private func removeObsoleteOpenRouterPreferences() {
-        UserDefaults.standard.removeObject(forKey: Self.openRouterModelIDKey)
-        UserDefaults.standard.removeObject(forKey: Self.openRouterSchemaToolAgentEnabledKey)
-        UserDefaults.standard.removeObject(forKey: Self.legacyExperimentalCloudSchemaAgentEnabledKey)
     }
 
     /// Asks the UI to show Settings on the given tab. MainView watches

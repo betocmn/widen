@@ -9,8 +9,9 @@ struct ParticleBackendSelectionTests {
     private static let defaultsKeys = [
         "WidenAIBackendMode", "WidenCloudAIProvider", "WidenOpenRouterModelID",
         "WidenUseMockAI", "WidenOpenRouterSchemaToolAgentEnabled",
-        "WidenExperimentalCloudSchemaAgentEnabled",
+        "WidenExperimentalCloudSchemaAgentEnabled", compatibilityAlertKey,
     ]
+    private static let compatibilityAlertKey = "WidenDidShowInstallLLMCompatibilityAlert.0.1.1.2.v1"
 
     private static let particleKey = "pai-test-0123456789abcdef"
 
@@ -242,19 +243,23 @@ struct ParticleBackendSelectionTests {
         #expect(state.connectionDetailsParser is MockConnectionDetailsParser)
     }
 
-    @Test func launchRemovesObsoleteOpenRouterPreferences() async {
+    @Test func launchRemovesRetiredAIPreferences() async {
         clearDefaults()
+        UserDefaults.standard.set("local", forKey: "WidenAIBackendMode")
+        UserDefaults.standard.set("applePCC", forKey: "WidenCloudAIProvider")
         UserDefaults.standard.set("custom/model-id", forKey: "WidenOpenRouterModelID")
         UserDefaults.standard.set(false, forKey: "WidenOpenRouterSchemaToolAgentEnabled")
         UserDefaults.standard.set(false, forKey: "WidenExperimentalCloudSchemaAgentEnabled")
+        UserDefaults.standard.set(true, forKey: Self.compatibilityAlertKey)
         let (state, dir) = makeState()
         defer { cleanUp(dir) }
 
         await state.onLaunch()
 
-        #expect(UserDefaults.standard.object(forKey: "WidenOpenRouterModelID") == nil)
-        #expect(UserDefaults.standard.object(forKey: "WidenOpenRouterSchemaToolAgentEnabled") == nil)
-        #expect(UserDefaults.standard.object(forKey: "WidenExperimentalCloudSchemaAgentEnabled") == nil)
+        for key in Self.defaultsKeys where key != "WidenUseMockAI" {
+            #expect(UserDefaults.standard.object(forKey: key) == nil, "\(key) survived launch")
+        }
+        #expect(state.loadParticleAPIKey() == nil)
     }
 
     // MARK: - Key storage
