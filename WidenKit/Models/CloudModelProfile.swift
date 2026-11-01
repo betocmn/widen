@@ -33,6 +33,8 @@ public enum CloudCallSite: String, CaseIterable, Sendable {
     case oneShotSQL
     case connectivityProbe
     case sessionTitle
+    /// The schema-tool agent's second-opinion review of its own SQL.
+    case critic
 }
 
 public enum CloudResponseFormat: Equatable, Sendable {
@@ -288,6 +290,11 @@ extension CloudModelProfile {
                 maxCompletionTokens: 64,
                 responseFormat: .none
             ),
+            .critic: CloudCallSitePolicy(
+                reasoningEffort: .high,
+                maxCompletionTokens: 16_000,
+                responseFormat: .jsonObject
+            ),
         ],
         supportsReasoningEffort: true,
         parallelToolCalls: true,
@@ -373,6 +380,13 @@ extension CloudModelProfile {
                 ),
                 .oneShotSQL: oneShot,
                 .connectivityProbe: oneShot,
+                // `json_object` is sent only when the catalog advertises
+                // `response_format`.
+                .critic: CloudCallSitePolicy(
+                    reasoningEffort: nil,
+                    maxCompletionTokens: 2_048,
+                    responseFormat: .jsonObject
+                ),
             ],
             // OpenRouter requests stay as they have always been sent, without
             // reasoning_effort, so an eval cannot override it either.
