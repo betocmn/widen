@@ -580,6 +580,7 @@ public final class SchemaToolSQLAgent: SQLGenerator, Sendable {
                         }
                         throw await agentFailure(.terminalResultMalformed, "The terminal tool arguments were malformed.", session: session)
                     }
+                    diagnostics.terminalIgnoredArgumentKeyCount += terminalResult.ignoredArgumentKeyCount
                     diagnostics.terminalAction = terminalResult.action.rawValue
                     if terminalResult.action == .sql {
                         diagnostics.terminalQueryPlan = terminalResult.queryPlan
@@ -1908,19 +1909,23 @@ public final class SchemaToolSQLAgent: SQLGenerator, Sendable {
         var clarificationQuestion: String
         var queryPlan: String
         var structuredQueryPlan: SchemaToolAgentStructuredQueryPlan?
+        /// Unknown argument keys plus a `query_plan` of the wrong type.
+        var ignoredArgumentKeyCount: Int
 
         init(
             action: TerminalAction,
             sql: String,
             clarificationQuestion: String,
             queryPlan: String,
-            structuredQueryPlan: SchemaToolAgentStructuredQueryPlan? = nil
+            structuredQueryPlan: SchemaToolAgentStructuredQueryPlan? = nil,
+            ignoredArgumentKeyCount: Int = 0
         ) {
             self.action = action
             self.sql = sql
             self.clarificationQuestion = clarificationQuestion
             self.queryPlan = queryPlan
             self.structuredQueryPlan = structuredQueryPlan
+            self.ignoredArgumentKeyCount = ignoredArgumentKeyCount
         }
     }
 
@@ -1959,33 +1964,42 @@ public final class SchemaToolSQLAgent: SQLGenerator, Sendable {
         return parts.joined(separator: "; ")
     }
 
+    /// Reads the terminal tool's arguments leniently, because a provider may
+    /// not hold tool arguments to the declared schema. Only `action` is
+    /// required. A missing or null `sql` or `clarification_question` reads
+    /// as empty. Unknown keys, and a `query_plan` that is neither a string
+    /// nor an object, are ignored and only counted. The sql/clarify
+    /// invariants and length caps still apply.
     private static func parseTerminalResult(_ arguments: String) throws -> TerminalResult {
         let data = Data(arguments.utf8)
         let value = try JSONDecoder().decode(JSONValue.self, from: data)
         guard let object = value.objectValue else {
             throw SchemaToolAgentFailure(category: .terminalResultMalformed, message: "Terminal arguments must be an object.")
         }
-        let allowed = Set(["action", "sql", "clarification_question", "query_plan"])
-        guard Set(object.keys).isSubset(of: allowed),
-            let actionText = object["action"]?.stringValue,
+        let knownKeys: Set<String> = ["action", "sql", "clarification_question", "query_plan"]
+        var ignoredArgumentKeyCount = object.keys.filter { !knownKeys.contains($0) }.count
+        guard let actionText = object["action"]?.stringValue,
             let action = TerminalAction(rawValue: actionText),
-            let sql = object["sql"]?.stringValue,
-            let question = object["clarification_question"]?.stringValue
+            let sql = terminalText(object["sql"]),
+            let question = terminalText(object["clarification_question"])
         else {
             throw SchemaToolAgentFailure(category: .terminalResultMalformed, message: "Terminal arguments are invalid.")
         }
-        guard
-            object["query_plan"] == nil
-                || object["query_plan"]?.stringValue != nil
-                || object["query_plan"]?.objectValue != nil
-        else {
-            throw SchemaToolAgentFailure(category: .terminalResultMalformed, message: "Terminal query_plan must be a string or object.")
+        let queryPlan: JSONValue?
+        switch object["query_plan"] {
+        case nil, .null?:
+            queryPlan = nil
+        case .string?, .object?:
+            queryPlan = object["query_plan"]
+        default:
+            queryPlan = nil
+            ignoredArgumentKeyCount += 1
         }
-        let structuredQueryPlan = object["query_plan"]
+        let structuredQueryPlan = queryPlan
             .flatMap(SchemaToolAgentStructuredQueryPlan.decode(from:))
         let trimmedSQL = sql.trimmingCharacters(in: .whitespacesAndNewlines)
         let trimmedQuestion = question.trimmingCharacters(in: .whitespacesAndNewlines)
-        let trimmedQueryPlan = (object["query_plan"]?.stringValue ?? "")
+        let trimmedQueryPlan = (queryPlan?.stringValue ?? "")
             .trimmingCharacters(in: .whitespacesAndNewlines)
         guard trimmedSQL.count <= 20_000, trimmedQuestion.count <= 280 else {
             throw SchemaToolAgentFailure(category: .terminalResultMalformed, message: "Terminal arguments exceeded length limits.")
@@ -2005,7 +2019,7 @@ public final class SchemaToolSQLAgent: SQLGenerator, Sendable {
             queryPlanSummary = ""
         } else if let structuredQueryPlan {
             queryPlanSummary = structuredQueryPlanSummary(for: structuredQueryPlan)
-        } else if object["query_plan"]?.objectValue != nil {
+        } else if queryPlan?.objectValue != nil {
             queryPlanSummary = "present; structured: false"
         } else {
             queryPlanSummary = redactedQueryPlanSummary(for: trimmedQueryPlan)
@@ -2015,8 +2029,22 @@ public final class SchemaToolSQLAgent: SQLGenerator, Sendable {
             sql: trimmedSQL,
             clarificationQuestion: trimmedQuestion,
             queryPlan: queryPlanSummary,
-            structuredQueryPlan: action == .sql ? structuredQueryPlan : nil
+            structuredQueryPlan: action == .sql ? structuredQueryPlan : nil,
+            ignoredArgumentKeyCount: ignoredArgumentKeyCount
         )
+    }
+
+    /// A missing or null text argument reads as empty; any other non-string
+    /// value is still malformed.
+    private static func terminalText(_ value: JSONValue?) -> String? {
+        switch value {
+        case nil, .null?:
+            ""
+        case .string(let text)?:
+            text
+        default:
+            nil
+        }
     }
 
     private static func structuredQueryPlanSummary(
@@ -2244,6 +2272,7 @@ private struct SchemaToolAgentDiagnosticState {
     var planConsistencyCorrectionAttempted = false
     var planConsistencyCorrectionSucceeded = false
     var providerToolCallIDReuseCount = 0
+    var terminalIgnoredArgumentKeyCount = 0
 
     mutating func recordFailureCategory(_ category: SchemaToolAgentFailure.Category) {
         if category == .wallClockTimeout {
@@ -2399,6 +2428,9 @@ private struct SchemaToolAgentDiagnosticState {
             planConsistencyCorrectionSucceeded: planConsistencyCorrectionSucceeded,
             providerToolCallIDReuseCount: providerToolCallIDReuseCount > 0
                 ? providerToolCallIDReuseCount
+                : nil,
+            terminalIgnoredArgumentKeyCount: terminalIgnoredArgumentKeyCount > 0
+                ? terminalIgnoredArgumentKeyCount
                 : nil
         )
     }

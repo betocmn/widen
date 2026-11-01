@@ -24,6 +24,7 @@ struct SchemaToolSQLAgentTests {
         #expect(diagnostics.redundantZeroResultSearchCount == 0)
         #expect(diagnostics.redundantJoinPathCallCount == 0)
         #expect(diagnostics.providerToolCallIDReuseCount == nil)
+        #expect(diagnostics.terminalIgnoredArgumentKeyCount == nil)
     }
 
     @Test func diagnosticsDecodeProviderToolCallIDReuseCountTolerantly() throws {
@@ -44,6 +45,25 @@ struct SchemaToolSQLAgentTests {
         // A run without reuse leaves the key out of the saved JSON.
         let encoded = String(decoding: try JSONEncoder().encode(SchemaToolAgentDiagnostics()), as: UTF8.self)
         #expect(!encoded.contains("providerToolCallIDReuseCount"))
+    }
+
+    @Test func diagnosticsDecodeTerminalIgnoredArgumentKeyCountTolerantly() throws {
+        let decoder = JSONDecoder()
+        let counted = try decoder.decode(
+            SchemaToolAgentDiagnostics.self,
+            from: Data(#"{"terminalIgnoredArgumentKeyCount":3}"#.utf8)
+        )
+        #expect(counted.terminalIgnoredArgumentKeyCount == 3)
+
+        let wrongType = try decoder.decode(
+            SchemaToolAgentDiagnostics.self,
+            from: Data(#"{"terminalAction":"sql","terminalIgnoredArgumentKeyCount":[1]}"#.utf8)
+        )
+        #expect(wrongType.terminalIgnoredArgumentKeyCount == nil)
+        #expect(wrongType.terminalAction == "sql")
+
+        let encoded = String(decoding: try JSONEncoder().encode(SchemaToolAgentDiagnostics()), as: UTF8.self)
+        #expect(!encoded.contains("terminalIgnoredArgumentKeyCount"))
     }
 
     @Test func cloudRequestFailureKeepsItsSavedRawValue() throws {
@@ -3190,6 +3210,172 @@ struct SchemaToolSQLAgentTests {
         #expect(result.schemaToolCalls.map(\.callID) == ["1:0:search-wide-multiply", "2:0:describe-wide-multiply"])
     }
 
+    @Test(arguments: [
+        #"{"action":"sql","sql":"SELECT id, name FROM public.users ORDER BY id LIMIT 100"}"#,
+        #"{"action":"sql","sql":"SELECT id, name FROM public.users ORDER BY id LIMIT 100","clarification_question":null}"#,
+    ])
+    func terminalSQLWithoutAClarificationQuestionIsAccepted(argumentsJSON: String) async throws {
+        let schema = Self.makeSchema()
+        let chatTransport = Self.searchDescribeThenTerminal(argumentsJSON: argumentsJSON)
+        let agent = makeAgent(schema: schema, chatTransport: chatTransport)
+
+        let result = try await agent.generateSQL(
+            question: "List users",
+            schema: schema,
+            context: SQLGenerationContext(),
+            config: SQLGenerationConfig()
+        )
+
+        #expect(result.sql == "SELECT id, name FROM public.users ORDER BY id LIMIT 100")
+        #expect(!result.needsClarification)
+        // Accepted on the first terminal call, with no correction turn.
+        #expect(chatTransport.requests.count == 3)
+        let diagnostics = try #require(result.backendMetadata?.agentDiagnostics)
+        #expect(diagnostics.terminalAction == "sql")
+        #expect(diagnostics.terminalValidationFailureReason == nil)
+        #expect(diagnostics.terminalIgnoredArgumentKeyCount == nil)
+    }
+
+    @Test func terminalClarificationWithoutSQLIsAccepted() async throws {
+        let schema = Self.makeSchema()
+        let chatTransport = ScriptedTransport { _, index in
+            switch index {
+            case 1:
+                return Self.particleToolCalls([
+                    Self.toolCall(id: "call_0", name: "search_schema", arguments: [
+                        "query": "users",
+                        "limit": 4,
+                    ]),
+                ])
+            default:
+                return Self.particleToolCalls([
+                    Self.toolCallRaw(
+                        id: "call_0",
+                        name: SchemaToolSQLAgent.terminalToolName,
+                        argumentsJSON: #"{"action":"clarify","clarification_question":"Which users count as active?"}"#
+                    ),
+                ])
+            }
+        }
+        let agent = makeAgent(schema: schema, chatTransport: chatTransport)
+
+        let result = try await agent.generateSQL(
+            question: "List active users",
+            schema: schema,
+            context: SQLGenerationContext(),
+            config: SQLGenerationConfig()
+        )
+
+        #expect(result.needsClarification)
+        #expect(result.sql == "")
+        #expect(result.clarificationQuestion == "Which users count as active?")
+        #expect(chatTransport.requests.count == 2)
+    }
+
+    @Test(arguments: [
+        (#""model_confidence_score":0.9"#, 1),
+        (#""model_confidence_score":0.9,"unexpected_reasoning_key":"why""#, 2),
+        (#""query_plan":["grain","joins"]"#, 1),
+        (#""query_plan":42"#, 1),
+        (#""query_plan":true,"unexpected_reasoning_key":"why""#, 2),
+    ])
+    func terminalSQLIgnoresAndCountsUnknownOrWrongTypedArguments(
+        extraArgumentsJSON: String,
+        ignoredCount: Int
+    ) async throws {
+        let schema = Self.makeSchema()
+        let chatTransport = Self.searchDescribeThenTerminal(
+            argumentsJSON: #"{"action":"sql","sql":"SELECT id, name FROM public.users ORDER BY id LIMIT 100","clarification_question":"","#
+                + extraArgumentsJSON + "}"
+        )
+        let agent = makeAgent(schema: schema, chatTransport: chatTransport)
+
+        let result = try await agent.generateSQL(
+            question: "List users",
+            schema: schema,
+            context: SQLGenerationContext(),
+            config: SQLGenerationConfig()
+        )
+
+        #expect(result.sql == "SELECT id, name FROM public.users ORDER BY id LIMIT 100")
+        #expect(chatTransport.requests.count == 3)
+        let diagnostics = try #require(result.backendMetadata?.agentDiagnostics)
+        #expect(diagnostics.terminalIgnoredArgumentKeyCount == ignoredCount)
+        #expect(diagnostics.terminalValidationFailureReason == nil)
+        // A query_plan of the wrong type is dropped, not summarized.
+        #expect(diagnostics.terminalQueryPlan == "")
+        // Only the count is kept: no ignored key name or value is saved.
+        let saved = String(decoding: try JSONEncoder().encode(result), as: UTF8.self)
+        #expect(!saved.contains("unexpected_reasoning_key"))
+        #expect(!saved.contains("model_confidence_score"))
+    }
+
+    @Test(arguments: [
+        // action is still required and must be sql or clarify.
+        #"{"sql":"SELECT id FROM public.users LIMIT 100","clarification_question":""}"#,
+        #"{"action":"explain","sql":"SELECT id FROM public.users LIMIT 100"}"#,
+        #"{"action":null,"sql":"SELECT id FROM public.users LIMIT 100"}"#,
+        // A missing sql reads as empty, which an sql result cannot be.
+        #"{"action":"sql"}"#,
+        #"{"action":"sql","sql":null,"clarification_question":""}"#,
+        // A missing question reads as empty, which a clarification cannot be.
+        #"{"action":"clarify","sql":""}"#,
+        #"{"action":"sql","sql":"SELECT id FROM public.users LIMIT 100","clarification_question":"Which users?"}"#,
+        #"{"action":"clarify","sql":"SELECT id FROM public.users LIMIT 100","clarification_question":"Which users?"}"#,
+        // Text arguments of another type are still malformed.
+        #"{"action":"sql","sql":42}"#,
+        #"{"action":"clarify","clarification_question":["Which users?"]}"#,
+        "[]",
+    ])
+    func terminalArgumentsStillEnforceTheSQLAndClarifyInvariants(argumentsJSON: String) async throws {
+        try await expectMalformedTerminalArguments(argumentsJSON)
+    }
+
+    @Test func terminalArgumentsStillEnforceLengthCaps() async throws {
+        let longSQL = "SELECT id FROM public.users WHERE name <> '"
+            + String(repeating: "x", count: 20_000) + "' LIMIT 100"
+        try await expectMalformedTerminalArguments(
+            #"{"action":"sql","sql":"\#(longSQL)"}"#
+        )
+        let longQuestion = String(repeating: "Which user? ", count: 30)
+        try await expectMalformedTerminalArguments(
+            #"{"action":"clarify","clarification_question":"\#(longQuestion)"}"#
+        )
+    }
+
+    /// Sends the same terminal arguments on every turn before any search, so
+    /// the agent corrects once and then fails without an inspected fallback.
+    private func expectMalformedTerminalArguments(_ argumentsJSON: String) async throws {
+        let schema = Self.makeSchema()
+        let chatTransport = ScriptedTransport { _, _ in
+            Self.particleToolCalls([
+                Self.toolCallRaw(
+                    id: "call_0",
+                    name: SchemaToolSQLAgent.terminalToolName,
+                    argumentsJSON: argumentsJSON
+                ),
+            ])
+        }
+        let agent = makeAgent(schema: schema, chatTransport: chatTransport)
+
+        do {
+            _ = try await agent.generateSQL(
+                question: "List users",
+                schema: schema,
+                context: SQLGenerationContext(),
+                config: SQLGenerationConfig()
+            )
+            Issue.record("Expected malformed terminal arguments: \(argumentsJSON)")
+        } catch let failure as SchemaToolAgentFailure {
+            #expect(failure.category == .terminalResultMalformed)
+            let diagnostics = failure.backendMetadata?.agentDiagnostics
+            #expect(diagnostics?.terminalValidationFailureReason == "terminalArgumentsInvalid")
+            #expect(chatTransport.requests.count == 2)
+            let correction = try Self.requestBodyText(try #require(chatTransport.requests.last))
+            #expect(correction.contains("malformed_terminal_arguments"))
+        }
+    }
+
     @Test func mixedSchemaAndTerminalCallsFailAfterSingleCorrection() async throws {
         let schema = Self.makeSchema()
         let chatTransport = ScriptedTransport { request, index in
@@ -5317,6 +5503,37 @@ struct SchemaToolSQLAgentTests {
                 "arguments": jsonString(arguments),
             ],
         ]
+    }
+
+    /// Search for users, describe the table, then send the terminal tool
+    /// with exactly `argumentsJSON`. Every Particle turn uses id call_0.
+    private static func searchDescribeThenTerminal(argumentsJSON: String) -> ScriptedTransport {
+        ScriptedTransport { request, index in
+            switch index {
+            case 1:
+                return Self.particleToolCalls([
+                    Self.toolCall(id: "call_0", name: "search_schema", arguments: [
+                        "query": "users",
+                        "limit": 4,
+                    ]),
+                ])
+            case 2:
+                let tableID = try Self.tableHandle(named: #""public"."users""#, in: request)
+                return Self.particleToolCalls([
+                    Self.toolCall(id: "call_0", name: "describe_tables", arguments: [
+                        "table_ids": [tableID],
+                    ]),
+                ])
+            default:
+                return Self.particleToolCalls([
+                    Self.toolCallRaw(
+                        id: "call_0",
+                        name: SchemaToolSQLAgent.terminalToolName,
+                        argumentsJSON: argumentsJSON
+                    ),
+                ])
+            }
+        }
     }
 
     private static func toolCallRaw(

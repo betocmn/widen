@@ -75,6 +75,10 @@ public struct SchemaToolAgentDiagnostics: Codable, Equatable, Sendable {
     /// agent namespaces ids per turn, so a reuse is recorded, not rejected.
     /// `nil` when no id was reused, and in sessions saved before it existed.
     public var providerToolCallIDReuseCount: Int?
+    /// Terminal arguments that were ignored: unknown keys and a `query_plan`
+    /// of the wrong type, summed over the run's terminal calls. Only the
+    /// count is kept, never the key names. `nil` when nothing was ignored.
+    public var terminalIgnoredArgumentKeyCount: Int?
 
     public init(
         logicalTurnCount: Int? = nil,
@@ -110,7 +114,8 @@ public struct SchemaToolAgentDiagnostics: Codable, Equatable, Sendable {
         planConsistencyDivergences: [String] = [],
         planConsistencyCorrectionAttempted: Bool = false,
         planConsistencyCorrectionSucceeded: Bool = false,
-        providerToolCallIDReuseCount: Int? = nil
+        providerToolCallIDReuseCount: Int? = nil,
+        terminalIgnoredArgumentKeyCount: Int? = nil
     ) {
         self.logicalTurnCount = logicalTurnCount
         self.terminalToolSeen = terminalToolSeen
@@ -146,6 +151,7 @@ public struct SchemaToolAgentDiagnostics: Codable, Equatable, Sendable {
         self.planConsistencyCorrectionAttempted = planConsistencyCorrectionAttempted
         self.planConsistencyCorrectionSucceeded = planConsistencyCorrectionSucceeded
         self.providerToolCallIDReuseCount = providerToolCallIDReuseCount
+        self.terminalIgnoredArgumentKeyCount = terminalIgnoredArgumentKeyCount
     }
 
     private enum CodingKeys: String, CodingKey {
@@ -183,6 +189,7 @@ public struct SchemaToolAgentDiagnostics: Codable, Equatable, Sendable {
         case planConsistencyCorrectionAttempted
         case planConsistencyCorrectionSucceeded
         case providerToolCallIDReuseCount
+        case terminalIgnoredArgumentKeyCount
     }
 
     public init(from decoder: any Decoder) throws {
@@ -310,6 +317,10 @@ public struct SchemaToolAgentDiagnostics: Codable, Equatable, Sendable {
         providerToolCallIDReuseCount = try? container.decodeIfPresent(
             Int.self,
             forKey: .providerToolCallIDReuseCount
+        )
+        terminalIgnoredArgumentKeyCount = try? container.decodeIfPresent(
+            Int.self,
+            forKey: .terminalIgnoredArgumentKeyCount
         )
     }
 }
