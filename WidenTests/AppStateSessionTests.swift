@@ -576,6 +576,33 @@ struct AppStateSessionTests {
         #expect(state.openSettingsRequest == 0)
     }
 
+    #if DEBUG
+        @Test func debugLaunchArgumentOpensTheRequestedSettingsTab() {
+            let (state, dir) = makeState()
+            defer { try? FileManager.default.removeItem(at: dir) }
+
+            state.openDebugSettingsTab(from: [
+                "Widen", "-WidenUseMockAI", "YES", "-WidenDebugOpenSettingsTab", "llm",
+            ])
+            #expect(state.settingsTab == .llm)
+            #expect(state.openSettingsRequest == 1)
+
+            state.openDebugSettingsTab(from: ["Widen", "-WidenDebugOpenSettingsTab", "Databases"])
+            #expect(state.settingsTab == .databases)
+            #expect(state.openSettingsRequest == 2)
+
+            for arguments in [
+                ["Widen"],
+                ["Widen", "-WidenDebugOpenSettingsTab"],
+                ["Widen", "-WidenDebugOpenSettingsTab", "privacy"],
+            ] {
+                state.openDebugSettingsTab(from: arguments)
+            }
+            #expect(state.settingsTab == .databases)
+            #expect(state.openSettingsRequest == 2)
+        }
+    #endif
+
     @Test func launchWithUnreadableSessionsNamesTheBackupInTheBanner() async throws {
         let (state, dir) = makeState()
         defer { try? FileManager.default.removeItem(at: dir) }

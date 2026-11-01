@@ -496,7 +496,26 @@ public final class AppState {
 
         UserDefaults.standard.removeObject(forKey: Self.selectedSessionKey)
         sidebarSelection = nil
+        #if DEBUG
+            openDebugSettingsTab(from: ProcessInfo.processInfo.arguments)
+        #endif
     }
+
+    #if DEBUG
+        static let debugOpenSettingsTabArgument = "-WidenDebugOpenSettingsTab"
+
+        /// Debug builds only: `-WidenDebugOpenSettingsTab <tab>` (`general`,
+        /// `llm`, `databases` or `archived`) opens Settings on that tab at
+        /// launch, so screenshots can be taken without accessibility access.
+        /// Nothing is saved; an unknown tab is ignored.
+        func openDebugSettingsTab(from arguments: [String]) {
+            guard let index = arguments.lastIndex(of: Self.debugOpenSettingsTabArgument),
+                arguments.indices.contains(index + 1),
+                let tab = SettingsTab(rawValue: arguments[index + 1].lowercased())
+            else { return }
+            openSettings(tab: tab)
+        }
+    #endif
 
     /// Asks the UI to show Settings on the given tab. MainView watches
     /// `openSettingsRequest` and opens the Settings window.
