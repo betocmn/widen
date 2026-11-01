@@ -269,6 +269,9 @@ struct SchemaToolSQLAgentTests {
     }
 
     private static let modelID = "openai/gpt-5.5"
+    /// The OpenRouter profile's completion cap, pinned so the eval-only
+    /// profile keeps sending the token budget the app always sent.
+    private static let openRouterCompletionTokenBudget = 2_048
     private static let chatEndpoint = URL(string: "https://openrouter.test/api/v1/chat/completions")!
     private static let apiBase = URL(string: "https://openrouter.test/api/v1")!
     private static let connectionID = UUID(uuidString: "11111111-1111-1111-1111-111111111111")!
@@ -2669,7 +2672,7 @@ struct SchemaToolSQLAgentTests {
             Issue.record("Expected provider failure")
         } catch {
             let body = try Self.requestBody(try #require(chatTransport.requests.first))
-            #expect(body["max_tokens"] as? Int == ChatToolRequestBuilder.completionTokenBudget)
+            #expect(body["max_tokens"] as? Int == Self.openRouterCompletionTokenBudget)
             #expect(body["max_completion_tokens"] == nil)
             try Self.expectPrivateRouting(in: try #require(chatTransport.requests.first))
         }
@@ -3283,7 +3286,7 @@ struct SchemaToolSQLAgentTests {
     }
 
     @Test func toolChatParserPreservesTypedOpenRouterErrorEnvelope() throws {
-        let parser = ChatToolParser()
+        let parser = ChatToolParser(profile: .openRouterTest)
         let data = Self.jsonData([
             "id": "cmpl-error",
             "model": Self.modelID,
@@ -3326,7 +3329,7 @@ struct SchemaToolSQLAgentTests {
     }
 
     @Test func toolChatChoiceErrorTakesPrecedenceOverCanonicalValidation() throws {
-        let parser = ChatToolParser()
+        let parser = ChatToolParser(profile: .openRouterTest)
         let data = Self.jsonData([
             "id": "cmpl-choice-error",
             "provider": "OpenAI",
@@ -3366,7 +3369,7 @@ struct SchemaToolSQLAgentTests {
     }
 
     @Test func toolChatFailedCompletionTakesPrecedenceOverCanonicalValidation() throws {
-        let parser = ChatToolParser()
+        let parser = ChatToolParser(profile: .openRouterTest)
         let expectedCanonicalModelID = "openai/gpt-5.5-20260423"
         let response = HTTPURLResponse(
             url: Self.chatEndpoint,
@@ -3452,7 +3455,7 @@ struct SchemaToolSQLAgentTests {
     }
 
     @Test func toolChatParserRejectsUnexpectedCanonicalModelWhenEnforced() throws {
-        let parser = ChatToolParser()
+        let parser = ChatToolParser(profile: .openRouterTest)
         let returnedModelID = "openai/gpt-5.5-unevaluated"
         let data = Self.assistantToolCalls(
             [
@@ -3488,7 +3491,7 @@ struct SchemaToolSQLAgentTests {
     }
 
     @Test func toolChatParserAcceptsMatchingCanonicalModelWhenEnforced() throws {
-        let parser = ChatToolParser()
+        let parser = ChatToolParser(profile: .openRouterTest)
         let canonicalModelID = "openai/gpt-5.5-20260423"
         let data = Self.assistantToolCalls(
             [
@@ -3519,7 +3522,7 @@ struct SchemaToolSQLAgentTests {
     }
 
     @Test func toolChatParserAcceptsAliasWithMatchingSelectedEndpointCanonicalModel() throws {
-        let parser = ChatToolParser()
+        let parser = ChatToolParser(profile: .openRouterTest)
         let canonicalModelID = "openai/gpt-5.5-20260423"
         let data = Self.assistantToolCalls(
             [
@@ -3562,7 +3565,7 @@ struct SchemaToolSQLAgentTests {
     }
 
     @Test func toolChatParserRejectsCanonicalModelWhenRouterMetadataConflicts() throws {
-        let parser = ChatToolParser()
+        let parser = ChatToolParser(profile: .openRouterTest)
         let canonicalModelID = "openai/gpt-5.5-20260423"
         let data = Self.assistantToolCalls(
             [
@@ -4673,28 +4676,27 @@ struct SchemaToolSQLAgentTests {
         ),
         databaseInspectionPolicy: DatabaseInspectionPolicy = .disabled,
         databaseInspectionDatabase: (any DatabaseInspectionQuerying)? = nil,
-        currentSchemaFingerprint: (@Sendable () async throws -> String)? = nil
+        currentSchemaFingerprint: (@Sendable () async throws -> String)? = nil,
+        profile: CloudModelProfile = .openRouterTest
     ) -> SchemaToolSQLAgent {
         let catalog = OpenRouterModelCatalogService(
+            profile: profile,
             transport: catalogTransport ?? ScriptedTransport { _, _ in Self.catalogResponse() },
-            baseURL: Self.apiBase,
             cacheURL: Self.temporaryDirectory().appendingPathComponent("catalog.json"),
             ttl: 0
         )
         return SchemaToolSQLAgent(
             apiKey: "test-key",
-            model: Self.modelID,
-            expectedCanonicalModelID: nil,
+            profile: profile,
             connectionID: Self.connectionID,
             selectedSchemas: ["public"],
             transport: chatTransport,
-            catalogService: catalog,
+            capabilityResolver: CloudCapabilityResolver(profile: profile, catalogService: catalog),
             sessionFactory: SchemaToolSessionFactory(
                 indexStore: SchemaSearchIndexStore(directory: Self.temporaryDirectory())
             ),
             databaseInspectionPolicy: databaseInspectionPolicy,
             databaseInspectionDatabase: databaseInspectionDatabase,
-            requestBuilder: ChatToolRequestBuilder(endpoint: Self.chatEndpoint),
             legacyGenerator: legacyGenerator ?? LegacyGenerator(),
             configuration: configuration,
             currentSchemaFingerprint: currentSchemaFingerprint ?? {

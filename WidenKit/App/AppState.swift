@@ -266,8 +266,7 @@ public final class AppState {
                         let selectedSchemas = selectedSchemaSet(from: schema)
                         return SchemaToolSQLAgent(
                             apiKey: key,
-                            model: profile.requestedModelID,
-                            expectedCanonicalModelID: profile.expectedReturnedModelID,
+                            profile: profile,
                             connectionID: connectionID,
                             selectedSchemas: selectedSchemas,
                             databaseInspectionPolicy: generationConnection?.databaseInspectionPolicy(
@@ -283,11 +282,7 @@ public final class AppState {
                             )
                         )
                     }
-                    return CloudSQLGenerator(
-                        apiKey: key,
-                        model: profile.requestedModelID,
-                        expectedCanonicalModelID: profile.expectedReturnedModelID
-                    )
+                    return CloudSQLGenerator(apiKey: key, profile: profile)
                 }
             case .applePCC:
                 if let generator = PCCSupport.makeGenerator() {

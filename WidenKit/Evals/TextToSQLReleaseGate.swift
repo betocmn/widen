@@ -50,7 +50,7 @@ public enum TextToSQLReleaseGateModelPolicy {
             case .pinnedModelRequired(let actual):
                 return "the requested model is \(actual ?? "missing"), not the pinned model \(profile.requestedModelID)"
             case .expectedReturnedModelRequired(let actual):
-                return "the manifest expected returned model is \(actual ?? "missing"), not \(profile.expectedReturnedModelID)"
+                return "the manifest expected returned model is \(actual ?? "missing"), not \(profile.expectedReturnedModelID ?? "missing")"
             case .cloudEvaluationRequired:
                 return "the run has no backend-available cloud results"
             }
@@ -121,7 +121,9 @@ public enum TextToSQLReleaseGateModelPolicy {
         guard model == profile.requestedModelID else {
             return .pinnedModelRequired(actual: model)
         }
-        guard expectedReturnedModelID == profile.expectedReturnedModelID else {
+        guard let pinnedReturnedModelID = profile.expectedReturnedModelID,
+            expectedReturnedModelID == pinnedReturnedModelID
+        else {
             return .expectedReturnedModelRequired(actual: expectedReturnedModelID)
         }
         guard cloudEvaluatedResultCount > 0 else {

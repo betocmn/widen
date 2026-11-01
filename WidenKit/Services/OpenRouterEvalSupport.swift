@@ -6,6 +6,8 @@ public enum OpenRouterCapabilitySource: String, Codable, Equatable, Sendable {
     case singleModelLookup
     case staleCache
     case conservativeDefault
+    /// Fixed in a cloud model profile; never written to the catalog cache.
+    case staticProfile
 }
 
 struct OpenRouterModelCapabilitiesLookup: Equatable, Sendable {
@@ -167,6 +169,23 @@ enum OpenRouterJSONValue: Decodable, Equatable, Sendable {
     }
 }
 
+/// Holds the eval-only catalog services, one per OpenRouter base URL.
+private final class OpenRouterCatalogServiceRegistry: @unchecked Sendable {
+    private let lock = NSLock()
+    private var services: [URL: OpenRouterModelCatalogService] = [:]
+
+    func service(for profile: CloudModelProfile) -> OpenRouterModelCatalogService {
+        lock.withLock {
+            if let service = services[profile.baseURL] {
+                return service
+            }
+            let service = OpenRouterModelCatalogService(profile: profile)
+            services[profile.baseURL] = service
+            return service
+        }
+    }
+}
+
 private final class OpenRouterRefreshWaiterState: @unchecked Sendable {
     private let lock = NSLock()
     private var released = false
@@ -181,7 +200,17 @@ private final class OpenRouterRefreshWaiterState: @unchecked Sendable {
 }
 
 actor OpenRouterModelCatalogService {
-    static let shared = OpenRouterModelCatalogService()
+    private static let evalRegistry = OpenRouterCatalogServiceRegistry()
+
+    /// The shared catalog for an OpenRouter eval profile, one per base URL.
+    /// Every other profile gets nil, so no other provider's key can reach the
+    /// OpenRouter catalog.
+    static func evalShared(for profile: CloudModelProfile) -> OpenRouterModelCatalogService? {
+        guard profile.provider == .openRouter,
+            profile.capabilityResolution == .openRouterCatalog
+        else { return nil }
+        return evalRegistry.service(for: profile)
+    }
 
     private struct CacheFile: Codable {
         var entries: [String: CachedCatalog]
@@ -286,8 +315,8 @@ actor OpenRouterModelCatalogService {
         }
     }
 
+    private let profile: CloudModelProfile
     private let transport: any HTTPTransport
-    private let baseURL: URL
     private let cacheURL: URL
     private let ttl: TimeInterval
     private let staleRetention: TimeInterval
@@ -298,20 +327,23 @@ actor OpenRouterModelCatalogService {
         CanonicalMismatchMemoKey: CanonicalMismatchSnapshot
     ] = [:]
 
+    /// Requests go to the profile's base URL and are signed by the profile.
+    /// The cache lives under the WidenEval caches folder, never in the app's
+    /// Application Support folder.
     init(
-        transport: any HTTPTransport = URLSessionTransport(),
-        baseURL: URL = URL(string: "https://openrouter.ai/api/v1")!,
+        profile: CloudModelProfile,
+        transport: (any HTTPTransport)? = nil,
         cacheURL: URL? = nil,
         ttl: TimeInterval = 6 * 60 * 60,
         staleRetention: TimeInterval = 7 * 24 * 60 * 60
     ) {
-        self.transport = transport
-        self.baseURL = baseURL
+        self.profile = profile
+        self.transport = transport ?? URLSessionTransport(timeout: profile.requestTimeoutSeconds)
         self.ttl = ttl
         self.staleRetention = staleRetention
         let directory =
-            FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask)[0]
-            .appendingPathComponent("Widen", isDirectory: true)
+            FileManager.default.urls(for: .cachesDirectory, in: .userDomainMask)[0]
+            .appendingPathComponent("WidenEval", isDirectory: true)
         self.cacheURL =
             cacheURL
             ?? directory.appendingPathComponent("openrouter-model-catalog-cache.json")
@@ -637,17 +669,19 @@ actor OpenRouterModelCatalogService {
     }
 
     private func fetchCatalog(apiKey: String) async throws -> CachedCatalog {
-        var request = URLRequest(url: baseURL.appendingPathComponent("models/user"))
-        request.httpMethod = "GET"
-        request.setValue("Bearer \(apiKey)", forHTTPHeaderField: "Authorization")
-        request.setValue("Widen", forHTTPHeaderField: "X-Title")
+        let request = try profile.authorizedRequest(
+            profile.baseURL.appendingPathComponent("models/user"),
+            apiKey: apiKey,
+            httpMethod: "GET"
+        )
         let (data, response) = try await transport.send(request)
         guard (200..<300).contains(response.statusCode) else {
             throw CloudSQLResponseParser.failure(
                 from: data,
                 response: response,
                 requestedModelID: nil,
-                attemptCount: 1
+                attemptCount: 1,
+                profile: profile
             )
         }
         let decoded = try JSONDecoder().decode(CatalogResponse.self, from: data)
@@ -673,15 +707,14 @@ actor OpenRouterModelCatalogService {
     {
         let parts = modelID.split(separator: "/", maxSplits: 1).map(String.init)
         guard parts.count == 2 else { return nil }
-        var request = URLRequest(
-            url: baseURL
+        var request = try profile.authorizedRequest(
+            profile.baseURL
                 .appendingPathComponent("model")
                 .appendingPathComponent(parts[0])
-                .appendingPathComponent(parts[1])
+                .appendingPathComponent(parts[1]),
+            apiKey: apiKey,
+            httpMethod: "GET"
         )
-        request.httpMethod = "GET"
-        request.setValue("Bearer \(apiKey)", forHTTPHeaderField: "Authorization")
-        request.setValue("Widen", forHTTPHeaderField: "X-Title")
         request.setValue("application/json", forHTTPHeaderField: "Accept")
         let (data, response) = try await transport.send(request)
         guard (200..<300).contains(response.statusCode) else {
@@ -690,7 +723,8 @@ actor OpenRouterModelCatalogService {
                 from: data,
                 response: response,
                 requestedModelID: modelID,
-                attemptCount: 1
+                attemptCount: 1,
+                profile: profile
             )
         }
         let decoded = try JSONDecoder().decode(SingleModelResponse.self, from: data)

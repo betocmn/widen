@@ -185,7 +185,7 @@ struct LLMSettingsView: View {
         let profile = CloudModelCatalog.productionProfile
         LabeledContent("Model", value: profile.displayName)
         LabeledContent("Requested ID", value: profile.requestedModelID)
-        LabeledContent("Evaluated version", value: profile.expectedReturnedModelID)
+        LabeledContent("Evaluated version", value: profile.expectedReturnedModelID ?? "-")
         HStack {
             Spacer()
             Button {
@@ -356,7 +356,8 @@ struct LLMSettingsView: View {
             isTestingModel = false
             modelTestResult = nil
             Task {
-                await OpenRouterModelCatalogService.shared.invalidate(apiKey: key)
+                await OpenRouterModelCatalogService.evalShared(for: .openRouterGPT55)?
+                    .invalidate(apiKey: key)
                 await MainActor.run {
                     refreshOpenRouterCatalog(force: true)
                 }
@@ -376,7 +377,7 @@ struct LLMSettingsView: View {
             isTestingModel = false
             modelTestResult = nil
             Task {
-                await OpenRouterModelCatalogService.shared.invalidate()
+                await OpenRouterModelCatalogService.evalShared(for: .openRouterGPT55)?.invalidate()
             }
         }
     }
@@ -399,8 +400,9 @@ struct LLMSettingsView: View {
         Task {
             let result: OpenRouterCatalogRefreshResult
             do {
+                let catalog = OpenRouterModelCatalogService.evalShared(for: .openRouterGPT55)
                 result = .metadata(
-                    try await OpenRouterModelCatalogService.shared.metadataSurfacingErrors(
+                    try await catalog?.metadataSurfacingErrors(
                         apiKey: key,
                         modelID: selectedModel,
                         forceRefresh: force
@@ -480,13 +482,10 @@ struct LLMSettingsView: View {
         modelTestResult = nil
         let testID = UUID()
         modelTestID = testID
-        let profile = CloudModelCatalog.productionProfile
-        let model = profile.requestedModelID
         Task {
             let result = await OpenRouterConnectivityCheck(
                 apiKey: key,
-                model: model,
-                expectedCanonicalModelID: profile.expectedReturnedModelID
+                profile: .openRouterGPT55
             ).run()
             await MainActor.run {
                 guard modelTestID == testID else { return }

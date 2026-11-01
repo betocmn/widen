@@ -42,11 +42,10 @@ struct ChatToolDefinition: Equatable, Sendable {
 }
 
 struct ChatToolRequestBuilder: Sendable {
-    static let completionTokenBudget = 2_048
-    let endpoint: URL
+    let profile: CloudModelProfile
 
-    init(endpoint: URL = URL(string: "https://openrouter.ai/api/v1/chat/completions")!) {
-        self.endpoint = endpoint
+    init(profile: CloudModelProfile) {
+        self.profile = profile
     }
 
     struct BuiltRequest: Sendable {
@@ -56,14 +55,14 @@ struct ChatToolRequestBuilder: Sendable {
 
     func build(
         apiKey: String,
-        model: String,
         messages: [ChatToolMessage],
         tools: [ChatToolDefinition],
         capabilities: CloudModelCapabilities,
         requireToolChoice: Bool = true
     ) throws -> BuiltRequest {
+        let policy = profile.policy(for: .agentTurn)
         var body: [String: Any] = [
-            "model": model,
+            "model": profile.requestedModelID,
             "messages": messages.map(messageBody),
             "tools": try tools.map(toolBody),
             "stream": false,
@@ -72,29 +71,32 @@ struct ChatToolRequestBuilder: Sendable {
             body["temperature"] = 0
         }
         if capabilities.supportsMaxCompletionTokens {
-            body["max_completion_tokens"] = cappedCompletionTokens(capabilities)
+            body["max_completion_tokens"] = cappedCompletionTokens(policy, capabilities)
         } else if capabilities.supportsMaxTokens {
-            body["max_tokens"] = cappedCompletionTokens(capabilities)
+            body["max_tokens"] = cappedCompletionTokens(policy, capabilities)
         } else {
-            body["max_tokens"] = cappedCompletionTokens(capabilities)
+            body["max_tokens"] = cappedCompletionTokens(policy, capabilities)
         }
         if capabilities.supportsToolChoice, requireToolChoice {
             body["tool_choice"] = "required"
         }
-        OpenRouterProviderPreferences.apply(to: &body)
+        if profile.usesOpenRouterRouting {
+            OpenRouterProviderPreferences.apply(to: &body)
+        }
 
-        var request = URLRequest(url: endpoint)
-        request.httpMethod = "POST"
-        request.setValue("Bearer \(apiKey)", forHTTPHeaderField: "Authorization")
-        request.setValue("application/json", forHTTPHeaderField: "Content-Type")
-        request.setValue("Widen", forHTTPHeaderField: "X-Title")
-        request.setValue("enabled", forHTTPHeaderField: "X-OpenRouter-Metadata")
+        var request = try profile.authorizedRequest(profile.chatCompletionsURL, apiKey: apiKey)
         request.httpBody = try JSONSerialization.data(withJSONObject: body)
         return BuiltRequest(request: request, mode: .promptOnlyJSON)
     }
 
-    private func cappedCompletionTokens(_ capabilities: CloudModelCapabilities) -> Int {
-        min(Self.completionTokenBudget, max(16, capabilities.maximumCompletionTokens ?? Self.completionTokenBudget))
+    private func cappedCompletionTokens(
+        _ policy: CloudCallSitePolicy,
+        _ capabilities: CloudModelCapabilities
+    ) -> Int {
+        min(
+            policy.maxCompletionTokens,
+            max(16, capabilities.maximumCompletionTokens ?? policy.maxCompletionTokens)
+        )
     }
 
     private func toolBody(_ definition: ChatToolDefinition) throws -> [String: Any] {
@@ -139,7 +141,7 @@ struct ChatToolRequestBuilder: Sendable {
                 "tool_call_id": message.toolCallID ?? "",
                 "content": message.content ?? "",
             ]
-            if let toolName = message.toolName {
+            if profile.sendsToolMessageName, let toolName = message.toolName {
                 body["name"] = toolName
             }
             return body
@@ -152,6 +154,12 @@ struct ChatToolParser: Sendable {
         var content: String?
         var toolCalls: [ChatToolCall]
         var metadata: CloudGenerationMetadata
+    }
+
+    let profile: CloudModelProfile
+
+    init(profile: CloudModelProfile) {
+        self.profile = profile
     }
 
     private struct ChatResponse: Decodable {
@@ -279,12 +287,11 @@ struct ChatToolParser: Sendable {
                 from: data,
                 response: response,
                 requestedModelID: requestedModelID,
-                attemptCount: requestCount
+                attemptCount: requestCount,
+                profile: profile
             ).withReportedUsage(reportedUsage)
         }
-        let requestID = response.value(forHTTPHeaderField: "X-Request-Id")
-            ?? response.value(forHTTPHeaderField: "X-Request-ID")
-            ?? response.value(forHTTPHeaderField: "X-Generation-Id")
+        let requestID = CloudSQLResponseParser.requestID(from: response, profile: profile)
         let completion: ChatResponse
         do {
             completion = try JSONDecoder().decode(ChatResponse.self, from: data)

@@ -39,11 +39,10 @@ public struct CloudModelCapabilities: Codable, Equatable, Sendable {
 }
 
 struct ChatCompletionRequestBuilder: Sendable {
-    static let completionTokenBudget = 2_048
-    let endpoint: URL
+    let profile: CloudModelProfile
 
-    init(endpoint: URL = URL(string: "https://openrouter.ai/api/v1/chat/completions")!) {
-        self.endpoint = endpoint
+    init(profile: CloudModelProfile) {
+        self.profile = profile
     }
 
     struct BuiltRequest: Sendable {
@@ -53,15 +52,19 @@ struct ChatCompletionRequestBuilder: Sendable {
 
     func build(
         apiKey: String,
-        model: String,
         instructions: String,
         prompt: String,
-        capabilities: CloudModelCapabilities
+        capabilities: CloudModelCapabilities,
+        callSite: CloudCallSite = .oneShotSQL
     ) throws -> BuiltRequest {
+        let policy = profile.policy(for: callSite)
         let mode: StructuredOutputMode =
-            capabilities.supportsStructuredOutputs ? .strictJSONSchema : .promptOnlyJSON
+            policy.responseFormat == .strictJSONSchemaWhenAdvertised
+                && capabilities.supportsStructuredOutputs
+            ? .strictJSONSchema
+            : .promptOnlyJSON
         var body: [String: Any] = [
-            "model": model,
+            "model": profile.requestedModelID,
             "messages": [
                 ["role": "system", "content": instructions],
                 ["role": "user", "content": prompt],
@@ -72,35 +75,30 @@ struct ChatCompletionRequestBuilder: Sendable {
             body["temperature"] = 0
         }
         if capabilities.supportsMaxCompletionTokens {
-            body["max_completion_tokens"] = cappedCompletionTokens(capabilities)
+            body["max_completion_tokens"] = cappedCompletionTokens(policy, capabilities)
         } else if capabilities.supportsMaxTokens {
-            body["max_tokens"] = cappedCompletionTokens(capabilities)
+            body["max_tokens"] = cappedCompletionTokens(policy, capabilities)
         } else if mode == .promptOnlyJSON {
-            body["max_tokens"] = Self.completionTokenBudget
+            body["max_tokens"] = policy.maxCompletionTokens
         }
         if mode == .strictJSONSchema {
             body["response_format"] = Self.responseFormat()
         }
-        OpenRouterProviderPreferences.apply(to: &body)
+        if profile.usesOpenRouterRouting {
+            OpenRouterProviderPreferences.apply(to: &body)
+        }
 
-        var request = URLRequest(url: endpoint)
-        request.httpMethod = "POST"
-        request.setValue("Bearer \(apiKey)", forHTTPHeaderField: "Authorization")
-        request.setValue("application/json", forHTTPHeaderField: "Content-Type")
-        request.setValue("Widen", forHTTPHeaderField: "X-Title")
-        request.setValue("enabled", forHTTPHeaderField: "X-OpenRouter-Metadata")
+        var request = try profile.authorizedRequest(profile.chatCompletionsURL, apiKey: apiKey)
         request.httpBody = try JSONSerialization.data(withJSONObject: body)
         return BuiltRequest(request: request, mode: mode)
     }
 
     func buildTinyJSONTest(
         apiKey: String,
-        model: String,
         capabilities: CloudModelCapabilities
     ) throws -> BuiltRequest {
         try build(
             apiKey: apiKey,
-            model: model,
             instructions: """
                 Respond with a single JSON object and nothing else, using exactly these keys:
                 {"sql": string, "explanation": string, "assumptions": [string], "referencedTables": [string], "confidence": number between 0 and 1, "riskLevel": "low" or "medium" or "high", "needsClarification": boolean, "clarificationQuestion": string or null}
@@ -108,12 +106,19 @@ struct ChatCompletionRequestBuilder: Sendable {
             prompt: """
                 Return a minimal connectivity response for SELECT 1.
                 """,
-            capabilities: capabilities
+            capabilities: capabilities,
+            callSite: .connectivityProbe
         )
     }
 
-    private func cappedCompletionTokens(_ capabilities: CloudModelCapabilities) -> Int {
-        min(Self.completionTokenBudget, max(16, capabilities.maximumCompletionTokens ?? Self.completionTokenBudget))
+    private func cappedCompletionTokens(
+        _ policy: CloudCallSitePolicy,
+        _ capabilities: CloudModelCapabilities
+    ) -> Int {
+        min(
+            policy.maxCompletionTokens,
+            max(16, capabilities.maximumCompletionTokens ?? policy.maxCompletionTokens)
+        )
     }
 
     private static func responseFormat() -> [String: Any] {
@@ -149,6 +154,12 @@ struct CloudSQLResponseParser: Sendable {
     struct ParsedResult: Sendable {
         var result: SQLGenerationResult
         var metadata: CloudGenerationMetadata
+    }
+
+    let profile: CloudModelProfile
+
+    init(profile: CloudModelProfile) {
+        self.profile = profile
     }
 
     private struct ChatResponse: Decodable {
@@ -269,12 +280,11 @@ struct CloudSQLResponseParser: Sendable {
                 from: data,
                 response: response,
                 requestedModelID: requestedModelID,
-                attemptCount: requestCount
+                attemptCount: requestCount,
+                profile: profile
             ).withReportedUsage(reportedUsage)
         }
-        let requestID = response.value(forHTTPHeaderField: "X-Request-Id")
-            ?? response.value(forHTTPHeaderField: "X-Request-ID")
-            ?? response.value(forHTTPHeaderField: "X-Generation-Id")
+        let requestID = Self.requestID(from: response, profile: profile)
         let completion: ChatResponse
         do {
             completion = try JSONDecoder().decode(ChatResponse.self, from: data)
@@ -510,6 +520,17 @@ struct CloudSQLResponseParser: Sendable {
         return ParsedResult(result: result, metadata: metadata)
     }
 
+    /// The first of the profile's request-ID headers the response carries.
+    /// Header lookup is case-insensitive.
+    static func requestID(from response: HTTPURLResponse, profile: CloudModelProfile) -> String? {
+        for name in profile.requestIDHeaderNames {
+            if let value = response.value(forHTTPHeaderField: name) {
+                return value
+            }
+        }
+        return nil
+    }
+
     static func reportedUsage(from data: Data) -> ChatCompletionUsage? {
         guard let envelope = try? JSONDecoder().decode(
             ChatCompletionUsageEnvelope.self,
@@ -523,11 +544,10 @@ struct CloudSQLResponseParser: Sendable {
         response: HTTPURLResponse,
         requestedModelID: String?,
         attemptCount: Int,
-        retryAfterSeconds: Double? = nil
+        retryAfterSeconds: Double? = nil,
+        profile: CloudModelProfile
     ) -> CloudRequestFailure {
-        let requestID = response.value(forHTTPHeaderField: "X-Request-Id")
-            ?? response.value(forHTTPHeaderField: "X-Request-ID")
-            ?? response.value(forHTTPHeaderField: "X-Generation-Id")
+        let requestID = requestID(from: response, profile: profile)
         if let envelope = try? JSONDecoder().decode(ChatCompletionErrorEnvelope.self, from: data),
             let apiError = envelope.error
         {
@@ -694,30 +714,44 @@ struct OpenRouterConnectivityCheck: Sendable {
     }
 
     let apiKey: String
-    let model: String
-    let expectedCanonicalModelID: String?
-    let catalogService: OpenRouterModelCatalogService
+    let profile: CloudModelProfile
+    let catalogService: OpenRouterModelCatalogService?
     let transport: any HTTPTransport
-    let requestBuilder: ChatCompletionRequestBuilder
 
+    /// Only an OpenRouter profile has a catalog to check; any other profile
+    /// fails without sending a request.
     init(
         apiKey: String,
-        model: String,
-        expectedCanonicalModelID: String?,
-        catalogService: OpenRouterModelCatalogService = .shared,
-        transport: any HTTPTransport = URLSessionTransport(),
-        requestBuilder: ChatCompletionRequestBuilder = ChatCompletionRequestBuilder()
+        profile: CloudModelProfile,
+        catalogService: OpenRouterModelCatalogService? = nil,
+        transport: (any HTTPTransport)? = nil
     ) {
         self.apiKey = apiKey
-        self.model = model
-        self.expectedCanonicalModelID = expectedCanonicalModelID
-        self.catalogService = catalogService
-        self.transport = transport
-        self.requestBuilder = requestBuilder
+        self.profile = profile
+        self.catalogService = catalogService ?? .evalShared(for: profile)
+        self.transport = transport ?? URLSessionTransport(timeout: profile.requestTimeoutSeconds)
     }
 
     func run() async -> Result {
         let started = Date()
+        let model = profile.requestedModelID
+        guard let catalogService else {
+            return Result(
+                keyAccepted: false,
+                selectedModelAvailable: false,
+                capabilities: .conservative(),
+                returnedModelID: nil,
+                providerName: nil,
+                latencyMs: 0,
+                retryCount: 0,
+                error: CloudRequestFailure(
+                    category: .unsupportedFeature,
+                    message: "The OpenRouter connectivity check only supports OpenRouter profiles.",
+                    requestedModelID: model,
+                    attemptCount: 0
+                )
+            )
+        }
         do {
             let metadata = try await catalogService.metadataSurfacingErrors(
                 apiKey: apiKey,
@@ -728,16 +762,17 @@ struct OpenRouterConnectivityCheck: Sendable {
             try OpenRouterCanonicalModelValidator.preflight(
                 catalogCanonicalModelID: capabilities.canonicalModelID,
                 capabilitySource: capabilities.capabilitySource,
-                expectedCanonicalModelID: expectedCanonicalModelID,
+                expectedCanonicalModelID: profile.expectedReturnedModelID,
                 requestedModelID: model
             )
             let generator = CloudSQLGenerator(
                 apiKey: apiKey,
-                model: model,
-                expectedCanonicalModelID: expectedCanonicalModelID,
+                profile: profile,
                 transport: transport,
-                catalogService: catalogService,
-                requestBuilder: requestBuilder
+                capabilityResolver: CloudCapabilityResolver(
+                    profile: profile,
+                    catalogService: catalogService
+                )
             )
             let parsed = try await generator.testTinyCompletion(capabilities: capabilities)
             return Result(
@@ -782,60 +817,60 @@ struct OpenRouterConnectivityCheck: Sendable {
     }
 }
 
-/// Generates SQL with a hosted model through OpenRouter's OpenAI-compatible
-/// chat-completions API. It keeps the same SQL prompts as the local model, but
-/// chooses the transport mode from authenticated OpenRouter capabilities.
+/// Generates SQL with a hosted model through an OpenAI-compatible
+/// chat-completions API described by a cloud model profile. It keeps the same
+/// SQL prompts as the local model, but chooses the transport mode from the
+/// profile's model capabilities.
 public final class CloudSQLGenerator: SQLGenerator, Sendable {
     static let schemaCharacterBudget = 60_000
 
     private let apiKey: String
-    let model: String
-    let expectedCanonicalModelID: String?
+    let profile: CloudModelProfile
     private let transport: any HTTPTransport
-    private let catalogService: OpenRouterModelCatalogService
+    private let capabilityResolver: CloudCapabilityResolver
     private let requestBuilder: ChatCompletionRequestBuilder
-    private let parser = CloudSQLResponseParser()
+    private let parser: CloudSQLResponseParser
     private let retryPolicy: ChatCompletionRetryPolicy
     private let countCapabilityLookupHTTPAttempts: Bool
     private let preResolvedCapabilities: CloudModelCapabilities?
 
-    public init(
+    var model: String { profile.requestedModelID }
+    var expectedCanonicalModelID: String? { profile.expectedReturnedModelID }
+
+    /// Requests go only to `profile`'s host. Without a transport, one is
+    /// built with the profile's timeouts.
+    public convenience init(
         apiKey: String,
-        model: String,
-        expectedCanonicalModelID: String?,
-        transport: any HTTPTransport = URLSessionTransport(),
-        endpoint: URL = URL(string: "https://openrouter.ai/api/v1/chat/completions")!,
+        profile: CloudModelProfile = CloudModelCatalog.productionProfile,
+        transport: (any HTTPTransport)? = nil,
         maximumHTTPAttempts: Int = 3,
         countCapabilityLookupHTTPAttempts: Bool = false
     ) {
-        self.apiKey = apiKey
-        self.model = model
-        self.expectedCanonicalModelID = expectedCanonicalModelID
-        self.transport = transport
-        self.catalogService = .shared
-        self.requestBuilder = ChatCompletionRequestBuilder(endpoint: endpoint)
-        self.retryPolicy = ChatCompletionRetryPolicy(maxAttempts: maximumHTTPAttempts)
-        self.countCapabilityLookupHTTPAttempts = countCapabilityLookupHTTPAttempts
-        self.preResolvedCapabilities = nil
+        self.init(
+            apiKey: apiKey,
+            profile: profile,
+            transport: transport ?? URLSessionTransport(timeout: profile.requestTimeoutSeconds),
+            capabilityResolver: CloudCapabilityResolver(profile: profile),
+            retryPolicy: ChatCompletionRetryPolicy(maxAttempts: maximumHTTPAttempts),
+            countCapabilityLookupHTTPAttempts: countCapabilityLookupHTTPAttempts
+        )
     }
 
     init(
         apiKey: String,
-        model: String,
-        expectedCanonicalModelID: String?,
+        profile: CloudModelProfile,
         transport: any HTTPTransport,
-        catalogService: OpenRouterModelCatalogService,
-        requestBuilder: ChatCompletionRequestBuilder,
+        capabilityResolver: CloudCapabilityResolver,
         retryPolicy: ChatCompletionRetryPolicy = ChatCompletionRetryPolicy(),
         countCapabilityLookupHTTPAttempts: Bool = false,
         preResolvedCapabilities: CloudModelCapabilities? = nil
     ) {
         self.apiKey = apiKey
-        self.model = model
-        self.expectedCanonicalModelID = expectedCanonicalModelID
+        self.profile = profile
         self.transport = transport
-        self.catalogService = catalogService
-        self.requestBuilder = requestBuilder
+        self.capabilityResolver = capabilityResolver
+        self.requestBuilder = ChatCompletionRequestBuilder(profile: profile)
+        self.parser = CloudSQLResponseParser(profile: profile)
         self.retryPolicy = retryPolicy
         self.countCapabilityLookupHTTPAttempts = countCapabilityLookupHTTPAttempts
         self.preResolvedCapabilities = preResolvedCapabilities
@@ -879,20 +914,16 @@ public final class CloudSQLGenerator: SQLGenerator, Sendable {
             capabilityLookupHTTPAttempts = 0
             capabilities = preResolvedCapabilities
         } else if countCapabilityLookupHTTPAttempts {
-            let lookup = try await catalogService.validatedCapabilitiesForGeneration(
+            let lookup = try await capabilityResolver.validatedCapabilitiesForGeneration(
                 apiKey: apiKey,
-                modelID: model,
-                expectedCanonicalModelID: expectedCanonicalModelID,
                 maximumHTTPRequests: availableHTTPAttempts
             )
             capabilityLookupHTTPAttempts = lookup.httpRequestCount
             capabilities = lookup.capabilities
         } else {
             capabilityLookupHTTPAttempts = 0
-            capabilities = try await catalogService.validatedCapabilitiesForGeneration(
+            capabilities = try await capabilityResolver.validatedCapabilitiesForGeneration(
                 apiKey: apiKey,
-                modelID: model,
-                expectedCanonicalModelID: expectedCanonicalModelID,
                 maximumHTTPRequests: nil
             ).capabilities
         }
@@ -946,7 +977,7 @@ public final class CloudSQLGenerator: SQLGenerator, Sendable {
                 ? failure.withAttemptCount(failure.diagnostic.attemptCount + capabilityLookupHTTPAttempts)
                 : failure
             if failure.category == .unsupportedFeature || failure.category == .invalidRequest {
-                await catalogService.invalidate(apiKey: apiKey, modelID: model)
+                await capabilityResolver.invalidate(apiKey: apiKey)
             }
             await GenerationLog.shared.append(
                 prompt: prompt,
@@ -987,7 +1018,6 @@ public final class CloudSQLGenerator: SQLGenerator, Sendable {
     {
         let built = try requestBuilder.buildTinyJSONTest(
             apiKey: apiKey,
-            model: model,
             capabilities: capabilities
         )
         let parsed = try await performBuiltRequest(built, requestedModelID: model)
@@ -1029,7 +1059,6 @@ public final class CloudSQLGenerator: SQLGenerator, Sendable {
     ) async throws -> CloudSQLResponseParser.ParsedResult {
         let built = try requestBuilder.build(
             apiKey: apiKey,
-            model: model,
             instructions: instructions,
             prompt: prompt,
             capabilities: capabilities

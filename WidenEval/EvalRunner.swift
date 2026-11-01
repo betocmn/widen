@@ -1029,14 +1029,16 @@ struct EvalRunner {
         switch backend {
         case .cloud:
             guard let apiKey = Self.openRouterAPIKey() else { return nil }
-            let expectedCanonicalModelID = CloudModelCatalog.expectedReturnedModelID(
-                forRequestedModelID: options.model
+            let profile = CloudModelProfile.openRouter(
+                requestedModelID: options.model,
+                expectedReturnedModelID: CloudModelCatalog.expectedReturnedModelID(
+                    forRequestedModelID: options.model
+                )
             )
             if options.cloudAgentMode == .tools {
                 return EvalCloudSchemaToolSQLGenerator(
                     apiKey: apiKey,
-                    model: options.model,
-                    expectedCanonicalModelID: expectedCanonicalModelID,
+                    profile: profile,
                     maximumHTTPAttempts: maximumHTTPAttempts,
                     clarificationCorrectionMode: options.schemaAgentClarificationCorrectionMode,
                     intentCoverageMode: options.schemaAgentIntentCoverageMode,
@@ -1045,8 +1047,7 @@ struct EvalRunner {
             }
             return CloudSQLGenerator(
                 apiKey: apiKey,
-                model: options.model,
-                expectedCanonicalModelID: expectedCanonicalModelID,
+                profile: profile,
                 maximumHTTPAttempts: maximumHTTPAttempts.map { min(3, max(1, $0)) } ?? 3,
                 countCapabilityLookupHTTPAttempts: maximumHTTPAttempts != nil
             )
@@ -1770,8 +1771,7 @@ private extension TextToSQLEvalResult {
 
 private struct EvalCloudSchemaToolSQLGenerator: SQLGenerator, Sendable {
     var apiKey: String
-    var model: String
-    var expectedCanonicalModelID: String?
+    var profile: CloudModelProfile
     var maximumHTTPAttempts: Int?
     var clarificationCorrectionMode: SchemaToolAgentClarificationCorrectionMode
     var intentCoverageMode: SchemaToolAgentIntentCoverageMode
@@ -1790,8 +1790,7 @@ private struct EvalCloudSchemaToolSQLGenerator: SQLGenerator, Sendable {
         )
         let agent = SchemaToolSQLAgent(
             apiKey: apiKey,
-            model: model,
-            expectedCanonicalModelID: expectedCanonicalModelID,
+            profile: profile,
             connectionID: connectionID,
             selectedSchemas: selectedSchemas,
             configuration: agentConfiguration()

@@ -143,20 +143,19 @@ public struct SchemaToolAgentFailure: Error, LocalizedError, Equatable, Sendable
     }
 }
 
-/// Experimental OpenRouter SQL generator that asks the model to discover schema
-/// through bounded metadata tools instead of sending a complete schema prompt.
+/// Cloud SQL generator that asks the model to discover schema through bounded
+/// metadata tools instead of sending a complete schema prompt.
 public final class SchemaToolSQLAgent: SQLGenerator, Sendable {
     public static let terminalToolName = "submit_text_to_sql_result"
 
     private let apiKey: String
-    let model: String
-    let expectedCanonicalModelID: String?
+    let profile: CloudModelProfile
     private let connectionID: UUID
     private let selectedSchemas: [String]
     private let transport: any HTTPTransport
-    private let catalogService: OpenRouterModelCatalogService
+    private let capabilityResolver: CloudCapabilityResolver
     private let requestBuilder: ChatToolRequestBuilder
-    private let parser = ChatToolParser()
+    private let parser: ChatToolParser
     private let retryPolicy = ChatCompletionRetryPolicy()
     private let sessionFactory: SchemaToolSessionFactory
     private let databaseInspectionSessionFactory: DatabaseInspectionToolSessionFactory
@@ -166,15 +165,18 @@ public final class SchemaToolSQLAgent: SQLGenerator, Sendable {
     private let legacyGenerator: any SQLGenerator
     private let currentSchemaFingerprint: (@Sendable () async throws -> String)?
 
-    public init(
+    var model: String { profile.requestedModelID }
+    var expectedCanonicalModelID: String? { profile.expectedReturnedModelID }
+
+    /// Requests go only to `profile`'s host. Without a transport, one is
+    /// built with the profile's timeouts.
+    public convenience init(
         apiKey: String,
-        model: String,
-        expectedCanonicalModelID: String?,
+        profile: CloudModelProfile,
         connectionID: UUID,
         selectedSchemas: [String],
-        transport: any HTTPTransport = URLSessionTransport(),
+        transport: (any HTTPTransport)? = nil,
         indexStore: SchemaSearchIndexStore = SchemaSearchIndexStore(),
-        endpoint: URL = URL(string: "https://openrouter.ai/api/v1/chat/completions")!,
         databaseInspectionPolicy: DatabaseInspectionPolicy = .disabled,
         databaseInspectionDatabase: (any DatabaseInspectionQuerying)? = nil,
         databaseInspectionSessionFactory: DatabaseInspectionToolSessionFactory =
@@ -182,56 +184,54 @@ public final class SchemaToolSQLAgent: SQLGenerator, Sendable {
         configuration: SchemaToolSQLAgentConfiguration = .default,
         currentSchemaFingerprint: (@Sendable () async throws -> String)? = nil
     ) {
-        self.apiKey = apiKey
-        self.model = model
-        self.expectedCanonicalModelID = expectedCanonicalModelID
-        self.connectionID = connectionID
-        self.selectedSchemas = selectedSchemas.sorted()
-        self.transport = transport
-        self.catalogService = .shared
-        self.requestBuilder = ChatToolRequestBuilder(endpoint: endpoint)
-        self.sessionFactory = SchemaToolSessionFactory(indexStore: indexStore)
-        self.databaseInspectionSessionFactory = databaseInspectionSessionFactory
-        self.databaseInspectionPolicy = databaseInspectionPolicy
-        self.databaseInspectionDatabase = databaseInspectionDatabase
-        self.configuration = configuration
-        self.currentSchemaFingerprint = currentSchemaFingerprint
-        self.legacyGenerator = CloudSQLGenerator(
+        let transport = transport ?? URLSessionTransport(timeout: profile.requestTimeoutSeconds)
+        let capabilityResolver = CloudCapabilityResolver(profile: profile)
+        self.init(
             apiKey: apiKey,
-            model: model,
-            expectedCanonicalModelID: expectedCanonicalModelID,
+            profile: profile,
+            connectionID: connectionID,
+            selectedSchemas: selectedSchemas,
             transport: transport,
-            catalogService: catalogService,
-            requestBuilder: ChatCompletionRequestBuilder(endpoint: endpoint)
+            capabilityResolver: capabilityResolver,
+            sessionFactory: SchemaToolSessionFactory(indexStore: indexStore),
+            databaseInspectionSessionFactory: databaseInspectionSessionFactory,
+            databaseInspectionPolicy: databaseInspectionPolicy,
+            databaseInspectionDatabase: databaseInspectionDatabase,
+            legacyGenerator: CloudSQLGenerator(
+                apiKey: apiKey,
+                profile: profile,
+                transport: transport,
+                capabilityResolver: capabilityResolver
+            ),
+            configuration: configuration,
+            currentSchemaFingerprint: currentSchemaFingerprint
         )
     }
 
     init(
         apiKey: String,
-        model: String,
-        expectedCanonicalModelID: String?,
+        profile: CloudModelProfile,
         connectionID: UUID,
         selectedSchemas: [String],
         transport: any HTTPTransport,
-        catalogService: OpenRouterModelCatalogService,
+        capabilityResolver: CloudCapabilityResolver,
         sessionFactory: SchemaToolSessionFactory,
         databaseInspectionSessionFactory: DatabaseInspectionToolSessionFactory =
             DatabaseInspectionToolSessionFactory(),
         databaseInspectionPolicy: DatabaseInspectionPolicy = .disabled,
         databaseInspectionDatabase: (any DatabaseInspectionQuerying)? = nil,
-        requestBuilder: ChatToolRequestBuilder,
         legacyGenerator: any SQLGenerator,
         configuration: SchemaToolSQLAgentConfiguration = .default,
         currentSchemaFingerprint: (@Sendable () async throws -> String)? = nil
     ) {
         self.apiKey = apiKey
-        self.model = model
-        self.expectedCanonicalModelID = expectedCanonicalModelID
+        self.profile = profile
         self.connectionID = connectionID
         self.selectedSchemas = selectedSchemas.sorted()
         self.transport = transport
-        self.catalogService = catalogService
-        self.requestBuilder = requestBuilder
+        self.capabilityResolver = capabilityResolver
+        self.requestBuilder = ChatToolRequestBuilder(profile: profile)
+        self.parser = ChatToolParser(profile: profile)
         self.sessionFactory = sessionFactory
         self.databaseInspectionSessionFactory = databaseInspectionSessionFactory
         self.databaseInspectionPolicy = databaseInspectionPolicy
@@ -269,10 +269,8 @@ public final class SchemaToolSQLAgent: SQLGenerator, Sendable {
         }
         let capabilities: CloudModelCapabilities
         if configuration.countCapabilityLookupHTTPAttempts {
-            let lookup = try await catalogService.validatedCapabilitiesForGeneration(
+            let lookup = try await capabilityResolver.validatedCapabilitiesForGeneration(
                 apiKey: apiKey,
-                modelID: model,
-                expectedCanonicalModelID: expectedCanonicalModelID,
                 maximumHTTPRequests: availableHTTPAttempts
             )
             aggregate.httpAttemptCount += lookup.httpRequestCount
@@ -281,10 +279,8 @@ public final class SchemaToolSQLAgent: SQLGenerator, Sendable {
             }
             capabilities = lookup.capabilities
         } else {
-            capabilities = try await catalogService.validatedCapabilitiesForGeneration(
+            capabilities = try await capabilityResolver.validatedCapabilitiesForGeneration(
                 apiKey: apiKey,
-                modelID: model,
-                expectedCanonicalModelID: expectedCanonicalModelID,
                 maximumHTTPRequests: nil
             ).capabilities
         }
@@ -310,11 +306,9 @@ public final class SchemaToolSQLAgent: SQLGenerator, Sendable {
             if configuration.countCapabilityLookupHTTPAttempts {
                 fallbackGenerator = CloudSQLGenerator(
                     apiKey: apiKey,
-                    model: model,
-                    expectedCanonicalModelID: expectedCanonicalModelID,
+                    profile: profile,
                     transport: transport,
-                    catalogService: catalogService,
-                    requestBuilder: ChatCompletionRequestBuilder(endpoint: requestBuilder.endpoint),
+                    capabilityResolver: capabilityResolver,
                     retryPolicy: ChatCompletionRetryPolicy(
                         maxAttempts: max(
                             1,
@@ -439,7 +433,7 @@ public final class SchemaToolSQLAgent: SQLGenerator, Sendable {
                     throw CancellationError()
                 } catch let failure as CloudRequestFailure {
                     if failure.category == .unsupportedFeature {
-                        await catalogService.invalidate(apiKey: apiKey, modelID: model)
+                        await capabilityResolver.invalidate(apiKey: apiKey)
                         throw await agentFailure(
                             .unsupportedTools,
                             "The selected OpenRouter model rejected tool parameters.",
@@ -1065,7 +1059,6 @@ public final class SchemaToolSQLAgent: SQLGenerator, Sendable {
     ) async throws -> ChatToolParser.ParsedTurn {
         let built = try requestBuilder.build(
             apiKey: apiKey,
-            model: model,
             messages: messages,
             tools: tools,
             capabilities: capabilities
@@ -1376,7 +1369,7 @@ public final class SchemaToolSQLAgent: SQLGenerator, Sendable {
         _ capabilities: CloudModelCapabilities
     ) -> Bool {
         switch capabilities.capabilitySource {
-        case .authenticatedCatalog, .singleModelLookup:
+        case .authenticatedCatalog, .singleModelLookup, .staticProfile:
             return true
         case .staleCache, .conservativeDefault:
             return false

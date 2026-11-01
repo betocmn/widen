@@ -545,3 +545,53 @@ extension CloudRequestFailure {
         }
     }
 }
+
+/// Resolves a profile's model capabilities before a completion. A profile
+/// with static capabilities answers locally and sends nothing; only an
+/// OpenRouter eval profile consults the authenticated OpenRouter catalog.
+struct CloudCapabilityResolver: Sendable {
+    let profile: CloudModelProfile
+    private let catalogService: OpenRouterModelCatalogService?
+
+    /// `catalogService` is a test seam; it is ignored for static profiles.
+    init(profile: CloudModelProfile, catalogService: OpenRouterModelCatalogService? = nil) {
+        self.profile = profile
+        switch profile.capabilityResolution {
+        case .staticCapabilities:
+            self.catalogService = nil
+        case .openRouterCatalog:
+            self.catalogService = catalogService ?? .evalShared(for: profile)
+        }
+    }
+
+    /// Lookup HTTP requests are reported in `httpRequestCount`; static
+    /// capabilities always report zero.
+    func validatedCapabilitiesForGeneration(
+        apiKey: String,
+        maximumHTTPRequests: Int?
+    ) async throws -> OpenRouterModelCapabilitiesLookup {
+        switch profile.capabilityResolution {
+        case .staticCapabilities(let capabilities):
+            return OpenRouterModelCapabilitiesLookup(capabilities: capabilities, httpRequestCount: 0)
+        case .openRouterCatalog:
+            guard let catalogService else {
+                return OpenRouterModelCapabilitiesLookup(
+                    capabilities: .conservative(),
+                    httpRequestCount: 0
+                )
+            }
+            return try await catalogService.validatedCapabilitiesForGeneration(
+                apiKey: apiKey,
+                modelID: profile.requestedModelID,
+                expectedCanonicalModelID: profile.expectedReturnedModelID,
+                maximumHTTPRequests: maximumHTTPRequests
+            )
+        }
+    }
+
+    /// Drops cached catalog capabilities after the provider rejected a
+    /// request parameter. A no-op for static capabilities.
+    func invalidate(apiKey: String) async {
+        await catalogService?.invalidate(apiKey: apiKey, modelID: profile.requestedModelID)
+    }
+}

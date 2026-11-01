@@ -80,6 +80,9 @@ struct CloudSQLGeneratorTests {
     private static let chatEndpoint = URL(string: "https://openrouter.test/api/v1/chat/completions")!
     private static let apiBase = URL(string: "https://openrouter.test/api/v1")!
     private static let modelID = "openai/gpt-5.5"
+    /// The OpenRouter profile's completion cap, pinned so the eval-only
+    /// profile keeps sending the token budget the app always sent.
+    private static let openRouterCompletionTokenBudget = 2_048
 
     private let goodContent = """
         {"sql":"SELECT id FROM public.users LIMIT 100","explanation":"Lists user ids.","assumptions":["All users wanted"],"referencedTables":["public.users"],"confidence":0.9,"riskLevel":"low","needsClarification":false,"clarificationQuestion":null}
@@ -263,7 +266,8 @@ struct CloudSQLGeneratorTests {
             ),
             response: response(url: Self.chatEndpoint, status: 404),
             requestedModelID: Self.modelID,
-            attemptCount: 1
+            attemptCount: 1,
+            profile: .openRouterTest
         )
         #expect(failure.message.contains("private-routing requirements"))
     }
@@ -295,7 +299,8 @@ struct CloudSQLGeneratorTests {
             ),
             response: response(url: Self.chatEndpoint, status: 404),
             requestedModelID: Self.modelID,
-            attemptCount: 1
+            attemptCount: 1,
+            profile: .openRouterTest
         )
         #expect(failure.category == .modelNotFound)
         #expect(!failure.message.contains("private-routing requirements"))
@@ -309,7 +314,8 @@ struct CloudSQLGeneratorTests {
             ),
             response: response(url: Self.chatEndpoint, status: 404),
             requestedModelID: Self.modelID,
-            attemptCount: 1
+            attemptCount: 1,
+            profile: .openRouterTest
         )
         #expect(failure.category == .modelNotFound)
         #expect(failure.message.contains("private-routing requirements"))
@@ -489,9 +495,8 @@ struct CloudSQLGeneratorTests {
     }
 
     @Test func requestBuilderKeepsPromptModeTokenCapWhenCapabilitiesUnknown() throws {
-        let built = try ChatCompletionRequestBuilder(endpoint: Self.chatEndpoint).build(
+        let built = try ChatCompletionRequestBuilder(profile: .openRouterTest).build(
             apiKey: "test-key",
-            model: Self.modelID,
             instructions: "instructions",
             prompt: "prompt",
             capabilities: .conservative()
@@ -501,7 +506,7 @@ struct CloudSQLGeneratorTests {
         #expect(built.mode == .promptOnlyJSON)
         #expect(body["response_format"] == nil)
         #expect(body["temperature"] == nil)
-        #expect(body["max_tokens"] as? Int == ChatCompletionRequestBuilder.completionTokenBudget)
+        #expect(body["max_tokens"] as? Int == Self.openRouterCompletionTokenBudget)
         #expect(body["max_completion_tokens"] == nil)
         try expectPrivateRouting(in: built.request)
         #expect(built.request.value(forHTTPHeaderField: "X-OpenRouter-Metadata") == "enabled")
@@ -522,9 +527,8 @@ struct CloudSQLGeneratorTests {
         capabilities.supportsMaxCompletionTokens = true
         capabilities.maximumCompletionTokens = 32
 
-        let built = try ChatCompletionRequestBuilder(endpoint: Self.chatEndpoint).build(
+        let built = try ChatCompletionRequestBuilder(profile: .openRouterTest).build(
             apiKey: "test-key",
-            model: Self.modelID,
             instructions: "instructions",
             prompt: "prompt",
             capabilities: capabilities
@@ -546,9 +550,8 @@ struct CloudSQLGeneratorTests {
         var capabilities = CloudModelCapabilities.conservative()
         capabilities.supportsStructuredOutputs = true
 
-        let built = try ChatCompletionRequestBuilder(endpoint: Self.chatEndpoint).build(
+        let built = try ChatCompletionRequestBuilder(profile: .openRouterTest).build(
             apiKey: "test-key",
-            model: Self.modelID,
             instructions: "instructions",
             prompt: "prompt",
             capabilities: capabilities
@@ -566,9 +569,8 @@ struct CloudSQLGeneratorTests {
         capabilities.supportsResponseFormat = true
         capabilities.supportsTemperature = true
 
-        let built = try ChatCompletionRequestBuilder(endpoint: Self.chatEndpoint).build(
+        let built = try ChatCompletionRequestBuilder(profile: .openRouterTest).build(
             apiKey: "test-key",
-            model: Self.modelID,
             instructions: "instructions",
             prompt: "prompt",
             capabilities: capabilities
@@ -579,7 +581,7 @@ struct CloudSQLGeneratorTests {
         #expect(body["response_format"] == nil)
         try expectPrivateRouting(in: built.request)
         #expect(body["temperature"] as? Int == 0)
-        #expect(body["max_tokens"] as? Int == ChatCompletionRequestBuilder.completionTokenBudget)
+        #expect(body["max_tokens"] as? Int == Self.openRouterCompletionTokenBudget)
     }
 
     @Test func maxTokensFallbackIsUsedOnlyWhenAdvertised() throws {
@@ -588,16 +590,15 @@ struct CloudSQLGeneratorTests {
         capabilities.maximumCompletionTokens = 16_000
 
         let body = try jsonBody(
-            ChatCompletionRequestBuilder(endpoint: Self.chatEndpoint).build(
+            ChatCompletionRequestBuilder(profile: .openRouterTest).build(
                 apiKey: "test-key",
-                model: Self.modelID,
                 instructions: "instructions",
                 prompt: "prompt",
                 capabilities: capabilities
             ).request
         )
 
-        #expect(body["max_tokens"] as? Int == ChatCompletionRequestBuilder.completionTokenBudget)
+        #expect(body["max_tokens"] as? Int == Self.openRouterCompletionTokenBudget)
         #expect(body["max_completion_tokens"] == nil)
     }
 
@@ -626,7 +627,7 @@ struct CloudSQLGeneratorTests {
     }
 
     @Test func parserHandlesStringAndContentParts() throws {
-        let parser = CloudSQLResponseParser()
+        let parser = CloudSQLResponseParser(profile: .openRouterTest)
         let stringResult = try parser.parse(
             data: chatResponse(content: goodContent),
             response: response(url: Self.chatEndpoint, status: 200, headers: ["X-Request-Id": "req-1"]),
@@ -659,7 +660,7 @@ struct CloudSQLGeneratorTests {
     }
 
     @Test func parserRejectsUnexpectedCanonicalModelWhenEnforced() throws {
-        let parser = CloudSQLResponseParser()
+        let parser = CloudSQLResponseParser(profile: .openRouterTest)
         let returnedModelID = "openai/gpt-5.5-unevaluated"
 
         do {
@@ -682,7 +683,7 @@ struct CloudSQLGeneratorTests {
     }
 
     @Test func parserAcceptsAliasWhenRouterMetadataPinsExpectedCanonicalModel() throws {
-        let parser = CloudSQLResponseParser()
+        let parser = CloudSQLResponseParser(profile: .openRouterTest)
         let expectedCanonicalModelID = "openai/gpt-5.5-20260423"
 
         let parsed = try parser.parse(
@@ -705,7 +706,7 @@ struct CloudSQLGeneratorTests {
     }
 
     @Test func parserRejectsAliasWithoutUnambiguousMatchingRouterMetadata() throws {
-        let parser = CloudSQLResponseParser()
+        let parser = CloudSQLResponseParser(profile: .openRouterTest)
         let expectedCanonicalModelID = "openai/gpt-5.5-20260423"
         let responses = [
             chatResponse(content: goodContent),
@@ -759,7 +760,7 @@ struct CloudSQLGeneratorTests {
     }
 
     @Test func parserRejectsCanonicalModelWhenRouterMetadataConflicts() throws {
-        let parser = CloudSQLResponseParser()
+        let parser = CloudSQLResponseParser(profile: .openRouterTest)
         let expectedCanonicalModelID = "openai/gpt-5.5-20260423"
         let responses = [
             chatResponse(
@@ -807,7 +808,7 @@ struct CloudSQLGeneratorTests {
     }
 
     @Test func malformedHTTP200EnvelopeIsStructuredResponseFailure() throws {
-        let parser = CloudSQLResponseParser()
+        let parser = CloudSQLResponseParser(profile: .openRouterTest)
 
         do {
             _ = try parser.parse(
@@ -827,7 +828,7 @@ struct CloudSQLGeneratorTests {
     }
 
     @Test func malformedEnvelopeFailurePreservesReportedUsage() throws {
-        let parser = CloudSQLResponseParser()
+        let parser = CloudSQLResponseParser(profile: .openRouterTest)
         let data = jsonData([
             "choices": "invalid",
             "usage": [
@@ -860,7 +861,7 @@ struct CloudSQLGeneratorTests {
     }
 
     @Test func parserAcceptsFencedJSONOnlyInPromptMode() throws {
-        let parser = CloudSQLResponseParser()
+        let parser = CloudSQLResponseParser(profile: .openRouterTest)
         let fenced = "```json\n\(goodContent)\n```"
         let proseWrapped = "Here is the query:\n\(fenced)\nDone."
         let promptResult = try parser.parse(
@@ -898,7 +899,7 @@ struct CloudSQLGeneratorTests {
     }
 
     @Test func http200ErrorEnvelopeUsesBodyCodeForCategory() throws {
-        let parser = CloudSQLResponseParser()
+        let parser = CloudSQLResponseParser(profile: .openRouterTest)
 
         do {
             _ = try parser.parse(
@@ -921,7 +922,7 @@ struct CloudSQLGeneratorTests {
     }
 
     @Test func parserClassifiesErrorAndFinishFormsBeforeContentParsing() throws {
-        let parser = CloudSQLResponseParser()
+        let parser = CloudSQLResponseParser(profile: .openRouterTest)
 
         try expectFailure(.paymentRequired) {
             try parser.parse(
@@ -986,7 +987,7 @@ struct CloudSQLGeneratorTests {
     }
 
     @Test func choiceLevelErrorInsideHTTP200PreservesProviderCode() throws {
-        let parser = CloudSQLResponseParser()
+        let parser = CloudSQLResponseParser(profile: .openRouterTest)
         do {
             _ = try parser.parse(
                 data: chatResponse(
@@ -1027,7 +1028,7 @@ struct CloudSQLGeneratorTests {
     }
 
     @Test func choiceLevelErrorTakesPrecedenceOverCanonicalValidation() throws {
-        let parser = CloudSQLResponseParser()
+        let parser = CloudSQLResponseParser(profile: .openRouterTest)
         do {
             _ = try parser.parse(
                 data: chatResponse(
@@ -1056,7 +1057,7 @@ struct CloudSQLGeneratorTests {
     }
 
     @Test func failedCompletionTakesPrecedenceOverCanonicalValidation() throws {
-        let parser = CloudSQLResponseParser()
+        let parser = CloudSQLResponseParser(profile: .openRouterTest)
         let expectedCanonicalModelID = "openai/gpt-5.5-20260423"
 
         try expectFailure(.providerUnavailable) {
@@ -1463,9 +1464,8 @@ struct CloudSQLGeneratorTests {
     @Test func testModelPayloadContainsNoDatabaseContextOrSchema() throws {
         var capabilities = CloudModelCapabilities.conservative()
         capabilities.supportsStructuredOutputs = true
-        let request = try ChatCompletionRequestBuilder(endpoint: Self.chatEndpoint).buildTinyJSONTest(
+        let request = try ChatCompletionRequestBuilder(profile: .openRouterTest).buildTinyJSONTest(
             apiKey: "test-key",
-            model: Self.modelID,
             capabilities: capabilities
         ).request
         let body = try jsonBody(request)
@@ -1492,11 +1492,9 @@ struct CloudSQLGeneratorTests {
 
         let result = await OpenRouterConnectivityCheck(
             apiKey: "test-key",
-            model: model,
-            expectedCanonicalModelID: nil,
+            profile: .openRouterTest.requestingModel(model),
             catalogService: service,
-            transport: transport,
-            requestBuilder: ChatCompletionRequestBuilder(endpoint: Self.chatEndpoint)
+            transport: transport
         ).run()
 
         #expect(result.error == nil)
@@ -1595,11 +1593,9 @@ struct CloudSQLGeneratorTests {
 
         let result = await OpenRouterConnectivityCheck(
             apiKey: "test-key",
-            model: Self.modelID,
-            expectedCanonicalModelID: expectedModelID,
+            profile: .openRouterTest.pinningReturnedModel(expectedModelID),
             catalogService: service,
-            transport: transport,
-            requestBuilder: ChatCompletionRequestBuilder(endpoint: Self.chatEndpoint)
+            transport: transport
         ).run()
 
         #expect(result.error?.category == .modelVersionMismatch)
@@ -1614,13 +1610,15 @@ struct CloudSQLGeneratorTests {
                 response(url: Self.apiBase.appendingPathComponent("models/user"), status: 200)
             )),
         ])
+        let profile = CloudModelProfile.openRouterTest.pinningReturnedModel("openai/gpt-5.5-20260423")
         let generator = CloudSQLGenerator(
             apiKey: "test-key",
-            model: Self.modelID,
-            expectedCanonicalModelID: "openai/gpt-5.5-20260423",
+            profile: profile,
             transport: transport,
-            catalogService: catalogService(transport: transport),
-            requestBuilder: ChatCompletionRequestBuilder(endpoint: Self.chatEndpoint)
+            capabilityResolver: CloudCapabilityResolver(
+                profile: profile,
+                catalogService: catalogService(transport: transport)
+            )
         )
 
         do {
@@ -1724,13 +1722,12 @@ struct CloudSQLGeneratorTests {
         let service = catalogService(transport: transport, cacheURL: cacheURL, ttl: 60)
         _ = try await service.availableModels(apiKey: "test-key", forceRefresh: true)
 
+        let profile = CloudModelProfile.openRouterTest.pinningReturnedModel("openai/gpt-5.5-20260423")
         let generator = CloudSQLGenerator(
             apiKey: "test-key",
-            model: Self.modelID,
-            expectedCanonicalModelID: "openai/gpt-5.5-20260423",
+            profile: profile,
             transport: transport,
-            catalogService: service,
-            requestBuilder: ChatCompletionRequestBuilder(endpoint: Self.chatEndpoint)
+            capabilityResolver: CloudCapabilityResolver(profile: profile, catalogService: service)
         )
 
         let result = try await generator.generateSQL(
@@ -1863,13 +1860,15 @@ struct CloudSQLGeneratorTests {
         retryPolicy: ChatCompletionRetryPolicy = ChatCompletionRetryPolicy(),
         countCapabilityLookupHTTPAttempts: Bool = false
     ) -> CloudSQLGenerator {
-        CloudSQLGenerator(
+        let profile = CloudModelProfile.openRouterTest.requestingModel(model)
+        return CloudSQLGenerator(
             apiKey: "test-key",
-            model: model,
-            expectedCanonicalModelID: nil,
+            profile: profile,
             transport: transport,
-            catalogService: catalogService(transport: transport),
-            requestBuilder: ChatCompletionRequestBuilder(endpoint: Self.chatEndpoint),
+            capabilityResolver: CloudCapabilityResolver(
+                profile: profile,
+                catalogService: catalogService(transport: transport)
+            ),
             retryPolicy: retryPolicy,
             countCapabilityLookupHTTPAttempts: countCapabilityLookupHTTPAttempts
         )
@@ -1881,22 +1880,21 @@ struct CloudSQLGeneratorTests {
     ) async -> OpenRouterConnectivityCheck.Result {
         await OpenRouterConnectivityCheck(
             apiKey: "test-key",
-            model: Self.modelID,
-            expectedCanonicalModelID: expectedCanonicalModelID,
+            profile: .openRouterTest.pinningReturnedModel(expectedCanonicalModelID),
             catalogService: catalogService(transport: transport),
-            transport: transport,
-            requestBuilder: ChatCompletionRequestBuilder(endpoint: Self.chatEndpoint)
+            transport: transport
         ).run()
     }
 
     private func makeGenerator(transport: CancellationAwareTransport) -> CloudSQLGenerator {
         CloudSQLGenerator(
             apiKey: "test-key",
-            model: Self.modelID,
-            expectedCanonicalModelID: nil,
+            profile: .openRouterTest,
             transport: transport,
-            catalogService: catalogService(transport: transport),
-            requestBuilder: ChatCompletionRequestBuilder(endpoint: Self.chatEndpoint)
+            capabilityResolver: CloudCapabilityResolver(
+                profile: .openRouterTest,
+                catalogService: catalogService(transport: transport)
+            )
         )
     }
 
@@ -1914,8 +1912,8 @@ struct CloudSQLGeneratorTests {
         ttl: TimeInterval = 60
     ) -> OpenRouterModelCatalogService {
         OpenRouterModelCatalogService(
+            profile: .openRouterTest,
             transport: transport,
-            baseURL: Self.apiBase,
             cacheURL: cacheURL ?? temporaryCacheURL(),
             ttl: ttl
         )
