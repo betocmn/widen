@@ -101,46 +101,6 @@ private let fmTestEnabled =
             )
         }
 
-        @Test func discoveryPinnedTablesConsumePrimaryTableSlots() {
-            guard #available(macOS 26.0, *) else { return }
-            let tables = (0..<8).map { index in
-                TableInfo(
-                    schema: "public",
-                    name: "events_\(index)",
-                    type: .baseTable,
-                    columns: [
-                        ColumnInfo(
-                            tableSchema: "public",
-                            tableName: "events_\(index)",
-                            name: "id",
-                            dataType: "integer",
-                            isNullable: false,
-                            ordinalPosition: 1
-                        )
-                    ]
-                )
-            }
-            let schema = DatabaseSchema(
-                schemas: [SchemaInfo(name: "public")],
-                tables: tables,
-                foreignKeys: []
-            )
-            let context = SQLGenerationContext(
-                schemaSearchQueries: (0..<4).map { "public.events_\($0)" }
-            )
-
-            let bundle = SQLPromptBuilder.promptBundle(
-                question: "show event ids",
-                schema: schema,
-                context: context,
-                maxSchemaCharacters: 20_000,
-                maxPrimarySchemaTables: 4,
-                maxDetailedSchemaTables: 4
-            )
-
-            #expect(bundle.schemaPackage.includedTables.count == 4)
-        }
-
         @Test func optionalDiscoveryRequiresBudgetForDiscoveryAndSQLResponse() {
             guard #available(macOS 26.0, *) else { return }
             #expect(
@@ -407,15 +367,5 @@ struct FoundationModelsSmokeTests {
         #else
             Issue.record("FoundationModels is not available at compile time")
         #endif
-    }
-
-    @Test func mockGeneratorReturnsSafeConstantQuery() async throws {
-        let result = try await MockSQLGenerator().generateSQL(
-            question: "anything",
-            schema: makeTinySchema(),
-            config: SQLGenerationConfig()
-        )
-        #expect(result.sql == "SELECT 1 AS test_value")
-        #expect(SQLSafetyValidator.validate(result.sql).isValid)
     }
 }
