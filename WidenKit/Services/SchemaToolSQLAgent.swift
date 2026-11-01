@@ -435,11 +435,23 @@ public final class SchemaToolSQLAgent: SQLGenerator, Sendable {
                 } catch is CancellationError {
                     throw CancellationError()
                 } catch let failure as CloudRequestFailure {
-                    if failure.category == .unsupportedFeature {
+                    // Only catalog capabilities can be wrong about tools; a
+                    // static profile's rejection is an ordinary request failure.
+                    if failure.category == .unsupportedFeature,
+                        profile.capabilityResolution == .openRouterCatalog
+                    {
                         await capabilityResolver.invalidate(apiKey: apiKey)
                         throw await agentFailure(
                             .unsupportedTools,
                             "The selected OpenRouter model rejected tool parameters.",
+                            session: session,
+                            cloudFailure: failure
+                        )
+                    }
+                    if failure.category == .unsupportedFeature {
+                        throw await agentFailure(
+                            .cloudRequestFailure,
+                            "\(profile.displayName) rejected a request parameter.",
                             session: session,
                             cloudFailure: failure
                         )

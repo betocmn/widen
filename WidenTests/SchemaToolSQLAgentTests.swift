@@ -4331,6 +4331,63 @@ struct SchemaToolSQLAgentTests {
     }
 
     @Test(arguments: Self.agentProfiles)
+    func unsupportedParameterIsUnsupportedToolsOnlyForCatalogCapabilities(
+        profile: CloudModelProfile
+    ) async throws {
+        let schema = Self.makeSchema()
+        let isCatalogProfile = profile.capabilityResolution == .openRouterCatalog
+        let chatTransport = ScriptedHTTPTransport { request, _ in
+            let error: [String: Any] = isCatalogProfile
+                ? [
+                    "code": 400,
+                    "message": "Unsupported parameter: parallel_tool_calls",
+                    "metadata": ["error_type": "unsupported_parameter"],
+                ]
+                : [
+                    "message": "Unsupported parameter: parallel_tool_calls",
+                    "type": "invalid_request_error",
+                    "code": "unsupported_parameter",
+                ]
+            return (
+                Self.jsonData(["error": error]),
+                HTTPURLResponse(
+                    url: request.url!,
+                    statusCode: 400,
+                    httpVersion: "HTTP/1.1",
+                    headerFields: ["Content-Type": "application/json"]
+                )!
+            )
+        }
+        let agent = makeAgent(profile: profile, schema: schema, chatTransport: chatTransport)
+
+        do {
+            _ = try await agent.generateSQL(
+                question: "List users",
+                schema: schema,
+                context: SQLGenerationContext(),
+                config: SQLGenerationConfig()
+            )
+            Issue.record("Expected unsupported parameter failure")
+        } catch let failure as SchemaToolAgentFailure {
+            #expect(failure.cloudFailure?.category == .unsupportedFeature)
+            #expect(failure.pipelineCategory == .modelGeneration)
+            #expect(chatTransport.requests.count == 1)
+            let diagnostics = failure.backendMetadata?.agentDiagnostics
+            if isCatalogProfile {
+                #expect(failure.category == .unsupportedTools)
+                #expect(failure.message == "The selected OpenRouter model rejected tool parameters.")
+                #expect(diagnostics?.appSideRejectionReason == .unsupportedAction)
+            } else {
+                #expect(failure.category == .cloudRequestFailure)
+                #expect(failure.message == "Particle-1 rejected a request parameter.")
+                #expect(failure.cloudFailure?.diagnostic.providerCode == "unsupported_parameter")
+                #expect(diagnostics?.appSideRejectionReason == nil)
+                #expect(!failure.message.contains("OpenRouter"))
+            }
+        }
+    }
+
+    @Test(arguments: Self.agentProfiles)
     func retryableFailureAtHTTPBudgetIsPreserved(profile: CloudModelProfile) async throws {
         let schema = Self.makeSchema()
         let chatTransport = ScriptedHTTPTransport { request, _ in
