@@ -39,7 +39,7 @@ enum SchemaRetrievalEvalReporter {
         var lines: [String] = [
             "# Schema Retrieval Eval",
             "",
-            "**Evaluation scope:** This run evaluates deterministic schema retrieval only. It does not call Foundation Models, OpenRouter, SQL generation, repair, validation, or PostgreSQL.",
+            "**Evaluation scope:** This run evaluates deterministic schema retrieval only. It does not call an LLM provider, SQL generation, repair, validation, or PostgreSQL.",
             "",
             "## Run",
             "",

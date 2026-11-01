@@ -35,7 +35,7 @@ enum DatabaseInspectionEvalReporter {
         var lines: [String] = [
             "# Database Inspection Tool Eval",
             "",
-            "**Evaluation scope:** Deterministic database-inspection tools only. No LLM, SQL generation, validation, repair, schema retrieval scoring, or OpenRouter calls are used.",
+            "**Evaluation scope:** Deterministic database-inspection tools only. No LLM provider, SQL generation, validation, repair, or schema retrieval scoring calls are used.",
             "",
             "## Run",
             "",

@@ -515,6 +515,32 @@ struct TextToSQLEvalRunPlanningTests {
         #expect(!evalText.contains(#"query plan: \(queryPlan)"#))
     }
 
+    @Test func deterministicEvalScopeCopyIsProviderNeutral() throws {
+        let repoRoot = URL(fileURLWithPath: #filePath)
+            .deletingLastPathComponent()
+            .deletingLastPathComponent()
+
+        for path in [
+            "WidenEval/DatabaseInspectionEvalReporter.swift",
+            "WidenEval/SchemaRetrievalEvalReporter.swift",
+            "WidenEval/SchemaToolContractEvalRunner.swift",
+        ] {
+            let text = try String(
+                contentsOf: repoRoot.appendingPathComponent(path),
+                encoding: .utf8
+            )
+            let scopeLines = text.split(separator: "\n").filter {
+                $0.contains("**Evaluation scope:**")
+            }
+            #expect(scopeLines.count == 1, "\(path) should have one evaluation scope line")
+            for line in scopeLines {
+                #expect(line.contains("LLM provider"), "\(path): \(line)")
+                #expect(!line.contains("OpenRouter"), "\(path): \(line)")
+                #expect(!line.contains("Foundation Models"), "\(path): \(line)")
+            }
+        }
+    }
+
     @Test func releaseTriageClassifiesSchemaAgentTimeoutSeparatelyFromToolBudget() throws {
         let testFile = URL(fileURLWithPath: #filePath)
         let repoRoot = testFile
