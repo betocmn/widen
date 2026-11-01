@@ -288,8 +288,7 @@ struct ChatToolParser: Sendable {
         response: HTTPURLResponse,
         requestedModelID: String,
         requestCount: Int,
-        retryCount: Int,
-        expectedCanonicalModelID: String? = nil
+        retryCount: Int
     ) throws -> ParsedTurn {
         let reportedUsage = CloudSQLResponseParser.reportedUsage(from: data, profile: profile)
         if !(200..<300).contains(response.statusCode) {
@@ -446,10 +445,10 @@ struct ChatToolParser: Sendable {
             ).withReportedUsage(reportedUsage)
         }
         do {
-            try OpenRouterCanonicalModelValidator.validate(
+            try CloudModelIdentityValidator.validate(
+                profile: profile,
                 returnedModelID: completion.model,
                 routerMetadata: completion.openrouterMetadata,
-                expectedCanonicalModelID: expectedCanonicalModelID,
                 requestedModelID: requestedModelID,
                 httpStatus: response.statusCode,
                 completionID: completion.id,

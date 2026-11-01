@@ -1098,8 +1098,7 @@ public final class SchemaToolSQLAgent: SQLGenerator, Sendable {
                         response: response,
                         requestedModelID: model,
                         requestCount: attempt,
-                        retryCount: attempt - 1,
-                        expectedCanonicalModelID: expectedCanonicalModelID
+                        retryCount: attempt - 1
                     )
                     aggregate.record(parsed.metadata)
                     return parsed

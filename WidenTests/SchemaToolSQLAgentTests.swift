@@ -3488,8 +3488,7 @@ struct SchemaToolSQLAgentTests {
                 response: response,
                 requestedModelID: profile.requestedModelID,
                 requestCount: 1,
-                retryCount: 0,
-                expectedCanonicalModelID: profile.expectedReturnedModelID
+                retryCount: 0
             )
             Issue.record("Expected provider failure")
         } catch let failure as CloudRequestFailure {
@@ -3501,7 +3500,6 @@ struct SchemaToolSQLAgentTests {
     @Test(arguments: Self.pinnedProfiles)
     func toolChatFailedCompletionTakesPrecedenceOverCanonicalValidation(profile: CloudModelProfile) throws {
         let parser = ChatToolParser(profile: profile)
-        let expectedCanonicalModelID = profile.expectedReturnedModelID
         let response = HTTPURLResponse(
             url: profile.chatCompletionsURL,
             statusCode: 200,
@@ -3573,8 +3571,7 @@ struct SchemaToolSQLAgentTests {
                     response: response,
                     requestedModelID: profile.requestedModelID,
                     requestCount: 1,
-                    retryCount: 0,
-                    expectedCanonicalModelID: expectedCanonicalModelID
+                    retryCount: 0
                 )
                 Issue.record("Expected \(expectedCategory) failure")
             } catch let failure as CloudRequestFailure {
@@ -3585,8 +3582,84 @@ struct SchemaToolSQLAgentTests {
         }
     }
 
+    @Test func toolChatParserRequiresExactlyTheParticleOneModel() throws {
+        let parser = ChatToolParser(profile: .particleTest)
+        let response = HTTPURLResponse(
+            url: CloudModelProfile.particleTest.chatCompletionsURL,
+            statusCode: 200,
+            httpVersion: "HTTP/1.1",
+            headerFields: nil
+        )!
+        let call = Self.toolCall(id: "call-1", name: "search_schema", arguments: ["query": "users"])
+        var missingModel = try #require(
+            try JSONSerialization.jsonObject(with: Self.assistantToolCalls([call])) as? [String: Any]
+        )
+        missingModel["model"] = nil
+        let rejected: [(String?, Data)] = [
+            (nil, Self.jsonData(missingModel)),
+            ("particle-1", Self.assistantToolCalls([call], model: "particle-1")),
+            ("particle-ai/particle-2", Self.assistantToolCalls([call], model: "particle-ai/particle-2")),
+        ]
+
+        for (model, data) in rejected {
+            do {
+                _ = try parser.parse(
+                    data: data,
+                    response: response,
+                    requestedModelID: "particle-1",
+                    requestCount: 1,
+                    retryCount: 0
+                )
+                Issue.record("Expected \(model ?? "a missing model") to be rejected")
+            } catch let failure as CloudRequestFailure {
+                #expect(failure.category == .modelVersionMismatch)
+                #expect(failure.diagnostic.returnedModelID == model)
+            }
+        }
+
+        let parsed = try parser.parse(
+            data: Self.assistantToolCalls([call]),
+            response: response,
+            requestedModelID: "particle-1",
+            requestCount: 1,
+            retryCount: 0
+        )
+        #expect(parsed.metadata.returnedModelID == ParticleTestSupport.returnedModelID)
+    }
+
+    @Test func particleAgentFailsClosedWhenAnotherModelAnswers() async throws {
+        let schema = Self.makeSchema()
+        let chatTransport = ScriptedTransport { _, _ in
+            Self.assistantToolCalls(
+                [Self.toolCall(id: "search-1", name: "search_schema", arguments: ["query": "users"])],
+                model: "particle-ai/particle-2"
+            )
+        }
+        let agent = makeAgent(schema: schema, chatTransport: chatTransport)
+
+        do {
+            _ = try await agent.generateSQL(
+                question: "List users",
+                schema: schema,
+                context: SQLGenerationContext(),
+                config: SQLGenerationConfig()
+            )
+            Issue.record("Expected model version mismatch")
+        } catch let failure as SchemaToolAgentFailure {
+            #expect(failure.category == .cloudRequestFailure)
+            #expect(failure.cloudFailure?.category == .modelVersionMismatch)
+            #expect(failure.cloudFailure?.diagnostic.returnedModelID == "particle-ai/particle-2")
+            #expect(failure.pipelineCategory == .backendUnavailable)
+            // The rejected turn's tool call never ran.
+            #expect(failure.schemaToolCalls.isEmpty)
+        }
+        #expect(chatTransport.requests.count == 1)
+    }
+
     @Test func toolChatParserRejectsUnexpectedCanonicalModelWhenEnforced() throws {
-        let parser = ChatToolParser(profile: .openRouterTest)
+        let parser = ChatToolParser(
+            profile: .openRouterTest.pinningReturnedModel("openai/gpt-5.5-20260423")
+        )
         let returnedModelID = "openai/gpt-5.5-unevaluated"
         let data = Self.assistantToolCalls(
             [
@@ -3611,8 +3684,7 @@ struct SchemaToolSQLAgentTests {
                 response: response,
                 requestedModelID: Self.modelID,
                 requestCount: 1,
-                retryCount: 0,
-                expectedCanonicalModelID: "openai/gpt-5.5-20260423"
+                retryCount: 0
             )
             Issue.record("Expected canonical model mismatch")
         } catch let failure as CloudRequestFailure {
@@ -3622,8 +3694,8 @@ struct SchemaToolSQLAgentTests {
     }
 
     @Test func toolChatParserAcceptsMatchingCanonicalModelWhenEnforced() throws {
-        let parser = ChatToolParser(profile: .openRouterTest)
         let canonicalModelID = "openai/gpt-5.5-20260423"
+        let parser = ChatToolParser(profile: .openRouterTest.pinningReturnedModel(canonicalModelID))
         let data = Self.assistantToolCalls(
             [
                 Self.toolCall(
@@ -3646,15 +3718,14 @@ struct SchemaToolSQLAgentTests {
             response: response,
             requestedModelID: Self.modelID,
             requestCount: 1,
-            retryCount: 0,
-            expectedCanonicalModelID: canonicalModelID
+            retryCount: 0
         )
         #expect(parsed.metadata.returnedModelID == canonicalModelID)
     }
 
     @Test func toolChatParserAcceptsAliasWithMatchingSelectedEndpointCanonicalModel() throws {
-        let parser = ChatToolParser(profile: .openRouterTest)
         let canonicalModelID = "openai/gpt-5.5-20260423"
+        let parser = ChatToolParser(profile: .openRouterTest.pinningReturnedModel(canonicalModelID))
         let data = Self.assistantToolCalls(
             [
                 Self.toolCall(
@@ -3688,16 +3759,15 @@ struct SchemaToolSQLAgentTests {
             response: response,
             requestedModelID: Self.modelID,
             requestCount: 1,
-            retryCount: 0,
-            expectedCanonicalModelID: canonicalModelID
+            retryCount: 0
         )
 
         #expect(parsed.metadata.returnedModelID == Self.modelID)
     }
 
     @Test func toolChatParserRejectsCanonicalModelWhenRouterMetadataConflicts() throws {
-        let parser = ChatToolParser(profile: .openRouterTest)
         let canonicalModelID = "openai/gpt-5.5-20260423"
+        let parser = ChatToolParser(profile: .openRouterTest.pinningReturnedModel(canonicalModelID))
         let data = Self.assistantToolCalls(
             [
                 Self.toolCall(
@@ -3732,8 +3802,7 @@ struct SchemaToolSQLAgentTests {
                 response: response,
                 requestedModelID: Self.modelID,
                 requestCount: 1,
-                retryCount: 0,
-                expectedCanonicalModelID: canonicalModelID
+                retryCount: 0
             )
             Issue.record("Expected contradictory canonical evidence to fail")
         } catch let failure as CloudRequestFailure {

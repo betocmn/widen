@@ -300,8 +300,7 @@ struct CloudSQLResponseParser: Sendable {
         requestedModelID: String,
         mode: StructuredOutputMode,
         requestCount: Int,
-        retryCount: Int,
-        expectedCanonicalModelID: String? = nil
+        retryCount: Int
     ) throws -> ParsedResult {
         let reportedUsage = Self.reportedUsage(from: data, profile: profile)
         if !(200..<300).contains(response.statusCode) {
@@ -435,10 +434,10 @@ struct CloudSQLResponseParser: Sendable {
             ).withReportedUsage(reportedUsage)
         }
         do {
-            try OpenRouterCanonicalModelValidator.validate(
+            try CloudModelIdentityValidator.validate(
+                profile: profile,
                 returnedModelID: completion.model,
                 routerMetadata: completion.openrouterMetadata,
-                expectedCanonicalModelID: expectedCanonicalModelID,
                 requestedModelID: requestedModelID,
                 httpStatus: response.statusCode,
                 completionID: completion.id,
@@ -1169,8 +1168,7 @@ public final class CloudSQLGenerator: SQLGenerator, Sendable {
                         requestedModelID: requestedModelID,
                         mode: built.mode,
                         requestCount: attempt,
-                        retryCount: attempt - 1,
-                        expectedCanonicalModelID: expectedCanonicalModelID
+                        retryCount: attempt - 1
                     )
                     parsed.metadata = failedUsage.merging(into: parsed.metadata)
                     parsed.metadata.responseFormatType = built.responseFormatType

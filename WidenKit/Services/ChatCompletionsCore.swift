@@ -456,6 +456,57 @@ extension CloudRequestFailure.Category {
     }
 }
 
+/// Confirms a completion came from the model its profile pins. Both parsers
+/// call it after the error, finish-reason and refusal checks, so a failed
+/// completion keeps its own category, and before any content is used.
+enum CloudModelIdentityValidator {
+    static func validate(
+        profile: CloudModelProfile,
+        returnedModelID: String?,
+        routerMetadata: OpenRouterRouterMetadata?,
+        requestedModelID: String,
+        httpStatus: Int?,
+        completionID: String?,
+        requestID: String?,
+        providerName: String?,
+        attemptCount: Int
+    ) throws {
+        switch profile.identityPolicy {
+        case .exactReturnedModelID:
+            // Fails closed: a missing model, or a profile with nothing
+            // pinned, never matches.
+            guard let returnedModelID, returnedModelID == profile.expectedReturnedModelID else {
+                let provider = profile.provider.displayName
+                throw CloudRequestFailure(
+                    category: .modelVersionMismatch,
+                    message: returnedModelID == nil
+                        ? "\(provider) did not report which model served this request, so Widen cannot confirm it was \(profile.displayName). Try again, and update Widen if this persists."
+                        : "\(provider) answered with a model other than \(profile.displayName). Update Widen before using this cloud model.",
+                    httpStatus: httpStatus,
+                    completionID: completionID,
+                    requestID: requestID,
+                    requestedModelID: requestedModelID,
+                    returnedModelID: returnedModelID,
+                    providerName: providerName,
+                    attemptCount: attemptCount
+                )
+            }
+        case .openRouterCanonical:
+            try OpenRouterCanonicalModelValidator.validate(
+                returnedModelID: returnedModelID,
+                routerMetadata: routerMetadata,
+                expectedCanonicalModelID: profile.expectedReturnedModelID,
+                requestedModelID: requestedModelID,
+                httpStatus: httpStatus,
+                completionID: completionID,
+                requestID: requestID,
+                providerName: providerName,
+                attemptCount: attemptCount
+            )
+        }
+    }
+}
+
 struct ChatCompletionUsageAccumulator {
     var promptTokens: Int?
     var cachedPromptTokens: Int?

@@ -735,7 +735,9 @@ struct CloudSQLGeneratorTests {
     }
 
     @Test func parserRejectsUnexpectedCanonicalModelWhenEnforced() throws {
-        let parser = CloudSQLResponseParser(profile: .openRouterTest)
+        let parser = CloudSQLResponseParser(
+            profile: .openRouterTest.pinningReturnedModel("openai/gpt-5.5-20260423")
+        )
         let returnedModelID = "openai/gpt-5.5-unevaluated"
 
         do {
@@ -745,8 +747,7 @@ struct CloudSQLGeneratorTests {
                 requestedModelID: Self.modelID,
                 mode: .strictJSONSchema,
                 requestCount: 1,
-                retryCount: 0,
-                expectedCanonicalModelID: "openai/gpt-5.5-20260423"
+                retryCount: 0
             )
             Issue.record("expected canonical model mismatch")
         } catch let failure as CloudRequestFailure {
@@ -758,8 +759,10 @@ struct CloudSQLGeneratorTests {
     }
 
     @Test func parserAcceptsAliasWhenRouterMetadataPinsExpectedCanonicalModel() throws {
-        let parser = CloudSQLResponseParser(profile: .openRouterTest)
         let expectedCanonicalModelID = "openai/gpt-5.5-20260423"
+        let parser = CloudSQLResponseParser(
+            profile: .openRouterTest.pinningReturnedModel(expectedCanonicalModelID)
+        )
 
         let parsed = try parser.parse(
             data: chatResponse(
@@ -773,16 +776,17 @@ struct CloudSQLGeneratorTests {
             requestedModelID: Self.modelID,
             mode: .strictJSONSchema,
             requestCount: 1,
-            retryCount: 0,
-            expectedCanonicalModelID: expectedCanonicalModelID
+            retryCount: 0
         )
 
         #expect(parsed.metadata.returnedModelID == Self.modelID)
     }
 
     @Test func parserRejectsAliasWithoutUnambiguousMatchingRouterMetadata() throws {
-        let parser = CloudSQLResponseParser(profile: .openRouterTest)
         let expectedCanonicalModelID = "openai/gpt-5.5-20260423"
+        let parser = CloudSQLResponseParser(
+            profile: .openRouterTest.pinningReturnedModel(expectedCanonicalModelID)
+        )
         let responses = [
             chatResponse(content: goodContent),
             chatResponse(
@@ -824,8 +828,7 @@ struct CloudSQLGeneratorTests {
                     requestedModelID: Self.modelID,
                     mode: .strictJSONSchema,
                     requestCount: 1,
-                    retryCount: 0,
-                    expectedCanonicalModelID: expectedCanonicalModelID
+                    retryCount: 0
                 )
                 Issue.record("expected incomplete or conflicting canonical evidence to fail")
             } catch let failure as CloudRequestFailure {
@@ -835,8 +838,10 @@ struct CloudSQLGeneratorTests {
     }
 
     @Test func parserRejectsCanonicalModelWhenRouterMetadataConflicts() throws {
-        let parser = CloudSQLResponseParser(profile: .openRouterTest)
         let expectedCanonicalModelID = "openai/gpt-5.5-20260423"
+        let parser = CloudSQLResponseParser(
+            profile: .openRouterTest.pinningReturnedModel(expectedCanonicalModelID)
+        )
         let responses = [
             chatResponse(
                 content: goodContent,
@@ -872,8 +877,7 @@ struct CloudSQLGeneratorTests {
                     requestedModelID: Self.modelID,
                     mode: .strictJSONSchema,
                     requestCount: 1,
-                    retryCount: 0,
-                    expectedCanonicalModelID: expectedCanonicalModelID
+                    retryCount: 0
                 )
                 Issue.record("expected contradictory canonical evidence to fail")
             } catch let failure as CloudRequestFailure {
@@ -1122,8 +1126,7 @@ struct CloudSQLGeneratorTests {
                 requestedModelID: profile.requestedModelID,
                 mode: .strictJSONSchema,
                 requestCount: 1,
-                retryCount: 0,
-                expectedCanonicalModelID: profile.expectedReturnedModelID
+                retryCount: 0
             )
             Issue.record("expected provider error")
         } catch let failure as CloudRequestFailure {
@@ -1135,7 +1138,6 @@ struct CloudSQLGeneratorTests {
     @Test(arguments: Self.pinnedProfiles)
     func failedCompletionTakesPrecedenceOverCanonicalValidation(profile: CloudModelProfile) throws {
         let parser = CloudSQLResponseParser(profile: profile)
-        let expectedCanonicalModelID = profile.expectedReturnedModelID
 
         try expectFailure(.providerUnavailable) {
             try parser.parse(
@@ -1144,8 +1146,7 @@ struct CloudSQLGeneratorTests {
                 requestedModelID: profile.requestedModelID,
                 mode: .strictJSONSchema,
                 requestCount: 1,
-                retryCount: 0,
-                expectedCanonicalModelID: expectedCanonicalModelID
+                retryCount: 0
             )
         }
         try expectFailure(.maxTokensExceeded) {
@@ -1155,8 +1156,7 @@ struct CloudSQLGeneratorTests {
                 requestedModelID: profile.requestedModelID,
                 mode: .strictJSONSchema,
                 requestCount: 1,
-                retryCount: 0,
-                expectedCanonicalModelID: expectedCanonicalModelID
+                retryCount: 0
             )
         }
         try expectFailure(.contentPolicy) {
@@ -1166,8 +1166,7 @@ struct CloudSQLGeneratorTests {
                 requestedModelID: profile.requestedModelID,
                 mode: .strictJSONSchema,
                 requestCount: 1,
-                retryCount: 0,
-                expectedCanonicalModelID: expectedCanonicalModelID
+                retryCount: 0
             )
         }
         try expectFailure(.refusal) {
@@ -1177,8 +1176,7 @@ struct CloudSQLGeneratorTests {
                 requestedModelID: profile.requestedModelID,
                 mode: .strictJSONSchema,
                 requestCount: 1,
-                retryCount: 0,
-                expectedCanonicalModelID: expectedCanonicalModelID
+                retryCount: 0
             )
         }
         try expectFailure(.noContent) {
@@ -1188,10 +1186,102 @@ struct CloudSQLGeneratorTests {
                 requestedModelID: profile.requestedModelID,
                 mode: .strictJSONSchema,
                 requestCount: 1,
-                retryCount: 0,
-                expectedCanonicalModelID: expectedCanonicalModelID
+                retryCount: 0
             )
         }
+    }
+
+    @Test(arguments: Self.pinnedProfiles)
+    func identityIsCheckedBeforeTheContentIsParsed(profile: CloudModelProfile) throws {
+        let parser = CloudSQLResponseParser(profile: profile)
+
+        for mode in [StructuredOutputMode.promptOnlyJSON, .strictJSONSchema] {
+            try expectFailure(.modelVersionMismatch) {
+                try parser.parse(
+                    data: chatResponse(content: "not json", model: "unexpected/model"),
+                    response: response(url: profile.chatCompletionsURL, status: 200),
+                    requestedModelID: profile.requestedModelID,
+                    mode: mode,
+                    requestCount: 1,
+                    retryCount: 0
+                )
+            }
+        }
+    }
+
+    @Test func particleRequiresExactlyTheParticleOneModel() throws {
+        let parser = CloudSQLResponseParser(profile: .particleTest)
+        // The requested alias, a sibling model, another provider's model, and
+        // the expected model vouched for only by OpenRouter router metadata.
+        let rejected: [(model: String?, routerMetadata: [String: Any]?)] = [
+            ("particle-1", nil),
+            ("particle-ai/particle-2", nil),
+            ("openai/gpt-5.5", nil),
+            (
+                "particle-1",
+                routerMetadata(
+                    requestedModelID: "particle-1",
+                    selectedModelIDs: [ParticleTestSupport.returnedModelID]
+                )
+            ),
+        ]
+
+        for (model, routerMetadata) in rejected {
+            do {
+                _ = try parser.parse(
+                    data: chatResponse(content: goodContent, model: model, openrouterMetadata: routerMetadata),
+                    response: response(url: Self.particleChatEndpoint, status: 200),
+                    requestedModelID: Self.particleModelID,
+                    mode: .promptOnlyJSON,
+                    requestCount: 1,
+                    retryCount: 0
+                )
+                Issue.record("expected \(model ?? "nil") to be rejected")
+            } catch let failure as CloudRequestFailure {
+                #expect(failure.category == .modelVersionMismatch)
+                #expect(failure.pipelineCategory == .backendUnavailable)
+                #expect(failure.diagnostic.returnedModelID == model)
+                #expect(failure.diagnostic.requestedModelID == Self.particleModelID)
+                #expect(failure.message.contains("answered with a model other than Particle-1"))
+            }
+        }
+
+        let accepted = try parser.parse(
+            data: particleChatResponse(content: goodContent),
+            response: response(url: Self.particleChatEndpoint, status: 200),
+            requestedModelID: Self.particleModelID,
+            mode: .promptOnlyJSON,
+            requestCount: 1,
+            retryCount: 0
+        )
+        #expect(accepted.metadata.returnedModelID == ParticleTestSupport.returnedModelID)
+    }
+
+    @Test func particleMissingReturnedModelFailsClosedAsVersionMismatch() async throws {
+        let (generator, transport) = makeGenerator(
+            profile: .particleTest,
+            chatResults: [
+                .success((chatResponse(content: goodContent, model: nil), response(url: Self.particleChatEndpoint, status: 200))),
+                .success((particleChatResponse(content: goodContent), response(url: Self.particleChatEndpoint, status: 200))),
+            ]
+        )
+
+        do {
+            _ = try await generator.generateSQL(
+                question: "show users",
+                schema: makeSchema(),
+                config: SQLGenerationConfig()
+            )
+            Issue.record("expected model version mismatch")
+        } catch let failure as CloudRequestFailure {
+            #expect(failure.category == .modelVersionMismatch)
+            #expect(failure.diagnostic.returnedModelID == nil)
+            #expect(failure.diagnostic.attemptCount == 1)
+            #expect(failure.message.contains("did not report"))
+            #expect(failure.message.contains("Particle-1"))
+        }
+        // An identity failure is never resent.
+        #expect(transport.requests.count == 1)
     }
 
     @Test func everyTypedFailureCategoryIsReachable() {
