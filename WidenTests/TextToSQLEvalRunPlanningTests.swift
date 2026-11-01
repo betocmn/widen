@@ -649,9 +649,9 @@ struct TextToSQLEvalRunPlanningTests {
             encoding: .utf8
         )
 
+        // The CLI default backend is cloud, so no recipe passes --backend.
         for removed in [
-            "test-fm", "eval-local", "eval-all", "eval-db-local",
-            "--backend local", "--backend both", "BACKEND ?=", #"--backend "$(BACKEND)""#,
+            "test-fm", "eval-local", "eval-all", "eval-db-local", "--backend", "BACKEND ?=",
         ] {
             #expect(!text.contains(removed), "Makefile still mentions \(removed)")
         }
@@ -662,15 +662,148 @@ struct TextToSQLEvalRunPlanningTests {
             assignments: ["CASE=commerce.fixture"],
             commandContaining: "--case commerce.fixture"
         )
-        #expect(caseCommand.contains(#"--backend cloud --model "particle-1""#))
+        #expect(caseCommand.contains(#"WidenEval --model "particle-1" --suite"#))
 
+        // A leftover BACKEND=cloud is still accepted and still adds no flag.
         let databaseCaseCommand = try Self.makeDryRunCommand(
             repoRoot: repoRoot,
             target: "eval-db-case",
             assignments: ["CASE=commerce.fixture", "BACKEND=cloud"],
             commandContaining: "--case commerce.fixture"
         )
-        #expect(databaseCaseCommand.contains(#"--backend cloud --model "particle-1" --semantic-db"#))
+        #expect(databaseCaseCommand.contains(#"WidenEval --model "particle-1" --semantic-db"#))
+        #expect(!databaseCaseCommand.contains("--backend"))
+    }
+
+    @Test func makefileRunsParticle1ByDefaultOnEveryModelTarget() throws {
+        let repoRoot = URL(fileURLWithPath: #filePath)
+            .deletingLastPathComponent()
+            .deletingLastPathComponent()
+
+        for (target, assignments) in Self.modelEvalTargets {
+            let (status, output) = try Self.makeDryRun(
+                repoRoot: repoRoot,
+                target: target,
+                assignments: assignments
+            )
+            #expect(status == 0, "make -n \(target): \(output)")
+            let command = try #require(
+                output.split(separator: "\n").first { $0.contains(Self.evalCommandMarker) },
+                "make -n \(target) omitted the WidenEval command"
+            )
+            #expect(command.contains(#"--model "particle-1""#), "make -n \(target): \(command)")
+            #expect(!output.contains("--backend"), "make -n \(target): \(output)")
+        }
+
+        // OpenRouter comparisons stay available on the non-gate targets.
+        for target in ["eval-cloud", "eval-db-cloud-agent", "eval-smoke"] {
+            let command = try Self.makeDryRunCommand(
+                repoRoot: repoRoot,
+                target: target,
+                assignments: ["MODEL=openai/gpt-5.5"],
+                commandContaining: Self.evalCommandMarker
+            )
+            #expect(command.contains(#"--model "openai/gpt-5.5""#), "make -n \(target): \(command)")
+        }
+    }
+
+    @Test func makefileSmokeTargetRunsTheProviderSmokeSuiteThroughTheAgent() throws {
+        let repoRoot = URL(fileURLWithPath: #filePath)
+            .deletingLastPathComponent()
+            .deletingLastPathComponent()
+        let text = try String(
+            contentsOf: repoRoot.appendingPathComponent("Makefile"),
+            encoding: .utf8
+        )
+
+        let phony = try #require(text.split(separator: "\n").first { $0.hasPrefix(".PHONY:") })
+        #expect(phony.split(separator: " ").contains("eval-smoke"))
+        #expect(!text.contains("eval-openrouter-smoke"))
+        #expect(Self.makefileRecipe(named: "eval-smoke", in: text) != nil)
+
+        let command = try Self.makeDryRunCommand(
+            repoRoot: repoRoot,
+            target: "eval-smoke",
+            commandContaining: Self.evalCommandMarker
+        )
+        #expect(
+            command.contains(
+                #"WidenEval --model "particle-1" --cloud-agent "tools" --suite Evals/suites/provider-smoke-v1.json"#
+            )
+        )
+        #expect(!command.contains("text-to-sql-v1.json"))
+
+        let legacy = try Self.makeDryRunCommand(
+            repoRoot: repoRoot,
+            target: "eval-smoke",
+            assignments: ["CLOUD_AGENT=legacy", "MODEL=openai/gpt-5.5", "REPEAT=3"],
+            commandContaining: Self.evalCommandMarker
+        )
+        #expect(legacy.contains(#"--model "openai/gpt-5.5" --cloud-agent "legacy""#))
+        #expect(legacy.contains("--repeat 3"))
+
+        let (status, output) = try Self.makeDryRun(repoRoot: repoRoot, target: "eval-openrouter-smoke")
+        #expect(status != 0, "eval-openrouter-smoke should no longer exist: \(output)")
+    }
+
+    @Test func makefilePassesReasoningEffortAndCasesToNonGateTargetsOnly() throws {
+        let repoRoot = URL(fileURLWithPath: #filePath)
+            .deletingLastPathComponent()
+            .deletingLastPathComponent()
+        let text = try String(
+            contentsOf: repoRoot.appendingPathComponent("Makefile"),
+            encoding: .utf8
+        )
+        let overrides = [
+            "REASONING_EFFORT=medium",
+            "CASES=commerce.customer-paid-revenue saas.overallocated-seats",
+        ]
+        let passedCases = "--case commerce.customer-paid-revenue --case saas.overallocated-seats"
+
+        for target in ["eval-cloud", "eval-cloud-agent", "eval-smoke", "eval-db-cloud", "eval-db-cloud-agent"] {
+            let command = try Self.makeDryRunCommand(
+                repoRoot: repoRoot,
+                target: target,
+                assignments: overrides,
+                commandContaining: Self.evalCommandMarker
+            )
+            #expect(command.contains("--reasoning-effort medium"), "make -n \(target): \(command)")
+            #expect(command.contains(passedCases), "make -n \(target): \(command)")
+        }
+        let caseCommand = try Self.makeDryRunCommand(
+            repoRoot: repoRoot,
+            target: "eval-db-case",
+            assignments: ["CASE=commerce.fixture"] + overrides,
+            commandContaining: Self.evalCommandMarker
+        )
+        #expect(caseCommand.contains("--case commerce.fixture \(passedCases)"))
+        #expect(caseCommand.contains("--reasoning-effort medium"))
+
+        let withoutOverrides = try Self.makeDryRunCommand(
+            repoRoot: repoRoot,
+            target: "eval-cloud",
+            commandContaining: Self.evalCommandMarker
+        )
+        #expect(!withoutOverrides.contains("--reasoning-effort"))
+        #expect(!withoutOverrides.contains("--case"))
+
+        // The release gate always runs the full suite at the production
+        // effort, so its recipes never see either variable.
+        for target in Self.releaseGateTargets {
+            let recipe = try #require(Self.makefileRecipe(named: target, in: text), "\(target)")
+            for forbidden in ["--reasoning-effort", "REASONING_EFFORT", "CASES", "EVAL_ARGS"] {
+                #expect(!recipe.contains(forbidden), "\(target) recipe mentions \(forbidden)")
+            }
+            let assignments = Self.modelEvalTargets.first { $0.target == target }?.assignments ?? []
+            let command = try Self.makeDryRunCommand(
+                repoRoot: repoRoot,
+                target: target,
+                assignments: assignments + overrides,
+                commandContaining: Self.evalCommandMarker
+            )
+            #expect(!command.contains("--reasoning-effort"), "make -n \(target): \(command)")
+            #expect(!command.contains("commerce.customer-paid-revenue"), "make -n \(target): \(command)")
+        }
     }
 
     @Test func makefileRejectsRemovedBackendInsteadOfRunningPaidCloudEval() throws {
@@ -691,7 +824,7 @@ struct TextToSQLEvalRunPlanningTests {
                 output.contains("BACKEND=\(backend) is no longer supported"),
                 "make -n \(target) BACKEND=\(backend): \(output)"
             )
-            #expect(!output.contains("--backend cloud"), "make -n \(target) BACKEND=\(backend): \(output)")
+            #expect(!output.contains("--model"), "make -n \(target) BACKEND=\(backend): \(output)")
         }
 
         // An unrelated BACKEND variable must not break non-eval targets.
@@ -1016,6 +1149,33 @@ struct TextToSQLEvalRunPlanningTests {
         return directory
     }
 
+    /// Marks the WidenEval command in `make -n` output, as opposed to the
+    /// eval-build xcodebuild line that names the WidenEval scheme.
+    private static let evalCommandMarker = "Debug/WidenEval "
+
+    /// The gate targets that publish committed docs.
+    private static let releaseGateTargets = ["eval-release", "eval-release-triage", "eval-release-resume"]
+
+    /// Every target that runs a text-to-SQL model, with the variables its
+    /// recipe requires.
+    private static let modelEvalTargets: [(target: String, assignments: [String])] = [
+        ("eval-cloud", []),
+        ("eval-cloud-agent", []),
+        ("eval-smoke", []),
+        ("eval-case", ["CASE=commerce.fixture"]),
+        ("eval-cloud-agent-case", ["CASE=commerce.fixture"]),
+        ("eval-db-cloud", []),
+        ("eval-db-cloud-agent", []),
+        ("eval-db-cloud-agent-case", ["CASE=commerce.fixture"]),
+        ("eval-db-case", ["CASE=commerce.fixture"]),
+        ("eval-release", ["RELEASE_VERSION=fixture"]),
+        ("eval-release-triage", ["RELEASE_VERSION=fixture"]),
+        ("eval-release-preseason", []),
+        ("eval-release-overclarification", []),
+        ("eval-release-sql-shape", []),
+        ("eval-release-resume", ["RELEASE_VERSION=fixture", "RESUME=fixture-run"]),
+    ]
+
     private static func makefileRecipe(named target: String, in text: String) -> String? {
         let lines = text.split(separator: "\n", omittingEmptySubsequences: false)
             .map(String.init)
@@ -1082,7 +1242,10 @@ struct TextToSQLEvalRunPlanningTests {
         environmentModel: String? = nil
     ) throws -> (status: Int32, output: String) {
         var environment = ProcessInfo.processInfo.environment
-        for name in ["ALLOW_MODEL_OVERRIDE", "BACKEND", "CASE", "MAKEFLAGS", "MAKELEVEL", "MFLAGS", "MODEL"] {
+        for name in [
+            "ALLOW_MODEL_OVERRIDE", "BACKEND", "CASE", "CASES", "CLOUD_AGENT", "MAKEFLAGS", "MAKELEVEL",
+            "MFLAGS", "MODEL", "REASONING_EFFORT",
+        ] {
             environment.removeValue(forKey: name)
         }
         if let environmentModel {
