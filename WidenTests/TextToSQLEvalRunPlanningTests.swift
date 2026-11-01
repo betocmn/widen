@@ -404,6 +404,49 @@ struct TextToSQLEvalRunPlanningTests {
         #expect(!sqlShapeRecipe.contains("--schema-agent-plan-consistency"))
     }
 
+    @Test func makefileProbeTargetLoadsTheEvalKeysAndSendsOnlyTheProbeFlag() throws {
+        let repoRoot = URL(fileURLWithPath: #filePath)
+            .deletingLastPathComponent()
+            .deletingLastPathComponent()
+        let text = try String(
+            contentsOf: repoRoot.appendingPathComponent("Makefile"),
+            encoding: .utf8
+        )
+
+        let phony = try #require(text.split(separator: "\n").first { $0.hasPrefix(".PHONY:") })
+        #expect(phony.split(separator: " ").contains("eval-provider-probe"))
+        let recipe = try #require(Self.makefileRecipe(named: "eval-provider-probe", in: text))
+        #expect(recipe.contains("set -a; if [ -f .env.eval.local ]; then . ./.env.eval.local; fi; set +a;"))
+
+        let command = try Self.makeDryRunCommand(
+            repoRoot: repoRoot,
+            target: "eval-provider-probe",
+            commandContaining: "--provider-probe"
+        )
+        #expect(command.trimmingCharacters(in: .whitespaces) == "build/Build/Products/Debug/WidenEval --provider-probe")
+        let withOutput = try Self.makeDryRunCommand(
+            repoRoot: repoRoot,
+            target: "eval-provider-probe",
+            assignments: ["OUTPUT=fixture-results", "CASE=commerce.fixture", "REPEAT=3"],
+            commandContaining: "--provider-probe"
+        )
+        #expect(withOutput.contains(#"--provider-probe --output "fixture-results""#))
+        for unrelated in ["--case", "--repeat", "--model", "--suite", "--backend"] {
+            #expect(!withOutput.contains(unrelated), "probe command must not pass \(unrelated)")
+        }
+
+        // WidenEval reads the probe key through the probe's Particle-only
+        // lookup and refuses to write a report that contains it.
+        let main = try String(
+            contentsOf: repoRoot.appendingPathComponent("WidenEval/WidenEvalMain.swift"),
+            encoding: .utf8
+        )
+        #expect(main.contains(#"case "--provider-probe":"#))
+        #expect(main.contains("ProviderAPIProbe.apiKey(in: ProcessInfo.processInfo.environment)"))
+        #expect(main.contains("let paths = try report.write("))
+        #expect(main.contains(#""provider-probe-" + DateFormatter.evalTimestamp"#))
+    }
+
     @Test func makefileHasNoOnDeviceEvalTargets() throws {
         let repoRoot = URL(fileURLWithPath: #filePath)
             .deletingLastPathComponent()

@@ -14,6 +14,13 @@ enum WidenEvalMain {
 
             await GenerationLog.shared.setEnabled(options.recordPrompts)
 
+            if options.providerProbe {
+                if !(try await runProviderProbe(options: options)) {
+                    exit(1)
+                }
+                return
+            }
+
             if let releaseTriageInputPath = options.releaseTriageInputPath {
                 let triageOutput = try TextToSQLReleaseTriageReporter.writeExisting(
                     runJSONPath: releaseTriageInputPath,
@@ -180,6 +187,52 @@ enum WidenEvalMain {
     }
 }
 
+extension WidenEvalMain {
+    /// Probes Particle-1's chat API with the Particle eval key only, and
+    /// returns whether every critical check passed. Without a key it sends
+    /// nothing and writes nothing.
+    private static func runProviderProbe(options: EvalCLIOptions) async throws -> Bool {
+        guard let apiKey = ProviderAPIProbe.apiKey(in: ProcessInfo.processInfo.environment) else {
+            fputs(ProviderAPIProbe.missingAPIKeyMessage + "\n", stderr)
+            return false
+        }
+        print(
+            "Probing \(CloudModelProfile.particle.displayName) at \(CloudModelProfile.particle.baseURL.host ?? "its provider host") with up to \(ProviderAPIProbe.maximumCompletionCount) small completions."
+        )
+        let report = await ProviderAPIProbe(apiKey: apiKey).run()
+        let paths = try report.write(
+            to: providerProbeDirectory(base: options.outputDirectory),
+            apiKey: apiKey
+        )
+        print("Wrote provider probe results to \(paths.directory.path)")
+        print("Summary: \(paths.markdown.path)")
+        print(report.costLine)
+        for warning in report.warnings {
+            print("Warning: \(warning)")
+        }
+        guard report.passed else {
+            fputs(
+                "Provider probe failed: \(report.criticalFailures.joined(separator: "; "))\n",
+                stderr
+            )
+            return false
+        }
+        return true
+    }
+
+    private static func providerProbeDirectory(base: String) -> URL {
+        let name = "provider-probe-" + DateFormatter.evalTimestamp.string(from: Date())
+        let baseURL = URL(fileURLWithPath: base, isDirectory: true)
+        var candidate = baseURL.appendingPathComponent(name, isDirectory: true)
+        var suffix = 1
+        while FileManager.default.fileExists(atPath: candidate.path) {
+            candidate = baseURL.appendingPathComponent("\(name)-\(suffix)", isDirectory: true)
+            suffix += 1
+        }
+        return candidate
+    }
+}
+
 private extension DecodingError {
     var contextDescription: String {
         switch self {
@@ -261,6 +314,7 @@ struct EvalCLIOptions {
     var maxHTTPAttempts: Int?
     var maxCompletedResults: Int?
     var stopBeforeProviderLimit = false
+    var providerProbe = false
     var explicitOptions: Set<EvalExplicitOption> = []
     var showHelp = false
 
@@ -298,6 +352,7 @@ struct EvalCLIOptions {
           --retriever legacy|index|both
           --schema-tools
           --inspection-tools
+          --provider-probe
           --help
         """
 
@@ -452,6 +507,8 @@ struct EvalCLIOptions {
                 options.schemaTools = true
             case "--inspection-tools":
                 options.inspectionTools = true
+            case "--provider-probe":
+                options.providerProbe = true
             case "--help", "-h":
                 options.showHelp = true
             default:

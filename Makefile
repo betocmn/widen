@@ -57,7 +57,7 @@ endif
 REQUIRE_PINNED_MODEL = @test "$(MODEL)" = "$(PINNED_OPENROUTER_MODEL)" || test "$(ALLOW_MODEL_OVERRIDE)" = "1" || { echo "error: release gate requires MODEL=$(PINNED_OPENROUTER_MODEL) but got MODEL=$(MODEL); set ALLOW_MODEL_OVERRIDE=1 to run an engineering comparison" >&2; exit 1; }
 MODEL_OVERRIDE_ARGS = $(if $(filter 1,$(ALLOW_MODEL_OVERRIDE)),--allow-model-override,)
 
-.PHONY: project build test test-db eval-build eval-cloud eval-cloud-agent eval-case eval-cloud-agent-case eval-retrieval eval-retrieval-case eval-schema-tools eval-inspection-tools eval-db-cloud eval-db-cloud-agent eval-db-cloud-agent-case eval-release eval-release-triage eval-release-preseason eval-release-overclarification eval-release-sql-shape eval-release-resume eval-db-case eval-openrouter-smoke setup run run-conductor release release-mac xcode clean
+.PHONY: project build test test-db eval-build eval-cloud eval-cloud-agent eval-case eval-cloud-agent-case eval-retrieval eval-retrieval-case eval-schema-tools eval-inspection-tools eval-db-cloud eval-db-cloud-agent eval-db-cloud-agent-case eval-release eval-release-triage eval-release-preseason eval-release-overclarification eval-release-sql-shape eval-release-resume eval-db-case eval-openrouter-smoke eval-provider-probe setup run run-conductor release release-mac xcode clean
 
 ## Regenerate Widen.xcodeproj from project.yml
 project:
@@ -108,6 +108,13 @@ eval-cloud-agent: eval-build
 eval-openrouter-smoke: eval-build
 	@set -a; if [ -f .env.eval.local ]; then . ./.env.eval.local; fi; set +a; \
 	$(EVAL) --backend cloud --model "$(MODEL)" --suite Evals/suites/provider-smoke-v1.json $(filter-out --suite Evals/suites/text-to-sql-v1.json,$(EVAL_ARGS))
+
+## Probe Particle-1's chat API with at most eight tiny paid completions (under $0.02).
+## Reads WIDEN_EVAL_PARTICLE_API_KEY only and writes probe.json and probe.md
+## under .eval-results/provider-probe-<timestamp>/.
+eval-provider-probe: eval-build
+	@set -a; if [ -f .env.eval.local ]; then . ./.env.eval.local; fi; set +a; \
+	$(EVAL) --provider-probe $(if $(OUTPUT),--output "$(OUTPUT)",)
 
 ## Run one eval case. Example: make eval-case CASE=preseason.top-wins-defined
 eval-case: eval-build
