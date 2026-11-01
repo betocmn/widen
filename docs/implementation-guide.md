@@ -290,6 +290,10 @@ the input draft — is never persisted.
 `SessionStore` mirrors `ConnectionStore`: a single
 `~/Library/Application Support/Widen/sessions.json` with ISO8601 dates and
 atomic pretty-printed writes, plus an `init(directory:)` override for tests.
+A file that fails to decode is copied to `sessions.unreadable-<ISO 8601
+basic timestamp>.json` beside it before `load()` throws
+`SessionStore.UnreadableFileError`, and the launch banner names the copy: the
+app then starts with no sessions, and its next save rewrites `sessions.json`.
 
 Persistence flow: views report edits through
 `AppState.sessionDidChange(_:)`, which snapshots the controller into the

@@ -423,6 +423,22 @@ struct AppStateSessionTests {
         #expect(state.openSettingsRequest == 0)
     }
 
+    @Test func launchWithUnreadableSessionsNamesTheBackupInTheBanner() async throws {
+        let (state, dir) = makeState()
+        defer { try? FileManager.default.removeItem(at: dir) }
+        try FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
+        try Data("not json".utf8).write(to: state.sessionStore.fileURL)
+
+        await state.onLaunch()
+
+        let backup = try #require(
+            FileManager.default.contentsOfDirectory(atPath: dir.path)
+                .first { $0.hasPrefix("sessions.unreadable-") }
+        )
+        #expect(state.sessions.isEmpty)
+        #expect(state.errorBanner?.contains(backup) == true)
+    }
+
     @Test func launchWithNoDatabasesLeavesWelcomeState() async {
         let (state, dir) = makeState()
         defer { try? FileManager.default.removeItem(at: dir) }

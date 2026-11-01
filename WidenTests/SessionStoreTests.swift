@@ -117,6 +117,65 @@ struct SessionStoreTests {
         }
     }
 
+    @Test func unreadableFileIsCopiedAsideBeforeLoadThrows() throws {
+        let (store, dir) = makeTempStore()
+        defer { try? FileManager.default.removeItem(at: dir) }
+        try FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
+        let original = Data("not json".utf8)
+        try original.write(to: store.fileURL)
+        let start = Date()
+
+        let error = try #require(throws: SessionStore.UnreadableFileError.self) {
+            try store.load()
+        }
+
+        let backup = error.backupURL
+        let name = backup.lastPathComponent
+        #expect(backup.deletingLastPathComponent().standardizedFileURL == dir.standardizedFileURL)
+        #expect(try Data(contentsOf: backup) == original)
+        #expect(try Data(contentsOf: store.fileURL) == original)
+        #expect(error.localizedDescription.contains(name))
+
+        let prefix = "sessions.unreadable-"
+        let suffix = ".json"
+        #expect(name.hasPrefix(prefix))
+        #expect(name.hasSuffix(suffix))
+        let formatter = ISO8601DateFormatter()
+        formatter.formatOptions = [.withYear, .withMonth, .withDay, .withTime, .withTimeZone]
+        let stamp = String(name.dropFirst(prefix.count).dropLast(suffix.count))
+        let stampDate = try #require(formatter.date(from: stamp))
+        #expect(abs(stampDate.timeIntervalSince(start)) < 60)
+    }
+
+    @Test func fileFromANewerFormatIsCopiedAsideBeforeLoadThrows() throws {
+        let (store, dir) = makeTempStore()
+        defer { try? FileManager.default.removeItem(at: dir) }
+        // Valid JSON, but a required field holds a value this build lacks.
+        let original = Data(
+            SavedCloudSessionsFixture.json
+                .replacingOccurrences(of: #""riskLevel": "low""#, with: #""riskLevel": "severe""#)
+                .utf8
+        )
+        try FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
+        try original.write(to: store.fileURL)
+
+        let error = try #require(throws: SessionStore.UnreadableFileError.self) {
+            try store.load()
+        }
+
+        #expect(try Data(contentsOf: error.backupURL) == original)
+    }
+
+    @Test func readableFileLeavesNoBackup() throws {
+        let (store, dir) = makeTempStore()
+        defer { try? FileManager.default.removeItem(at: dir) }
+        try store.save([QuerySession(connectionID: UUID())])
+
+        _ = try store.load()
+
+        #expect(try FileManager.default.contentsOfDirectory(atPath: dir.path) == ["sessions.json"])
+    }
+
     // MARK: - Saved cloud generations
 
     private func writeSessionsFile(_ json: String, for store: SessionStore) throws {

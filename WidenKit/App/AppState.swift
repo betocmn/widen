@@ -491,6 +491,12 @@ public final class AppState {
         }
         do {
             sessions = try sessionStore.load()
+        } catch let error as SessionStore.UnreadableFileError {
+            let folder = (error.backupURL.deletingLastPathComponent().path as NSString)
+                .abbreviatingWithTildeInPath
+            errorBanner =
+                "Could not read the saved sessions. The unreadable file was kept as "
+                + "\(error.backupURL.lastPathComponent) in \(folder)."
         } catch {
             errorBanner = "Could not load the saved sessions: \(error.localizedDescription)"
         }
