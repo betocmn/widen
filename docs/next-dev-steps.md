@@ -136,7 +136,8 @@ over its 18 results, all of these hold:
 
 Pick **high** if it is eligible, otherwise **medium**. If medium wins, land
 `fix: default Particle agent turns to medium reasoning` before Stage 2, so the
-gate runs at the shipped default. Quality differences between efforts are
+gate runs at the shipped default. If neither effort is eligible, Stage 1
+fails: stop all paid work and report. Quality differences between efforts are
 reported, not used; the smoke cannot measure them.
 
 Then commit `docs: record Particle-1 stage 1 evidence`, including the spend
