@@ -32,6 +32,14 @@ public enum SchemaToolAgentForcedTerminalMode: String, Codable, Equatable, Senda
     case allToolsNamedChoice
 }
 
+/// Whether the agent asks a second request to review its SQL before
+/// answering. The review only advises: revised SQL goes through the same
+/// evidence checks, and any critic failure keeps the reviewed SQL.
+public enum SchemaToolAgentCriticMode: String, Codable, Equatable, Sendable {
+    case disabled
+    case enabled
+}
+
 public struct SchemaToolSQLAgentConfiguration: Equatable, Sendable {
     public var maximumSchemaToolCalls: Int
     public var maximumRepairSchemaToolCalls: Int
@@ -66,6 +74,19 @@ public struct SchemaToolSQLAgentConfiguration: Equatable, Sendable {
     /// A run that has searched the schema and has less than this left on its
     /// wall clock forces its final answer. Zero turns the reserve off.
     public var forcedTerminalTimeReserveSeconds: TimeInterval
+    /// The critic reviews SQL from initial and follow-up runs only, never
+    /// from repairs or forced final requests.
+    public var criticMode: SchemaToolAgentCriticMode
+    /// Times the critic may send SQL back for revision in one run.
+    public var maximumCriticRevisions: Int
+    /// HTTP attempts one review may use, including the one resend after
+    /// `invalid_model_output`. They also count against `maximumHTTPAttempts`.
+    public var maximumCriticHTTPAttempts: Int
+    /// A run with less than this left on its wall clock skips the review.
+    public var criticMinimumRemainingSeconds: TimeInterval
+    /// A run with less than this left after a review keeps its SQL instead
+    /// of revising it.
+    public var criticRevisionMinimumRemainingSeconds: TimeInterval
 
     public init(
         maximumSchemaToolCalls: Int = 12,
@@ -87,7 +108,12 @@ public struct SchemaToolSQLAgentConfiguration: Equatable, Sendable {
         planConsistencyMode: SchemaToolAgentPlanConsistencyMode = .diagnosticsOnly,
         forcedTerminalMode: SchemaToolAgentForcedTerminalMode = .terminalToolOnly,
         maximumForcedTerminalRequests: Int = 2,
-        forcedTerminalTimeReserveSeconds: TimeInterval = 45
+        forcedTerminalTimeReserveSeconds: TimeInterval = 45,
+        criticMode: SchemaToolAgentCriticMode = .enabled,
+        maximumCriticRevisions: Int = 2,
+        maximumCriticHTTPAttempts: Int = 2,
+        criticMinimumRemainingSeconds: TimeInterval = 30,
+        criticRevisionMinimumRemainingSeconds: TimeInterval = 60
     ) {
         self.maximumSchemaToolCalls = maximumSchemaToolCalls
         self.maximumRepairSchemaToolCalls = maximumRepairSchemaToolCalls
@@ -109,6 +135,11 @@ public struct SchemaToolSQLAgentConfiguration: Equatable, Sendable {
         self.forcedTerminalMode = forcedTerminalMode
         self.maximumForcedTerminalRequests = maximumForcedTerminalRequests
         self.forcedTerminalTimeReserveSeconds = forcedTerminalTimeReserveSeconds
+        self.criticMode = criticMode
+        self.maximumCriticRevisions = maximumCriticRevisions
+        self.maximumCriticHTTPAttempts = maximumCriticHTTPAttempts
+        self.criticMinimumRemainingSeconds = criticMinimumRemainingSeconds
+        self.criticRevisionMinimumRemainingSeconds = criticRevisionMinimumRemainingSeconds
     }
 
     public static let `default` = SchemaToolSQLAgentConfiguration()
@@ -461,6 +492,9 @@ public final class SchemaToolSQLAgent: SQLGenerator, Sendable {
         diagnostics.clarificationCorrectionMode = configuration.clarificationCorrectionMode.rawValue
         diagnostics.intentCoverageMode = configuration.intentCoverageMode.rawValue
         diagnostics.planConsistencyMode = configuration.planConsistencyMode.rawValue
+        if configuration.criticMode == .enabled {
+            diagnostics.criticMode = configuration.criticMode.rawValue
+        }
         var seenProviderCallIDs = Set<String>()
         var internalCallIDs = Set<String>()
         var seenToolSignatures = Set<String>()
@@ -475,6 +509,12 @@ public final class SchemaToolSQLAgent: SQLGenerator, Sendable {
         var planConsistencyCorrections = 0
         var terminalRequiredAfterSufficientEvidence = false
         var terminalRequiredCorrections = 0
+        var criticRevisions = 0
+        var lastCriticReviewedSQL: SQLTextFingerprint?
+        var criticFallback: CriticFallback?
+        // Value-tool payloads already sent to the model. The critic request
+        // decides whether the connection lets them reach the critic.
+        var criticValuePayloads: [SchemaToolAgentCriticValuePayload] = []
         let deadline = Date().addingTimeInterval(
             configuration.wallClockTimeoutSeconds(for: context.mode)
         )
@@ -758,6 +798,22 @@ public final class SchemaToolSQLAgent: SQLGenerator, Sendable {
 
                     switch terminalResult.action {
                     case .clarify:
+                        // A revision may change the SQL, never the decision
+                        // to answer with SQL.
+                        if let fallback = criticFallback {
+                            try await checkStaleSnapshot(expected: initialFingerprint)
+                            return try await releaseCriticFallback(
+                                fallback,
+                                outcome: "revisionTurnedClarifyReleasedPrevious",
+                                diagnostics: diagnostics,
+                                evidence: evidence,
+                                schema: schema,
+                                context: context,
+                                aggregate: aggregate,
+                                session: session,
+                                inspectionSession: inspectionSession
+                            )
+                        }
                         guard evidence.hasSuccessfulSearch else {
                             diagnostics.appSideRejectionReason = .clarificationRejected
                             diagnostics.terminalValidationFailureReason = "schemaSearchRequired"
@@ -990,6 +1046,19 @@ public final class SchemaToolSQLAgent: SQLGenerator, Sendable {
                                     session: session
                                 )
                             case .mustClarify:
+                                if let fallback = criticFallback {
+                                    return try await releaseCriticFallback(
+                                        fallback,
+                                        outcome: "revisionTurnedClarifyReleasedPrevious",
+                                        diagnostics: diagnostics,
+                                        evidence: evidence,
+                                        schema: schema,
+                                        context: context,
+                                        aggregate: aggregate,
+                                        session: session,
+                                        inspectionSession: inspectionSession
+                                    )
+                                }
                                 let clarificationQuestion = intentCoverage.clarificationQuestion
                                     ?? evidence.fallbackClarificationQuestion(for: question)
                                     ?? "Which concrete database decision remains unresolved?"
@@ -1065,22 +1134,134 @@ public final class SchemaToolSQLAgent: SQLGenerator, Sendable {
                                 diagnostics.recordPlanConsistencyNotEvaluated()
                             }
                         }
+                        if configuration.criticMode == .enabled {
+                            let statementKind = SQLSafetyValidator.validate(terminalResult.sql).kind
+                            // A revision may change the SQL text, never the
+                            // kind of statement it is.
+                            if let fallback = criticFallback, fallback.statementKind != statementKind {
+                                return try await releaseCriticFallback(
+                                    fallback,
+                                    outcome: "revisionChangedKindReleasedPrevious",
+                                    diagnostics: diagnostics,
+                                    evidence: evidence,
+                                    schema: schema,
+                                    context: context,
+                                    aggregate: aggregate,
+                                    session: session,
+                                    inspectionSession: inspectionSession
+                                )
+                            }
+                            let fingerprint = SQLTextFingerprint(terminalResult.sql)
+                            let skipReason: String? =
+                                if context.mode == .repair || context.mode == .reconstructAfterFailedRepair {
+                                    "skippedRepairMode"
+                                } else if diagnostics.forcedTerminalReason != nil {
+                                    "skippedForcedTerminal"
+                                } else if criticRevisions >= configuration.maximumCriticRevisions {
+                                    "revisionLimitReached"
+                                } else if fingerprint == lastCriticReviewedSQL {
+                                    // The agent resubmitted the SQL it was
+                                    // asked to revise: it declined the issues.
+                                    "agentKeptSQL"
+                                } else if deadline.timeIntervalSinceNow
+                                    < configuration.criticMinimumRemainingSeconds
+                                {
+                                    "skippedDeadline"
+                                } else if aggregate.httpAttemptCount >= availableHTTPAttempts {
+                                    "skippedHTTPBudget"
+                                } else if turn >= configuration.maximumModelTurns {
+                                    // No turn would be left to act on a revision.
+                                    "skippedNoTurns"
+                                } else {
+                                    nil
+                                }
+                            if let skipReason {
+                                diagnostics.criticFinalOutcome = skipReason
+                            } else {
+                                lastCriticReviewedSQL = fingerprint
+                                let review = try await reviewSQLWithCritic(
+                                    SchemaToolAgentCriticRequest(
+                                        question: question,
+                                        mode: context.mode,
+                                        recentQuestions: context.recentQuestions,
+                                        currentSQL: context.currentSQL,
+                                        databaseContext: config.databaseContext,
+                                        confirmedSemanticBindings: context.confirmedSemanticBindings,
+                                        defaultRowLimit: config.defaultRowLimit,
+                                        schemaEvidence: evidence.criticSchemaEvidence,
+                                        inspectedValuePayloads: criticValuePayloads,
+                                        inspectionPolicy: databaseInspectionPolicy,
+                                        sql: terminalResult.sql,
+                                        queryPlanJSON: terminalResult.rawQueryPlanJSON
+                                    ),
+                                    capabilities: capabilities,
+                                    promptCacheKey: promptCacheKey,
+                                    aggregate: &aggregate,
+                                    maximumHTTPAttempts: availableHTTPAttempts,
+                                    deadline: deadline,
+                                    usageSink: config.usageSink,
+                                    diagnostics: &diagnostics
+                                )
+                                try await checkStaleSnapshot(expected: initialFingerprint)
+                                if let review {
+                                    switch review.verdict {
+                                    case .accept:
+                                        diagnostics.criticFinalOutcome = criticRevisions > 0
+                                            ? "revisedAccepted"
+                                            : "accepted"
+                                    case .clarify:
+                                        // Never trusted: the SQL stands and
+                                        // the decision stays the agent's.
+                                        diagnostics.criticFinalOutcome = "clarifyNotTrusted"
+                                    case .revise:
+                                        if deadline.timeIntervalSinceNow
+                                            < configuration.criticRevisionMinimumRemainingSeconds
+                                        {
+                                            diagnostics.criticFinalOutcome = "skippedDeadline"
+                                        } else if aggregate.httpAttemptCount >= availableHTTPAttempts {
+                                            diagnostics.criticFinalOutcome = "skippedHTTPBudget"
+                                        } else {
+                                            // The SQL as the run would have
+                                            // answered now, for a revision
+                                            // that goes wrong.
+                                            var accepted = diagnostics
+                                            accepted.recordSQLTerminalAccepted(
+                                                afterOverClarificationCorrection: overClarificationCorrections > 0,
+                                                afterIntentCoverageCorrection: intentCoverageCorrections > 0,
+                                                afterPlanConsistencyCorrection: planConsistencyCorrections > 0
+                                            )
+                                            criticFallback = CriticFallback(
+                                                terminal: terminalResult,
+                                                statementKind: statementKind,
+                                                diagnostics: accepted.snapshot(
+                                                    evidence: evidence,
+                                                    inspectionToolCalls: await inspectionSession?.tracesSnapshot() ?? []
+                                                )
+                                            )
+                                            criticRevisions += 1
+                                            diagnostics.criticRevisionCount = criticRevisions
+                                            messages.append(
+                                                toolErrorResponse(
+                                                    call: terminal,
+                                                    code: "critic_revision",
+                                                    message: SchemaToolAgentCritic.revisionMessage(for: review.issues)
+                                                )
+                                            )
+                                            messages.append(correction(SchemaToolAgentCritic.revisionCorrection))
+                                            continue
+                                        }
+                                    }
+                                } else {
+                                    diagnostics.criticFinalOutcome = "failedOpen"
+                                }
+                            }
+                        }
                         aggregate.terminalOutcome = "sql"
-                        if overClarificationCorrections > 0 {
-                            diagnostics.overClarificationCorrectionSucceeded = true
-                        }
-                        diagnostics.clearResolvedClarificationRejection()
-                        if intentCoverageCorrections > 0 {
-                            diagnostics.intentCoverageCorrectionSucceeded = true
-                        }
-                        if planConsistencyCorrections > 0,
-                            diagnostics.planConsistencyDecision
-                                == SchemaToolAgentPlanConsistencyDecision.consistent.rawValue
-                        {
-                            diagnostics.planConsistencyCorrectionSucceeded = true
-                        }
-                        diagnostics.clearResolvedPlanConsistencyRejection()
-                        diagnostics.recordTerminalAccepted()
+                        diagnostics.recordSQLTerminalAccepted(
+                            afterOverClarificationCorrection: overClarificationCorrections > 0,
+                            afterIntentCoverageCorrection: intentCoverageCorrections > 0,
+                            afterPlanConsistencyCorrection: planConsistencyCorrections > 0
+                        )
                         aggregate.agentDiagnostics = diagnostics.snapshot(
                             evidence: evidence,
                             inspectionToolCalls: await inspectionSession?.tracesSnapshot() ?? []
@@ -1235,6 +1416,19 @@ public final class SchemaToolSQLAgent: SQLGenerator, Sendable {
                         diagnostics.resultBudgetToolErrorCount += 1
                     }
                     messages.append(try toolResponse(result, providerCallID: call.providerID))
+                    if configuration.criticMode == .enabled,
+                        case .inspection(let inspectionResult) = result,
+                        inspectionResult.success,
+                        SchemaToolAgentCritic.valueToolNames.contains(inspectionResult.toolName),
+                        let payload = try? inspectionResult.payload?.encodedData()
+                    {
+                        criticValuePayloads.append(
+                            SchemaToolAgentCriticValuePayload(
+                                toolName: inspectionResult.toolName,
+                                content: String(decoding: payload, as: UTF8.self)
+                            )
+                        )
+                    }
                     if case .schema(let schemaResult) = result, schemaResult.success {
                         Self.recordExecutedSchemaCall(
                             call: call,
@@ -1256,6 +1450,26 @@ public final class SchemaToolSQLAgent: SQLGenerator, Sendable {
         } catch is CancellationError {
             throw CancellationError()
         } catch let thrown as SchemaToolAgentFailure {
+            // A revision that fails afterwards releases the SQL the critic
+            // sent back, with the diagnostics saved before the revision, so
+            // the failure leaves no rejection or timeout behind. A schema
+            // change still fails the run.
+            if let fallback = criticFallback, thrown.category != .staleSchemaSnapshot {
+                if diagnostics.forcedTerminalReason != nil, diagnostics.forcedTerminalFailure == nil {
+                    diagnostics.forcedTerminalFailure = Self.forcedTerminalFailureDescription(thrown)
+                }
+                return try await releaseCriticFallback(
+                    fallback,
+                    outcome: "revisionFailedReleasedPrevious",
+                    diagnostics: diagnostics,
+                    evidence: evidence,
+                    schema: schema,
+                    context: context,
+                    aggregate: aggregate,
+                    session: session,
+                    inspectionSession: inspectionSession
+                )
+            }
             var failure = thrown
             // A forced final request that fails, or whose answer is
             // rejected, leaves the run as its trigger left it: the trigger's
@@ -1309,6 +1523,10 @@ public final class SchemaToolSQLAgent: SQLGenerator, Sendable {
         }
     }
 
+    /// `maximumAttempts` replaces the retry policy's attempt cap for this
+    /// request. `invalidOutputMessages` replaces the messages for the one
+    /// resend after `invalid_model_output`; without it the same request is
+    /// resent.
     private func performRequest(
         messages: [ChatToolMessage],
         tools: [ChatToolDefinition],
@@ -1317,15 +1535,19 @@ public final class SchemaToolSQLAgent: SQLGenerator, Sendable {
         aggregate: inout AgentMetadataAccumulator,
         maximumHTTPAttempts: Int,
         deadline: Date,
-        usageSink: (@Sendable (SQLGenerationUsageEvent) -> Void)?
+        usageSink: (@Sendable (SQLGenerationUsageEvent) -> Void)?,
+        maximumAttempts: Int? = nil,
+        invalidOutputMessages: [ChatToolMessage]? = nil
     ) async throws -> ChatToolParser.ParsedTurn {
-        let built = try requestBuilder.build(
+        var built = try requestBuilder.build(
             apiKey: apiKey,
             messages: messages,
             tools: tools,
             capabilities: capabilities,
             options: options
         )
+        let retryPolicy = maximumAttempts.map(ChatCompletionRetryPolicy.init(maxAttempts:))
+            ?? self.retryPolicy
         var attempt = 1
         var noContentRetries = 0
         // Particle does not validate tool-call arguments, so an agent turn
@@ -1374,7 +1596,18 @@ public final class SchemaToolSQLAgent: SQLGenerator, Sendable {
                         guard aggregate.httpAttemptCount < maximumHTTPAttempts else {
                             throw failure.withAttemptCount(attempt)
                         }
-                        if failure.isInvalidModelOutput { invalidOutputRetries += 1 }
+                        if failure.isInvalidModelOutput {
+                            invalidOutputRetries += 1
+                            if let invalidOutputMessages {
+                                built = try requestBuilder.build(
+                                    apiKey: apiKey,
+                                    messages: invalidOutputMessages,
+                                    tools: tools,
+                                    capabilities: capabilities,
+                                    options: options
+                                )
+                            }
+                        }
                         attempt += 1
                         aggregate.retryCount += 1
                         try await sleep(delay, deadline: deadline)
@@ -2061,6 +2294,126 @@ public final class SchemaToolSQLAgent: SQLGenerator, Sendable {
         ChatToolMessage(role: .user, content: text)
     }
 
+    /// The SQL the critic last sent back for revision, kept for a revision
+    /// that goes wrong.
+    private struct CriticFallback {
+        var terminal: TerminalResult
+        var statementKind: SQLStatementKind
+        /// The diagnostics the run would have answered with instead of
+        /// revising.
+        var diagnostics: SchemaToolAgentDiagnostics
+    }
+
+    /// Asks the critic to review `request` in its own request: no tools,
+    /// the critic call site's effort, token cap and `json_object`, and at
+    /// most `maximumCriticHTTPAttempts` attempts. It shares the run's
+    /// deadline, HTTP budget, usage sink and metadata. Every failure but
+    /// cancellation returns `nil`, so the SQL is accepted as it is.
+    private func reviewSQLWithCritic(
+        _ request: SchemaToolAgentCriticRequest,
+        capabilities: CloudModelCapabilities,
+        promptCacheKey: String?,
+        aggregate: inout AgentMetadataAccumulator,
+        maximumHTTPAttempts: Int,
+        deadline: Date,
+        usageSink: (@Sendable (SQLGenerationUsageEvent) -> Void)?,
+        diagnostics: inout SchemaToolAgentDiagnosticState
+    ) async throws -> SchemaToolAgentCriticReview? {
+        let policy = profile.policy(for: .critic)
+        let systemMessage = ChatToolMessage(
+            role: .system,
+            content: SchemaToolAgentCritic.systemPrompt(defaultRowLimit: request.defaultRowLimit)
+        )
+        let userPrompt = SchemaToolAgentCritic.userPrompt(for: request)
+        diagnostics.criticCallCount += 1
+        if request.sharesDataValues {
+            diagnostics.criticSharedDataValues = true
+        }
+        do {
+            let parsed = try await performRequest(
+                messages: [systemMessage, ChatToolMessage(role: .user, content: userPrompt)],
+                tools: [],
+                options: ChatRequestOptions(
+                    toolChoice: .omitted,
+                    responseFormat: policy.responseFormat == .jsonObject ? .jsonObject : .omitted,
+                    reasoningEffort: policy.reasoningEffort,
+                    maximumCompletionTokens: policy.maxCompletionTokens,
+                    promptCacheKey: promptCacheKey.map { "\($0)-critic" }
+                ),
+                capabilities: capabilities,
+                aggregate: &aggregate,
+                maximumHTTPAttempts: maximumHTTPAttempts,
+                deadline: deadline,
+                usageSink: usageSink,
+                maximumAttempts: configuration.maximumCriticHTTPAttempts,
+                // One user message, so the resend never carries two in a row.
+                invalidOutputMessages: [
+                    systemMessage,
+                    ChatToolMessage(
+                        role: .user,
+                        content: userPrompt + "\n\n" + SchemaToolAgentCritic.invalidOutputCorrection
+                    ),
+                ]
+            )
+            let review = try SchemaToolAgentCritic.parseReview(parsed.content ?? "")
+            diagnostics.recordCriticReview(review)
+            return review
+        } catch is CancellationError {
+            throw CancellationError()
+        } catch {
+            diagnostics.recordCriticFailure(Self.criticFailureDescription(error))
+            return nil
+        }
+    }
+
+    /// Answers with the SQL the critic last sent back for revision, as the
+    /// run would have answered before the revision: the revision turned into
+    /// a clarification, changed the statement kind or failed.
+    private func releaseCriticFallback(
+        _ fallback: CriticFallback,
+        outcome: String,
+        diagnostics: SchemaToolAgentDiagnosticState,
+        evidence: SchemaToolEvidenceLedger,
+        schema: DatabaseSchema,
+        context: SQLGenerationContext,
+        aggregate: AgentMetadataAccumulator,
+        session: SchemaToolSession,
+        inspectionSession: DatabaseInspectionToolSession?
+    ) async throws -> SQLGenerationResult {
+        var released = aggregate
+        released.terminalOutcome = "sql"
+        released.agentDiagnostics = diagnostics.releasingCriticFallback(
+            fallback.diagnostics,
+            outcome: outcome,
+            evidence: evidence,
+            inspectionToolCalls: await inspectionSession?.tracesSnapshot() ?? []
+        )
+        return try await finalResult(
+            fallback.terminal,
+            schema: schema,
+            context: context,
+            aggregate: released,
+            session: session,
+            inspectionSession: inspectionSession
+        )
+    }
+
+    /// The diagnostics' name for a failed review: the parse error, the
+    /// provider's failure category after `cloudRequestFailure:`, or the
+    /// agent's failure category.
+    private static func criticFailureDescription(_ error: any Error) -> String {
+        switch error {
+        case let failure as SchemaToolAgentCriticParseError:
+            failure.rawValue
+        case let failure as CloudRequestFailure:
+            "cloudRequestFailure:\(failure.category.rawValue)"
+        case let failure as SchemaToolAgentFailure:
+            forcedTerminalFailureDescription(failure)
+        default:
+            "unexpectedError"
+        }
+    }
+
     private static func canFallbackToInspectedClarification(
         _ category: SchemaToolAgentFailure.Category
     ) -> Bool {
@@ -2346,6 +2699,9 @@ public final class SchemaToolSQLAgent: SQLGenerator, Sendable {
         var structuredQueryPlan: SchemaToolAgentStructuredQueryPlan?
         /// Unknown argument keys plus a `query_plan` of the wrong type.
         var ignoredArgumentKeyCount: Int
+        /// The SQL answer's `query_plan` as the model sent it, for the
+        /// critic only; it is never saved.
+        var rawQueryPlanJSON: String?
 
         init(
             action: TerminalAction,
@@ -2353,7 +2709,8 @@ public final class SchemaToolSQLAgent: SQLGenerator, Sendable {
             clarificationQuestion: String,
             queryPlan: String,
             structuredQueryPlan: SchemaToolAgentStructuredQueryPlan? = nil,
-            ignoredArgumentKeyCount: Int = 0
+            ignoredArgumentKeyCount: Int = 0,
+            rawQueryPlanJSON: String? = nil
         ) {
             self.action = action
             self.sql = sql
@@ -2361,6 +2718,7 @@ public final class SchemaToolSQLAgent: SQLGenerator, Sendable {
             self.queryPlan = queryPlan
             self.structuredQueryPlan = structuredQueryPlan
             self.ignoredArgumentKeyCount = ignoredArgumentKeyCount
+            self.rawQueryPlanJSON = rawQueryPlanJSON
         }
     }
 
@@ -2459,13 +2817,19 @@ public final class SchemaToolSQLAgent: SQLGenerator, Sendable {
         } else {
             queryPlanSummary = redactedQueryPlanSummary(for: trimmedQueryPlan)
         }
+        var rawQueryPlanJSON: String?
+        if action == .sql, let queryPlan {
+            rawQueryPlanJSON = queryPlan.stringValue
+                ?? (try? queryPlan.encodedData()).map { String(decoding: $0, as: UTF8.self) }
+        }
         return TerminalResult(
             action: action,
             sql: trimmedSQL,
             clarificationQuestion: trimmedQuestion,
             queryPlan: queryPlanSummary,
             structuredQueryPlan: action == .sql ? structuredQueryPlan : nil,
-            ignoredArgumentKeyCount: ignoredArgumentKeyCount
+            ignoredArgumentKeyCount: ignoredArgumentKeyCount,
+            rawQueryPlanJSON: rawQueryPlanJSON
         )
     }
 
@@ -2735,6 +3099,16 @@ private struct SchemaToolAgentDiagnosticState {
     var forcedTerminalRequestCount = 0
     var forcedTerminalSucceeded = false
     var forcedTerminalFailure: String?
+    var criticMode: String?
+    var criticCallCount = 0
+    var criticVerdicts: [String] = []
+    var criticRevisionCount = 0
+    var criticFinalOutcome: String?
+    var criticIssueKinds: [String] = []
+    var criticFailureReason: String?
+    var criticSharedDataValues = false
+
+    static let maximumCriticIssueKindCount = 12
 
     /// Records that the run's terminal answer was accepted, which for a
     /// forced run means its forced request succeeded.
@@ -2742,6 +3116,68 @@ private struct SchemaToolAgentDiagnosticState {
         if forcedTerminalReason != nil {
             forcedTerminalSucceeded = true
         }
+    }
+
+    /// Records that the run answers with SQL: the corrections that led to it
+    /// succeeded, and the rejections it resolved are cleared.
+    mutating func recordSQLTerminalAccepted(
+        afterOverClarificationCorrection: Bool,
+        afterIntentCoverageCorrection: Bool,
+        afterPlanConsistencyCorrection: Bool
+    ) {
+        if afterOverClarificationCorrection {
+            overClarificationCorrectionSucceeded = true
+        }
+        clearResolvedClarificationRejection()
+        if afterIntentCoverageCorrection {
+            intentCoverageCorrectionSucceeded = true
+        }
+        if afterPlanConsistencyCorrection,
+            planConsistencyDecision == SchemaToolAgentPlanConsistencyDecision.consistent.rawValue
+        {
+            planConsistencyCorrectionSucceeded = true
+        }
+        clearResolvedPlanConsistencyRejection()
+        recordTerminalAccepted()
+    }
+
+    mutating func recordCriticReview(_ review: SchemaToolAgentCriticReview) {
+        criticVerdicts.append(review.verdict.rawValue)
+        guard review.verdict == .revise else { return }
+        let room = max(0, Self.maximumCriticIssueKindCount - criticIssueKinds.count)
+        criticIssueKinds.append(contentsOf: review.issues.prefix(room).map(\.kind.rawValue))
+    }
+
+    mutating func recordCriticFailure(_ reason: String) {
+        criticVerdicts.append("error")
+        criticFailureReason = reason
+    }
+
+    /// The diagnostics for a released critic fallback: those saved when the
+    /// critic asked for the revision, with this run's later turn, forced
+    /// terminal and critic facts, and `outcome`.
+    func releasingCriticFallback(
+        _ saved: SchemaToolAgentDiagnostics,
+        outcome: String,
+        evidence: SchemaToolEvidenceLedger,
+        inspectionToolCalls: [DatabaseInspectionToolCallTrace]
+    ) -> SchemaToolAgentDiagnostics {
+        let current = snapshot(evidence: evidence, inspectionToolCalls: inspectionToolCalls)
+        var released = saved
+        released.logicalTurnCount = current.logicalTurnCount
+        released.forcedTerminalReason = current.forcedTerminalReason
+        released.forcedTerminalRequestCount = current.forcedTerminalRequestCount
+        released.forcedTerminalSucceeded = current.forcedTerminalSucceeded
+        released.forcedTerminalFailure = current.forcedTerminalFailure
+        released.criticMode = current.criticMode
+        released.criticCallCount = current.criticCallCount
+        released.criticVerdicts = current.criticVerdicts
+        released.criticRevisionCount = current.criticRevisionCount
+        released.criticIssueKinds = current.criticIssueKinds
+        released.criticFailureReason = current.criticFailureReason
+        released.criticSharedDataValues = current.criticSharedDataValues
+        released.criticFinalOutcome = outcome
+        return released
     }
 
     mutating func recordFailureCategory(_ category: SchemaToolAgentFailure.Category) {
@@ -2915,7 +3351,15 @@ private struct SchemaToolAgentDiagnosticState {
                 ? forcedTerminalRequestCount
                 : nil,
             forcedTerminalSucceeded: forcedTerminalReason != nil ? forcedTerminalSucceeded : nil,
-            forcedTerminalFailure: forcedTerminalFailure
+            forcedTerminalFailure: forcedTerminalFailure,
+            criticMode: criticMode,
+            criticCallCount: criticCallCount > 0 ? criticCallCount : nil,
+            criticVerdicts: criticVerdicts.isEmpty ? nil : criticVerdicts,
+            criticRevisionCount: criticRevisionCount > 0 ? criticRevisionCount : nil,
+            criticFinalOutcome: criticFinalOutcome,
+            criticIssueKinds: criticIssueKinds.isEmpty ? nil : criticIssueKinds,
+            criticFailureReason: criticFailureReason,
+            criticSharedDataValues: criticCallCount > 0 ? criticSharedDataValues : nil
         )
     }
 }
@@ -2969,6 +3413,8 @@ private struct SchemaToolEvidenceLedger {
     private var fullyDescribedTables = Set<String>()
     private var joinPathTables = Set<String>()
     private var exposedColumns = Set<String>()
+    /// The data type a tool returned for an exposed column, for the critic.
+    private var exposedColumnTypes: [String: String] = [:]
     private var inspectedConstraintColumns = Set<String>()
     private var foreignKeyPathIDs = Set<String>()
     private var foreignKeyPairs: [(sourceTable: String, sourceColumn: String, targetTable: String, targetColumn: String)] = []
@@ -3164,6 +3610,7 @@ private struct SchemaToolEvidenceLedger {
                     columnPath.split(separator: ".").count == 3
                 {
                     exposedColumns.insert(columnPath)
+                    recordColumnType(object, path: columnPath)
                     if Self.isDateOrTimeColumn(path: columnPath, object: object) {
                         dateOrTimeColumns.insert(columnPath)
                     }
@@ -3172,11 +3619,18 @@ private struct SchemaToolEvidenceLedger {
                 {
                     let path = "\(table).\(column)"
                     exposedColumns.insert(path)
+                    recordColumnType(object, path: path)
                     if Self.isDateOrTimeColumn(path: path, object: object) {
                         dateOrTimeColumns.insert(path)
                     }
                 }
             }
+        }
+    }
+
+    private mutating func recordColumnType(_ object: [String: JSONValue], path: String) {
+        if let dataType = object["data_type"]?.stringValue, !dataType.isEmpty {
+            exposedColumnTypes[path] = dataType
         }
     }
 
@@ -3234,6 +3688,19 @@ private struct SchemaToolEvidenceLedger {
             inspectedValueToolUsed: inspectionToolCalls.contains { trace in
                 trace.outcome == .success && valueToolNames.contains(trace.toolName)
             }
+        )
+    }
+
+    /// Only what the schema tools returned: the tables they named, the
+    /// columns they exposed with the types they gave, and the foreign-key
+    /// pairs they showed.
+    var criticSchemaEvidence: SchemaToolAgentCriticSchemaEvidence {
+        SchemaToolAgentCriticSchemaEvidence(
+            tableIDs: searchedTables.union(describedTables).union(joinPathTables).sorted(),
+            columns: exposedColumns.sorted().map {
+                SchemaToolAgentCriticSchemaEvidence.Column(id: $0, dataType: exposedColumnTypes[$0])
+            },
+            foreignKeyPathIDs: foreignKeyPathIDs.sorted()
         )
     }
 

@@ -28,6 +28,12 @@ validation or database error being repaired. Database error messages from the
 session are sent so Particle-1 can fix failed queries; they can quote a value
 from your data, and other fields can include literals you typed.
 
+Widen may also ask Particle to review the drafted SQL, up to twice per
+question, sending the same question and prompt context, the schema metadata
+the schema tools returned, and the drafted SQL and its query plan; inspected
+data values are included only for connections that allow sending inspected
+data values.
+
 Each connection has its own controls under Advanced Privacy in
 Settings > Databases:
 
