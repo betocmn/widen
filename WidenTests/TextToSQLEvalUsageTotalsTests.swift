@@ -145,7 +145,14 @@ struct TextToSQLEvalUsageTotalsTests {
         let text = try Self.source("WidenEval/ReleaseGateReporter.swift")
 
         let markdownStart = try #require(text.range(of: "private static func markdown("))
-        let markdownText = String(text[markdownStart.lowerBound...])
+        let triageStart = try #require(text.range(of: "private static func triageMarkdown("))
+        let triageEnd = try #require(
+            text.range(of: "\"## Failure Categories\",", range: triageStart.upperBound..<text.endIndex)
+        )
+        let markdownText = String(text[markdownStart.lowerBound..<triageStart.lowerBound])
+        // The triage Run table is copied verbatim to docs/evals/<v>-triage.md,
+        // so it names the provider and effort too.
+        let triageRunTable = String(text[triageStart.upperBound..<triageEnd.lowerBound])
         for row in [
             #""| Provider | \(tableCell(run.manifest.resolvedProvider ?? "-")) |","#,
             #""| Endpoint | \(tableCell(run.manifest.providerEndpointHost ?? "-")) |","#,
@@ -153,6 +160,7 @@ struct TextToSQLEvalUsageTotalsTests {
             #""| Reasoning effort | \(tableCell(run.manifest.reasoningEffort ?? "-")) |","#,
         ] {
             #expect(markdownText.contains(row), "\(row)")
+            #expect(triageRunTable.contains(row), "triage \(row)")
         }
         #expect(markdownText.contains("lines += reportedUsageSection(results: releaseGateResults(for: run))"))
 
