@@ -122,24 +122,6 @@ struct ChatCompletionRequestBuilder: Sendable {
         )
     }
 
-    func buildTinyJSONTest(
-        apiKey: String,
-        capabilities: CloudModelCapabilities
-    ) throws -> BuiltRequest {
-        try build(
-            apiKey: apiKey,
-            instructions: """
-                Respond with a single JSON object and nothing else, using exactly these keys:
-                {"sql": string, "explanation": string, "assumptions": [string], "referencedTables": [string], "confidence": number between 0 and 1, "riskLevel": "low" or "medium" or "high", "needsClarification": boolean, "clarificationQuestion": string or null}
-                """,
-            prompt: """
-                Return a minimal connectivity response for SELECT 1.
-                """,
-            capabilities: capabilities,
-            callSite: .connectivityProbe
-        )
-    }
-
     private func cappedCompletionTokens(
         _ policy: CloudCallSitePolicy,
         _ capabilities: CloudModelCapabilities
@@ -757,122 +739,6 @@ struct CloudSQLResponseParser: Sendable {
     }
 }
 
-struct OpenRouterConnectivityCheck: Sendable {
-    struct Result: Equatable, Sendable {
-        var keyAccepted: Bool
-        var selectedModelAvailable: Bool
-        var capabilities: CloudModelCapabilities
-        var returnedModelID: String?
-        var providerName: String?
-        var latencyMs: Int
-        var retryCount: Int
-        var error: CloudRequestFailure?
-    }
-
-    let apiKey: String
-    let profile: CloudModelProfile
-    let catalogService: OpenRouterModelCatalogService?
-    let transport: any HTTPTransport
-
-    /// Only an OpenRouter profile has a catalog to check; any other profile
-    /// fails without sending a request.
-    init(
-        apiKey: String,
-        profile: CloudModelProfile,
-        catalogService: OpenRouterModelCatalogService? = nil,
-        transport: (any HTTPTransport)? = nil
-    ) {
-        self.apiKey = apiKey
-        self.profile = profile
-        self.catalogService = catalogService ?? .evalShared(for: profile)
-        self.transport = transport ?? URLSessionTransport(timeoutsOf: profile)
-    }
-
-    func run() async -> Result {
-        let started = Date()
-        let model = profile.requestedModelID
-        guard let catalogService else {
-            return Result(
-                keyAccepted: false,
-                selectedModelAvailable: false,
-                capabilities: .conservative(),
-                returnedModelID: nil,
-                providerName: nil,
-                latencyMs: 0,
-                retryCount: 0,
-                error: CloudRequestFailure(
-                    category: .unsupportedFeature,
-                    message: "The OpenRouter connectivity check only supports OpenRouter profiles.",
-                    requestedModelID: model,
-                    attemptCount: 0
-                )
-            )
-        }
-        do {
-            let metadata = try await catalogService.metadataSurfacingErrors(
-                apiKey: apiKey,
-                modelID: model,
-                forceRefresh: true
-            )
-            let capabilities = metadata?.capabilities ?? .conservative()
-            try OpenRouterCanonicalModelValidator.preflight(
-                catalogCanonicalModelID: capabilities.canonicalModelID,
-                capabilitySource: capabilities.capabilitySource,
-                expectedCanonicalModelID: profile.expectedReturnedModelID,
-                requestedModelID: model
-            )
-            let generator = CloudSQLGenerator(
-                apiKey: apiKey,
-                profile: profile,
-                transport: transport,
-                capabilityResolver: CloudCapabilityResolver(
-                    profile: profile,
-                    catalogService: catalogService
-                )
-            )
-            let parsed = try await generator.testTinyCompletion(capabilities: capabilities)
-            return Result(
-                keyAccepted: true,
-                selectedModelAvailable: true,
-                capabilities: capabilities,
-                returnedModelID: parsed.returnedModelID,
-                providerName: parsed.providerName,
-                latencyMs: elapsedMilliseconds(since: started),
-                retryCount: parsed.retryCount,
-                error: nil
-            )
-        } catch let failure as CloudRequestFailure {
-            return Result(
-                keyAccepted: failure.category != .authentication,
-                selectedModelAvailable: failure.category != .modelNotFound
-                    && failure.category != .modelVersionMismatch,
-                capabilities: .conservative(),
-                returnedModelID: failure.diagnostic.returnedModelID,
-                providerName: failure.diagnostic.providerName,
-                latencyMs: elapsedMilliseconds(since: started),
-                retryCount: max(0, failure.diagnostic.attemptCount - 1),
-                error: failure
-            )
-        } catch {
-            let failure = CloudRequestFailure(
-                category: .networkTransport,
-                message: error.localizedDescription,
-                requestedModelID: model
-            )
-            return Result(
-                keyAccepted: true,
-                selectedModelAvailable: false,
-                capabilities: .conservative(),
-                returnedModelID: nil,
-                providerName: nil,
-                latencyMs: elapsedMilliseconds(since: started),
-                retryCount: 0,
-                error: failure
-            )
-        }
-    }
-}
-
 /// Generates SQL with a hosted model through an OpenAI-compatible
 /// chat-completions API described by a cloud model profile. It sends the full
 /// schema prompt in one request and chooses the transport mode from the
@@ -1069,17 +935,6 @@ public final class CloudSQLGenerator: SQLGenerator, Sendable {
                 attemptCount: max(1, capabilityLookupHTTPAttempts)
             )
         }
-    }
-
-    fileprivate func testTinyCompletion(capabilities: CloudModelCapabilities) async throws
-        -> CloudGenerationMetadata
-    {
-        let built = try requestBuilder.buildTinyJSONTest(
-            apiKey: apiKey,
-            capabilities: capabilities
-        )
-        let parsed = try await performBuiltRequest(built, requestedModelID: model)
-        return parsed.metadata
     }
 
     private func budgetMetadata(

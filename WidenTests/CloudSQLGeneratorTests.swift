@@ -262,51 +262,6 @@ struct CloudSQLGeneratorTests {
         #expect(authFailureTransport.requests.count == 1)
     }
 
-    @Test func settingsMetadataLookupSurfacesAuthenticationFailure() async throws {
-        let cacheURL = temporaryCacheURL()
-        let primingTransport = StubTransport([
-            .success((catalogResponse(id: Self.modelID), response(url: Self.apiBase.appendingPathComponent("models/user"), status: 200)))
-        ])
-        let primingService = catalogService(transport: primingTransport, cacheURL: cacheURL, ttl: 60)
-        _ = try await primingService.availableModels(apiKey: "secret-key")
-
-        let authFailureTransport = StubTransport([
-            .success((
-                errorResponse(errorType: "invalid_api_key", message: "Invalid API key"),
-                response(url: Self.apiBase.appendingPathComponent("models/user"), status: 401)
-            ))
-        ])
-        let expiredService = catalogService(transport: authFailureTransport, cacheURL: cacheURL, ttl: -1)
-
-        do {
-            _ = try await expiredService.metadataSurfacingErrors(
-                apiKey: "secret-key",
-                modelID: Self.modelID
-            )
-            Issue.record("expected authentication failure")
-        } catch let failure as CloudRequestFailure {
-            #expect(failure.category == .authentication)
-        }
-    }
-
-    @Test func settingsMetadataLookupServesStaleCacheForTransientFailures() async throws {
-        let cacheURL = temporaryCacheURL()
-        let primingTransport = StubTransport([
-            .success((catalogResponse(id: Self.modelID), response(url: Self.apiBase.appendingPathComponent("models/user"), status: 200)))
-        ])
-        let primingService = catalogService(transport: primingTransport, cacheURL: cacheURL, ttl: 60)
-        _ = try await primingService.availableModels(apiKey: "secret-key")
-
-        let flakyTransport = StubTransport([.failure(URLError(.networkConnectionLost))])
-        let expiredService = catalogService(transport: flakyTransport, cacheURL: cacheURL, ttl: -1)
-
-        let metadata = try await expiredService.metadataSurfacingErrors(
-            apiKey: "secret-key",
-            modelID: Self.modelID
-        )
-        #expect(metadata?.capabilitySource == .staleCache)
-    }
-
     @Test func keyLimitExceededClassifiesAsProviderBudget() {
         let category = CloudRequestFailure.category(
             errorType: nil,
@@ -447,37 +402,6 @@ struct CloudSQLGeneratorTests {
 
         let metadata = await lookup.value
         #expect(metadata == nil)
-    }
-
-    @Test func cancelledSettingsMetadataLookupRethrowsCancellationInsteadOfServingStaleCache()
-        async throws
-    {
-        let cacheURL = temporaryCacheURL()
-        let primingTransport = StubTransport([
-            .success((
-                catalogResponse(),
-                response(url: Self.apiBase.appendingPathComponent("models/user"), status: 200)
-            ))
-        ])
-        let primingService = catalogService(transport: primingTransport, cacheURL: cacheURL)
-        _ = try await primingService.availableModels(apiKey: "secret-key")
-
-        let transport = CancellationAwareTransport()
-        let service = catalogService(transport: transport, cacheURL: cacheURL)
-        let lookup = Task {
-            try await service.metadataSurfacingErrors(
-                apiKey: "secret-key",
-                modelID: Self.modelID,
-                forceRefresh: true
-            )
-        }
-        while transport.requests.isEmpty {
-            try await Task.sleep(nanoseconds: 1_000_000)
-        }
-
-        lookup.cancel()
-
-        await expectCancellation(lookup)
     }
 
     @Test func invalidatingCanonicalModelIDRemovesCachedCapabilities() async throws {
@@ -2217,7 +2141,13 @@ struct CloudSQLGeneratorTests {
         #expect(body["prompt_cache_key"] as? String == "widen-run")
         #expect((body["response_format"] as? [String: Any])?.count == 1)
 
-        let probe = try builder.buildTinyJSONTest(apiKey: "pai-test", capabilities: capabilities)
+        let probe = try builder.build(
+            apiKey: "pai-test",
+            instructions: CloudConnectivityCheck.completionInstructions,
+            prompt: CloudConnectivityCheck.completionPrompt,
+            capabilities: capabilities,
+            callSite: .connectivityProbe
+        )
         let probeBody = try ParticleTestSupport.expectRequestShape(
             probe.request,
             callSite: .connectivityProbe,
@@ -2264,123 +2194,7 @@ struct CloudSQLGeneratorTests {
         #expect(decoded.backendMetadata == nil)
     }
 
-    @Test func testModelPayloadContainsNoDatabaseContextOrSchema() throws {
-        var capabilities = CloudModelCapabilities.conservative()
-        capabilities.supportsStructuredOutputs = true
-        let request = try ChatCompletionRequestBuilder(profile: .openRouterTest).buildTinyJSONTest(
-            apiKey: "test-key",
-            capabilities: capabilities
-        ).request
-        let body = try jsonBody(request)
-        let messages = try #require(body["messages"] as? [[String: String]])
-        let combined = messages.compactMap { $0["content"] }.joined(separator: "\n")
-
-        #expect(combined.contains("SELECT 1"))
-        #expect(combined.contains("\"sql\""))
-        #expect(!combined.contains("TABLE"))
-        #expect(!combined.contains("Database context"))
-        #expect(!combined.contains("SQL history"))
-        #expect(!combined.contains("public.users"))
-        try expectPrivateRouting(in: request)
-    }
-
-    @Test func connectivityMarksSingleLookupModelAvailableAfterSuccessfulTest() async throws {
-        let model = "custom/model"
-        let transport = StubTransport([
-            .success((catalogResponse(id: "openai/other"), response(url: Self.apiBase.appendingPathComponent("models/user"), status: 200))),
-            .success((singleModelResponse(id: model), response(url: Self.apiBase.appendingPathComponent("model/custom/model"), status: 200))),
-            .success((chatResponse(content: goodContent), response(url: Self.chatEndpoint, status: 200))),
-        ])
-        let service = catalogService(transport: transport)
-
-        let result = await OpenRouterConnectivityCheck(
-            apiKey: "test-key",
-            profile: .openRouterTest.requestingModel(model),
-            catalogService: service,
-            transport: transport
-        ).run()
-
-        #expect(result.error == nil)
-        #expect(result.selectedModelAvailable)
-        #expect(result.capabilities.supportsMaxTokens)
-        // The shared lookup serves the model from one forced catalog fetch
-        // plus the single-model fallback; the old hand-rolled matcher fetched
-        // the catalog twice.
-        #expect(
-            transport.requests.map { $0.url?.path } == [
-                "/api/v1/models/user",
-                "/api/v1/model/custom/model",
-                "/api/v1/chat/completions",
-            ]
-        )
-    }
-
-    @Test func connectivityCheckReportsCanonicalModelMismatch() async throws {
-        let expectedModelID = "openai/gpt-5.5-20260423"
-        let returnedModelID = "openai/gpt-5.5-unevaluated"
-        let transport = StubTransport([
-            .success((
-                catalogResponse(id: Self.modelID, canonicalID: expectedModelID),
-                response(url: Self.apiBase.appendingPathComponent("models/user"), status: 200)
-            )),
-            .success((
-                chatResponse(content: goodContent, model: returnedModelID),
-                response(url: Self.chatEndpoint, status: 200)
-            )),
-        ])
-        let result = await runConnectivityCheck(
-            transport: transport,
-            expectedCanonicalModelID: expectedModelID
-        )
-
-        #expect(result.error?.category == .modelVersionMismatch)
-        #expect(result.returnedModelID == returnedModelID)
-        #expect(!result.selectedModelAvailable)
-    }
-
-    @Test func connectivityCheckAcceptsMatchingCanonicalModel() async throws {
-        let expectedModelID = "openai/gpt-5.5-20260423"
-        let transport = StubTransport([
-            .success((
-                catalogResponse(id: Self.modelID, canonicalID: expectedModelID),
-                response(url: Self.apiBase.appendingPathComponent("models/user"), status: 200)
-            )),
-            .success((
-                chatResponse(content: goodContent, model: expectedModelID),
-                response(url: Self.chatEndpoint, status: 200)
-            )),
-        ])
-        let result = await runConnectivityCheck(
-            transport: transport,
-            expectedCanonicalModelID: expectedModelID
-        )
-
-        #expect(result.error == nil)
-        #expect(result.selectedModelAvailable)
-        #expect(result.returnedModelID == expectedModelID)
-    }
-
-    @Test func connectivityCheckRejectsCanonicalRolloverBeforeCompletionRequest() async throws {
-        let expectedModelID = "openai/gpt-5.5-20260423"
-        let returnedModelID = "openai/gpt-5.5-20260901"
-        let transport = StubTransport([
-            .success((
-                catalogResponse(id: Self.modelID, canonicalID: returnedModelID),
-                response(url: Self.apiBase.appendingPathComponent("models/user"), status: 200)
-            )),
-        ])
-        let result = await runConnectivityCheck(
-            transport: transport,
-            expectedCanonicalModelID: expectedModelID
-        )
-
-        #expect(result.error?.category == .modelVersionMismatch)
-        #expect(result.returnedModelID == returnedModelID)
-        #expect(!result.selectedModelAvailable)
-        #expect(transport.requests.map { $0.url?.path } == ["/api/v1/models/user"])
-    }
-
-    @Test func missingReturnedModelFailsClosedAsVersionMismatch() async throws {
+    @Test func openRouterMissingReturnedModelFailsClosedAsVersionMismatch() async throws {
         let expectedModelID = "openai/gpt-5.5-20260423"
         let transport = StubTransport([
             .success((
@@ -2392,18 +2206,36 @@ struct CloudSQLGeneratorTests {
                 response(url: Self.chatEndpoint, status: 200)
             )),
         ])
-        let service = catalogService(transport: transport)
-
-        let result = await OpenRouterConnectivityCheck(
+        let profile = CloudModelProfile.openRouterTest.pinningReturnedModel(expectedModelID)
+        let generator = CloudSQLGenerator(
             apiKey: "test-key",
-            profile: .openRouterTest.pinningReturnedModel(expectedModelID),
-            catalogService: service,
-            transport: transport
-        ).run()
+            profile: profile,
+            transport: transport,
+            capabilityResolver: CloudCapabilityResolver(
+                profile: profile,
+                catalogService: catalogService(transport: transport)
+            )
+        )
 
-        #expect(result.error?.category == .modelVersionMismatch)
-        #expect(result.returnedModelID == nil)
-        #expect(result.error?.message.contains("did not report") == true)
+        do {
+            _ = try await generator.generateSQL(
+                question: "show users",
+                schema: makeSchema(),
+                config: SQLGenerationConfig()
+            )
+            Issue.record("expected model version mismatch")
+        } catch let failure as CloudRequestFailure {
+            #expect(failure.category == .modelVersionMismatch)
+            #expect(failure.diagnostic.returnedModelID == nil)
+            #expect(failure.message.contains("did not report"))
+        }
+        // An identity failure is never resent.
+        #expect(
+            transport.requests.map { $0.url?.path } == [
+                "/api/v1/models/user",
+                "/api/v1/chat/completions",
+            ]
+        )
     }
 
     @Test func preflightRejectsCanonicalRolloverBeforeCompletionRequest() async throws {
@@ -2675,18 +2507,6 @@ struct CloudSQLGeneratorTests {
             retryPolicy: retryPolicy,
             countCapabilityLookupHTTPAttempts: countCapabilityLookupHTTPAttempts
         )
-    }
-
-    private func runConnectivityCheck(
-        transport: StubTransport,
-        expectedCanonicalModelID: String
-    ) async -> OpenRouterConnectivityCheck.Result {
-        await OpenRouterConnectivityCheck(
-            apiKey: "test-key",
-            profile: .openRouterTest.pinningReturnedModel(expectedCanonicalModelID),
-            catalogService: catalogService(transport: transport),
-            transport: transport
-        ).run()
     }
 
     private func makeGenerator(transport: CancellationAwareTransport) -> CloudSQLGenerator {

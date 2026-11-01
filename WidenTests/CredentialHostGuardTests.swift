@@ -252,17 +252,25 @@ struct CredentialHostGuardTests {
         #expect(catalogTransport.requests.isEmpty)
     }
 
-    @Test func openRouterConnectivityCheckSendsNothingForOtherProfiles() async {
-        let transport = RecordingTransport()
-
-        let result = await OpenRouterConnectivityCheck(
-            apiKey: "test-key",
-            profile: Self.staticProfile,
-            transport: transport
+    @Test func connectivityCheckSendsNothingForAForeignKeyOrAProfileWithoutAModelList() async throws {
+        let foreignKeyTransport = RecordingTransport()
+        let foreignKey = await CloudConnectivityCheck(
+            apiKey: "sk-or-v1-abc",
+            profile: .particleTest,
+            transport: foreignKeyTransport
         ).run()
+        Self.expectCredentialRefusal(try #require(foreignKey.error))
+        #expect(!foreignKey.keyAccepted)
+        #expect(foreignKeyTransport.requests.isEmpty)
 
-        #expect(result.error?.category == .unsupportedFeature)
-        #expect(transport.requests.isEmpty)
+        let openRouterTransport = RecordingTransport()
+        let openRouter = await CloudConnectivityCheck(
+            apiKey: "test-key",
+            profile: .openRouterTest,
+            transport: openRouterTransport
+        ).run()
+        #expect(openRouter.error?.category == .unsupportedFeature)
+        #expect(openRouterTransport.requests.isEmpty)
     }
 
     private func expectCredentialRefusal(_ body: () throws -> Void) throws {

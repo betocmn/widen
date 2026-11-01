@@ -58,8 +58,7 @@ public struct OpenRouterModelMetadata: Codable, Identifiable, Equatable, Sendabl
 
 enum OpenRouterCanonicalModelValidator {
     /// True when positively-sourced catalog metadata reports a canonical
-    /// version other than the pinned expectation. Shared by the preflight
-    /// check and the Settings rollover warning so the two cannot drift.
+    /// version other than the pinned expectation.
     static func canonicalHasRolled(
         catalogCanonicalModelID: String?,
         capabilitySource: OpenRouterCapabilitySource,
@@ -373,38 +372,10 @@ actor OpenRouterModelCatalogService {
         }
     }
 
-    /// Settings-facing lookup that rethrows the underlying catalog failure so
-    /// the UI can say why metadata is unavailable, instead of a generic
-    /// message. Transient failures still fall back to a stale cache entry;
-    /// authentication and other non-servable failures propagate. The full
-    /// catalog fetch is intentional even for a single pinned model: catalog
-    /// membership is what proves the model is visible to the saved key.
-    func metadataSurfacingErrors(
-        apiKey: String,
-        modelID: String,
-        forceRefresh: Bool = false
-    ) async throws -> OpenRouterModelMetadata? {
-        do {
-            return try await lookupModel(apiKey: apiKey, modelID: modelID, forceRefresh: forceRefresh)
-        } catch is CancellationError {
-            throw CancellationError()
-        } catch {
-            if canServeStaleCatalog(after: error),
-                let stale = staleCatalog(apiKey: apiKey)
-                    .map(staleCatalogWithSource)
-                    .flatMap({ Self.find(modelID, in: $0.models) })
-            {
-                return stale
-            }
-            throw error
-        }
-    }
-
-    /// The shared model-lookup flow: fresh catalog membership first, then
-    /// the single-model endpoint. Both public lookups wrap this with their
-    /// distinct error handling so Settings and generation cannot drift.
-    /// `metadataWithUsage` keeps a budget-gated variant of the same sequence
-    /// for counted eval lookups; changes here should be mirrored there.
+    /// The model-lookup flow: fresh catalog membership first, then the
+    /// single-model endpoint. `metadataWithUsage` keeps a budget-gated
+    /// variant of the same sequence for counted eval lookups; changes here
+    /// should be mirrored there.
     private func lookupModel(
         apiKey: String,
         modelID: String,
