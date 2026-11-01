@@ -4,6 +4,306 @@ Follow-up PRs after PR 55 (pinned OpenRouter profile, private routing,
 canonical-version enforcement, release-gate hardening) merges to `main`.
 Numbering continues from `docs/refactoring-plan.md`.
 
+**Superseded in 0.2.0 (Particle-1 migration):** Widen 0.2.0 makes Particle-1
+the only text-to-SQL model. The current plan is
+[Particle-1 migration (0.2.0)](#particle-1-migration-020); the sections after
+it record the previous OpenRouter GPT-5.5/5.6 work, and their results don't
+transfer to Particle-1.
+
+## Particle-1 migration (0.2.0)
+
+This section records the approved decisions for 0.2.0 and preregisters the
+staged paid gate plan. It was committed before any paid Particle request. The
+stage commands, ceilings, criteria, effort rule and revert method below are
+fixed; later commits add evidence and records, not changes to them.
+
+### Decisions
+
+* **Particle-1 only.** The app requests `particle-1` and accepts only
+  completions that report `particle-ai/particle-1`. Particle publishes no
+  dated snapshots, so only the model name is verified; periodic re-gates
+  ([docs/release.md](release.md#particle-model-change-and-periodic-re-gate))
+  replace the old fail-closed rollover handling.
+* **Apple paths removed.** On-device Foundation Models, the Private Cloud
+  Compute stub and the on-device eval backend are gone.
+* **OpenRouter is eval-only.** The app never builds it. WidenEval runs it only
+  when the model is a vendor/model ID, such as `MODEL=openai/gpt-5.5` on the
+  non-gate targets, with `WIDEN_EVAL_OPENROUTER_API_KEY`.
+* **Extra-calls layer.** Particle-1's per-token prices are much lower than
+  GPT-5.5's, so the agent may spend more model calls for accuracy: bigger
+  agent budgets, the repair-accounting fix, a forced final answer when the
+  agent runs out of budget, and an LLM critic with at most 2 revisions. It
+  lands after Stage 2 and is kept only if Stage 3 passes.
+* **Not approved:** plan-consistency enforcement by default (it stays
+  `diagnosticsOnly`) and k-candidate voting.
+* **PR 59's "six-call limit is unchanged"** decision is to be superseded by
+  the extra-calls layer if Stage 3 keeps it.
+* **Gate version 0.2.0.** Always pass `RELEASE_VERSION=0.2.0`; the Makefile
+  otherwise defaults to the `Info.plist` version, 0.1.1. `docs/evals/0.1.0.md`
+  and `docs/evals/0.1.0-triage.md` stay as GPT-5.5 history.
+* **Paid evals are staged** under a branch cap of $5.00: Stage 1 ≤ $0.25,
+  Stage 2 ≤ $1.50, Stage 3 ≤ $2.50. Stop all paid work at the first breached
+  ceiling or failed criterion.
+
+### Comparators
+
+The committed 0.1.0 evidence for the previous OpenRouter GPT-5.5 profile
+(`docs/evals/0.1.0.md` and `docs/evals/0.1.0-triage.md`, from the 2026-07-25
+evidence refresh below) is reported next to each Particle-1 gate. Results
+don't transfer between models, so it is context, not a pass criterion; Stage 3
+is judged against Stage 2.
+
+| Metric | GPT-5.5, 0.1.0 gate |
+| --- | --- |
+| Complete | 60/60 |
+| End-to-end semantic pass rate | 20/60 (33%) |
+| Clarification decision accuracy | 11/12 (92%) |
+| Safety and schema validity | 15/15 and 15/15 of evaluated SQL |
+| Transport reliability | 60/60 |
+| Repeated/no-progress repairs | 0 |
+| Internal schema-agent timeouts | 0 |
+| Triage: expected SQL, got clarification | 31 |
+| Triage: semantic result mismatch | 6 |
+| Triage: tool budget exhausted | 3 |
+| Total cost | $3.838330, about $0.064 per result |
+
+The gate report itself records no cost or latency; the total comes from the
+evidence refresh. Particle-1 costs are WidenEval's token estimate at peak list
+prices, an upper bound, so cost comparisons with GPT-5.5 are approximate.
+
+### Preregistered staged gate plan
+
+Every paid command runs with `MODEL` and `ALLOW_MODEL_OVERRIDE` unset.
+`MAX_CLOUD_COST_USD` is checked only between results, before each one
+starts, so a command can overshoot its ceiling by one result's cost; the
+reserves below cover that. Spend is recorded from each command's own report
+(see Spend ledger).
+
+| Stage | Allocation | `MAX_CLOUD_COST_USD` |
+| --- | ---: | --- |
+| 1: probe and smoke | $0.25 | per command below (sum $0.20) |
+| 2: full gate on the straight swap | $1.50 | 1.50 − max($0.10, 3 × Stage 1's highest per-result cost) |
+| 3: full gate with the extra-calls layer | $2.50 | min(2.50, 5.00 − spent) − max($0.25, 3 × Stage 2's highest per-result cost) |
+| Branch cap | $5.00 | - |
+
+`spent` is the cumulative estimated spend of Stages 1 and 2. A per-result
+cost is `metrics.estimatedCloudCostUSD` in the run's `cases.jsonl`.
+
+Free checks before paying: `make test-db`, `make eval-schema-tools`,
+`make eval-inspection-tools`, `make eval-retrieval`, `make -n` on every gate
+target, and a dry run with no keys that expects 20 `backendUnavailable`
+results and gate docs rendered into the run directory only:
+
+```sh
+env -u WIDEN_EVAL_PARTICLE_API_KEY -u WIDEN_EVAL_OPENROUTER_API_KEY build/Build/Products/Debug/WidenEval --suite Evals/suites/text-to-sql-v1.json --repeat 1 --release-gate-version 0.2.0-dryrun
+```
+
+#### Stage 1: probe and smoke (≤ $0.25 total)
+
+```sh
+make eval-provider-probe
+make eval-smoke REPEAT=3 REASONING_EFFORT=high MAX_CLOUD_COST_USD=0.06
+make eval-smoke REPEAT=3 REASONING_EFFORT=medium MAX_CLOUD_COST_USD=0.05
+make eval-db-cloud-agent CASES="preseason.top-wins-defined commerce.customer-paid-revenue saas.overallocated-seats" REASONING_EFFORT=high MAX_CLOUD_COST_USD=0.04
+make eval-db-cloud-agent CASES="preseason.top-wins-defined commerce.customer-paid-revenue saas.overallocated-seats" REASONING_EFFORT=medium MAX_CLOUD_COST_USD=0.03
+```
+
+The probe costs at most $0.02 and takes no cost flag. If its findings require
+it, set `echoesReasoningContent` and the request-ID headers in
+`fix: set Particle protocol flags from the API probe` before the smoke. Each
+smoke runs the five provider-smoke cases three times (15 results), and each
+hard-case run adds 3 results, so each effort has 18 results.
+
+**Pass criteria** (all must hold):
+
+* every critical probe check passes;
+* at the chosen effort: 15/15 smoke results complete; transport 15/15;
+  structured parsing ≥ 14/15; returned model always `particle-ai/particle-1`;
+  tools agent 15/15; no timeouts or `length` failures;
+* no cost-accounting failure.
+
+**Reasoning-effort rule (fixed in advance).** An effort level is eligible if,
+over its 18 results, all of these hold:
+
+* no timeouts and no `length` failures;
+* P95 ≤ 60 s;
+* the slowest result ≤ 108 s (0.6 × the agent's 180 s wall clock);
+* projected Stage 2 cost ≤ $1.20, where the projection is
+  60 × max(mean hard-case cost, mean smoke cost) × 1.5.
+
+Pick **high** if it is eligible, otherwise **medium**. If medium wins, land
+`fix: default Particle agent turns to medium reasoning` before Stage 2, so the
+gate runs at the shipped default. Quality differences between efforts are
+reported, not used; the smoke cannot measure them.
+
+Then commit `docs: record Particle-1 stage 1 evidence`, including the spend
+ledger.
+
+#### Stage 2: full gate on the straight swap (≤ $1.50)
+
+```sh
+make eval-release-triage RELEASE_VERSION=0.2.0 MAX_CLOUD_COST_USD=<1.50 − reserve>
+```
+
+reserve = max($0.10, 3 × Stage 1's highest per-result cost). Resume an
+incomplete run caused by infrastructure with the same ceiling; resumed
+results count toward it:
+
+```sh
+make eval-release-resume RESUME=<run-directory> RELEASE_VERSION=0.2.0 MAX_CLOUD_COST_USD=<same ceiling>
+```
+
+**Validity** (all must hold):
+
+* 60/60 complete; transport ≥ 57/60; structured parsing ≥ 57/60;
+* no eval timeouts and no internal schema-agent timeouts;
+* returned-model identity 100%; tools agent 60/60; cost reported.
+
+If validity fails, stop all paid work and report. Otherwise publish the honest
+verdict whether or not the gate passes. It will probably fail the 90%
+threshold: in the 0.1.0 comparator, 31 of the 60 results failed as "expected
+SQL, got clarification", a bucket the grounding postprocessor drives (PR 56's
+bypass of it cut the bucket from 28 to 5).
+
+Then commit `docs: publish the Particle-1 straight-swap release gate`:
+`docs/evals/0.2.0.md`, `docs/evals/0.2.0-triage.md`, the Stage 2 evidence
+below, and the README link. Stage 2's results are Stage 3's comparator.
+
+#### Extra-calls layer (contiguous, code-only, revertible)
+
+The layer lands after Stage 2 as one contiguous run of code-only commits, so
+a failed Stage 3 can revert it cleanly:
+
+1. `refactor: move schema agent correction caps into configuration`, with
+   their current values.
+2. `fix: count logical generator invocations for repair budgets`: 5
+   invocations per request; validation repairs 2 (now reachable),
+   verification repairs 1 (unchanged), execution repairs 2 (now reachable);
+   a repair-start cutoff and a 120 s wall clock for repairs.
+3. `feat: raise schema agent call budgets`: turns 6 → 12; schema calls
+   6 → 12, and 2 → 4 in repair mode; HTTP attempts 12 → 30;
+   malformed-terminal, repeated-tool and invalid-terminal-SQL corrections
+   1 → 2; `SchemaToolPolicy.cloudAgent` bytes 8k/20k → 16k/64k; inspection
+   budgets unchanged.
+4. `fix: keep the schema agent running when a tool batch exceeds its budget`:
+   run the calls that fit, answer the rest with `sessionBudgetExceeded` tool
+   errors, and give every tool-call ID exactly one tool message.
+5. `feat: add tool choice and response format options to chat requests`.
+6. `feat: force a final terminal answer when the agent runs out of budget`:
+   at most 2 forced requests (terminal tool only, named `tool_choice`,
+   `parallel_tool_calls:false`); a failed forced request rethrows the
+   original failure.
+7. `feat: add schema agent critic review contract`: the critic returns
+   accept, revise or clarify with issues, and has no SQL field.
+8. `feat: review schema agent sql with a critic pass`: its own request (no
+   tools, `json_object`, effort high, 16k tokens) sharing the agent's
+   deadline, HTTP budget and usage; at most 2 revisions; a critic
+   clarification is recorded, never trusted; any critic error accepts the
+   SQL; on by default in the app, with a PRIVACY.md note that a second review
+   request may be sent.
+9. `feat: add schema agent critic flag and metrics to evals`:
+   `--schema-agent-critic on|off` (default on), plus critic and
+   forced-terminal counts.
+
+Then `docs: record the extra-calls layer commits for stage 3` records the
+layer commit SHAs and settings.
+
+#### Stage 3: full gate with the layer (≤ $2.50)
+
+```sh
+make eval-release-triage RELEASE_VERSION=0.2.0 MAX_CLOUD_COST_USD=<ceiling>
+```
+
+ceiling = min(2.50, 5.00 − spent) − max($0.25, 3 × Stage 2's highest
+per-result cost).
+
+**Keep the layer only if all hold (compared with Stage 2):**
+
+* K1 valid: 60/60; identity 100%; tools 60/60; the code is Stage 2 plus layer
+  commits only; run within 72 h of Stage 2.
+* K2 end-to-end semantic ≥ Stage 2 − 2. This allows for noise: two 60-result
+  runs differ by about 5.5 results by chance.
+* K3 per-case guard: no case loses 2 or more of its 3 passes.
+* K4 safety and schema 100%.
+* K5 clarification decisions ≥ Stage 2's count, out of 12.
+* K6 zero critic invariant violations.
+* K7 transport ≥ 95%.
+* K8 repeated/no-progress repairs ≤ Stage 2.
+* K9 zero eval timeouts; internal agent timeouts ≤ Stage 2.
+* K10 cost per result ≤ 3 × Stage 2; spend within the ceiling.
+* K11 P95 ≤ max(2 × Stage 2's P95, Stage 2's P95 + 30 s) and ≤ 150 s.
+* K12 the layer actually ran: critic reviewed ≥ 80% of eligible SQL;
+  failed-open ≤ 10%; provider rejections of forced requests = 0.
+
+**Pass:** commit
+`docs: publish the Particle-1 release gate with the extra-calls layer`: the
+0.2.0 reports, a how-we-gate row (under its own Particle-1 heading, not the
+previous-provider table), and the note that PR 59's "six-call limit" is
+superseded.
+
+**Fail:**
+
+1. Copy the Stage 3 reports (`docs/evals/0.2.0.md` and
+   `docs/evals/0.2.0-triage.md`) into its run directory.
+2. `git restore docs/evals/0.2.0*.md`, back to Stage 2's committed copies.
+3. `git revert --no-edit` each of the nine layer commits above, newest first
+   (not the docs commit that records them).
+4. `make build && make test`.
+5. Commit `docs: record failed extra-calls layer gate`.
+
+**Last step:** `docs: add the Particle-1 cloud eval baseline`, using the
+shipped configuration's gate `summary.md`. No new spend.
+
+#### Rules for every stage
+
+* Never rerun to get a better number. Resume only an incomplete run caused by
+  infrastructure.
+* Before every evidence commit, check for leaks:
+  * nothing from `.eval-results` or `.env` is staged;
+  * a grep of the staged additions for `pai-`, `sk-or-`, `Bearer`, URLs and
+    `/Users/` comes back empty;
+  * a key-value check over `git diff --cached` that never prints the key
+    returns 0 matches.
+
+  ```sh
+  git diff --cached --name-only | grep -E '\.eval-results|\.env'
+  git diff --cached -U0 | grep '^+' | grep -nE 'pai-[A-Za-z0-9_-]{6,}|sk-or-|[Bb]earer |https?://|(particle|openrouter)\.ai/|/Users/'
+  ( set -a; . ./.env.eval.local; set +a; for v in WIDEN_EVAL_PARTICLE_API_KEY WIDEN_EVAL_OPENROUTER_API_KEY; do eval "k=\${$v}"; [ -n "$k" ] && git diff --cached | grep -cF -- "$k"; done )
+  ```
+
+  The first two print nothing and the third prints only `0`s. Never `cat`,
+  dump the environment or `set -x` near `.env.eval.local`.
+
+### Evidence
+
+#### Stage 1
+
+Pending.
+
+#### Stage 2
+
+Pending.
+
+#### Stage 3
+
+Pending.
+
+#### Spend ledger
+
+Record each command after it finishes: the probe's estimated cost from its
+`probe.md`, otherwise `summary.estimatedCloudCostUSD` from the run's
+`run.json`.
+
+| Stage | Command | Ceiling | Estimated spend | Cumulative |
+| --- | --- | ---: | ---: | ---: |
+| 1 | `make eval-provider-probe` | $0.02 | - | - |
+| 1 | `make eval-smoke` (high) | $0.06 | - | - |
+| 1 | `make eval-smoke` (medium) | $0.05 | - | - |
+| 1 | `make eval-db-cloud-agent` (high) | $0.04 | - | - |
+| 1 | `make eval-db-cloud-agent` (medium) | $0.03 | - | - |
+| 2 | `make eval-release-triage` | 1.50 − reserve | - | - |
+| 3 | `make eval-release-triage` | Stage 3 formula | - | - |
+
 ## Completed and remaining work
 
 * ✅ **Done — PR 56 experiment and retry:** restored the trusted
@@ -76,15 +376,16 @@ Numbering continues from `docs/refactoring-plan.md`.
 
 ## Where things stand
 
-* The product path is fixed: OpenRouter schema-tool agent, pinned
-  `openai/gpt-5.5` (canonical `openai/gpt-5.5-20260423`), zero-data-retention
-  routing, fail-closed canonical checks in the app and in pinned-model evals
-  (with one forced-refresh recovery so a stale cache cannot fail a freshly
-  updated app). A completion alias is now accepted only when router metadata
-  also names the requested alias and exactly one selected endpoint reports
-  the pinned canonical version; missing, ambiguous, or conflicting evidence
-  still fails closed. Release-gate/triage doc publication is pin-enforced in
-  both the Makefile and the eval CLI (`--allow-model-override` to opt out).
+* **Superseded in 0.2.0 (Particle-1 migration):** The product path is fixed:
+  OpenRouter schema-tool agent, pinned `openai/gpt-5.5` (canonical
+  `openai/gpt-5.5-20260423`), zero-data-retention routing, fail-closed
+  canonical checks in the app and in pinned-model evals (with one
+  forced-refresh recovery so a stale cache cannot fail a freshly updated app).
+  A completion alias is now accepted only when router metadata also names the
+  requested alias and exactly one selected endpoint reports the pinned
+  canonical version; missing, ambiguous, or conflicting evidence still fails
+  closed. Release-gate/triage doc publication is pin-enforced in both the
+  Makefile and the eval CLI (`--allow-model-override` to opt out).
 * The release gate still fails, so text-to-SQL stays beta. The complete
   2026-07-14 post-PR 59 retry (pinned GPT-5.5, private routing, canonical
   enforcement, $3.521450) reached 26/60 semantic and 11/12 clarification.
@@ -133,12 +434,12 @@ Numbering continues from `docs/refactoring-plan.md`.
   pre-registered `saas.users-without-membership` controls still clarified, so
   no genuine reduction occurred. Commit `5ee77da` reverted candidate
   `ddf4e12`; only sanitized reports and roadmap evidence remain.
-* PR 62 now remembers a confirmed cache-served canonical mismatch only for
-  that catalog snapshot and TTL. Repeated generations fail immediately from
-  the memo; TTL expiry or invalidation permits a fresh verification, while a
-  mismatch observed on a network-fresh lookup still fails immediately without
-  a second catalog request. The memo is memory-only and never stores an API
-  key.
+* **Superseded in 0.2.0 (Particle-1 migration):** PR 62 now remembers a
+  confirmed cache-served canonical mismatch only for that catalog snapshot and
+  TTL. Repeated generations fail immediately from the memo; TTL expiry or
+  invalidation permits a fresh verification, while a mismatch observed on a
+  network-fresh lookup still fails immediately without a second catalog
+  request. The memo is memory-only and never stores an API key.
 * Standing conclusions to respect: the intent-coverage phrase heuristics are
   frozen (PR 53); more force-SQL prompt pressure does not help (PR 52); the
   next accuracy lever is stable query planning / deterministic synthesis
@@ -677,7 +978,9 @@ passed.
 separated four genuine six-call exhaustions from one misclassified pre-tool
 timeout, and the budget/timeout fix landed in commits `47d6ad1`, `2b28900`,
 and `551ce3e`. The six-call budget is unchanged; the post-PR 59 full gate
-completed the acceptance measurement below.
+completed the acceptance measurement below. In 0.2.0 this decision is to be
+superseded by the extra-calls layer (12 schema calls) if Stage 3 keeps it; see
+[Particle-1 migration (0.2.0)](#particle-1-migration-020).
 
 **Why:** The retained comparator has 6 triaged tool-budget results. The PR 56
 experiment had four genuine exhaustion records: each used six successful
@@ -1507,18 +1810,20 @@ pre-registered experiment; no acceptance decision hangs on it.
 * **PR 10 embeddings** — stays deferred unless a future triage shows required
   tables missing from retrieval, which has not happened since the index
   landed (100% required-table Recall@5).
-* **On-device path** — remains "On-Device — Experimental" (20% eval pass).
-  Revisit when Apple ships stronger on-device or Private Cloud Compute
-  models; the PCC provider path is already in place. Promotion criteria stay
-  those of PR 11 (all simple single-table and quoted-identifier cases, at
-  least 14/20 total, zero unsafe SQL).
+* **Superseded in 0.2.0 (Particle-1 migration):** **On-device path** — remains
+  "On-Device — Experimental" (20% eval pass). Revisit when Apple ships
+  stronger on-device or Private Cloud Compute models; the PCC provider path is
+  already in place. Promotion criteria stay those of PR 11 (all simple
+  single-table and quoted-identifier cases, at least 14/20 total, zero unsafe
+  SQL).
 * **Beta exit** — when `make eval-release` passes every threshold (>= 90%
   semantic, 100% clarification, 100% safety/schema, >= 95% transport, 0
   repeated repairs), update README/PRIVACY beta wording and commit the
   passing `docs/evals/<version>.md` as the production-ready record.
-* **Second vetted model in the allowlist (formerly PR 61)** — dropped from
-  planned work; keep as optional future work. If accounts whose OpenRouter
-  provider policies hide GPT-5.6 Sol's ZDR endpoints ever need a cloud path,
-  evaluate one fallback candidate through the full release gate under
-  identical private routing and add it to the profile list only if it meets
-  or beats the pinned baseline with all hard gates green.
+* **Superseded in 0.2.0 (Particle-1 migration):** **Second vetted model in the
+  allowlist (formerly PR 61)** — dropped from planned work; keep as optional
+  future work. If accounts whose OpenRouter provider policies hide GPT-5.6
+  Sol's ZDR endpoints ever need a cloud path, evaluate one fallback candidate
+  through the full release gate under identical private routing and add it to
+  the profile list only if it meets or beats the pinned baseline with all hard
+  gates green.
