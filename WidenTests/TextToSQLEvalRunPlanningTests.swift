@@ -487,18 +487,85 @@ struct TextToSQLEvalRunPlanningTests {
         #expect(policyText.contains("parts.append(diagnostics.clarificationPolicyDecision)"))
     }
 
-    @Test func cloudResumeSourceHashesIncludeGenerationAndOpenRouterSources() throws {
-        let testFile = URL(fileURLWithPath: #filePath)
-        let evalRunner = testFile
+    @Test func evalSourceManifestPathsExistUnderRepositoryRoot() throws {
+        let repoRoot = URL(fileURLWithPath: #filePath)
             .deletingLastPathComponent()
             .deletingLastPathComponent()
-            .appendingPathComponent("WidenEval/EvalRunner.swift")
-        let source = try String(contentsOf: evalRunner, encoding: .utf8)
+        let oneShotPaths = TextToSQLEvalSourceManifest.scorerSourcePaths(
+            includesSchemaToolAgent: false
+        )
+        let agentPaths = TextToSQLEvalSourceManifest.scorerSourcePaths(
+            includesSchemaToolAgent: true
+        )
+        let semanticPaths = TextToSQLEvalSourceManifest.semanticComparatorSourcePaths
 
-        #expect(source.contains("\"WidenKit/Models/SQLGenerationResult.swift\""))
-        #expect(source.contains("\"WidenKit/Models/OpenRouterCatalog.swift\""))
-        #expect(source.contains("\"WidenKit/Services/OpenRouterSQLGenerator.swift\""))
-        #expect(source.contains("options.backendMode.backends.contains(.cloud)"))
+        for path in oneShotPaths + agentPaths + semanticPaths {
+            #expect(
+                FileManager.default.fileExists(
+                    atPath: repoRoot.appendingPathComponent(path).path
+                ),
+                "\(path) is listed in TextToSQLEvalSourceManifest but does not exist"
+            )
+        }
+        #expect(Set(oneShotPaths).isSubset(of: Set(agentPaths)))
+        #expect(oneShotPaths.contains("WidenKit/Models/SQLGenerationResult.swift"))
+        #expect(oneShotPaths.contains("WidenKit/Models/OpenRouterCatalog.swift"))
+        #expect(oneShotPaths.contains("WidenKit/Services/OpenRouterSQLGenerator.swift"))
+        #expect(oneShotPaths.contains("WidenKit/Services/HTTPTransport.swift"))
+        #expect(agentPaths.contains("WidenKit/Services/OpenRouterSchemaToolSQLAgent.swift"))
+        #expect(agentPaths.contains("WidenKit/Services/SchemaToolRuntime.swift"))
+
+        let hash = try TextToSQLEvalSourceManifest.sourceHash(
+            relativePaths: agentPaths,
+            relativeTo: repoRoot
+        )
+        #expect(hash.count == 64)
+    }
+
+    @Test func evalSourceHashThrowsNamingTheMissingPath() throws {
+        let directory = try Self.sourceHashFixtureDirectory(files: ["a.swift": "let a = 1"])
+        defer { try? FileManager.default.removeItem(at: directory) }
+
+        #expect(throws: TextToSQLEvalSourceHashError(missingPath: "Renamed/b.swift")) {
+            try TextToSQLEvalSourceManifest.sourceHash(
+                relativePaths: ["a.swift", "Renamed/b.swift"],
+                relativeTo: directory
+            )
+        }
+    }
+
+    @Test func evalSourceHashIgnoresListOrderButTracksContents() throws {
+        let directory = try Self.sourceHashFixtureDirectory(
+            files: ["a.swift": "let a = 1", "b.swift": "let b = 2"]
+        )
+        defer { try? FileManager.default.removeItem(at: directory) }
+
+        let forward = try TextToSQLEvalSourceManifest.sourceHash(
+            relativePaths: ["a.swift", "b.swift"],
+            relativeTo: directory
+        )
+        let reversed = try TextToSQLEvalSourceManifest.sourceHash(
+            relativePaths: ["b.swift", "a.swift"],
+            relativeTo: directory
+        )
+        #expect(forward == reversed)
+
+        try Data("let b = 3".utf8).write(to: directory.appendingPathComponent("b.swift"))
+        let edited = try TextToSQLEvalSourceManifest.sourceHash(
+            relativePaths: ["a.swift", "b.swift"],
+            relativeTo: directory
+        )
+        #expect(edited != forward)
+    }
+
+    private static func sourceHashFixtureDirectory(files: [String: String]) throws -> URL {
+        let directory = FileManager.default.temporaryDirectory
+            .appendingPathComponent("widen-tests-\(UUID().uuidString)", isDirectory: true)
+        try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+        for (path, contents) in files {
+            try Data(contents.utf8).write(to: directory.appendingPathComponent(path))
+        }
+        return directory
     }
 
     private static func makefileRecipe(named target: String, in text: String) -> String? {

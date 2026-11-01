@@ -209,17 +209,15 @@ struct EvalRunner {
         let expectedCanonicalModelID = options.backendMode.backends.contains(.cloud)
             ? OpenRouterCatalog.expectedCanonicalModelID(forRequestedModelID: options.model)
             : nil
-        let scorerSourcePaths = scorerSourcePaths(isOpenRouterSmoke: isOpenRouterSmoke)
-        let scorerSourceHash = Self.sourceHash(
-            relativePaths: scorerSourcePaths,
+        let scorerSourceHash = try TextToSQLEvalSourceManifest.sourceHash(
+            relativePaths: TextToSQLEvalSourceManifest.scorerSourcePaths(
+                includesSchemaToolAgent: options.cloudAgentMode == .tools
+            ),
             relativeTo: repositoryRoot
         )
         let semanticComparatorSourceHash = options.semanticDatabase
-            ? Self.sourceHash(
-                relativePaths: [
-                    "WidenKit/Evals/TextToSQLSemanticComparator.swift",
-                    "WidenKit/Evals/TextToSQLSemanticDatabase.swift",
-                ],
+            ? try TextToSQLEvalSourceManifest.sourceHash(
+                relativePaths: TextToSQLEvalSourceManifest.semanticComparatorSourcePaths,
                 relativeTo: repositoryRoot
             )
             : nil
@@ -667,36 +665,6 @@ struct EvalRunner {
                 }
             }
         }
-    }
-
-    private func scorerSourcePaths(isOpenRouterSmoke: Bool) -> [String] {
-        [
-            "WidenKit/Evals/TextToSQLEvalCase.swift",
-            "WidenKit/Evals/TextToSQLEvalScorer.swift",
-            "WidenKit/Evals/TextToSQLEvalResult.swift",
-            "WidenKit/Evals/TextToSQLEvalRunPlanning.swift",
-            "WidenEval/EvalRunner.swift",
-            "WidenKit/Models/SQLGenerationResult.swift",
-            "WidenKit/Services/TextToSQLPipeline.swift",
-            "WidenKit/Services/SQLGenerationFailure.swift",
-            "WidenKit/Services/GeneratedSQLRepairSupport.swift",
-            "WidenKit/Services/GeneratedSQLVerifier.swift",
-            "WidenKit/Services/PostgresErrorMapper.swift",
-            "WidenKit/Services/PostgresService.swift",
-        ] + ((isOpenRouterSmoke || options.backendMode.backends.contains(.cloud))
-            ? [
-                "WidenKit/Models/OpenRouterCatalog.swift",
-                "WidenKit/Services/OpenRouterSQLGenerator.swift",
-            ]
-            : [])
-            + (options.cloudAgentMode == .tools ? [
-                "WidenKit/Services/OpenRouterSchemaToolSQLAgent.swift",
-                "WidenKit/Services/OpenRouterToolChatProtocol.swift",
-                "WidenKit/Services/SchemaToolAgentClarificationPolicy.swift",
-                "WidenKit/Services/SchemaToolAgentPlanConsistencyPolicy.swift",
-                "WidenKit/Services/SchemaToolAgentSQLIntentCoveragePolicy.swift",
-                "WidenKit/Services/SchemaToolSession.swift",
-            ] : [])
     }
 
     private struct SemanticFixtureIssue: Sendable {
@@ -1568,21 +1536,6 @@ struct EvalRunner {
             }
             .joined(separator: "\n")
         return sha256(Data(lines.utf8))
-    }
-
-    private static func sourceHash(relativePaths: [String], relativeTo directory: URL) -> String {
-        var data = Data()
-        for path in relativePaths.sorted() {
-            data.append(Data(path.utf8))
-            data.append(0)
-            let url = directory.appendingPathComponent(path)
-            guard let fileData = try? Data(contentsOf: url) else {
-                return "unknown"
-            }
-            data.append(fileData)
-            data.append(0)
-        }
-        return sha256(data)
     }
 
     private static func outputDirectory(base: String) -> URL {
