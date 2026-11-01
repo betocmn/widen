@@ -319,7 +319,7 @@ struct CloudSQLResponseParser: Sendable {
         } catch {
             throw CloudRequestFailure(
                 category: .malformedStructuredResponse,
-                message: "OpenRouter returned a malformed response envelope.",
+                message: "\(profile.provider.displayName) returned a malformed response envelope.",
                 httpStatus: response.statusCode,
                 requestID: requestID,
                 requestedModelID: requestedModelID,
@@ -342,7 +342,7 @@ struct CloudSQLResponseParser: Sendable {
         guard let choice = completion.choices.first else {
             throw CloudRequestFailure(
                 category: .noContent,
-                message: "OpenRouter returned no choices.",
+                message: "\(profile.provider.displayName) returned no choices.",
                 httpStatus: response.statusCode,
                 completionID: completion.id,
                 requestID: requestID,
@@ -423,7 +423,7 @@ struct CloudSQLResponseParser: Sendable {
         else {
             throw CloudRequestFailure(
                 category: .noContent,
-                message: "OpenRouter returned empty assistant content.",
+                message: "\(profile.provider.displayName) returned empty assistant content.",
                 httpStatus: response.statusCode,
                 completionID: completion.id,
                 requestID: requestID,
@@ -955,7 +955,7 @@ public final class CloudSQLGenerator: SQLGenerator, Sendable {
             : retryPolicy.maxAttempts
         guard availableHTTPAttempts > 0 else {
             throw HTTPAttemptBudgetExhausted(
-                message: "OpenRouter HTTP-attempt budget exhausted before generation."
+                message: "\(profile.provider.displayName) HTTP-attempt budget exhausted before generation."
             )
         }
         let capabilityLookupHTTPAttempts: Int
@@ -987,7 +987,7 @@ public final class CloudSQLGenerator: SQLGenerator, Sendable {
             capabilityLookupHTTPAttempts >= availableHTTPAttempts
         {
             throw HTTPAttemptBudgetExhausted(
-                message: "OpenRouter HTTP-attempt budget exhausted before chat completion.",
+                message: "\(profile.provider.displayName) HTTP-attempt budget exhausted before chat completion.",
                 backendMetadata: budgetMetadata(
                     requestCount: capabilityLookupHTTPAttempts,
                     capabilities: capabilities

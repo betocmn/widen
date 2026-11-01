@@ -263,7 +263,7 @@ public final class SchemaToolSQLAgent: SQLGenerator, Sendable {
             metadata.agentSelectionReason = "tools"
             throw SchemaToolAgentFailure(
                 category: .httpAttemptBudgetExhausted,
-                message: "The schema-tool agent exhausted its OpenRouter HTTP-attempt budget.",
+                message: "The schema-tool agent exhausted its \(profile.provider.displayName) HTTP-attempt budget.",
                 backendMetadata: metadata
             )
         }
@@ -295,7 +295,7 @@ public final class SchemaToolSQLAgent: SQLGenerator, Sendable {
             metadata.agentSelectionReason = "tools"
             throw SchemaToolAgentFailure(
                 category: .httpAttemptBudgetExhausted,
-                message: "The schema-tool agent exhausted its OpenRouter HTTP-attempt budget.",
+                message: "The schema-tool agent exhausted its \(profile.provider.displayName) HTTP-attempt budget.",
                 backendMetadata: metadata
             )
         }
@@ -1113,7 +1113,7 @@ public final class SchemaToolSQLAgent: SQLGenerator, Sendable {
             guard aggregate.httpAttemptCount < maximumHTTPAttempts else {
                 throw SchemaToolAgentFailure(
                     category: .httpAttemptBudgetExhausted,
-                    message: "The schema-tool agent exhausted its OpenRouter HTTP-attempt budget."
+                    message: "The schema-tool agent exhausted its \(profile.provider.displayName) HTTP-attempt budget."
                 )
             }
             aggregate.httpAttemptCount += 1

@@ -4435,6 +4435,47 @@ struct SchemaToolSQLAgentTests {
     }
 
     @Test(arguments: Self.agentProfiles)
+    func httpAttemptBudgetMessageNamesTheProfileProvider(profile: CloudModelProfile) async throws {
+        let schema = Self.makeSchema()
+        let chatTransport = ScriptedTransport { _, _ in
+            Issue.record("No request fits a spent budget")
+            throw URLError(.badServerResponse)
+        }
+        let agent = makeAgent(
+            profile: profile,
+            schema: schema,
+            chatTransport: chatTransport,
+            configuration: SchemaToolSQLAgentConfiguration(
+                maximumSchemaToolCalls: 4,
+                maximumRepairSchemaToolCalls: 2,
+                maximumModelTurns: 6,
+                maximumMalformedTerminalCorrections: 1,
+                maximumRepeatedToolCorrections: 1,
+                maximumHTTPAttempts: 2,
+                countCapabilityLookupHTTPAttempts: true,
+                wallClockTimeoutSeconds: 10
+            )
+        )
+
+        do {
+            _ = try await agent.generateSQL(
+                question: "List users",
+                schema: schema,
+                context: SQLGenerationContext(mode: .repair, modelCallCount: 3),
+                config: SQLGenerationConfig()
+            )
+            Issue.record("Expected HTTP-attempt budget failure")
+        } catch let failure as SchemaToolAgentFailure {
+            #expect(failure.category == .httpAttemptBudgetExhausted)
+            #expect(
+                failure.message
+                    == "The schema-tool agent exhausted its \(profile.provider.displayName) HTTP-attempt budget."
+            )
+            #expect(chatTransport.requests.isEmpty)
+        }
+    }
+
+    @Test(arguments: Self.agentProfiles)
     func failedToolTurnRetriesPreserveBilledUsage(profile: CloudModelProfile) async throws {
         let schema = Self.makeSchema()
         let chatTransport = ScriptedHTTPTransport { request, _ in

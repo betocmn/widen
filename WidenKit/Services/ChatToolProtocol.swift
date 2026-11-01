@@ -382,7 +382,7 @@ struct ChatToolParser: Sendable {
         } catch {
             throw CloudRequestFailure(
                 category: .malformedStructuredResponse,
-                message: "OpenRouter returned a malformed response envelope.",
+                message: "\(profile.provider.displayName) returned a malformed response envelope.",
                 httpStatus: response.statusCode,
                 requestID: requestID,
                 requestedModelID: requestedModelID,
@@ -405,7 +405,7 @@ struct ChatToolParser: Sendable {
         guard let choice = completion.choices.first else {
             throw CloudRequestFailure(
                 category: .noContent,
-                message: "OpenRouter returned no choices.",
+                message: "\(profile.provider.displayName) returned no choices.",
                 httpStatus: response.statusCode,
                 completionID: completion.id,
                 requestID: requestID,
@@ -510,7 +510,7 @@ struct ChatToolParser: Sendable {
         guard !toolCalls.isEmpty || content != nil else {
             throw CloudRequestFailure(
                 category: .noContent,
-                message: "OpenRouter returned empty assistant content.",
+                message: "\(profile.provider.displayName) returned empty assistant content.",
                 httpStatus: response.statusCode,
                 completionID: completion.id,
                 requestID: requestID,

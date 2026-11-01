@@ -1531,6 +1531,83 @@ struct CloudSQLGeneratorTests {
         }
     }
 
+    @Test(arguments: [CloudModelProfile.particleTest, .openRouterTest])
+    func responseParsersNameTheProfileProvider(profile: CloudModelProfile) throws {
+        let provider = profile.provider.displayName
+        let ok = response(url: profile.chatCompletionsURL, status: 200)
+        let emptyContent = jsonData([
+            "id": "cmpl-empty",
+            "model": ParticleTestSupport.returnedModelID,
+            "choices": [[
+                "index": 0,
+                "finish_reason": "stop",
+                "message": ["role": "assistant", "content": ""],
+            ]],
+        ])
+        let cases: [(data: Data, message: String)] = [
+            (Data("{".utf8), "\(provider) returned a malformed response envelope."),
+            (jsonData(["id": "cmpl-none", "choices": [Any]()]), "\(provider) returned no choices."),
+            (emptyContent, "\(provider) returned empty assistant content."),
+        ]
+
+        for (data, message) in cases {
+            do {
+                _ = try CloudSQLResponseParser(profile: profile).parse(
+                    data: data,
+                    response: ok,
+                    requestedModelID: profile.requestedModelID,
+                    mode: .promptOnlyJSON,
+                    requestCount: 1,
+                    retryCount: 0
+                )
+                Issue.record("Expected one-shot parse failure: \(message)")
+            } catch let failure as CloudRequestFailure {
+                #expect(failure.message == message)
+            }
+            do {
+                _ = try ChatToolParser(profile: profile).parse(
+                    data: data,
+                    response: ok,
+                    requestedModelID: profile.requestedModelID,
+                    requestCount: 1,
+                    retryCount: 0
+                )
+                Issue.record("Expected tool-turn parse failure: \(message)")
+            } catch let failure as CloudRequestFailure {
+                #expect(failure.message == message)
+            }
+        }
+    }
+
+    @Test(arguments: [CloudModelProfile.particleTest, .openRouterTest])
+    func generatorHTTPBudgetMessageNamesTheProfileProvider(profile: CloudModelProfile) async throws {
+        let transport = StubTransport([])
+        let generator = CloudSQLGenerator(
+            apiKey: "test-key",
+            profile: profile,
+            transport: transport,
+            capabilityResolver: CloudCapabilityResolver(
+                profile: profile,
+                catalogService: catalogService(transport: transport)
+            ),
+            retryPolicy: ChatCompletionRetryPolicy(maxAttempts: 1),
+            countCapabilityLookupHTTPAttempts: true
+        )
+
+        do {
+            _ = try await generator.generateSQL(
+                question: "List users",
+                schema: makeSchema(),
+                context: SQLGenerationContext(mode: .repair, modelCallCount: 2),
+                config: SQLGenerationConfig()
+            )
+            Issue.record("Expected HTTP-attempt budget exhaustion.")
+        } catch let failure as HTTPAttemptBudgetExhausted {
+            #expect(failure.message == "\(profile.provider.displayName) HTTP-attempt budget exhausted before generation.")
+            #expect(transport.requests.isEmpty)
+        }
+    }
+
     @Test func openRouterMessageWordingReclassifiesOnlyOpenRouterFailures() {
         func category(_ message: String, status: Int, profile: CloudModelProfile) -> CloudRequestFailure.Category {
             CloudSQLResponseParser.failure(
