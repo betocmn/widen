@@ -13,6 +13,91 @@ struct CloudModelCatalogTests {
         #expect(!profile.displayName.isEmpty)
     }
 
+    @Test func particleProfileMatchesTheParticle1Contract() {
+        let profile = CloudModelProfile.particle
+        #expect(profile.provider == .particle)
+        #expect(profile.displayName == "Particle-1")
+        #expect(profile.chatCompletionsURL.absoluteString == "https://api.particle.ai/v1/chat/completions")
+        #expect(profile.modelsURL?.absoluteString == "https://api.particle.ai/v1/models")
+        #expect(profile.requestedModelID == "particle-1")
+        #expect(profile.expectedReturnedModelID == "particle-ai/particle-1")
+        #expect(profile.identityPolicy == .exactReturnedModelID)
+        guard case .staticCapabilities(let capabilities) = profile.capabilityResolution else {
+            Issue.record("Particle capabilities must be static")
+            return
+        }
+        #expect(capabilities.supportsTools)
+        #expect(capabilities.supportsToolChoice)
+        #expect(capabilities.supportsResponseFormat)
+        #expect(!capabilities.supportsStructuredOutputs)
+        #expect(!capabilities.supportsTemperature)
+        #expect(capabilities.supportsMaxCompletionTokens)
+        #expect(!capabilities.supportsMaxTokens)
+        #expect(capabilities.contextLength == 1_048_576)
+        #expect(capabilities.maximumCompletionTokens == 131_072)
+        #expect(capabilities.capabilitySource == .staticProfile)
+        #expect(profile.pricing == CloudModelPricing(input: 0.25, cachedInput: 0.03, output: 1.00))
+        #expect(!profile.reportsUsageCost)
+        #expect(
+            profile.policy(for: .agentTurn)
+                == CloudCallSitePolicy(reasoningEffort: .high, maxCompletionTokens: 16_000, responseFormat: .none)
+        )
+        #expect(
+            profile.policy(for: .oneShotSQL)
+                == CloudCallSitePolicy(reasoningEffort: .high, maxCompletionTokens: 16_000, responseFormat: .jsonObject)
+        )
+        #expect(
+            profile.policy(for: .connectivityProbe)
+                == CloudCallSitePolicy(
+                    reasoningEffort: ReasoningEffort.none,
+                    maxCompletionTokens: 256,
+                    responseFormat: .jsonObject
+                )
+        )
+        #expect(
+            profile.policy(for: .sessionTitle)
+                == CloudCallSitePolicy(
+                    reasoningEffort: ReasoningEffort.none,
+                    maxCompletionTokens: 64,
+                    responseFormat: .none
+                )
+        )
+        #expect(profile.parallelToolCalls == true)
+        #expect(profile.usesPromptCacheKey)
+        #expect(!profile.echoesReasoningContent)
+        #expect(!profile.sendsToolMessageName)
+        #expect(!profile.usesOpenRouterRouting)
+        #expect(profile.requestIDHeaderNames == ["X-Request-Id", "Request-Id"])
+        #expect(profile.requestTimeoutSeconds == 180)
+        #expect(profile.resourceTimeoutSeconds == 300)
+        #expect(profile.foreignAPIKeyPrefixes == ["sk-or-"])
+        #expect(profile.evalAPIKeyEnvironmentVariable == "WIDEN_EVAL_PARTICLE_API_KEY")
+    }
+
+    @Test func promptCacheKeysAreFreshShortAndOnlyForProfilesThatUseThem() throws {
+        let first = try #require(CloudModelProfile.particle.makePromptCacheKey())
+        let second = try #require(CloudModelProfile.particle.makePromptCacheKey())
+
+        #expect(first.hasPrefix("widen-"))
+        #expect(first == first.lowercased())
+        #expect(first.utf8.count <= 256)
+        #expect(first != second)
+        #expect(CloudModelProfile.openRouterGPT55.makePromptCacheKey() == nil)
+    }
+
+    @Test func defaultTransportsUseTheProfileTimeouts() {
+        let particle = URLSessionTransport(timeoutsOf: .particle).sessionConfiguration
+        #expect(particle.timeoutIntervalForRequest == 180)
+        #expect(particle.timeoutIntervalForResource == 300)
+
+        let openRouter = URLSessionTransport(timeoutsOf: .openRouterGPT55).sessionConfiguration
+        #expect(openRouter.timeoutIntervalForRequest == 90)
+        #expect(
+            openRouter.timeoutIntervalForResource
+                == URLSessionConfiguration.ephemeral.timeoutIntervalForResource
+        )
+    }
+
     @Test func openRouterProfileKeepsTheRequestSettingsTheAppAlwaysSent() {
         let profile = CloudModelProfile.openRouterGPT55
         #expect(profile.provider == .openRouter)
@@ -41,6 +126,8 @@ struct CloudModelCatalogTests {
         #expect(profile.sendsToolMessageName)
         #expect(profile.usesOpenRouterRouting)
         #expect(profile.requestTimeoutSeconds == 90)
+        #expect(profile.resourceTimeoutSeconds == nil)
+        #expect(profile.foreignAPIKeyPrefixes == ["pai-"])
         #expect(profile.evalAPIKeyEnvironmentVariable == "WIDEN_EVAL_OPENROUTER_API_KEY")
     }
 

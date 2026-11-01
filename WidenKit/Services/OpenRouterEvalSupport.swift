@@ -338,7 +338,7 @@ actor OpenRouterModelCatalogService {
         staleRetention: TimeInterval = 7 * 24 * 60 * 60
     ) {
         self.profile = profile
-        self.transport = transport ?? URLSessionTransport(timeout: profile.requestTimeoutSeconds)
+        self.transport = transport ?? URLSessionTransport(timeoutsOf: profile)
         self.ttl = ttl
         self.staleRetention = staleRetention
         let directory =

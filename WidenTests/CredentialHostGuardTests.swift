@@ -113,6 +113,46 @@ struct CredentialHostGuardTests {
         #expect(agentTransport.requests.isEmpty)
     }
 
+    @Test func particleAndOpenRouterKeysNeverCrossProviders() async throws {
+        try expectCredentialRefusal {
+            _ = try CloudModelProfile.particle.authorizedRequest(
+                CloudModelProfile.particle.chatCompletionsURL,
+                apiKey: "sk-or-v1-abc"
+            )
+        }
+        try expectCredentialRefusal {
+            _ = try CloudModelProfile.openRouterGPT55.authorizedRequest(
+                CloudModelProfile.openRouterGPT55.chatCompletionsURL,
+                apiKey: "pai-abc"
+            )
+        }
+        try expectCredentialRefusal {
+            _ = try CloudModelProfile.particle.authorizedRequest(
+                CloudModelProfile.openRouterGPT55.chatCompletionsURL,
+                apiKey: "pai-abc"
+            )
+        }
+
+        let generatorTransport = RecordingTransport()
+        try await expectAsyncCredentialRefusal {
+            _ = try await CloudSQLGenerator(
+                apiKey: "sk-or-v1-abc",
+                profile: .particleTest,
+                transport: generatorTransport
+            ).generateSQL(question: "List users", schema: Self.makeSchema(), config: SQLGenerationConfig())
+        }
+        #expect(generatorTransport.requests.isEmpty)
+
+        let agentTransport = RecordingTransport()
+        try await expectAsyncCredentialRefusal {
+            _ = try await makeAgent(profile: .particleTest, apiKey: "sk-or-v1-abc", transport: agentTransport)
+                .generateSQL(question: "List users", schema: Self.makeSchema(), config: SQLGenerationConfig())
+        }
+        #expect(agentTransport.requests.isEmpty)
+
+        #expect(OpenRouterModelCatalogService.evalShared(for: .particle) == nil)
+    }
+
     @Test func catalogUnavailableForStaticCapabilityProfile() async throws {
         #expect(OpenRouterModelCatalogService.evalShared(for: Self.staticProfile) == nil)
 

@@ -41,7 +41,7 @@ public struct SchemaToolSQLAgentConfiguration: Equatable, Sendable {
         maximumRepeatedToolCorrections: Int = 1,
         maximumHTTPAttempts: Int = 12,
         countCapabilityLookupHTTPAttempts: Bool = false,
-        wallClockTimeoutSeconds: TimeInterval = 90,
+        wallClockTimeoutSeconds: TimeInterval = 180,
         clarificationCorrectionMode: SchemaToolAgentClarificationCorrectionMode = .diagnosticsOnly,
         intentCoverageMode: SchemaToolAgentIntentCoverageMode = .diagnosticsOnly,
         planConsistencyMode: SchemaToolAgentPlanConsistencyMode = .diagnosticsOnly
@@ -184,7 +184,7 @@ public final class SchemaToolSQLAgent: SQLGenerator, Sendable {
         configuration: SchemaToolSQLAgentConfiguration = .default,
         currentSchemaFingerprint: (@Sendable () async throws -> String)? = nil
     ) {
-        let transport = transport ?? URLSessionTransport(timeout: profile.requestTimeoutSeconds)
+        let transport = transport ?? URLSessionTransport(timeoutsOf: profile)
         let capabilityResolver = CloudCapabilityResolver(profile: profile)
         self.init(
             apiKey: apiKey,
@@ -387,6 +387,7 @@ public final class SchemaToolSQLAgent: SQLGenerator, Sendable {
         var terminalRequiredAfterSufficientEvidence = false
         var terminalRequiredCorrections = 0
         let deadline = Date().addingTimeInterval(configuration.wallClockTimeoutSeconds)
+        let promptCacheKey = profile.makePromptCacheKey()
 
         do {
             var messages: [ChatToolMessage] = [
@@ -424,6 +425,7 @@ public final class SchemaToolSQLAgent: SQLGenerator, Sendable {
                         messages: messages,
                         tools: tools,
                         capabilities: capabilities,
+                        promptCacheKey: promptCacheKey,
                         aggregate: &aggregate,
                         maximumHTTPAttempts: availableHTTPAttempts,
                         deadline: deadline,
@@ -1052,6 +1054,7 @@ public final class SchemaToolSQLAgent: SQLGenerator, Sendable {
         messages: [ChatToolMessage],
         tools: [ChatToolDefinition],
         capabilities: CloudModelCapabilities,
+        promptCacheKey: String?,
         aggregate: inout AgentMetadataAccumulator,
         maximumHTTPAttempts: Int,
         deadline: Date,
@@ -1061,7 +1064,8 @@ public final class SchemaToolSQLAgent: SQLGenerator, Sendable {
             apiKey: apiKey,
             messages: messages,
             tools: tools,
-            capabilities: capabilities
+            capabilities: capabilities,
+            promptCacheKey: promptCacheKey
         )
         var attempt = 1
         var noContentRetries = 0

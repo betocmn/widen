@@ -78,11 +78,24 @@ struct CloudSQLGeneratorTests {
     }
 
     private static let chatEndpoint = URL(string: "https://openrouter.test/api/v1/chat/completions")!
+    private static let particleChatEndpoint = CloudModelProfile.particleTest.chatCompletionsURL
+    private static let particleModelID = CloudModelProfile.particleTest.requestedModelID
     private static let apiBase = URL(string: "https://openrouter.test/api/v1")!
     private static let modelID = "openai/gpt-5.5"
     /// The OpenRouter profile's completion cap, pinned so the eval-only
     /// profile keeps sending the token budget the app always sent.
     private static let openRouterCompletionTokenBudget = 2_048
+
+    /// Profiles that pin the returned model, for checks that must hold for
+    /// Particle-1 and for the OpenRouter eval profile alike.
+    /// Profiles whose returned model any fixture satisfies, for chat and
+    /// retry behavior both providers must share.
+    private static let chatProfiles: [CloudModelProfile] = [.particleTest, .openRouterTest]
+
+    private static let pinnedProfiles: [CloudModelProfile] = [
+        .particleTest,
+        .openRouterTest.pinningReturnedModel("openai/gpt-5.5-20260423"),
+    ]
 
     private let goodContent = """
         {"sql":"SELECT id FROM public.users LIMIT 100","explanation":"Lists user ids.","assumptions":["All users wanted"],"referencedTables":["public.users"],"confidence":0.9,"riskLevel":"low","needsClarification":false,"clarificationQuestion":null}
@@ -808,13 +821,13 @@ struct CloudSQLGeneratorTests {
     }
 
     @Test func malformedHTTP200EnvelopeIsStructuredResponseFailure() throws {
-        let parser = CloudSQLResponseParser(profile: .openRouterTest)
+        let parser = CloudSQLResponseParser(profile: .particleTest)
 
         do {
             _ = try parser.parse(
                 data: Data("not json".utf8),
-                response: response(url: Self.chatEndpoint, status: 200),
-                requestedModelID: Self.modelID,
+                response: response(url: Self.particleChatEndpoint, status: 200),
+                requestedModelID: Self.particleModelID,
                 mode: .strictJSONSchema,
                 requestCount: 1,
                 retryCount: 0
@@ -823,7 +836,7 @@ struct CloudSQLGeneratorTests {
         } catch let failure as CloudRequestFailure {
             #expect(failure.category == .malformedStructuredResponse)
             #expect(failure.diagnostic.httpStatus == 200)
-            #expect(failure.diagnostic.requestedModelID == Self.modelID)
+            #expect(failure.diagnostic.requestedModelID == Self.particleModelID)
         }
     }
 
@@ -861,22 +874,22 @@ struct CloudSQLGeneratorTests {
     }
 
     @Test func parserAcceptsFencedJSONOnlyInPromptMode() throws {
-        let parser = CloudSQLResponseParser(profile: .openRouterTest)
+        let parser = CloudSQLResponseParser(profile: .particleTest)
         let fenced = "```json\n\(goodContent)\n```"
         let proseWrapped = "Here is the query:\n\(fenced)\nDone."
         let promptResult = try parser.parse(
-            data: chatResponse(content: fenced),
-            response: response(url: Self.chatEndpoint, status: 200),
-            requestedModelID: Self.modelID,
+            data: particleChatResponse(content: fenced),
+            response: response(url: Self.particleChatEndpoint, status: 200),
+            requestedModelID: Self.particleModelID,
             mode: .promptOnlyJSON,
             requestCount: 1,
             retryCount: 0
         )
         #expect(promptResult.result.sql == "SELECT id FROM public.users LIMIT 100")
         let proseResult = try parser.parse(
-            data: chatResponse(content: proseWrapped),
-            response: response(url: Self.chatEndpoint, status: 200),
-            requestedModelID: Self.modelID,
+            data: particleChatResponse(content: proseWrapped),
+            response: response(url: Self.particleChatEndpoint, status: 200),
+            requestedModelID: Self.particleModelID,
             mode: .promptOnlyJSON,
             requestCount: 1,
             retryCount: 0
@@ -885,9 +898,9 @@ struct CloudSQLGeneratorTests {
 
         do {
             _ = try parser.parse(
-                data: chatResponse(content: fenced),
-                response: response(url: Self.chatEndpoint, status: 200),
-                requestedModelID: Self.modelID,
+                data: particleChatResponse(content: fenced),
+                response: response(url: Self.particleChatEndpoint, status: 200),
+                requestedModelID: Self.particleModelID,
                 mode: .strictJSONSchema,
                 requestCount: 1,
                 retryCount: 0
@@ -922,13 +935,13 @@ struct CloudSQLGeneratorTests {
     }
 
     @Test func parserClassifiesErrorAndFinishFormsBeforeContentParsing() throws {
-        let parser = CloudSQLResponseParser(profile: .openRouterTest)
+        let parser = CloudSQLResponseParser(profile: .particleTest)
 
         try expectFailure(.paymentRequired) {
             try parser.parse(
                 data: topLevelErrorResponse(errorType: "insufficient_credits", providerCode: "credits"),
-                response: response(url: Self.chatEndpoint, status: 200),
-                requestedModelID: Self.modelID,
+                response: response(url: Self.particleChatEndpoint, status: 200),
+                requestedModelID: Self.particleModelID,
                 mode: .strictJSONSchema,
                 requestCount: 1,
                 retryCount: 0
@@ -937,8 +950,8 @@ struct CloudSQLGeneratorTests {
         try expectFailure(.providerUnavailable) {
             try parser.parse(
                 data: chatResponse(content: nil, finishReason: "error"),
-                response: response(url: Self.chatEndpoint, status: 200),
-                requestedModelID: Self.modelID,
+                response: response(url: Self.particleChatEndpoint, status: 200),
+                requestedModelID: Self.particleModelID,
                 mode: .strictJSONSchema,
                 requestCount: 1,
                 retryCount: 0
@@ -947,8 +960,8 @@ struct CloudSQLGeneratorTests {
         try expectFailure(.maxTokensExceeded) {
             try parser.parse(
                 data: chatResponse(content: goodContent, finishReason: "length"),
-                response: response(url: Self.chatEndpoint, status: 200),
-                requestedModelID: Self.modelID,
+                response: response(url: Self.particleChatEndpoint, status: 200),
+                requestedModelID: Self.particleModelID,
                 mode: .strictJSONSchema,
                 requestCount: 1,
                 retryCount: 0
@@ -957,8 +970,8 @@ struct CloudSQLGeneratorTests {
         try expectFailure(.contentPolicy) {
             try parser.parse(
                 data: chatResponse(content: goodContent, finishReason: "content_filter"),
-                response: response(url: Self.chatEndpoint, status: 200),
-                requestedModelID: Self.modelID,
+                response: response(url: Self.particleChatEndpoint, status: 200),
+                requestedModelID: Self.particleModelID,
                 mode: .strictJSONSchema,
                 requestCount: 1,
                 retryCount: 0
@@ -967,8 +980,8 @@ struct CloudSQLGeneratorTests {
         try expectFailure(.refusal) {
             try parser.parse(
                 data: chatResponse(content: goodContent, refusal: "No."),
-                response: response(url: Self.chatEndpoint, status: 200),
-                requestedModelID: Self.modelID,
+                response: response(url: Self.particleChatEndpoint, status: 200),
+                requestedModelID: Self.particleModelID,
                 mode: .strictJSONSchema,
                 requestCount: 1,
                 retryCount: 0
@@ -977,8 +990,8 @@ struct CloudSQLGeneratorTests {
         try expectFailure(.noContent) {
             try parser.parse(
                 data: chatResponse(content: ""),
-                response: response(url: Self.chatEndpoint, status: 200),
-                requestedModelID: Self.modelID,
+                response: response(url: Self.particleChatEndpoint, status: 200),
+                requestedModelID: Self.particleModelID,
                 mode: .strictJSONSchema,
                 requestCount: 1,
                 retryCount: 0
@@ -1027,8 +1040,9 @@ struct CloudSQLGeneratorTests {
         }
     }
 
-    @Test func choiceLevelErrorTakesPrecedenceOverCanonicalValidation() throws {
-        let parser = CloudSQLResponseParser(profile: .openRouterTest)
+    @Test(arguments: Self.pinnedProfiles)
+    func choiceLevelErrorTakesPrecedenceOverCanonicalValidation(profile: CloudModelProfile) throws {
+        let parser = CloudSQLResponseParser(profile: profile)
         do {
             _ = try parser.parse(
                 data: chatResponse(
@@ -1042,12 +1056,12 @@ struct CloudSQLGeneratorTests {
                         ],
                     ]
                 ),
-                response: response(url: Self.chatEndpoint, status: 200),
-                requestedModelID: Self.modelID,
+                response: response(url: profile.chatCompletionsURL, status: 200),
+                requestedModelID: profile.requestedModelID,
                 mode: .strictJSONSchema,
                 requestCount: 1,
                 retryCount: 0,
-                expectedCanonicalModelID: "openai/gpt-5.5-20260423"
+                expectedCanonicalModelID: profile.expectedReturnedModelID
             )
             Issue.record("expected provider error")
         } catch let failure as CloudRequestFailure {
@@ -1056,15 +1070,16 @@ struct CloudSQLGeneratorTests {
         }
     }
 
-    @Test func failedCompletionTakesPrecedenceOverCanonicalValidation() throws {
-        let parser = CloudSQLResponseParser(profile: .openRouterTest)
-        let expectedCanonicalModelID = "openai/gpt-5.5-20260423"
+    @Test(arguments: Self.pinnedProfiles)
+    func failedCompletionTakesPrecedenceOverCanonicalValidation(profile: CloudModelProfile) throws {
+        let parser = CloudSQLResponseParser(profile: profile)
+        let expectedCanonicalModelID = profile.expectedReturnedModelID
 
         try expectFailure(.providerUnavailable) {
             try parser.parse(
                 data: chatResponse(content: nil, model: nil, finishReason: "error"),
-                response: response(url: Self.chatEndpoint, status: 200),
-                requestedModelID: Self.modelID,
+                response: response(url: profile.chatCompletionsURL, status: 200),
+                requestedModelID: profile.requestedModelID,
                 mode: .strictJSONSchema,
                 requestCount: 1,
                 retryCount: 0,
@@ -1074,8 +1089,8 @@ struct CloudSQLGeneratorTests {
         try expectFailure(.maxTokensExceeded) {
             try parser.parse(
                 data: chatResponse(content: goodContent, model: nil, finishReason: "length"),
-                response: response(url: Self.chatEndpoint, status: 200),
-                requestedModelID: Self.modelID,
+                response: response(url: profile.chatCompletionsURL, status: 200),
+                requestedModelID: profile.requestedModelID,
                 mode: .strictJSONSchema,
                 requestCount: 1,
                 retryCount: 0,
@@ -1085,8 +1100,8 @@ struct CloudSQLGeneratorTests {
         try expectFailure(.contentPolicy) {
             try parser.parse(
                 data: chatResponse(content: goodContent, model: nil, finishReason: "content_filter"),
-                response: response(url: Self.chatEndpoint, status: 200),
-                requestedModelID: Self.modelID,
+                response: response(url: profile.chatCompletionsURL, status: 200),
+                requestedModelID: profile.requestedModelID,
                 mode: .strictJSONSchema,
                 requestCount: 1,
                 retryCount: 0,
@@ -1096,8 +1111,8 @@ struct CloudSQLGeneratorTests {
         try expectFailure(.refusal) {
             try parser.parse(
                 data: chatResponse(content: goodContent, model: nil, refusal: "No."),
-                response: response(url: Self.chatEndpoint, status: 200),
-                requestedModelID: Self.modelID,
+                response: response(url: profile.chatCompletionsURL, status: 200),
+                requestedModelID: profile.requestedModelID,
                 mode: .strictJSONSchema,
                 requestCount: 1,
                 retryCount: 0,
@@ -1107,8 +1122,8 @@ struct CloudSQLGeneratorTests {
         try expectFailure(.noContent) {
             try parser.parse(
                 data: chatResponse(content: nil, model: nil),
-                response: response(url: Self.chatEndpoint, status: 200),
-                requestedModelID: Self.modelID,
+                response: response(url: profile.chatCompletionsURL, status: 200),
+                requestedModelID: profile.requestedModelID,
                 mode: .strictJSONSchema,
                 requestCount: 1,
                 retryCount: 0,
@@ -1276,14 +1291,17 @@ struct CloudSQLGeneratorTests {
         #expect(policy.retryDelay(for: failure, attempt: 1, noContentRetries: 0) == nil)
     }
 
-    @Test func retriesTransientFailuresAndCountsEveryAttempt() async throws {
-        let transport = StubTransport([
-            .success((catalogResponse(), response(url: Self.apiBase.appendingPathComponent("models/user"), status: 200))),
-            .success((errorResponse(errorType: "provider_unavailable"), response(url: Self.chatEndpoint, status: 503, headers: ["Retry-After": "0"]))),
-            .success((errorResponse(errorType: "provider_unavailable"), response(url: Self.chatEndpoint, status: 503, headers: ["Retry-After": "0"]))),
-            .success((chatResponse(content: goodContent), response(url: Self.chatEndpoint, status: 200))),
-        ])
-        let result = try await makeGenerator(transport: transport).generateSQL(
+        @Test(arguments: Self.chatProfiles)
+    func retriesTransientFailuresAndCountsEveryAttempt(profile: CloudModelProfile) async throws {
+        let (generator, transport) = makeGenerator(
+            profile: profile,
+            chatResults: [
+                .success((transientErrorResponse(for: profile), response(url: profile.chatCompletionsURL, status: 503, headers: ["Retry-After": "0"]))),
+                .success((transientErrorResponse(for: profile), response(url: profile.chatCompletionsURL, status: 503, headers: ["Retry-After": "0"]))),
+                .success((chatResponse(for: profile, content: goodContent), response(url: profile.chatCompletionsURL, status: 200))),
+            ]
+        )
+        let result = try await generator.generateSQL(
             question: "show users",
             schema: makeSchema(),
             config: SQLGenerationConfig()
@@ -1292,21 +1310,24 @@ struct CloudSQLGeneratorTests {
         #expect(result.generationCallCount == 3)
         #expect(result.backendMetadata?.requestCount == 3)
         #expect(result.backendMetadata?.retryCount == 2)
-        let chatRequests = transport.requests.filter { $0.url?.path == "/api/v1/chat/completions" }
+        let chatRequests = transport.requests.filter { $0.url == profile.chatCompletionsURL }
         #expect(chatRequests.count == 3)
         for request in chatRequests {
-            try expectPrivateRouting(in: request)
+            try expectProviderRequest(request, profile: profile)
         }
     }
 
-    @Test func retryMetadataIncludesUsageFromFailedCompletion() async throws {
-        let transport = StubTransport([
-            .success((catalogResponse(), response(url: Self.apiBase.appendingPathComponent("models/user"), status: 200))),
-            .success((chatResponse(content: ""), response(url: Self.chatEndpoint, status: 200, headers: ["Retry-After": "0"]))),
-            .success((chatResponse(content: goodContent), response(url: Self.chatEndpoint, status: 200))),
-        ])
+        @Test(arguments: Self.chatProfiles)
+    func retryMetadataIncludesUsageFromFailedCompletion(profile: CloudModelProfile) async throws {
+        let (generator, _) = makeGenerator(
+            profile: profile,
+            chatResults: [
+                .success((chatResponse(for: profile, content: ""), response(url: profile.chatCompletionsURL, status: 200, headers: ["Retry-After": "0"]))),
+                .success((chatResponse(for: profile, content: goodContent), response(url: profile.chatCompletionsURL, status: 200))),
+            ]
+        )
 
-        let result = try await makeGenerator(transport: transport).generateSQL(
+        let result = try await generator.generateSQL(
             question: "show users",
             schema: makeSchema(),
             config: SQLGenerationConfig()
@@ -1318,7 +1339,8 @@ struct CloudSQLGeneratorTests {
         #expect(result.backendMetadata?.completionTokens == 44)
         #expect(result.backendMetadata?.reasoningTokens == 6)
         #expect(result.backendMetadata?.totalTokens == 66)
-        #expect(result.backendMetadata?.costUSD == 0.00024)
+        // Particle reports no usage.cost; only OpenRouter's reported cost sums.
+        #expect(result.backendMetadata?.costUSD == (profile.reportsUsageCost ? 0.00024 : nil))
     }
 
     @Test func repairCompletionRequiresPrivateRouting() async throws {
@@ -1378,13 +1400,16 @@ struct CloudSQLGeneratorTests {
         try expectPrivateRouting(in: try #require(chatRequests.first))
     }
 
-    @Test func retriesServerFailuresAndCountsAttempts() async throws {
-        let transport = StubTransport([
-            .success((catalogResponse(), response(url: Self.apiBase.appendingPathComponent("models/user"), status: 200))),
-            .success((errorResponse(errorType: "server"), response(url: Self.chatEndpoint, status: 500, headers: ["Retry-After": "0"]))),
-            .success((chatResponse(content: goodContent), response(url: Self.chatEndpoint, status: 200))),
-        ])
-        let result = try await makeGenerator(transport: transport).generateSQL(
+        @Test(arguments: Self.chatProfiles)
+    func retriesServerFailuresAndCountsAttempts(profile: CloudModelProfile) async throws {
+        let (generator, transport) = makeGenerator(
+            profile: profile,
+            chatResults: [
+                .success((serverErrorResponse(for: profile), response(url: profile.chatCompletionsURL, status: 500, headers: ["Retry-After": "0"]))),
+                .success((chatResponse(for: profile, content: goodContent), response(url: profile.chatCompletionsURL, status: 200))),
+            ]
+        )
+        let result = try await generator.generateSQL(
             question: "show users",
             schema: makeSchema(),
             config: SQLGenerationConfig()
@@ -1393,32 +1418,38 @@ struct CloudSQLGeneratorTests {
         #expect(result.generationCallCount == 2)
         #expect(result.backendMetadata?.requestCount == 2)
         #expect(result.backendMetadata?.retryCount == 1)
-        #expect(transport.requests.filter { $0.url?.path == "/api/v1/chat/completions" }.count == 2)
+        #expect(transport.requests.filter { $0.url == profile.chatCompletionsURL }.count == 2)
     }
 
-    @Test func retryCapStopsAfterThreeHTTPAttempts() async throws {
-        let transport = StubTransport([
-            .success((catalogResponse(), response(url: Self.apiBase.appendingPathComponent("models/user"), status: 200))),
-            .success((errorResponse(errorType: "provider_unavailable"), response(url: Self.chatEndpoint, status: 503, headers: ["Retry-After": "0"]))),
-            .success((errorResponse(errorType: "provider_unavailable"), response(url: Self.chatEndpoint, status: 503, headers: ["Retry-After": "0"]))),
-            .success((errorResponse(errorType: "provider_unavailable"), response(url: Self.chatEndpoint, status: 503, headers: ["Retry-After": "0"]))),
-        ])
+        @Test(arguments: Self.chatProfiles)
+    func retryCapStopsAfterThreeHTTPAttempts(profile: CloudModelProfile) async throws {
+        let (generator, transport) = makeGenerator(
+            profile: profile,
+            chatResults: Array(
+                repeating: .success((transientErrorResponse(for: profile), response(url: profile.chatCompletionsURL, status: 503, headers: ["Retry-After": "0"]))),
+                count: 3
+            )
+        )
 
         do {
-            _ = try await makeGenerator(transport: transport).generateSQL(
+            _ = try await generator.generateSQL(
                 question: "show users",
                 schema: makeSchema(),
                 config: SQLGenerationConfig()
             )
             Issue.record("expected provider failure")
         } catch let failure as CloudRequestFailure {
-            #expect(failure.category == .providerUnavailable)
+            // Particle's 503 carries no typed category yet, so its status decides.
+            #expect(
+                failure.category
+                    == (profile.usesOpenRouterRouting ? .providerUnavailable : .providerOverloaded)
+            )
             #expect(failure.diagnostic.attemptCount == 3)
         }
-        #expect(transport.requests.filter { $0.url?.path == "/api/v1/chat/completions" }.count == 3)
+        #expect(transport.requests.filter { $0.url == profile.chatCompletionsURL }.count == 3)
     }
 
-    @Test func cancellationDuringRequestAndBackoffIsImmediate() async throws {
+        @Test func cancellationDuringRequestAndBackoffIsImmediate() async throws {
         let requestTransport = CancellationAwareTransport()
         let requestTask = Task {
             try await makeGenerator(transport: requestTransport).generateSQL(
@@ -1433,22 +1464,83 @@ struct CloudSQLGeneratorTests {
         requestTask.cancel()
         await expectCancellation(requestTask)
 
-        let backoffTransport = StubTransport([
-            .success((catalogResponse(), response(url: Self.apiBase.appendingPathComponent("models/user"), status: 200))),
-            .success((errorResponse(errorType: "provider_unavailable"), response(url: Self.chatEndpoint, status: 503, headers: ["Retry-After": "10"]))),
-        ])
+        let (backoffGenerator, backoffTransport) = makeGenerator(
+            profile: .particleTest,
+            chatResults: [
+                .success((transientErrorResponse(for: .particleTest), response(url: Self.particleChatEndpoint, status: 503, headers: ["Retry-After": "10"]))),
+            ]
+        )
         let backoffTask = Task {
-            try await makeGenerator(transport: backoffTransport).generateSQL(
+            try await backoffGenerator.generateSQL(
                 question: "show users",
                 schema: makeSchema(),
                 config: SQLGenerationConfig()
             )
         }
-        while backoffTransport.requests.count < 2 {
+        while backoffTransport.requests.isEmpty {
             try await Task.sleep(nanoseconds: 1_000_000)
         }
         backoffTask.cancel()
         await expectCancellation(backoffTask)
+    }
+
+    @Test func particleOneShotRequestSendsOnlyParticleParameters() throws {
+        let profile = CloudModelProfile.particleTest
+        guard case .staticCapabilities(let capabilities) = profile.capabilityResolution else {
+            Issue.record("expected static Particle capabilities")
+            return
+        }
+        let builder = ChatCompletionRequestBuilder(profile: profile)
+
+        let built = try builder.build(
+            apiKey: "pai-test",
+            instructions: "instructions",
+            prompt: "prompt",
+            capabilities: capabilities,
+            promptCacheKey: "widen-run"
+        )
+        let body = try ParticleTestSupport.expectRequestShape(built.request, callSite: .oneShotSQL)
+        #expect(built.mode == .promptOnlyJSON)
+        #expect(body["reasoning_effort"] as? String == "high")
+        #expect(body["max_completion_tokens"] as? Int == 16_000)
+        #expect(body["prompt_cache_key"] as? String == "widen-run")
+        #expect((body["response_format"] as? [String: Any])?.count == 1)
+
+        let probe = try builder.buildTinyJSONTest(apiKey: "pai-test", capabilities: capabilities)
+        let probeBody = try ParticleTestSupport.expectRequestShape(
+            probe.request,
+            callSite: .connectivityProbe,
+            requiresPromptCacheKey: false
+        )
+        #expect(probeBody["reasoning_effort"] as? String == "none")
+        #expect(probeBody["max_completion_tokens"] as? Int == 256)
+    }
+
+    @Test func particleOneShotRunsShareOneCacheKeyAcrossRetriesButNotAcrossRuns() async throws {
+        let (generator, transport) = makeGenerator(
+            profile: .particleTest,
+            chatResults: [
+                .success((transientErrorResponse(for: .particleTest), response(url: Self.particleChatEndpoint, status: 503, headers: ["Retry-After": "0"]))),
+                .success((particleChatResponse(content: goodContent), response(url: Self.particleChatEndpoint, status: 200))),
+                .success((particleChatResponse(content: goodContent), response(url: Self.particleChatEndpoint, status: 200))),
+            ]
+        )
+
+        for _ in 0..<2 {
+            _ = try await generator.generateSQL(
+                question: "show users",
+                schema: makeSchema(),
+                config: SQLGenerationConfig()
+            )
+        }
+
+        let keys = try transport.requests.compactMap { try ParticleTestSupport.promptCacheKey(in: $0) }
+        #expect(keys.count == 3)
+        #expect(keys[0] == keys[1])
+        #expect(keys[1] != keys[2])
+        for request in transport.requests {
+            try ParticleTestSupport.expectRequestShape(request, callSite: .oneShotSQL)
+        }
     }
 
     @Test func sqlGenerationResultDecodesLegacyJSONWithoutBackendMetadata() throws {
@@ -1889,13 +1981,43 @@ struct CloudSQLGeneratorTests {
     private func makeGenerator(transport: CancellationAwareTransport) -> CloudSQLGenerator {
         CloudSQLGenerator(
             apiKey: "test-key",
-            profile: .openRouterTest,
+            profile: .particleTest,
+            transport: transport,
+            capabilityResolver: CloudCapabilityResolver(profile: .particleTest)
+        )
+    }
+
+    /// A generator for `profile` whose transport answers its chat requests in
+    /// order. An OpenRouter profile is first answered its catalog lookup.
+    private func makeGenerator(
+        profile: CloudModelProfile,
+        chatResults: [Result<(Data, HTTPURLResponse), Error>],
+        retryPolicy: ChatCompletionRetryPolicy = ChatCompletionRetryPolicy()
+    ) -> (CloudSQLGenerator, StubTransport) {
+        let catalogResults: [Result<(Data, HTTPURLResponse), Error>] =
+            profile.capabilityResolution == .openRouterCatalog
+            ? [.success((catalogResponse(id: profile.requestedModelID), response(url: Self.apiBase.appendingPathComponent("models/user"), status: 200)))]
+            : []
+        let transport = StubTransport(catalogResults + chatResults)
+        let generator = CloudSQLGenerator(
+            apiKey: "test-key",
+            profile: profile,
             transport: transport,
             capabilityResolver: CloudCapabilityResolver(
-                profile: .openRouterTest,
+                profile: profile,
                 catalogService: catalogService(transport: transport)
-            )
+            ),
+            retryPolicy: retryPolicy
         )
+        return (generator, transport)
+    }
+
+    private func expectProviderRequest(_ request: URLRequest, profile: CloudModelProfile) throws {
+        if profile.usesOpenRouterRouting {
+            try expectPrivateRouting(in: request)
+        } else {
+            try ParticleTestSupport.expectRequestShape(request, callSite: .oneShotSQL, profile: profile)
+        }
     }
 
     private func catalogService(
@@ -2026,6 +2148,52 @@ struct CloudSQLGeneratorTests {
             body["openrouter_metadata"] = openrouterMetadata
         }
         return jsonData(body)
+    }
+
+    /// A Particle-1 completion: the `particle-ai/particle-1` model, cached and
+    /// reasoning token details, and no `usage.cost`.
+    private func particleChatResponse(content: Any?, finishReason: String = "stop") -> Data {
+        var message: [String: Any] = ["role": "assistant"]
+        if let content {
+            message["content"] = content
+        }
+        return jsonData([
+            "id": "chatcmpl-1",
+            "object": "chat.completion",
+            "model": ParticleTestSupport.returnedModelID,
+            "choices": [
+                ["index": 0, "finish_reason": finishReason, "message": message],
+            ],
+            "usage": [
+                "prompt_tokens": 11,
+                "completion_tokens": 22,
+                "total_tokens": 33,
+                "prompt_tokens_details": ["cached_tokens": 0],
+                "completion_tokens_details": ["reasoning_tokens": 3],
+            ],
+        ])
+    }
+
+    private func particleErrorResponse(code: String, type: String, message: String) -> Data {
+        jsonData(["error": ["message": message, "type": type, "code": code]])
+    }
+
+    private func chatResponse(for profile: CloudModelProfile, content: Any?) -> Data {
+        profile.provider == .particle
+            ? particleChatResponse(content: content)
+            : chatResponse(content: content)
+    }
+
+    private func transientErrorResponse(for profile: CloudModelProfile) -> Data {
+        profile.provider == .particle
+            ? particleErrorResponse(code: "model_unavailable", type: "server_error", message: "Model unavailable.")
+            : errorResponse(errorType: "provider_unavailable")
+    }
+
+    private func serverErrorResponse(for profile: CloudModelProfile) -> Data {
+        profile.provider == .particle
+            ? particleErrorResponse(code: "internal_error", type: "server_error", message: "Internal error.")
+            : errorResponse(errorType: "server")
     }
 
     private func routerMetadata(

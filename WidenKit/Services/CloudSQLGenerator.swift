@@ -55,7 +55,8 @@ struct ChatCompletionRequestBuilder: Sendable {
         instructions: String,
         prompt: String,
         capabilities: CloudModelCapabilities,
-        callSite: CloudCallSite = .oneShotSQL
+        callSite: CloudCallSite = .oneShotSQL,
+        promptCacheKey: String? = nil
     ) throws -> BuiltRequest {
         let policy = profile.policy(for: callSite)
         let mode: StructuredOutputMode =
@@ -83,6 +84,16 @@ struct ChatCompletionRequestBuilder: Sendable {
         }
         if mode == .strictJSONSchema {
             body["response_format"] = Self.responseFormat()
+        } else if policy.responseFormat == .jsonObject, capabilities.supportsResponseFormat {
+            // json_object is checked for syntax only, so the schema stays
+            // prompt-enforced and the result is still promptOnlyJSON.
+            body["response_format"] = ["type": "json_object"]
+        }
+        if let reasoningEffort = policy.reasoningEffort {
+            body["reasoning_effort"] = reasoningEffort.rawValue
+        }
+        if profile.usesPromptCacheKey, let promptCacheKey {
+            body["prompt_cache_key"] = promptCacheKey
         }
         if profile.usesOpenRouterRouting {
             OpenRouterProviderPreferences.apply(to: &body)
@@ -729,7 +740,7 @@ struct OpenRouterConnectivityCheck: Sendable {
         self.apiKey = apiKey
         self.profile = profile
         self.catalogService = catalogService ?? .evalShared(for: profile)
-        self.transport = transport ?? URLSessionTransport(timeout: profile.requestTimeoutSeconds)
+        self.transport = transport ?? URLSessionTransport(timeoutsOf: profile)
     }
 
     func run() async -> Result {
@@ -849,7 +860,7 @@ public final class CloudSQLGenerator: SQLGenerator, Sendable {
         self.init(
             apiKey: apiKey,
             profile: profile,
-            transport: transport ?? URLSessionTransport(timeout: profile.requestTimeoutSeconds),
+            transport: transport ?? URLSessionTransport(timeoutsOf: profile),
             capabilityResolver: CloudCapabilityResolver(profile: profile),
             retryPolicy: ChatCompletionRetryPolicy(maxAttempts: maximumHTTPAttempts),
             countCapabilityLookupHTTPAttempts: countCapabilityLookupHTTPAttempts
@@ -894,6 +905,7 @@ public final class CloudSQLGenerator: SQLGenerator, Sendable {
         )
         let prompt = bundle.prompt
         let started = Date()
+        let promptCacheKey = profile.makePromptCacheKey()
         let availableHTTPAttempts = countCapabilityLookupHTTPAttempts
             ? HTTPAttemptBudget.remaining(
                 maximumHTTPAttempts: retryPolicy.maxAttempts,
@@ -949,6 +961,7 @@ public final class CloudSQLGenerator: SQLGenerator, Sendable {
                 instructions: instructions,
                 prompt: prompt,
                 capabilities: capabilities,
+                promptCacheKey: promptCacheKey,
                 maximumHTTPAttempts: remainingHTTPAttempts,
                 usageSink: config.usageSink
             )
@@ -1054,6 +1067,7 @@ public final class CloudSQLGenerator: SQLGenerator, Sendable {
         instructions: String,
         prompt: String,
         capabilities: CloudModelCapabilities,
+        promptCacheKey: String?,
         maximumHTTPAttempts: Int? = nil,
         usageSink: (@Sendable (SQLGenerationUsageEvent) -> Void)? = nil
     ) async throws -> CloudSQLResponseParser.ParsedResult {
@@ -1061,7 +1075,8 @@ public final class CloudSQLGenerator: SQLGenerator, Sendable {
             apiKey: apiKey,
             instructions: instructions,
             prompt: prompt,
-            capabilities: capabilities
+            capabilities: capabilities,
+            promptCacheKey: promptCacheKey
         )
         return try await performBuiltRequest(
             built,

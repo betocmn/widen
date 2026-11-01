@@ -4,6 +4,14 @@ import Testing
 @testable import WidenKit
 
 extension CloudModelProfile {
+    /// The Particle-1 production profile pointed at a `particle.test` host.
+    /// Like production, it pins the returned model to `particle-ai/particle-1`.
+    static let particleTest: CloudModelProfile = {
+        var profile = CloudModelProfile.particle
+        profile.baseURL = URL(string: "https://particle.test/v1")!
+        return profile
+    }()
+
     /// The OpenRouter eval profile pointed at an `openrouter.test` host. The
     /// returned model is left unpinned, as these suites always ran; tests of
     /// canonical-version pinning set it with `pinningReturnedModel(_:)`.
@@ -24,6 +32,12 @@ extension CloudModelProfile {
         var copy = self
         copy.requestedModelID = modelID
         return copy
+    }
+}
+
+extension CloudModelProfile: CustomTestStringConvertible {
+    public var testDescription: String {
+        "\(provider.rawValue) \(requestedModelID) at \(baseURL.host ?? "?")"
     }
 }
 
@@ -63,6 +77,75 @@ final class RecordingTransport: HTTPTransport, @unchecked Sendable {
             httpVersion: "HTTP/1.1",
             headerFields: ["Content-Type": "application/json"].merging(headers) { _, new in new }
         )!
+    }
+}
+
+enum ParticleTestSupport {
+    static let returnedModelID = "particle-ai/particle-1"
+
+    /// Asserts a chat request carries only what Particle-1 should receive for
+    /// a call site, and returns its body. Never sent: OpenRouter's provider
+    /// block and X-* headers, `temperature`, `max_tokens`, `n`, `seed`, or a
+    /// tool-message `name`.
+    @discardableResult
+    static func expectRequestShape(
+        _ request: URLRequest,
+        callSite: CloudCallSite,
+        profile: CloudModelProfile = .particleTest,
+        requiresPromptCacheKey: Bool = true
+    ) throws -> [String: Any] {
+        let policy = profile.policy(for: callSite)
+        let headers = request.allHTTPHeaderFields ?? [:]
+        #expect(request.url == profile.chatCompletionsURL)
+        #expect(request.httpMethod == "POST")
+        #expect(headers["Authorization"]?.hasPrefix("Bearer ") == true)
+        #expect(headers["Content-Type"] == "application/json")
+        #expect(!headers.keys.contains { $0.lowercased().hasPrefix("x-") })
+
+        let body = try requestBody(request)
+        #expect(body["model"] as? String == "particle-1")
+        #expect(body["stream"] as? Bool == false)
+        #expect(body["max_completion_tokens"] as? Int == policy.maxCompletionTokens)
+        #expect(body["reasoning_effort"] as? String == policy.reasoningEffort?.rawValue)
+        for key in ["provider", "temperature", "max_tokens", "n", "seed"] {
+            #expect(body[key] == nil, "Particle request must not send \(key)")
+        }
+        if requiresPromptCacheKey {
+            let cacheKey = try #require(body["prompt_cache_key"] as? String)
+            #expect(cacheKey.hasPrefix("widen-"))
+            #expect(cacheKey.utf8.count <= 256)
+        } else {
+            #expect(body["prompt_cache_key"] == nil)
+        }
+
+        switch callSite {
+        case .agentTurn:
+            #expect(body["tools"] is [Any])
+            #expect(body["tool_choice"] as? String == "required")
+            #expect(body["parallel_tool_calls"] as? Bool == true)
+            #expect(body["response_format"] == nil)
+            let messages = try #require(body["messages"] as? [[String: Any]])
+            #expect(messages.allSatisfy { $0["name"] == nil })
+        case .oneShotSQL, .connectivityProbe, .sessionTitle:
+            #expect(body["tools"] == nil)
+            #expect(body["tool_choice"] == nil)
+            #expect(body["parallel_tool_calls"] == nil)
+            let format = body["response_format"] as? [String: Any]
+            #expect(
+                format?["type"] as? String
+                    == (policy.responseFormat == .jsonObject ? "json_object" : nil)
+            )
+        }
+        return body
+    }
+
+    static func promptCacheKey(in request: URLRequest) throws -> String? {
+        try requestBody(request)["prompt_cache_key"] as? String
+    }
+
+    private static func requestBody(_ request: URLRequest) throws -> [String: Any] {
+        let data = try #require(request.httpBody)
+        return try #require(try JSONSerialization.jsonObject(with: data) as? [String: Any])
     }
 }
 

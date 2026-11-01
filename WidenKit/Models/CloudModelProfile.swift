@@ -117,12 +117,20 @@ public struct CloudModelProfile: Equatable, Sendable {
     public internal(set) var errorTypeCategories: [String: CloudRequestFailure.Category]
     public internal(set) var requestIDHeaderNames: [String]
     public internal(set) var requestTimeoutSeconds: TimeInterval
+    /// `nil` keeps URLSession's default resource timeout.
+    public internal(set) var resourceTimeoutSeconds: TimeInterval?
     /// Key prefixes that belong to other providers and must never be sent here.
     public internal(set) var foreignAPIKeyPrefixes: [String]
     public internal(set) var evalAPIKeyEnvironmentVariable: String
 
     public func policy(for callSite: CloudCallSite) -> CloudCallSitePolicy {
         callSites[callSite] ?? .unconfigured
+    }
+
+    /// One `prompt_cache_key` per generation run, shared by every request in
+    /// that run. It holds no user data and stays well under 256 bytes.
+    func makePromptCacheKey() -> String? {
+        usesPromptCacheKey ? "widen-" + UUID().uuidString.lowercased() : nil
     }
 
     var chatCompletionsURL: URL {
@@ -184,6 +192,72 @@ public struct CloudModelProfile: Equatable, Sendable {
 }
 
 extension CloudModelProfile {
+    /// Particle-1 at particle.ai. Its capabilities are fixed here, so no
+    /// catalog request is ever made with a Particle key. Prices are peak list
+    /// prices, so cost estimates from them are an upper bound.
+    public static let particle = CloudModelProfile(
+        provider: .particle,
+        displayName: "Particle-1",
+        baseURL: URL(string: "https://api.particle.ai/v1")!,
+        chatCompletionsPath: "chat/completions",
+        modelsPath: "models",
+        requestedModelID: "particle-1",
+        expectedReturnedModelID: "particle-ai/particle-1",
+        identityPolicy: .exactReturnedModelID,
+        capabilityResolution: .staticCapabilities(
+            CloudModelCapabilities(
+                supportsResponseFormat: true,
+                supportsStructuredOutputs: false,
+                supportsTools: true,
+                supportsToolChoice: true,
+                supportsTemperature: false,
+                supportsSeed: false,
+                supportsMaxTokens: false,
+                supportsMaxCompletionTokens: true,
+                contextLength: 1_048_576,
+                maximumCompletionTokens: 131_072,
+                capabilitySource: .staticProfile,
+                fetchedAt: Date(timeIntervalSince1970: 0)
+            )
+        ),
+        pricing: CloudModelPricing(input: 0.25, cachedInput: 0.03, output: 1.00),
+        reportsUsageCost: false,
+        callSites: [
+            .agentTurn: CloudCallSitePolicy(
+                reasoningEffort: .high,
+                maxCompletionTokens: 16_000,
+                responseFormat: .none
+            ),
+            .oneShotSQL: CloudCallSitePolicy(
+                reasoningEffort: .high,
+                maxCompletionTokens: 16_000,
+                responseFormat: .jsonObject
+            ),
+            .connectivityProbe: CloudCallSitePolicy(
+                reasoningEffort: ReasoningEffort.none,
+                maxCompletionTokens: 256,
+                responseFormat: .jsonObject
+            ),
+            .sessionTitle: CloudCallSitePolicy(
+                reasoningEffort: ReasoningEffort.none,
+                maxCompletionTokens: 64,
+                responseFormat: .none
+            ),
+        ],
+        parallelToolCalls: true,
+        usesPromptCacheKey: true,
+        echoesReasoningContent: false,
+        sendsToolMessageName: false,
+        usesOpenRouterRouting: false,
+        errorCodeCategories: [:],
+        errorTypeCategories: [:],
+        requestIDHeaderNames: ["X-Request-Id", "Request-Id"],
+        requestTimeoutSeconds: 180,
+        resourceTimeoutSeconds: 300,
+        foreignAPIKeyPrefixes: ["sk-or-"],
+        evalAPIKeyEnvironmentVariable: "WIDEN_EVAL_PARTICLE_API_KEY"
+    )
+
     /// GPT-5.5 through OpenRouter, the previous production model. Evals keep
     /// it to compare against; it sends the same requests the app sent before.
     public static let openRouterGPT55 = openRouter(
@@ -234,8 +308,19 @@ extension CloudModelProfile {
             errorTypeCategories: [:],
             requestIDHeaderNames: ["X-Request-Id", "X-Generation-Id"],
             requestTimeoutSeconds: 90,
-            foreignAPIKeyPrefixes: [],
+            resourceTimeoutSeconds: nil,
+            foreignAPIKeyPrefixes: ["pai-"],
             evalAPIKeyEnvironmentVariable: "WIDEN_EVAL_OPENROUTER_API_KEY"
+        )
+    }
+}
+
+extension URLSessionTransport {
+    /// A transport with the profile's request and resource timeouts.
+    init(timeoutsOf profile: CloudModelProfile) {
+        self.init(
+            timeout: profile.requestTimeoutSeconds,
+            resourceTimeout: profile.resourceTimeoutSeconds
         )
     }
 }

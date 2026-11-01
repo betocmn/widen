@@ -58,7 +58,8 @@ struct ChatToolRequestBuilder: Sendable {
         messages: [ChatToolMessage],
         tools: [ChatToolDefinition],
         capabilities: CloudModelCapabilities,
-        requireToolChoice: Bool = true
+        requireToolChoice: Bool = true,
+        promptCacheKey: String? = nil
     ) throws -> BuiltRequest {
         let policy = profile.policy(for: .agentTurn)
         var body: [String: Any] = [
@@ -79,6 +80,15 @@ struct ChatToolRequestBuilder: Sendable {
         }
         if capabilities.supportsToolChoice, requireToolChoice {
             body["tool_choice"] = "required"
+        }
+        if let parallelToolCalls = profile.parallelToolCalls {
+            body["parallel_tool_calls"] = parallelToolCalls
+        }
+        if let reasoningEffort = policy.reasoningEffort {
+            body["reasoning_effort"] = reasoningEffort.rawValue
+        }
+        if profile.usesPromptCacheKey, let promptCacheKey {
+            body["prompt_cache_key"] = promptCacheKey
         }
         if profile.usesOpenRouterRouting {
             OpenRouterProviderPreferences.apply(to: &body)
