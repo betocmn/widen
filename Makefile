@@ -108,7 +108,7 @@ eval-cloud-agent: eval-build
 ## Run a tiny OpenRouter transport and structured-response smoke suite
 eval-openrouter-smoke: eval-build
 	@set -a; if [ -f .env.eval.local ]; then . ./.env.eval.local; fi; set +a; \
-	$(EVAL) --backend cloud --model "$(MODEL)" --suite Evals/suites/openrouter-smoke-v1.json $(filter-out --suite Evals/suites/text-to-sql-v1.json,$(EVAL_ARGS))
+	$(EVAL) --backend cloud --model "$(MODEL)" --suite Evals/suites/provider-smoke-v1.json $(filter-out --suite Evals/suites/text-to-sql-v1.json,$(EVAL_ARGS))
 
 ## Run the text-to-SQL eval suite against local and cloud backends
 eval-all: eval-build

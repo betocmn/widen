@@ -191,8 +191,9 @@ enum EvalReporter {
     }
 
     private static func evaluationScope(for run: EvalRun) -> String {
-        if run.manifest.evaluationMode == "openrouter-transport-smoke" {
-            return "**Evaluation scope:** The smoke run invokes the shared production text-to-SQL pipeline only to exercise OpenRouter transport, request-mode selection, structured-response parsing, retry accounting, and safe provider diagnostics. It does not establish SQL semantic accuracy."
+        // Runs recorded before the provider-smoke rename keep the legacy mode name.
+        if ["provider-transport-smoke", "openrouter-transport-smoke"].contains(run.manifest.evaluationMode) {
+            return "**Evaluation scope:** The smoke run invokes the shared production text-to-SQL pipeline only to exercise provider transport, request-mode selection, structured-response parsing, retry accounting, and safe provider diagnostics. It does not establish SQL semantic accuracy."
         }
 
         let verificationAttempted = postgresVerificationAttempted(in: run.summary)

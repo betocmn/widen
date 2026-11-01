@@ -1,10 +1,10 @@
 {
-  "name": "openrouter-smoke-v1",
+  "name": "provider-smoke-v1",
   "version": "1",
   "cases": [
     {
-      "id": "openrouter.simple-select",
-      "schemaFixture": "openrouter-smoke",
+      "id": "smoke.simple-select",
+      "schemaFixture": "provider-smoke",
       "question": "Write a SQL query that selects public.users.id and public.users.email from public.users.",
       "expected": {
         "decision": "sql",
@@ -14,8 +14,8 @@
       }
     },
     {
-      "id": "openrouter.simple-aggregate",
-      "schemaFixture": "openrouter-smoke",
+      "id": "smoke.simple-aggregate",
+      "schemaFixture": "provider-smoke",
       "question": "Count orders by status.",
       "expected": {
         "decision": "sql",
@@ -26,8 +26,8 @@
       }
     },
     {
-      "id": "openrouter.clarification",
-      "schemaFixture": "openrouter-smoke",
+      "id": "smoke.clarification",
+      "schemaFixture": "provider-smoke",
       "question": "Show performance.",
       "expected": {
         "decision": "clarify",
@@ -35,8 +35,8 @@
       }
     },
     {
-      "id": "openrouter.mixed-case-quoted-identifier",
-      "schemaFixture": "openrouter-smoke",
+      "id": "smoke.mixed-case-quoted-identifier",
+      "schemaFixture": "provider-smoke",
       "question": "Write a SQL query that selects public.\"UserEvents\".\"eventType\" from public.\"UserEvents\".",
       "expected": {
         "decision": "sql",
@@ -46,8 +46,8 @@
       }
     },
     {
-      "id": "openrouter.two-table-join",
-      "schemaFixture": "openrouter-smoke",
+      "id": "smoke.two-table-join",
+      "schemaFixture": "provider-smoke",
       "question": "Return public.users.email and public.orders.id where public.orders.user_id equals public.users.id.",
       "expected": {
         "decision": "sql",

@@ -1694,6 +1694,53 @@ struct TextToSQLEvalTests {
         try TextToSQLEvalSuiteValidator.validate(suite: suite, suiteURL: suiteURL)
     }
 
+    @Test func validatesProviderSmokeSuiteAndRunnerPrefix() throws {
+        let root = URL(fileURLWithPath: #filePath)
+            .deletingLastPathComponent()
+            .deletingLastPathComponent()
+        let suiteURL = root.appendingPathComponent("Evals/suites/provider-smoke-v1.json")
+        let suiteData = try Data(contentsOf: suiteURL)
+        let suite = try JSONDecoder().decode(TextToSQLEvalSuite.self, from: suiteData)
+
+        try TextToSQLEvalSuiteValidator.validate(suite: suite, suiteURL: suiteURL)
+        #expect(suite.name == "provider-smoke-v1")
+        #expect(suite.name.hasPrefix("provider-smoke"))
+        #expect(!suite.cases.isEmpty)
+        #expect(suite.cases.allSatisfy { $0.id.hasPrefix("smoke.") })
+        #expect(Set(suite.cases.map(\.schemaFixture)) == ["provider-smoke"])
+        #expect(
+            FileManager.default.fileExists(
+                atPath: root.appendingPathComponent("Evals/schemas/provider-smoke-schema.json").path
+            )
+        )
+        #expect(
+            !FileManager.default.fileExists(
+                atPath: root.appendingPathComponent("Evals/suites/openrouter-smoke-v1.json").path
+            )
+        )
+
+        let runnerText = try String(
+            contentsOf: root.appendingPathComponent("WidenEval/EvalRunner.swift"),
+            encoding: .utf8
+        )
+        #expect(runnerText.contains(#"suite.name.hasPrefix("provider-smoke")"#))
+        #expect(runnerText.contains(#""provider-transport-smoke""#))
+        #expect(runnerText.contains(#""provider-transport-smoke-v1""#))
+
+        let reporterText = try String(
+            contentsOf: root.appendingPathComponent("WidenEval/EvalReporter.swift"),
+            encoding: .utf8
+        )
+        #expect(reporterText.contains(#""provider-transport-smoke""#))
+        #expect(reporterText.contains(#""openrouter-transport-smoke""#))
+
+        let makefileText = try String(
+            contentsOf: root.appendingPathComponent("Makefile"),
+            encoding: .utf8
+        )
+        #expect(makefileText.contains("--suite Evals/suites/provider-smoke-v1.json"))
+    }
+
     @Test func staticSuiteValidationAllowsSQLCasesWithoutSemanticMetadata() throws {
         let schemaDirectory = FileManager.default.temporaryDirectory
             .appendingPathComponent("widen-validator-\(UUID().uuidString)", isDirectory: true)

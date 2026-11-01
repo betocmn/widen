@@ -205,7 +205,7 @@ struct EvalRunner {
             schemaDirectory: schemaDirectory
         )
         let databaseDirectory = evalDirectory.appendingPathComponent("databases", isDirectory: true)
-        let isOpenRouterSmoke = suite.name.hasPrefix("openrouter-smoke")
+        let isTransportSmoke = suite.name.hasPrefix("provider-smoke")
         let expectedCanonicalModelID = options.backendMode.backends.contains(.cloud)
             ? OpenRouterCatalog.expectedCanonicalModelID(forRequestedModelID: options.model)
             : nil
@@ -316,8 +316,8 @@ struct EvalRunner {
                 suiteName: suite.name,
                 suiteVersion: suite.version,
                 suitePath: suiteURL.path,
-                evaluationMode: isOpenRouterSmoke
-                    ? "openrouter-transport-smoke"
+                evaluationMode: isTransportSmoke
+                    ? "provider-transport-smoke"
                     : options.semanticDatabase
                     ? "production-pipeline-static-shape-plus-seeded-postgres-semantic"
                     : "production-pipeline-static-shape",
@@ -346,8 +346,8 @@ struct EvalRunner {
                 repeatCount: options.repeatCount,
                 caseTimeoutSeconds: options.caseTimeoutSeconds,
                 suiteFileHash: currentCompatibility.suiteFileHash,
-                scorerVersion: isOpenRouterSmoke
-                    ? "openrouter-transport-smoke-v1"
+                scorerVersion: isTransportSmoke
+                    ? "provider-transport-smoke-v1"
                     : "production-pipeline-static-shape-v1",
                 scorerSourceHash: scorerSourceHash,
                 schemaFixtureHashes: currentCompatibility.schemaFixtureHashes,
