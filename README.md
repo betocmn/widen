@@ -256,13 +256,13 @@ refreshes the active database's schema; **Cmd+,** opens Settings.
 Setup, Make targets, and release scripts share Xcode discovery: an explicit
 `DEVELOPER_DIR` takes priority, followed by the full Xcode selected by
 `xcode-select`, `/Applications/Xcode.app`, and other `/Applications/Xcode*.app`
-installations. Xcode 26 or later is required; Xcode 27 is supported. To choose
-a different installation, use
+installations. Xcode 26 or later is required; Xcode 27 is supported, and older
+Xcode installations are skipped. To choose a different installation, use
 `make build DEVELOPER_DIR=/path/to/Xcode.app/Contents/Developer`.
 
-If no full Xcode installation is found, Conductor setup skips package
+If no Xcode 26 or later installation is found, Conductor setup skips package
 resolution and leaves the workspace available for editing. Command Line Tools
-alone cannot build or test the app. After installing Xcode, rerun
+or an older Xcode cannot build or test the app. After installing Xcode, rerun
 `bash .conductor/setup.sh`. Setup and the normal build/test commands do not
 require Apple Intelligence, Apple model downloads, or cloud LLM credentials.
 

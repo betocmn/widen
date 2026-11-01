@@ -45,7 +45,8 @@ for source builds because optional Foundation Models and Liquid Glass code are
 compiled behind availability checks against the macOS 26 SDK. Setup, Make
 targets, and release scripts use `scripts/xcode-developer-dir.sh` to honor
 `DEVELOPER_DIR`, then prefer the selected full Xcode, the standard Xcode app,
-and other installed Xcode apps. For an explicit override:
+and other installed Xcode apps, skipping any older than Xcode 26. For an
+explicit override:
 
 ```sh
 make build DEVELOPER_DIR=/path/to/Xcode.app/Contents/Developer

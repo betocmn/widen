@@ -17,9 +17,9 @@ if [ "${CONDUCTOR_IS_LOCAL:-1}" = "1" ]; then
     # failure, must still fail setup so the underlying error stays visible.
     make setup
   else
-    echo "Skipping Swift package dependency resolution: full Xcode was not found."
+    echo "Skipping Swift package dependency resolution: Xcode 26 or later was not found."
     echo "The workspace is available for editing, but building and testing require Xcode 26 or later."
-    echo "Command Line Tools alone are not sufficient. Install Xcode, then rerun:"
+    echo "Command Line Tools or an older Xcode is not sufficient. Install Xcode 26 or later, then rerun:"
     echo "  DEVELOPER_DIR=/path/to/Xcode.app/Contents/Developer bash .conductor/setup.sh"
   fi
 else
