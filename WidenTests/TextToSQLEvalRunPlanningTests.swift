@@ -210,6 +210,47 @@ struct TextToSQLEvalRunPlanningTests {
         }
     }
 
+    @Test func compatibilityTreatsAMissingCriticModeAsDisabled() throws {
+        // A manifest from before the critic recorded no mode and ran without it.
+        let previous = Self.compatibility()
+        var current = Self.compatibility()
+        current.schemaAgentCriticMode = SchemaToolAgentCriticMode.disabled.rawValue
+        try TextToSQLEvalResumeCompatibility.validate(previous: previous, current: current)
+
+        current.schemaAgentCriticMode = SchemaToolAgentCriticMode.enabled.rawValue
+        #expect(
+            throws: TextToSQLEvalResumeCompatibilityError(issues: [
+                TextToSQLEvalResumeCompatibilityIssue(
+                    field: "schema agent critic mode",
+                    previous: "disabled",
+                    current: "enabled"
+                ),
+            ])
+        ) {
+            try TextToSQLEvalResumeCompatibility.validate(previous: previous, current: current)
+        }
+    }
+
+    @Test func compatibilityRejectsAChangedCriticMode() throws {
+        var previous = Self.compatibility()
+        previous.schemaAgentCriticMode = SchemaToolAgentCriticMode.enabled.rawValue
+        var current = previous
+        try TextToSQLEvalResumeCompatibility.validate(previous: previous, current: current)
+
+        current.schemaAgentCriticMode = SchemaToolAgentCriticMode.disabled.rawValue
+        #expect(
+            throws: TextToSQLEvalResumeCompatibilityError(issues: [
+                TextToSQLEvalResumeCompatibilityIssue(
+                    field: "schema agent critic mode",
+                    previous: "enabled",
+                    current: "disabled"
+                ),
+            ])
+        ) {
+            try TextToSQLEvalResumeCompatibility.validate(previous: previous, current: current)
+        }
+    }
+
     @Test func resumeMissingRunsOnlyMissingOrNotEvaluatedSlots() {
         let expected = Self.expectedKeys(caseIDs: ["case.a", "case.b", "case.c"], repeats: 1)
         let previousResults = [

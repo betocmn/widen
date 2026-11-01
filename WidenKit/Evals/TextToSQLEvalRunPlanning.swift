@@ -314,6 +314,9 @@ public struct TextToSQLEvalResumeCompatibilityManifest: Equatable, Sendable {
     public var schemaAgentClarificationCorrectionMode: String?
     public var schemaAgentIntentCoverageMode: String?
     public var schemaAgentPlanConsistencyMode: String?
+    /// The critic mode the run's agent configuration recorded, or nil for a
+    /// run without the schema agent or from before the critic existed.
+    public var schemaAgentCriticMode: String?
     public var semanticDatabaseEnabled: Bool
     public var scorerSourceHash: String
     public var semanticComparatorSourceHash: String?
@@ -334,6 +337,7 @@ public struct TextToSQLEvalResumeCompatibilityManifest: Equatable, Sendable {
         schemaAgentClarificationCorrectionMode: String? = nil,
         schemaAgentIntentCoverageMode: String? = nil,
         schemaAgentPlanConsistencyMode: String? = nil,
+        schemaAgentCriticMode: String? = nil,
         semanticDatabaseEnabled: Bool,
         scorerSourceHash: String,
         semanticComparatorSourceHash: String?,
@@ -353,6 +357,7 @@ public struct TextToSQLEvalResumeCompatibilityManifest: Equatable, Sendable {
         self.schemaAgentClarificationCorrectionMode = schemaAgentClarificationCorrectionMode
         self.schemaAgentIntentCoverageMode = schemaAgentIntentCoverageMode
         self.schemaAgentPlanConsistencyMode = schemaAgentPlanConsistencyMode
+        self.schemaAgentCriticMode = schemaAgentCriticMode
         self.semanticDatabaseEnabled = semanticDatabaseEnabled
         self.scorerSourceHash = scorerSourceHash
         self.semanticComparatorSourceHash = semanticComparatorSourceHash
@@ -456,6 +461,12 @@ public enum TextToSQLEvalResumeCompatibility {
             issues: &issues
         )
         compare(
+            "schema agent critic mode",
+            normalizedSchemaAgentCriticMode(previous.schemaAgentCriticMode),
+            normalizedSchemaAgentCriticMode(current.schemaAgentCriticMode),
+            issues: &issues
+        )
+        compare(
             "semantic DB",
             String(previous.semanticDatabaseEnabled),
             String(current.semanticDatabaseEnabled),
@@ -531,6 +542,11 @@ public enum TextToSQLEvalResumeCompatibility {
 
     private static func normalizedSchemaAgentPlanConsistencyMode(_ value: String?) -> String {
         value ?? SchemaToolAgentPlanConsistencyMode.diagnosticsOnly.rawValue
+    }
+
+    /// A run that recorded no critic mode ran without the critic.
+    private static func normalizedSchemaAgentCriticMode(_ value: String?) -> String {
+        value ?? SchemaToolAgentCriticMode.disabled.rawValue
     }
 }
 

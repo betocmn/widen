@@ -216,11 +216,21 @@ struct TextToSQLEvalCloudSettingsTests {
                 "forcedTerminalMode": "terminalToolOnly",
                 "maximumForcedTerminalRequests": "2",
                 "forcedTerminalTimeReserveSeconds": "45",
+                "criticMode": "enabled",
+                "maximumCriticRevisions": "2",
+                "maximumCriticHTTPAttempts": "2",
+                "criticMinimumRemainingSeconds": "30",
+                "criticRevisionMinimumRemainingSeconds": "60",
             ]
         )
         var configuration = SchemaToolSQLAgentConfiguration.default
         configuration.wallClockTimeoutSeconds = 90.5
+        configuration.criticMode = .disabled
         #expect(configuration.reportedSettings["wallClockTimeoutSeconds"] == "90.5")
+        #expect(
+            configuration.reportedSettings[TextToSQLEvalSchemaAgentCritic.reportedSettingsKey]
+                == "disabled"
+        )
     }
 
     @Test func widenEvalSelectsTheProfileFromTheModelAndReadsOnlyItsKey() throws {

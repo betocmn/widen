@@ -146,7 +146,7 @@ public struct SchemaToolSQLAgentConfiguration: Equatable, Sendable {
 
     /// The call budgets and wall clock, as an eval records them in its run
     /// manifest for evidence. Keys are stable; values are plain numbers,
-    /// except the forced-terminal mode's name.
+    /// except the forced-terminal and critic modes' names.
     public var reportedSettings: [String: String] {
         [
             "maximumModelTurns": String(maximumModelTurns),
@@ -165,6 +165,14 @@ public struct SchemaToolSQLAgentConfiguration: Equatable, Sendable {
             "forcedTerminalMode": forcedTerminalMode.rawValue,
             "maximumForcedTerminalRequests": String(maximumForcedTerminalRequests),
             "forcedTerminalTimeReserveSeconds": String(format: "%g", forcedTerminalTimeReserveSeconds),
+            "criticMode": criticMode.rawValue,
+            "maximumCriticRevisions": String(maximumCriticRevisions),
+            "maximumCriticHTTPAttempts": String(maximumCriticHTTPAttempts),
+            "criticMinimumRemainingSeconds": String(format: "%g", criticMinimumRemainingSeconds),
+            "criticRevisionMinimumRemainingSeconds": String(
+                format: "%g",
+                criticRevisionMinimumRemainingSeconds
+            ),
         ]
     }
 
