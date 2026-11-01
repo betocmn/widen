@@ -1,14 +1,14 @@
 import Foundation
 
-/// Deterministic stand-in for the on-device parser: handles connection URLs
-/// and KEY=VALUE lines without any language model. Used in mock-AI mode and
-/// tests.
+/// The paste-autofill parser: handles connection URLs, KEY=VALUE lines and
+/// JSON objects with fixed rules and no language model, so pasted credentials
+/// never leave this Mac.
 public struct MockConnectionDetailsParser: ConnectionDetailsParsing {
     public init() {}
 
     public func parse(_ text: String) async throws -> ParsedConnectionDetails {
         // A pasted URL is parsed deterministically and takes precedence over the
-        // KEY=VALUE scan, matching the on-device parser's merge.
+        // KEY=VALUE scan.
         let keyValues = Self.details(fromKeyValues: text)
         if let url = ConnectionURLParser.details(in: text) {
             return keyValues.overridden(by: url)

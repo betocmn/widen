@@ -87,11 +87,11 @@ public struct SQLRepairContext: Equatable, Sendable {
     }
 }
 
-/// Compact conversational context for one generation. The on-device model
-/// has a small context window, so this carries only what a follow-up needs:
-/// a short ordered chat transcript, the SQL currently on screen, and the last
-/// error when the previous run failed. With it, "make it last month instead"
-/// or "the query is failing" can be answered against the right query.
+/// Compact conversational context for one generation. It carries only what a
+/// follow-up needs: a short ordered chat transcript, the SQL currently on
+/// screen, and the last error when the previous run failed. With it, "make it
+/// last month instead" or "the query is failing" can be answered against the
+/// right query.
 public struct SQLGenerationContext: Equatable, Sendable {
     public var mode: SQLGenerationMode
     /// Earlier user questions, oldest first, excluding the current one.
@@ -172,8 +172,9 @@ public struct SchemaDiscoveryRequestResult: Codable, Equatable, Sendable {
 
 /// A backend that turns an English question plus a schema into one PostgreSQL
 /// statement — a SELECT/WITH read, or an INSERT/UPDATE/DELETE write when the
-/// user asks to modify data. Implementations: `FoundationModelsSQLGenerator`
-/// (Apple's on-device model) and `MockSQLGenerator` (tests / developer mode).
+/// user asks to modify data. Implementations: `SchemaToolSQLAgent` (a cloud
+/// model that discovers schema through tools), `CloudSQLGenerator` (one-shot
+/// cloud prompt) and `MockSQLGenerator` (tests / developer mode).
 public protocol SQLGenerator: Sendable {
     func generateSQL(
         question: String,

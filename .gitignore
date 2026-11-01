@@ -27,4 +27,3 @@ sparkle_private_key.pem
 # Conductor
 .context/
 .conductor/settings.local.toml
-build-xcode27/

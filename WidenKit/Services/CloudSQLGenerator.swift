@@ -874,8 +874,8 @@ struct OpenRouterConnectivityCheck: Sendable {
 }
 
 /// Generates SQL with a hosted model through an OpenAI-compatible
-/// chat-completions API described by a cloud model profile. It keeps the same
-/// SQL prompts as the local model, but chooses the transport mode from the
+/// chat-completions API described by a cloud model profile. It sends the full
+/// schema prompt in one request and chooses the transport mode from the
 /// profile's model capabilities.
 public final class CloudSQLGenerator: SQLGenerator, Sendable {
     static let schemaCharacterBudget = 60_000
