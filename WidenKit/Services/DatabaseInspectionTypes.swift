@@ -12,7 +12,7 @@ public enum DatabaseInspectionResultAudience: String, Codable, Equatable, Sendab
     case cloud
 }
 
-public enum DatabaseInspectionErrorCode: String, Codable, Equatable, Hashable, Sendable {
+public enum DatabaseInspectionErrorCode: String, Codable, CaseIterable, Equatable, Hashable, Sendable {
     case unknownTool
     case malformedArguments
     case missingArgument

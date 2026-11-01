@@ -80,7 +80,7 @@ public enum TextToSQLDecision: Equatable, Sendable {
     case failed(TextToSQLPipelineFailure)
 }
 
-public enum TextToSQLStage: String, Codable, Equatable, Sendable {
+public enum TextToSQLStage: String, Codable, CaseIterable, Equatable, Sendable {
     case modelGeneration
     case postprocessing
     case canonicalization
@@ -98,7 +98,7 @@ public enum TextToSQLStageOutcome: String, Codable, Equatable, Sendable {
     case skipped
 }
 
-public enum TextToSQLFailureCategory: String, Codable, Equatable, Sendable {
+public enum TextToSQLFailureCategory: String, Codable, CaseIterable, Equatable, Sendable {
     case backendUnavailable
     case transport
     case contextWindow

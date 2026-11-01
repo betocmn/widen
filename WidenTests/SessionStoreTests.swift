@@ -116,6 +116,408 @@ struct SessionStoreTests {
             try store.load()
         }
     }
+
+    // MARK: - Saved cloud generations
+
+    private func writeSessionsFile(_ json: String, for store: SessionStore) throws {
+        try FileManager.default.createDirectory(
+            at: store.fileURL.deletingLastPathComponent(),
+            withIntermediateDirectories: true
+        )
+        try Data(json.utf8).write(to: store.fileURL)
+    }
+
+    /// Every key path in a JSON document, with array elements folded into
+    /// `[]`, so a renamed or dropped key shows up by name in a failure.
+    private func jsonKeyPaths(_ value: Any, prefix: String = "") -> Set<String> {
+        switch value {
+        case let object as [String: Any]:
+            return object.reduce(into: []) { paths, entry in
+                let path = prefix.isEmpty ? entry.key : "\(prefix).\(entry.key)"
+                paths.insert(path)
+                paths.formUnion(jsonKeyPaths(entry.value, prefix: path))
+            }
+        case let array as [Any]:
+            return array.reduce(into: []) { paths, element in
+                paths.formUnion(jsonKeyPaths(element, prefix: "\(prefix)[]"))
+            }
+        default:
+            return []
+        }
+    }
+
+    @Test func savedCloudGenerationsDecode() throws {
+        let (store, dir) = makeTempStore()
+        defer { try? FileManager.default.removeItem(at: dir) }
+        try writeSessionsFile(SavedCloudSessionsFixture.json, for: store)
+
+        let session = try #require(try store.load().first)
+
+        #expect(session.messages.map(\.role) == [.user, .assistant, .user, .assistant])
+        let oneShot = try #require(session.messages[1].generation?.backendMetadata)
+        #expect(oneShot.structuredOutputMode == .strictJSONSchema)
+        #expect(oneShot.requestedModelID == "openai/gpt-5.5")
+        #expect(oneShot.agentDiagnostics == nil)
+
+        let generation = try #require(session.lastGeneration)
+        #expect(session.messages[3].generation == generation)
+        #expect(generation.riskLevel == .medium)
+        let metadata = try #require(generation.backendMetadata)
+        #expect(metadata.structuredOutputMode == .promptOnlyJSON)
+        #expect(metadata.agentTerminalOutcome == "sql")
+        #expect(metadata.agentSchemaToolCallCount == 2)
+        #expect(metadata.agentInspectionToolCallCount == 2)
+        let diagnostics = try #require(metadata.agentDiagnostics)
+        #expect(diagnostics.appSideRejectionReason == .uninspectedObject)
+        #expect(diagnostics.schemaEvidence.describedTableIDs == ["public.orders", "public.users"])
+        #expect(diagnostics.planConsistencyCorrectionSucceeded)
+
+        #expect(generation.schemaToolCalls.map(\.outcome) == [.success, .error])
+        #expect(generation.schemaToolCalls.map(\.errorCode) == [nil, .staleObjectID])
+        #expect(generation.inspectionToolCalls.map(\.outcome) == [.success, .error])
+        #expect(generation.inspectionToolCalls.map(\.errorCode) == [nil, .policyDenied])
+    }
+
+    @Test func savedCloudGenerationsSurviveSaveUnchanged() throws {
+        let (store, dir) = makeTempStore()
+        defer { try? FileManager.default.removeItem(at: dir) }
+        try writeSessionsFile(SavedCloudSessionsFixture.json, for: store)
+
+        let loaded = try store.load()
+        try store.save(loaded)
+        #expect(try store.load() == loaded)
+
+        let fixture = try #require(
+            JSONSerialization.jsonObject(with: Data(SavedCloudSessionsFixture.json.utf8)) as? NSArray
+        )
+        let saved = try #require(
+            JSONSerialization.jsonObject(with: Data(contentsOf: store.fileURL)) as? NSArray
+        )
+        // Frozen key set. A renamed or dropped key loses data that older
+        // builds wrote; a new field must be optional (omitted while nil) or
+        // be added to the fixture on purpose.
+        let fixtureKeys = jsonKeyPaths(fixture)
+        let savedKeys = jsonKeyPaths(saved)
+        #expect(fixtureKeys.subtracting(savedKeys).sorted() == [])
+        #expect(savedKeys.subtracting(fixtureKeys).sorted() == [])
+        #expect(saved == fixture)
+    }
+
+    @Test func persistedEnumRawValuesAreFrozen() {
+        // These raw values are stored in sessions.json and in eval results.
+        // An older build can't decode a case it doesn't know, so adding,
+        // removing, or renaming one loses saved data on rollback.
+        #expect(SQLRiskLevel.allCases.map(\.rawValue) == ["low", "medium", "high"])
+        #expect(
+            OpenRouterStructuredOutputMode.allCases.map(\.rawValue)
+                == ["strictJSONSchema", "promptOnlyJSON"]
+        )
+        #expect(
+            OpenRouterSchemaToolAppRejectionReason.allCases.map(\.rawValue) == [
+                "uninspectedObject",
+                "invalidSQL",
+                "intentCoverageRejected",
+                "planConsistencyRejected",
+                "unsupportedAction",
+                "malformedTerminal",
+                "budgetExhausted",
+                "timedOut",
+                "clarificationRejected",
+            ]
+        )
+        #expect(SchemaToolCallOutcome.allCases.map(\.rawValue) == ["success", "error"])
+        #expect(
+            SchemaToolErrorCode.allCases.map(\.rawValue) == [
+                "unknownTool",
+                "malformedArguments",
+                "missingArgument",
+                "invalidArgumentType",
+                "argumentOutOfRange",
+                "invalidObjectID",
+                "staleObjectID",
+                "wrongObjectKind",
+                "objectOutsideSnapshot",
+                "columnTableMismatch",
+                "resultBudgetExceeded",
+                "sessionBudgetExceeded",
+                "cancelled",
+                "internalFailure",
+            ]
+        )
+        #expect(
+            DatabaseInspectionErrorCode.allCases.map(\.rawValue) == [
+                "unknownTool",
+                "malformedArguments",
+                "missingArgument",
+                "invalidArgumentType",
+                "argumentOutOfRange",
+                "invalidObjectID",
+                "staleObjectID",
+                "wrongObjectKind",
+                "objectOutsideSnapshot",
+                "columnTableMismatch",
+                "policyDenied",
+                "unsafeColumnType",
+                "resultBudgetExceeded",
+                "sessionBudgetExceeded",
+                "timeout",
+                "cancelled",
+                "databaseError",
+                "internalFailure",
+            ]
+        )
+        #expect(
+            TextToSQLStage.allCases.map(\.rawValue) == [
+                "modelGeneration",
+                "postprocessing",
+                "canonicalization",
+                "safetyValidation",
+                "schemaValidation",
+                "postgresVerification",
+                "postgresVerificationRepair",
+                "validationRepair",
+                "finalDecision",
+            ]
+        )
+        #expect(
+            TextToSQLFailureCategory.allCases.map(\.rawValue) == [
+                "backendUnavailable",
+                "transport",
+                "contextWindow",
+                "structuredResponseParsing",
+                "modelGeneration",
+                "httpBudgetExhausted",
+                "safetyValidation",
+                "schemaValidation",
+                "postgresVerification",
+                "repeatedNoProgressRepair",
+                "cancellation",
+                "emptySQL",
+            ]
+        )
+    }
+}
+
+/// A sessions.json as 0.1.x writes it after two cloud generations: a one-shot
+/// answer (strict JSON schema) and a schema-agent answer (prompt-only JSON)
+/// that sets every agent diagnostics field and both tool traces. Keys and
+/// values match what `SessionStore.save` writes, so a round trip reproduces
+/// them exactly.
+private enum SavedCloudSessionsFixture {
+    static let oneShotGeneration = """
+        {
+          "sql": "SELECT user_id, sum(total) AS spend FROM public.orders GROUP BY user_id ORDER BY spend DESC LIMIT 10",
+          "explanation": "Lists users by total order spend.",
+          "assumptions": ["Spend is the sum of order totals."],
+          "referencedTables": ["public.orders"],
+          "confidence": 0.9,
+          "riskLevel": "low",
+          "needsClarification": false,
+          "generationCallCount": 1,
+          "backendMetadata": {
+            "requestedModelID": "openai/gpt-5.5",
+            "returnedModelID": "openai/gpt-5.5-20260115",
+            "providerName": "OpenAI",
+            "completionID": "gen-oneshot-1",
+            "requestID": "req-oneshot-1",
+            "structuredOutputMode": "strictJSONSchema",
+            "requestCount": 1,
+            "retryCount": 0,
+            "promptTokens": 1800,
+            "completionTokens": 210,
+            "reasoningTokens": 64,
+            "totalTokens": 2010,
+            "costUSD": 0.0042,
+            "serviceTier": "default",
+            "finishReason": "stop",
+            "nativeFinishReason": "stop"
+          }
+        }
+        """
+
+    static let agentGeneration = """
+        {
+          "sql": "SELECT u.id, sum(o.total) AS revenue FROM public.users u JOIN public.orders o ON o.user_id = u.id WHERE o.status = 'paid' GROUP BY u.id ORDER BY revenue DESC LIMIT 10",
+          "explanation": "Top ten users by paid order revenue.",
+          "assumptions": ["Revenue counts paid orders only."],
+          "referencedTables": ["public.orders", "public.users"],
+          "confidence": 0.82,
+          "riskLevel": "medium",
+          "needsClarification": false,
+          "generationSchemaName": "public",
+          "generationCallCount": 2,
+          "backendMetadata": {
+            "requestedModelID": "openai/gpt-5.5",
+            "returnedModelID": "openai/gpt-5.5-20260115",
+            "providerName": "OpenAI",
+            "completionID": "gen-agent-4",
+            "requestID": "req-agent-4",
+            "structuredOutputMode": "promptOnlyJSON",
+            "requestCount": 5,
+            "retryCount": 1,
+            "promptTokens": 9200,
+            "completionTokens": 1300,
+            "reasoningTokens": 512,
+            "totalTokens": 10500,
+            "costUSD": 0.0213,
+            "serviceTier": "default",
+            "finishReason": "tool_calls",
+            "nativeFinishReason": "tool_calls",
+            "agentSelectionReason": "tools",
+            "agentLogicalTurnCount": 4,
+            "agentHTTPAttemptCount": 5,
+            "agentSchemaToolCallCount": 2,
+            "agentInspectionToolCallCount": 2,
+            "agentTerminalOutcome": "sql",
+            "agentFinishReasons": ["tool_calls", "tool_calls", "tool_calls", "tool_calls"],
+            "agentCompletionIDs": ["gen-agent-1", "gen-agent-2", "gen-agent-3", "gen-agent-4"],
+            "agentRequestIDs": ["req-agent-1", "req-agent-2", "req-agent-3", "req-agent-4"],
+            "agentReturnedModelIDs": ["openai/gpt-5.5-20260115"],
+            "agentProviderNames": ["OpenAI"],
+            "agentDiagnostics": {
+              "logicalTurnCount": 4,
+              "terminalToolSeen": true,
+              "terminalAction": "sql",
+              "terminalQueryPlan": "Sum paid order totals per user, highest first.",
+              "terminalValidationFailureReason": "public.orders.status was not inspected.",
+              "triedSchemaToolsAfterTerminal": true,
+              "producedProseInsteadOfTools": true,
+              "redundantDuplicateToolCallCount": 1,
+              "redundantZeroResultSearchCount": 2,
+              "redundantJoinPathCallCount": 3,
+              "schemaEvidence": {
+                "searched": true,
+                "describedTableIDs": ["public.orders", "public.users"],
+                "exposedColumnIDs": ["public.orders.total", "public.orders.user_id", "public.users.id"],
+                "exposedForeignKeyPathIDs": ["public.orders.user_id->public.users.id"],
+                "inspectedConstraintToolUsed": true,
+                "inspectedValueToolUsed": true
+              },
+              "appSideRejectionReason": "uninspectedObject",
+              "clarificationCorrectionMode": "diagnosticsOnly",
+              "intentCoverageMode": "correctAndRetryExperimental",
+              "clarificationPolicyDecision": "shouldAnswerWithSQL",
+              "clarificationPolicyReason": "The schema defines paid orders.",
+              "overClarificationCorrectionAttempted": true,
+              "overClarificationCorrectionSucceeded": true,
+              "databaseContextFactsUsed": ["Revenue means paid order totals."],
+              "evidenceSufficientForSQL": true,
+              "unresolvedDecisionKinds": ["metric"],
+              "sqlIntentCoverageDecision": "needsCorrection",
+              "sqlIntentCoverageReason": "The first draft ignored the paid filter.",
+              "sqlIntentCoverageMissingSignals": ["paid status filter"],
+              "sqlIntentCoverageMismatchCategory": "missing filter",
+              "intentCoverageCorrectionAttempted": true,
+              "intentCoverageCorrectionSucceeded": true,
+              "planConsistencyMode": "diagnosticsOnly",
+              "planConsistencyDecision": "divergent",
+              "planConsistencyReason": "The plan grouped by email; the SQL groups by id.",
+              "planConsistencyDivergences": ["grouping key"],
+              "planConsistencyCorrectionAttempted": true,
+              "planConsistencyCorrectionSucceeded": true
+            }
+          },
+          "schemaToolCalls": [
+            {
+              "callID": "call_search_1",
+              "toolName": "search_schema",
+              "outcome": "success",
+              "latencyMs": 3,
+              "returnedObjectCount": 4,
+              "outputByteCount": 812,
+              "truncated": false,
+              "schemaFingerprintPrefix": "3f9a1c2b",
+              "cacheHit": false
+            },
+            {
+              "callID": "call_describe_2",
+              "toolName": "describe_tables",
+              "outcome": "error",
+              "latencyMs": 1,
+              "returnedObjectCount": 0,
+              "outputByteCount": 96,
+              "truncated": true,
+              "errorCode": "staleObjectID",
+              "schemaFingerprintPrefix": "3f9a1c2b",
+              "cacheHit": true
+            }
+          ],
+          "inspectionToolCalls": [
+            {
+              "callID": "call_profile_3",
+              "toolName": "inspect_column_profile",
+              "outcome": "success",
+              "tableID": "public.orders",
+              "columnIDs": ["public.orders.status"],
+              "rowCount": 1,
+              "valueCount": 3,
+              "outputByteCount": 240,
+              "redactionCount": 1,
+              "cloudShareable": true,
+              "latencyMs": 18,
+              "truncated": false
+            },
+            {
+              "callID": "call_sample_4",
+              "toolName": "inspect_sample_rows",
+              "outcome": "error",
+              "columnIDs": [],
+              "rowCount": 0,
+              "valueCount": 0,
+              "outputByteCount": 88,
+              "redactionCount": 0,
+              "cloudShareable": false,
+              "latencyMs": 0,
+              "truncated": true,
+              "errorCode": "policyDenied"
+            }
+          ]
+        }
+        """
+
+    static let json = """
+        [
+          {
+            "id": "11111111-2222-3333-4444-555555555555",
+            "connectionID": "AAAAAAAA-BBBB-CCCC-DDDD-EEEEEEEEEEEE",
+            "title": "Top Spenders",
+            "titleWasManuallySet": false,
+            "messages": [
+              {
+                "id": "00000000-0000-0000-0000-000000000001",
+                "role": "user",
+                "text": "Which users spent the most?",
+                "timestamp": "2025-06-15T12:00:00Z"
+              },
+              {
+                "id": "00000000-0000-0000-0000-000000000002",
+                "role": "assistant",
+                "text": "Lists users by total order spend.",
+                "generation": \(oneShotGeneration),
+                "timestamp": "2025-06-15T12:00:05Z"
+              },
+              {
+                "id": "00000000-0000-0000-0000-000000000003",
+                "role": "user",
+                "text": "Only count paid orders.",
+                "timestamp": "2025-06-15T12:01:00Z"
+              },
+              {
+                "id": "00000000-0000-0000-0000-000000000004",
+                "role": "assistant",
+                "text": "Top ten users by paid order revenue.",
+                "generation": \(agentGeneration),
+                "timestamp": "2025-06-15T12:01:20Z"
+              }
+            ],
+            "sqlText": "SELECT u.id, sum(o.total) AS revenue FROM public.users u JOIN public.orders o ON o.user_id = u.id WHERE o.status = 'paid' GROUP BY u.id ORDER BY revenue DESC LIMIT 10",
+            "lastGeneration": \(agentGeneration),
+            "isArchived": false,
+            "createdAt": "2025-06-15T12:00:00Z",
+            "updatedAt": "2025-06-15T12:01:20Z"
+          }
+        ]
+        """
 }
 
 @Suite("ChatMessage codable")

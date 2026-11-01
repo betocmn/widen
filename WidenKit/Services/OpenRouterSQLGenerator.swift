@@ -8,7 +8,7 @@ public enum OpenRouterCapabilitySource: String, Codable, Equatable, Sendable {
     case conservativeDefault
 }
 
-public enum OpenRouterStructuredOutputMode: String, Codable, Equatable, Sendable {
+public enum OpenRouterStructuredOutputMode: String, Codable, CaseIterable, Equatable, Sendable {
     case strictJSONSchema
     case promptOnlyJSON
 }
@@ -92,7 +92,7 @@ public struct OpenRouterModelMetadata: Codable, Identifiable, Equatable, Sendabl
     }
 }
 
-public enum OpenRouterSchemaToolAppRejectionReason: String, Codable, Equatable, Sendable {
+public enum OpenRouterSchemaToolAppRejectionReason: String, Codable, CaseIterable, Equatable, Sendable {
     case uninspectedObject
     case invalidSQL
     case intentCoverageRejected

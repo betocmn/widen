@@ -143,7 +143,7 @@ public struct SchemaToolInvocation: Codable, Equatable, Sendable {
     }
 }
 
-public enum SchemaToolErrorCode: String, Codable, Equatable, Hashable, Sendable {
+public enum SchemaToolErrorCode: String, Codable, CaseIterable, Equatable, Hashable, Sendable {
     case unknownTool
     case malformedArguments
     case missingArgument
@@ -223,7 +223,7 @@ public struct SchemaToolResult: Codable, Equatable, Sendable {
     }
 }
 
-public enum SchemaToolCallOutcome: String, Codable, Equatable, Sendable {
+public enum SchemaToolCallOutcome: String, Codable, CaseIterable, Equatable, Sendable {
     case success
     case error
 }
