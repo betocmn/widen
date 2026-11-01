@@ -172,7 +172,7 @@ struct SQLPromptBuilderTests {
         #expect(instructions.contains("Do not include semicolons."))
         #expect(instructions.contains("needsClarification"))
         #expect(instructions.contains("Use schema-qualified table names"))
-        // PostgreSQL dialect guardrails — the local model drifts into MySQL.
+        // PostgreSQL dialect guardrails — models drift into MySQL.
         #expect(instructions.contains("CURDATE()"))
         #expect(instructions.contains("INTERVAL '7 days'"))
         #expect(instructions.contains("DATE_TRUNC('day'"))
@@ -180,18 +180,14 @@ struct SQLPromptBuilderTests {
         #expect(instructions.contains("Do not group or partition by CURRENT_DATE itself"))
         #expect(instructions.contains("Business terms can have database-specific meanings"))
         #expect(instructions.contains("other proxy metric"))
-        #expect(SQLPromptBuilder.compactInstructions(defaultRowLimit: 250).contains("Do not answer with a proxy metric"))
         #expect(instructions.contains("answers affirmatively to a previous assistant clarification"))
         // Follow-up handling for the conversation context section.
         #expect(instructions.contains("follow-up"))
         #expect(instructions.contains("<ordered_chat_history>"))
     }
 
-    @Test func compactInstructionsKeepWinningToolPromptUnderLocalBudget() {
+    @Test func promptBundleKeepsSearchedWinningToolTablesUnderTightSchemaBudget() {
         let question = "what are tools that are getting the most wins in the last two weeks?"
-        let instructions = SQLPromptBuilder.compactInstructions(defaultRowLimit: 100)
-        let verboseInstructions = SQLPromptBuilder.instructions(defaultRowLimit: 100)
-        let budget = PromptBudget.localFoundationModels
         let context = SQLGenerationContext(
             schemaSearchQueries: [
                 "winning tools last two weeks winner_id createdAt",
@@ -199,21 +195,23 @@ struct SQLPromptBuilderTests {
                 "public.preseason_tool",
             ]
         )
-        let fixedPromptCharacters = instructions.count + question.count + 1_600
-        let schemaCharacters = min(
-            8_000,
-            budget.schemaCharacterAllowance(fixedPromptCharacters: fixedPromptCharacters)
-        )
 
         let bundle = SQLPromptBuilder.promptBundle(
             question: question,
             schema: makeScreenshotWinningToolSchema(extraTables: 60),
             context: context,
-            maxSchemaCharacters: schemaCharacters
+            maxSchemaCharacters: 5_000
         )
 
-        #expect(instructions.count < verboseInstructions.count)
-        #expect(budget.fits(inputCharacters: instructions.count + bundle.prompt.count))
+        let diagnostics = bundle.schemaPackage.diagnostics
+        let schemaTokens = PromptTokenEstimator.tokens(forCharacters: bundle.schemaPackage.text.count)
+        #expect(bundle.schemaPackage.text.count <= 5_000)
+        #expect(diagnostics.estimatedTokens == schemaTokens)
+        #expect(
+            diagnostics.estimatedEnvelopeTokens
+                == schemaTokens + PromptTokenEstimator.envelopeOverheadTokens
+        )
+        #expect(diagnostics.hiddenOverheadTokens == PromptTokenEstimator.envelopeOverheadTokens)
         #expect(bundle.prompt.contains(#"TABLE "public"."preseason_match_evaluation""#))
         #expect(bundle.prompt.contains(#""winner_id" uuid"#))
         #expect(bundle.prompt.contains(#""createdAt" timestamp with time zone"#))

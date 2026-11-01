@@ -80,7 +80,7 @@ public enum SchemaToolRegistry {
     }
 
     public static func estimatedDefinitionTokens() throws -> Int {
-        PromptBudget.localFoundationModels.estimatedTokenCount(for: try definitionByteCount())
+        PromptTokenEstimator.tokens(forCharacters: try definitionByteCount())
     }
 
     private static func objectSchema(
@@ -299,12 +299,6 @@ public struct SchemaToolPolicy: Codable, Equatable, Sendable {
         maximumCallCount: 4,
         maximumResultBytes: 8_000,
         maximumSessionResultBytes: 20_000
-    )
-
-    public static let localAgent = SchemaToolPolicy(
-        maximumCallCount: 2,
-        maximumResultBytes: 3_000,
-        maximumSessionResultBytes: 5_000
     )
 }
 

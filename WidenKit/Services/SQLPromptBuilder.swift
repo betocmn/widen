@@ -52,34 +52,6 @@ public enum SQLPromptBuilder {
         """
     }
 
-    /// Shorter system prompt for Apple's local Foundation Models. The local
-    /// model has a small context window, and Widen performs deterministic
-    /// schema validation and SQL safety validation before execution.
-    public static func compactInstructions(defaultRowLimit: Int) -> String {
-        """
-        You generate one safe PostgreSQL statement for Widen.
-
-        Rules:
-        - The provided <database_schema> is closed-world. Use only listed base relations and columns.
-        - Generate PostgreSQL only. Use NOW(), CURRENT_DATE, DATE_TRUNC, and INTERVAL '7 days'. Do not use MySQL date functions.
-        - Return exactly one SELECT/WITH SELECT, or a write only when the user clearly asks to modify data.
-        - Do not generate DDL, admin commands, transaction commands, COPY, CALL, EXECUTE, PREPARE, VACUUM, ANALYZE, REFRESH, SET, DO, MERGE, or multiple statements.
-        - Do not include semicolons.
-        - Use schema-qualified table names exactly as shown.
-        - Prefer explicit joins and readable aliases.
-        - For read queries, include LIMIT \(defaultRowLimit) unless the result is naturally small.
-        - Use real date/timestamp columns for time windows. If none exists, set needsClarification true.
-        - For average counts per period, count per period in a CTE/subquery, then average those counts outside.
-        - Use <database_context> as business guidance when present. Schema remains authoritative.
-        - In repair mode, the diagnostic and repair constraints are authoritative.
-        - If a needed table, column, relationship, metric, status value, or business term is undefined, set needsClarification true and ask one concise question.
-        - Do not invent metric, status, ownership, or business-term definitions.
-        - Do not answer with a proxy metric. If the schema/context does not define the requested metric, ask for the column, condition, or table that defines it.
-        - A plausible query that answers a different metric is wrong.
-        - Output only the requested structured result.
-        """
-    }
-
     /// The per-question prompt: schema summary, compact conversation context
     /// (when present), and the user's question.
     public static func prompt(
@@ -605,10 +577,6 @@ public enum SQLPromptBuilder {
         """
     }
 
-    public static func taggedCDATASectionForGenerator(_ tag: String, _ content: String) -> String {
-        taggedCDATASection(tag, content)
-    }
-
     private static func taggedCDATASection(_ tag: String, _ content: String) -> String {
         """
         <\(tag)>
@@ -628,8 +596,8 @@ public enum SQLPromptBuilder {
     }
 
     /// Renders user-authored database guidance from settings. This is capped
-    /// separately from the schema budget so saved notes cannot consume the
-    /// full local model context window.
+    /// separately from the schema budget so long saved notes cannot crowd the
+    /// schema out of the prompt.
     static func databaseContextSection(
         _ databaseContext: String?,
         maxCharacters: Int = maxDatabaseContextCharacters

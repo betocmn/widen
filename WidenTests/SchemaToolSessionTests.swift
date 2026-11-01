@@ -16,6 +16,10 @@ struct SchemaToolSessionTests {
             #expect(definition.description.contains(SchemaToolRegistry.metadataRule))
         }
         #expect(try SchemaToolRegistry.definitionByteCount() < 4_000)
+        #expect(
+            try SchemaToolRegistry.estimatedDefinitionTokens()
+                == PromptTokenEstimator.tokens(forCharacters: try SchemaToolRegistry.definitionByteCount())
+        )
     }
 
     @Test func malformedJSONUnknownToolUnknownArgumentAndRangeErrorsAreStructured() async throws {
@@ -279,72 +283,71 @@ struct SchemaToolSessionTests {
         #expect(cappedConstraint?["omitted_value_count"]?.intValue == 8)
     }
 
-    @Test func builtInPoliciesReturnUsefulBoundedResultsForMaxDocumentedArguments() async throws {
-        for policy in [SchemaToolPolicy.cloudAgent, SchemaToolPolicy.localAgent] {
-            let schema = policyExerciseSchema()
-            let query = String(String(repeating: "c0 c1 c2 c3 ", count: 32).prefix(256))
+    @Test func cloudAgentPolicyReturnsUsefulBoundedResultsForMaxDocumentedArguments() async throws {
+        let policy = SchemaToolPolicy.cloudAgent
+        let schema = policyExerciseSchema()
+        let query = String(String(repeating: "c0 c1 c2 c3 ", count: 32).prefix(256))
 
-            let searchSession = try await makeSession(schema: schema, policy: policy)
-            let search = try await invoke(
-                searchSession,
-                id: "max-search-\(policy.maximumResultBytes)",
-                tool: .searchSchema,
-                arguments: ["query": .string(query), "limit": 8]
+        let searchSession = try await makeSession(schema: schema, policy: policy)
+        let search = try await invoke(
+            searchSession,
+            id: "max-search-\(policy.maximumResultBytes)",
+            tool: .searchSchema,
+            arguments: ["query": .string(query), "limit": 8]
+        )
+
+        let describeSession = try await makeSession(schema: schema, policy: policy)
+        var tableHandles: [String] = []
+        for tableName in ["t0", "t1", "t2", "t3"] {
+            tableHandles.append(
+                try await requireHandle(describeSession, .table(schema: "public", name: tableName))
             )
-
-            let describeSession = try await makeSession(schema: schema, policy: policy)
-            var tableHandles: [String] = []
-            for tableName in ["t0", "t1", "t2", "t3"] {
-                tableHandles.append(
-                    try await requireHandle(describeSession, .table(schema: "public", name: tableName))
-                )
-            }
-            var focusHandles: [String] = []
-            for index in 0..<16 {
-                focusHandles.append(
-                    try await requireHandle(describeSession, .column(schema: "public", table: "t0", name: "c\(index)"))
-                )
-            }
-            let describe = try await invoke(
-                describeSession,
-                id: "max-describe-\(policy.maximumResultBytes)",
-                tool: .describeTables,
-                arguments: [
-                    "table_ids": .array(tableHandles.map { .string($0) }),
-                    "focus_column_ids": .array(focusHandles.map { .string($0) }),
-                ]
+        }
+        var focusHandles: [String] = []
+        for index in 0..<16 {
+            focusHandles.append(
+                try await requireHandle(describeSession, .column(schema: "public", table: "t0", name: "c\(index)"))
             )
+        }
+        let describe = try await invoke(
+            describeSession,
+            id: "max-describe-\(policy.maximumResultBytes)",
+            tool: .describeTables,
+            arguments: [
+                "table_ids": .array(tableHandles.map { .string($0) }),
+                "focus_column_ids": .array(focusHandles.map { .string($0) }),
+            ]
+        )
 
-            let joinSession = try await makeSession(schema: schema, policy: policy)
-            let from = try await requireHandle(joinSession, .table(schema: "public", name: "t3"))
-            let to = try await requireHandle(joinSession, .table(schema: "public", name: "t0"))
-            let join = try await invoke(
-                joinSession,
-                id: "max-join-\(policy.maximumResultBytes)",
-                tool: .findJoinPaths,
-                arguments: [
-                    "from_table_id": .string(from),
-                    "to_table_id": .string(to),
-                    "max_hops": 3,
-                    "max_paths": 3,
-                ]
-            )
+        let joinSession = try await makeSession(schema: schema, policy: policy)
+        let from = try await requireHandle(joinSession, .table(schema: "public", name: "t3"))
+        let to = try await requireHandle(joinSession, .table(schema: "public", name: "t0"))
+        let join = try await invoke(
+            joinSession,
+            id: "max-join-\(policy.maximumResultBytes)",
+            tool: .findJoinPaths,
+            arguments: [
+                "from_table_id": .string(from),
+                "to_table_id": .string(to),
+                "max_hops": 3,
+                "max_paths": 3,
+            ]
+        )
 
-            let inspectSession = try await makeSession(schema: schema, policy: policy)
-            let table = try await requireHandle(inspectSession, .table(schema: "public", name: "t0"))
-            let column = try await requireHandle(inspectSession, .column(schema: "public", table: "t0", name: "c0"))
-            let inspect = try await invoke(
-                inspectSession,
-                id: "max-inspect-\(policy.maximumResultBytes)",
-                tool: .inspectColumnConstraints,
-                arguments: ["table_id": .string(table), "column_id": .string(column)]
-            )
+        let inspectSession = try await makeSession(schema: schema, policy: policy)
+        let table = try await requireHandle(inspectSession, .table(schema: "public", name: "t0"))
+        let column = try await requireHandle(inspectSession, .column(schema: "public", table: "t0", name: "c0"))
+        let inspect = try await invoke(
+            inspectSession,
+            id: "max-inspect-\(policy.maximumResultBytes)",
+            tool: .inspectColumnConstraints,
+            arguments: ["table_id": .string(table), "column_id": .string(column)]
+        )
 
-            for result in [search, describe, join, inspect] {
-                #expect(result.success)
-                #expect(result.error == nil)
-                #expect(result.outputByteCount <= policy.maximumResultBytes)
-            }
+        for result in [search, describe, join, inspect] {
+            #expect(result.success)
+            #expect(result.error == nil)
+            #expect(result.outputByteCount <= policy.maximumResultBytes)
         }
     }
 

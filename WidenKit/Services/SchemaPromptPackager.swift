@@ -1,86 +1,14 @@
 import Foundation
 
-public struct PromptBudget: Equatable, Sendable {
-    public static let estimatedCharactersPerToken = 3
+/// Rough prompt-size estimate for telemetry and tool-contract reports: about
+/// three characters per token, plus a fixed allowance for the instructions
+/// and structured-output envelope around a prompt. Not a tokenizer.
+public enum PromptTokenEstimator {
+    public static let charactersPerToken = 3
+    public static let envelopeOverheadTokens = 320
 
-    public var contextWindowTokens: Int
-    public var outputReserveTokens: Int
-    public var safetyMarginTokens: Int
-    public var instructionOverheadTokens: Int
-    public var structuredOutputOverheadTokens: Int
-    public var toolOverheadTokens: Int
-
-    public init(
-        contextWindowTokens: Int,
-        outputReserveTokens: Int,
-        safetyMarginTokens: Int,
-        instructionOverheadTokens: Int = 0,
-        structuredOutputOverheadTokens: Int = 0,
-        toolOverheadTokens: Int = 0
-    ) {
-        self.contextWindowTokens = contextWindowTokens
-        self.outputReserveTokens = outputReserveTokens
-        self.safetyMarginTokens = safetyMarginTokens
-        self.instructionOverheadTokens = instructionOverheadTokens
-        self.structuredOutputOverheadTokens = structuredOutputOverheadTokens
-        self.toolOverheadTokens = toolOverheadTokens
-    }
-
-    public static let localFoundationModels = PromptBudget(
-        contextWindowTokens: 4_096,
-        outputReserveTokens: 512,
-        safetyMarginTokens: 512,
-        instructionOverheadTokens: 128,
-        structuredOutputOverheadTokens: 192,
-        toolOverheadTokens: 0
-    )
-
-    public var hiddenOverheadTokens: Int {
-        instructionOverheadTokens + structuredOutputOverheadTokens + toolOverheadTokens
-    }
-
-    public func inputTokenAllowance(scale: Double = 1.0) -> Int {
-        let raw = contextWindowTokens - outputReserveTokens - safetyMarginTokens
-            - hiddenOverheadTokens
-        return max(256, Int(Double(raw) * scale))
-    }
-
-    public func inputCharacterAllowance(scale: Double = 1.0) -> Int {
-        inputTokenAllowance(scale: scale) * Self.estimatedCharactersPerToken
-    }
-
-    public func estimatedTokenCount(for characters: Int) -> Int {
-        max(0, Int(ceil(Double(characters) / Double(Self.estimatedCharactersPerToken))))
-    }
-
-    public func fits(inputCharacters: Int, scale: Double = 1.0) -> Bool {
-        estimatedTokenCount(for: inputCharacters) <= inputTokenAllowance(scale: scale)
-    }
-
-    public func schemaCharacterAllowance(fixedPromptCharacters: Int) -> Int {
-        schemaCharacterAllowance(fixedPromptCharacters: fixedPromptCharacters, scale: 1.0)
-    }
-
-    public func schemaCharacterAllowance(fixedPromptCharacters: Int, scale: Double) -> Int {
-        schemaCharacterAllowance(
-            fixedPromptCharacters: fixedPromptCharacters,
-            hiddenOverheadCharacters: 0,
-            scale: scale
-        )
-    }
-
-    public func schemaCharacterAllowance(
-        fixedPromptCharacters: Int,
-        hiddenOverheadCharacters: Int,
-        scale: Double
-    ) -> Int {
-        let fixedTokens = estimatedTokenCount(for: max(0, fixedPromptCharacters))
-        let hiddenTokens = estimatedTokenCount(for: max(0, hiddenOverheadCharacters))
-        let availableTokens = max(
-            256,
-            inputTokenAllowance(scale: scale) - fixedTokens - hiddenTokens
-        )
-        return availableTokens * Self.estimatedCharactersPerToken
+    public static func tokens(forCharacters characters: Int) -> Int {
+        max(0, Int(ceil(Double(characters) / Double(charactersPerToken))))
     }
 }
 
@@ -90,98 +18,6 @@ public struct SchemaPromptPackage: Equatable, Sendable {
     public var pinnedTables: [String]
     public var omittedTableCount: Int
     public var diagnostics: SchemaPromptPackager.PackageDiagnostics
-}
-
-public enum SchemaDiscoveryService {
-    public static func compactCatalog(
-        schema: DatabaseSchema,
-        question: String,
-        databaseContext: String,
-        maxCharacters: Int
-    ) -> String {
-        let input = SchemaRankingInput(
-            question: question,
-            databaseContext: databaseContext
-        )
-        let ranked = SchemaRelevanceRanker.rank(schema: schema, input: input)
-        var lines = [
-            "Schema catalog:",
-            "Return up to 3 schema search queries that would help answer the user request. Do not write SQL.",
-        ]
-
-        for entry in ranked {
-            guard lines.joined(separator: "\n").count < maxCharacters else { break }
-            let table = entry.table
-            let columns = catalogColumns(table, input: input)
-            let line =
-                "TABLE \(quotedIdentifier(table.schema)).\(quotedIdentifier(table.name)) columns: \(columns.joined(separator: ", "))"
-            if lines.joined(separator: "\n").count + line.count + 1 <= maxCharacters {
-                lines.append(line)
-            }
-        }
-
-        let foreignKeyLines = schema.foreignKeys.prefix(80).map {
-            "FK \(quotedIdentifier($0.sourceSchema)).\(quotedIdentifier($0.sourceTable)).\(quotedIdentifier($0.sourceColumn)) -> \(quotedIdentifier($0.targetSchema)).\(quotedIdentifier($0.targetTable)).\(quotedIdentifier($0.targetColumn))"
-        }
-        if !foreignKeyLines.isEmpty {
-            for line in ["Relationships:"] + foreignKeyLines {
-                if lines.joined(separator: "\n").count + line.count + 1 <= maxCharacters {
-                    lines.append(line)
-                } else {
-                    break
-                }
-            }
-        }
-
-        return lines.joined(separator: "\n")
-    }
-
-    public static func search(
-        schema: DatabaseSchema,
-        queries: [String],
-        limit: Int = 8
-    ) -> [TableInfo] {
-        let searchText = queries
-            .map { $0.trimmingCharacters(in: .whitespacesAndNewlines) }
-            .filter { !$0.isEmpty }
-            .joined(separator: " ")
-        guard !searchText.isEmpty else { return [] }
-        let ranked = SchemaRelevanceRanker.rank(
-            schema: schema,
-            input: SchemaRankingInput(question: searchText)
-        )
-        return Array(ranked.filter { $0.score > 0 }.prefix(limit).map(\.table))
-    }
-
-    private static func catalogColumns(
-        _ table: TableInfo,
-        input: SchemaRankingInput
-    ) -> [String] {
-        let tokens = Set(SchemaIndex.tokens(in: input.question + " " + input.databaseContext))
-        let matches = table.columns.filter {
-            let columnTokens = Set(SchemaIndex.tokens(in: $0.name))
-            return !tokens.intersection(columnTokens).isEmpty
-                || SchemaRelevanceRanker.canonicalIdentifier($0.name) == "id"
-                || SchemaRelevanceRanker.canonicalIdentifier($0.name).hasSuffix("_id")
-                || ["name", "slug"].contains(SchemaRelevanceRanker.canonicalIdentifier($0.name))
-                || $0.valueConstraints?.isEmpty == false
-        }
-        let selected = matches.isEmpty ? Array(table.columns.prefix(4)) : Array(matches.prefix(8))
-        return selected.map {
-            var text = quotedIdentifier($0.name)
-            if let constraints = $0.valueConstraints, !constraints.isEmpty {
-                let values = constraints.flatMap(\.values).prefix(8)
-                if !values.isEmpty {
-                    text += " values: \(values.joined(separator: "|"))"
-                }
-            }
-            return text
-        }
-    }
-
-    private static func quotedIdentifier(_ identifier: String) -> String {
-        "\"\(identifier.replacingOccurrences(of: "\"", with: "\"\""))\""
-    }
 }
 
 public enum SchemaPromptPackager {
@@ -445,13 +281,10 @@ public enum SchemaPromptPackager {
             ? text + suffix
             : text
         let diagnostics = PackageDiagnostics(
-            estimatedTokens: PromptBudget.localFoundationModels.estimatedTokenCount(
-                for: finalText.count
-            ),
-            estimatedEnvelopeTokens: PromptBudget.localFoundationModels.estimatedTokenCount(
-                for: finalText.count
-            ) + PromptBudget.localFoundationModels.hiddenOverheadTokens,
-            hiddenOverheadTokens: PromptBudget.localFoundationModels.hiddenOverheadTokens,
+            estimatedTokens: PromptTokenEstimator.tokens(forCharacters: finalText.count),
+            estimatedEnvelopeTokens: PromptTokenEstimator.tokens(forCharacters: finalText.count)
+                + PromptTokenEstimator.envelopeOverheadTokens,
+            hiddenOverheadTokens: PromptTokenEstimator.envelopeOverheadTokens,
             maxCharacters: maxCharacters,
             compressionLevel: compression,
             includedTables: Array(includedIDs).sorted(),
