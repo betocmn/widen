@@ -2,8 +2,8 @@
 
 PR 5 adds a deterministic local schema-search subsystem for evaluation and
 future bounded schema tools. Production text-to-SQL prompts, prompt packaging,
-Foundation Models generation, OpenRouter generation, SQL repair, validation,
-backend defaults, and tool calling do not route through this index in PR 5.
+model generation, SQL repair, validation, backend defaults, and tool calling
+do not route through this index in PR 5.
 
 ## Indexed Metadata
 
@@ -131,8 +131,8 @@ make eval-retrieval-case CASE=preseason.top-wins-defined
 ```
 
 The suite runs the legacy `SchemaRelevanceRanker` and the local index against
-the same query inputs when `RETRIEVER=both`. It does not call Foundation
-Models, OpenRouter, SQL generation, repair, validation, or PostgreSQL.
+the same query inputs when `RETRIEVER=both`. It does not call a model, SQL
+generation, repair, validation, or PostgreSQL.
 
 Reports include required-table Recall@3/5/8, all-required-tables-present at
 3/5/8, primary-table reciprocal rank and MRR, required join-path recall,

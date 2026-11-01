@@ -7,10 +7,10 @@ what happens when an experiment fails.
 ## The release gate
 
 `make eval-release` runs a 20-case suite three times (60 results) through the
-same OpenRouter pipeline fresh installs use, with seeded Postgres semantic
-grading: each candidate query executes against a synthetic fixture database
-and its result set is compared to a hand-written golden query's. The gate
-passes only if all of the following hold:
+same Particle-1 schema-tool pipeline the app uses, with seeded Postgres
+semantic grading: each candidate query executes against a synthetic fixture
+database and its result set is compared to a hand-written golden query's. The
+gate passes only if all of the following hold:
 
 | Criterion | Required |
 | --- | --- |
@@ -25,22 +25,24 @@ passes only if all of the following hold:
 ("Clarification" means that when a question is ambiguous, the model should ask
 a follow-up question instead of guessing at SQL.)
 
-The gate currently fails on semantic pass rate, so text-to-SQL stays beta and
-is not described as production-ready. The committed gate report for each
+Particle-1 has not been gated yet, so text-to-SQL stays beta and is not
+described as production-ready. The previous OpenRouter GPT-5.5 profile failed
+the 0.1.0 gate on semantic pass rate. The committed gate report for each
 release lives in [docs/evals/](.).
 
-## Pinned model, fail-closed verification, private routing
+## Pinned model and identity check
 
-- The cloud profile is fixed to an evaluated `openai/gpt-5.5` version. Users
-  cannot select another model; changing the model requires a new app release
-  that passed the gate on that exact version.
-- Providers can silently change what a model alias serves. Widen verifies the
-  concrete model version routed for each completion against the pinned one;
-  missing, ambiguous, or conflicting evidence fails the request rather than
-  running an unevaluated model.
-- Every OpenRouter completion requires zero-data-retention endpoints and
-  denies provider data collection. If no eligible endpoint is available,
-  generation fails instead of relaxing those requirements.
+- The app requests `particle-1`. Users cannot select another model; changing
+  the model requires a new app release that passed the gate.
+- Every completion must report `particle-ai/particle-1`. A missing or
+  different model name fails the request, and Widen discards the response
+  rather than use an unevaluated model.
+- Particle publishes no dated snapshots, so that check verifies the model name
+  only. Particle can change the model behind the name without a Widen release,
+  and Widen cannot detect it. Periodic re-gates stand in for version pinning.
+- Particle states it keeps no inference data by default. That is Particle's
+  policy, not something Widen enforces: Particle's API has no per-request
+  routing or retention setting, so Widen sends none.
 
 ## Pre-registered experiments, published negatives
 
@@ -48,6 +50,11 @@ Pipeline changes are pre-registered: acceptance criteria are written down
 before the paid gate run, and the criteria are conjunctive — one miss rejects
 the whole candidate. Rejected candidates are reverted from the product; the
 sanitized evidence stays published.
+
+### Previous provider (OpenRouter GPT-5.5/5.6, before 0.2.0) — results don't transfer
+
+These experiments ran on OpenRouter models before Widen moved to Particle-1
+in 0.2.0.
 
 | Experiment | Outcome |
 | --- | --- |
