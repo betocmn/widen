@@ -122,6 +122,9 @@ public struct CloudModelProfile: Equatable, Sendable {
     public internal(set) var pricing: CloudModelPricing?
     public internal(set) var reportsUsageCost: Bool
     public internal(set) var callSites: [CloudCallSite: CloudCallSitePolicy]
+    /// Whether the provider accepts `reasoning_effort`, so an eval may
+    /// override it for a run.
+    public internal(set) var supportsReasoningEffort: Bool
     /// `nil` omits `parallel_tool_calls`.
     public internal(set) var parallelToolCalls: Bool?
     public internal(set) var usesPromptCacheKey: Bool
@@ -146,6 +149,27 @@ public struct CloudModelProfile: Equatable, Sendable {
 
     public func policy(for callSite: CloudCallSite) -> CloudCallSitePolicy {
         callSites[callSite] ?? .unconfigured
+    }
+
+    /// A copy that sends `effort` for agent turns and one-shot SQL, the call
+    /// sites that generate SQL. Evals use it to compare efforts; the app
+    /// always sends the profile's own policy.
+    public func overridingReasoningEffort(_ effort: ReasoningEffort) -> CloudModelProfile {
+        var copy = self
+        for callSite in [CloudCallSite.agentTurn, .oneShotSQL] {
+            var policy = copy.policy(for: callSite)
+            policy.reasoningEffort = effort
+            copy.callSites[callSite] = policy
+        }
+        return copy
+    }
+
+    /// The eval API key for this profile. Only the profile's own variable is
+    /// read, so an eval never picks up another provider's key. Blank is nil.
+    public func evalAPIKey(in environment: [String: String]) -> String? {
+        let value = environment[evalAPIKeyEnvironmentVariable]?
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+        return value?.isEmpty == false ? value : nil
     }
 
     /// One `prompt_cache_key` per generation run, shared by every request in
@@ -265,6 +289,7 @@ extension CloudModelProfile {
                 responseFormat: .none
             ),
         ],
+        supportsReasoningEffort: true,
         parallelToolCalls: true,
         usesPromptCacheKey: true,
         echoesReasoningContent: false,
@@ -347,6 +372,9 @@ extension CloudModelProfile {
                 .oneShotSQL: oneShot,
                 .connectivityProbe: oneShot,
             ],
+            // OpenRouter requests stay as they have always been sent, without
+            // reasoning_effort, so an eval cannot override it either.
+            supportsReasoningEffort: false,
             parallelToolCalls: nil,
             usesPromptCacheKey: false,
             echoesReasoningContent: false,
@@ -378,12 +406,33 @@ extension URLSessionTransport {
 public enum CloudModelCatalog {
     public static let productionProfile: CloudModelProfile = .openRouterGPT55
 
-    /// The returned model version to enforce for a requested model ID. Evals
-    /// may run arbitrary models, but when they run the pinned production model
-    /// they must enforce the same returned-version contract as the app.
-    public static func expectedReturnedModelID(forRequestedModelID id: String) -> String? {
-        id == productionProfile.requestedModelID
-            ? productionProfile.expectedReturnedModelID
-            : nil
+    /// The profile an eval runs for a requested model, which also decides the
+    /// provider: `particle-1` is Particle-1, and an OpenRouter `vendor/model`
+    /// ID runs through OpenRouter. Only the pinned GPT-5.5 comparison model
+    /// enforces a dated returned version there; other OpenRouter models
+    /// enforce none. Anything else is nil, including `particle-ai/…`, which
+    /// is the name Particle reports rather than a model to request.
+    public static func profile(forRequestedModelID id: String) -> CloudModelProfile? {
+        if id == CloudModelProfile.particle.requestedModelID {
+            return .particle
+        }
+        guard isOpenRouterModelID(id) else { return nil }
+        let gpt55 = CloudModelProfile.openRouterGPT55
+        return .openRouter(
+            requestedModelID: id,
+            expectedReturnedModelID: id == gpt55.requestedModelID
+                ? gpt55.expectedReturnedModelID
+                : nil
+        )
+    }
+
+    private static func isOpenRouterModelID(_ id: String) -> Bool {
+        let parts = id.split(separator: "/", maxSplits: 1, omittingEmptySubsequences: false)
+        guard parts.count == 2,
+            !parts[0].isEmpty,
+            !parts[1].isEmpty,
+            id.rangeOfCharacter(from: .whitespacesAndNewlines) == nil
+        else { return false }
+        return parts[0].lowercased() != "particle-ai"
     }
 }

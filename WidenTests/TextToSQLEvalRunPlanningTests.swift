@@ -118,6 +118,68 @@ struct TextToSQLEvalRunPlanningTests {
         }
     }
 
+    @Test func compatibilityRejectsChangedProviderOrReasoningEffort() {
+        var previous = Self.compatibility()
+        previous.provider = "particle"
+        previous.model = "particle-1"
+        previous.expectedCanonicalModelID = "particle-ai/particle-1"
+        previous.reasoningEffort = "high"
+        var lowerEffort = previous
+        lowerEffort.reasoningEffort = "low"
+        var noEffort = previous
+        noEffort.reasoningEffort = nil
+        var otherProvider = previous
+        otherProvider.provider = "openrouter"
+
+        for (current, field) in [
+            (lowerEffort, "reasoning effort"),
+            (noEffort, "reasoning effort"),
+            (otherProvider, "provider"),
+        ] {
+            do {
+                try TextToSQLEvalResumeCompatibility.validate(previous: previous, current: current)
+                Issue.record("Expected compatibility rejection for \(field).")
+            } catch let error as TextToSQLEvalResumeCompatibilityError {
+                #expect(error.issues.map(\.field) == [field])
+            } catch {
+                Issue.record("Unexpected error: \(error)")
+            }
+        }
+    }
+
+    @Test func compatibilityResolvesLegacyCloudManifestsToOpenRouter() throws {
+        let legacy = Self.compatibility()
+        #expect(legacy.provider == nil)
+        var openRouter = legacy
+        openRouter.provider = "openrouter"
+        try TextToSQLEvalResumeCompatibility.validate(previous: legacy, current: openRouter)
+
+        var particle = openRouter
+        particle.provider = "particle"
+        particle.model = "particle-1"
+        particle.expectedCanonicalModelID = "particle-ai/particle-1"
+        particle.reasoningEffort = "high"
+        do {
+            try TextToSQLEvalResumeCompatibility.validate(previous: legacy, current: particle)
+            Issue.record("Expected compatibility rejection.")
+        } catch let error as TextToSQLEvalResumeCompatibilityError {
+            #expect(
+                error.issues.map(\.field)
+                    == ["provider", "model", "expected canonical model", "reasoning effort"]
+            )
+            #expect(
+                error.issues.first
+                    == TextToSQLEvalResumeCompatibilityIssue(
+                        field: "provider",
+                        previous: "openrouter",
+                        current: "particle"
+                    )
+            )
+        } catch {
+            Issue.record("Unexpected error: \(error)")
+        }
+    }
+
     @Test func compatibilityDefaultsMissingSchemaAgentModesToDiagnosticsOnly() throws {
         let previous = Self.compatibility()
         var current = Self.compatibility()

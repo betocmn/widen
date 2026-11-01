@@ -274,6 +274,7 @@ enum EvalExplicitOption: Hashable {
     case schemaAgentIntentCoverageMode
     case schemaAgentPlanConsistencyMode
     case model
+    case reasoningEffort
     case suitePath
     case repeatCount
     case caseTimeoutSeconds
@@ -283,17 +284,21 @@ enum EvalExplicitOption: Hashable {
 
 struct EvalCLIOptions {
     var backendMode: EvalBackendMode = .cloud
-    var cloudAgentMode: EvalCloudAgentMode = .legacy
+    var cloudAgentMode: EvalCloudAgentMode = .tools
     var schemaAgentClarificationCorrectionMode: SchemaToolAgentClarificationCorrectionMode =
         .diagnosticsOnly
     var schemaAgentIntentCoverageMode: SchemaToolAgentIntentCoverageMode = .diagnosticsOnly
     var schemaAgentPlanConsistencyMode: SchemaToolAgentPlanConsistencyMode = .diagnosticsOnly
-    var model: String = CloudModelCatalog.productionProfile.requestedModelID
+    /// The provider follows from the model: `particle-1` is Particle-1 and
+    /// an OpenRouter `vendor/model` ID runs through OpenRouter.
+    var model: String = TextToSQLEvalDefaults.requestedModelID
+    /// Eval-only; overrides the effort agent turns and one-shot SQL send.
+    var reasoningEffort: ReasoningEffort?
     var suitePath: String = "Evals/suites/text-to-sql-v1.json"
     var caseID: String?
     var caseIDs: [String] = []
     var repeatCount: Int = 1
-    var caseTimeoutSeconds: Double = 120
+    var caseTimeoutSeconds: Double = TextToSQLEvalDefaults.caseTimeoutSeconds
     var outputDirectory: String = ".eval-results"
     var recordPrompts = false
     var failUnder: Double?
@@ -323,15 +328,16 @@ struct EvalCLIOptions {
 
         Options:
           --backend cloud
-          --cloud-agent legacy|tools
+          --cloud-agent legacy|tools (default: tools)
           --schema-agent-clarification-correction disabled|diagnostics|experimental
           --schema-agent-intent-coverage disabled|diagnostics|reject-only|experimental
           --schema-agent-plan-consistency disabled|diagnostics|experimental
-          --model <openrouter-model-id>
+          --model <model-id> (default: \(TextToSQLEvalDefaults.requestedModelID); a vendor/model ID runs through OpenRouter)
+          --reasoning-effort \(ReasoningEffort.allCases.map(\.rawValue).joined(separator: "|")) (eval-only; \(TextToSQLEvalDefaults.requestedModelID) only)
           --suite <path>
           --case <case-id>
           --repeat <n>
-          --case-timeout-seconds <n>
+          --case-timeout-seconds <n> (default: \(Int(TextToSQLEvalDefaults.caseTimeoutSeconds)))
           --output <directory>
           --record-prompts
           --fail-under <percentage>
@@ -410,6 +416,13 @@ struct EvalCLIOptions {
             case "--model":
                 options.model = try nextValue(after: argument)
                 options.explicitOptions.insert(.model)
+            case "--reasoning-effort":
+                let value = try nextValue(after: argument)
+                guard let effort = ReasoningEffort(rawValue: value) else {
+                    throw EvalCLIError.invalidValue(argument, value)
+                }
+                options.reasoningEffort = effort
+                options.explicitOptions.insert(.reasoningEffort)
             case "--suite":
                 options.suitePath = try nextValue(after: argument)
                 options.explicitOptions.insert(.suitePath)

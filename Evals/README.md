@@ -32,20 +32,25 @@ make eval-retrieval RETRIEVER=index
 make eval-retrieval-case CASE=preseason.top-wins-defined RETRIEVER=both
 ```
 
-Cloud mode reads the OpenRouter key only from:
+The provider follows `--model`, and each run reads only that provider's key:
 
 ```sh
-WIDEN_EVAL_OPENROUTER_API_KEY
+WIDEN_EVAL_PARTICLE_API_KEY    # --model particle-1 (the CLI default)
+WIDEN_EVAL_OPENROUTER_API_KEY  # --model <vendor/model>, e.g. openai/gpt-5.5
 ```
 
-For local development, a gitignored `.env.eval.local` file can export that
-variable. Do not commit API keys, prompts, or raw model output.
+Any other model ID fails before a request is sent. The make targets pass
+`MODEL`, which still defaults to `openai/gpt-5.5`. For local development, a
+gitignored `.env.eval.local` file can export these variables. Do not commit
+API keys, prompts, or raw model output.
 
 ## CLI
 
 ```text
 --backend cloud
---model <openrouter-model-id>
+--cloud-agent legacy|tools
+--model <model-id>
+--reasoning-effort none|minimal|low|medium|high|xhigh|max|ultra
 --suite <path>
 --case <case-id>
 --repeat <n>
@@ -59,10 +64,18 @@ variable. Do not commit API keys, prompts, or raw model output.
 --retriever legacy|index|both
 ```
 
-Each case has a default 120-second timeout, covering schema discovery,
-generation, and validation repair. When the timeout fires, WidenEval cancels
-the pipeline task and records `evalTimeout` rather than a transport failure,
-then continues with the remaining cases. Foundation Models cancellation is
+`--cloud-agent` defaults to `tools`, the schema-tool agent the app uses.
+`--reasoning-effort` is eval-only: it overrides the effort Particle-1 agent
+turns and one-shot SQL send for the run, and is rejected for OpenRouter
+models. A run that publishes release-gate or triage docs needs
+`--allow-model-override` to use it. The run manifest records the provider,
+its endpoint host, the effort sent, and the agent's call budgets.
+
+Each case has a default 1,200-second timeout, covering schema discovery,
+generation, and validation repair. That is longer than the agent's wall clock
+multiplied by every generation and repair one case can run. When the timeout
+fires, WidenEval cancels the pipeline task and records `evalTimeout` rather
+than a transport failure, then continues with the remaining cases. Foundation Models cancellation is
 cooperative; if the framework does not return after task cancellation, the
 cancelled model work can continue in process until the framework returns.
 WidenEval does not use detached model tasks and cannot force Foundation Models

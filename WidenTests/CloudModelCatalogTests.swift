@@ -62,6 +62,7 @@ struct CloudModelCatalogTests {
                     responseFormat: .none
                 )
         )
+        #expect(profile.supportsReasoningEffort)
         #expect(profile.parallelToolCalls == true)
         #expect(profile.usesPromptCacheKey)
         #expect(!profile.echoesReasoningContent)
@@ -120,6 +121,7 @@ struct CloudModelCatalogTests {
                     responseFormat: .strictJSONSchemaWhenAdvertised
                 )
         )
+        #expect(!profile.supportsReasoningEffort)
         #expect(profile.parallelToolCalls == nil)
         #expect(!profile.usesPromptCacheKey)
         #expect(!profile.echoesReasoningContent)
@@ -405,23 +407,119 @@ struct CloudModelCatalogTests {
         #expect(violation.localizedDescription.contains("--allow-model-override"))
     }
 
-    @Test func expectedReturnedModelIDEnforcesOnlyThePinnedModel() throws {
-        let profile = CloudModelCatalog.productionProfile
-        let expectedReturnedModelID = try #require(profile.expectedReturnedModelID)
+    @Test func evalProfileIsInferredFromTheRequestedModel() throws {
+        let particle = try #require(CloudModelCatalog.profile(forRequestedModelID: "particle-1"))
+        #expect(particle == .particle)
+        #expect(particle.provider == .particle)
+        #expect(particle.baseURL.host == "api.particle.ai")
+        #expect(particle.expectedReturnedModelID == "particle-ai/particle-1")
+
+        let gpt55 = try #require(CloudModelCatalog.profile(forRequestedModelID: "openai/gpt-5.5"))
         #expect(
-            CloudModelCatalog.expectedReturnedModelID(
-                forRequestedModelID: profile.requestedModelID
-            ) == profile.expectedReturnedModelID
+            gpt55
+                == .openRouter(
+                    requestedModelID: "openai/gpt-5.5",
+                    expectedReturnedModelID: "openai/gpt-5.5-20260423"
+                )
         )
-        #expect(
-            CloudModelCatalog.expectedReturnedModelID(forRequestedModelID: "vendor/other-model")
-                == nil
+        #expect(gpt55.provider == .openRouter)
+        #expect(gpt55.baseURL.host == "openrouter.ai")
+
+        // Other OpenRouter models enforce no dated version, including the
+        // dated GPT-5.5 ID itself when it is requested directly.
+        for id in ["vendor/other-model", "openai/gpt-5.5-20260423", "meta-llama/llama-3-70b:nitro"] {
+            let profile = try #require(CloudModelCatalog.profile(forRequestedModelID: id), "\(id)")
+            #expect(profile.provider == .openRouter)
+            #expect(profile.requestedModelID == id)
+            #expect(profile.expectedReturnedModelID == nil)
+        }
+
+        for junk in [
+            "", "junk", "gpt-5.5", "Particle-1", "particle-1 ", "/gpt-5.5", "openai/",
+            "openai/gpt 5.5", "particle-ai/particle-1", "Particle-AI/particle-1",
+        ] {
+            #expect(CloudModelCatalog.profile(forRequestedModelID: junk) == nil, "\(junk)")
+        }
+    }
+
+    @Test func evalsEnforceTheProductionReturnedModelForThePinnedModel() throws {
+        let production = CloudModelCatalog.productionProfile
+        let profile = try #require(
+            CloudModelCatalog.profile(forRequestedModelID: production.requestedModelID)
         )
-        #expect(
-            CloudModelCatalog.expectedReturnedModelID(
-                forRequestedModelID: expectedReturnedModelID
-            ) == nil
+        #expect(profile.provider == production.provider)
+        #expect(profile.baseURL == production.baseURL)
+        #expect(profile.expectedReturnedModelID == production.expectedReturnedModelID)
+    }
+
+    @Test func reasoningEffortOverrideChangesOnlyTheSQLCallSites() {
+        let profile = CloudModelProfile.particle.overridingReasoningEffort(.low)
+
+        for callSite in [CloudCallSite.agentTurn, .oneShotSQL] {
+            var expected = CloudModelProfile.particle.policy(for: callSite)
+            expected.reasoningEffort = .low
+            #expect(profile.policy(for: callSite) == expected)
+        }
+        for callSite in [CloudCallSite.connectivityProbe, .sessionTitle] {
+            #expect(profile.policy(for: callSite) == CloudModelProfile.particle.policy(for: callSite))
+        }
+        var unchanged = profile
+        unchanged.callSites = CloudModelProfile.particle.callSites
+        #expect(unchanged == .particle)
+    }
+
+    @Test func releaseGateModelPolicyRejectsReasoningEffortOverridesWithoutTheOverrideFlag() {
+        let pinned = CloudModelCatalog.productionProfile.requestedModelID
+        let violation = TextToSQLReleaseGateModelPolicy.Violation(
+            model: pinned,
+            reasoningEffortOverride: .low
         )
+        for (gateVersion, triageVersion) in [("0.2.0", nil), (nil, "0.2.0")] as [(String?, String?)] {
+            #expect(throws: violation) {
+                try TextToSQLReleaseGateModelPolicy.validate(
+                    model: pinned,
+                    reasoningEffortOverride: .low,
+                    backendIncludesCloud: true,
+                    releaseGateVersion: gateVersion,
+                    releaseTriageVersion: triageVersion,
+                    allowModelOverride: false
+                )
+            }
+            #expect(throws: Never.self) {
+                try TextToSQLReleaseGateModelPolicy.validate(
+                    model: pinned,
+                    reasoningEffortOverride: .low,
+                    backendIncludesCloud: true,
+                    releaseGateVersion: gateVersion,
+                    releaseTriageVersion: triageVersion,
+                    allowModelOverride: true
+                )
+            }
+        }
+        #expect(throws: Never.self) {
+            try TextToSQLReleaseGateModelPolicy.validate(
+                model: pinned,
+                reasoningEffortOverride: .low,
+                backendIncludesCloud: true,
+                releaseGateVersion: nil,
+                releaseTriageVersion: nil,
+                allowModelOverride: false
+            )
+        }
+        // An unpinned model is reported as the model violation it already was.
+        #expect(throws: TextToSQLReleaseGateModelPolicy.Violation(model: "vendor/other")) {
+            try TextToSQLReleaseGateModelPolicy.validate(
+                model: "vendor/other",
+                reasoningEffortOverride: .low,
+                backendIncludesCloud: true,
+                releaseGateVersion: "0.2.0",
+                releaseTriageVersion: nil,
+                allowModelOverride: false
+            )
+        }
+        #expect(violation.localizedDescription.contains("--reasoning-effort low"))
+        #expect(violation.localizedDescription.contains(pinned))
+        #expect(violation.localizedDescription.contains("--allow-model-override"))
     }
 
     private static let openRouterCompletionHeaders = [

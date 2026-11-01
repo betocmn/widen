@@ -59,11 +59,16 @@ public enum TextToSQLReleaseGateModelPolicy {
 
     public struct Violation: LocalizedError, CustomStringConvertible, Equatable, Sendable {
         public var model: String?
+        /// Set when the pinned model ran with an eval-only `--reasoning-effort`.
+        public var reasoningEffortOverride: ReasoningEffort? = nil
         public var pinnedModel: String {
             CloudModelCatalog.productionProfile.requestedModelID
         }
 
         public var description: String {
+            if let reasoningEffortOverride {
+                return "Release-gate and triage docs require the production reasoning effort for \(pinnedModel), but --reasoning-effort \(reasoningEffortOverride.rawValue) overrides it; pass --allow-model-override to run an engineering comparison."
+            }
             guard let model else {
                 return "Release-gate and triage docs require a cloud run using the pinned production model \(pinnedModel); pass --allow-model-override to run an engineering comparison."
             }
@@ -73,8 +78,12 @@ public enum TextToSQLReleaseGateModelPolicy {
         public var errorDescription: String? { description }
     }
 
+    /// `reasoningEffortOverride` is the eval-only `--reasoning-effort`. It
+    /// changes what the pinned model is asked to do, so a doc-publishing run
+    /// that passes it needs the same override flag as another model.
     public static func validate(
         model: String?,
+        reasoningEffortOverride: ReasoningEffort? = nil,
         backendIncludesCloud: Bool,
         releaseGateVersion: String?,
         releaseTriageVersion: String?,
@@ -89,9 +98,12 @@ public enum TextToSQLReleaseGateModelPolicy {
         guard releaseGateVersion != nil || releaseTriageVersion != nil,
             !allowModelOverride
         else { return }
-        guard !isPinnedCloudRun(model: model, backendIncludesCloud: backendIncludesCloud)
-        else { return }
-        throw Violation(model: backendIncludesCloud ? model : nil)
+        guard isPinnedCloudRun(model: model, backendIncludesCloud: backendIncludesCloud) else {
+            throw Violation(model: backendIncludesCloud ? model : nil)
+        }
+        if let reasoningEffortOverride {
+            throw Violation(model: model, reasoningEffortOverride: reasoningEffortOverride)
+        }
     }
 
     /// Sink-time eligibility is deliberately stricter than the override used

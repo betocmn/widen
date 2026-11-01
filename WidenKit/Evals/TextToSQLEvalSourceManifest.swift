@@ -13,6 +13,7 @@ public enum TextToSQLEvalSourceManifest {
             "WidenKit/Evals/TextToSQLEvalResult.swift",
             "WidenKit/Evals/TextToSQLEvalRunPlanning.swift",
             "WidenKit/Evals/TextToSQLEvalSourceManifest.swift",
+            "WidenKit/Evals/TextToSQLEvalCloudSettings.swift",
             "WidenEval/EvalRunner.swift",
             "WidenKit/Models/SQLGenerationResult.swift",
             "WidenKit/Services/TextToSQLPipeline.swift",

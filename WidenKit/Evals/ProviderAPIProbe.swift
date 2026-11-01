@@ -41,9 +41,7 @@ public struct ProviderAPIProbe: Sendable {
 
     /// The Particle eval key from `environment`. No other key is read.
     public static func apiKey(in environment: [String: String]) -> String? {
-        let value = environment[CloudModelProfile.particle.evalAPIKeyEnvironmentVariable]?
-            .trimmingCharacters(in: .whitespacesAndNewlines)
-        return value?.isEmpty == false ? value : nil
+        CloudModelProfile.particle.evalAPIKey(in: environment)
     }
 
     public static var missingAPIKeyMessage: String {

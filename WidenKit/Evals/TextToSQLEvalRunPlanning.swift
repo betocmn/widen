@@ -267,10 +267,15 @@ public struct TextToSQLEvalResumeCompatibilityManifest: Equatable, Sendable {
     public var suiteVersion: String
     public var suiteFileHash: String
     public var schemaFixtureHashes: [String: String]
+    /// `"particle"` or `"openrouter"`; nil in manifests written before
+    /// providers were recorded, which resolves to OpenRouter for cloud runs.
+    public var provider: String?
     public var model: String?
     public var expectedCanonicalModelID: String?
     public var backendMode: String
     public var cloudAgentMode: String?
+    /// The `reasoning_effort` the run sent, or nil when it sent none.
+    public var reasoningEffort: String?
     public var schemaAgentClarificationCorrectionMode: String?
     public var schemaAgentIntentCoverageMode: String?
     public var schemaAgentPlanConsistencyMode: String?
@@ -285,10 +290,12 @@ public struct TextToSQLEvalResumeCompatibilityManifest: Equatable, Sendable {
         suiteVersion: String,
         suiteFileHash: String,
         schemaFixtureHashes: [String: String],
+        provider: String? = nil,
         model: String?,
         expectedCanonicalModelID: String? = nil,
         backendMode: String,
         cloudAgentMode: String?,
+        reasoningEffort: String? = nil,
         schemaAgentClarificationCorrectionMode: String? = nil,
         schemaAgentIntentCoverageMode: String? = nil,
         schemaAgentPlanConsistencyMode: String? = nil,
@@ -302,10 +309,12 @@ public struct TextToSQLEvalResumeCompatibilityManifest: Equatable, Sendable {
         self.suiteVersion = suiteVersion
         self.suiteFileHash = suiteFileHash
         self.schemaFixtureHashes = schemaFixtureHashes
+        self.provider = provider
         self.model = model
         self.expectedCanonicalModelID = expectedCanonicalModelID
         self.backendMode = backendMode
         self.cloudAgentMode = cloudAgentMode
+        self.reasoningEffort = reasoningEffort
         self.schemaAgentClarificationCorrectionMode = schemaAgentClarificationCorrectionMode
         self.schemaAgentIntentCoverageMode = schemaAgentIntentCoverageMode
         self.schemaAgentPlanConsistencyMode = schemaAgentPlanConsistencyMode
@@ -361,6 +370,18 @@ public enum TextToSQLEvalResumeCompatibility {
             current.schemaFixtureHashes,
             issues: &issues
         )
+        compare(
+            "provider",
+            TextToSQLEvalCloudSettings.resolvedManifestProvider(
+                previous.provider,
+                backendMode: previous.backendMode
+            ) ?? "-",
+            TextToSQLEvalCloudSettings.resolvedManifestProvider(
+                current.provider,
+                backendMode: current.backendMode
+            ) ?? "-",
+            issues: &issues
+        )
         compare("model", previous.model ?? "-", current.model ?? "-", issues: &issues)
         compare(
             "expected canonical model",
@@ -373,6 +394,12 @@ public enum TextToSQLEvalResumeCompatibility {
             "cloud agent",
             previous.cloudAgentMode ?? "-",
             current.cloudAgentMode ?? "-",
+            issues: &issues
+        )
+        compare(
+            "reasoning effort",
+            previous.reasoningEffort ?? "-",
+            current.reasoningEffort ?? "-",
             issues: &issues
         )
         compare(

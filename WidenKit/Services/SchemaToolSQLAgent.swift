@@ -60,6 +60,20 @@ public struct SchemaToolSQLAgentConfiguration: Equatable, Sendable {
     }
 
     public static let `default` = SchemaToolSQLAgentConfiguration()
+
+    /// The call budgets and wall clock, as an eval records them in its run
+    /// manifest for evidence. Keys are stable; values are plain numbers.
+    public var reportedSettings: [String: String] {
+        [
+            "maximumModelTurns": String(maximumModelTurns),
+            "maximumSchemaToolCalls": String(maximumSchemaToolCalls),
+            "maximumRepairSchemaToolCalls": String(maximumRepairSchemaToolCalls),
+            "maximumHTTPAttempts": String(maximumHTTPAttempts),
+            "maximumMalformedTerminalCorrections": String(maximumMalformedTerminalCorrections),
+            "maximumRepeatedToolCorrections": String(maximumRepeatedToolCorrections),
+            "wallClockTimeoutSeconds": String(format: "%g", wallClockTimeoutSeconds),
+        ]
+    }
 }
 
 public struct SchemaToolAgentFailure: Error, LocalizedError, Equatable, Sendable {

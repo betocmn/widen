@@ -29,6 +29,15 @@ struct EvalRunManifest: Codable {
     var schemaAgentPlanConsistencyMode: String?
     var model: String?
     var expectedCanonicalModelID: String?
+    /// `"particle"` or `"openrouter"`, inferred from the model. Manifests
+    /// written before it was recorded resolve to OpenRouter for cloud runs.
+    var provider: String?
+    var providerEndpointHost: String?
+    /// The `reasoning_effort` sent from the run's call site (agent turns for
+    /// the tools agent, one-shot SQL for legacy), or nil when none was sent.
+    var reasoningEffort: String?
+    /// The schema agent's reported budgets, for evidence only.
+    var agentConfiguration: [String: String]?
     var osVersion: String
     var architecture: String
     var caseCount: Int
@@ -161,15 +170,23 @@ struct EvalRunner {
         }
         try TextToSQLReleaseGateModelPolicy.validate(
             model: runner.options.model,
+            reasoningEffortOverride: runner.options.reasoningEffort,
             backendIncludesCloud: runner.options.backendMode.backends.contains(.cloud),
             releaseGateVersion: runner.options.releaseGateVersion,
             releaseTriageVersion: runner.options.releaseTriageVersion,
             allowModelOverride: runner.options.allowModelOverride
         )
-        return try await runner.runResolved(resumeRun: resumeRun)
+        let cloud = try TextToSQLEvalCloudSettings(
+            requestedModelID: runner.options.model,
+            reasoningEffortOverride: runner.options.reasoningEffort
+        )
+        return try await runner.runResolved(resumeRun: resumeRun, cloud: cloud)
     }
 
-    private func runResolved(resumeRun: EvalPreviousRun?) async throws -> EvalRun {
+    private func runResolved(
+        resumeRun: EvalPreviousRun?,
+        cloud: TextToSQLEvalCloudSettings
+    ) async throws -> EvalRun {
         let startedAt = ISO8601DateFormatter().string(from: Date())
         let suiteURL = URL(fileURLWithPath: options.suitePath).standardizedFileURL
         let suiteData = try Data(contentsOf: suiteURL)
@@ -203,8 +220,9 @@ struct EvalRunner {
         let databaseDirectory = evalDirectory.appendingPathComponent("databases", isDirectory: true)
         let isTransportSmoke = suite.name.hasPrefix("provider-smoke")
         let expectedCanonicalModelID = options.backendMode.backends.contains(.cloud)
-            ? CloudModelCatalog.expectedReturnedModelID(forRequestedModelID: options.model)
+            ? cloud.profile.expectedReturnedModelID
             : nil
+        let reasoningEffort = cloud.reasoningEffort(for: options.cloudCallSite)
         let scorerSourceHash = try TextToSQLEvalSourceManifest.sourceHash(
             relativePaths: TextToSQLEvalSourceManifest.scorerSourcePaths(
                 includesSchemaToolAgent: options.cloudAgentMode == .tools
@@ -231,12 +249,14 @@ struct EvalRunner {
             suiteVersion: suite.version,
             suiteFileHash: Self.sha256(suiteData),
             schemaFixtureHashes: schemas.mapValues(\.sha256),
+            provider: cloud.provider,
             model: options.model,
             expectedCanonicalModelID: expectedCanonicalModelID,
             backendMode: options.backendMode.rawValue,
             cloudAgentMode: options.backendMode.backends.contains(.cloud)
                 ? options.cloudAgentMode.rawValue
                 : nil,
+            reasoningEffort: reasoningEffort,
             schemaAgentClarificationCorrectionMode: options.usesCloudSchemaAgent
                 ? options.schemaAgentClarificationCorrectionMode.rawValue
                 : nil,
@@ -335,6 +355,16 @@ struct EvalRunner {
                     : nil,
                 model: options.model,
                 expectedCanonicalModelID: expectedCanonicalModelID,
+                provider: cloud.provider,
+                providerEndpointHost: cloud.endpointHost,
+                reasoningEffort: reasoningEffort,
+                agentConfiguration: options.usesCloudSchemaAgent
+                    ? EvalCloudSchemaToolSQLGenerator.baseConfiguration(
+                        clarificationCorrectionMode: options.schemaAgentClarificationCorrectionMode,
+                        intentCoverageMode: options.schemaAgentIntentCoverageMode,
+                        planConsistencyMode: options.schemaAgentPlanConsistencyMode
+                    ).reportedSettings
+                    : nil,
                 osVersion: ProcessInfo.processInfo.operatingSystemVersionString,
                 architecture: Self.architecture(),
                 caseCount: selectedCases.count,
@@ -409,7 +439,7 @@ struct EvalRunner {
                 }
 
                 if backendStates[key.backend] == nil {
-                    let unavailable = backendUnavailableReason(for: key.backend)
+                    let unavailable = backendUnavailableReason(for: key.backend, cloud: cloud)
                     backendStates[key.backend] = EvalBackendRuntime(
                         unavailableReason: unavailable
                     )
@@ -435,6 +465,7 @@ struct EvalRunner {
                     result = semanticSkip
                 } else if let generator = makeGenerator(
                     for: key.backend,
+                    cloud: cloud,
                     maximumHTTPAttempts: budgetTracker.remainingHTTPAttempts(for: key.backend)
                 ) {
                     let prompt = promptText(evalCase: evalCase, schema: schema)
@@ -509,7 +540,7 @@ struct EvalRunner {
                 results.append(result)
                 budgetTracker.record(result)
                 if options.stopBeforeProviderLimit, result.status.isProviderBudgetUnavailable {
-                    budgetStopReason = "OpenRouter provider budget was unavailable."
+                    budgetStopReason = "\(cloud.profile.provider.displayName) provider budget was unavailable."
                 }
                 try writePartialArtifacts()
             }
@@ -566,6 +597,15 @@ struct EvalRunner {
         }
         if let model = previousRun.manifest.model, !options.explicitOptions.contains(.model) {
             options.model = model
+        }
+        // The provider follows the inherited model; an effort override is
+        // inherited only when the previous run sent a non-default effort.
+        if !options.explicitOptions.contains(.reasoningEffort) {
+            options.reasoningEffort = try TextToSQLEvalCloudSettings.resumedReasoningEffortOverride(
+                previousReasoningEffort: previousRun.manifest.reasoningEffort,
+                requestedModelID: options.model,
+                callSite: options.cloudCallSite
+            )
         }
         if !options.explicitOptions.contains(.repeatCount) {
             options.repeatCount = previousRun.manifest.repeatCount
@@ -1024,17 +1064,15 @@ struct EvalRunner {
 
     private func makeGenerator(
         for backend: TextToSQLEvalBackend,
+        cloud: TextToSQLEvalCloudSettings,
         maximumHTTPAttempts: Int?
     ) -> (any SQLGenerator)? {
         switch backend {
         case .cloud:
-            guard let apiKey = Self.openRouterAPIKey() else { return nil }
-            let profile = CloudModelProfile.openRouter(
-                requestedModelID: options.model,
-                expectedReturnedModelID: CloudModelCatalog.expectedReturnedModelID(
-                    forRequestedModelID: options.model
-                )
-            )
+            guard let apiKey = cloud.apiKey(in: ProcessInfo.processInfo.environment) else {
+                return nil
+            }
+            let profile = cloud.profile
             if options.cloudAgentMode == .tools {
                 return EvalCloudSchemaToolSQLGenerator(
                     apiKey: apiKey,
@@ -1090,11 +1128,14 @@ struct EvalRunner {
         return result
     }
 
-    private func backendUnavailableReason(for backend: TextToSQLEvalBackend) -> String? {
+    private func backendUnavailableReason(
+        for backend: TextToSQLEvalBackend,
+        cloud: TextToSQLEvalCloudSettings
+    ) -> String? {
         switch backend {
         case .cloud:
-            return Self.openRouterAPIKey() == nil
-                ? "WIDEN_EVAL_OPENROUTER_API_KEY is not set."
+            return cloud.apiKey(in: ProcessInfo.processInfo.environment) == nil
+                ? cloud.missingAPIKeyMessage
                 : nil
         }
     }
@@ -1531,12 +1572,6 @@ struct EvalRunner {
         return candidate
     }
 
-    private static func openRouterAPIKey() -> String? {
-        let value = ProcessInfo.processInfo.environment["WIDEN_EVAL_OPENROUTER_API_KEY"]?
-            .trimmingCharacters(in: .whitespacesAndNewlines)
-        return value?.isEmpty == false ? value : nil
-    }
-
     private static func readCasesJSONL(_ url: URL) throws -> [TextToSQLEvalResult] {
         let text = try String(contentsOf: url, encoding: .utf8)
         let decoder = JSONDecoder()
@@ -1603,10 +1638,12 @@ private extension EvalRunManifest {
             suiteVersion: suiteVersion,
             suiteFileHash: suiteFileHash,
             schemaFixtureHashes: schemaFixtureHashes,
+            provider: provider,
             model: model,
             expectedCanonicalModelID: expectedCanonicalModelID,
             backendMode: backendMode,
             cloudAgentMode: cloudAgentMode,
+            reasoningEffort: reasoningEffort,
             schemaAgentClarificationCorrectionMode: schemaAgentClarificationCorrectionMode,
             schemaAgentIntentCoverageMode: schemaAgentIntentCoverageMode,
             schemaAgentPlanConsistencyMode: schemaAgentPlanConsistencyMode,
@@ -1622,6 +1659,11 @@ private extension EvalRunManifest {
 private extension EvalCLIOptions {
     var usesCloudSchemaAgent: Bool {
         backendMode.backends.contains(.cloud) && cloudAgentMode == .tools
+    }
+
+    /// The call site whose policy the run's cloud requests follow.
+    var cloudCallSite: CloudCallSite {
+        cloudAgentMode == .tools ? .agentTurn : .oneShotSQL
     }
 
     var budgetLimits: TextToSQLEvalBudgetLimits {
@@ -1803,11 +1845,26 @@ private struct EvalCloudSchemaToolSQLGenerator: SQLGenerator, Sendable {
         )
     }
 
-    private func agentConfiguration() -> SchemaToolSQLAgentConfiguration {
+    /// The agent configuration before a per-case HTTP budget clamps it,
+    /// which is also what the run manifest reports.
+    static func baseConfiguration(
+        clarificationCorrectionMode: SchemaToolAgentClarificationCorrectionMode,
+        intentCoverageMode: SchemaToolAgentIntentCoverageMode,
+        planConsistencyMode: SchemaToolAgentPlanConsistencyMode
+    ) -> SchemaToolSQLAgentConfiguration {
         var configuration = SchemaToolSQLAgentConfiguration.default
         configuration.clarificationCorrectionMode = clarificationCorrectionMode
         configuration.intentCoverageMode = intentCoverageMode
         configuration.planConsistencyMode = planConsistencyMode
+        return configuration
+    }
+
+    private func agentConfiguration() -> SchemaToolSQLAgentConfiguration {
+        var configuration = Self.baseConfiguration(
+            clarificationCorrectionMode: clarificationCorrectionMode,
+            intentCoverageMode: intentCoverageMode,
+            planConsistencyMode: planConsistencyMode
+        )
         if let maximumHTTPAttempts {
             configuration.maximumHTTPAttempts = min(
                 configuration.maximumHTTPAttempts,
