@@ -16,7 +16,22 @@ public enum EvalReportRedaction {
                 options: .regularExpression
             )
             .replacingOccurrences(
+                of: #"(?i)\b(?:[a-z0-9-]+\.)*particle\.ai/\S+"#,
+                with: "[redacted-url]",
+                options: .regularExpression
+            )
+            .replacingOccurrences(
+                of: #"(?i)\bbearer\s+\S+"#,
+                with: "[redacted-key]",
+                options: .regularExpression
+            )
+            .replacingOccurrences(
                 of: #"\bsk-or-\S+"#,
+                with: "[redacted-key]",
+                options: .regularExpression
+            )
+            .replacingOccurrences(
+                of: #"(?<![A-Za-z0-9])pai-[A-Za-z0-9_-]{8,}"#,
                 with: "[redacted-key]",
                 options: .regularExpression
             )

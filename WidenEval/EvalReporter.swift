@@ -619,7 +619,7 @@ enum EvalReporter {
             parts.append("schema: \(result.diagnostics.schemaErrors.joined(separator: " "))")
         }
         if let error = result.diagnostics.errorMessage {
-            parts.append(error)
+            parts.append(EvalReportRedaction.redactedProviderMessage(error))
         }
         if let category = result.diagnostics.openRouterFailureCategory {
             parts.append("openrouter: \(category)")
