@@ -95,6 +95,47 @@ struct ChatToolDefinition: Equatable, Sendable {
     var parameters: JSONValue
 }
 
+/// The `tool_choice` a chat request sends.
+enum ChatToolChoice: Equatable, Sendable {
+    /// Send no `tool_choice`.
+    case omitted
+    case auto
+    case required
+    /// Require a call to the named function. Without `tool_choice` support
+    /// it falls back to `required`, which is then omitted like any other
+    /// `tool_choice`.
+    case function(name: String)
+}
+
+/// The `response_format` a chat request sends.
+enum ChatResponseFormat: Equatable, Sendable {
+    /// Send no `response_format`.
+    case omitted
+    /// Send `{"type":"json_object"}` when the capabilities support a response
+    /// format. The provider checks JSON syntax only, so the answer is still
+    /// validated locally.
+    case jsonObject
+}
+
+/// Per-request overrides for an agent-turn request. The defaults send what
+/// every agent turn has always sent.
+struct ChatRequestOptions: Equatable, Sendable {
+    var toolChoice: ChatToolChoice = .required
+    /// `nil` sends the profile's `parallel_tool_calls`.
+    var parallelToolCalls: Bool?
+    /// The names of the tools to send, out of the tools passed to the
+    /// builder. `nil` sends them all.
+    var toolNames: Set<String>?
+    var responseFormat: ChatResponseFormat = .omitted
+    /// `nil` sends the agent-turn policy's effort. An override is sent only
+    /// to a profile that accepts `reasoning_effort`.
+    var reasoningEffort: ReasoningEffort?
+    /// `nil` sends the agent-turn policy's token cap. Either one is capped by
+    /// the model's own maximum.
+    var maximumCompletionTokens: Int?
+    var promptCacheKey: String?
+}
+
 struct ChatToolRequestBuilder: Sendable {
     let profile: CloudModelProfile
 
@@ -105,23 +146,39 @@ struct ChatToolRequestBuilder: Sendable {
     struct BuiltRequest: Sendable {
         var request: URLRequest
         var mode: StructuredOutputMode
+        /// The `response_format` type sent, if any.
+        var responseFormatType: String?
+        /// The `reasoning_effort` sent, if any.
+        var reasoningEffort: String?
     }
 
+    /// A request with no tools sends no `tools`, `tool_choice` or
+    /// `parallel_tool_calls`.
     func build(
         apiKey: String,
         messages: [ChatToolMessage],
         tools: [ChatToolDefinition],
         capabilities: CloudModelCapabilities,
-        requireToolChoice: Bool = true,
-        promptCacheKey: String? = nil
+        options: ChatRequestOptions = ChatRequestOptions()
     ) throws -> BuiltRequest {
-        let policy = profile.policy(for: .agentTurn)
+        var policy = profile.policy(for: .agentTurn)
+        if let reasoningEffort = options.reasoningEffort, profile.supportsReasoningEffort {
+            policy.reasoningEffort = reasoningEffort
+        }
+        if let maximumCompletionTokens = options.maximumCompletionTokens {
+            policy.maxCompletionTokens = maximumCompletionTokens
+        }
+        let sentTools = options.toolNames.map { names in
+            tools.filter { names.contains($0.name) }
+        } ?? tools
         var body: [String: Any] = [
             "model": profile.requestedModelID,
             "messages": messages.map(messageBody),
-            "tools": try tools.map(toolBody),
             "stream": false,
         ]
+        if !sentTools.isEmpty {
+            body["tools"] = try sentTools.map(toolBody)
+        }
         if capabilities.supportsTemperature {
             body["temperature"] = 0
         }
@@ -132,16 +189,25 @@ struct ChatToolRequestBuilder: Sendable {
         } else {
             body["max_tokens"] = cappedCompletionTokens(policy, capabilities)
         }
-        if capabilities.supportsToolChoice, requireToolChoice {
-            body["tool_choice"] = "required"
+        if !sentTools.isEmpty, capabilities.supportsToolChoice,
+            let toolChoice = toolChoiceBody(options.toolChoice)
+        {
+            body["tool_choice"] = toolChoice
         }
-        if let parallelToolCalls = profile.parallelToolCalls {
+        if !sentTools.isEmpty,
+            let parallelToolCalls = options.parallelToolCalls ?? profile.parallelToolCalls
+        {
             body["parallel_tool_calls"] = parallelToolCalls
+        }
+        var responseFormatType: String?
+        if options.responseFormat == .jsonObject, capabilities.supportsResponseFormat {
+            body["response_format"] = ["type": "json_object"]
+            responseFormatType = "json_object"
         }
         if let reasoningEffort = policy.reasoningEffort {
             body["reasoning_effort"] = reasoningEffort.rawValue
         }
-        if profile.usesPromptCacheKey, let promptCacheKey {
+        if profile.usesPromptCacheKey, let promptCacheKey = options.promptCacheKey {
             body["prompt_cache_key"] = promptCacheKey
         }
         if profile.usesOpenRouterRouting {
@@ -150,7 +216,28 @@ struct ChatToolRequestBuilder: Sendable {
 
         var request = try profile.authorizedRequest(profile.chatCompletionsURL, apiKey: apiKey)
         request.httpBody = try JSONSerialization.data(withJSONObject: body)
-        return BuiltRequest(request: request, mode: .promptOnlyJSON)
+        return BuiltRequest(
+            request: request,
+            mode: .promptOnlyJSON,
+            responseFormatType: responseFormatType,
+            reasoningEffort: policy.reasoningEffort?.rawValue
+        )
+    }
+
+    private func toolChoiceBody(_ choice: ChatToolChoice) -> Any? {
+        switch choice {
+        case .omitted:
+            nil
+        case .auto:
+            "auto"
+        case .required:
+            "required"
+        case .function(let name):
+            [
+                "type": "function",
+                "function": ["name": name],
+            ]
+        }
     }
 
     private func cappedCompletionTokens(
