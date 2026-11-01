@@ -6,7 +6,10 @@ public protocol HTTPTransport: Sendable {
     func send(_ request: URLRequest) async throws -> (Data, HTTPURLResponse)
 }
 
-/// Production transport backed by an ephemeral URLSession.
+/// Production transport backed by an ephemeral URLSession. It never follows
+/// a redirect: `CloudModelProfile.authorizedRequest` checks only the URL it
+/// signs, so a 3xx comes back to the caller as an HTTP error instead of
+/// carrying the Authorization header to a URL nothing checked.
 public struct URLSessionTransport: HTTPTransport {
     private let session: URLSession
 
@@ -19,6 +22,10 @@ public struct URLSessionTransport: HTTPTransport {
         if let resourceTimeout {
             configuration.timeoutIntervalForResource = resourceTimeout
         }
+        self.init(configuration: configuration)
+    }
+
+    init(configuration: URLSessionConfiguration) {
         self.session = URLSession(configuration: configuration)
     }
 
@@ -27,10 +34,29 @@ public struct URLSessionTransport: HTTPTransport {
     }
 
     public func send(_ request: URLRequest) async throws -> (Data, HTTPURLResponse) {
-        let (data, response) = try await session.data(for: request)
+        let (data, response) = try await session.data(
+            for: request,
+            delegate: RedirectRefusingTaskDelegate.shared
+        )
         guard let http = response as? HTTPURLResponse else {
             throw URLError(.badServerResponse)
         }
         return (data, http)
+    }
+}
+
+/// Refuses every HTTP redirect, so the task finishes with the 3xx response
+/// itself. A task delegate rather than a session delegate, so sessions are
+/// not kept alive by a delegate reference.
+private final class RedirectRefusingTaskDelegate: NSObject, URLSessionTaskDelegate, Sendable {
+    static let shared = RedirectRefusingTaskDelegate()
+
+    func urlSession(
+        _ session: URLSession,
+        task: URLSessionTask,
+        willPerformHTTPRedirection response: HTTPURLResponse,
+        newRequest request: URLRequest
+    ) async -> URLRequest? {
+        nil
     }
 }

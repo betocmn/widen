@@ -87,6 +87,51 @@ struct CredentialHostGuardTests {
         )
     }
 
+    @Test func signedRequestIsNeverRedirectedToAnotherHost() async throws {
+        let run = UUID().uuidString
+        let request = try Self.staticProfile.authorizedRequest(
+            URL(string: "https://provider.test/v1/chat/completions?run=\(run)")!,
+            apiKey: "test-key"
+        )
+        let configuration = URLSessionConfiguration.ephemeral
+        configuration.protocolClasses = [RedirectingURLProtocol.self]
+
+        // The stub's redirect is real: a session that follows redirects
+        // carries the signed request to the other host.
+        let following = URLSession(configuration: configuration)
+        defer { following.finishTasksAndInvalidate() }
+        let (_, followed) = try await following.data(for: request)
+        #expect((followed as? HTTPURLResponse)?.url?.host == RedirectingURLProtocol.targetHost)
+        #expect(RedirectingURLProtocol.loadedHosts(run: run) == ["provider.test", RedirectingURLProtocol.targetHost])
+
+        let refusingRun = UUID().uuidString
+        var refused = request
+        refused.url = URL(string: "https://provider.test/v1/chat/completions?run=\(refusingRun)")!
+        let (data, response) = try await URLSessionTransport(configuration: configuration).send(refused)
+        #expect(response.statusCode == 302)
+        #expect(response.url?.host == "provider.test")
+        #expect(String(decoding: data, as: UTF8.self) == RedirectingURLProtocol.redirectBody)
+        #expect(RedirectingURLProtocol.loadedHosts(run: refusingRun) == ["provider.test"])
+
+        // The generator surfaces the 3xx as an HTTP failure, not a result.
+        let generatorRun = UUID().uuidString
+        var profile = Self.staticProfile
+        profile.baseURL = URL(string: "https://provider.test/v1/\(generatorRun)")!
+        do {
+            _ = try await CloudSQLGenerator(
+                apiKey: "test-key",
+                profile: profile,
+                transport: URLSessionTransport(configuration: configuration),
+                maximumHTTPAttempts: 1
+            ).generateSQL(question: "List users", schema: Self.makeSchema(), config: SQLGenerationConfig())
+            Issue.record("expected a redirect to fail the generation")
+        } catch let failure as CloudRequestFailure {
+            #expect(failure.diagnostic.httpStatus == 302)
+            #expect(failure.message.contains("HTTP 302"))
+        }
+        #expect(RedirectingURLProtocol.loadedHosts(run: generatorRun) == ["provider.test"])
+    }
+
     @Test func foreignPrefixKeySendsNoRequest() async throws {
         let profile = Self.staticProfile
         for key in ["sk-or-v1-abc", " SK-OR-v1-abc"] {
@@ -272,4 +317,61 @@ struct CredentialHostGuardTests {
         try! FileManager.default.createDirectory(at: url, withIntermediateDirectories: true)
         return url
     }
+}
+
+/// Answers every request to its own host with a 302 to `targetHost`, the
+/// way URLSession's HTTP loader reports a redirect, and answers the target
+/// host with a 200. Records each loaded URL; tests tell their requests
+/// apart by a unique token in the URL.
+private final class RedirectingURLProtocol: URLProtocol {
+    static let targetHost = "redirect-target.test"
+    static let redirectBody = "moved"
+
+    private static let lock = NSLock()
+    nonisolated(unsafe) private static var loadedURLs: [URL] = []
+
+    static func loadedHosts(run: String) -> [String] {
+        lock.withLock {
+            loadedURLs.filter { $0.absoluteString.contains(run) }.compactMap(\.host)
+        }
+    }
+
+    override class func canInit(with request: URLRequest) -> Bool { true }
+
+    override class func canonicalRequest(for request: URLRequest) -> URLRequest { request }
+
+    override func startLoading() {
+        guard let url = request.url, let client else { return }
+        Self.lock.withLock { Self.loadedURLs.append(url) }
+
+        if url.host == Self.targetHost {
+            let response = HTTPURLResponse(url: url, statusCode: 200, httpVersion: "HTTP/1.1", headerFields: [:])!
+            client.urlProtocol(self, didReceive: response, cacheStoragePolicy: .notAllowed)
+            client.urlProtocol(self, didLoad: Data("followed".utf8))
+            client.urlProtocolDidFinishLoading(self)
+            return
+        }
+
+        var components = URLComponents()
+        components.scheme = "https"
+        components.host = Self.targetHost
+        components.path = "/collect"
+        components.queryItems = [URLQueryItem(name: "from", value: url.absoluteString)]
+        let target = components.url!
+        let response = HTTPURLResponse(
+            url: url,
+            statusCode: 302,
+            httpVersion: "HTTP/1.1",
+            headerFields: ["Location": target.absoluteString]
+        )!
+        var redirected = request
+        redirected.url = target
+        client.urlProtocol(self, wasRedirectedTo: redirected, redirectResponse: response)
+        // A refused redirect finishes with the 3xx response itself.
+        client.urlProtocol(self, didReceive: response, cacheStoragePolicy: .notAllowed)
+        client.urlProtocol(self, didLoad: Data(Self.redirectBody.utf8))
+        client.urlProtocolDidFinishLoading(self)
+    }
+
+    override func stopLoading() {}
 }
