@@ -2,18 +2,18 @@ import Testing
 
 @testable import WidenKit
 
-@Suite("OpenRouter production profile")
-struct OpenRouterCatalogTests {
-    @Test func productionProfilePinsDistinctRequestedAndCanonicalIDs() {
-        let profile = OpenRouterCatalog.productionProfile
+@Suite("Cloud model profile")
+struct CloudModelCatalogTests {
+    @Test func productionProfilePinsDistinctRequestedAndReturnedIDs() {
+        let profile = CloudModelCatalog.productionProfile
         #expect(!profile.requestedModelID.isEmpty)
-        #expect(!profile.expectedCanonicalModelID.isEmpty)
-        #expect(profile.requestedModelID != profile.expectedCanonicalModelID)
+        #expect(!profile.expectedReturnedModelID.isEmpty)
+        #expect(profile.requestedModelID != profile.expectedReturnedModelID)
         #expect(!profile.displayName.isEmpty)
     }
 
     @Test func releaseGateModelPolicyRejectsUnpinnedDocPublishingRuns() {
-        let pinned = OpenRouterCatalog.productionProfile.requestedModelID
+        let pinned = CloudModelCatalog.productionProfile.requestedModelID
         #expect(throws: Never.self) {
             try TextToSQLReleaseGateModelPolicy.validate(
                 model: pinned,
@@ -113,11 +113,11 @@ struct OpenRouterCatalogTests {
     }
 
     @Test func committedDocEligibilityRequiresVerifiedCloudEvaluation() {
-        let profile = OpenRouterCatalog.productionProfile
+        let profile = CloudModelCatalog.productionProfile
         #expect(
             TextToSQLReleaseGateModelPolicy.canPublishCommittedDocs(
                 model: profile.requestedModelID,
-                expectedCanonicalModelID: profile.expectedCanonicalModelID,
+                expectedReturnedModelID: profile.expectedReturnedModelID,
                 backendIncludesCloud: true,
                 cloudEvaluatedResultCount: 1
             )
@@ -125,7 +125,7 @@ struct OpenRouterCatalogTests {
         #expect(
             !TextToSQLReleaseGateModelPolicy.canPublishCommittedDocs(
                 model: nil,
-                expectedCanonicalModelID: profile.expectedCanonicalModelID,
+                expectedReturnedModelID: profile.expectedReturnedModelID,
                 backendIncludesCloud: true,
                 cloudEvaluatedResultCount: 1
             )
@@ -133,7 +133,7 @@ struct OpenRouterCatalogTests {
         #expect(
             !TextToSQLReleaseGateModelPolicy.canPublishCommittedDocs(
                 model: profile.requestedModelID,
-                expectedCanonicalModelID: profile.expectedCanonicalModelID,
+                expectedReturnedModelID: profile.expectedReturnedModelID,
                 backendIncludesCloud: false,
                 cloudEvaluatedResultCount: 1
             )
@@ -141,7 +141,7 @@ struct OpenRouterCatalogTests {
         #expect(
             !TextToSQLReleaseGateModelPolicy.canPublishCommittedDocs(
                 model: "vendor/other",
-                expectedCanonicalModelID: profile.expectedCanonicalModelID,
+                expectedReturnedModelID: profile.expectedReturnedModelID,
                 backendIncludesCloud: true,
                 cloudEvaluatedResultCount: 1
             )
@@ -149,7 +149,7 @@ struct OpenRouterCatalogTests {
         #expect(
             !TextToSQLReleaseGateModelPolicy.canPublishCommittedDocs(
                 model: profile.requestedModelID,
-                expectedCanonicalModelID: nil,
+                expectedReturnedModelID: nil,
                 backendIncludesCloud: true,
                 cloudEvaluatedResultCount: 1
             )
@@ -157,7 +157,7 @@ struct OpenRouterCatalogTests {
         #expect(
             !TextToSQLReleaseGateModelPolicy.canPublishCommittedDocs(
                 model: profile.requestedModelID,
-                expectedCanonicalModelID: "openai/gpt-5.5-unevaluated",
+                expectedReturnedModelID: "openai/gpt-5.5-unevaluated",
                 backendIncludesCloud: true,
                 cloudEvaluatedResultCount: 1
             )
@@ -165,7 +165,7 @@ struct OpenRouterCatalogTests {
         #expect(
             !TextToSQLReleaseGateModelPolicy.canPublishCommittedDocs(
                 model: profile.requestedModelID,
-                expectedCanonicalModelID: profile.expectedCanonicalModelID,
+                expectedReturnedModelID: profile.expectedReturnedModelID,
                 backendIncludesCloud: true,
                 cloudEvaluatedResultCount: 0
             )
@@ -173,10 +173,10 @@ struct OpenRouterCatalogTests {
     }
 
     @Test func committedDocIneligibilityExplainsMissingExecutionEvidence() {
-        let profile = OpenRouterCatalog.productionProfile
+        let profile = CloudModelCatalog.productionProfile
         let reason = TextToSQLReleaseGateModelPolicy.committedDocIneligibility(
             model: profile.requestedModelID,
-            expectedCanonicalModelID: profile.expectedCanonicalModelID,
+            expectedReturnedModelID: profile.expectedReturnedModelID,
             backendIncludesCloud: true,
             cloudEvaluatedResultCount: 0
         )
@@ -186,7 +186,7 @@ struct OpenRouterCatalogTests {
     }
 
     @Test func releaseGateViolationHasAnActionableLocalizedDescription() {
-        let pinned = OpenRouterCatalog.productionProfile.requestedModelID
+        let pinned = CloudModelCatalog.productionProfile.requestedModelID
         let violation = TextToSQLReleaseGateModelPolicy.Violation(model: nil)
 
         #expect(violation.pinnedModel == pinned)
@@ -194,20 +194,20 @@ struct OpenRouterCatalogTests {
         #expect(violation.localizedDescription.contains("--allow-model-override"))
     }
 
-    @Test func expectedCanonicalModelIDEnforcesOnlyThePinnedModel() {
-        let profile = OpenRouterCatalog.productionProfile
+    @Test func expectedReturnedModelIDEnforcesOnlyThePinnedModel() {
+        let profile = CloudModelCatalog.productionProfile
         #expect(
-            OpenRouterCatalog.expectedCanonicalModelID(
+            CloudModelCatalog.expectedReturnedModelID(
                 forRequestedModelID: profile.requestedModelID
-            ) == profile.expectedCanonicalModelID
+            ) == profile.expectedReturnedModelID
         )
         #expect(
-            OpenRouterCatalog.expectedCanonicalModelID(forRequestedModelID: "vendor/other-model")
+            CloudModelCatalog.expectedReturnedModelID(forRequestedModelID: "vendor/other-model")
                 == nil
         )
         #expect(
-            OpenRouterCatalog.expectedCanonicalModelID(
-                forRequestedModelID: profile.expectedCanonicalModelID
+            CloudModelCatalog.expectedReturnedModelID(
+                forRequestedModelID: profile.expectedReturnedModelID
             ) == nil
         )
     }

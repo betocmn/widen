@@ -235,7 +235,7 @@ struct EvalCLIOptions {
         .diagnosticsOnly
     var schemaAgentIntentCoverageMode: SchemaToolAgentIntentCoverageMode = .diagnosticsOnly
     var schemaAgentPlanConsistencyMode: SchemaToolAgentPlanConsistencyMode = .diagnosticsOnly
-    var model: String = OpenRouterCatalog.productionProfile.requestedModelID
+    var model: String = CloudModelCatalog.productionProfile.requestedModelID
     var suitePath: String = "Evals/suites/text-to-sql-v1.json"
     var caseID: String?
     var caseIDs: [String] = []

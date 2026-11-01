@@ -1,12 +1,12 @@
 import Foundation
 
-struct OpenRouterToolCall: Codable, Equatable, Sendable {
+struct ChatToolCall: Codable, Equatable, Sendable {
     var id: String
     var name: String
     var arguments: String
 }
 
-struct OpenRouterToolChatMessage: Equatable, Sendable {
+struct ChatToolMessage: Equatable, Sendable {
     enum Role: String, Equatable, Sendable {
         case system
         case user
@@ -16,14 +16,14 @@ struct OpenRouterToolChatMessage: Equatable, Sendable {
 
     var role: Role
     var content: String?
-    var toolCalls: [OpenRouterToolCall]
+    var toolCalls: [ChatToolCall]
     var toolCallID: String?
     var toolName: String?
 
     init(
         role: Role,
         content: String? = nil,
-        toolCalls: [OpenRouterToolCall] = [],
+        toolCalls: [ChatToolCall] = [],
         toolCallID: String? = nil,
         toolName: String? = nil
     ) {
@@ -35,13 +35,13 @@ struct OpenRouterToolChatMessage: Equatable, Sendable {
     }
 }
 
-struct OpenRouterToolDefinition: Equatable, Sendable {
+struct ChatToolDefinition: Equatable, Sendable {
     var name: String
     var description: String
     var parameters: JSONValue
 }
 
-struct OpenRouterToolChatRequestBuilder: Sendable {
+struct ChatToolRequestBuilder: Sendable {
     static let completionTokenBudget = 2_048
     let endpoint: URL
 
@@ -57,8 +57,8 @@ struct OpenRouterToolChatRequestBuilder: Sendable {
     func build(
         apiKey: String,
         model: String,
-        messages: [OpenRouterToolChatMessage],
-        tools: [OpenRouterToolDefinition],
+        messages: [ChatToolMessage],
+        tools: [ChatToolDefinition],
         capabilities: CloudModelCapabilities,
         requireToolChoice: Bool = true
     ) throws -> BuiltRequest {
@@ -97,7 +97,7 @@ struct OpenRouterToolChatRequestBuilder: Sendable {
         min(Self.completionTokenBudget, max(16, capabilities.maximumCompletionTokens ?? Self.completionTokenBudget))
     }
 
-    private func toolBody(_ definition: OpenRouterToolDefinition) throws -> [String: Any] {
+    private func toolBody(_ definition: ChatToolDefinition) throws -> [String: Any] {
         [
             "type": "function",
             "function": [
@@ -108,7 +108,7 @@ struct OpenRouterToolChatRequestBuilder: Sendable {
         ]
     }
 
-    private func messageBody(_ message: OpenRouterToolChatMessage) -> [String: Any] {
+    private func messageBody(_ message: ChatToolMessage) -> [String: Any] {
         switch message.role {
         case .system, .user:
             return [
@@ -147,10 +147,10 @@ struct OpenRouterToolChatRequestBuilder: Sendable {
     }
 }
 
-struct OpenRouterToolChatParser: Sendable {
+struct ChatToolParser: Sendable {
     struct ParsedTurn: Sendable {
         var content: String?
-        var toolCalls: [OpenRouterToolCall]
+        var toolCalls: [ChatToolCall]
         var metadata: CloudGenerationMetadata
     }
 
@@ -273,9 +273,9 @@ struct OpenRouterToolChatParser: Sendable {
         retryCount: Int,
         expectedCanonicalModelID: String? = nil
     ) throws -> ParsedTurn {
-        let reportedUsage = OpenRouterResponseParser.reportedUsage(from: data)
+        let reportedUsage = CloudSQLResponseParser.reportedUsage(from: data)
         if !(200..<300).contains(response.statusCode) {
-            throw OpenRouterResponseParser.failure(
+            throw CloudSQLResponseParser.failure(
                 from: data,
                 response: response,
                 requestedModelID: requestedModelID,
@@ -299,7 +299,7 @@ struct OpenRouterToolChatParser: Sendable {
             ).withReportedUsage(reportedUsage)
         }
         if let topError = completion.error {
-            throw OpenRouterResponseParser.failure(
+            throw CloudSQLResponseParser.failure(
                 apiError: topError,
                 httpStatus: response.statusCode,
                 completionID: completion.id,
@@ -324,7 +324,7 @@ struct OpenRouterToolChatParser: Sendable {
             ).withReportedUsage(reportedUsage)
         }
         if let choiceError = choice.error {
-            throw OpenRouterResponseParser.failure(
+            throw CloudSQLResponseParser.failure(
                 apiError: choiceError,
                 httpStatus: response.statusCode,
                 completionID: completion.id,
@@ -408,7 +408,7 @@ struct OpenRouterToolChatParser: Sendable {
                     attemptCount: requestCount
                 ).withReportedUsage(reportedUsage)
             }
-            return OpenRouterToolCall(id: id, name: name, arguments: arguments)
+            return ChatToolCall(id: id, name: name, arguments: arguments)
         }
         let content = choice.message?.content?.text
             .trimmingCharacters(in: .whitespacesAndNewlines)

@@ -8,8 +8,8 @@ import Testing
 @Suite("Text-to-SQL call budgets")
 struct TextToSQLCallBudgetTests {
     @Test func straightSwapCallBudgetsKeepCurrentDefaults() {
-        let agent = OpenRouterSchemaToolSQLAgentConfiguration.default
-        #expect(agent == OpenRouterSchemaToolSQLAgentConfiguration())
+        let agent = SchemaToolSQLAgentConfiguration.default
+        #expect(agent == SchemaToolSQLAgentConfiguration())
         #expect(agent.maximumModelTurns == 6)
         #expect(agent.maximumSchemaToolCalls == 6)
         #expect(agent.maximumRepairSchemaToolCalls == 2)

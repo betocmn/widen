@@ -5,7 +5,7 @@ import Testing
 
 @Suite("SQLGenerationErrorCopy")
 struct SQLGenerationErrorCopyTests {
-    private let modelName = OpenRouterCatalog.productionProfile.displayName
+    private let modelName = CloudModelCatalog.productionProfile.displayName
 
     private func pipelineFailure(
         openRouterCategory: CloudRequestFailure.Category? = nil,
@@ -96,7 +96,7 @@ struct SQLGenerationErrorCopyTests {
 
     @Test func privateRoutingFailureLeadsWithTransientFraming() {
         // The ZDR routing failure arrives with the fixed prefix injected by
-        // OpenRouterSQLGenerator, under a non-retryable category (404).
+        // CloudSQLGenerator, under a non-retryable category (404).
         let failure = pipelineFailure(
             openRouterCategory: .modelNotFound,
             message:
@@ -158,7 +158,7 @@ struct SQLGenerationErrorCopyTests {
     }
 
     @Test func thrownAgentTimeoutMapsToExplorationCopy() {
-        let error = OpenRouterSchemaToolAgentFailure(
+        let error = SchemaToolAgentFailure(
             category: .wallClockTimeout,
             message: "The schema-tool agent timed out."
         )

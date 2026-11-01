@@ -1509,7 +1509,7 @@ public struct TextToSQLPipeline: TextToSQLRunning {
                 openRouterDiagnostic = nil
                 backendMetadata = budgetFailure.backendMetadata
             } else if case .schemaToolAgent(let agentFailure) = failure,
-                let openRouterFailure = agentFailure.openRouterFailure
+                let openRouterFailure = agentFailure.cloudFailure
             {
                 openRouterDiagnostic = openRouterFailure.diagnostic
                 backendMetadata = agentFailure.backendMetadata
@@ -1720,7 +1720,7 @@ private struct TraceBuilder {
 }
 
 private func schemaToolCalls(from error: any Error) -> [SchemaToolCallTrace] {
-    if let failure = error as? OpenRouterSchemaToolAgentFailure {
+    if let failure = error as? SchemaToolAgentFailure {
         return failure.schemaToolCalls
     }
     if case .schemaToolAgent(let failure)? = SQLGenerationFailure.typed(error) {
@@ -1730,7 +1730,7 @@ private func schemaToolCalls(from error: any Error) -> [SchemaToolCallTrace] {
 }
 
 private func inspectionToolCalls(from error: any Error) -> [DatabaseInspectionToolCallTrace] {
-    if let failure = error as? OpenRouterSchemaToolAgentFailure {
+    if let failure = error as? SchemaToolAgentFailure {
         return failure.inspectionToolCalls
     }
     if case .schemaToolAgent(let failure)? = SQLGenerationFailure.typed(error) {

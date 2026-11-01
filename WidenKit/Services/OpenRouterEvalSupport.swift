@@ -643,7 +643,7 @@ actor OpenRouterModelCatalogService {
         request.setValue("Widen", forHTTPHeaderField: "X-Title")
         let (data, response) = try await transport.send(request)
         guard (200..<300).contains(response.statusCode) else {
-            throw OpenRouterResponseParser.failure(
+            throw CloudSQLResponseParser.failure(
                 from: data,
                 response: response,
                 requestedModelID: nil,
@@ -686,7 +686,7 @@ actor OpenRouterModelCatalogService {
         let (data, response) = try await transport.send(request)
         guard (200..<300).contains(response.statusCode) else {
             if response.statusCode == 404 { return nil }
-            throw OpenRouterResponseParser.failure(
+            throw CloudSQLResponseParser.failure(
                 from: data,
                 response: response,
                 requestedModelID: modelID,
@@ -856,7 +856,7 @@ struct OpenRouterRouterMetadata: Decodable, Equatable, Sendable {
     }
 }
 
-extension OpenRouterResponseParser {
+extension CloudSQLResponseParser {
     /// OpenRouter routing failures for provider data-policy preferences (ZDR,
     /// data collection) arrive as generic 404/503 messages; detect them so
     /// the user sees why generation failed closed. Keep the match specific to

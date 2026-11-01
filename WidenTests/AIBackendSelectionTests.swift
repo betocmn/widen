@@ -80,12 +80,12 @@ struct AIBackendSelectionTests {
         state.openRouterAPIKeyOverride = .some("sk-test")
 
         #expect(state.cloudBackendStatus == .ready)
-        let generator = state.sqlGenerator as? OpenRouterSQLGenerator
+        let generator = state.sqlGenerator as? CloudSQLGenerator
         #expect(generator != nil)
-        #expect(generator?.model == OpenRouterCatalog.productionProfile.requestedModelID)
+        #expect(generator?.model == CloudModelCatalog.productionProfile.requestedModelID)
         #expect(
             generator?.expectedCanonicalModelID
-                == OpenRouterCatalog.productionProfile.expectedCanonicalModelID
+                == CloudModelCatalog.productionProfile.expectedReturnedModelID
         )
         #expect(state.activeBackendDisplayName.contains("via OpenRouter"))
         #expect(state.modelAvailabilityMessage == nil)
@@ -109,12 +109,12 @@ struct AIBackendSelectionTests {
             )
         )
 
-        let agent = generator as? OpenRouterSchemaToolSQLAgent
+        let agent = generator as? SchemaToolSQLAgent
         #expect(agent != nil)
-        #expect(agent?.model == OpenRouterCatalog.productionProfile.requestedModelID)
+        #expect(agent?.model == CloudModelCatalog.productionProfile.requestedModelID)
         #expect(
             agent?.expectedCanonicalModelID
-                == OpenRouterCatalog.productionProfile.expectedCanonicalModelID
+                == CloudModelCatalog.productionProfile.expectedReturnedModelID
         )
     }
 
@@ -138,12 +138,12 @@ struct AIBackendSelectionTests {
             )
         )
 
-        let agent = generator as? OpenRouterSchemaToolSQLAgent
+        let agent = generator as? SchemaToolSQLAgent
         #expect(agent != nil)
-        #expect(agent?.model == OpenRouterCatalog.productionProfile.requestedModelID)
+        #expect(agent?.model == CloudModelCatalog.productionProfile.requestedModelID)
         #expect(
             agent?.expectedCanonicalModelID
-                == OpenRouterCatalog.productionProfile.expectedCanonicalModelID
+                == CloudModelCatalog.productionProfile.expectedReturnedModelID
         )
     }
 
@@ -229,7 +229,7 @@ struct AIBackendSelectionTests {
             Issue.record("expected notConfigured, got \(state.cloudBackendStatus)")
             return
         }
-        #expect(!(state.sqlGenerator is OpenRouterSQLGenerator))
+        #expect(!(state.sqlGenerator is CloudSQLGenerator))
         #expect(state.sqlGenerator is UnavailableSQLGenerator)
         #expect(state.activeBackendDisplayName.contains("via OpenRouter"))
         #expect(state.modelAvailabilityMessage?.contains("API key") == true)
@@ -270,7 +270,7 @@ struct AIBackendSelectionTests {
             return
         }
         #expect(message.contains("OpenRouter"))
-        #expect(!(state.sqlGenerator is OpenRouterSQLGenerator))
+        #expect(!(state.sqlGenerator is CloudSQLGenerator))
         #expect(state.sqlGenerator is UnavailableSQLGenerator)
         #expect(state.activeBackendDisplayName == "Apple Private Cloud Compute")
         #expect(state.modelAvailabilityMessage?.contains("OpenRouter") == true)
@@ -286,7 +286,7 @@ struct AIBackendSelectionTests {
         state.openRouterAPIKeyOverride = .some("sk-test")
         state.localLLMEligibilityOverride = .ready
 
-        #expect(!(state.sqlGenerator is OpenRouterSQLGenerator))
+        #expect(!(state.sqlGenerator is CloudSQLGenerator))
         #expect(state.activeBackendDisplayName == "On-Device — Experimental")
     }
 
@@ -309,9 +309,9 @@ struct AIBackendSelectionTests {
         #expect(state.aiBackendMode == .cloud)
         #expect(state.activeBackendDisplayName.contains("via OpenRouter"))
         #expect(state.cloudProvider == .openRouter)
-        #expect(OpenRouterCatalog.productionProfile.requestedModelID == "openai/gpt-5.5")
+        #expect(CloudModelCatalog.productionProfile.requestedModelID == "openai/gpt-5.5")
         #expect(
-            OpenRouterCatalog.productionProfile.expectedCanonicalModelID
+            CloudModelCatalog.productionProfile.expectedReturnedModelID
                 == "openai/gpt-5.5-20260423"
         )
     }
@@ -475,12 +475,12 @@ struct AIBackendSelectionTests {
         state.openRouterAPIKeyOverride = .some("sk-test")
         state.localLLMEligibilityOverride = .ready
 
-        #expect(state.sqlGenerator is OpenRouterSQLGenerator)
+        #expect(state.sqlGenerator is CloudSQLGenerator)
         #expect(state.requestAIBackendMode(.local))
         #expect(state.aiBackendMode == .local)
         #expect(!(state.sqlGenerator is UnavailableSQLGenerator))
         #expect(state.requestAIBackendMode(.cloud))
         #expect(state.aiBackendMode == .cloud)
-        #expect(state.sqlGenerator is OpenRouterSQLGenerator)
+        #expect(state.sqlGenerator is CloudSQLGenerator)
     }
 }

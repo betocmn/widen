@@ -20,7 +20,7 @@ public enum SchemaToolAgentPlanConsistencyMode: String, Codable, Equatable, Send
     case correctAndRetryExperimental
 }
 
-public struct OpenRouterSchemaToolSQLAgentConfiguration: Equatable, Sendable {
+public struct SchemaToolSQLAgentConfiguration: Equatable, Sendable {
     public var maximumSchemaToolCalls: Int
     public var maximumRepairSchemaToolCalls: Int
     public var maximumModelTurns: Int
@@ -59,10 +59,10 @@ public struct OpenRouterSchemaToolSQLAgentConfiguration: Equatable, Sendable {
         self.planConsistencyMode = planConsistencyMode
     }
 
-    public static let `default` = OpenRouterSchemaToolSQLAgentConfiguration()
+    public static let `default` = SchemaToolSQLAgentConfiguration()
 }
 
-public struct OpenRouterSchemaToolAgentFailure: Error, LocalizedError, Equatable, Sendable {
+public struct SchemaToolAgentFailure: Error, LocalizedError, Equatable, Sendable {
     public enum Category: String, Codable, Equatable, Sendable {
         case unsupportedTools
         case malformedToolCall
@@ -83,12 +83,12 @@ public struct OpenRouterSchemaToolAgentFailure: Error, LocalizedError, Equatable
         case uninspectedSchemaObjects
         case staleSchemaSnapshot
         case cancellation
-        case openRouterRequestFailure
+        case cloudRequestFailure = "openRouterRequestFailure"
     }
 
     public var category: Category
     public var message: String
-    public var openRouterFailure: CloudRequestFailure?
+    public var cloudFailure: CloudRequestFailure?
     public var backendMetadata: CloudGenerationMetadata?
     public var schemaToolCalls: [SchemaToolCallTrace]
     public var inspectionToolCalls: [DatabaseInspectionToolCallTrace]
@@ -96,14 +96,14 @@ public struct OpenRouterSchemaToolAgentFailure: Error, LocalizedError, Equatable
     public init(
         category: Category,
         message: String,
-        openRouterFailure: CloudRequestFailure? = nil,
+        cloudFailure: CloudRequestFailure? = nil,
         backendMetadata: CloudGenerationMetadata? = nil,
         schemaToolCalls: [SchemaToolCallTrace] = [],
         inspectionToolCalls: [DatabaseInspectionToolCallTrace] = []
     ) {
         self.category = category
         self.message = message
-        self.openRouterFailure = openRouterFailure
+        self.cloudFailure = cloudFailure
         self.backendMetadata = backendMetadata
         self.schemaToolCalls = schemaToolCalls
         self.inspectionToolCalls = inspectionToolCalls
@@ -137,15 +137,15 @@ public struct OpenRouterSchemaToolAgentFailure: Error, LocalizedError, Equatable
             .modelGeneration
         case .cancellation:
             .cancellation
-        case .openRouterRequestFailure:
-            openRouterFailure?.pipelineCategory ?? .transport
+        case .cloudRequestFailure:
+            cloudFailure?.pipelineCategory ?? .transport
         }
     }
 }
 
 /// Experimental OpenRouter SQL generator that asks the model to discover schema
 /// through bounded metadata tools instead of sending a complete schema prompt.
-public final class OpenRouterSchemaToolSQLAgent: SQLGenerator, Sendable {
+public final class SchemaToolSQLAgent: SQLGenerator, Sendable {
     public static let terminalToolName = "submit_text_to_sql_result"
 
     private let apiKey: String
@@ -155,14 +155,14 @@ public final class OpenRouterSchemaToolSQLAgent: SQLGenerator, Sendable {
     private let selectedSchemas: [String]
     private let transport: any HTTPTransport
     private let catalogService: OpenRouterModelCatalogService
-    private let requestBuilder: OpenRouterToolChatRequestBuilder
-    private let parser = OpenRouterToolChatParser()
+    private let requestBuilder: ChatToolRequestBuilder
+    private let parser = ChatToolParser()
     private let retryPolicy = ChatCompletionRetryPolicy()
     private let sessionFactory: SchemaToolSessionFactory
     private let databaseInspectionSessionFactory: DatabaseInspectionToolSessionFactory
     private let databaseInspectionPolicy: DatabaseInspectionPolicy
     private let databaseInspectionDatabase: (any DatabaseInspectionQuerying)?
-    private let configuration: OpenRouterSchemaToolSQLAgentConfiguration
+    private let configuration: SchemaToolSQLAgentConfiguration
     private let legacyGenerator: any SQLGenerator
     private let currentSchemaFingerprint: (@Sendable () async throws -> String)?
 
@@ -179,7 +179,7 @@ public final class OpenRouterSchemaToolSQLAgent: SQLGenerator, Sendable {
         databaseInspectionDatabase: (any DatabaseInspectionQuerying)? = nil,
         databaseInspectionSessionFactory: DatabaseInspectionToolSessionFactory =
             DatabaseInspectionToolSessionFactory(),
-        configuration: OpenRouterSchemaToolSQLAgentConfiguration = .default,
+        configuration: SchemaToolSQLAgentConfiguration = .default,
         currentSchemaFingerprint: (@Sendable () async throws -> String)? = nil
     ) {
         self.apiKey = apiKey
@@ -189,20 +189,20 @@ public final class OpenRouterSchemaToolSQLAgent: SQLGenerator, Sendable {
         self.selectedSchemas = selectedSchemas.sorted()
         self.transport = transport
         self.catalogService = .shared
-        self.requestBuilder = OpenRouterToolChatRequestBuilder(endpoint: endpoint)
+        self.requestBuilder = ChatToolRequestBuilder(endpoint: endpoint)
         self.sessionFactory = SchemaToolSessionFactory(indexStore: indexStore)
         self.databaseInspectionSessionFactory = databaseInspectionSessionFactory
         self.databaseInspectionPolicy = databaseInspectionPolicy
         self.databaseInspectionDatabase = databaseInspectionDatabase
         self.configuration = configuration
         self.currentSchemaFingerprint = currentSchemaFingerprint
-        self.legacyGenerator = OpenRouterSQLGenerator(
+        self.legacyGenerator = CloudSQLGenerator(
             apiKey: apiKey,
             model: model,
             expectedCanonicalModelID: expectedCanonicalModelID,
             transport: transport,
             catalogService: catalogService,
-            requestBuilder: OpenRouterRequestBuilder(endpoint: endpoint)
+            requestBuilder: ChatCompletionRequestBuilder(endpoint: endpoint)
         )
     }
 
@@ -219,9 +219,9 @@ public final class OpenRouterSchemaToolSQLAgent: SQLGenerator, Sendable {
             DatabaseInspectionToolSessionFactory(),
         databaseInspectionPolicy: DatabaseInspectionPolicy = .disabled,
         databaseInspectionDatabase: (any DatabaseInspectionQuerying)? = nil,
-        requestBuilder: OpenRouterToolChatRequestBuilder,
+        requestBuilder: ChatToolRequestBuilder,
         legacyGenerator: any SQLGenerator,
-        configuration: OpenRouterSchemaToolSQLAgentConfiguration = .default,
+        configuration: SchemaToolSQLAgentConfiguration = .default,
         currentSchemaFingerprint: (@Sendable () async throws -> String)? = nil
     ) {
         self.apiKey = apiKey
@@ -247,7 +247,7 @@ public final class OpenRouterSchemaToolSQLAgent: SQLGenerator, Sendable {
         context: SQLGenerationContext,
         config: SQLGenerationConfig
     ) async throws -> SQLGenerationResult {
-        var aggregate = OpenRouterAgentMetadataAccumulator(requestedModelID: model)
+        var aggregate = AgentMetadataAccumulator(requestedModelID: model)
         let availableHTTPAttempts = configuration.countCapabilityLookupHTTPAttempts
             ? HTTPAttemptBudget.remaining(
                 maximumHTTPAttempts: configuration.maximumHTTPAttempts,
@@ -261,7 +261,7 @@ public final class OpenRouterSchemaToolSQLAgent: SQLGenerator, Sendable {
                 inspectionToolCalls: []
             )
             metadata.agentSelectionReason = "tools"
-            throw OpenRouterSchemaToolAgentFailure(
+            throw SchemaToolAgentFailure(
                 category: .httpAttemptBudgetExhausted,
                 message: "The schema-tool agent exhausted its OpenRouter HTTP-attempt budget.",
                 backendMetadata: metadata
@@ -297,7 +297,7 @@ public final class OpenRouterSchemaToolSQLAgent: SQLGenerator, Sendable {
                 inspectionToolCalls: []
             )
             metadata.agentSelectionReason = "tools"
-            throw OpenRouterSchemaToolAgentFailure(
+            throw SchemaToolAgentFailure(
                 category: .httpAttemptBudgetExhausted,
                 message: "The schema-tool agent exhausted its OpenRouter HTTP-attempt budget.",
                 backendMetadata: metadata
@@ -308,13 +308,13 @@ public final class OpenRouterSchemaToolSQLAgent: SQLGenerator, Sendable {
         {
             let fallbackGenerator: any SQLGenerator
             if configuration.countCapabilityLookupHTTPAttempts {
-                fallbackGenerator = OpenRouterSQLGenerator(
+                fallbackGenerator = CloudSQLGenerator(
                     apiKey: apiKey,
                     model: model,
                     expectedCanonicalModelID: expectedCanonicalModelID,
                     transport: transport,
                     catalogService: catalogService,
-                    requestBuilder: OpenRouterRequestBuilder(endpoint: requestBuilder.endpoint),
+                    requestBuilder: ChatCompletionRequestBuilder(endpoint: requestBuilder.endpoint),
                     retryPolicy: ChatCompletionRetryPolicy(
                         maxAttempts: max(
                             1,
@@ -375,7 +375,7 @@ public final class OpenRouterSchemaToolSQLAgent: SQLGenerator, Sendable {
         let session = try await sessionFactory.makeSession(snapshot: snapshot, policy: policy)
         let inspectionSession = try makeDatabaseInspectionSession(snapshot: snapshot)
         var evidence = SchemaToolEvidenceLedger(schema: schema)
-        var diagnostics = OpenRouterSchemaToolAgentDiagnosticState()
+        var diagnostics = SchemaToolAgentDiagnosticState()
         diagnostics.clarificationCorrectionMode = configuration.clarificationCorrectionMode.rawValue
         diagnostics.intentCoverageMode = configuration.intentCoverageMode.rawValue
         diagnostics.planConsistencyMode = configuration.planConsistencyMode.rawValue
@@ -395,12 +395,12 @@ public final class OpenRouterSchemaToolSQLAgent: SQLGenerator, Sendable {
         let deadline = Date().addingTimeInterval(configuration.wallClockTimeoutSeconds)
 
         do {
-            var messages: [OpenRouterToolChatMessage] = [
-                OpenRouterToolChatMessage(
+            var messages: [ChatToolMessage] = [
+                ChatToolMessage(
                     role: .system,
                     content: Self.instructions(for: configuration)
                 ),
-                OpenRouterToolChatMessage(
+                ChatToolMessage(
                     role: .user,
                     content: userPrompt(
                         question: question,
@@ -424,7 +424,7 @@ public final class OpenRouterSchemaToolSQLAgent: SQLGenerator, Sendable {
                 try await checkStaleSnapshot(expected: initialFingerprint)
                 try checkDeadline(deadline)
 
-                let parsed: OpenRouterToolChatParser.ParsedTurn
+                let parsed: ChatToolParser.ParsedTurn
                 do {
                     parsed = try await performRequest(
                         messages: messages,
@@ -444,14 +444,14 @@ public final class OpenRouterSchemaToolSQLAgent: SQLGenerator, Sendable {
                             .unsupportedTools,
                             "The selected OpenRouter model rejected tool parameters.",
                             session: session,
-                            openRouterFailure: failure
+                            cloudFailure: failure
                         )
                     }
                     throw await agentFailure(
-                        .openRouterRequestFailure,
+                        .cloudRequestFailure,
                         failure.message,
                         session: session,
-                        openRouterFailure: failure
+                        cloudFailure: failure
                     )
                 }
                 aggregate.logicalTurnCount = turn
@@ -464,7 +464,7 @@ public final class OpenRouterSchemaToolSQLAgent: SQLGenerator, Sendable {
                     }
                     if malformedTerminalCorrections < configuration.maximumMalformedTerminalCorrections {
                         malformedTerminalCorrections += 1
-                        messages.append(OpenRouterToolChatMessage(role: .assistant, content: parsed.content))
+                        messages.append(ChatToolMessage(role: .assistant, content: parsed.content))
                         let guidance = evidence.hasSuccessfulSearch
                             ? Self.strictTerminalCorrection
                             : Self.schemaSearchCorrection
@@ -502,7 +502,7 @@ public final class OpenRouterSchemaToolSQLAgent: SQLGenerator, Sendable {
                 if mixesTerminalAndSchema {
                     diagnostics.appSideRejectionReason = .malformedTerminal
                     diagnostics.terminalValidationFailureReason = "mixedTerminalAndSchemaCalls"
-                    messages.append(OpenRouterToolChatMessage(role: .assistant, toolCalls: toolCalls))
+                    messages.append(ChatToolMessage(role: .assistant, toolCalls: toolCalls))
                     if malformedTerminalCorrections < configuration.maximumMalformedTerminalCorrections {
                         malformedTerminalCorrections += 1
                         appendToolErrorResponses(
@@ -524,7 +524,7 @@ public final class OpenRouterSchemaToolSQLAgent: SQLGenerator, Sendable {
                 if terminalCalls.count > 1 {
                     diagnostics.appSideRejectionReason = .malformedTerminal
                     diagnostics.terminalValidationFailureReason = "multipleTerminalCalls"
-                    messages.append(OpenRouterToolChatMessage(role: .assistant, toolCalls: toolCalls))
+                    messages.append(ChatToolMessage(role: .assistant, toolCalls: toolCalls))
                     if malformedTerminalCorrections < configuration.maximumMalformedTerminalCorrections {
                         malformedTerminalCorrections += 1
                         appendToolErrorResponses(
@@ -545,7 +545,7 @@ public final class OpenRouterSchemaToolSQLAgent: SQLGenerator, Sendable {
 
                 if terminalCalls.count == 1 {
                     let terminal = terminalCalls[0]
-                    messages.append(OpenRouterToolChatMessage(role: .assistant, toolCalls: toolCalls))
+                    messages.append(ChatToolMessage(role: .assistant, toolCalls: toolCalls))
                     let terminalResult: TerminalResult
                     do {
                         terminalResult = try Self.parseTerminalResult(terminal.arguments)
@@ -904,7 +904,7 @@ public final class OpenRouterSchemaToolSQLAgent: SQLGenerator, Sendable {
                 }
 
                 if terminalRequiredAfterSufficientEvidence {
-                    messages.append(OpenRouterToolChatMessage(role: .assistant, toolCalls: toolCalls))
+                    messages.append(ChatToolMessage(role: .assistant, toolCalls: toolCalls))
                     appendToolErrorResponses(
                         for: toolCalls,
                         to: &messages,
@@ -923,7 +923,7 @@ public final class OpenRouterSchemaToolSQLAgent: SQLGenerator, Sendable {
                     )
                 }
 
-                messages.append(OpenRouterToolChatMessage(role: .assistant, toolCalls: toolCalls))
+                messages.append(ChatToolMessage(role: .assistant, toolCalls: toolCalls))
                 for call in toolCalls {
                     try Task.checkCancellation()
                     try await checkStaleSnapshot(expected: initialFingerprint)
@@ -1023,7 +1023,7 @@ public final class OpenRouterSchemaToolSQLAgent: SQLGenerator, Sendable {
             )
         } catch is CancellationError {
             throw CancellationError()
-        } catch let failure as OpenRouterSchemaToolAgentFailure {
+        } catch let failure as SchemaToolAgentFailure {
             diagnostics.recordFailureCategory(failure.category)
             let inspectionTraces = await inspectionSession?.tracesSnapshot() ?? []
             aggregate.agentDiagnostics = diagnostics.snapshot(
@@ -1055,14 +1055,14 @@ public final class OpenRouterSchemaToolSQLAgent: SQLGenerator, Sendable {
     }
 
     private func performRequest(
-        messages: [OpenRouterToolChatMessage],
-        tools: [OpenRouterToolDefinition],
+        messages: [ChatToolMessage],
+        tools: [ChatToolDefinition],
         capabilities: CloudModelCapabilities,
-        aggregate: inout OpenRouterAgentMetadataAccumulator,
+        aggregate: inout AgentMetadataAccumulator,
         maximumHTTPAttempts: Int,
         deadline: Date,
         usageSink: (@Sendable (SQLGenerationUsageEvent) -> Void)?
-    ) async throws -> OpenRouterToolChatParser.ParsedTurn {
+    ) async throws -> ChatToolParser.ParsedTurn {
         let built = try requestBuilder.build(
             apiKey: apiKey,
             model: model,
@@ -1076,7 +1076,7 @@ public final class OpenRouterSchemaToolSQLAgent: SQLGenerator, Sendable {
             try Task.checkCancellation()
             try checkDeadline(deadline)
             guard aggregate.httpAttemptCount < maximumHTTPAttempts else {
-                throw OpenRouterSchemaToolAgentFailure(
+                throw SchemaToolAgentFailure(
                     category: .httpAttemptBudgetExhausted,
                     message: "The schema-tool agent exhausted its OpenRouter HTTP-attempt budget."
                 )
@@ -1085,7 +1085,7 @@ public final class OpenRouterSchemaToolSQLAgent: SQLGenerator, Sendable {
             usageSink?(.httpAttempts(1))
             do {
                 let (data, response) = try await sendWithDeadline(built.request, deadline: deadline)
-                if let reportedUsage = OpenRouterResponseParser.reportedUsage(from: data) {
+                if let reportedUsage = CloudSQLResponseParser.reportedUsage(from: data) {
                     usageSink?(reportedUsage.generationUsageEvent)
                 }
                 let retryAfter = retryPolicy.retryAfter(from: response)
@@ -1169,7 +1169,7 @@ public final class OpenRouterSchemaToolSQLAgent: SQLGenerator, Sendable {
         let remaining = deadline.timeIntervalSinceNow
         guard remaining > 0 else {
             try checkDeadline(deadline)
-            throw OpenRouterSchemaToolAgentFailure(
+            throw SchemaToolAgentFailure(
                 category: .wallClockTimeout,
                 message: "The schema-tool agent timed out."
             )
@@ -1197,7 +1197,7 @@ public final class OpenRouterSchemaToolSQLAgent: SQLGenerator, Sendable {
                     try checkDeadline(deadline)
                     return (data, response)
                 case .deadlineExceeded:
-                    throw OpenRouterSchemaToolAgentFailure(
+                    throw SchemaToolAgentFailure(
                         category: .wallClockTimeout,
                         message: "The schema-tool agent timed out."
                     )
@@ -1225,7 +1225,7 @@ public final class OpenRouterSchemaToolSQLAgent: SQLGenerator, Sendable {
         _ terminal: TerminalResult,
         schema: DatabaseSchema,
         context: SQLGenerationContext,
-        aggregate: OpenRouterAgentMetadataAccumulator,
+        aggregate: AgentMetadataAccumulator,
         session: SchemaToolSession,
         inspectionSession: DatabaseInspectionToolSession?
     ) async throws -> SQLGenerationResult {
@@ -1281,16 +1281,16 @@ public final class OpenRouterSchemaToolSQLAgent: SQLGenerator, Sendable {
     }
 
     private func fallbackClarification(
-        for failure: OpenRouterSchemaToolAgentFailure,
+        for failure: SchemaToolAgentFailure,
         question: String,
         databaseContext: String,
         schema: DatabaseSchema,
         context: SQLGenerationContext,
-        aggregate: OpenRouterAgentMetadataAccumulator,
+        aggregate: AgentMetadataAccumulator,
         evidence: SchemaToolEvidenceLedger,
         session: SchemaToolSession,
         inspectionSession: DatabaseInspectionToolSession?,
-        diagnostics: OpenRouterSchemaToolAgentDiagnosticState
+        diagnostics: SchemaToolAgentDiagnosticState
     ) async throws -> SQLGenerationResult? {
         guard Self.canFallbackToInspectedClarification(failure.category),
             let fallbackQuestion = evidence.fallbackClarificationQuestions(for: question).first(where: {
@@ -1336,9 +1336,9 @@ public final class OpenRouterSchemaToolSQLAgent: SQLGenerator, Sendable {
     private func toolDefinitions(
         from session: SchemaToolSession,
         inspectionSession: DatabaseInspectionToolSession?
-    ) async -> [OpenRouterToolDefinition] {
+    ) async -> [ChatToolDefinition] {
         let schemaTools = session.definitions.map {
-            OpenRouterToolDefinition(
+            ChatToolDefinition(
                 name: $0.name,
                 description: $0.description,
                 parameters: $0.parameters
@@ -1350,7 +1350,7 @@ public final class OpenRouterSchemaToolSQLAgent: SQLGenerator, Sendable {
             [DatabaseInspectionToolDefinition]()
         }
         let inspectionTools = inspectionDefinitions.map {
-            OpenRouterToolDefinition(
+            ChatToolDefinition(
                 name: $0.name,
                 description: $0.description,
                 parameters: $0.parameters
@@ -1495,7 +1495,7 @@ public final class OpenRouterSchemaToolSQLAgent: SQLGenerator, Sendable {
     }
 
     private func invokeToolCall(
-        _ call: OpenRouterToolCall,
+        _ call: ChatToolCall,
         schemaSession: SchemaToolSession,
         inspectionSession: DatabaseInspectionToolSession?
     ) async throws -> ToolInvocationResult {
@@ -1531,9 +1531,9 @@ public final class OpenRouterSchemaToolSQLAgent: SQLGenerator, Sendable {
         )
     }
 
-    private func toolResponse(_ result: SchemaToolResult, providerCallID: String) throws -> OpenRouterToolChatMessage {
+    private func toolResponse(_ result: SchemaToolResult, providerCallID: String) throws -> ChatToolMessage {
         let data = try JSONEncoder.schemaToolEncoder.encode(result)
-        return OpenRouterToolChatMessage(
+        return ChatToolMessage(
             role: .tool,
             content: String(decoding: data, as: UTF8.self),
             toolCallID: providerCallID,
@@ -1544,9 +1544,9 @@ public final class OpenRouterSchemaToolSQLAgent: SQLGenerator, Sendable {
     private func toolResponse(
         _ result: DatabaseInspectionResult,
         providerCallID: String
-    ) throws -> OpenRouterToolChatMessage {
+    ) throws -> ChatToolMessage {
         let data = try JSONEncoder.schemaToolEncoder.encode(result)
-        return OpenRouterToolChatMessage(
+        return ChatToolMessage(
             role: .tool,
             content: String(decoding: data, as: UTF8.self),
             toolCallID: providerCallID,
@@ -1557,7 +1557,7 @@ public final class OpenRouterSchemaToolSQLAgent: SQLGenerator, Sendable {
     private func toolResponse(
         _ result: ToolInvocationResult,
         providerCallID: String
-    ) throws -> OpenRouterToolChatMessage {
+    ) throws -> ChatToolMessage {
         switch result {
         case .schema(let schemaResult):
             try toolResponse(schemaResult, providerCallID: providerCallID)
@@ -1567,10 +1567,10 @@ public final class OpenRouterSchemaToolSQLAgent: SQLGenerator, Sendable {
     }
 
     private func toolErrorResponse(
-        call: OpenRouterToolCall,
+        call: ChatToolCall,
         code: String,
         message: String
-    ) -> OpenRouterToolChatMessage {
+    ) -> ChatToolMessage {
         let payload: JSONValue = [
             "callID": .string(call.id),
             "toolName": .string(call.name),
@@ -1582,7 +1582,7 @@ public final class OpenRouterSchemaToolSQLAgent: SQLGenerator, Sendable {
         ]
         let content = (try? String(decoding: payload.encodedData(), as: UTF8.self))
             ?? #"{"success":false,"error":{"code":"tool_error"}}"#
-        return OpenRouterToolChatMessage(
+        return ChatToolMessage(
             role: .tool,
             content: content,
             toolCallID: call.id,
@@ -1591,8 +1591,8 @@ public final class OpenRouterSchemaToolSQLAgent: SQLGenerator, Sendable {
     }
 
     private func appendToolErrorResponses(
-        for calls: [OpenRouterToolCall],
-        to messages: inout [OpenRouterToolChatMessage],
+        for calls: [ChatToolCall],
+        to messages: inout [ChatToolMessage],
         code: String,
         message: String
     ) {
@@ -1601,12 +1601,12 @@ public final class OpenRouterSchemaToolSQLAgent: SQLGenerator, Sendable {
         })
     }
 
-    private func correction(_ text: String) -> OpenRouterToolChatMessage {
-        OpenRouterToolChatMessage(role: .user, content: text)
+    private func correction(_ text: String) -> ChatToolMessage {
+        ChatToolMessage(role: .user, content: text)
     }
 
     private static func canFallbackToInspectedClarification(
-        _ category: OpenRouterSchemaToolAgentFailure.Category
+        _ category: SchemaToolAgentFailure.Category
     ) -> Bool {
         switch category {
         case .terminalResultMissing, .terminalResultMalformed, .mixedTerminalAndSchemaCalls,
@@ -1618,7 +1618,7 @@ public final class OpenRouterSchemaToolSQLAgent: SQLGenerator, Sendable {
             .intentCoverageNoProgress, .planConsistencyNoProgress,
             .terminalRequiredAfterSufficientEvidenceNoProgress,
             .safetyValidation, .uninspectedSchemaObjects, .staleSchemaSnapshot,
-            .cancellation, .openRouterRequestFailure:
+            .cancellation, .cloudRequestFailure:
             false
         }
     }
@@ -1627,7 +1627,7 @@ public final class OpenRouterSchemaToolSQLAgent: SQLGenerator, Sendable {
         guard let currentSchemaFingerprint else { return }
         let current = try await currentSchemaFingerprint()
         guard current == expected else {
-            throw OpenRouterSchemaToolAgentFailure(
+            throw SchemaToolAgentFailure(
                 category: .staleSchemaSnapshot,
                 message: "The database schema changed during schema-tool generation."
             )
@@ -1636,7 +1636,7 @@ public final class OpenRouterSchemaToolSQLAgent: SQLGenerator, Sendable {
 
     private func checkDeadline(_ deadline: Date) throws {
         guard Date() <= deadline else {
-            throw OpenRouterSchemaToolAgentFailure(
+            throw SchemaToolAgentFailure(
                 category: .wallClockTimeout,
                 message: "The schema-tool agent timed out."
             )
@@ -1644,26 +1644,26 @@ public final class OpenRouterSchemaToolSQLAgent: SQLGenerator, Sendable {
     }
 
     private func agentFailure(
-        _ category: OpenRouterSchemaToolAgentFailure.Category,
+        _ category: SchemaToolAgentFailure.Category,
         _ message: String,
         session: SchemaToolSession,
-        openRouterFailure: CloudRequestFailure? = nil
-    ) async -> OpenRouterSchemaToolAgentFailure {
-        OpenRouterSchemaToolAgentFailure(
+        cloudFailure: CloudRequestFailure? = nil
+    ) async -> SchemaToolAgentFailure {
+        SchemaToolAgentFailure(
             category: category,
             message: message,
-            openRouterFailure: openRouterFailure,
+            cloudFailure: cloudFailure,
             schemaToolCalls: await session.tracesSnapshot()
         )
     }
 
     private func enrichedAgentFailure(
-        _ failure: OpenRouterSchemaToolAgentFailure,
+        _ failure: SchemaToolAgentFailure,
         session: SchemaToolSession,
         inspectionSession: DatabaseInspectionToolSession?,
-        aggregate: OpenRouterAgentMetadataAccumulator,
+        aggregate: AgentMetadataAccumulator,
         contextModelCallCount: Int
-    ) async -> OpenRouterSchemaToolAgentFailure {
+    ) async -> SchemaToolAgentFailure {
         var enriched = failure
         let traces = failure.schemaToolCalls.isEmpty
             ? await session.tracesSnapshot()
@@ -1685,7 +1685,7 @@ public final class OpenRouterSchemaToolSQLAgent: SQLGenerator, Sendable {
         return enriched
     }
 
-    private static let terminalToolDefinition = OpenRouterToolDefinition(
+    private static let terminalToolDefinition = ChatToolDefinition(
         name: terminalToolName,
         description: "Finish the SQL generation by submitting exactly one SQL statement or exactly one clarification question. Include a structured query_plan object that matches the SQL when submitting SQL.",
         parameters: [
@@ -1799,7 +1799,7 @@ public final class OpenRouterSchemaToolSQLAgent: SQLGenerator, Sendable {
     }
 
     private static func instructions(
-        for configuration: OpenRouterSchemaToolSQLAgentConfiguration
+        for configuration: SchemaToolSQLAgentConfiguration
     ) -> String {
         guard configuration.clarificationCorrectionMode == .correctOverClarificationExperimental
             || configuration.intentCoverageMode == .rejectOnlyExperimental
@@ -1941,7 +1941,7 @@ public final class OpenRouterSchemaToolSQLAgent: SQLGenerator, Sendable {
         let data = Data(arguments.utf8)
         let value = try JSONDecoder().decode(JSONValue.self, from: data)
         guard let object = value.objectValue else {
-            throw OpenRouterSchemaToolAgentFailure(category: .terminalResultMalformed, message: "Terminal arguments must be an object.")
+            throw SchemaToolAgentFailure(category: .terminalResultMalformed, message: "Terminal arguments must be an object.")
         }
         let allowed = Set(["action", "sql", "clarification_question", "query_plan"])
         guard Set(object.keys).isSubset(of: allowed),
@@ -1950,14 +1950,14 @@ public final class OpenRouterSchemaToolSQLAgent: SQLGenerator, Sendable {
             let sql = object["sql"]?.stringValue,
             let question = object["clarification_question"]?.stringValue
         else {
-            throw OpenRouterSchemaToolAgentFailure(category: .terminalResultMalformed, message: "Terminal arguments are invalid.")
+            throw SchemaToolAgentFailure(category: .terminalResultMalformed, message: "Terminal arguments are invalid.")
         }
         guard
             object["query_plan"] == nil
                 || object["query_plan"]?.stringValue != nil
                 || object["query_plan"]?.objectValue != nil
         else {
-            throw OpenRouterSchemaToolAgentFailure(category: .terminalResultMalformed, message: "Terminal query_plan must be a string or object.")
+            throw SchemaToolAgentFailure(category: .terminalResultMalformed, message: "Terminal query_plan must be a string or object.")
         }
         let structuredQueryPlan = object["query_plan"]
             .flatMap(SchemaToolAgentStructuredQueryPlan.decode(from:))
@@ -1966,16 +1966,16 @@ public final class OpenRouterSchemaToolSQLAgent: SQLGenerator, Sendable {
         let trimmedQueryPlan = (object["query_plan"]?.stringValue ?? "")
             .trimmingCharacters(in: .whitespacesAndNewlines)
         guard trimmedSQL.count <= 20_000, trimmedQuestion.count <= 280 else {
-            throw OpenRouterSchemaToolAgentFailure(category: .terminalResultMalformed, message: "Terminal arguments exceeded length limits.")
+            throw SchemaToolAgentFailure(category: .terminalResultMalformed, message: "Terminal arguments exceeded length limits.")
         }
         switch action {
         case .sql:
             guard !trimmedSQL.isEmpty, trimmedQuestion.isEmpty else {
-                throw OpenRouterSchemaToolAgentFailure(category: .terminalResultMalformed, message: "SQL terminal result invariant failed.")
+                throw SchemaToolAgentFailure(category: .terminalResultMalformed, message: "SQL terminal result invariant failed.")
             }
         case .clarify:
             guard trimmedSQL.isEmpty, !trimmedQuestion.isEmpty else {
-                throw OpenRouterSchemaToolAgentFailure(category: .terminalResultMalformed, message: "Clarification terminal result invariant failed.")
+                throw SchemaToolAgentFailure(category: .terminalResultMalformed, message: "Clarification terminal result invariant failed.")
             }
         }
         let queryPlanSummary: String
@@ -2026,7 +2026,7 @@ struct SchemaToolJoinPathScope: Equatable {
     var maxPaths: Int
 }
 
-extension OpenRouterSchemaToolSQLAgent {
+extension SchemaToolSQLAgent {
     /// The production transport's request timeout can race the agent's
     /// wall-clock deadline. A transport timeout that surfaces once the
     /// deadline has passed ended the run for the same reason the deadline
@@ -2035,9 +2035,9 @@ extension OpenRouterSchemaToolSQLAgent {
     static func wallClockTimeoutFailure(
         for error: URLError,
         deadline: Date
-    ) -> OpenRouterSchemaToolAgentFailure? {
+    ) -> SchemaToolAgentFailure? {
         guard error.code == .timedOut, Date() > deadline else { return nil }
-        return OpenRouterSchemaToolAgentFailure(
+        return SchemaToolAgentFailure(
             category: .wallClockTimeout,
             message: "The schema-tool agent timed out."
         )
@@ -2048,7 +2048,7 @@ extension OpenRouterSchemaToolSQLAgent {
     /// calls receive a structured tool error and never reach the session, so
     /// they do not consume the schema-tool call budget.
     static func redundantSchemaCallInterception(
-        call: OpenRouterToolCall,
+        call: ChatToolCall,
         executedSchemaCallSignatures: Set<String>,
         zeroResultSearchQueries: Set<String>,
         exploredJoinPathScopes: [String: [SchemaToolJoinPathScope]]
@@ -2089,7 +2089,7 @@ extension OpenRouterSchemaToolSQLAgent {
     }
 
     static func recordExecutedSchemaCall(
-        call: OpenRouterToolCall,
+        call: ChatToolCall,
         result: SchemaToolResult,
         executedSchemaCallSignatures: inout Set<String>,
         zeroResultSearchQueries: inout Set<String>,
@@ -2188,7 +2188,7 @@ extension OpenRouterSchemaToolSQLAgent {
     }
 }
 
-private struct OpenRouterSchemaToolAgentDiagnosticState {
+private struct SchemaToolAgentDiagnosticState {
     var logicalTurnCount: Int?
     var terminalToolSeen = false
     var terminalAction: String?
@@ -2222,7 +2222,7 @@ private struct OpenRouterSchemaToolAgentDiagnosticState {
     var planConsistencyCorrectionAttempted = false
     var planConsistencyCorrectionSucceeded = false
 
-    mutating func recordFailureCategory(_ category: OpenRouterSchemaToolAgentFailure.Category) {
+    mutating func recordFailureCategory(_ category: SchemaToolAgentFailure.Category) {
         if category == .wallClockTimeout {
             // A reason left behind by an earlier recovered correction must not
             // hide the timeout that actually ended the run.
@@ -2254,7 +2254,7 @@ private struct OpenRouterSchemaToolAgentDiagnosticState {
         case .planConsistencyNoProgress:
             appSideRejectionReason = .planConsistencyRejected
         case .repeatedToolCallNoProgress, .staleSchemaSnapshot, .cancellation,
-            .openRouterRequestFailure:
+            .cloudRequestFailure:
             break
         }
     }
@@ -2382,7 +2382,7 @@ private struct SchemaToolEvidenceLedger {
     struct ValidationResult {
         var accepted: Bool
         var message: String
-        var category: OpenRouterSchemaToolAgentFailure.Category
+        var category: SchemaToolAgentFailure.Category
         var reasonCode: String
         var rejectionReason: SchemaToolAppRejectionReason
 
@@ -2412,7 +2412,7 @@ private struct SchemaToolEvidenceLedger {
                 .clarificationRejected:
                 prefix = "Use schema tools and validator feedback before returning SQL."
             }
-            return "\(prefix) \(message). \(OpenRouterSchemaToolSQLAgent.strictTerminalCorrection)"
+            return "\(prefix) \(message). \(SchemaToolSQLAgent.strictTerminalCorrection)"
         }
     }
 
@@ -2904,7 +2904,7 @@ private struct SchemaToolEvidenceLedger {
 
     private static func rejected(
         _ message: String,
-        category: OpenRouterSchemaToolAgentFailure.Category = .uninspectedSchemaObjects,
+        category: SchemaToolAgentFailure.Category = .uninspectedSchemaObjects,
         reasonCode: String,
         rejectionReason: SchemaToolAppRejectionReason = .uninspectedObject
     ) -> ValidationResult {
@@ -3101,7 +3101,7 @@ private struct SchemaToolEvidenceLedger {
     }
 }
 
-private struct OpenRouterAgentMetadataAccumulator {
+private struct AgentMetadataAccumulator {
     var requestedModelID: String
     var logicalTurnCount = 0
     var httpAttemptCount = 0

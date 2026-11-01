@@ -203,7 +203,7 @@ struct EvalRunner {
         let databaseDirectory = evalDirectory.appendingPathComponent("databases", isDirectory: true)
         let isTransportSmoke = suite.name.hasPrefix("provider-smoke")
         let expectedCanonicalModelID = options.backendMode.backends.contains(.cloud)
-            ? OpenRouterCatalog.expectedCanonicalModelID(forRequestedModelID: options.model)
+            ? CloudModelCatalog.expectedReturnedModelID(forRequestedModelID: options.model)
             : nil
         let scorerSourceHash = try TextToSQLEvalSourceManifest.sourceHash(
             relativePaths: TextToSQLEvalSourceManifest.scorerSourcePaths(
@@ -1029,7 +1029,7 @@ struct EvalRunner {
         switch backend {
         case .cloud:
             guard let apiKey = Self.openRouterAPIKey() else { return nil }
-            let expectedCanonicalModelID = OpenRouterCatalog.expectedCanonicalModelID(
+            let expectedCanonicalModelID = CloudModelCatalog.expectedReturnedModelID(
                 forRequestedModelID: options.model
             )
             if options.cloudAgentMode == .tools {
@@ -1043,7 +1043,7 @@ struct EvalRunner {
                     planConsistencyMode: options.schemaAgentPlanConsistencyMode
                 )
             }
-            return OpenRouterSQLGenerator(
+            return CloudSQLGenerator(
                 apiKey: apiKey,
                 model: options.model,
                 expectedCanonicalModelID: expectedCanonicalModelID,
@@ -1788,7 +1788,7 @@ private struct EvalCloudSchemaToolSQLGenerator: SQLGenerator, Sendable {
         let connectionID = deterministicConnectionID(
             for: "\(schemaFingerprint)|\(selectedSchemas.joined(separator: ","))"
         )
-        let agent = OpenRouterSchemaToolSQLAgent(
+        let agent = SchemaToolSQLAgent(
             apiKey: apiKey,
             model: model,
             expectedCanonicalModelID: expectedCanonicalModelID,
@@ -1804,8 +1804,8 @@ private struct EvalCloudSchemaToolSQLGenerator: SQLGenerator, Sendable {
         )
     }
 
-    private func agentConfiguration() -> OpenRouterSchemaToolSQLAgentConfiguration {
-        var configuration = OpenRouterSchemaToolSQLAgentConfiguration.default
+    private func agentConfiguration() -> SchemaToolSQLAgentConfiguration {
+        var configuration = SchemaToolSQLAgentConfiguration.default
         configuration.clarificationCorrectionMode = clarificationCorrectionMode
         configuration.intentCoverageMode = intentCoverageMode
         configuration.planConsistencyMode = planConsistencyMode

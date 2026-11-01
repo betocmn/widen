@@ -21,7 +21,7 @@ extension EvalRun {
         }.count
         return TextToSQLReleaseGateModelPolicy.committedDocIneligibility(
             model: manifest.model,
-            expectedCanonicalModelID: manifest.expectedCanonicalModelID,
+            expectedReturnedModelID: manifest.expectedCanonicalModelID,
             backendIncludesCloud: backendIncludesCloud,
             cloudEvaluatedResultCount: cloudEvaluatedResultCount
         )

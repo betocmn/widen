@@ -182,10 +182,10 @@ struct LLMSettingsView: View {
                 .font(.callout)
         }
 
-        let profile = OpenRouterCatalog.productionProfile
+        let profile = CloudModelCatalog.productionProfile
         LabeledContent("Model", value: profile.displayName)
         LabeledContent("Requested ID", value: profile.requestedModelID)
-        LabeledContent("Evaluated version", value: profile.expectedCanonicalModelID)
+        LabeledContent("Evaluated version", value: profile.expectedReturnedModelID)
         HStack {
             Spacer()
             Button {
@@ -395,7 +395,7 @@ struct LLMSettingsView: View {
         let refreshID = UUID()
         catalogRefreshID = refreshID
         isLoadingCatalog = true
-        let selectedModel = OpenRouterCatalog.productionProfile.requestedModelID
+        let selectedModel = CloudModelCatalog.productionProfile.requestedModelID
         Task {
             let result: OpenRouterCatalogRefreshResult
             do {
@@ -422,7 +422,7 @@ struct LLMSettingsView: View {
                             catalogCanonicalModelID: metadata.canonicalModelID,
                             capabilitySource: metadata.capabilitySource,
                             expectedCanonicalModelID:
-                                OpenRouterCatalog.productionProfile.expectedCanonicalModelID
+                                CloudModelCatalog.productionProfile.expectedReturnedModelID
                         )
                         if canonicalRolled, !force {
                             // A within-TTL cache can hold the canonical from
@@ -480,13 +480,13 @@ struct LLMSettingsView: View {
         modelTestResult = nil
         let testID = UUID()
         modelTestID = testID
-        let profile = OpenRouterCatalog.productionProfile
+        let profile = CloudModelCatalog.productionProfile
         let model = profile.requestedModelID
         Task {
             let result = await OpenRouterConnectivityCheck(
                 apiKey: key,
                 model: model,
-                expectedCanonicalModelID: profile.expectedCanonicalModelID
+                expectedCanonicalModelID: profile.expectedReturnedModelID
             ).run()
             await MainActor.run {
                 guard modelTestID == testID else { return }

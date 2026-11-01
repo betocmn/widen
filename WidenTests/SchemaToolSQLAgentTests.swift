@@ -3,10 +3,10 @@ import Testing
 
 @testable import WidenKit
 
-@Suite("OpenRouter schema tool SQL agent")
-struct OpenRouterSchemaToolSQLAgentTests {
+@Suite("Schema tool SQL agent")
+struct SchemaToolSQLAgentTests {
     @Test func defaultConfigurationUsesDiagnosticsOnlyPolicyModes() {
-        let configuration = OpenRouterSchemaToolSQLAgentConfiguration.default
+        let configuration = SchemaToolSQLAgentConfiguration.default
 
         #expect(configuration.clarificationCorrectionMode == .diagnosticsOnly)
         #expect(configuration.intentCoverageMode == .diagnosticsOnly)
@@ -23,6 +23,15 @@ struct OpenRouterSchemaToolSQLAgentTests {
         #expect(diagnostics.redundantDuplicateToolCallCount == 0)
         #expect(diagnostics.redundantZeroResultSearchCount == 0)
         #expect(diagnostics.redundantJoinPathCallCount == 0)
+    }
+
+    @Test func cloudRequestFailureKeepsItsSavedRawValue() throws {
+        // Older builds wrote this category as openRouterRequestFailure; the
+        // renamed case must keep reading and writing that raw value.
+        let category = SchemaToolAgentFailure.Category.cloudRequestFailure
+        #expect(category.rawValue == "openRouterRequestFailure")
+        #expect(SchemaToolAgentFailure.Category(rawValue: "openRouterRequestFailure") == category)
+        #expect(String(decoding: try JSONEncoder().encode(category), as: UTF8.self) == #""openRouterRequestFailure""#)
     }
 
     private final class ScriptedTransport: HTTPTransport, @unchecked Sendable {
@@ -176,7 +185,7 @@ struct OpenRouterSchemaToolSQLAgentTests {
                 needsClarification: false,
                 clarificationQuestion: nil,
                 backendMetadata: CloudGenerationMetadata(
-                    requestedModelID: OpenRouterSchemaToolSQLAgentTests.modelID,
+                    requestedModelID: SchemaToolSQLAgentTests.modelID,
                     structuredOutputMode: .promptOnlyJSON,
                     requestCount: 1,
                     retryCount: 0
@@ -558,7 +567,7 @@ struct OpenRouterSchemaToolSQLAgentTests {
         let agent = makeAgent(
             schema: schema,
             chatTransport: chatTransport,
-            configuration: OpenRouterSchemaToolSQLAgentConfiguration(maximumSchemaToolCalls: 2)
+            configuration: SchemaToolSQLAgentConfiguration(maximumSchemaToolCalls: 2)
         )
 
         let result = try await agent.generateSQL(
@@ -610,7 +619,7 @@ struct OpenRouterSchemaToolSQLAgentTests {
         let agent = makeAgent(
             schema: schema,
             chatTransport: chatTransport,
-            configuration: OpenRouterSchemaToolSQLAgentConfiguration(maximumSchemaToolCalls: 2)
+            configuration: SchemaToolSQLAgentConfiguration(maximumSchemaToolCalls: 2)
         )
 
         let result = try await agent.generateSQL(
@@ -1388,7 +1397,7 @@ struct OpenRouterSchemaToolSQLAgentTests {
                 )
             )
             Issue.record("Expected repeated over-clarification failure")
-        } catch let failure as OpenRouterSchemaToolAgentFailure {
+        } catch let failure as SchemaToolAgentFailure {
             #expect(failure.category == .overcautiousClarificationNoProgress)
             #expect(failure.backendMetadata?.agentDiagnostics?.overClarificationCorrectionAttempted == true)
             #expect(failure.backendMetadata?.agentDiagnostics?.overClarificationCorrectionSucceeded == false)
@@ -1515,7 +1524,7 @@ struct OpenRouterSchemaToolSQLAgentTests {
         let agent = makeAgent(
             schema: schema,
             chatTransport: chatTransport,
-            configuration: OpenRouterSchemaToolSQLAgentConfiguration(
+            configuration: SchemaToolSQLAgentConfiguration(
                 maximumSchemaToolCalls: 4,
                 maximumHTTPAttempts: 8,
                 wallClockTimeoutSeconds: 10,
@@ -1587,7 +1596,7 @@ struct OpenRouterSchemaToolSQLAgentTests {
         let agent = makeAgent(
             schema: schema,
             chatTransport: chatTransport,
-            configuration: OpenRouterSchemaToolSQLAgentConfiguration(
+            configuration: SchemaToolSQLAgentConfiguration(
                 maximumSchemaToolCalls: 4,
                 maximumHTTPAttempts: 8,
                 wallClockTimeoutSeconds: 10,
@@ -1603,7 +1612,7 @@ struct OpenRouterSchemaToolSQLAgentTests {
                 config: SQLGenerationConfig()
             )
             Issue.record("Expected a plan-consistency no-progress failure.")
-        } catch let failure as OpenRouterSchemaToolAgentFailure {
+        } catch let failure as SchemaToolAgentFailure {
             #expect(failure.category == .planConsistencyNoProgress)
         }
     }
@@ -1702,7 +1711,7 @@ struct OpenRouterSchemaToolSQLAgentTests {
         let agent = makeAgent(
             schema: schema,
             chatTransport: chatTransport,
-            configuration: OpenRouterSchemaToolSQLAgentConfiguration(
+            configuration: SchemaToolSQLAgentConfiguration(
                 maximumSchemaToolCalls: 4,
                 maximumHTTPAttempts: 8,
                 wallClockTimeoutSeconds: 10,
@@ -1766,7 +1775,7 @@ struct OpenRouterSchemaToolSQLAgentTests {
         let agent = makeAgent(
             schema: schema,
             chatTransport: chatTransport,
-            configuration: OpenRouterSchemaToolSQLAgentConfiguration(
+            configuration: SchemaToolSQLAgentConfiguration(
                 maximumSchemaToolCalls: 4,
                 maximumHTTPAttempts: 8,
                 wallClockTimeoutSeconds: 10,
@@ -1835,7 +1844,7 @@ struct OpenRouterSchemaToolSQLAgentTests {
         let agent = makeAgent(
             schema: schema,
             chatTransport: chatTransport,
-            configuration: OpenRouterSchemaToolSQLAgentConfiguration(
+            configuration: SchemaToolSQLAgentConfiguration(
                 maximumSchemaToolCalls: 4,
                 maximumHTTPAttempts: 8,
                 wallClockTimeoutSeconds: 10,
@@ -2074,7 +2083,7 @@ struct OpenRouterSchemaToolSQLAgentTests {
                 config: SQLGenerationConfig()
             )
             Issue.record("Expected missing terminal failure without metric fallback")
-        } catch let failure as OpenRouterSchemaToolAgentFailure {
+        } catch let failure as SchemaToolAgentFailure {
             #expect(failure.category == .terminalResultMissing)
             #expect(failure.schemaToolCalls.map(\.callID) == [
                 "search-recent-orders", "describe-recent-orders",
@@ -2339,7 +2348,7 @@ struct OpenRouterSchemaToolSQLAgentTests {
                 config: SQLGenerationConfig()
             )
             Issue.record("Expected uninspected lowercase table failure")
-        } catch let failure as OpenRouterSchemaToolAgentFailure {
+        } catch let failure as SchemaToolAgentFailure {
             #expect(failure.category == .uninspectedSchemaObjects)
             #expect(failure.schemaToolCalls.map(\.callID) == ["search-mixed", "describe-mixed"])
         }
@@ -2395,7 +2404,7 @@ struct OpenRouterSchemaToolSQLAgentTests {
                 config: SQLGenerationConfig()
             )
             Issue.record("Expected no-path endpoint inspection failure")
-        } catch let failure as OpenRouterSchemaToolAgentFailure {
+        } catch let failure as SchemaToolAgentFailure {
             #expect(failure.category == .uninspectedSchemaObjects)
             #expect(failure.schemaToolCalls.map(\.callID) == [
                 "search-users", "search-invoices", "find-no-path",
@@ -2452,7 +2461,7 @@ struct OpenRouterSchemaToolSQLAgentTests {
                 config: SQLGenerationConfig()
             )
             Issue.record("Expected safety validation failure")
-        } catch let failure as OpenRouterSchemaToolAgentFailure {
+        } catch let failure as SchemaToolAgentFailure {
             #expect(failure.category == .safetyValidation)
             #expect(failure.pipelineCategory == .safetyValidation)
         }
@@ -2505,7 +2514,7 @@ struct OpenRouterSchemaToolSQLAgentTests {
                 config: SQLGenerationConfig()
             )
             Issue.record("Expected terminal stale snapshot failure")
-        } catch let failure as OpenRouterSchemaToolAgentFailure {
+        } catch let failure as SchemaToolAgentFailure {
             #expect(failure.category == .staleSchemaSnapshot)
             #expect(failure.schemaToolCalls.map(\.callID) == [
                 "search-before-terminal-stale", "describe-before-terminal-stale",
@@ -2660,7 +2669,7 @@ struct OpenRouterSchemaToolSQLAgentTests {
             Issue.record("Expected provider failure")
         } catch {
             let body = try Self.requestBody(try #require(chatTransport.requests.first))
-            #expect(body["max_tokens"] as? Int == OpenRouterToolChatRequestBuilder.completionTokenBudget)
+            #expect(body["max_tokens"] as? Int == ChatToolRequestBuilder.completionTokenBudget)
             #expect(body["max_completion_tokens"] == nil)
             try Self.expectPrivateRouting(in: try #require(chatTransport.requests.first))
         }
@@ -2777,7 +2786,7 @@ struct OpenRouterSchemaToolSQLAgentTests {
                 config: SQLGenerationConfig()
             )
             Issue.record("Expected wildcard inspection failure")
-        } catch let failure as OpenRouterSchemaToolAgentFailure {
+        } catch let failure as SchemaToolAgentFailure {
             #expect(failure.category == .uninspectedSchemaObjects)
             #expect(failure.schemaToolCalls.map(\.callID) == ["search-wide", "describe-wide"])
         }
@@ -2849,7 +2858,7 @@ struct OpenRouterSchemaToolSQLAgentTests {
                 config: SQLGenerationConfig()
             )
             Issue.record("Expected mixed terminal/schema failure")
-        } catch let failure as OpenRouterSchemaToolAgentFailure {
+        } catch let failure as SchemaToolAgentFailure {
             #expect(failure.category == .mixedTerminalAndSchemaCalls)
         }
     }
@@ -2877,7 +2886,7 @@ struct OpenRouterSchemaToolSQLAgentTests {
                 config: SQLGenerationConfig()
             )
             Issue.record("Expected multiple terminal failure")
-        } catch let failure as OpenRouterSchemaToolAgentFailure {
+        } catch let failure as SchemaToolAgentFailure {
             #expect(failure.category == .terminalResultMalformed)
         }
     }
@@ -2932,7 +2941,7 @@ struct OpenRouterSchemaToolSQLAgentTests {
             schema: schema,
             chatTransport: chatTransport,
             catalogTransport: catalogTransport,
-            configuration: OpenRouterSchemaToolSQLAgentConfiguration(
+            configuration: SchemaToolSQLAgentConfiguration(
                 maximumSchemaToolCalls: 4,
                 maximumRepairSchemaToolCalls: 2,
                 maximumModelTurns: 6,
@@ -3089,7 +3098,7 @@ struct OpenRouterSchemaToolSQLAgentTests {
                 config: SQLGenerationConfig()
             )
             Issue.record("Expected stale snapshot failure")
-        } catch let failure as OpenRouterSchemaToolAgentFailure {
+        } catch let failure as SchemaToolAgentFailure {
             #expect(failure.category == .staleSchemaSnapshot)
             #expect(failure.schemaToolCalls.map(\.callID) == ["search-before-stale"])
         }
@@ -3122,9 +3131,9 @@ struct OpenRouterSchemaToolSQLAgentTests {
                 config: SQLGenerationConfig()
             )
             Issue.record("Expected OpenRouter failure")
-        } catch let failure as OpenRouterSchemaToolAgentFailure {
-            #expect(failure.category == .openRouterRequestFailure)
-            #expect(failure.openRouterFailure?.category == .maxTokensExceeded)
+        } catch let failure as SchemaToolAgentFailure {
+            #expect(failure.category == .cloudRequestFailure)
+            #expect(failure.cloudFailure?.category == .maxTokensExceeded)
             #expect(failure.schemaToolCalls.map(\.callID) == ["search-before-provider-failure"])
             #expect(failure.backendMetadata?.agentSelectionReason == "tools")
             #expect(failure.backendMetadata?.agentLogicalTurnCount == 1)
@@ -3166,7 +3175,7 @@ struct OpenRouterSchemaToolSQLAgentTests {
         let agent = makeAgent(
             schema: schema,
             chatTransport: chatTransport,
-            configuration: OpenRouterSchemaToolSQLAgentConfiguration(
+            configuration: SchemaToolSQLAgentConfiguration(
                 maximumSchemaToolCalls: 4,
                 maximumRepairSchemaToolCalls: 2,
                 maximumModelTurns: 6,
@@ -3185,7 +3194,7 @@ struct OpenRouterSchemaToolSQLAgentTests {
                 config: SQLGenerationConfig()
             )
             Issue.record("Expected reconstruction budget failure")
-        } catch let failure as OpenRouterSchemaToolAgentFailure {
+        } catch let failure as SchemaToolAgentFailure {
             #expect(failure.category == .schemaToolCallBudgetExhausted)
             #expect(failure.schemaToolCalls.map(\.callID) == [
                 "search-repair-budget",
@@ -3206,7 +3215,7 @@ struct OpenRouterSchemaToolSQLAgentTests {
         let agent = makeAgent(
             schema: schema,
             chatTransport: chatTransport,
-            configuration: OpenRouterSchemaToolSQLAgentConfiguration(
+            configuration: SchemaToolSQLAgentConfiguration(
                 maximumSchemaToolCalls: 4,
                 maximumRepairSchemaToolCalls: 2,
                 maximumModelTurns: 0,
@@ -3225,7 +3234,7 @@ struct OpenRouterSchemaToolSQLAgentTests {
                 config: SQLGenerationConfig()
             )
             Issue.record("Expected model-turn budget failure")
-        } catch let failure as OpenRouterSchemaToolAgentFailure {
+        } catch let failure as SchemaToolAgentFailure {
             #expect(failure.category == .modelTurnBudgetExhausted)
             #expect(chatTransport.requests.isEmpty)
         }
@@ -3274,7 +3283,7 @@ struct OpenRouterSchemaToolSQLAgentTests {
     }
 
     @Test func toolChatParserPreservesTypedOpenRouterErrorEnvelope() throws {
-        let parser = OpenRouterToolChatParser()
+        let parser = ChatToolParser()
         let data = Self.jsonData([
             "id": "cmpl-error",
             "model": Self.modelID,
@@ -3317,7 +3326,7 @@ struct OpenRouterSchemaToolSQLAgentTests {
     }
 
     @Test func toolChatChoiceErrorTakesPrecedenceOverCanonicalValidation() throws {
-        let parser = OpenRouterToolChatParser()
+        let parser = ChatToolParser()
         let data = Self.jsonData([
             "id": "cmpl-choice-error",
             "provider": "OpenAI",
@@ -3357,7 +3366,7 @@ struct OpenRouterSchemaToolSQLAgentTests {
     }
 
     @Test func toolChatFailedCompletionTakesPrecedenceOverCanonicalValidation() throws {
-        let parser = OpenRouterToolChatParser()
+        let parser = ChatToolParser()
         let expectedCanonicalModelID = "openai/gpt-5.5-20260423"
         let response = HTTPURLResponse(
             url: Self.chatEndpoint,
@@ -3443,7 +3452,7 @@ struct OpenRouterSchemaToolSQLAgentTests {
     }
 
     @Test func toolChatParserRejectsUnexpectedCanonicalModelWhenEnforced() throws {
-        let parser = OpenRouterToolChatParser()
+        let parser = ChatToolParser()
         let returnedModelID = "openai/gpt-5.5-unevaluated"
         let data = Self.assistantToolCalls(
             [
@@ -3479,7 +3488,7 @@ struct OpenRouterSchemaToolSQLAgentTests {
     }
 
     @Test func toolChatParserAcceptsMatchingCanonicalModelWhenEnforced() throws {
-        let parser = OpenRouterToolChatParser()
+        let parser = ChatToolParser()
         let canonicalModelID = "openai/gpt-5.5-20260423"
         let data = Self.assistantToolCalls(
             [
@@ -3510,7 +3519,7 @@ struct OpenRouterSchemaToolSQLAgentTests {
     }
 
     @Test func toolChatParserAcceptsAliasWithMatchingSelectedEndpointCanonicalModel() throws {
-        let parser = OpenRouterToolChatParser()
+        let parser = ChatToolParser()
         let canonicalModelID = "openai/gpt-5.5-20260423"
         let data = Self.assistantToolCalls(
             [
@@ -3553,7 +3562,7 @@ struct OpenRouterSchemaToolSQLAgentTests {
     }
 
     @Test func toolChatParserRejectsCanonicalModelWhenRouterMetadataConflicts() throws {
-        let parser = OpenRouterToolChatParser()
+        let parser = ChatToolParser()
         let canonicalModelID = "openai/gpt-5.5-20260423"
         let data = Self.assistantToolCalls(
             [
@@ -3624,9 +3633,9 @@ struct OpenRouterSchemaToolSQLAgentTests {
                 config: SQLGenerationConfig()
             )
             Issue.record("Expected invalid request failure")
-        } catch let failure as OpenRouterSchemaToolAgentFailure {
-            #expect(failure.category == .openRouterRequestFailure)
-            #expect(failure.openRouterFailure?.category == .invalidRequest)
+        } catch let failure as SchemaToolAgentFailure {
+            #expect(failure.category == .cloudRequestFailure)
+            #expect(failure.cloudFailure?.category == .invalidRequest)
         }
     }
 
@@ -3646,7 +3655,7 @@ struct OpenRouterSchemaToolSQLAgentTests {
         let agent = makeAgent(
             schema: schema,
             chatTransport: chatTransport,
-            configuration: OpenRouterSchemaToolSQLAgentConfiguration(
+            configuration: SchemaToolSQLAgentConfiguration(
                 maximumSchemaToolCalls: 4,
                 maximumRepairSchemaToolCalls: 2,
                 maximumModelTurns: 6,
@@ -3665,10 +3674,10 @@ struct OpenRouterSchemaToolSQLAgentTests {
                 config: SQLGenerationConfig()
             )
             Issue.record("Expected retryable OpenRouter failure")
-        } catch let failure as OpenRouterSchemaToolAgentFailure {
-            #expect(failure.category == .openRouterRequestFailure)
-            #expect(failure.openRouterFailure?.category == .rateLimited)
-            #expect(failure.openRouterFailure?.diagnostic.attemptCount == 1)
+        } catch let failure as SchemaToolAgentFailure {
+            #expect(failure.category == .cloudRequestFailure)
+            #expect(failure.cloudFailure?.category == .rateLimited)
+            #expect(failure.cloudFailure?.diagnostic.attemptCount == 1)
             #expect(failure.backendMetadata?.agentHTTPAttemptCount == 1)
             #expect(failure.backendMetadata?.retryCount == 0)
             #expect(chatTransport.requests.count == 1)
@@ -3691,7 +3700,7 @@ struct OpenRouterSchemaToolSQLAgentTests {
         let agent = makeAgent(
             schema: schema,
             chatTransport: chatTransport,
-            configuration: OpenRouterSchemaToolSQLAgentConfiguration(
+            configuration: SchemaToolSQLAgentConfiguration(
                 maximumSchemaToolCalls: 4,
                 maximumRepairSchemaToolCalls: 2,
                 maximumModelTurns: 6,
@@ -3710,9 +3719,9 @@ struct OpenRouterSchemaToolSQLAgentTests {
                 config: SQLGenerationConfig()
             )
             Issue.record("Expected empty tool-turn failure")
-        } catch let failure as OpenRouterSchemaToolAgentFailure {
-            #expect(failure.category == .openRouterRequestFailure)
-            #expect(failure.openRouterFailure?.category == .noContent)
+        } catch let failure as SchemaToolAgentFailure {
+            #expect(failure.category == .cloudRequestFailure)
+            #expect(failure.cloudFailure?.category == .noContent)
             #expect(failure.backendMetadata?.agentHTTPAttemptCount == 2)
             #expect(failure.backendMetadata?.retryCount == 1)
             #expect(failure.backendMetadata?.totalTokens == 30)
@@ -3734,7 +3743,7 @@ struct OpenRouterSchemaToolSQLAgentTests {
             schema: schema,
             chatTransport: chatTransport,
             catalogTransport: catalogTransport,
-            configuration: OpenRouterSchemaToolSQLAgentConfiguration(
+            configuration: SchemaToolSQLAgentConfiguration(
                 maximumSchemaToolCalls: 4,
                 maximumRepairSchemaToolCalls: 2,
                 maximumModelTurns: 6,
@@ -3754,7 +3763,7 @@ struct OpenRouterSchemaToolSQLAgentTests {
                 config: SQLGenerationConfig()
             )
             Issue.record("Expected HTTP-attempt budget failure")
-        } catch let failure as OpenRouterSchemaToolAgentFailure {
+        } catch let failure as SchemaToolAgentFailure {
             #expect(failure.category == .httpAttemptBudgetExhausted)
             #expect(failure.backendMetadata?.agentHTTPAttemptCount == 1)
             #expect(failure.backendMetadata?.requestCount == 1)
@@ -3776,7 +3785,7 @@ struct OpenRouterSchemaToolSQLAgentTests {
             schema: schema,
             chatTransport: chatTransport,
             catalogTransport: catalogTransport,
-            configuration: OpenRouterSchemaToolSQLAgentConfiguration(
+            configuration: SchemaToolSQLAgentConfiguration(
                 maximumSchemaToolCalls: 4,
                 maximumRepairSchemaToolCalls: 2,
                 maximumModelTurns: 6,
@@ -3796,7 +3805,7 @@ struct OpenRouterSchemaToolSQLAgentTests {
                 config: SQLGenerationConfig()
             )
             Issue.record("Expected HTTP-attempt budget failure")
-        } catch let failure as OpenRouterSchemaToolAgentFailure {
+        } catch let failure as SchemaToolAgentFailure {
             #expect(failure.category == .httpAttemptBudgetExhausted)
             #expect(failure.backendMetadata?.agentHTTPAttemptCount == 1)
             #expect(catalogTransport.requests.map { $0.url?.path } == ["/api/v1/models/user"])
@@ -3823,7 +3832,7 @@ struct OpenRouterSchemaToolSQLAgentTests {
         let agent = makeAgent(
             schema: schema,
             chatTransport: chatTransport,
-            configuration: OpenRouterSchemaToolSQLAgentConfiguration(
+            configuration: SchemaToolSQLAgentConfiguration(
                 maximumSchemaToolCalls: 4,
                 maximumRepairSchemaToolCalls: 2,
                 maximumModelTurns: 6,
@@ -3843,7 +3852,7 @@ struct OpenRouterSchemaToolSQLAgentTests {
                 config: SQLGenerationConfig()
             )
             Issue.record("Expected timeout failure")
-        } catch let failure as OpenRouterSchemaToolAgentFailure {
+        } catch let failure as SchemaToolAgentFailure {
             let elapsed = started.duration(to: .now)
             #expect(failure.category == .wallClockTimeout)
             #expect(elapsed < .milliseconds(500))
@@ -3856,7 +3865,7 @@ struct OpenRouterSchemaToolSQLAgentTests {
         let agent = makeAgent(
             schema: schema,
             chatTransport: chatTransport,
-            configuration: OpenRouterSchemaToolSQLAgentConfiguration(
+            configuration: SchemaToolSQLAgentConfiguration(
                 maximumSchemaToolCalls: 4,
                 maximumRepairSchemaToolCalls: 2,
                 maximumModelTurns: 6,
@@ -3876,7 +3885,7 @@ struct OpenRouterSchemaToolSQLAgentTests {
                 config: SQLGenerationConfig()
             )
             Issue.record("Expected timeout failure")
-        } catch let failure as OpenRouterSchemaToolAgentFailure {
+        } catch let failure as SchemaToolAgentFailure {
             let elapsed = started.duration(to: .now)
             #expect(failure.category == .wallClockTimeout)
             #expect(chatTransport.requests.count == 1)
@@ -3891,7 +3900,7 @@ struct OpenRouterSchemaToolSQLAgentTests {
         let agent = makeAgent(
             schema: schema,
             chatTransport: chatTransport,
-            configuration: OpenRouterSchemaToolSQLAgentConfiguration(
+            configuration: SchemaToolSQLAgentConfiguration(
                 maximumSchemaToolCalls: 6,
                 maximumRepairSchemaToolCalls: 2,
                 maximumModelTurns: 6,
@@ -3910,7 +3919,7 @@ struct OpenRouterSchemaToolSQLAgentTests {
                 config: SQLGenerationConfig()
             )
             Issue.record("Expected timeout failure")
-        } catch let failure as OpenRouterSchemaToolAgentFailure {
+        } catch let failure as SchemaToolAgentFailure {
             #expect(failure.category == .wallClockTimeout)
             #expect(failure.pipelineCategory == .modelGeneration)
             #expect(failure.schemaToolCalls.isEmpty)
@@ -3933,7 +3942,7 @@ struct OpenRouterSchemaToolSQLAgentTests {
         let agent = makeAgent(
             schema: schema,
             chatTransport: chatTransport,
-            configuration: OpenRouterSchemaToolSQLAgentConfiguration(
+            configuration: SchemaToolSQLAgentConfiguration(
                 maximumSchemaToolCalls: 6,
                 maximumRepairSchemaToolCalls: 2,
                 maximumModelTurns: 6,
@@ -3952,7 +3961,7 @@ struct OpenRouterSchemaToolSQLAgentTests {
                 config: SQLGenerationConfig()
             )
             Issue.record("Expected timeout failure")
-        } catch let failure as OpenRouterSchemaToolAgentFailure {
+        } catch let failure as SchemaToolAgentFailure {
             #expect(failure.category == .wallClockTimeout)
             #expect(failure.schemaToolCalls.map(\.callID) == ["search-before-timeout"])
             #expect(failure.schemaToolCalls.allSatisfy { $0.errorCode != .sessionBudgetExceeded })
@@ -3962,14 +3971,14 @@ struct OpenRouterSchemaToolSQLAgentTests {
     }
 
     @Test func wallClockTimeoutMapsToModelGenerationPipelineCategory() {
-        let timeout = OpenRouterSchemaToolAgentFailure(category: .wallClockTimeout, message: "timed out")
+        let timeout = SchemaToolAgentFailure(category: .wallClockTimeout, message: "timed out")
         #expect(timeout.pipelineCategory == .modelGeneration)
-        let turnBudget = OpenRouterSchemaToolAgentFailure(
+        let turnBudget = SchemaToolAgentFailure(
             category: .modelTurnBudgetExhausted,
             message: "turn budget"
         )
         #expect(turnBudget.pipelineCategory == .structuredResponseParsing)
-        let toolBudget = OpenRouterSchemaToolAgentFailure(
+        let toolBudget = SchemaToolAgentFailure(
             category: .schemaToolCallBudgetExhausted,
             message: "tool budget"
         )
@@ -3977,8 +3986,8 @@ struct OpenRouterSchemaToolSQLAgentTests {
     }
 
     @Test func defaultConfigurationKeepsSixSchemaToolCalls() {
-        #expect(OpenRouterSchemaToolSQLAgentConfiguration.default.maximumSchemaToolCalls == 6)
-        #expect(OpenRouterSchemaToolSQLAgentConfiguration().maximumSchemaToolCalls == 6)
+        #expect(SchemaToolSQLAgentConfiguration.default.maximumSchemaToolCalls == 6)
+        #expect(SchemaToolSQLAgentConfiguration().maximumSchemaToolCalls == 6)
     }
 
     @Test func byteVariantDuplicateSchemaCallIsInterceptedWithoutBurningBudget() async throws {
@@ -4024,7 +4033,7 @@ struct OpenRouterSchemaToolSQLAgentTests {
         let agent = makeAgent(
             schema: schema,
             chatTransport: chatTransport,
-            configuration: OpenRouterSchemaToolSQLAgentConfiguration(maximumSchemaToolCalls: 2)
+            configuration: SchemaToolSQLAgentConfiguration(maximumSchemaToolCalls: 2)
         )
 
         let result = try await agent.generateSQL(
@@ -4092,7 +4101,7 @@ struct OpenRouterSchemaToolSQLAgentTests {
         let agent = makeAgent(
             schema: schema,
             chatTransport: chatTransport,
-            configuration: OpenRouterSchemaToolSQLAgentConfiguration(maximumSchemaToolCalls: 4)
+            configuration: SchemaToolSQLAgentConfiguration(maximumSchemaToolCalls: 4)
         )
 
         let result = try await agent.generateSQL(
@@ -4170,7 +4179,7 @@ struct OpenRouterSchemaToolSQLAgentTests {
         let agent = makeAgent(
             schema: schema,
             chatTransport: chatTransport,
-            configuration: OpenRouterSchemaToolSQLAgentConfiguration(maximumSchemaToolCalls: 4)
+            configuration: SchemaToolSQLAgentConfiguration(maximumSchemaToolCalls: 4)
         )
 
         let result = try await agent.generateSQL(
@@ -4245,7 +4254,7 @@ struct OpenRouterSchemaToolSQLAgentTests {
         let agent = makeAgent(
             schema: schema,
             chatTransport: chatTransport,
-            configuration: OpenRouterSchemaToolSQLAgentConfiguration(maximumSchemaToolCalls: 5)
+            configuration: SchemaToolSQLAgentConfiguration(maximumSchemaToolCalls: 5)
         )
 
         let result = try await agent.generateSQL(
@@ -4284,7 +4293,7 @@ struct OpenRouterSchemaToolSQLAgentTests {
         let agent = makeAgent(
             schema: schema,
             chatTransport: chatTransport,
-            configuration: OpenRouterSchemaToolSQLAgentConfiguration(
+            configuration: SchemaToolSQLAgentConfiguration(
                 maximumSchemaToolCalls: 6,
                 maximumRepairSchemaToolCalls: 2,
                 maximumModelTurns: 6,
@@ -4303,7 +4312,7 @@ struct OpenRouterSchemaToolSQLAgentTests {
                 config: SQLGenerationConfig()
             )
             Issue.record("Expected timeout failure")
-        } catch let failure as OpenRouterSchemaToolAgentFailure {
+        } catch let failure as SchemaToolAgentFailure {
             #expect(failure.category == .wallClockTimeout)
             let diagnostics = failure.backendMetadata?.agentDiagnostics
             #expect(diagnostics?.appSideRejectionReason == .timedOut)
@@ -4363,7 +4372,7 @@ struct OpenRouterSchemaToolSQLAgentTests {
         let agent = makeAgent(
             schema: schema,
             chatTransport: chatTransport,
-            configuration: OpenRouterSchemaToolSQLAgentConfiguration(maximumSchemaToolCalls: 2)
+            configuration: SchemaToolSQLAgentConfiguration(maximumSchemaToolCalls: 2)
         )
 
         let result = try await agent.generateSQL(
@@ -4405,7 +4414,7 @@ struct OpenRouterSchemaToolSQLAgentTests {
                 config: SQLGenerationConfig()
             )
             Issue.record("Expected repeated-call failure")
-        } catch let failure as OpenRouterSchemaToolAgentFailure {
+        } catch let failure as SchemaToolAgentFailure {
             #expect(failure.category == .repeatedToolCallNoProgress)
             #expect(failure.schemaToolCalls.map(\.callID) == ["search-invalid-1"])
             #expect(failure.backendMetadata?.agentDiagnostics?.redundantDuplicateToolCallCount == 0)
@@ -4461,7 +4470,7 @@ struct OpenRouterSchemaToolSQLAgentTests {
         let agent = makeAgent(
             schema: schema,
             chatTransport: chatTransport,
-            configuration: OpenRouterSchemaToolSQLAgentConfiguration(maximumSchemaToolCalls: 4)
+            configuration: SchemaToolSQLAgentConfiguration(maximumSchemaToolCalls: 4)
         )
 
         let result = try await agent.generateSQL(
@@ -4482,27 +4491,27 @@ struct OpenRouterSchemaToolSQLAgentTests {
 
     @Test func searchQueryNormalizationRejectsInvalidArgumentShapes() {
         #expect(
-            OpenRouterSchemaToolSQLAgent.normalizedSearchQuery(
+            SchemaToolSQLAgent.normalizedSearchQuery(
                 fromArguments: #"{"query":"users","limit":4}"#
             ) == "users"
         )
         #expect(
-            OpenRouterSchemaToolSQLAgent.normalizedSearchQuery(
+            SchemaToolSQLAgent.normalizedSearchQuery(
                 fromArguments: #"{"query":"users","limit":0}"#
             ) == nil
         )
         #expect(
-            OpenRouterSchemaToolSQLAgent.normalizedSearchQuery(
+            SchemaToolSQLAgent.normalizedSearchQuery(
                 fromArguments: #"{"query":"users","limit":"4"}"#
             ) == nil
         )
         #expect(
-            OpenRouterSchemaToolSQLAgent.normalizedSearchQuery(
+            SchemaToolSQLAgent.normalizedSearchQuery(
                 fromArguments: #"{"query":"users","unexpected":true}"#
             ) == nil
         )
         #expect(
-            OpenRouterSchemaToolSQLAgent.normalizedSearchQuery(
+            SchemaToolSQLAgent.normalizedSearchQuery(
                 fromArguments: #"{"query":""}"#
             ) == nil
         )
@@ -4512,20 +4521,20 @@ struct OpenRouterSchemaToolSQLAgentTests {
         let pastDeadline = Date().addingTimeInterval(-1)
         let futureDeadline = Date().addingTimeInterval(60)
 
-        let converted = OpenRouterSchemaToolSQLAgent.wallClockTimeoutFailure(
+        let converted = SchemaToolSQLAgent.wallClockTimeoutFailure(
             for: URLError(.timedOut),
             deadline: pastDeadline
         )
         #expect(converted?.category == .wallClockTimeout)
 
         #expect(
-            OpenRouterSchemaToolSQLAgent.wallClockTimeoutFailure(
+            SchemaToolSQLAgent.wallClockTimeoutFailure(
                 for: URLError(.timedOut),
                 deadline: futureDeadline
             ) == nil
         )
         #expect(
-            OpenRouterSchemaToolSQLAgent.wallClockTimeoutFailure(
+            SchemaToolSQLAgent.wallClockTimeoutFailure(
                 for: URLError(.networkConnectionLost),
                 deadline: pastDeadline
             ) == nil
@@ -4536,12 +4545,12 @@ struct OpenRouterSchemaToolSQLAgentTests {
         var signatures = Set<String>()
         var zeroResults = Set<String>()
         var scopes: [String: [SchemaToolJoinPathScope]] = [:]
-        let forward = OpenRouterToolCall(
+        let forward = ChatToolCall(
             id: "join-capped",
             name: "find_join_paths",
             arguments: #"{"from_table_id":"t1","to_table_id":"t2","max_hops":2,"max_paths":2}"#
         )
-        let reversed = OpenRouterToolCall(
+        let reversed = ChatToolCall(
             id: "join-capped-reversed",
             name: "find_join_paths",
             arguments: #"{"from_table_id":"t2","to_table_id":"t1","max_hops":2,"max_paths":2}"#
@@ -4556,7 +4565,7 @@ struct OpenRouterSchemaToolSQLAgentTests {
             ])
         )
 
-        OpenRouterSchemaToolSQLAgent.recordExecutedSchemaCall(
+        SchemaToolSQLAgent.recordExecutedSchemaCall(
             call: forward,
             result: cappedResult,
             executedSchemaCallSignatures: &signatures,
@@ -4566,7 +4575,7 @@ struct OpenRouterSchemaToolSQLAgentTests {
 
         #expect(scopes.isEmpty)
         #expect(
-            OpenRouterSchemaToolSQLAgent.redundantSchemaCallInterception(
+            SchemaToolSQLAgent.redundantSchemaCallInterception(
                 call: reversed,
                 executedSchemaCallSignatures: signatures,
                 zeroResultSearchQueries: zeroResults,
@@ -4583,7 +4592,7 @@ struct OpenRouterSchemaToolSQLAgentTests {
                 "no_path": .bool(false),
             ])
         )
-        OpenRouterSchemaToolSQLAgent.recordExecutedSchemaCall(
+        SchemaToolSQLAgent.recordExecutedSchemaCall(
             call: forward,
             result: completeResult,
             executedSchemaCallSignatures: &signatures,
@@ -4592,7 +4601,7 @@ struct OpenRouterSchemaToolSQLAgentTests {
         )
 
         #expect(scopes.count == 1)
-        let interception = OpenRouterSchemaToolSQLAgent.redundantSchemaCallInterception(
+        let interception = SchemaToolSQLAgent.redundantSchemaCallInterception(
             call: reversed,
             executedSchemaCallSignatures: signatures,
             zeroResultSearchQueries: zeroResults,
@@ -4605,7 +4614,7 @@ struct OpenRouterSchemaToolSQLAgentTests {
         var signatures = Set<String>()
         var zeroResults = Set<String>()
         var scopes: [String: [SchemaToolJoinPathScope]] = [:]
-        let forward = OpenRouterToolCall(
+        let forward = ChatToolCall(
             id: "join-range",
             name: "find_join_paths",
             arguments: #"{"from_table_id":"t1","to_table_id":"t2","max_hops":3,"max_paths":3}"#
@@ -4619,7 +4628,7 @@ struct OpenRouterSchemaToolSQLAgentTests {
                 "no_path": .bool(false),
             ])
         )
-        OpenRouterSchemaToolSQLAgent.recordExecutedSchemaCall(
+        SchemaToolSQLAgent.recordExecutedSchemaCall(
             call: forward,
             result: completeResult,
             executedSchemaCallSignatures: &signatures,
@@ -4632,13 +4641,13 @@ struct OpenRouterSchemaToolSQLAgentTests {
             #"{"from_table_id":"t1","to_table_id":"t2","max_hops":0,"max_paths":3}"#,
             #"{"from_table_id":"t1","to_table_id":"t2","max_hops":2,"max_paths":0}"#,
         ] {
-            let invalid = OpenRouterToolCall(
+            let invalid = ChatToolCall(
                 id: "join-invalid",
                 name: "find_join_paths",
                 arguments: arguments
             )
             #expect(
-                OpenRouterSchemaToolSQLAgent.redundantSchemaCallInterception(
+                SchemaToolSQLAgent.redundantSchemaCallInterception(
                     call: invalid,
                     executedSchemaCallSignatures: signatures,
                     zeroResultSearchQueries: zeroResults,
@@ -4653,7 +4662,7 @@ struct OpenRouterSchemaToolSQLAgentTests {
         chatTransport: any HTTPTransport,
         catalogTransport: ScriptedTransport? = nil,
         legacyGenerator: (any SQLGenerator)? = nil,
-        configuration: OpenRouterSchemaToolSQLAgentConfiguration = OpenRouterSchemaToolSQLAgentConfiguration(
+        configuration: SchemaToolSQLAgentConfiguration = SchemaToolSQLAgentConfiguration(
             maximumSchemaToolCalls: 4,
             maximumRepairSchemaToolCalls: 2,
             maximumModelTurns: 6,
@@ -4665,14 +4674,14 @@ struct OpenRouterSchemaToolSQLAgentTests {
         databaseInspectionPolicy: DatabaseInspectionPolicy = .disabled,
         databaseInspectionDatabase: (any DatabaseInspectionQuerying)? = nil,
         currentSchemaFingerprint: (@Sendable () async throws -> String)? = nil
-    ) -> OpenRouterSchemaToolSQLAgent {
+    ) -> SchemaToolSQLAgent {
         let catalog = OpenRouterModelCatalogService(
             transport: catalogTransport ?? ScriptedTransport { _, _ in Self.catalogResponse() },
             baseURL: Self.apiBase,
             cacheURL: Self.temporaryDirectory().appendingPathComponent("catalog.json"),
             ttl: 0
         )
-        return OpenRouterSchemaToolSQLAgent(
+        return SchemaToolSQLAgent(
             apiKey: "test-key",
             model: Self.modelID,
             expectedCanonicalModelID: nil,
@@ -4685,7 +4694,7 @@ struct OpenRouterSchemaToolSQLAgentTests {
             ),
             databaseInspectionPolicy: databaseInspectionPolicy,
             databaseInspectionDatabase: databaseInspectionDatabase,
-            requestBuilder: OpenRouterToolChatRequestBuilder(endpoint: Self.chatEndpoint),
+            requestBuilder: ChatToolRequestBuilder(endpoint: Self.chatEndpoint),
             legacyGenerator: legacyGenerator ?? LegacyGenerator(),
             configuration: configuration,
             currentSchemaFingerprint: currentSchemaFingerprint ?? {
@@ -4705,8 +4714,8 @@ struct OpenRouterSchemaToolSQLAgentTests {
         maximumModelTurns: Int = 6,
         maximumHTTPAttempts: Int = 8,
         wallClockTimeoutSeconds: TimeInterval = 10
-    ) -> OpenRouterSchemaToolSQLAgentConfiguration {
-        OpenRouterSchemaToolSQLAgentConfiguration(
+    ) -> SchemaToolSQLAgentConfiguration {
+        SchemaToolSQLAgentConfiguration(
             maximumSchemaToolCalls: maximumSchemaToolCalls,
             maximumRepairSchemaToolCalls: maximumRepairSchemaToolCalls,
             maximumModelTurns: maximumModelTurns,
@@ -4823,7 +4832,7 @@ struct OpenRouterSchemaToolSQLAgentTests {
         }
         return Self.toolCall(
             id: id,
-            name: OpenRouterSchemaToolSQLAgent.terminalToolName,
+            name: SchemaToolSQLAgent.terminalToolName,
             arguments: arguments
         )
     }
@@ -4855,7 +4864,7 @@ struct OpenRouterSchemaToolSQLAgentTests {
     ) -> [String: Any] {
         Self.toolCall(
             id: id,
-            name: OpenRouterSchemaToolSQLAgent.terminalToolName,
+            name: SchemaToolSQLAgent.terminalToolName,
             arguments: [
                 "action": "sql",
                 "sql": sql,
@@ -4868,7 +4877,7 @@ struct OpenRouterSchemaToolSQLAgentTests {
     private static func terminalClarification(id: String, question: String) -> [String: Any] {
         Self.toolCall(
             id: id,
-            name: OpenRouterSchemaToolSQLAgent.terminalToolName,
+            name: SchemaToolSQLAgent.terminalToolName,
             arguments: [
                 "action": "clarify",
                 "sql": "",
@@ -4895,7 +4904,7 @@ struct OpenRouterSchemaToolSQLAgentTests {
         return try messages.compactMap { message -> SchemaToolResult? in
             guard message["role"] as? String == "tool",
                 let content = message["content"] as? String,
-                message["name"] as? String != OpenRouterSchemaToolSQLAgent.terminalToolName
+                message["name"] as? String != SchemaToolSQLAgent.terminalToolName
             else {
                 return nil
             }

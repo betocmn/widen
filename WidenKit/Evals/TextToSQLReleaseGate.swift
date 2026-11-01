@@ -39,18 +39,18 @@ public enum TextToSQLReleaseGateModelPolicy {
     public enum CommittedDocIneligibility: Equatable, Sendable, CustomStringConvertible {
         case cloudBackendRequired
         case pinnedModelRequired(actual: String?)
-        case expectedCanonicalModelRequired(actual: String?)
+        case expectedReturnedModelRequired(actual: String?)
         case cloudEvaluationRequired
 
         public var description: String {
-            let profile = OpenRouterCatalog.productionProfile
+            let profile = CloudModelCatalog.productionProfile
             switch self {
             case .cloudBackendRequired:
                 return "the run does not include the cloud backend"
             case .pinnedModelRequired(let actual):
                 return "the requested model is \(actual ?? "missing"), not the pinned model \(profile.requestedModelID)"
-            case .expectedCanonicalModelRequired(let actual):
-                return "the manifest expected canonical model is \(actual ?? "missing"), not \(profile.expectedCanonicalModelID)"
+            case .expectedReturnedModelRequired(let actual):
+                return "the manifest expected returned model is \(actual ?? "missing"), not \(profile.expectedReturnedModelID)"
             case .cloudEvaluationRequired:
                 return "the run has no backend-available cloud results"
             }
@@ -60,7 +60,7 @@ public enum TextToSQLReleaseGateModelPolicy {
     public struct Violation: LocalizedError, CustomStringConvertible, Equatable, Sendable {
         public var model: String?
         public var pinnedModel: String {
-            OpenRouterCatalog.productionProfile.requestedModelID
+            CloudModelCatalog.productionProfile.requestedModelID
         }
 
         public var description: String {
@@ -98,13 +98,13 @@ public enum TextToSQLReleaseGateModelPolicy {
     /// to run engineering comparisons: overrides never publish committed docs.
     public static func canPublishCommittedDocs(
         model: String?,
-        expectedCanonicalModelID: String?,
+        expectedReturnedModelID: String?,
         backendIncludesCloud: Bool,
         cloudEvaluatedResultCount: Int
     ) -> Bool {
         committedDocIneligibility(
             model: model,
-            expectedCanonicalModelID: expectedCanonicalModelID,
+            expectedReturnedModelID: expectedReturnedModelID,
             backendIncludesCloud: backendIncludesCloud,
             cloudEvaluatedResultCount: cloudEvaluatedResultCount
         ) == nil
@@ -112,17 +112,17 @@ public enum TextToSQLReleaseGateModelPolicy {
 
     public static func committedDocIneligibility(
         model: String?,
-        expectedCanonicalModelID: String?,
+        expectedReturnedModelID: String?,
         backendIncludesCloud: Bool,
         cloudEvaluatedResultCount: Int
     ) -> CommittedDocIneligibility? {
-        let profile = OpenRouterCatalog.productionProfile
+        let profile = CloudModelCatalog.productionProfile
         guard backendIncludesCloud else { return .cloudBackendRequired }
         guard model == profile.requestedModelID else {
             return .pinnedModelRequired(actual: model)
         }
-        guard expectedCanonicalModelID == profile.expectedCanonicalModelID else {
-            return .expectedCanonicalModelRequired(actual: expectedCanonicalModelID)
+        guard expectedReturnedModelID == profile.expectedReturnedModelID else {
+            return .expectedReturnedModelRequired(actual: expectedReturnedModelID)
         }
         guard cloudEvaluatedResultCount > 0 else {
             return .cloudEvaluationRequired
@@ -135,7 +135,7 @@ public enum TextToSQLReleaseGateModelPolicy {
         backendIncludesCloud: Bool
     ) -> Bool {
         backendIncludesCloud
-            && model == OpenRouterCatalog.productionProfile.requestedModelID
+            && model == CloudModelCatalog.productionProfile.requestedModelID
     }
 }
 

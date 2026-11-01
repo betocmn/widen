@@ -284,7 +284,7 @@ public struct CloudRequestFailure: Error, LocalizedError, Equatable, Sendable {
             break
         }
 
-        if let message, OpenRouterResponseParser.isProviderOverloadMessage(message) {
+        if let message, CloudSQLResponseParser.isProviderOverloadMessage(message) {
             return .providerOverloaded
         }
 
@@ -294,7 +294,7 @@ public struct CloudRequestFailure: Error, LocalizedError, Equatable, Sendable {
         // Gate by status: 401 stays authentication and 5xx stays retryable
         // even when a provider message mentions a limit. Effective 2xx covers
         // provider errors delivered inside HTTP-200 envelopes.
-        if let message, OpenRouterResponseParser.isKeyOrCreditLimitMessage(message),
+        if let message, CloudSQLResponseParser.isKeyOrCreditLimitMessage(message),
             httpStatus.map({ [402, 403, 429].contains($0) || (200...299).contains($0) }) ?? true
         {
             return .providerLimit
@@ -302,10 +302,10 @@ public struct CloudRequestFailure: Error, LocalizedError, Equatable, Sendable {
 
         switch httpStatus {
         case 400:
-            if let message, OpenRouterResponseParser.isContextWindowMessage(message) {
+            if let message, CloudSQLResponseParser.isContextWindowMessage(message) {
                 return .contextWindow
             }
-            if let message, OpenRouterResponseParser.isUnsupportedFeatureMessage(message) {
+            if let message, CloudSQLResponseParser.isUnsupportedFeatureMessage(message) {
                 return .unsupportedFeature
             }
             return .invalidRequest
@@ -325,7 +325,7 @@ public struct CloudRequestFailure: Error, LocalizedError, Equatable, Sendable {
         case 408:
             return .timeout
         case 413, 422:
-            if let message, OpenRouterResponseParser.isContextWindowMessage(message) {
+            if let message, CloudSQLResponseParser.isContextWindowMessage(message) {
                 return .contextWindow
             }
             return .invalidRequest

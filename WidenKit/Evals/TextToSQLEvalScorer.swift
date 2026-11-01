@@ -418,7 +418,7 @@ public enum TextToSQLEvalCaseRunner {
             backendMetadata = failure.backendMetadata
             trace = nil
         } else if let typed, case .schemaToolAgent(let failure) = typed {
-            openRouterDiagnostic = failure.openRouterFailure?.diagnostic
+            openRouterDiagnostic = failure.cloudFailure?.diagnostic
             backendMetadata = failure.backendMetadata
             trace = agentFailureTrace(failure, latencyMs: latencyMs)
         } else {
@@ -573,7 +573,7 @@ public enum TextToSQLEvalCaseRunner {
     }
 
     private static func agentFailureTrace(
-        _ failure: OpenRouterSchemaToolAgentFailure,
+        _ failure: SchemaToolAgentFailure,
         latencyMs: Int
     ) -> TextToSQLTrace? {
         guard !failure.schemaToolCalls.isEmpty || !failure.inspectionToolCalls.isEmpty else {
@@ -595,7 +595,7 @@ public enum TextToSQLEvalCaseRunner {
         case .httpBudgetExhausted:
             return .skippedBudgetLimit
         case .schemaToolAgent(let failure):
-            if let status = failure.openRouterFailure.flatMap({ status(for: $0.category) }) {
+            if let status = failure.cloudFailure.flatMap({ status(for: $0.category) }) {
                 return status
             }
             return status(for: failure.pipelineCategory)

@@ -259,15 +259,15 @@ public final class AppState {
             switch cloudProvider {
             case .openRouter:
                 if let key = openRouterAPIKey, !key.isEmpty {
-                    let profile = OpenRouterCatalog.productionProfile
+                    let profile = CloudModelCatalog.productionProfile
                     if let connectionID,
                         let schema
                     {
                         let selectedSchemas = selectedSchemaSet(from: schema)
-                        return OpenRouterSchemaToolSQLAgent(
+                        return SchemaToolSQLAgent(
                             apiKey: key,
                             model: profile.requestedModelID,
-                            expectedCanonicalModelID: profile.expectedCanonicalModelID,
+                            expectedCanonicalModelID: profile.expectedReturnedModelID,
                             connectionID: connectionID,
                             selectedSchemas: selectedSchemas,
                             databaseInspectionPolicy: generationConnection?.databaseInspectionPolicy(
@@ -283,10 +283,10 @@ public final class AppState {
                             )
                         )
                     }
-                    return OpenRouterSQLGenerator(
+                    return CloudSQLGenerator(
                         apiKey: key,
                         model: profile.requestedModelID,
-                        expectedCanonicalModelID: profile.expectedCanonicalModelID
+                        expectedCanonicalModelID: profile.expectedReturnedModelID
                     )
                 }
             case .applePCC:
@@ -356,7 +356,7 @@ public final class AppState {
             case .applePCC:
                 return "Apple Private Cloud Compute"
             case .openRouter:
-                return "\(OpenRouterCatalog.productionProfile.displayName) via OpenRouter"
+                return "\(CloudModelCatalog.productionProfile.displayName) via OpenRouter"
             }
         }
         return "On-Device — Experimental"

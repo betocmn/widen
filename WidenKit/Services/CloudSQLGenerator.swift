@@ -38,7 +38,7 @@ public struct CloudModelCapabilities: Codable, Equatable, Sendable {
     }
 }
 
-struct OpenRouterRequestBuilder: Sendable {
+struct ChatCompletionRequestBuilder: Sendable {
     static let completionTokenBudget = 2_048
     let endpoint: URL
 
@@ -145,7 +145,7 @@ struct OpenRouterRequestBuilder: Sendable {
     }
 }
 
-struct OpenRouterResponseParser: Sendable {
+struct CloudSQLResponseParser: Sendable {
     struct ParsedResult: Sendable {
         var result: SQLGenerationResult
         var metadata: CloudGenerationMetadata
@@ -698,7 +698,7 @@ struct OpenRouterConnectivityCheck: Sendable {
     let expectedCanonicalModelID: String?
     let catalogService: OpenRouterModelCatalogService
     let transport: any HTTPTransport
-    let requestBuilder: OpenRouterRequestBuilder
+    let requestBuilder: ChatCompletionRequestBuilder
 
     init(
         apiKey: String,
@@ -706,7 +706,7 @@ struct OpenRouterConnectivityCheck: Sendable {
         expectedCanonicalModelID: String?,
         catalogService: OpenRouterModelCatalogService = .shared,
         transport: any HTTPTransport = URLSessionTransport(),
-        requestBuilder: OpenRouterRequestBuilder = OpenRouterRequestBuilder()
+        requestBuilder: ChatCompletionRequestBuilder = ChatCompletionRequestBuilder()
     ) {
         self.apiKey = apiKey
         self.model = model
@@ -731,7 +731,7 @@ struct OpenRouterConnectivityCheck: Sendable {
                 expectedCanonicalModelID: expectedCanonicalModelID,
                 requestedModelID: model
             )
-            let generator = OpenRouterSQLGenerator(
+            let generator = CloudSQLGenerator(
                 apiKey: apiKey,
                 model: model,
                 expectedCanonicalModelID: expectedCanonicalModelID,
@@ -785,7 +785,7 @@ struct OpenRouterConnectivityCheck: Sendable {
 /// Generates SQL with a hosted model through OpenRouter's OpenAI-compatible
 /// chat-completions API. It keeps the same SQL prompts as the local model, but
 /// chooses the transport mode from authenticated OpenRouter capabilities.
-public final class OpenRouterSQLGenerator: SQLGenerator, Sendable {
+public final class CloudSQLGenerator: SQLGenerator, Sendable {
     static let schemaCharacterBudget = 60_000
 
     private let apiKey: String
@@ -793,8 +793,8 @@ public final class OpenRouterSQLGenerator: SQLGenerator, Sendable {
     let expectedCanonicalModelID: String?
     private let transport: any HTTPTransport
     private let catalogService: OpenRouterModelCatalogService
-    private let requestBuilder: OpenRouterRequestBuilder
-    private let parser = OpenRouterResponseParser()
+    private let requestBuilder: ChatCompletionRequestBuilder
+    private let parser = CloudSQLResponseParser()
     private let retryPolicy: ChatCompletionRetryPolicy
     private let countCapabilityLookupHTTPAttempts: Bool
     private let preResolvedCapabilities: CloudModelCapabilities?
@@ -813,7 +813,7 @@ public final class OpenRouterSQLGenerator: SQLGenerator, Sendable {
         self.expectedCanonicalModelID = expectedCanonicalModelID
         self.transport = transport
         self.catalogService = .shared
-        self.requestBuilder = OpenRouterRequestBuilder(endpoint: endpoint)
+        self.requestBuilder = ChatCompletionRequestBuilder(endpoint: endpoint)
         self.retryPolicy = ChatCompletionRetryPolicy(maxAttempts: maximumHTTPAttempts)
         self.countCapabilityLookupHTTPAttempts = countCapabilityLookupHTTPAttempts
         self.preResolvedCapabilities = nil
@@ -825,7 +825,7 @@ public final class OpenRouterSQLGenerator: SQLGenerator, Sendable {
         expectedCanonicalModelID: String?,
         transport: any HTTPTransport,
         catalogService: OpenRouterModelCatalogService,
-        requestBuilder: OpenRouterRequestBuilder,
+        requestBuilder: ChatCompletionRequestBuilder,
         retryPolicy: ChatCompletionRetryPolicy = ChatCompletionRetryPolicy(),
         countCapabilityLookupHTTPAttempts: Bool = false,
         preResolvedCapabilities: CloudModelCapabilities? = nil
@@ -1026,7 +1026,7 @@ public final class OpenRouterSQLGenerator: SQLGenerator, Sendable {
         capabilities: CloudModelCapabilities,
         maximumHTTPAttempts: Int? = nil,
         usageSink: (@Sendable (SQLGenerationUsageEvent) -> Void)? = nil
-    ) async throws -> OpenRouterResponseParser.ParsedResult {
+    ) async throws -> CloudSQLResponseParser.ParsedResult {
         let built = try requestBuilder.build(
             apiKey: apiKey,
             model: model,
@@ -1043,11 +1043,11 @@ public final class OpenRouterSQLGenerator: SQLGenerator, Sendable {
     }
 
     private func performBuiltRequest(
-        _ built: OpenRouterRequestBuilder.BuiltRequest,
+        _ built: ChatCompletionRequestBuilder.BuiltRequest,
         requestedModelID: String,
         maximumHTTPAttempts: Int? = nil,
         usageSink: (@Sendable (SQLGenerationUsageEvent) -> Void)? = nil
-    ) async throws -> OpenRouterResponseParser.ParsedResult {
+    ) async throws -> CloudSQLResponseParser.ParsedResult {
         let effectiveRetryPolicy = ChatCompletionRetryPolicy(
             maxAttempts: maximumHTTPAttempts.map { min(retryPolicy.maxAttempts, max(1, $0)) }
                 ?? retryPolicy.maxAttempts
@@ -1060,7 +1060,7 @@ public final class OpenRouterSQLGenerator: SQLGenerator, Sendable {
             do {
                 usageSink?(.httpAttempts(1))
                 let (data, response) = try await transport.send(built.request)
-                if let reportedUsage = OpenRouterResponseParser.reportedUsage(from: data) {
+                if let reportedUsage = CloudSQLResponseParser.reportedUsage(from: data) {
                     usageSink?(reportedUsage.generationUsageEvent)
                 }
                 let retryAfter = retryPolicy.retryAfter(from: response)

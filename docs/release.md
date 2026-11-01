@@ -99,7 +99,7 @@ verifies the route OpenRouter will actually use.
    authorization. Command-level ceilings do not replace cumulative branch
    accounting.
 3. Create a candidate branch from current `origin/main` in a fresh worktree.
-4. Update only `OpenRouterCatalog.productionProfile.expectedCanonicalModelID`
+4. Update only `CloudModelCatalog.productionProfile.expectedReturnedModelID`
    and deterministic fixtures that assert that production pin. Do not change
    the requested alias, private routing, canonical verification, safety or
    schema validation, PostgreSQL verification, or release-gate enforcement.
@@ -113,9 +113,9 @@ verifies the route OpenRouter will actually use.
    DEVELOPER_DIR="$(bash scripts/xcode-developer-dir.sh)" \
      xcodebuild -project Widen.xcodeproj -scheme Widen -configuration Debug \
        -derivedDataPath build test \
-       -only-testing:WidenTests/OpenRouterCatalogTests \
-       -only-testing:WidenTests/OpenRouterSQLGeneratorTests \
-       -only-testing:WidenTests/OpenRouterSchemaToolSQLAgentTests \
+       -only-testing:WidenTests/CloudModelCatalogTests \
+       -only-testing:WidenTests/CloudSQLGeneratorTests \
+       -only-testing:WidenTests/SchemaToolSQLAgentTests \
        -only-testing:WidenTests/AIBackendSelectionTests \
        -only-testing:WidenTests/TextToSQLEvalRunPlanningTests
    make test

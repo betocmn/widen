@@ -38,7 +38,7 @@ public enum SQLGenerationFailure: Error, LocalizedError, Equatable, Sendable {
     case generation(String)
     case cloudRequest(CloudRequestFailure)
     case httpBudgetExhausted(HTTPAttemptBudgetExhausted)
-    case schemaToolAgent(OpenRouterSchemaToolAgentFailure)
+    case schemaToolAgent(SchemaToolAgentFailure)
 
     public var errorDescription: String? {
         switch self {
@@ -106,7 +106,7 @@ public enum SQLGenerationFailure: Error, LocalizedError, Equatable, Sendable {
         if let failure = error as? HTTPAttemptBudgetExhausted {
             return .httpBudgetExhausted(failure)
         }
-        if let failure = error as? OpenRouterSchemaToolAgentFailure {
+        if let failure = error as? SchemaToolAgentFailure {
             return .schemaToolAgent(failure)
         }
         if let appError = error as? AppError {

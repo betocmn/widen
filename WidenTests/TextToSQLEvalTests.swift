@@ -90,7 +90,7 @@ struct TextToSQLEvalTests {
             metadata.agentLogicalTurnCount = 2
             metadata.agentHTTPAttemptCount = 3
             metadata.agentSchemaToolCallCount = 1
-            throw OpenRouterSchemaToolAgentFailure(
+            throw SchemaToolAgentFailure(
                 category: .schemaToolCallBudgetExhausted,
                 message: "Schema tool call budget exhausted.",
                 backendMetadata: metadata,
@@ -151,7 +151,7 @@ struct TextToSQLEvalTests {
             metadata.agentLogicalTurnCount = 1
             metadata.agentHTTPAttemptCount = 1
             metadata.agentSchemaToolCallCount = 1
-            throw OpenRouterSchemaToolAgentFailure(
+            throw SchemaToolAgentFailure(
                 category: .schemaToolCallBudgetExhausted,
                 message: "Schema tool call budget exhausted.",
                 backendMetadata: metadata,

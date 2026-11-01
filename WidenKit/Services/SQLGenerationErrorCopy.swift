@@ -102,7 +102,7 @@ public enum SQLGenerationErrorCopy {
     }
 
     private static var modelName: String {
-        OpenRouterCatalog.productionProfile.displayName
+        CloudModelCatalog.productionProfile.displayName
     }
 
     private static func mappedText(
@@ -112,7 +112,7 @@ public enum SQLGenerationErrorCopy {
         // ZDR routing failures already explain the fail-closed policy, but
         // present a usually-transient provider gap as a permanent stalemate;
         // lead with the transient framing. Detection keys on the fixed
-        // prefix OpenRouterSQLGenerator injects for data-policy routing
+        // prefix CloudSQLGenerator injects for data-policy routing
         // failures, so it holds for both the 404 and 503 shapes.
         if message.contains("private-routing requirements") {
             return withDetail(
@@ -197,7 +197,7 @@ public enum SQLGenerationErrorCopy {
         case .cloudRequest(let openRouterFailure):
             openRouterFailure.category
         case .schemaToolAgent(let agentFailure):
-            agentFailure.openRouterFailure?.category
+            agentFailure.cloudFailure?.category
         default:
             nil
         }
