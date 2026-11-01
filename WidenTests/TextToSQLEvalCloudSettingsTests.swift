@@ -259,6 +259,49 @@ struct TextToSQLEvalCloudSettingsTests {
         #expect(!runner.contains("CloudModelProfile.openRouter("))
     }
 
+    @Test func committedDocChecksReadTheRecordedReasoningEffort() throws {
+        let repoRoot = URL(fileURLWithPath: #filePath)
+            .deletingLastPathComponent()
+            .deletingLastPathComponent()
+        let reporter = try String(
+            contentsOf: repoRoot.appendingPathComponent("WidenEval/ReleaseGateReporter.swift"),
+            encoding: .utf8
+        )
+
+        // Sink-time eligibility, used by every gate and triage write, checks
+        // the effort the manifest recorded for the run's call site.
+        let eligibilityStart = try #require(
+            reporter.range(of: "var committedDocIneligibility: TextToSQLReleaseGateModelPolicy.CommittedDocIneligibility? {")
+        )
+        let eligibility = String(reporter[eligibilityStart.upperBound...].prefix(1_200))
+        #expect(eligibility.contains("reasoningEffort: manifest.reasoningEffort,"))
+        #expect(eligibility.contains("callSite: manifest.cloudCallSite,"))
+        #expect(
+            reporter.contains(
+                "cloudAgentMode == EvalCloudAgentMode.tools.rawValue ? .agentTurn : .oneShotSQL"
+            )
+        )
+
+        // Offline re-triage derives the override from the manifest, so a
+        // non-default-effort run needs --allow-model-override as when it ran.
+        let retriageStart = try #require(reporter.range(of: "static func writeExisting("))
+        let retriage = String(reporter[retriageStart.upperBound...].prefix(2_000))
+        let override = try #require(
+            retriage.range(of: "try TextToSQLEvalCloudSettings.resumedReasoningEffortOverride(")
+        )
+        let recorded = try #require(
+            retriage.range(of: "previousReasoningEffort: runFile.manifest.reasoningEffort,")
+        )
+        let gateCheck = try #require(retriage.range(of: "try TextToSQLReleaseGateModelPolicy.validate("))
+        let overrideArgument = try #require(
+            retriage.range(of: "reasoningEffortOverride: reasoningEffortOverride,")
+        )
+        #expect(retriage.contains("callSite: runFile.manifest.cloudCallSite"))
+        #expect(override.lowerBound < recorded.lowerBound)
+        #expect(recorded.lowerBound < gateCheck.lowerBound)
+        #expect(gateCheck.lowerBound < overrideArgument.lowerBound)
+    }
+
     private static func body(_ request: URLRequest) throws -> [String: Any] {
         let data = try #require(request.httpBody)
         return try #require(try JSONSerialization.jsonObject(with: data) as? [String: Any])

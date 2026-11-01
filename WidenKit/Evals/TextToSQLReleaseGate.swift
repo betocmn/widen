@@ -40,6 +40,10 @@ public enum TextToSQLReleaseGateModelPolicy {
         case cloudBackendRequired
         case pinnedModelRequired(actual: String?)
         case expectedReturnedModelRequired(actual: String?)
+        /// The run sent a reasoning effort other than the production
+        /// profile's, as an eval-only `--reasoning-effort` does. Nil means
+        /// no effort was sent.
+        case productionReasoningEffortRequired(actual: String?, expected: String?)
         case cloudEvaluationRequired
 
         public var description: String {
@@ -51,6 +55,8 @@ public enum TextToSQLReleaseGateModelPolicy {
                 return "the requested model is \(actual ?? "missing"), not the pinned model \(profile.requestedModelID)"
             case .expectedReturnedModelRequired(let actual):
                 return "the manifest expected returned model is \(actual ?? "missing"), not \(profile.expectedReturnedModelID ?? "missing")"
+            case .productionReasoningEffortRequired(let actual, let expected):
+                return "the run's reasoning effort is \(actual ?? "unset"), not the production \(expected ?? "unset") for \(profile.requestedModelID)"
             case .cloudEvaluationRequired:
                 return "the run has no backend-available cloud results"
             }
@@ -111,20 +117,29 @@ public enum TextToSQLReleaseGateModelPolicy {
     public static func canPublishCommittedDocs(
         model: String?,
         expectedReturnedModelID: String?,
+        reasoningEffort: String?,
+        callSite: CloudCallSite,
         backendIncludesCloud: Bool,
         cloudEvaluatedResultCount: Int
     ) -> Bool {
         committedDocIneligibility(
             model: model,
             expectedReturnedModelID: expectedReturnedModelID,
+            reasoningEffort: reasoningEffort,
+            callSite: callSite,
             backendIncludesCloud: backendIncludesCloud,
             cloudEvaluatedResultCount: cloudEvaluatedResultCount
         ) == nil
     }
 
+    /// `reasoningEffort` is the effort the run manifest recorded for
+    /// `callSite`. Only the production profile's own effort for that call
+    /// site publishes, so a `--reasoning-effort` run never does.
     public static func committedDocIneligibility(
         model: String?,
         expectedReturnedModelID: String?,
+        reasoningEffort: String?,
+        callSite: CloudCallSite,
         backendIncludesCloud: Bool,
         cloudEvaluatedResultCount: Int
     ) -> CommittedDocIneligibility? {
@@ -137,6 +152,13 @@ public enum TextToSQLReleaseGateModelPolicy {
             expectedReturnedModelID == pinnedReturnedModelID
         else {
             return .expectedReturnedModelRequired(actual: expectedReturnedModelID)
+        }
+        let productionReasoningEffort = profile.policy(for: callSite).reasoningEffort?.rawValue
+        guard reasoningEffort == productionReasoningEffort else {
+            return .productionReasoningEffortRequired(
+                actual: reasoningEffort,
+                expected: productionReasoningEffort
+            )
         }
         guard cloudEvaluatedResultCount > 0 else {
             return .cloudEvaluationRequired

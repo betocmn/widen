@@ -327,10 +327,13 @@ struct CloudModelCatalogTests {
 
     @Test func committedDocEligibilityRequiresVerifiedCloudEvaluation() {
         let profile = CloudModelCatalog.productionProfile
+        let effort = profile.policy(for: .agentTurn).reasoningEffort?.rawValue
         #expect(
             TextToSQLReleaseGateModelPolicy.canPublishCommittedDocs(
                 model: profile.requestedModelID,
                 expectedReturnedModelID: profile.expectedReturnedModelID,
+                reasoningEffort: effort,
+                callSite: .agentTurn,
                 backendIncludesCloud: true,
                 cloudEvaluatedResultCount: 1
             )
@@ -339,6 +342,8 @@ struct CloudModelCatalogTests {
             !TextToSQLReleaseGateModelPolicy.canPublishCommittedDocs(
                 model: nil,
                 expectedReturnedModelID: profile.expectedReturnedModelID,
+                reasoningEffort: effort,
+                callSite: .agentTurn,
                 backendIncludesCloud: true,
                 cloudEvaluatedResultCount: 1
             )
@@ -347,6 +352,8 @@ struct CloudModelCatalogTests {
             !TextToSQLReleaseGateModelPolicy.canPublishCommittedDocs(
                 model: profile.requestedModelID,
                 expectedReturnedModelID: profile.expectedReturnedModelID,
+                reasoningEffort: effort,
+                callSite: .agentTurn,
                 backendIncludesCloud: false,
                 cloudEvaluatedResultCount: 1
             )
@@ -355,6 +362,8 @@ struct CloudModelCatalogTests {
             !TextToSQLReleaseGateModelPolicy.canPublishCommittedDocs(
                 model: "vendor/other",
                 expectedReturnedModelID: profile.expectedReturnedModelID,
+                reasoningEffort: effort,
+                callSite: .agentTurn,
                 backendIncludesCloud: true,
                 cloudEvaluatedResultCount: 1
             )
@@ -363,6 +372,8 @@ struct CloudModelCatalogTests {
             !TextToSQLReleaseGateModelPolicy.canPublishCommittedDocs(
                 model: profile.requestedModelID,
                 expectedReturnedModelID: nil,
+                reasoningEffort: effort,
+                callSite: .agentTurn,
                 backendIncludesCloud: true,
                 cloudEvaluatedResultCount: 1
             )
@@ -371,6 +382,8 @@ struct CloudModelCatalogTests {
             !TextToSQLReleaseGateModelPolicy.canPublishCommittedDocs(
                 model: profile.requestedModelID,
                 expectedReturnedModelID: "openai/gpt-5.5-unevaluated",
+                reasoningEffort: effort,
+                callSite: .agentTurn,
                 backendIncludesCloud: true,
                 cloudEvaluatedResultCount: 1
             )
@@ -379,6 +392,8 @@ struct CloudModelCatalogTests {
             !TextToSQLReleaseGateModelPolicy.canPublishCommittedDocs(
                 model: profile.requestedModelID,
                 expectedReturnedModelID: profile.expectedReturnedModelID,
+                reasoningEffort: effort,
+                callSite: .agentTurn,
                 backendIncludesCloud: true,
                 cloudEvaluatedResultCount: 0
             )
@@ -387,15 +402,54 @@ struct CloudModelCatalogTests {
 
     @Test func committedDocIneligibilityExplainsMissingExecutionEvidence() {
         let profile = CloudModelCatalog.productionProfile
+        let effort = profile.policy(for: .agentTurn).reasoningEffort?.rawValue
         let reason = TextToSQLReleaseGateModelPolicy.committedDocIneligibility(
             model: profile.requestedModelID,
             expectedReturnedModelID: profile.expectedReturnedModelID,
+            reasoningEffort: effort,
+            callSite: .agentTurn,
             backendIncludesCloud: true,
             cloudEvaluatedResultCount: 0
         )
 
         #expect(reason == .cloudEvaluationRequired)
         #expect(reason?.description.contains("no backend-available cloud results") == true)
+    }
+
+    @Test func committedDocsRequireTheProductionReasoningEffort() {
+        let profile = CloudModelCatalog.productionProfile
+        let recordedEfforts: [String?] = [nil] + ReasoningEffort.allCases.map(\.rawValue)
+        for callSite in [CloudCallSite.agentTurn, .oneShotSQL] {
+            let production = profile.policy(for: callSite).reasoningEffort?.rawValue
+            func ineligibility(_ effort: String?) -> TextToSQLReleaseGateModelPolicy.CommittedDocIneligibility? {
+                TextToSQLReleaseGateModelPolicy.committedDocIneligibility(
+                    model: profile.requestedModelID,
+                    expectedReturnedModelID: profile.expectedReturnedModelID,
+                    reasoningEffort: effort,
+                    callSite: callSite,
+                    backendIncludesCloud: true,
+                    cloudEvaluatedResultCount: 1
+                )
+            }
+
+            #expect(ineligibility(production) == nil, "\(callSite)")
+            // Any other effort, or none when production sends one, is an
+            // eval-only override: even with --allow-model-override it never
+            // publishes the committed docs.
+            for effort in recordedEfforts where effort != production {
+                #expect(
+                    ineligibility(effort)
+                        == .productionReasoningEffortRequired(actual: effort, expected: production),
+                    "\(callSite) \(effort ?? "nil")"
+                )
+            }
+        }
+
+        let reason = TextToSQLReleaseGateModelPolicy.CommittedDocIneligibility
+            .productionReasoningEffortRequired(actual: "low", expected: "high")
+        #expect(reason.description.contains("reasoning effort is low"))
+        #expect(reason.description.contains("production high"))
+        #expect(reason.description.contains(profile.requestedModelID))
     }
 
     @Test func releaseGateViolationHasAnActionableLocalizedDescription() {

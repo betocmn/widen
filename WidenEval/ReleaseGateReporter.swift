@@ -22,9 +22,19 @@ extension EvalRun {
         return TextToSQLReleaseGateModelPolicy.committedDocIneligibility(
             model: manifest.model,
             expectedReturnedModelID: manifest.expectedCanonicalModelID,
+            reasoningEffort: manifest.reasoningEffort,
+            callSite: manifest.cloudCallSite,
             backendIncludesCloud: backendIncludesCloud,
             cloudEvaluatedResultCount: cloudEvaluatedResultCount
         )
+    }
+}
+
+extension EvalRunManifest {
+    /// The call site whose policy the run's cloud requests followed, and so
+    /// the one its recorded reasoning effort belongs to.
+    var cloudCallSite: CloudCallSite {
+        cloudAgentMode == EvalCloudAgentMode.tools.rawValue ? .agentTurn : .oneShotSQL
     }
 }
 
@@ -407,12 +417,22 @@ enum TextToSQLReleaseTriageReporter {
             from: Data(contentsOf: runURL)
         )
         // Offline re-triage publishes committed docs too, so it enforces the
-        // same pinned-model policy as evaluated runs — and even with the
-        // override, a non-pinned run never replaces the committed copy.
+        // same pinned-model and reasoning-effort policy as evaluated runs —
+        // and even with the override, a non-pinned or non-default-effort run
+        // never replaces the committed copy.
         let backendIncludesCloud = runFile.manifest.backendMode == "cloud"
             || runFile.manifest.backendMode == "both"
+        var reasoningEffortOverride: ReasoningEffort?
+        if copyVersion != nil {
+            reasoningEffortOverride = try TextToSQLEvalCloudSettings.resumedReasoningEffortOverride(
+                previousReasoningEffort: runFile.manifest.reasoningEffort,
+                requestedModelID: runFile.manifest.model ?? "",
+                callSite: runFile.manifest.cloudCallSite
+            )
+        }
         try TextToSQLReleaseGateModelPolicy.validate(
             model: runFile.manifest.model,
+            reasoningEffortOverride: reasoningEffortOverride,
             backendIncludesCloud: backendIncludesCloud,
             releaseGateVersion: nil,
             releaseTriageVersion: copyVersion,

@@ -67,9 +67,10 @@ API keys, prompts, or raw model output.
 `--cloud-agent` defaults to `tools`, the schema-tool agent the app uses.
 `--reasoning-effort` is eval-only: it overrides the effort Particle-1 agent
 turns and one-shot SQL send for the run, and is rejected for OpenRouter
-models. A run that publishes release-gate or triage docs needs
-`--allow-model-override` to use it. The run manifest records the provider,
-its endpoint host, the effort sent, and the agent's call budgets.
+models. A release-gate or triage run needs `--allow-model-override` to use
+it, and then keeps its summaries in the run directory: only the production
+effort writes the committed `docs/evals/` files. The run manifest records the
+provider, its endpoint host, the effort sent, and the agent's call budgets.
 
 Each case has a default 1,200-second timeout, covering schema discovery,
 generation, and validation repair. That is longer than the agent's wall clock
@@ -140,9 +141,10 @@ diffs, if added later, must stay under `.eval-results/`.
 production alias `openai/gpt-5.5`. Engineering comparisons must opt in with
 `make eval-release MODEL=<model> ALLOW_MODEL_OVERRIDE=1`; direct CLI runs that
 publish release-gate or triage docs equally require `--allow-model-override`
-for a non-pinned `--model` (including offline `--triage-release` re-runs).
-Even with the override, a non-pinned run never writes the committed
-`docs/evals/` files — its gate summary and triage stay in the run directory.
+for a non-pinned `--model` or a non-default recorded reasoning effort
+(including offline `--triage-release` re-runs). Even with the override, such a
+run never writes the committed `docs/evals/` files — its gate summary and
+triage stay in the run directory.
 Neither override changes the app's production profile. The target runs
 `Evals/suites/text-to-sql-v1.json` with `--backend cloud`, `--cloud-agent tools`,
 `--semantic-db`, and `--repeat 3`. This intentionally tests the OpenRouter

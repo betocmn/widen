@@ -109,11 +109,12 @@ public struct TextToSQLEvalCloudSettings: Equatable, Sendable {
         return includedCloud ? manifestName(for: .openRouter) : nil
     }
 
-    /// The override a resumed run inherits from the reasoning effort its
-    /// manifest recorded for `callSite`. The profile's own default is not an
-    /// override, so resuming a default run never looks like one to the
+    /// The override a resumed or re-triaged run carries from the reasoning
+    /// effort its manifest recorded for `callSite`. The profile's own default
+    /// is not an override, so a default run never looks like one to the
     /// release gate. A profile that sends no effort inherits none, which
-    /// leaves the mismatch to the resume compatibility check.
+    /// leaves the mismatch to the resume compatibility check and the
+    /// committed-doc eligibility check.
     public static func resumedReasoningEffortOverride(
         previousReasoningEffort: String?,
         requestedModelID: String,
