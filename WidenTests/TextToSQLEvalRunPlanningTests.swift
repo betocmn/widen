@@ -713,15 +713,15 @@ struct TextToSQLEvalRunPlanningTests {
         }
         #expect(Set(oneShotPaths).isSubset(of: Set(agentPaths)))
         #expect(oneShotPaths.contains("WidenKit/Models/SQLGenerationResult.swift"))
-        #expect(oneShotPaths.contains("WidenKit/Models/OpenRouterCatalog.swift"))
-        #expect(oneShotPaths.contains("WidenKit/Services/OpenRouterSQLGenerator.swift"))
+        #expect(oneShotPaths.contains("WidenKit/Models/CloudModelProfile.swift"))
+        #expect(oneShotPaths.contains("WidenKit/Services/CloudSQLGenerator.swift"))
         #expect(oneShotPaths.contains("WidenKit/Services/HTTPTransport.swift"))
         // The scorer's safety, schema and reference metrics, and the pipeline's
         // GeneratedSQLPostprocessor grounding, come from these validators.
         #expect(oneShotPaths.contains("WidenKit/Services/SQLSafetyValidator.swift"))
         #expect(oneShotPaths.contains("WidenKit/Services/SQLSchemaValidator.swift"))
         #expect(oneShotPaths.contains("WidenKit/Services/SQLReferenceAnalyzer.swift"))
-        #expect(agentPaths.contains("WidenKit/Services/OpenRouterSchemaToolSQLAgent.swift"))
+        #expect(agentPaths.contains("WidenKit/Services/SchemaToolSQLAgent.swift"))
         #expect(agentPaths.contains("WidenKit/Services/SchemaToolRuntime.swift"))
 
         let hash = try TextToSQLEvalSourceManifest.sourceHash(
