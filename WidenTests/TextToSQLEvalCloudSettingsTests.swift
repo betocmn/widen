@@ -168,21 +168,24 @@ struct TextToSQLEvalCloudSettingsTests {
     }
 
     @Test func caseTimeoutOutlastsEveryAgentInvocationInOneCase() {
-        let wallClock = SchemaToolSQLAgentConfiguration.default.wallClockTimeoutSeconds
-        let verificationRepairs = GeneratedSQLRepairSupport.verificationRepairModelCallBudget
-        // Validation repairs share the request's model-call budget with the
-        // first generation; the verification repair comes on top.
-        let validationRepairs = GeneratedSQLRepairSupport.cloudModelCallBudget - 1
+        let agent = SchemaToolSQLAgentConfiguration.default
+        let policy = TextToSQLRepairPolicy.default
+        let repairs = policy.maximumValidationRepairs + policy.maximumVerificationRepairs
         let margin: TimeInterval = 60
 
         #expect(TextToSQLEvalDefaults.caseTimeoutSeconds == 1_200)
+        // The first generation, then every repair the policy allows, each
+        // bounded by the repair wall clock.
         #expect(
             TextToSQLEvalDefaults.caseTimeoutSeconds
-                > wallClock * Double(1 + verificationRepairs) + margin
+                > agent.wallClockTimeoutSeconds
+                    + agent.repairWallClockTimeoutSeconds * Double(repairs) + margin
         )
+        // No repair starts after the cutoff, so the last one ends within one
+        // repair wall clock of it.
         #expect(
             TextToSQLEvalDefaults.caseTimeoutSeconds
-                > wallClock * Double(1 + validationRepairs + verificationRepairs) + margin
+                > policy.repairStartCutoffSeconds + agent.repairWallClockTimeoutSeconds + margin
         )
     }
 
@@ -209,6 +212,7 @@ struct TextToSQLEvalCloudSettingsTests {
                 "maximumPlanConsistencyCorrections": "1",
                 "maximumTerminalRequiredCorrections": "1",
                 "wallClockTimeoutSeconds": "180",
+                "repairWallClockTimeoutSeconds": "120",
             ]
         )
         var configuration = SchemaToolSQLAgentConfiguration.default

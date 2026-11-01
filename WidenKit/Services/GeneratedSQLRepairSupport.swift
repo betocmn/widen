@@ -1,22 +1,68 @@
 import Foundation
 
+/// How many repairs one text-to-SQL request may ask the generator for, and
+/// how late a repair may start. Budgets count logical generator invocations
+/// (`SQLGenerationResult.generatorInvocationCount`), so a schema-agent run
+/// that spent many HTTP attempts still counts once.
+public struct TextToSQLRepairPolicy: Equatable, Sendable {
+    /// The first generation plus every validation, verification and
+    /// execution repair for one request.
+    public var maximumGeneratorInvocationsPerRequest: Int
+    /// A focused repair and one reconstruction after local validation fails.
+    public var maximumValidationRepairs: Int
+    /// One repair after PostgreSQL rejects SQL that passed local validation.
+    public var maximumVerificationRepairs: Int
+    /// A focused repair and one reconstruction after the database rejects a
+    /// generated read.
+    public var maximumExecutionRepairs: Int
+    /// No repair starts once the request has run this long.
+    public var repairStartCutoffSeconds: TimeInterval
+
+    public init(
+        maximumGeneratorInvocationsPerRequest: Int = 5,
+        maximumValidationRepairs: Int = 2,
+        maximumVerificationRepairs: Int = 1,
+        maximumExecutionRepairs: Int = 2,
+        repairStartCutoffSeconds: TimeInterval = 300
+    ) {
+        self.maximumGeneratorInvocationsPerRequest = maximumGeneratorInvocationsPerRequest
+        self.maximumValidationRepairs = maximumValidationRepairs
+        self.maximumVerificationRepairs = maximumVerificationRepairs
+        self.maximumExecutionRepairs = maximumExecutionRepairs
+        self.repairStartCutoffSeconds = repairStartCutoffSeconds
+    }
+
+    public static let `default` = TextToSQLRepairPolicy()
+
+    /// Logical generator invocations already spent on the request behind
+    /// `generation`. A generation saved by an older build counts as one: its
+    /// `generationCallCount` mixes in HTTP attempts and can't be split back.
+    public static func spentInvocations(after generation: SQLGenerationResult?) -> Int {
+        max(1, generation?.generatorInvocationCount ?? 1)
+    }
+
+    /// Repairs a stage may still start: its own cap, bounded by what is left
+    /// of the request's invocation budget.
+    public func remainingRepairs(cap: Int, after generation: SQLGenerationResult?) -> Int {
+        let remainingInvocations = maximumGeneratorInvocationsPerRequest
+            - Self.spentInvocations(after: generation)
+        return max(0, min(cap, remainingInvocations))
+    }
+
+    /// False once the request has run for the cutoff or longer.
+    public func allowsRepairStart(requestStartedAt: Date, now: Date = Date()) -> Bool {
+        now.timeIntervalSince(requestStartedAt) < repairStartCutoffSeconds
+    }
+}
+
 enum GeneratedSQLRepairFailureMode: Sendable {
     case validationOnly
     case execution
 }
 
 enum GeneratedSQLRepairSupport {
-    static let cloudModelCallBudget = 3
-    static let verificationRepairModelCallBudget = 1
-
-    static func remainingRepairCalls(
-        after generation: SQLGenerationResult?,
-        modelCallBudget: Int = cloudModelCallBudget
-    ) -> Int {
-        let spentModelCalls = max(1, generation?.generationCallCount ?? 1)
-        return max(0, modelCallBudget - spentModelCalls)
-    }
-
+    /// The HTTP-inclusive model-call count a repair attempt reports to the
+    /// generator, for telemetry and the eval HTTP-attempt budget.
     static func cumulativeModelCallCount(
         after generation: SQLGenerationResult?,
         attempt: Int
@@ -202,7 +248,8 @@ enum GeneratedSQLRepairSupport {
 
     static func repairFailureMessage(
         attempts: [SQLRepairAttempt],
-        mode: GeneratedSQLRepairFailureMode
+        mode: GeneratedSQLRepairFailureMode,
+        backendDisplayName: String = CloudModelCatalog.productionProfile.displayName
     ) -> String {
         let lastError = attempts.last?.error ?? "Unknown database error."
         let history = attempts
@@ -227,7 +274,7 @@ enum GeneratedSQLRepairSupport {
             : executionRecoveryGuidance
         if attempts.count <= 1 {
             return """
-                The generated SQL already used this request's model-call budget, so I did not ask the model to repair it.
+                This request already used its repair budget, so Widen did not ask \(backendDisplayName) to repair the query again.
 
                 Last error: \(lastError)
 
@@ -237,8 +284,15 @@ enum GeneratedSQLRepairSupport {
                 \(recoveryGuidance)
                 """
         }
+        let reconstructionCount = attempts.filter { $0.mode == .reconstructAfterFailedRepair }.count
+        let repairsTried =
+            switch reconstructionCount {
+            case 0: "a focused repair"
+            case 1: "a focused repair and one reconstruction"
+            default: "a focused repair and \(reconstructionCount) reconstructions"
+            }
         return """
-            I tried a focused repair and, when needed, one reconstruction, but \(failureReason).
+            I tried \(repairsTried), but \(failureReason).
 
             Last error: \(lastError)
 

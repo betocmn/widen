@@ -280,9 +280,11 @@ public struct TextToSQLPipelineEvent: Equatable, Sendable {
 
 public struct TextToSQLPipeline: TextToSQLRunning {
     private let generator: any SQLGenerator
+    private let repairPolicy: TextToSQLRepairPolicy
 
-    public init(generator: any SQLGenerator) {
+    public init(generator: any SQLGenerator, repairPolicy: TextToSQLRepairPolicy = .default) {
         self.generator = generator
+        self.repairPolicy = repairPolicy
     }
 
     public func run(_ request: TextToSQLRequest) async throws -> TextToSQLRun {
@@ -298,7 +300,7 @@ public struct TextToSQLPipeline: TextToSQLRunning {
                 schema: request.schema,
                 context: request.context,
                 config: request.config
-            )
+            ).withGeneratorInvocationCount(1)
             trace.mergeSchemaToolCalls(generated.schemaToolCalls)
             trace.mergeInspectionToolCalls(generated.inspectionToolCalls)
             trace.append(
@@ -473,6 +475,8 @@ public struct TextToSQLPipeline: TextToSQLRunning {
             startingGeneration: result.withPipelineSQL(generatedSQL),
             startingSQL: generatedSQL,
             firstError: firstError,
+            firstFailureCategory: validationFailureCategory,
+            requestStartedAt: started,
             trace: &trace,
             events: &events
         )
@@ -560,6 +564,7 @@ public struct TextToSQLPipeline: TextToSQLRunning {
             startingGeneration: generation,
             startingSQL: sql,
             verification: verification,
+            requestStartedAt: started,
             trace: &trace,
             events: &events
         )
@@ -677,6 +682,7 @@ public struct TextToSQLPipeline: TextToSQLRunning {
         startingGeneration: SQLGenerationResult,
         startingSQL: String,
         verification: SQLVerificationResult,
+        requestStartedAt: Date,
         trace: inout TraceBuilder,
         events: inout [TextToSQLPipelineEvent]
     ) async throws -> RepairRun {
@@ -706,10 +712,15 @@ public struct TextToSQLPipeline: TextToSQLRunning {
                 forbiddenIdentifiers: forbiddenIdentifiers,
                 error: firstError
             ),
-            maxModelCalls: GeneratedSQLRepairSupport.verificationRepairModelCallBudget
+            maxModelCalls: repairPolicy.remainingRepairs(
+                cap: repairPolicy.maximumVerificationRepairs,
+                after: startingGeneration
+            )
         )
 
-        guard let repairMode = coordinator.beginNextAttempt() else {
+        guard repairPolicy.allowsRepairStart(requestStartedAt: requestStartedAt),
+            let repairMode = coordinator.beginNextAttempt()
+        else {
             var failure = postgresVerificationFailure(
                 stage: .postgresVerificationRepair,
                 verification: verification
@@ -752,6 +763,8 @@ public struct TextToSQLPipeline: TextToSQLRunning {
                 schema: request.schema,
                 context: context,
                 config: request.config
+            ).withGeneratorInvocationCount(
+                TextToSQLRepairPolicy.spentInvocations(after: startingGeneration) + 1
             )
             trace.mergeSchemaToolCalls(generated.schemaToolCalls)
             trace.mergeInspectionToolCalls(generated.inspectionToolCalls)
@@ -964,6 +977,8 @@ public struct TextToSQLPipeline: TextToSQLRunning {
         startingGeneration: SQLGenerationResult,
         startingSQL: String,
         firstError: String,
+        firstFailureCategory: TextToSQLFailureCategory,
+        requestStartedAt: Date,
         trace: inout TraceBuilder,
         events: inout [TextToSQLPipelineEvent]
     ) async throws -> RepairRun {
@@ -992,14 +1007,20 @@ public struct TextToSQLPipeline: TextToSQLRunning {
                 forbiddenIdentifiers: forbiddenIdentifiers,
                 error: firstError
             ),
-            maxModelCalls: GeneratedSQLRepairSupport.remainingRepairCalls(
+            maxModelCalls: repairPolicy.remainingRepairs(
+                cap: repairPolicy.maximumValidationRepairs,
                 after: startingGeneration
             )
         )
+        let spentInvocations = TextToSQLRepairPolicy.spentInvocations(after: startingGeneration)
         var accumulatedBackendMetadata = startingGeneration.backendMetadata
+        var attemptNumber = 0
+        var lastRejectionCategory: TextToSQLFailureCategory?
 
-        while let repairMode = coordinator.beginNextAttempt() {
-            let attemptNumber = repairMode == .repair ? 1 : 2
+        while repairPolicy.allowsRepairStart(requestStartedAt: requestStartedAt),
+            let repairMode = coordinator.beginNextAttempt()
+        {
+            attemptNumber += 1
             let repairContext = coordinator.repairContext(for: repairMode)
             let repairLabel = repairMode.activityLabel
             await record(
@@ -1036,7 +1057,7 @@ public struct TextToSQLPipeline: TextToSQLRunning {
                     schema: request.schema,
                     context: context,
                     config: request.config
-                )
+                ).withGeneratorInvocationCount(spentInvocations + attemptNumber)
                 trace.mergeSchemaToolCalls(generated.schemaToolCalls)
                 trace.mergeInspectionToolCalls(generated.inspectionToolCalls)
                 generation = GeneratedSQLPostprocessor.enriched(
@@ -1187,6 +1208,7 @@ public struct TextToSQLPipeline: TextToSQLRunning {
                     }
                 }
                 if evaluation.allowsReconstruction, coordinator.canRequestAnotherModelCall {
+                    lastRejectionCategory = category
                     continue
                 }
                 var failure = repairFailure(attempts: coordinator.attempts, category: category)
@@ -1303,6 +1325,7 @@ public struct TextToSQLPipeline: TextToSQLRunning {
                     startingGeneration: generation,
                     startingSQL: generatedSQL,
                     verification: verification,
+                    requestStartedAt: requestStartedAt,
                     trace: &trace,
                     events: &events
                 )
@@ -1315,17 +1338,18 @@ public struct TextToSQLPipeline: TextToSQLRunning {
             return RepairRun(decision: .failed(failure), failureCategory: failure.category)
         }
 
+        // The invocation budget or the repair-start cutoff stopped repairs,
+        // either before the first one (the validation failure stands) or
+        // before the reconstruction a rejected repair allowed (its rejection
+        // stands, already traced).
         var failure = repairFailure(
             attempts: coordinator.attempts,
-            category: .repeatedNoProgressRepair
+            category: lastRejectionCategory ?? firstFailureCategory
         )
         failure.backendMetadata = accumulatedBackendMetadata
-        trace.append(
-            .validationRepair,
-            outcome: .failure,
-            since: Date(),
-            failureCategory: failure.category
-        )
+        if attemptNumber == 0 {
+            trace.append(.validationRepair, outcome: .skipped, since: Date())
+        }
         return RepairRun(decision: .failed(failure), failureCategory: failure.category)
     }
 
