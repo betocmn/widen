@@ -18,6 +18,15 @@ PINNED_OPENROUTER_MODEL := openai/gpt-5.5
 MODEL ?= $(PINNED_OPENROUTER_MODEL)
 RETRIEVER ?= both
 CLOUD_AGENT ?= tools
+
+# BACKEND used to select the on-device eval backend, which was removed. Fail
+# on a leftover BACKEND=local instead of silently running a paid cloud eval.
+ifneq ($(filter eval-%,$(MAKECMDGOALS)),)
+ifneq ($(filter-out cloud,$(strip $(BACKEND))),)
+$(error BACKEND=$(BACKEND) is no longer supported because the on-device eval backend was removed; drop BACKEND to run the cloud eval)
+endif
+endif
+
 RELEASE_VERSION ?= $(shell /usr/libexec/PlistBuddy -c 'Print CFBundleShortVersionString' Widen/Info.plist 2>/dev/null || echo 0.1.0)
 EVAL_ARGS := --suite Evals/suites/text-to-sql-v1.json
 ifdef CASE

@@ -22,14 +22,11 @@ comparison metadata to establish baseline compatibility.
 ## Commands
 
 ```sh
-make eval-local
 make eval-cloud
-make eval-all
-make eval-case CASE=preseason.top-wins-defined BACKEND=local
-make eval-db-local
+make eval-case CASE=preseason.top-wins-defined
 make eval-db-cloud
 make eval-release
-make eval-db-case CASE=preseason.top-wins-defined BACKEND=local
+make eval-db-case CASE=preseason.top-wins-defined
 make eval-retrieval
 make eval-retrieval RETRIEVER=index
 make eval-retrieval-case CASE=preseason.top-wins-defined RETRIEVER=both
@@ -47,7 +44,7 @@ variable. Do not commit API keys, prompts, or raw model output.
 ## CLI
 
 ```text
---backend local|cloud|both
+--backend cloud
 --model <openrouter-model-id>
 --suite <path>
 --case <case-id>

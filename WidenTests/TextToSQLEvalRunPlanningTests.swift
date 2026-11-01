@@ -415,7 +415,7 @@ struct TextToSQLEvalRunPlanningTests {
 
         for removed in [
             "test-fm", "eval-local", "eval-all", "eval-db-local",
-            "--backend local", "--backend both", "BACKEND ?=", "$(BACKEND)",
+            "--backend local", "--backend both", "BACKEND ?=", #"--backend "$(BACKEND)""#,
         ] {
             #expect(!text.contains(removed), "Makefile still mentions \(removed)")
         }
@@ -423,20 +423,49 @@ struct TextToSQLEvalRunPlanningTests {
         let caseCommand = try Self.makeDryRunCommand(
             repoRoot: repoRoot,
             target: "eval-case",
-            assignments: ["CASE=commerce.fixture", "BACKEND=local"],
+            assignments: ["CASE=commerce.fixture"],
             commandContaining: "--case commerce.fixture"
         )
         #expect(caseCommand.contains(#"--backend cloud --model "openai/gpt-5.5""#))
-        #expect(!caseCommand.contains("--backend local"))
 
         let databaseCaseCommand = try Self.makeDryRunCommand(
             repoRoot: repoRoot,
             target: "eval-db-case",
-            assignments: ["CASE=commerce.fixture", "BACKEND=local"],
+            assignments: ["CASE=commerce.fixture", "BACKEND=cloud"],
             commandContaining: "--case commerce.fixture"
         )
         #expect(databaseCaseCommand.contains(#"--backend cloud --model "openai/gpt-5.5" --semantic-db"#))
-        #expect(!databaseCaseCommand.contains("--backend local"))
+    }
+
+    @Test func makefileRejectsRemovedBackendInsteadOfRunningPaidCloudEval() throws {
+        let repoRoot = URL(fileURLWithPath: #filePath)
+            .deletingLastPathComponent()
+            .deletingLastPathComponent()
+
+        for (target, backend) in [
+            ("eval-case", "local"), ("eval-db-case", "local"), ("eval-case", "both"),
+        ] {
+            let (status, output) = try Self.makeDryRun(
+                repoRoot: repoRoot,
+                target: target,
+                assignments: ["CASE=commerce.fixture", "BACKEND=\(backend)"]
+            )
+            #expect(status != 0, "make -n \(target) BACKEND=\(backend) should fail")
+            #expect(
+                output.contains("BACKEND=\(backend) is no longer supported"),
+                "make -n \(target) BACKEND=\(backend): \(output)"
+            )
+            #expect(!output.contains("--backend cloud"), "make -n \(target) BACKEND=\(backend): \(output)")
+        }
+
+        // An unrelated BACKEND variable must not break non-eval targets.
+        let projectCommand = try Self.makeDryRunCommand(
+            repoRoot: repoRoot,
+            target: "project",
+            assignments: ["BACKEND=local"],
+            commandContaining: "xcodegen generate"
+        )
+        #expect(projectCommand == "xcodegen generate")
     }
 
     @Test func evalResultFromRemovedOnDeviceBackendFailsToDecodeWithClearMessage() throws {
@@ -715,6 +744,38 @@ struct TextToSQLEvalRunPlanningTests {
         environmentModel: String? = nil,
         commandContaining marker: String
     ) throws -> String {
+        let (status, text) = try makeDryRun(
+            repoRoot: repoRoot,
+            target: target,
+            assignments: assignments,
+            environmentModel: environmentModel
+        )
+        guard status == 0 else {
+            throw NSError(
+                domain: "TextToSQLEvalRunPlanningTests",
+                code: Int(status),
+                userInfo: [NSLocalizedDescriptionKey: text]
+            )
+        }
+        guard let command = text.split(separator: "\n").first(where: {
+            $0.contains(marker)
+        }) else {
+            throw NSError(
+                domain: "TextToSQLEvalRunPlanningTests",
+                code: 1,
+                userInfo: [NSLocalizedDescriptionKey: "Make dry run of \(target) omitted the \(marker) command."]
+            )
+        }
+        return String(command)
+    }
+
+    /// Runs `make -n` and returns its exit status with the combined output.
+    private static func makeDryRun(
+        repoRoot: URL,
+        target: String,
+        assignments: [String] = [],
+        environmentModel: String? = nil
+    ) throws -> (status: Int32, output: String) {
         var environment = ProcessInfo.processInfo.environment
         for name in ["ALLOW_MODEL_OVERRIDE", "BACKEND", "CASE", "MAKEFLAGS", "MAKELEVEL", "MFLAGS", "MODEL"] {
             environment.removeValue(forKey: name)
@@ -753,23 +814,7 @@ struct TextToSQLEvalRunPlanningTests {
             decoding: output.fileHandleForReading.readDataToEndOfFile(),
             as: UTF8.self
         )
-        guard process.terminationStatus == 0 else {
-            throw NSError(
-                domain: "TextToSQLEvalRunPlanningTests",
-                code: Int(process.terminationStatus),
-                userInfo: [NSLocalizedDescriptionKey: text]
-            )
-        }
-        guard let command = text.split(separator: "\n").first(where: {
-            $0.contains(marker)
-        }) else {
-            throw NSError(
-                domain: "TextToSQLEvalRunPlanningTests",
-                code: 1,
-                userInfo: [NSLocalizedDescriptionKey: "Make dry run of \(target) omitted the \(marker) command."]
-            )
-        }
-        return String(command)
+        return (process.terminationStatus, text)
     }
 
     /// One cases.jsonl line in the shape the 0.1.0 OpenRouter release gate wrote.
