@@ -160,13 +160,15 @@ happens:
    interruption may have left billed in-flight work unpersisted, lower the
    ceiling or obtain new authorization before resuming. Never rerun a
    complete gate to get a better number.
-6. Account for spend conservatively. Particle reports no cost, so WidenEval
-   estimates each request from its token usage at Particle's peak list
-   prices. That estimate is an upper bound for requests that report usage; a
-   request that returns no usage, such as one cut off by a timeout, adds
-   nothing (see [Cost Accounting](../Evals/README.md#cost-accounting)).
-   Record probe, smoke, and gate spend against the authorization in the
-   issue.
+6. Account for spend. Particle reports no cost, so WidenEval estimates each
+   request from its token usage at Particle's peak list prices. That estimate
+   is an upper bound for requests that report usage, but a request that
+   returns no usage, such as one cut off by a timeout, adds nothing, so the
+   total can understate what Particle bills (see
+   [Cost Accounting](../Evals/README.md#cost-accounting)). If Particle's
+   console shows the key's usage, compare it with the estimate and record the
+   larger figure. Record probe, smoke, and gate spend against the
+   authorization in the issue.
 7. Apply the recorded criteria mechanically. Unless the issue recorded
    stricter ones, the run is valid only with 60/60 complete results,
    transport and structured parsing at least 57/60, zero eval timeouts, the

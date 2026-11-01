@@ -189,9 +189,10 @@ uncached input tokens, $0.03 per 1M cached input tokens, and $1.00 per 1M
 output tokens, which include reasoning tokens. Off-peak and flex discounts
 can't be observed per response, so the estimate is an upper bound for the
 requests that report usage. A request that returns no usage, such as one cut
-off by a timeout, adds nothing to it. Reports label the total "token estimate
-at peak pricing; upper bound". OpenRouter comparison runs use the `usage.cost`
-OpenRouter reports, labelled "provider-reported".
+off by a timeout, adds nothing to it, so a run's total can be lower than what
+Particle bills. Reports label the total "token estimate at peak pricing; upper
+bound". OpenRouter comparison runs use the `usage.cost` OpenRouter reports,
+labelled "provider-reported".
 
 `--max-cloud-cost-usd` sums these per-result costs. A profile with neither a
 reported cost nor token prices fails before any request; Particle-1 has

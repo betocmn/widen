@@ -70,7 +70,8 @@ is judged against Stage 2.
 
 The gate report itself records no cost or latency; the total comes from the
 evidence refresh. Particle-1 costs are WidenEval's token estimate at peak list
-prices, an upper bound, so cost comparisons with GPT-5.5 are approximate.
+prices, an upper bound only for requests that report usage, so cost
+comparisons with GPT-5.5 are approximate.
 
 ### Preregistered staged gate plan
 
@@ -87,8 +88,9 @@ reserves below cover that. Spend is recorded from each command's own report
 | 3: full gate with the extra-calls layer | $2.50 | min(2.50, 5.00 − spent) − max($0.25, 3 × Stage 2's highest per-result cost) |
 | Branch cap | $5.00 | - |
 
-`spent` is the cumulative estimated spend of Stages 1 and 2. A per-result
-cost is `metrics.estimatedCloudCostUSD` in the run's `cases.jsonl`.
+`spent` is the cumulative spend of Stages 1 and 2 recorded in the Spend
+ledger. A per-result cost is `metrics.estimatedCloudCostUSD` in the run's
+`cases.jsonl`.
 
 Free checks before paying: `make test-db`, `make eval-schema-tools`,
 `make eval-inspection-tools`, `make eval-retrieval`, `make -n` on every gate
@@ -295,7 +297,10 @@ Pending.
 
 Record each command after it finishes: the probe's estimated cost from its
 `probe.md`, otherwise `summary.estimatedCloudCostUSD` from the run's
-`run.json`.
+`run.json`. That estimate leaves out requests that returned no usage, such as
+one cut off by a timeout, so it can understate what Particle bills. If
+Particle's console shows the key's usage, compare it with the Cumulative
+column after each command and record the larger figure.
 
 | Stage | Command | Ceiling | Estimated spend | Cumulative |
 | --- | --- | ---: | ---: | ---: |
