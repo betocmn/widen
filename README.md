@@ -257,6 +257,14 @@ The Makefile pins `DEVELOPER_DIR` to `/Applications/Xcode-26.app`. If your
 Xcode 26 lives elsewhere (e.g. it is your default `/Applications/Xcode.app`),
 override it: `make build DEVELOPER_DIR=/Applications/Xcode.app/Contents/Developer`.
 
+Conductor workspace setup honors `DEVELOPER_DIR`, then looks for
+`/Applications/Xcode-26.app`, the Xcode selected by `xcode-select`, and
+`/Applications/Xcode.app`, in that order. If no full Xcode installation is
+found, setup skips package resolution and leaves the workspace available for
+editing. Building and testing still require Xcode 26 or later; Command Line
+Tools alone are not sufficient. After installing Xcode, rerun
+`DEVELOPER_DIR=/path/to/Xcode.app/Contents/Developer bash .conductor/setup.sh`.
+
 ```sh
 make project   # regenerate Widen.xcodeproj from project.yml (needs xcodegen)
 make build     # build the app (Debug)
