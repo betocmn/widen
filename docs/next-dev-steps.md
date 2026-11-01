@@ -214,6 +214,47 @@ a failed Stage 3 can revert it cleanly:
 Then `docs: record the extra-calls layer commits for stage 3` records the
 layer commit SHAs and settings.
 
+**Layer as landed (recorded 2026-11-02, before Stage 3).** Review fixes added
+two layer commits, so the layer is eleven code-only commits, oldest first:
+
+| SHA | Subject |
+| --- | --- |
+| `b0307e8` | refactor: move schema agent correction caps into configuration |
+| `515e248` | fix: count logical generator invocations for repair budgets |
+| `2585bcf` | feat: raise schema agent call budgets |
+| `9b758ef` | fix: keep the schema agent running when a tool batch exceeds its budget |
+| `a5f27cd` | feat: add tool choice and response format options to chat requests |
+| `3b1caf8` | feat: force a final terminal answer when the agent runs out of budget |
+| `5b48fab` | feat: add schema agent critic review contract |
+| `85f0800` | feat: review schema agent sql with a critic pass |
+| `b139b1f` | feat: add schema agent critic flag and metrics to evals |
+| `cfeab6b` | fix: leave forced final answers out of the sql the critic must review |
+| `9a9f55f` | fix: count forced requests that hit the agent wall clock as internal timeouts |
+
+Agent settings the gate manifest records (`agentConfiguration`): turns 12;
+schema calls 12 (4 in repair mode); HTTP attempts 30; malformed-terminal,
+repeated-tool and invalid-terminal-SQL corrections 2; over-clarification,
+intent-coverage, plan-consistency and terminal-required corrections 1; wall
+clock 180 s (120 s for repairs); forced terminal `terminalToolOnly`, at most
+2 requests, 45 s time reserve; critic `enabled`, at most 2 revisions and 2
+HTTP attempts, skipped below 30 s remaining (revisions below 60 s).
+Reasoning effort high; case timeout 1,200 s.
+
+Definitions used for K12, fixed here before the run: an *eligible SQL
+terminal* is a result whose agent answered with SQL in an initial or
+follow-up run, excluding answers produced by a forced request and repair
+runs (the critic skips both by design); critic skips for the deadline, HTTP
+budget or turn budget still count as eligible but unreviewed. *Failed-open*
+counts critic calls that errored and accepted the SQL. A *provider
+rejection* is a forced request the provider refused as an invalid request or
+unsupported parameter (`invalidRequest` / `unsupportedFeature`); rate limits,
+timeouts, server errors and invalid model output are not rejections. For
+K8, Stage 2 recorded 0 repeated/no-progress repairs, so the layer must record
+0 too.
+
+The failure procedure's step 3 therefore reverts all eleven commits above,
+newest first.
+
 #### Stage 3: full gate with the layer (≤ $2.50)
 
 ```sh
@@ -252,7 +293,7 @@ superseded.
 1. Copy the Stage 3 reports (`docs/evals/0.2.0.md` and
    `docs/evals/0.2.0-triage.md`) into its run directory.
 2. `git restore docs/evals/0.2.0*.md`, back to Stage 2's committed copies.
-3. `git revert --no-edit` each of the nine layer commits above, newest first
+3. `git revert --no-edit` each of the eleven layer commits above, newest first
    (not the docs commit that records them).
 4. `make build && make test`.
 5. Commit `docs: record failed extra-calls layer gate`.
