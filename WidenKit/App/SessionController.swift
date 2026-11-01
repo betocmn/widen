@@ -239,6 +239,7 @@ public final class SessionController: Identifiable {
                 context: context,
                 config: config
             )
+            appState.noteTextToSQLOutcome(.answered)
             generation = GeneratedSQLPostprocessor.enriched(
                 generated,
                 question: questionContext.question,
@@ -248,6 +249,9 @@ public final class SessionController: Identifiable {
                 allowGroundingClarification: false
             )
         } catch {
+            appState.noteTextToSQLOutcome(
+                .failed(SQLGenerationErrorCopy.cloudFailureCategory(of: error))
+            )
             chatVM.appendGenerationError(SQLGenerationErrorCopy.chatText(for: error))
             return
         }
@@ -758,6 +762,7 @@ public final class SessionController: Identifiable {
                     context: context,
                     config: config
                 )
+                appState.noteTextToSQLOutcome(.answered)
                 generation = GeneratedSQLPostprocessor.enriched(
                     generated,
                     question: questionContext.question,
@@ -767,6 +772,9 @@ public final class SessionController: Identifiable {
                     allowGroundingClarification: true
                 )
             } catch {
+                appState.noteTextToSQLOutcome(
+                    .failed(SQLGenerationErrorCopy.cloudFailureCategory(of: error))
+                )
                 appendActivity(
                     "\(repairLabel) failed before producing SQL.",
                     error: error.localizedDescription,

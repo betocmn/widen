@@ -2666,6 +2666,85 @@ struct SessionControllerTests {
         #expect(controller.queryVM.sqlText == "SELECT id FROM public.users LIMIT 100")
     }
 
+    @Test func failedWriteRetryRecordsAndClearsARejectedParticleKey() async {
+        let connectionID = UUID()
+        let (state, dir) = makeState(connectionID: connectionID, connected: true)
+        defer { try? FileManager.default.removeItem(at: dir) }
+        state.schemas[connectionID] = makeSchema()
+        state.particleAPIKeyOverride = .some("pai-test-0123456789abcdef")
+        // Another suite may have mock mode on while this state initializes.
+        state.useMockAI = false
+        let fixed = makeGeneration(
+            sql: "UPDATE public.users SET id = 2 WHERE id = 1", explanation: "Fixed it.")
+        state.sqlGeneratorOverride = FailOnceThenResultGenerator(
+            failure: CloudRequestFailure(
+                category: .authentication,
+                message: "Invalid bearer credential.",
+                httpStatus: 401
+            ),
+            result: fixed
+        )
+        let controller = makeController(connectionID: connectionID)
+        controller.chatVM.messages = [ChatMessage(role: .user, text: "bump ids")]
+
+        await controller.retryFailedWrite(
+            appState: state, failedSQL: "UPDATE public.users SET id = 9", error: "boom")
+
+        #expect(state.particleRuntimeIssue == .keyRejected)
+        #expect(controller.chatVM.messages.last?.role == .error)
+
+        await controller.retryFailedWrite(
+            appState: state, failedSQL: "UPDATE public.users SET id = 9", error: "boom")
+
+        #expect(state.particleRuntimeIssue == nil)
+        #expect(state.textToSQLStatus == .ready)
+        #expect(controller.queryVM.sqlText == fixed.sql)
+    }
+
+    @Test func executionRepairRecordsARejectedParticleKey() async {
+        let connectionID = UUID()
+        let (state, dir) = makeState(connectionID: connectionID, connected: true)
+        defer { try? FileManager.default.removeItem(at: dir) }
+        state.schemas[connectionID] = makeSchema()
+        state.particleAPIKeyOverride = .some("pai-test-0123456789abcdef")
+        // Another suite may have mock mode on while this state initializes.
+        state.useMockAI = false
+        let badGeneration = makeGeneration(
+            sql: "SELECT id FROM public.bad_table",
+            explanation: "Uses the wrong table."
+        )
+        let generator = FailOnceThenResultGenerator(
+            failure: CloudRequestFailure(
+                category: .authentication,
+                message: "Invalid bearer credential.",
+                httpStatus: 401
+            ),
+            result: makeGeneration(sql: "SELECT id FROM public.users LIMIT 100")
+        )
+        state.sqlGeneratorOverride = generator
+        let recorder = SQLRecorder()
+        let controller = makeController(
+            connectionID: connectionID,
+            executor: BadTableExecutor(recorder: recorder)
+        )
+        controller.chatVM.messages = [
+            ChatMessage(role: .user, text: "show users"),
+            ChatMessage(role: .assistant, text: badGeneration.explanation, generation: badGeneration),
+        ]
+        controller.queryVM.setGeneration(badGeneration)
+
+        controller.runQuery(appState: state)
+        await waitUntil {
+            !controller.queryVM.isRunning
+                && !controller.chatVM.isGenerating
+                && controller.chatVM.messages.last?.role == .error
+        }
+
+        #expect(generator.contexts.count == 1)
+        #expect(state.particleRuntimeIssue == .keyRejected)
+        #expect(state.textToSQLStatus == .unavailable(ParticleRuntimeIssue.keyRejected.message))
+    }
+
     // MARK: - Session titles
 
     private struct FixedTitleGenerator: SessionTitleGenerating {
