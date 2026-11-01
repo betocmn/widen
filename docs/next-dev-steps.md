@@ -284,7 +284,53 @@ shipped configuration's gate `summary.md`. No new spend.
 
 #### Stage 1
 
-Pending.
+Recorded 2026-11-01. **Stage 1 passed; agent turns stay at high reasoning.**
+
+The probe (`make eval-provider-probe`) passed every critical check:
+
+* `GET /v1/models` lists `particle-ai/particle-1` (twice: a default-tier entry
+  and a `service_tier: flex` entry). The live list uses a nested schema
+  (`schema_version` 2.4) instead of the documented flat fields, so
+  `fix: read the nested capability fields in Particle's model list` landed
+  before the smoke.
+* Every completion reported `particle-ai/particle-1`; `cached_tokens` and
+  `reasoning_tokens` are reported.
+* Tool-call ids look like `call_` + 24 hex characters and were unique across
+  turns. All four second-turn shapes (echoing `reasoning_content` or not,
+  tool-message `name` or not) were accepted, so the profile keeps its shape
+  (no echo, no `name`).
+* A named `tool_choice` was honored, and `json_object` returned a valid
+  object.
+* The only request-id header is `x-particle-request-id`, so
+  `fix: set Particle protocol flags from the API probe` added it to the
+  profile before the smoke.
+
+Smoke (15 results) plus the three hard cases (3 results) per effort:
+
+| Check | high | medium |
+| --- | --- | --- |
+| Smoke complete | 15/15 | 15/15 |
+| Smoke transport | 15/15 | 15/15 |
+| Smoke structured parsing | 14/15 | 12/15 |
+| Returned model `particle-ai/particle-1` | 18/18 | 18/18 |
+| Tools agent | 15/15 | 15/15 |
+| Timeouts / `length` failures | 0 / 0 | 0 / 0 |
+| P95 latency (18 results) | 13.7 s | 16.8 s |
+| Slowest result | 13.7 s | 16.8 s |
+| Mean cost per smoke / hard result | $0.0017 / $0.0042 | $0.0012 / $0.0038 |
+| Projected Stage 2 cost | $0.37 | $0.34 |
+| Pass criteria | met | not met (parsing 12/15) |
+| Effort rule | eligible | eligible |
+
+High is eligible, so the shipped default stays high and no effort fix is
+needed. Highest per-result cost: $0.0073.
+
+Quality is reported, not gated, here. At high, 8 of 15 smoke results passed
+and none of the three hard cases did. Seven of the ten non-passing results
+carried agent SQL that the grounding postprocessor replaced with a
+clarification (for example "What column, condition, or table defines
+'write' for this question?" for "Write a SQL query that selects …"), the
+same bucket that dominated the 0.1.0 comparator.
 
 #### Stage 2
 
@@ -305,11 +351,11 @@ column after each command and record the larger figure.
 
 | Stage | Command | Ceiling | Estimated spend | Cumulative |
 | --- | --- | ---: | ---: | ---: |
-| 1 | `make eval-provider-probe` | $0.02 | - | - |
-| 1 | `make eval-smoke` (high) | $0.06 | - | - |
-| 1 | `make eval-smoke` (medium) | $0.05 | - | - |
-| 1 | `make eval-db-cloud-agent` (high) | $0.04 | - | - |
-| 1 | `make eval-db-cloud-agent` (medium) | $0.03 | - | - |
+| 1 | `make eval-provider-probe` | $0.02 | $0.0008 | $0.0008 |
+| 1 | `make eval-smoke` (high) | $0.06 | $0.0248 | $0.0256 |
+| 1 | `make eval-smoke` (medium) | $0.05 | $0.0176 | $0.0432 |
+| 1 | `make eval-db-cloud-agent` (high) | $0.04 | $0.0125 | $0.0557 |
+| 1 | `make eval-db-cloud-agent` (medium) | $0.03 | $0.0115 | $0.0672 |
 | 2 | `make eval-release-triage` | 1.50 − reserve | - | - |
 | 3 | `make eval-release-triage` | Stage 3 formula | - | - |
 
