@@ -44,6 +44,7 @@
 		2B111077431692B6EA7D260F /* DatabaseDiagnostic.swift in Sources */ = {isa = PBXBuildFile; fileRef = 60676CAAF12FB35DD232696B /* DatabaseDiagnostic.swift */; };
 		2C8F8995D28211876451B162 /* ConnectionSettingsViewModel.swift in Sources */ = {isa = PBXBuildFile; fileRef = 75E1E0F5761DB6F974FB9494 /* ConnectionSettingsViewModel.swift */; };
 		2DEB15A6FB12058AEB8EA4C3 /* PostgresNIO in Frameworks */ = {isa = PBXBuildFile; productRef = 529F1F207D19D87065B1C548 /* PostgresNIO */; };
+		2E139E2A8D1CC8427819469F /* ParticleTitleGenerator.swift in Sources */ = {isa = PBXBuildFile; fileRef = 6E402F11203C82D8685107D0 /* ParticleTitleGenerator.swift */; };
 		2ECF4D6E459FE689FF8F6D4C /* TableInfo.swift in Sources */ = {isa = PBXBuildFile; fileRef = 2B82C454D2705BD1520A0263 /* TableInfo.swift */; };
 		316CA0EFBF0814BF6C5F02A3 /* ReleaseGateReporter.swift in Sources */ = {isa = PBXBuildFile; fileRef = FD6D77AD2B6861577977E11B /* ReleaseGateReporter.swift */; };
 		31AAD4FFD25B413C6BB2410E /* QueryResultViewModel.swift in Sources */ = {isa = PBXBuildFile; fileRef = CD9A4AC6A2353BABF87696E2 /* QueryResultViewModel.swift */; };
@@ -94,6 +95,7 @@
 		7A1376525CF19C362A717496 /* SchemaToolRuntime.swift in Sources */ = {isa = PBXBuildFile; fileRef = 986958ED550CCF8A916F0E59 /* SchemaToolRuntime.swift */; };
 		7B1DFD78FA16437332A3E123 /* EvalRunner.swift in Sources */ = {isa = PBXBuildFile; fileRef = 1AB216C91F5F87604B3323BC /* EvalRunner.swift */; };
 		7B8853EF36A5A764F648AF6C /* MockSQLGenerator.swift in Sources */ = {isa = PBXBuildFile; fileRef = C69FF94E360E9E0F027F2AAA /* MockSQLGenerator.swift */; };
+		7C2504AF482B7E77582312E6 /* ParticleTitleGeneratorTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 50709522182FF1661E1579B0 /* ParticleTitleGeneratorTests.swift */; };
 		7DBEF4C3F5F26F43884DDC1A /* SessionStoreTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = F2CC4ADDFBD0372E41CBC1A4 /* SessionStoreTests.swift */; };
 		80615CA01F67727C46443BCA /* SchemaToolSQLAgentTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = CD0952EE16E6B07B18E96433 /* SchemaToolSQLAgentTests.swift */; };
 		8159D0ACBE575901A52D8766 /* SchemaToolContractEvalRunner.swift in Sources */ = {isa = PBXBuildFile; fileRef = 82D28E9DEEF3BE19B68665CB /* SchemaToolContractEvalRunner.swift */; };
@@ -290,6 +292,7 @@
 		4ADD7208F530D580E73CDC2C /* TextToSQLEvalCloudSettingsTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = TextToSQLEvalCloudSettingsTests.swift; sourceTree = "<group>"; };
 		4D7DC9491F74000AE5458E39 /* ConnectionStoreTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ConnectionStoreTests.swift; sourceTree = "<group>"; };
 		4E3224013C3BD2A7894756D9 /* SessionController.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SessionController.swift; sourceTree = "<group>"; };
+		50709522182FF1661E1579B0 /* ParticleTitleGeneratorTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ParticleTitleGeneratorTests.swift; sourceTree = "<group>"; };
 		526F33B4A497093D4F7A3300 /* PostgresIntegrationTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PostgresIntegrationTests.swift; sourceTree = "<group>"; };
 		53B157FCABED3A63DEE715A3 /* ForeignKeyInfo.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ForeignKeyInfo.swift; sourceTree = "<group>"; };
 		55003AE18B47B04247233530 /* SidebarView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SidebarView.swift; sourceTree = "<group>"; };
@@ -311,6 +314,7 @@
 		6C5890F05C2BE9A419B2A7C8 /* SchemaObjectID.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SchemaObjectID.swift; sourceTree = "<group>"; };
 		6D63609C7CFC8D581AD812BA /* UpdaterModel.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = UpdaterModel.swift; sourceTree = "<group>"; };
 		6DBE4DAF98A714DFDE7DF54E /* ConnectionStore.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ConnectionStore.swift; sourceTree = "<group>"; };
+		6E402F11203C82D8685107D0 /* ParticleTitleGenerator.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ParticleTitleGenerator.swift; sourceTree = "<group>"; };
 		6E93D92D37A8796CFBFBD827 /* SessionTitleGenerator.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SessionTitleGenerator.swift; sourceTree = "<group>"; };
 		6E9720CC8F348FC64D404436 /* SQLCardView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SQLCardView.swift; sourceTree = "<group>"; };
 		725DE507622217A36A82A235 /* SchemaInspectorView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SchemaInspectorView.swift; sourceTree = "<group>"; };
@@ -562,6 +566,7 @@
 				9AA8DD4D47860928536D57B0 /* EvalReportRedactionTests.swift */,
 				83CB38F63BB0A83032DE82DC /* ParticleBackendSelectionTests.swift */,
 				DEA911F638EDFE5F67FCBE29 /* ParticleConnectionTestPresentationTests.swift */,
+				50709522182FF1661E1579B0 /* ParticleTitleGeneratorTests.swift */,
 				526F33B4A497093D4F7A3300 /* PostgresIntegrationTests.swift */,
 				44CD5A973F9E986BB58D4D13 /* ProviderAPIProbeTests.swift */,
 				C1CBD8B12B1A3A9D2FCEA48F /* RetiredAIStateCleanupTests.swift */,
@@ -617,6 +622,7 @@
 				1C82BFC72C1C05541743CC9D /* MockConnectionDetailsParser.swift */,
 				C69FF94E360E9E0F027F2AAA /* MockSQLGenerator.swift */,
 				FCF3C2EF50A072862B381856 /* OpenRouterEvalSupport.swift */,
+				6E402F11203C82D8685107D0 /* ParticleTitleGenerator.swift */,
 				AFAE5FF61F0206972133B567 /* PostgresCellFormatter.swift */,
 				D02148CFD54DB234244D6960 /* PostgresErrorMapper.swift */,
 				EC8949F7F4C8FC5E472D3909 /* PostgresService.swift */,
@@ -938,6 +944,7 @@
 				E055162B888787A60549758F /* EvalReportRedactionTests.swift in Sources */,
 				3A74EF5D954304047B20C0B7 /* ParticleBackendSelectionTests.swift in Sources */,
 				E2132B1721BE520239AD45E9 /* ParticleConnectionTestPresentationTests.swift in Sources */,
+				7C2504AF482B7E77582312E6 /* ParticleTitleGeneratorTests.swift in Sources */,
 				05E75B10D5A5DAECC48EF104 /* PostgresIntegrationTests.swift in Sources */,
 				B99D0DB3EC2763734ADF9319 /* ProviderAPIProbeTests.swift in Sources */,
 				E7C8D0A6D127B7FBDC3830AB /* RetiredAIStateCleanupTests.swift in Sources */,
@@ -1041,6 +1048,7 @@
 				0ECA13371EE0CA1FE5045232 /* OpenRouterEvalSupport.swift in Sources */,
 				ADA9EE2A4A2DAF4B7E7EDFC8 /* ParsedConnectionDetails.swift in Sources */,
 				0BC7CF6AD436CE1C6DC8A308 /* ParticleStatusChip.swift in Sources */,
+				2E139E2A8D1CC8427819469F /* ParticleTitleGenerator.swift in Sources */,
 				C502AEC63AC48859043019A9 /* PostgresCellFormatter.swift in Sources */,
 				44DC2644E6C9B468A01B836C /* PostgresErrorMapper.swift in Sources */,
 				AFA418FA05A4579D14F1DA77 /* PostgresService.swift in Sources */,

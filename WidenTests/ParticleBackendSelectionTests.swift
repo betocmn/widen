@@ -238,7 +238,7 @@ struct ParticleBackendSelectionTests {
         defer { cleanUp(dir) }
 
         #expect(state.connectionDetailsParser is MockConnectionDetailsParser)
-        #expect(state.titleGenerator is MockTitleGenerator)
+        #expect(state.titleGenerator(for: .naturalLanguage, connectionID: nil) is MockTitleGenerator)
         state.particleAPIKeyOverride = .some(Self.particleKey)
         #expect(state.connectionDetailsParser is MockConnectionDetailsParser)
     }

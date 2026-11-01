@@ -2666,6 +2666,72 @@ struct SessionControllerTests {
         #expect(controller.queryVM.sqlText == "SELECT id FROM public.users LIMIT 100")
     }
 
+    // MARK: - Session titles
+
+    private struct FixedTitleGenerator: SessionTitleGenerating {
+        func generateTitle(for question: String) async throws -> String {
+            "Particle Title"
+        }
+    }
+
+    /// Counts the Particle-1 title generators AppState builds.
+    private final class TitleFactoryRecorder {
+        private(set) var keys: [String] = []
+
+        func make(_ key: String) -> any SessionTitleGenerating {
+            keys.append(key)
+            return FixedTitleGenerator()
+        }
+    }
+
+    /// A placeholder-titled session that AppState knows about, on a state
+    /// where every other Particle-1 title gate is open.
+    private func makeTitledSession(
+        connectionID: UUID,
+        state: AppState
+    ) -> (QuerySession, SessionController, TitleFactoryRecorder) {
+        let session = QuerySession(connectionID: connectionID)
+        state.sessions = [session]
+        state.particleAPIKeyOverride = .some("pai-test-0123456789abcdef")
+        // Another suite may have mock mode on while this state initializes.
+        state.useMockAI = false
+        let recorder = TitleFactoryRecorder()
+        state.particleTitleGeneratorFactory = { recorder.make($0) }
+        return (session, SessionController(session: session, executor: ImmediateExecutor()), recorder)
+    }
+
+    @Test func directSQLFirstMessageIsNamedWithoutParticle() async {
+        let connectionID = UUID()
+        let (state, dir) = makeState(connectionID: connectionID, connected: true)
+        defer { try? FileManager.default.removeItem(at: dir) }
+        let (session, controller, recorder) = makeTitledSession(connectionID: connectionID, state: state)
+        controller.chatVM.input = "SELECT 1"
+
+        await controller.submit(appState: state)
+        await controller.pendingTitleTask?.value
+
+        #expect(recorder.keys.isEmpty)
+        #expect(state.session(for: session.id)?.title == "Select 1")
+    }
+
+    @Test func naturalLanguageFirstQuestionIsNamedByParticleOnce() async {
+        let connectionID = UUID()
+        let (state, dir) = makeState(connectionID: connectionID, connected: true)
+        defer { try? FileManager.default.removeItem(at: dir) }
+        state.schemas[connectionID] = makeSchema()
+        state.sqlGeneratorOverride = RecordingRepairGenerator(results: [
+            makeGeneration(sql: "SELECT id FROM public.users LIMIT 100", explanation: "Lists users.")
+        ])
+        let (session, controller, recorder) = makeTitledSession(connectionID: connectionID, state: state)
+        controller.chatVM.input = "show users"
+
+        await controller.submit(appState: state)
+        await controller.pendingTitleTask?.value
+
+        #expect(recorder.keys == ["pai-test-0123456789abcdef"])
+        #expect(state.session(for: session.id)?.title == "Particle Title")
+    }
+
     @Test func runSummaryDecodesLegacyJSONWithoutKindAsRead() throws {
         let legacy = #"{"rowCount":3,"executionTimeMs":12,"truncated":false,"sql":"SELECT 1"}"#
         let summary = try JSONDecoder().decode(

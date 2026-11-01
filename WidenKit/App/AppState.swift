@@ -351,12 +351,35 @@ public final class AppState {
         useMockAI ? "the mock generator" : CloudModelCatalog.productionProfile.displayName
     }
 
-    /// The active session-title backend: titles come from the first question
-    /// on this Mac, with no model involved. Overridable for tests.
-    public var titleGenerator: any SessionTitleGenerating {
-        titleGeneratorOverride ?? MockTitleGenerator()
+    /// The session-title backend for a first message. Particle-1 names the
+    /// session only when the message was a plain-English question, mock AI is
+    /// off, Particle has reported no problem with the key, the connection
+    /// shares schema metadata and a key is saved. Otherwise the title comes
+    /// from the first question on this Mac, with no model involved.
+    public func titleGenerator(
+        for source: SessionTitleSource,
+        connectionID: UUID?
+    ) -> any SessionTitleGenerating {
+        if let titleGeneratorOverride { return titleGeneratorOverride }
+        // The key is read last, so the Keychain is only consulted when
+        // everything else already allows a Particle title.
+        guard source == .naturalLanguage, !useMockAI, particleRuntimeIssue == nil,
+            let connectionID,
+            connection(for: connectionID)?.allowCloudSchemaMetadata == true,
+            let key = particleAPIKey, !key.isEmpty
+        else { return MockTitleGenerator() }
+        if let particleTitleGeneratorFactory { return particleTitleGeneratorFactory(key) }
+        return ParticleTitleGenerator(
+            apiKey: key,
+            profile: CloudModelCatalog.productionProfile,
+            transport: cloudTransportOverride
+        )
     }
+    /// Test seam: replaces every title backend, deterministic or not.
     var titleGeneratorOverride: (any SessionTitleGenerating)?
+    /// Test seam: builds the Particle-1 title generator for a saved key, so
+    /// tests can see when a session would be named by Particle-1.
+    var particleTitleGeneratorFactory: ((String) -> any SessionTitleGenerating)?
 
     /// The paste-autofill backend. Deterministic and local by design: pasted
     /// text can contain credentials, so it is never sent to any model.
@@ -1037,15 +1060,23 @@ public final class AppState {
         flushSessions()
     }
 
-    /// Names a session after its first question. The model's title is
-    /// sanitized; on failure (or an unusable result) the truncated question
-    /// is used instead.
-    public func autoTitleSession(_ id: UUID, question: String) async {
+    /// Names a session after its first question. `source` and `connectionID`
+    /// decide whether Particle-1 may name it (see `titleGenerator(for:
+    /// connectionID:)`); without a connection the title stays on this Mac.
+    /// The model's title is sanitized; on failure (or an unusable result) the
+    /// truncated question is used instead.
+    public func autoTitleSession(
+        _ id: UUID,
+        question: String,
+        source: SessionTitleSource = .naturalLanguage,
+        connectionID: UUID? = nil
+    ) async {
         guard let session = session(for: id),
             !session.titleWasManuallySet,
             session.title == QuerySession.placeholderTitle
         else { return }
-        let generated = try? await titleGenerator.generateTitle(for: question)
+        let generator = titleGenerator(for: source, connectionID: connectionID)
+        let generated = try? await generator.generateTitle(for: question)
         let title =
             generated.flatMap(SessionTitleFallback.sanitize)
             ?? SessionTitleFallback.title(from: question)

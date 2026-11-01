@@ -5,7 +5,15 @@ public protocol SessionTitleGenerating: Sendable {
     func generateTitle(for question: String) async throws -> String
 }
 
-/// Deterministic stand-in for the real model. Used in tests and behind the
+/// What a session's first message was. Only a plain-English question may be
+/// sent to Particle-1 for a title; SQL the user typed is named on this Mac.
+public enum SessionTitleSource: Sendable {
+    case naturalLanguage
+    case directSQL
+}
+
+/// Deterministic titles from the first question, with no model involved.
+/// Used whenever a Particle-1 title is not allowed, in tests and behind the
 /// "Use mock AI" developer toggle.
 public struct MockTitleGenerator: SessionTitleGenerating {
     public init() {}

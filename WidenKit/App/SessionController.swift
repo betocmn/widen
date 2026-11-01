@@ -17,6 +17,9 @@ public final class SessionController: Identifiable {
     /// persisted — after a relaunch the records render as summary rows.
     public private(set) var results: [UUID: QueryResult] = [:]
     private var selectedClarificationOption: (pendingID: UUID, option: ClarificationOption)?
+    /// The title request started by the first submission, kept so tests can
+    /// await it.
+    @ObservationIgnored private(set) var pendingTitleTask: Task<Void, Never>?
 
     /// True while the session is mid-generation or mid-run. Surfaced in the
     /// sidebar so work in progress stays visible even when another session is
@@ -70,9 +73,14 @@ public final class SessionController: Identifiable {
     public func submit(appState: AppState) async {
         guard !queryVM.isRunning else { return }
         let hadUserMessage = chatVM.messages.contains { $0.role == .user }
-        if ChatViewModel.isDirectSQL(chatVM.input) {
+        // Captured before submitting clears the input: SQL the user typed is
+        // never sent to Particle-1 for a title.
+        let titleSource: SessionTitleSource =
+            ChatViewModel.isDirectSQL(chatVM.input) ? .directSQL : .naturalLanguage
+        switch titleSource {
+        case .directSQL:
             chatVM.submitDirectSQL(queryVM: queryVM)
-        } else {
+        case .naturalLanguage:
             await submitGeneratedSQL(appState: appState)
         }
         appState.sessionDidChange(sessionID)
@@ -82,7 +90,15 @@ public final class SessionController: Identifiable {
             let firstQuestion = chatVM.messages.first(where: { $0.role == .user })?.text
         {
             let sessionID = sessionID
-            Task { await appState.autoTitleSession(sessionID, question: firstQuestion) }
+            let connectionID = connectionID
+            pendingTitleTask = Task {
+                await appState.autoTitleSession(
+                    sessionID,
+                    question: firstQuestion,
+                    source: titleSource,
+                    connectionID: connectionID
+                )
+            }
         }
     }
 
