@@ -603,6 +603,10 @@ struct CloudSQLResponseParser: Sendable {
             return failure
         }
         let message = HTTPURLResponse.localizedString(forStatusCode: response.statusCode)
+        let provider = profile.provider.displayName
+        let displayMessage = (300...399).contains(response.statusCode)
+            ? "\(provider) redirected the request (HTTP \(response.statusCode)). Widen does not follow redirects for signed requests."
+            : "\(provider) returned HTTP \(response.statusCode)."
         return CloudRequestFailure(
             category: CloudRequestFailure.category(
                 errorType: nil,
@@ -611,7 +615,7 @@ struct CloudSQLResponseParser: Sendable {
                 message: message,
                 profile: profile
             ),
-            message: "\(profile.provider.displayName) returned HTTP \(response.statusCode).",
+            message: displayMessage,
             httpStatus: response.statusCode,
             requestID: requestID,
             requestedModelID: requestedModelID,

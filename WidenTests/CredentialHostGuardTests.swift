@@ -113,7 +113,8 @@ struct CredentialHostGuardTests {
         #expect(String(decoding: data, as: UTF8.self) == RedirectingURLProtocol.redirectBody)
         #expect(RedirectingURLProtocol.loadedHosts(run: refusingRun) == ["provider.test"])
 
-        // The generator surfaces the 3xx as an HTTP failure, not a result.
+        // The generator surfaces the 3xx as an HTTP failure, not a result,
+        // and does not resend it: the same URL would only redirect again.
         let generatorRun = UUID().uuidString
         var profile = Self.staticProfile
         profile.baseURL = URL(string: "https://provider.test/v1/\(generatorRun)")!
@@ -122,14 +123,32 @@ struct CredentialHostGuardTests {
                 apiKey: "test-key",
                 profile: profile,
                 transport: URLSessionTransport(configuration: configuration),
-                maximumHTTPAttempts: 1
+                maximumHTTPAttempts: 3
             ).generateSQL(question: "List users", schema: Self.makeSchema(), config: SQLGenerationConfig())
             Issue.record("expected a redirect to fail the generation")
         } catch let failure as CloudRequestFailure {
             #expect(failure.diagnostic.httpStatus == 302)
+            #expect(failure.diagnostic.attemptCount == 1)
             #expect(failure.message.contains("HTTP 302"))
+            #expect(failure.message.contains("does not follow redirects"))
         }
         #expect(RedirectingURLProtocol.loadedHosts(run: generatorRun) == ["provider.test"])
+
+        // The agent stops at the first redirect too.
+        let agentRun = UUID().uuidString
+        profile.baseURL = URL(string: "https://provider.test/v1/\(agentRun)")!
+        do {
+            _ = try await SchemaToolSQLAgent(
+                apiKey: "test-key",
+                profile: profile,
+                connectionID: UUID(),
+                selectedSchemas: ["public"],
+                transport: URLSessionTransport(configuration: configuration),
+                indexStore: SchemaSearchIndexStore(directory: Self.temporaryDirectory())
+            ).generateSQL(question: "List users", schema: Self.makeSchema(), config: SQLGenerationConfig())
+            Issue.record("expected a redirect to fail the agent")
+        } catch {}
+        #expect(RedirectingURLProtocol.loadedHosts(run: agentRun) == ["provider.test"])
     }
 
     @Test func foreignPrefixKeySendsNoRequest() async throws {

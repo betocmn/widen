@@ -664,6 +664,9 @@ struct ChatCompletionRetryPolicy: Sendable {
         invalidOutputRetries: Int = 0
     ) -> TimeInterval? {
         guard attempt < maxAttempts else { return nil }
+        // Signed requests never follow redirects, and resending one to the
+        // same URL only gets redirected again.
+        if let status = failure.diagnostic.httpStatus, (300...399).contains(status) { return nil }
         if failure.category == .noContent, noContentRetries >= 1 { return nil }
         let isInvalidModelOutput = failure.isInvalidModelOutput
         if isInvalidModelOutput {

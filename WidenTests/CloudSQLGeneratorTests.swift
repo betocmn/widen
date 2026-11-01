@@ -1832,6 +1832,25 @@ struct CloudSQLGeneratorTests {
         #expect(policy.retryDelay(for: failure, attempt: 1, noContentRetries: 0) == nil)
     }
 
+    @Test func retryPolicyNeverResendsARefusedRedirect() {
+        let policy = ChatCompletionRetryPolicy()
+        for status in [301, 302, 303, 307, 308] {
+            // The status alone decides, whatever category the 3xx mapped to.
+            let failure = CloudRequestFailure(
+                category: .serverFailure,
+                message: "Redirected.",
+                httpStatus: status
+            )
+            #expect(policy.retryDelay(for: failure, attempt: 1, noContentRetries: 0) == nil, "\(status)")
+        }
+        let serverFailure = CloudRequestFailure(
+            category: .serverFailure,
+            message: "Try again.",
+            httpStatus: 500
+        )
+        #expect(policy.retryDelay(for: serverFailure, attempt: 1, noContentRetries: 0) != nil)
+    }
+
         @Test(arguments: Self.chatProfiles)
     func retriesTransientFailuresAndCountsEveryAttempt(profile: CloudModelProfile) async throws {
         let (generator, transport) = makeGenerator(
