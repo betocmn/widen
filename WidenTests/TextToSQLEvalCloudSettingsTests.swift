@@ -200,13 +200,13 @@ struct TextToSQLEvalCloudSettingsTests {
     @Test func agentReportsItsBudgetsForTheRunManifest() {
         #expect(
             SchemaToolSQLAgentConfiguration.default.reportedSettings == [
-                "maximumModelTurns": "6",
-                "maximumSchemaToolCalls": "6",
-                "maximumRepairSchemaToolCalls": "2",
-                "maximumHTTPAttempts": "12",
-                "maximumMalformedTerminalCorrections": "1",
-                "maximumRepeatedToolCorrections": "1",
-                "maximumInvalidTerminalSQLCorrections": "1",
+                "maximumModelTurns": "12",
+                "maximumSchemaToolCalls": "12",
+                "maximumRepairSchemaToolCalls": "4",
+                "maximumHTTPAttempts": "30",
+                "maximumMalformedTerminalCorrections": "2",
+                "maximumRepeatedToolCorrections": "2",
+                "maximumInvalidTerminalSQLCorrections": "2",
                 "maximumOverClarificationCorrections": "1",
                 "maximumIntentCoverageCorrections": "1",
                 "maximumPlanConsistencyCorrections": "1",

@@ -297,8 +297,8 @@ public struct SchemaToolPolicy: Codable, Equatable, Sendable {
 
     public static let cloudAgent = SchemaToolPolicy(
         maximumCallCount: 4,
-        maximumResultBytes: 8_000,
-        maximumSessionResultBytes: 20_000
+        maximumResultBytes: 16_000,
+        maximumSessionResultBytes: 64_000
     )
 }
 
