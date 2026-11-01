@@ -144,7 +144,7 @@ struct ConnectionEditorForm: View {
     private var privacySection: some View {
         SettingsSectionPanel(title: "Advanced Privacy", systemImage: "lock.shield") {
             VStack(alignment: .leading, spacing: 10) {
-                Text("Text-to-SQL sends your question and the schema metadata allowed here to Particle: table and column names, comments, constraints, and enum values. Inspected data values are sent to Particle only when both data inspection and sending inspected values are enabled here. Turning off schema metadata sharing turns off text-to-SQL for this connection; you can still browse the schema and run SQL.")
+                Text("Text-to-SQL sends your question and the schema metadata allowed here to Particle: table and column names, comments, constraints, and enum values. Data inspection on its own sends Particle only approximate row counts and column statistics, such as the share of nulls and the number of distinct values. Inspected data values are sent to Particle only when both data inspection and sending inspected values are enabled here. Turning off schema metadata sharing turns off text-to-SQL for this connection; you can still browse the schema and run SQL.")
                     .font(.caption)
                     .foregroundStyle(.secondary)
                     .fixedSize(horizontal: false, vertical: true)
@@ -152,7 +152,7 @@ struct ConnectionEditorForm: View {
                 Toggle("Allow sending schema metadata to Particle (required for text-to-SQL)", isOn: $viewModel.allowCloudSchemaMetadata)
                     .toggleStyle(.checkbox)
 
-                Toggle("Allow Widen to inspect data values to improve SQL (runs on this Mac)", isOn: $viewModel.allowLocalDataInspection)
+                Toggle("Allow Widen to inspect data to improve SQL (sends row counts and column statistics to Particle)", isOn: $viewModel.allowLocalDataInspection)
                     .toggleStyle(.checkbox)
                     .onChange(of: viewModel.allowLocalDataInspection) { _, enabled in
                         if !enabled {
