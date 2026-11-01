@@ -173,6 +173,10 @@ struct ParticleConnectionTestPresentation: Equatable {
 /// Configuration for Particle-1, Widen's only text-to-SQL model, plus the
 /// developer mock toggle.
 struct LLMSettingsView: View {
+    /// What text-to-SQL sends to Particle. General › Privacy repeats it.
+    static let privacyCopy =
+        "Text-to-SQL sends your question and the schema metadata each connection allows directly to Particle (api.particle.ai) with your key. Particle states it keeps no inference data by default — that is Particle's policy, not something Widen enforces. Inspected data values are sent only for connections that turn on cloud data inspection. Your first question in a session is also used to name it."
+
     @Environment(AppState.self) private var appState
     @State private var apiKeyDraft = ""
     @State private var hasStoredKey = false
@@ -187,11 +191,9 @@ struct LLMSettingsView: View {
         Form {
             Section("Particle-1 — Beta") {
                 particleConfiguration
-                Text(
-                    "Text-to-SQL sends your question and the schema metadata each connection allows directly to Particle (api.particle.ai) with your key. Particle states it keeps no inference data by default — that is Particle's policy, not something Widen enforces. Inspected data values are sent only for connections that turn on cloud data inspection. Your first question in a session is also used to name it."
-                )
-                .font(.callout)
-                .foregroundStyle(.secondary)
+                Text(Self.privacyCopy)
+                    .font(.callout)
+                    .foregroundStyle(.secondary)
             }
 
             Section("Developer") {

@@ -1156,7 +1156,7 @@ public final class SessionController: Identifiable {
         let recoveryGuidance =
             "The failed SQL and repair attempts are shown above in the chat. "
             + "The editor was restored to the last valid or original generation. "
-            + "Add more context so the model can adjust it, or switch to a smarter cloud model and try again."
+            + "Add more context to your question, or to Query Context in Database Settings, then try again."
         if attempts.count <= 1 {
             return """
                 The generated SQL already used this request's model-call budget, so I did not ask the model to repair it.

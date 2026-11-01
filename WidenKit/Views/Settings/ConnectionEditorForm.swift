@@ -144,15 +144,15 @@ struct ConnectionEditorForm: View {
     private var privacySection: some View {
         SettingsSectionPanel(title: "Advanced Privacy", systemImage: "lock.shield") {
             VStack(alignment: .leading, spacing: 10) {
-                Text("Cloud SQL generation can send your question and allowed schema metadata: table/column names, comments, constraints, and enum values. Inspected data values are sent to cloud models only when both local inspection and cloud data inspection are enabled here.")
+                Text("Text-to-SQL sends your question and the schema metadata allowed here to Particle: table and column names, comments, constraints, and enum values. Inspected data values are sent to Particle only when both data inspection and sending inspected values are enabled here. Turning off schema metadata sharing turns off text-to-SQL for this connection; you can still browse the schema and run SQL.")
                     .font(.caption)
                     .foregroundStyle(.secondary)
                     .fixedSize(horizontal: false, vertical: true)
 
-                Toggle("Allow sending schema metadata to cloud models", isOn: $viewModel.allowCloudSchemaMetadata)
+                Toggle("Allow sending schema metadata to Particle (required for text-to-SQL)", isOn: $viewModel.allowCloudSchemaMetadata)
                     .toggleStyle(.checkbox)
 
-                Toggle("Allow local data inspection for AI assistance", isOn: $viewModel.allowLocalDataInspection)
+                Toggle("Allow Widen to inspect data values to improve SQL (runs on this Mac)", isOn: $viewModel.allowLocalDataInspection)
                     .toggleStyle(.checkbox)
                     .onChange(of: viewModel.allowLocalDataInspection) { _, enabled in
                         if !enabled {
@@ -161,7 +161,7 @@ struct ConnectionEditorForm: View {
                         }
                     }
 
-                Toggle("Allow sending inspected data values to cloud models", isOn: $viewModel.allowCloudDataInspection)
+                Toggle("Allow sending inspected data values to Particle", isOn: $viewModel.allowCloudDataInspection)
                     .toggleStyle(.checkbox)
                     .disabled(!viewModel.allowLocalDataInspection)
 

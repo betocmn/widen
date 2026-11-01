@@ -1,6 +1,7 @@
 import SwiftUI
 
-/// Appearance and privacy settings. Model configuration lives in the LLM tab.
+/// Appearance, update and privacy settings. Particle-1 configuration lives in
+/// the LLM tab.
 struct GeneralSettingsView: View {
     @Environment(AppState.self) private var appState
     @AppStorage(AppearancePreference.storageKey)
@@ -58,6 +59,7 @@ struct GeneralSettingsView: View {
     }
 
     private var privacyCopy: String {
-        "Text-to-SQL sends your question and the schema metadata each connection allows directly to Particle (api.particle.ai) with your Particle API key. Inspected data values are sent only when cloud data inspection is enabled for that connection. Query results never leave your Mac unless you explicitly inspect and allow those values. Widen has no backend of its own."
+        LLMSettingsView.privacyCopy
+            + " Query results never leave your Mac unless you allow inspected values. Widen has no backend of its own."
     }
 }

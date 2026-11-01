@@ -370,6 +370,67 @@ struct ParticleBackendSelectionTests {
         #expect(state.particleRuntimeIssue == .keyRejected)
     }
 
+    // MARK: - Chat notice
+
+    @Test func chatNoticeLeadsWithTheKeyThenTheConnection() {
+        clearDefaults()
+        let (state, dir) = makeState()
+        defer { cleanUp(dir) }
+        let optedOut = DatabaseConnectionConfig(
+            database: "widen_test",
+            username: "beto",
+            allowCloudSchemaMetadata: false
+        )
+        let allowed = DatabaseConnectionConfig(database: "widen_other", username: "beto")
+        state.connections = [optedOut, allowed]
+
+        // No key blocks every connection, opted out or not.
+        let missingKey = TextToSQLChatNotice(appState: state, connectionID: optedOut.id)
+        #expect(missingKey == .model(.notConfigured(AppState.missingParticleAPIKeyMessage)))
+        #expect(missingKey?.title == "Text-to-SQL needs a Particle API key")
+        #expect(missingKey?.message == AppState.missingParticleAPIKeyMessage)
+        #expect(missingKey?.detail == nil)
+        #expect(missingKey?.actionTitle == "Open LLM Settings…")
+
+        state.particleAPIKeyOverride = .some(Self.particleKey)
+        state.noteTextToSQLOutcome(.failed(.authentication))
+        let rejected = TextToSQLChatNotice(appState: state, connectionID: allowed.id)
+        #expect(rejected?.title == "Particle-1 needs attention")
+        #expect(rejected?.detail == ParticleRuntimeIssue.keyRejected.message)
+        #expect(rejected?.message == ParticleRuntimeIssue.keyRejected.message)
+        #expect(rejected?.actionTitle == "Open LLM Settings…")
+
+        state.noteTextToSQLOutcome(.answered)
+        let connectionMessage =
+            "Text-to-SQL is off for this connection because schema metadata sharing is turned off."
+        #expect(state.textToSQLUnavailableMessage(for: optedOut.id) == connectionMessage)
+        let notice = TextToSQLChatNotice(appState: state, connectionID: optedOut.id)
+        #expect(notice == .connection(connectionMessage))
+        #expect(notice?.title == connectionMessage)
+        #expect(notice?.message == connectionMessage)
+        #expect(notice?.detail == nil)
+        #expect(notice?.actionTitle == "Open Database Settings…")
+        #expect(TextToSQLChatNotice(appState: state, connectionID: allowed.id) == nil)
+        #expect(state.textToSQLUnavailableMessage(for: UUID()) == nil)
+    }
+
+    @Test func mockModeShowsNoChatNotice() {
+        clearDefaults()
+        let (state, dir) = makeState()
+        defer { cleanUp(dir) }
+        let optedOut = DatabaseConnectionConfig(
+            database: "widen_test",
+            username: "beto",
+            allowCloudSchemaMetadata: false
+        )
+        state.connections = [optedOut]
+
+        state.useMockAI = true
+        #expect(TextToSQLChatNotice(appState: state, connectionID: optedOut.id) == nil)
+        state.useMockAI = false
+        #expect(TextToSQLChatNotice(appState: state, connectionID: optedOut.id) != nil)
+    }
+
     // MARK: - Credential leak
 
     /// Runs one agent generation and one one-shot generation through the app's

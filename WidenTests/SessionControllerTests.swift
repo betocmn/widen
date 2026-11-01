@@ -862,6 +862,8 @@ struct SessionControllerTests {
         #expect(controller.queryVM.generation?.sql == badGeneration.sql)
         #expect(conversationRoles(controller.chatVM.messages) == [.user, .assistant, .error])
         #expect(controller.chatVM.messages.last?.text.contains("model-call budget") == true)
+        #expect(controller.chatVM.messages.last?.text.contains("Query Context in Database Settings") == true)
+        #expect(controller.chatVM.messages.last?.text.contains("cloud model") == false)
         let activityText = activityMessages(controller.chatVM.messages).map(\.text).joined(separator: "\n")
         #expect(activityText.contains("Generated SQL failed while running."))
         #expect(activityText.contains(badGeneration.sql))

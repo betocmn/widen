@@ -217,11 +217,11 @@ enum GeneratedSQLRepairSupport {
             : "the database still rejected it"
         let validationRecoveryGuidance =
             "I did not show the rejected SQL because it failed local validation. "
-            + "Add more context so the model can adjust it, or switch to a smarter cloud model and try again."
+            + "Add more context to your question, or to Query Context in Database Settings, then try again."
         let executionRecoveryGuidance =
             "The failed SQL and repair attempts are shown above in the chat. "
             + "The editor was restored to the last valid or original generation. "
-            + "Add more context so the model can adjust it, or switch to a smarter cloud model and try again."
+            + "Add more context to your question, or to Query Context in Database Settings, then try again."
         let recoveryGuidance =
             mode == .validationOnly
             ? validationRecoveryGuidance
