@@ -13,6 +13,18 @@ struct CloudModelCatalogTests {
         #expect(!profile.displayName.isEmpty)
     }
 
+    @Test func particleRequestIDComesFromParticlesOwnHeader() throws {
+        let response = try #require(
+            HTTPURLResponse(
+                url: CloudModelProfile.particle.chatCompletionsURL,
+                statusCode: 200,
+                httpVersion: nil,
+                headerFields: ["x-particle-request-id": "req-particle"]
+            )
+        )
+        #expect(CloudSQLResponseParser.requestID(from: response, profile: .particle) == "req-particle")
+    }
+
     @Test func particleProfileMatchesTheParticle1Contract() {
         let profile = CloudModelProfile.particle
         #expect(profile.provider == .particle)
@@ -68,7 +80,7 @@ struct CloudModelCatalogTests {
         #expect(!profile.echoesReasoningContent)
         #expect(!profile.sendsToolMessageName)
         #expect(!profile.usesOpenRouterRouting)
-        #expect(profile.requestIDHeaderNames == ["X-Request-Id", "Request-Id"])
+        #expect(profile.requestIDHeaderNames == ["X-Particle-Request-Id", "X-Request-Id", "Request-Id"])
         #expect(profile.requestTimeoutSeconds == 180)
         #expect(profile.resourceTimeoutSeconds == 300)
         #expect(profile.foreignAPIKeyPrefixes == ["sk-or-"])

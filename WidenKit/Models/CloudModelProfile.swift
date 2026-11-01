@@ -324,7 +324,9 @@ extension CloudModelProfile {
             "invalid_request_error": .invalidRequest,
             "rate_limit_error": .rateLimited,
         ],
-        requestIDHeaderNames: ["X-Request-Id", "Request-Id"],
+        // The API probe saw only `x-particle-request-id` come back; the generic
+        // names stay as fallbacks.
+        requestIDHeaderNames: ["X-Particle-Request-Id", "X-Request-Id", "Request-Id"],
         requestTimeoutSeconds: 180,
         resourceTimeoutSeconds: 300,
         foreignAPIKeyPrefixes: ["sk-or-"],
