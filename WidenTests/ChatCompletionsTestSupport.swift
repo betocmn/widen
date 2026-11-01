@@ -83,6 +83,51 @@ final class RecordingTransport: HTTPTransport, @unchecked Sendable {
 enum ParticleTestSupport {
     static let returnedModelID = "particle-ai/particle-1"
 
+    /// A trimmed copy of the live `GET /v1/models` entry (schema 2.4), which
+    /// nests limits and parameters under the text modalities instead of the
+    /// documented flat fields. `serviceTier` marks the alternate-tier listing.
+    static func nestedParticleModel(
+        serviceTier: String? = nil,
+        contextLength: Int = 1_048_576,
+        listsTools: Bool = true
+    ) -> [String: Any] {
+        var parameters: [String: Any] = [
+            "max_tokens": ["type": "integer", "min": 1, "max": 131_072],
+            "reasoning_effort": [
+                "type": "enum",
+                "values": ["high", "low", "max", "medium", "minimal", "none", "ultra", "xhigh"],
+            ],
+        ]
+        if listsTools {
+            parameters["tools"] = ["type": "boolean"]
+            parameters["tool_choice"] = ["type": "unknown"]
+        }
+        var model: [String: Any] = [
+            "schema_version": "2.4",
+            "id": ParticleTestSupport.returnedModelID,
+            "name": "Particle-1",
+            "is_ready": true,
+            "input_modalities": [
+                [
+                    "type": "text",
+                    "supported_inputs": ["max_context_length": ["value": contextLength, "unit": "token"]],
+                ],
+                ["type": "image"],
+            ],
+            "output_modalities": [
+                [
+                    "type": "text",
+                    "max_length": ["value": 131_072, "unit": "token"],
+                    "supported_parameters": parameters,
+                ]
+            ],
+        ]
+        if let serviceTier {
+            model["service_tier"] = serviceTier
+        }
+        return model
+    }
+
     /// Asserts a chat request carries only what Particle-1 should receive for
     /// a call site, and returns its body. Never sent: OpenRouter's provider
     /// block and X-* headers, `temperature`, `max_tokens`, `n`, `seed`, or a

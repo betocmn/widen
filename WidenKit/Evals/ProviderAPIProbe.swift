@@ -119,7 +119,7 @@ public struct ProviderAPIProbe: Sendable {
         let exchange = await send(method: "GET", url: profile.modelsURL, chat: nil)
         var finding = ProviderAPIProbeReport.ModelListFinding(request: exchange.outcome)
         guard exchange.outcome.accepted,
-            let entries = exchange.json?["data"]?.arrayValue ?? exchange.json?.arrayValue
+            let entries = exchange.json.flatMap(CloudModelListEntry.entries(in:))
         else {
             if exchange.outcome.accepted {
                 finding.request.accepted = false
@@ -127,19 +127,14 @@ public struct ProviderAPIProbe: Sendable {
             }
             return finding
         }
-        let model = entries.first { $0["id"]?.stringValue == profile.requestedModelID }
-            ?? profile.expectedReturnedModelID.flatMap { expected in
-                entries.first { $0["id"]?.stringValue == expected }
-            }
-        guard let model else { return finding }
+        guard let model = CloudModelListEntry.entry(for: profile, in: entries) else { return finding }
         finding.listed = true
-        finding.listedID = model["id"]?.stringValue
-        finding.contextWindowTokens = model["context_window"]?.intValue
-        finding.maxOutputTokens = model["max_output_tokens"]?.intValue
-        finding.capabilities = model["capabilities"]?.objectValue?.compactMapValues(\.boolValue)
-        finding.defaultReasoningEffort = model["reasoning"]?["default_effort"]?.stringValue
-        finding.supportedReasoningEfforts = model["reasoning"]?["supported_efforts"]?.arrayValue?
-            .compactMap(\.stringValue)
+        finding.listedID = model.id
+        finding.contextWindowTokens = model.contextWindowTokens
+        finding.maxOutputTokens = model.maxOutputTokens
+        finding.capabilities = model.capabilities
+        finding.defaultReasoningEffort = model.defaultReasoningEffort
+        finding.supportedReasoningEfforts = model.supportedReasoningEfforts
         return finding
     }
 

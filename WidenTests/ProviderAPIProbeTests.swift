@@ -409,6 +409,31 @@ struct ProviderAPIProbeTests {
 
     // MARK: - Critical failures
 
+    @Test func probeReadsParticlesNestedModelList() async throws {
+        var fake = FakeProvider()
+        fake.modelList = Reply(
+            body: Self.modelList([
+                ParticleTestSupport.nestedParticleModel(serviceTier: "flex", contextLength: 262_144),
+                ParticleTestSupport.nestedParticleModel(),
+            ])
+        )
+
+        let report = await ProviderAPIProbe(
+            apiKey: Self.apiKey,
+            profile: .particleTest,
+            transport: fake.transport()
+        ).run()
+
+        let models = report.modelList
+        #expect(models.listed)
+        #expect(models.listedID == ParticleTestSupport.returnedModelID)
+        #expect(models.contextWindowTokens == 1_048_576)
+        #expect(models.maxOutputTokens == 131_072)
+        #expect(models.capabilities == ["tool_calling": true])
+        #expect(models.defaultReasoningEffort == nil)
+        #expect(models.supportedReasoningEfforts?.contains("high") == true)
+    }
+
     @Test func unlistedModelStopsBeforeAnyCompletion() async throws {
         var fake = FakeProvider()
         fake.modelList = Reply(body: Self.modelList([Self.particleModel(id: "particle-0")]))

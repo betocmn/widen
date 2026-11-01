@@ -11,6 +11,48 @@ struct CloudConnectivityCheckTests {
         var headers: [String: String] = [:]
     }
 
+    @Test func readsParticlesNestedModelListAndPrefersTheDefaultTier() async throws {
+        let transport = Self.scripted([
+            Reply(
+                body: Self.modelList([
+                    ParticleTestSupport.nestedParticleModel(serviceTier: "flex", contextLength: 262_144),
+                    ParticleTestSupport.nestedParticleModel(),
+                ])
+            ),
+            Reply(body: Self.pingResponse()),
+        ])
+
+        let result = await CloudConnectivityCheck(
+            apiKey: "pai-test",
+            profile: .particleTest,
+            transport: transport
+        ).run()
+
+        #expect(result.error == nil)
+        #expect(result.modelListed)
+        #expect(result.toolCallingAdvertised == true)
+        #expect(result.contextWindowTokens == 1_048_576)
+        #expect(result.defaultReasoningEffort == nil)
+        #expect(result.completionVerified)
+    }
+
+    @Test func nestedModelListWithoutToolsFailsBeforeAnyCompletion() async throws {
+        let transport = Self.scripted([
+            Reply(body: Self.modelList([ParticleTestSupport.nestedParticleModel(listsTools: false)]))
+        ])
+
+        let result = await CloudConnectivityCheck(
+            apiKey: "pai-test",
+            profile: .particleTest,
+            transport: transport
+        ).run()
+
+        #expect(result.modelListed)
+        #expect(result.toolCallingAdvertised == false)
+        #expect(result.error?.category == .unsupportedFeature)
+        #expect(transport.requests.count == 1)
+    }
+
     @Test func listsTheModelThenVerifiesOneTinyCompletion() async throws {
         let profile = CloudModelProfile.particleTest
         let transport = Self.scripted([

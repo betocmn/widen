@@ -108,27 +108,7 @@ struct CloudConnectivityCheck: Sendable {
 
     // MARK: - Model list
 
-    /// One entry of `GET {base}/models`. The response is `{"data": [M]}` or a
-    /// bare `[M]`, where M is `{id, context_window?, max_output_tokens?,
-    /// capabilities?: {tool_calling?, structured_outputs?}, reasoning?:
-    /// {default_effort?, supported_efforts?}}`. Every field but `id` is
-    /// optional, and a field with an unexpected type reads as missing.
-    private struct ListedModel {
-        var id: String
-        var contextWindowTokens: Int?
-        var toolCalling: Bool?
-        var defaultReasoningEffort: String?
-
-        init?(_ value: JSONValue) {
-            guard let id = value["id"]?.stringValue else { return nil }
-            self.id = id
-            contextWindowTokens = value["context_window"]?.intValue
-            toolCalling = value["capabilities"]?["tool_calling"]?.boolValue
-            defaultReasoningEffort = value["reasoning"]?["default_effort"]?.stringValue
-        }
-    }
-
-    private func fetchModelList() async throws -> (models: [ListedModel], attempts: Int) {
+    private func fetchModelList() async throws -> (models: [CloudModelListEntry], attempts: Int) {
         guard let modelsURL = profile.modelsURL else {
             throw CloudRequestFailure(
                 category: .unsupportedFeature,
@@ -149,7 +129,7 @@ struct CloudConnectivityCheck: Sendable {
                 )
             }
             guard let list = try? JSONDecoder().decode(JSONValue.self, from: data),
-                let entries = list["data"]?.arrayValue ?? list.arrayValue
+                let entries = CloudModelListEntry.entries(in: list)
             else {
                 throw CloudRequestFailure(
                     category: .malformedStructuredResponse,
@@ -160,17 +140,12 @@ struct CloudConnectivityCheck: Sendable {
                     attemptCount: attempt
                 )
             }
-            return (entries.compactMap(ListedModel.init), attempt)
+            return (entries, attempt)
         }
     }
 
-    /// The entry for the requested model, or else the one named like the
-    /// model responses report.
-    private func listedModel(in models: [ListedModel]) -> ListedModel? {
-        models.first { $0.id == profile.requestedModelID }
-            ?? profile.expectedReturnedModelID.flatMap { expected in
-                models.first { $0.id == expected }
-            }
+    private func listedModel(in models: [CloudModelListEntry]) -> CloudModelListEntry? {
+        CloudModelListEntry.entry(for: profile, in: models)
     }
 
     // MARK: - Completion
@@ -275,4 +250,72 @@ struct CloudConnectivityCheck: Sendable {
 
 private func elapsedMilliseconds(since date: Date) -> Int {
     Int(Date().timeIntervalSince(date) * 1_000)
+}
+
+/// One entry of `GET {base}/models`. The list is `{"data": [M]}` or a bare
+/// `[M]`. Particle's documented M is `{id, context_window?,
+/// max_output_tokens?, capabilities?: {tool_calling?, structured_outputs?},
+/// reasoning?: {default_effort?, supported_efforts?}}`; the live API answers
+/// with its nested schema instead, where limits and parameters sit under
+/// `input_modalities` / `output_modalities` entries of type `text`. Both
+/// shapes are read. Every field but `id` is optional, and a field with an
+/// unexpected type reads as missing.
+struct CloudModelListEntry: Equatable, Sendable {
+    var id: String
+    var contextWindowTokens: Int?
+    var maxOutputTokens: Int?
+    /// The documented `capabilities` flags, or `tool_calling` derived from a
+    /// listed `tools` parameter.
+    var capabilities: [String: Bool]?
+    var defaultReasoningEffort: String?
+    var supportedReasoningEfforts: [String]?
+    /// Set on alternate-tier listings (for example `flex`) of the same model.
+    var serviceTier: String?
+
+    var toolCalling: Bool? { capabilities?["tool_calling"] }
+
+    init?(_ value: JSONValue) {
+        guard let id = value["id"]?.stringValue else { return nil }
+        self.id = id
+        let textInput = Self.textModality(value["input_modalities"])
+        let textOutput = Self.textModality(value["output_modalities"])
+        let parameters = textOutput?["supported_parameters"]
+        contextWindowTokens = value["context_window"]?.intValue
+            ?? textInput?["supported_inputs"]?["max_context_length"]?["value"]?.intValue
+        maxOutputTokens = value["max_output_tokens"]?.intValue
+            ?? textOutput?["max_length"]?["value"]?.intValue
+        if let documented = value["capabilities"]?.objectValue?.compactMapValues(\.boolValue) {
+            capabilities = documented
+        } else if let parameters = parameters?.objectValue {
+            capabilities = ["tool_calling": parameters["tools"] != nil]
+        }
+        defaultReasoningEffort = value["reasoning"]?["default_effort"]?.stringValue
+        supportedReasoningEfforts = (value["reasoning"]?["supported_efforts"]
+            ?? parameters?["reasoning_effort"]?["values"]
+            ?? parameters?["reasoning"]?["properties"]?["effort"]?["values"])?
+            .arrayValue?.compactMap(\.stringValue)
+        serviceTier = value["service_tier"]?.stringValue
+    }
+
+    static func entries(in list: JSONValue) -> [CloudModelListEntry]? {
+        (list["data"]?.arrayValue ?? list.arrayValue)?.compactMap(Self.init)
+    }
+
+    /// The entry for the profile's requested model, or else the one named
+    /// like the model responses report. A default-tier listing wins over
+    /// alternate-tier listings of the same model.
+    static func entry(for profile: CloudModelProfile, in entries: [CloudModelListEntry]) -> CloudModelListEntry? {
+        let ids = [profile.requestedModelID] + (profile.expectedReturnedModelID.map { [$0] } ?? [])
+        for id in ids {
+            let matches = entries.filter { $0.id == id }
+            if let match = matches.first(where: { $0.serviceTier == nil }) ?? matches.first {
+                return match
+            }
+        }
+        return nil
+    }
+
+    private static func textModality(_ modalities: JSONValue?) -> JSONValue? {
+        modalities?.arrayValue?.first { $0["type"]?.stringValue == "text" }
+    }
 }
