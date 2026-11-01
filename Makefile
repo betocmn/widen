@@ -16,7 +16,6 @@ APP := build/Build/Products/Debug/Widen.app
 EVAL := build/Build/Products/Debug/WidenEval
 PINNED_OPENROUTER_MODEL := openai/gpt-5.5
 MODEL ?= $(PINNED_OPENROUTER_MODEL)
-BACKEND ?= local
 RETRIEVER ?= both
 CLOUD_AGENT ?= tools
 RELEASE_VERSION ?= $(shell /usr/libexec/PlistBuddy -c 'Print CFBundleShortVersionString' Widen/Info.plist 2>/dev/null || echo 0.1.0)
@@ -49,7 +48,7 @@ endif
 REQUIRE_PINNED_MODEL = @test "$(MODEL)" = "$(PINNED_OPENROUTER_MODEL)" || test "$(ALLOW_MODEL_OVERRIDE)" = "1" || { echo "error: release gate requires MODEL=$(PINNED_OPENROUTER_MODEL) but got MODEL=$(MODEL); set ALLOW_MODEL_OVERRIDE=1 to run an engineering comparison" >&2; exit 1; }
 MODEL_OVERRIDE_ARGS = $(if $(filter 1,$(ALLOW_MODEL_OVERRIDE)),--allow-model-override,)
 
-.PHONY: project build test test-db test-fm eval-build eval-local eval-cloud eval-cloud-agent eval-all eval-case eval-cloud-agent-case eval-retrieval eval-retrieval-case eval-schema-tools eval-inspection-tools eval-db-local eval-db-cloud eval-db-cloud-agent eval-db-cloud-agent-case eval-release eval-release-triage eval-release-preseason eval-release-overclarification eval-release-sql-shape eval-release-resume eval-db-case eval-openrouter-smoke setup run run-conductor release release-mac xcode clean
+.PHONY: project build test test-db eval-build eval-cloud eval-cloud-agent eval-case eval-cloud-agent-case eval-retrieval eval-retrieval-case eval-schema-tools eval-inspection-tools eval-db-cloud eval-db-cloud-agent eval-db-cloud-agent-case eval-release eval-release-triage eval-release-preseason eval-release-overclarification eval-release-sql-shape eval-release-resume eval-db-case eval-openrouter-smoke setup run run-conductor release release-mac xcode clean
 
 ## Regenerate Widen.xcodeproj from project.yml
 project:
@@ -82,18 +81,9 @@ test-db:
 	TEST_RUNNER_WIDEN_TEST_DB_MAINTENANCE_DB="$${WIDEN_TEST_DB_MAINTENANCE_DB:-}" \
 	$(XCODEBUILD) test -only-testing:WidenTests/PostgresIntegrationTests -only-testing:WidenTests/QueryExecutionIntegrationTests -only-testing:WidenTests/TextToSQLSemanticDatabaseIntegrationTests
 
-## Run unit + Foundation Models smoke tests (requires Apple Intelligence enabled)
-test-fm:
-	$(XCODEBUILD) test
-	TEST_RUNNER_WIDEN_FM_TEST=1 $(XCODEBUILD) test -only-testing:WidenTests/FoundationModelsSmokeTests
-
 ## Build the native text-to-SQL eval runner
 eval-build:
 	$(EVAL_XCODEBUILD) build
-
-## Run the text-to-SQL eval suite against local Foundation Models
-eval-local: eval-build
-	$(EVAL) --backend local $(EVAL_ARGS)
 
 ## Run the text-to-SQL eval suite against OpenRouter
 eval-cloud: eval-build
@@ -110,16 +100,11 @@ eval-openrouter-smoke: eval-build
 	@set -a; if [ -f .env.eval.local ]; then . ./.env.eval.local; fi; set +a; \
 	$(EVAL) --backend cloud --model "$(MODEL)" --suite Evals/suites/provider-smoke-v1.json $(filter-out --suite Evals/suites/text-to-sql-v1.json,$(EVAL_ARGS))
 
-## Run the text-to-SQL eval suite against local and cloud backends
-eval-all: eval-build
-	@set -a; if [ -f .env.eval.local ]; then . ./.env.eval.local; fi; set +a; \
-	$(EVAL) --backend both --model "$(MODEL)" $(EVAL_ARGS)
-
-## Run one eval case. Example: make eval-case CASE=preseason.top-wins-defined BACKEND=cloud
+## Run one eval case. Example: make eval-case CASE=preseason.top-wins-defined
 eval-case: eval-build
 	@test -n "$(CASE)" || (echo "error: CASE is required" >&2; exit 1)
 	@set -a; if [ -f .env.eval.local ]; then . ./.env.eval.local; fi; set +a; \
-	$(EVAL) --backend "$(BACKEND)" --model "$(MODEL)" $(EVAL_ARGS)
+	$(EVAL) --backend cloud --model "$(MODEL)" $(EVAL_ARGS)
 
 ## Run one OpenRouter cloud-agent eval case. Example: make eval-cloud-agent-case CASE=preseason.top-wins-defined CLOUD_AGENT=tools
 eval-cloud-agent-case: eval-build
@@ -143,11 +128,6 @@ eval-schema-tools: eval-build
 ## Run deterministic privacy-gated database inspection tool evals with no model calls
 eval-inspection-tools: eval-build
 	$(EVAL) --inspection-tools $(filter-out --suite Evals/suites/text-to-sql-v1.json,$(EVAL_ARGS))
-
-## Run the text-to-SQL eval suite with seeded Postgres semantic grading locally
-eval-db-local: eval-build
-	@set -a; if [ -f .env.eval.local ]; then . ./.env.eval.local; fi; set +a; \
-	$(EVAL) --backend local --semantic-db $(EVAL_ARGS)
 
 ## Run the text-to-SQL eval suite with seeded Postgres semantic grading through OpenRouter
 eval-db-cloud: eval-build
@@ -213,7 +193,7 @@ eval-release-resume: eval-build
 eval-db-case: eval-build
 	@test -n "$(CASE)" || (echo "error: CASE is required" >&2; exit 1)
 	@set -a; if [ -f .env.eval.local ]; then . ./.env.eval.local; fi; set +a; \
-	$(EVAL) --backend "$(BACKEND)" --model "$(MODEL)" --semantic-db $(EVAL_ARGS)
+	$(EVAL) --backend cloud --model "$(MODEL)" --semantic-db $(EVAL_ARGS)
 
 ## Build and launch the app
 run: build

@@ -1,9 +1,5 @@
 import Foundation
 
-#if canImport(FoundationModels)
-    import FoundationModels
-#endif
-
 import WidenKit
 
 @main
@@ -172,6 +168,11 @@ enum WidenEvalMain {
                     exit(1)
                 }
             }
+        } catch let error as DecodingError {
+            // A decoding error's localized description is generic; its context
+            // names the actual problem, such as results from a removed backend.
+            fputs("WidenEval failed: \(error.contextDescription)\n", stderr)
+            exit(1)
         } catch {
             fputs("WidenEval failed: \(error.localizedDescription)\n", stderr)
             exit(1)
@@ -179,19 +180,31 @@ enum WidenEvalMain {
     }
 }
 
+private extension DecodingError {
+    var contextDescription: String {
+        switch self {
+        case .dataCorrupted(let context),
+            .keyNotFound(_, let context),
+            .typeMismatch(_, let context),
+            .valueNotFound(_, let context):
+            context.debugDescription
+        @unknown default:
+            localizedDescription
+        }
+    }
+}
+
 enum EvalBackendMode: String {
-    case local
     case cloud
-    case both
+
+    /// Backend modes that earlier releases accepted and that now fail with a
+    /// clear message instead of a generic invalid-value error.
+    static let removedRawValues: Set<String> = ["local", "both"]
 
     var backends: [TextToSQLEvalBackend] {
         switch self {
-        case .local:
-            [.local]
         case .cloud:
             [.cloud]
-        case .both:
-            [.local, .cloud]
         }
     }
 }
@@ -216,7 +229,7 @@ enum EvalExplicitOption: Hashable {
 }
 
 struct EvalCLIOptions {
-    var backendMode: EvalBackendMode = .local
+    var backendMode: EvalBackendMode = .cloud
     var cloudAgentMode: EvalCloudAgentMode = .legacy
     var schemaAgentClarificationCorrectionMode: SchemaToolAgentClarificationCorrectionMode =
         .diagnosticsOnly
@@ -255,7 +268,7 @@ struct EvalCLIOptions {
         WidenEval
 
         Options:
-          --backend local|cloud|both
+          --backend cloud
           --cloud-agent legacy|tools
           --schema-agent-clarification-correction disabled|diagnostics|experimental
           --schema-agent-intent-coverage disabled|diagnostics|reject-only|experimental
@@ -303,6 +316,9 @@ struct EvalCLIOptions {
             switch argument {
             case "--backend":
                 let value = try nextValue(after: argument)
+                if EvalBackendMode.removedRawValues.contains(value) {
+                    throw EvalCLIError.removedBackend(value)
+                }
                 guard let backend = EvalBackendMode(rawValue: value) else {
                     throw EvalCLIError.invalidValue(argument, value)
                 }
@@ -514,6 +530,7 @@ enum EvalCLIError: LocalizedError {
     case unknownArgument(String)
     case resumeSelectionWithoutRun
     case releaseTriageVersionWithoutOutput
+    case removedBackend(String)
 
     var errorDescription: String? {
         switch self {
@@ -527,6 +544,8 @@ enum EvalCLIError: LocalizedError {
             "Resume selection flags require --resume-run."
         case .releaseTriageVersionWithoutOutput:
             "--release-triage-version requires --write-release-triage or --triage-release."
+        case .removedBackend(let backendMode):
+            "--backend \(backendMode) is no longer supported because the on-device backend was removed; use --backend cloud."
         }
     }
 }

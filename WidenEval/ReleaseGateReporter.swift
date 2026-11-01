@@ -713,17 +713,10 @@ enum TextToSQLReleaseTriageReporter {
         }
     }
 
+    /// Only the cloud backend remains. A legacy "both" manifest expects cloud
+    /// keys only; its on-device results fail to decode with a clear error.
     private static func backends(for backendMode: String) -> [TextToSQLEvalBackend] {
-        switch backendMode {
-        case "local":
-            return [.local]
-        case "cloud":
-            return [.cloud]
-        case "both":
-            return [.local, .cloud]
-        default:
-            return [.cloud]
-        }
+        [.cloud]
     }
 
     private static func orderedUniqueCaseIDs(_ results: [TextToSQLEvalResult]) -> [String] {

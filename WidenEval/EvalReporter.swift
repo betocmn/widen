@@ -528,7 +528,7 @@ enum EvalReporter {
             let statuses = sorted.map(\.status.rawValue)
             return RepeatCaseSummary(
                 caseID: sorted.first?.caseID ?? "-",
-                backend: sorted.first?.backend ?? .local,
+                backend: sorted.first?.backend ?? .cloud,
                 passCount: passCount,
                 repeatCount: sorted.count,
                 statuses: statuses,

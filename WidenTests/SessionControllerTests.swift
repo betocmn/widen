@@ -2006,7 +2006,7 @@ struct SessionControllerTests {
             evalCase: evalCase,
             schema: schema,
             generator: RecordingRepairGenerator(results: [scriptedGeneration]),
-            options: TextToSQLEvalRunOptions(backend: .local)
+            options: TextToSQLEvalRunOptions(backend: .cloud)
         )
 
         #expect(sessionGenerator.contexts.count == 1)

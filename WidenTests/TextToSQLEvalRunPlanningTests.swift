@@ -287,7 +287,7 @@ struct TextToSQLEvalRunPlanningTests {
         )
     }
 
-    @Test func httpBudgetStopsOnlyCloudAndReportsRemainingAttempts() {
+    @Test func httpBudgetStopsCloudAndReportsRemainingAttempts() {
         let reused = [
             Self.result(
                 caseID: "case.a",
@@ -304,8 +304,6 @@ struct TextToSQLEvalRunPlanningTests {
 
         #expect(state.httpAttempts == 2)
         #expect(state.remainingHTTPAttempts(for: .cloud) == 0)
-        #expect(state.remainingHTTPAttempts(for: .local) == nil)
-        #expect(state.stopReasonBeforeNextResult(backend: .local) == nil)
         #expect(state.stopReasonBeforeNextResult(backend: .cloud) == "Eval OpenRouter HTTP-attempt budget reached (2/2).")
     }
 
@@ -404,6 +402,96 @@ struct TextToSQLEvalRunPlanningTests {
         #expect(!sqlShapeRecipe.contains("--schema-agent-clarification-correction"))
         #expect(!sqlShapeRecipe.contains("--schema-agent-intent-coverage"))
         #expect(!sqlShapeRecipe.contains("--schema-agent-plan-consistency"))
+    }
+
+    @Test func makefileHasNoOnDeviceEvalTargets() throws {
+        let repoRoot = URL(fileURLWithPath: #filePath)
+            .deletingLastPathComponent()
+            .deletingLastPathComponent()
+        let text = try String(
+            contentsOf: repoRoot.appendingPathComponent("Makefile"),
+            encoding: .utf8
+        )
+
+        for removed in [
+            "test-fm", "eval-local", "eval-all", "eval-db-local",
+            "--backend local", "--backend both", "BACKEND ?=", "$(BACKEND)",
+        ] {
+            #expect(!text.contains(removed), "Makefile still mentions \(removed)")
+        }
+
+        let caseCommand = try Self.makeDryRunCommand(
+            repoRoot: repoRoot,
+            target: "eval-case",
+            assignments: ["CASE=commerce.fixture", "BACKEND=local"],
+            commandContaining: "--case commerce.fixture"
+        )
+        #expect(caseCommand.contains(#"--backend cloud --model "openai/gpt-5.5""#))
+        #expect(!caseCommand.contains("--backend local"))
+
+        let databaseCaseCommand = try Self.makeDryRunCommand(
+            repoRoot: repoRoot,
+            target: "eval-db-case",
+            assignments: ["CASE=commerce.fixture", "BACKEND=local"],
+            commandContaining: "--case commerce.fixture"
+        )
+        #expect(databaseCaseCommand.contains(#"--backend cloud --model "openai/gpt-5.5" --semantic-db"#))
+        #expect(!databaseCaseCommand.contains("--backend local"))
+    }
+
+    @Test func evalResultFromRemovedOnDeviceBackendFailsToDecodeWithClearMessage() throws {
+        let line = Self.cloudResultLine0_1_0.replacingOccurrences(
+            of: #""backend":"cloud""#,
+            with: #""backend":"local""#
+        )
+        #expect(line != Self.cloudResultLine0_1_0)
+
+        let error = try #require(throws: DecodingError.self) {
+            try JSONDecoder().decode(TextToSQLEvalResult.self, from: Data(line.utf8))
+        }
+        guard case .dataCorrupted(let context) = error else {
+            Issue.record("Expected dataCorrupted, got \(error)")
+            return
+        }
+        #expect(context.debugDescription.contains("removed on-device backend"))
+        #expect(context.debugDescription == TextToSQLEvalBackend.removedOnDeviceBackendMessage)
+        #expect(context.codingPath.map(\.stringValue) == ["backend"])
+    }
+
+    @Test func evalResultWithUnknownBackendStillFailsToDecode() {
+        let line = Self.cloudResultLine0_1_0.replacingOccurrences(
+            of: #""backend":"cloud""#,
+            with: #""backend":"elsewhere""#
+        )
+
+        #expect(throws: DecodingError.self) {
+            try JSONDecoder().decode(TextToSQLEvalResult.self, from: Data(line.utf8))
+        }
+    }
+
+    @Test func cloudEvalResultShapedLike0_1_0Decodes() throws {
+        let result = try JSONDecoder().decode(
+            TextToSQLEvalResult.self,
+            from: Data(Self.cloudResultLine0_1_0.utf8)
+        )
+
+        #expect(result.backend == .cloud)
+        #expect(result.caseID == "commerce.customer-paid-revenue")
+        #expect(result.model == "openai/gpt-5.5")
+        #expect(result.repeatIndex == 2)
+        #expect(result.status == .passed)
+        #expect(result.metrics.openRouterReturnedModelID == "openai/gpt-5.5-20260423")
+        #expect(result.metrics.openRouterAgentHTTPAttemptCount == 3)
+        #expect(result.metrics.semanticStatus == .passed)
+        #expect(result.metrics.endToEndPassed == true)
+        #expect(result.diagnostics.openRouterAttemptCount == 3)
+        #expect(result.referencedTables == ["public.customers", "public.orders"])
+
+        let roundTripped = try JSONDecoder().decode(
+            TextToSQLEvalResult.self,
+            from: JSONEncoder().encode(result)
+        )
+        #expect(roundTripped == result)
     }
 
     @Test func releaseReportsIncludeRedactedQueryPlanDiagnostics() throws {
@@ -585,8 +673,24 @@ struct TextToSQLEvalRunPlanningTests {
         assignments: [String] = [],
         environmentModel: String? = nil
     ) throws -> String {
+        try makeDryRunCommand(
+            repoRoot: repoRoot,
+            target: "eval-release-resume",
+            assignments: ["RELEASE_VERSION=fixture", "RESUME=fixture-run"] + assignments,
+            environmentModel: environmentModel,
+            commandContaining: "--resume-run"
+        )
+    }
+
+    private static func makeDryRunCommand(
+        repoRoot: URL,
+        target: String,
+        assignments: [String] = [],
+        environmentModel: String? = nil,
+        commandContaining marker: String
+    ) throws -> String {
         var environment = ProcessInfo.processInfo.environment
-        for name in ["ALLOW_MODEL_OVERRIDE", "MAKEFLAGS", "MAKELEVEL", "MFLAGS", "MODEL"] {
+        for name in ["ALLOW_MODEL_OVERRIDE", "BACKEND", "CASE", "MAKEFLAGS", "MAKELEVEL", "MFLAGS", "MODEL"] {
             environment.removeValue(forKey: name)
         }
         if let environmentModel {
@@ -610,13 +714,7 @@ struct TextToSQLEvalRunPlanningTests {
         let process = Process()
         process.executableURL = makeURL
         process.currentDirectoryURL = repoRoot
-        process.arguments = [
-            "--no-print-directory",
-            "-n",
-            "eval-release-resume",
-            "RELEASE_VERSION=fixture",
-            "RESUME=fixture-run",
-        ] + assignments
+        process.arguments = ["--no-print-directory", "-n", target] + assignments
         process.environment = environment
 
         let output = Pipe()
@@ -637,16 +735,44 @@ struct TextToSQLEvalRunPlanningTests {
             )
         }
         guard let command = text.split(separator: "\n").first(where: {
-            $0.contains("--resume-run")
+            $0.contains(marker)
         }) else {
             throw NSError(
                 domain: "TextToSQLEvalRunPlanningTests",
                 code: 1,
-                userInfo: [NSLocalizedDescriptionKey: "Make dry run omitted the release-resume command."]
+                userInfo: [NSLocalizedDescriptionKey: "Make dry run of \(target) omitted the \(marker) command."]
             )
         }
         return String(command)
     }
+
+    /// One cases.jsonl line in the shape the 0.1.0 OpenRouter release gate wrote.
+    private static let cloudResultLine0_1_0 = """
+        {"caseID":"commerce.customer-paid-revenue","backend":"cloud","model":"openai/gpt-5.5",\
+        "repeatIndex":2,"status":"passed","metrics":{"backendAvailable":true,"transportSuccess":true,\
+        "structuredResponseParsed":true,"decisionMatches":true,"safetyValid":true,"schemaValid":true,\
+        "requiredTableCoverage":1,"requiredColumnBindingCoverage":1,"forbiddenBindingViolations":[],\
+        "latencyMs":18234,"modelCallCount":3,"estimatedInitialPromptCharacters":412,"tokenUsage":9120,\
+        "estimatedCloudCostUSD":0.0412,"openRouterStructuredOutputMode":"strictJSONSchema",\
+        "openRouterRetryCount":0,"openRouterRequestedModelID":"openai/gpt-5.5",\
+        "openRouterReturnedModelID":"openai/gpt-5.5-20260423","openRouterProviderName":"OpenAI",\
+        "openRouterAgentSelectionReason":"tools","openRouterAgentLogicalTurnCount":3,\
+        "openRouterAgentHTTPAttemptCount":3,"openRouterSchemaToolCallCount":2,\
+        "openRouterInspectionToolCallCount":0,"openRouterAgentTerminalOutcome":"sql",\
+        "postgresVerificationStatus":"passed","postgresVerificationElapsedMs":14,\
+        "postgresVerificationRepairAttempted":false,"semanticExecutionAttempted":true,\
+        "semanticEnvironmentAvailable":true,"goldenExecutionSucceeded":true,\
+        "candidateExecutionSucceeded":true,"resultEquivalent":true,"endToEndPassed":true,\
+        "semanticStatus":"passed","goldenRowCount":4,"candidateRowCount":4,"comparisonMode":"unordered",\
+        "executionLatencyMs":9,"goldenResultDigest":"3f1c","candidateResultDigest":"3f1c"},\
+        "diagnostics":{"missingTables":[],"missingColumnBindings":[],"missingOperations":[],\
+        "safetyErrors":[],"schemaErrors":[],"openRouterAttemptCount":3},\
+        "generatedSQL":"SELECT c.id, SUM(o.total) AS paid_revenue FROM public.customers AS c \
+        JOIN public.orders AS o ON o.customer_id = c.id WHERE o.status = 'paid' GROUP BY c.id LIMIT 100",\
+        "referencedTables":["public.customers","public.orders"],\
+        "referencedColumnBindings":["public.customers.id","public.orders.customer_id",\
+        "public.orders.status","public.orders.total"]}
+        """
 
     private static func expectedKeys(
         caseIDs: [String],

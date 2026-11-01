@@ -1542,7 +1542,7 @@ struct TextToSQLPipelineTests {
             evalCase: evalCase,
             schema: makeSchema(),
             generator: generator,
-            options: TextToSQLEvalRunOptions(backend: .local)
+            options: TextToSQLEvalRunOptions(backend: .cloud)
         )
 
         #expect(result.status == .passed)

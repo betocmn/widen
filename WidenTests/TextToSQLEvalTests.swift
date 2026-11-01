@@ -258,7 +258,7 @@ struct TextToSQLEvalTests {
             evalCase: evalCase,
             schema: makeCommerceSchema(),
             generation: generation,
-            options: TextToSQLEvalRunOptions(backend: .local),
+            options: TextToSQLEvalRunOptions(backend: .cloud),
             latencyMs: 12
         )
 
@@ -306,7 +306,7 @@ struct TextToSQLEvalTests {
             evalCase: evalCase,
             schema: makeCommerceSchema(),
             generation: generation,
-            options: TextToSQLEvalRunOptions(backend: .local),
+            options: TextToSQLEvalRunOptions(backend: .cloud),
             latencyMs: 12,
             trace: TextToSQLTrace(stages: [], modelCalls: 2, elapsedMs: 12)
         )
@@ -347,7 +347,7 @@ struct TextToSQLEvalTests {
             evalCase: evalCase,
             schema: makeCommerceSchema(),
             generator: generator,
-            options: TextToSQLEvalRunOptions(backend: .local)
+            options: TextToSQLEvalRunOptions(backend: .cloud)
         )
 
         #expect(result.status == .wrongSchemaObjects)
@@ -718,7 +718,7 @@ struct TextToSQLEvalTests {
             evalCase: evalCase,
             schema: makeCommerceSchema(),
             generator: generator,
-            options: TextToSQLEvalRunOptions(backend: .local)
+            options: TextToSQLEvalRunOptions(backend: .cloud)
         )
 
         #expect(result.status == .passed)
@@ -759,7 +759,7 @@ struct TextToSQLEvalTests {
             schema: makeCommerceSchema(),
             generator: generator,
             options: TextToSQLEvalRunOptions(
-                backend: .local,
+                backend: .cloud,
                 testOnlyDisableGroundingClarification: true
             )
         )
@@ -802,7 +802,7 @@ struct TextToSQLEvalTests {
             evalCase: evalCase,
             schema: makePreseasonSchema(),
             generation: generation,
-            options: TextToSQLEvalRunOptions(backend: .local),
+            options: TextToSQLEvalRunOptions(backend: .cloud),
             latencyMs: 12
         )
 
@@ -853,7 +853,7 @@ struct TextToSQLEvalTests {
             evalCase: evalCase,
             schema: makeCommerceSchema(),
             generation: generation,
-            options: TextToSQLEvalRunOptions(backend: .local),
+            options: TextToSQLEvalRunOptions(backend: .cloud),
             latencyMs: 12
         )
 
@@ -900,7 +900,7 @@ struct TextToSQLEvalTests {
             evalCase: evalCase,
             schema: makeCommerceSchema(),
             generation: generation,
-            options: TextToSQLEvalRunOptions(backend: .local),
+            options: TextToSQLEvalRunOptions(backend: .cloud),
             latencyMs: 12
         )
 
@@ -920,7 +920,7 @@ struct TextToSQLEvalTests {
             evalCase: evalCase,
             schema: makeCommerceSchema(),
             generator: ThrowingGenerator(error: SQLGenerationFailure.backendUnavailable("No model.")),
-            options: TextToSQLEvalRunOptions(backend: .local)
+            options: TextToSQLEvalRunOptions(backend: .cloud)
         )
 
         #expect(result.status == .backendUnavailable)
@@ -1075,7 +1075,7 @@ struct TextToSQLEvalTests {
             schema: makeCommerceSchema(),
             generator: hangingGenerator,
             options: TextToSQLEvalRunOptions(
-                backend: .local,
+                backend: .cloud,
                 caseTimeoutSeconds: 0.01
             )
         )
@@ -1106,7 +1106,7 @@ struct TextToSQLEvalTests {
                     clarificationQuestion: nil
                 )
             ),
-            options: TextToSQLEvalRunOptions(backend: .local)
+            options: TextToSQLEvalRunOptions(backend: .cloud)
         )
 
         #expect(nextResult.status == .passed)
@@ -1151,7 +1151,7 @@ struct TextToSQLEvalTests {
                 schema: makeCommerceSchema(),
                 generator: hangingGenerator,
                 options: TextToSQLEvalRunOptions(
-                    backend: .local,
+                    backend: .cloud,
                     caseTimeoutSeconds: 60
                 )
             )
@@ -1183,7 +1183,7 @@ struct TextToSQLEvalTests {
             schema: makeCommerceSchema(),
             generator: BlockingGenerator(),
             options: TextToSQLEvalRunOptions(
-                backend: .local,
+                backend: .cloud,
                 caseTimeoutSeconds: 0.01
             )
         )
@@ -1217,7 +1217,7 @@ struct TextToSQLEvalTests {
                 )
             ),
             options: TextToSQLEvalRunOptions(
-                backend: .local,
+                backend: .cloud,
                 caseTimeoutSeconds: .greatestFiniteMagnitude
             )
         )
@@ -1298,7 +1298,7 @@ struct TextToSQLEvalTests {
                     "The local model failed to decode structured output."
                 )
             ),
-            options: TextToSQLEvalRunOptions(backend: .local)
+            options: TextToSQLEvalRunOptions(backend: .cloud)
         )
 
         #expect(result.status == .parseFailure)
@@ -1322,7 +1322,7 @@ struct TextToSQLEvalTests {
                     "The schema and question exceed the local model's context window."
                 )
             ),
-            options: TextToSQLEvalRunOptions(backend: .local)
+            options: TextToSQLEvalRunOptions(backend: .cloud)
         )
 
         #expect(result.status == .contextWindowFailure)
@@ -1344,7 +1344,7 @@ struct TextToSQLEvalTests {
             generator: ThrowingGenerator(
                 error: SQLGenerationFailure.generation("The local model declined to answer.")
             ),
-            options: TextToSQLEvalRunOptions(backend: .local)
+            options: TextToSQLEvalRunOptions(backend: .cloud)
         )
 
         #expect(result.status == .generationFailure)
@@ -1498,7 +1498,7 @@ struct TextToSQLEvalTests {
             evalCase: evalCase,
             schema: makeCommerceSchema(),
             generation: generation,
-            options: TextToSQLEvalRunOptions(backend: .local),
+            options: TextToSQLEvalRunOptions(backend: .cloud),
             latencyMs: 12
         )
 
@@ -1544,7 +1544,7 @@ struct TextToSQLEvalTests {
             evalCase: evalCase,
             schema: makeCommerceSchema(),
             generation: generation,
-            options: TextToSQLEvalRunOptions(backend: .local),
+            options: TextToSQLEvalRunOptions(backend: .cloud),
             latencyMs: 12
         )
 
@@ -1588,7 +1588,7 @@ struct TextToSQLEvalTests {
             evalCase: evalCase,
             schema: makeCommerceSchema(),
             generation: generation,
-            options: TextToSQLEvalRunOptions(backend: .local),
+            options: TextToSQLEvalRunOptions(backend: .cloud),
             latencyMs: 12
         )
 
@@ -1632,7 +1632,7 @@ struct TextToSQLEvalTests {
                 evalCase: evalCase,
                 schema: makePreseasonSchema(),
                 generation: generation,
-                options: TextToSQLEvalRunOptions(backend: .local),
+                options: TextToSQLEvalRunOptions(backend: .cloud),
                 latencyMs: 12
             )
 
@@ -1671,7 +1671,7 @@ struct TextToSQLEvalTests {
             evalCase: evalCase,
             schema: makePreseasonSchema(),
             generation: generation,
-            options: TextToSQLEvalRunOptions(backend: .local),
+            options: TextToSQLEvalRunOptions(backend: .cloud),
             latencyMs: 12
         )
 

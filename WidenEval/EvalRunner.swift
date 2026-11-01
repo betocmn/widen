@@ -1,10 +1,6 @@
 import CryptoKit
 import Foundation
 
-#if canImport(FoundationModels)
-    import FoundationModels
-#endif
-
 import WidenKit
 
 struct EvalRun {
@@ -235,7 +231,7 @@ struct EvalRunner {
             suiteVersion: suite.version,
             suiteFileHash: Self.sha256(suiteData),
             schemaFixtureHashes: schemas.mapValues(\.sha256),
-            model: options.backendMode == .local ? nil : options.model,
+            model: options.model,
             expectedCanonicalModelID: expectedCanonicalModelID,
             backendMode: options.backendMode.rawValue,
             cloudAgentMode: options.backendMode.backends.contains(.cloud)
@@ -337,7 +333,7 @@ struct EvalRunner {
                 schemaAgentPlanConsistencyMode: options.usesCloudSchemaAgent
                     ? options.schemaAgentPlanConsistencyMode.rawValue
                     : nil,
-                model: options.backendMode == .local ? nil : options.model,
+                model: options.model,
                 expectedCanonicalModelID: expectedCanonicalModelID,
                 osVersion: ProcessInfo.processInfo.operatingSystemVersionString,
                 architecture: Self.architecture(),
@@ -432,7 +428,7 @@ struct EvalRunner {
                     let semanticSkip = semanticPreparation.skipResult(
                         for: evalCase,
                         backend: key.backend,
-                        model: key.backend == .cloud ? options.model : nil,
+                        model: options.model,
                         repeatIndex: key.repeatIndex
                     )
                 {
@@ -441,7 +437,7 @@ struct EvalRunner {
                     for: key.backend,
                     maximumHTTPAttempts: budgetTracker.remainingHTTPAttempts(for: key.backend)
                 ) {
-                    let prompt = promptText(for: key.backend, evalCase: evalCase, schema: schema)
+                    let prompt = promptText(evalCase: evalCase, schema: schema)
                     let verificationService: PostgresService?
                     let verificationConnection: PostgresConnectionHandle?
                     if let semanticPreparation,
@@ -460,7 +456,7 @@ struct EvalRunner {
                             result = semanticVerificationUnavailableResult(
                                 evalCase: evalCase,
                                 backend: key.backend,
-                                model: key.backend == .cloud ? options.model : nil,
+                                model: options.model,
                                 repeatIndex: key.repeatIndex,
                                 message:
                                     "PostgreSQL verification connection failed: \(error.localizedDescription)"
@@ -476,7 +472,7 @@ struct EvalRunner {
                     }
                     let runOptions = TextToSQLEvalRunOptions(
                         backend: key.backend,
-                        model: key.backend == .cloud ? options.model : nil,
+                        model: options.model,
                         repeatIndex: key.repeatIndex,
                         estimatedInitialPromptCharacters: prompt.count,
                         estimatedInitialPrompt: options.recordPrompts ? prompt : nil,
@@ -533,7 +529,9 @@ struct EvalRunner {
         if !options.explicitOptions.contains(.backendMode) {
             guard let backendMode = EvalBackendMode(rawValue: previousRun.manifest.backendMode) else {
                 throw EvalRunnerError.invalidResumeRun(
-                    "Previous run has unknown backend mode \(previousRun.manifest.backendMode)."
+                    EvalBackendMode.removedRawValues.contains(previousRun.manifest.backendMode)
+                        ? TextToSQLEvalBackend.removedOnDeviceBackendMessage
+                        : "Previous run has unknown backend mode \(previousRun.manifest.backendMode)."
                 )
             }
             options.backendMode = backendMode
@@ -1029,15 +1027,6 @@ struct EvalRunner {
         maximumHTTPAttempts: Int?
     ) -> (any SQLGenerator)? {
         switch backend {
-        case .local:
-            #if canImport(FoundationModels)
-                if #available(macOS 26.0, *) {
-                    return FoundationModelsSQLGenerator()
-                }
-                return nil
-            #else
-                return nil
-            #endif
         case .cloud:
             guard let apiKey = Self.openRouterAPIKey() else { return nil }
             let expectedCanonicalModelID = OpenRouterCatalog.expectedCanonicalModelID(
@@ -1102,15 +1091,6 @@ struct EvalRunner {
 
     private func backendUnavailableReason(for backend: TextToSQLEvalBackend) -> String? {
         switch backend {
-        case .local:
-            #if canImport(FoundationModels)
-                if #available(macOS 26.0, *) {
-                    return FoundationModelsSQLGenerator.availabilityMessage
-                }
-                return "Foundation Models requires macOS 26 or later."
-            #else
-                return "Foundation Models is not available in this build."
-            #endif
         case .cloud:
             return Self.openRouterAPIKey() == nil
                 ? "WIDEN_EVAL_OPENROUTER_API_KEY is not set."
@@ -1119,11 +1099,10 @@ struct EvalRunner {
     }
 
     private func promptText(
-        for backend: TextToSQLEvalBackend,
         evalCase: TextToSQLEvalCase,
         schema: DatabaseSchema
     ) -> String {
-        if backend == .cloud, options.cloudAgentMode == .tools {
+        if options.cloudAgentMode == .tools {
             return [
                 "Schema-tool agent initial request estimate.",
                 "The full DatabaseSchema is intentionally not sent in the first request.",
@@ -1131,12 +1110,11 @@ struct EvalRunner {
                 "Database context: \(evalCase.databaseContext ?? "")",
             ].joined(separator: "\n")
         }
-        let budget = backend == .cloud ? 60_000 : 8_000
         return SQLPromptBuilder.prompt(
             question: evalCase.question,
             schema: schema,
             databaseContext: evalCase.databaseContext,
-            maxSchemaCharacters: budget
+            maxSchemaCharacters: 60_000
         )
     }
 
@@ -1150,7 +1128,7 @@ struct EvalRunner {
         return TextToSQLEvalResult(
             caseID: evalCase.id,
             backend: backend,
-            model: backend == .cloud ? options.model : nil,
+            model: options.model,
             repeatIndex: repeatIndex,
             status: .backendUnavailable,
             metrics: TextToSQLEvalMetrics(
@@ -1177,7 +1155,7 @@ struct EvalRunner {
         TextToSQLEvalResult(
             caseID: evalCase.id,
             backend: backend,
-            model: backend == .cloud ? options.model : nil,
+            model: options.model,
             repeatIndex: repeatIndex,
             status: .skippedBudgetLimit,
             metrics: TextToSQLEvalMetrics(

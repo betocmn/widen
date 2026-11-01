@@ -1,8 +1,28 @@
 import Foundation
 
 public enum TextToSQLEvalBackend: String, Codable, CaseIterable, Equatable, Sendable {
-    case local
     case cloud
+
+    public static let removedOnDeviceBackendMessage =
+        "Eval results from the removed on-device backend (\"local\") cannot be resumed or triaged."
+
+    public init(from decoder: any Decoder) throws {
+        let container = try decoder.singleValueContainer()
+        let rawValue = try container.decode(String.self)
+        if let backend = Self(rawValue: rawValue) {
+            self = backend
+        } else if rawValue == "local" {
+            throw DecodingError.dataCorruptedError(
+                in: container,
+                debugDescription: Self.removedOnDeviceBackendMessage
+            )
+        } else {
+            throw DecodingError.dataCorruptedError(
+                in: container,
+                debugDescription: "Unknown eval backend \"\(rawValue)\"."
+            )
+        }
+    }
 }
 
 public enum TextToSQLEvalCaseStatus: String, Codable, CaseIterable, Equatable, Sendable {
