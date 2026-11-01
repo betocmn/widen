@@ -591,6 +591,23 @@ struct ChatCompletionErrorEnvelope: Decodable {
         let message: String?
         let metadata: Metadata?
 
+        private enum CodingKeys: String, CodingKey {
+            case code
+            case type
+            case message
+            case metadata
+        }
+
+        init(from decoder: any Decoder) throws {
+            let container = try decoder.container(keyedBy: CodingKeys.self)
+            code = try container.decodeIfPresent(OpenRouterJSONValue.self, forKey: .code)
+            // `type` is only a classification hint, so an unexpected shape
+            // drops it instead of the whole error envelope.
+            type = try? container.decodeIfPresent(String.self, forKey: .type)
+            message = try container.decodeIfPresent(String.self, forKey: .message)
+            metadata = try container.decodeIfPresent(Metadata.self, forKey: .metadata)
+        }
+
         var httpStatusCode: Int? {
             switch code {
             case .int(let value):

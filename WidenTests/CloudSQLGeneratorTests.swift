@@ -1449,6 +1449,88 @@ struct CloudSQLGeneratorTests {
         #expect(fallback.message == "Particle returned HTTP 502.")
     }
 
+    @Test func openRouterIgnoresTopLevelErrorTypeAndTypedCode() {
+        func failure(_ error: [String: Any], status: Int) -> CloudRequestFailure {
+            CloudSQLResponseParser.failure(
+                from: jsonData(["error": error]),
+                response: response(url: Self.chatEndpoint, status: status),
+                requestedModelID: Self.modelID,
+                attemptCount: 1,
+                profile: .openRouterTest
+            )
+        }
+
+        // A passed-through upstream `type` and string `code` would mean
+        // authentication and out of credits on Particle; on OpenRouter only
+        // `metadata` and the status classify, as before.
+        let bare = failure(["message": "Upstream busy."], status: 503)
+        let typed = failure(
+            ["message": "Upstream busy.", "type": "authentication", "code": "payment_required"],
+            status: 503
+        )
+        #expect(typed.category == bare.category)
+        #expect(typed.diagnostic.providerErrorType == nil)
+        #expect(typed.diagnostic.providerCode == nil)
+
+        let withMetadata = failure(
+            [
+                "message": "Upstream busy.",
+                "type": "authentication",
+                "code": "payment_required",
+                "metadata": ["error_type": "provider_unavailable", "provider_code": "overloaded"],
+            ],
+            status: 503
+        )
+        #expect(withMetadata.category == .providerUnavailable)
+        #expect(withMetadata.diagnostic.providerErrorType == "provider_unavailable")
+        #expect(withMetadata.diagnostic.providerCode == "overloaded")
+    }
+
+    @Test(arguments: [CloudModelProfile.particleTest, .openRouterTest])
+    func errorEnvelopeWithANonStringTypeKeepsItsMessageAndCode(profile: CloudModelProfile) throws {
+        let error: [String: Any] = profile.usesOpenRouterRouting
+            ? [
+                "message": "No credits left.",
+                "type": ["name": "billing"],
+                "code": 402,
+                "metadata": ["error_type": "insufficient_credits"],
+            ]
+            : [
+                "message": "No credits left.",
+                "type": ["name": "billing"],
+                "code": "insufficient_credits",
+            ]
+
+        let nonSuccess = CloudSQLResponseParser.failure(
+            from: jsonData(["error": error]),
+            response: response(url: profile.chatCompletionsURL, status: 402),
+            requestedModelID: profile.requestedModelID,
+            attemptCount: 1,
+            profile: profile
+        )
+        #expect(nonSuccess.category == .paymentRequired)
+        #expect(nonSuccess.message == "No credits left.")
+        #expect(nonSuccess.diagnostic.providerErrorType == (profile.usesOpenRouterRouting ? "insufficient_credits" : nil))
+
+        // The same envelope inside an HTTP 200 is still a provider error,
+        // not a malformed response.
+        do {
+            _ = try CloudSQLResponseParser(profile: profile).parse(
+                data: jsonData(["id": "cmpl-typed-error", "error": error]),
+                response: response(url: profile.chatCompletionsURL, status: 200),
+                requestedModelID: profile.requestedModelID,
+                mode: .promptOnlyJSON,
+                requestCount: 1,
+                retryCount: 0
+            )
+            Issue.record("Expected a provider error")
+        } catch let failure as CloudRequestFailure {
+            #expect(failure.category == .paymentRequired)
+            #expect(failure.message == "No credits left.")
+            #expect(failure.diagnostic.completionID == "cmpl-typed-error")
+        }
+    }
+
     @Test func openRouterMessageWordingReclassifiesOnlyOpenRouterFailures() {
         func category(_ message: String, status: Int, profile: CloudModelProfile) -> CloudRequestFailure.Category {
             CloudSQLResponseParser.failure(
@@ -1489,6 +1571,7 @@ struct CloudSQLGeneratorTests {
             profile: .openRouterTest
         )
         #expect(openRouter.category == .providerOverloaded)
+        #expect(openRouter.diagnostic.providerCode == nil)
         #expect(
             CloudSQLResponseParser.failure(
                 from: Data(),

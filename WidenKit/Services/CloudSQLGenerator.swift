@@ -622,7 +622,10 @@ struct CloudSQLResponseParser: Sendable {
 
     /// OpenRouter puts the error type and provider code in `metadata`;
     /// Particle sends them as `error.type` and a string `error.code`. Either
-    /// way they are kept as `providerErrorType` and `providerCode`.
+    /// way they are kept as `providerErrorType` and `providerCode`. An
+    /// OpenRouter profile reads only `metadata`, as it always has, so a
+    /// passed-through upstream `type` or `code` changes neither its category
+    /// nor its recorded diagnostics.
     static func failure(
         apiError: ChatCompletionErrorEnvelope.APIError,
         httpStatus: Int?,
@@ -637,8 +640,11 @@ struct CloudSQLResponseParser: Sendable {
         let fallbackMessage = "\(profile.provider.displayName) returned an error."
         let message = apiError.message ?? fallbackMessage
         let effectiveHTTPStatus = apiError.httpStatusCode ?? httpStatus
-        let providerErrorType = apiError.metadata?.errorType ?? apiError.type
-        let providerCode = apiError.metadata?.providerCode ?? apiError.typedCode
+        let readsTopLevelFields = !profile.usesOpenRouterRouting
+        let providerErrorType = apiError.metadata?.errorType
+            ?? (readsTopLevelFields ? apiError.type : nil)
+        let providerCode = apiError.metadata?.providerCode
+            ?? (readsTopLevelFields ? apiError.typedCode : nil)
         var displayMessage = safeMessage(message, fallback: fallbackMessage)
         if profile.usesOpenRouterRouting, isProviderRoutingPolicyMessage(message) {
             displayMessage =
