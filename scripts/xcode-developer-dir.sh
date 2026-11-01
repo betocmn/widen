@@ -8,6 +8,11 @@ MIN_XCODE_MAJOR=26
 
 print_xcode_dir() {
   local candidate="$1"
+  # Drop trailing slashes (shell completion adds one) so callers such as
+  # `make xcode` can strip /Contents/Developer from the printed path.
+  while [ "${candidate%/}" != "$candidate" ]; do
+    candidate="${candidate%/}"
+  done
   # xcrun also accepts an Xcode app bundle as DEVELOPER_DIR.
   if [ -d "$candidate/Contents/Developer" ]; then
     candidate="$candidate/Contents/Developer"
