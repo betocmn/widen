@@ -203,6 +203,68 @@ struct SessionStoreTests {
         #expect(saved == fixture)
     }
 
+    /// Loads the fixture after one textual edit, standing in for a file
+    /// written by a newer build.
+    private func loadFixture(replacing original: String, with replacement: String) throws -> QuerySession {
+        let (store, dir) = makeTempStore()
+        defer { try? FileManager.default.removeItem(at: dir) }
+        let json = SavedCloudSessionsFixture.json
+        #expect(json.contains(original))
+        try writeSessionsFile(json.replacingOccurrences(of: original, with: replacement), for: store)
+        return try #require(try store.load().first)
+    }
+
+    @Test func unknownStructuredOutputModeDropsOnlyBackendMetadata() throws {
+        let session = try loadFixture(
+            replacing: #""structuredOutputMode": "promptOnlyJSON""#,
+            with: #""structuredOutputMode": "jsonObject""#
+        )
+
+        let generation = try #require(session.lastGeneration)
+        #expect(generation.backendMetadata == nil)
+        #expect(generation.explanation == "Top ten users by paid order revenue.")
+        #expect(generation.schemaToolCalls.count == 2)
+        #expect(generation.inspectionToolCalls.count == 2)
+        #expect(session.messages[3].generation == generation)
+        #expect(session.messages[1].generation?.backendMetadata?.structuredOutputMode == .strictJSONSchema)
+    }
+
+    @Test func unknownAppSideRejectionReasonDropsOnlyBackendMetadata() throws {
+        let session = try loadFixture(
+            replacing: #""appSideRejectionReason": "uninspectedObject""#,
+            with: #""appSideRejectionReason": "criticRejected""#
+        )
+
+        let generation = try #require(session.lastGeneration)
+        #expect(generation.backendMetadata == nil)
+        #expect(generation.schemaToolCalls.count == 2)
+        #expect(generation.inspectionToolCalls.count == 2)
+    }
+
+    @Test func unknownSchemaToolErrorCodeDropsOnlySchemaToolTraces() throws {
+        let session = try loadFixture(
+            replacing: #""errorCode": "staleObjectID""#,
+            with: #""errorCode": "budgetRejected""#
+        )
+
+        let generation = try #require(session.lastGeneration)
+        #expect(generation.schemaToolCalls.isEmpty)
+        #expect(generation.inspectionToolCalls.map(\.errorCode) == [nil, .policyDenied])
+        #expect(generation.backendMetadata?.agentDiagnostics?.appSideRejectionReason == .uninspectedObject)
+    }
+
+    @Test func unknownInspectionErrorCodeDropsOnlyInspectionTraces() throws {
+        let session = try loadFixture(
+            replacing: #""errorCode": "policyDenied""#,
+            with: #""errorCode": "retentionDenied""#
+        )
+
+        let generation = try #require(session.lastGeneration)
+        #expect(generation.inspectionToolCalls.isEmpty)
+        #expect(generation.schemaToolCalls.map(\.errorCode) == [nil, .staleObjectID])
+        #expect(generation.backendMetadata?.structuredOutputMode == .promptOnlyJSON)
+    }
+
     @Test func persistedEnumRawValuesAreFrozen() {
         // These raw values are stored in sessions.json and in eval results.
         // An older build can't decode a case it doesn't know, so adding,

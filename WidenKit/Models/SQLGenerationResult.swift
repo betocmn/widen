@@ -222,18 +222,21 @@ public struct SQLGenerationResult: Codable, Equatable, Sendable {
             PendingClarification.self,
             forKey: .pendingClarification
         )
-        backendMetadata = try container.decodeIfPresent(
+        // Diagnostics only: a value this build can't read (say, an enum case
+        // written by a newer build) drops the diagnostics, never the whole
+        // saved session.
+        backendMetadata = try? container.decodeIfPresent(
             OpenRouterGenerationMetadata.self,
             forKey: .backendMetadata
         )
-        schemaToolCalls = try container.decodeIfPresent(
+        schemaToolCalls = (try? container.decodeIfPresent(
             [SchemaToolCallTrace].self,
             forKey: .schemaToolCalls
-        ) ?? []
-        inspectionToolCalls = try container.decodeIfPresent(
+        )) ?? []
+        inspectionToolCalls = (try? container.decodeIfPresent(
             [DatabaseInspectionToolCallTrace].self,
             forKey: .inspectionToolCalls
-        ) ?? []
+        )) ?? []
     }
 
     public func encode(to encoder: any Encoder) throws {
