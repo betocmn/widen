@@ -236,6 +236,9 @@ struct TextToSQLEvalExtraCallsMetricsTests {
                 "terminalRequired": 1,
             ]
         )
+        // The run that ran out of time before its forced request.
+        #expect(summary.timedOut == 1)
+        #expect(TextToSQLEvalForcedTerminalSummary.timedOutFailure == "wallClockTimeout")
         // Only invalid-request and unsupported-feature failures are the
         // provider refusing the forced request; a rate limit is not.
         #expect(summary.providerRejected == 2)
@@ -249,6 +252,7 @@ struct TextToSQLEvalExtraCallsMetricsTests {
             "| Forced final answers attempted | 4 |",
             "| Forced final answers succeeded | 1 of 4 (25.0%) |",
             "| Forced final answer reasons | terminalRequired 1, timeReserve 1, toolBudget 2, turnBudget 1 |",
+            "| Forced final answers timed out | 1 |",
             "| Forced requests rejected by the provider | 2 |",
         ])
     }
@@ -270,14 +274,65 @@ struct TextToSQLEvalExtraCallsMetricsTests {
             attempted: 0,
             succeeded: 0,
             reasonCounts: [:],
+            timedOut: 0,
             providerRejected: 0
         ))
         #expect(TextToSQLEvalForcedTerminalSummary.markdownRows(forced) == [
             "| Forced final answers attempted | 0 |",
             "| Forced final answers succeeded | 0 of 0 |",
             "| Forced final answer reasons | - |",
+            "| Forced final answers timed out | 0 |",
             "| Forced requests rejected by the provider | 0 |",
         ])
+    }
+
+    @Test func internalAgentTimeoutsCountForcedRequestsThatRanIntoTheWallClock() throws {
+        var plainTimeout = SchemaToolAgentDiagnostics(terminalAction: "sql")
+        plainTimeout.appSideRejectionReason = .timedOut
+        // A forced request that timed out leaves the failure that forced
+        // it, here the tool budget's fallback clarification.
+        var forcedTimeout = Self.critic(
+            forcedReason: "toolBudget",
+            forcedRequests: 1,
+            forcedSucceeded: false,
+            forcedFailure: "wallClockTimeout"
+        )
+        forcedTimeout.appSideRejectionReason = .clarificationRejected
+        // A time-reserve run that timed out records both, and counts once.
+        var reserveTimeout = Self.critic(
+            forcedReason: "timeReserve",
+            forcedRequests: 1,
+            forcedSucceeded: false,
+            forcedFailure: "wallClockTimeout"
+        )
+        reserveTimeout.appSideRejectionReason = .timedOut
+        var budget = SchemaToolAgentDiagnostics(terminalAction: "sql")
+        budget.appSideRejectionReason = .budgetExhausted
+
+        let results = [
+            Self.result(plainTimeout),
+            Self.result(forcedTimeout),
+            Self.result(reserveTimeout),
+            Self.result(budget),
+            Self.result(nil),
+        ] + Self.scriptedResults()
+
+        // The scripted results add the run that timed out before its
+        // forced request; their provider failures are not timeouts.
+        #expect(TextToSQLEvalInternalAgentTimeouts.count(results) == 4)
+        #expect(TextToSQLEvalInternalAgentTimeouts.count(Self.scriptedResults()) == 1)
+        #expect(TextToSQLEvalInternalAgentTimeouts.count([Self.result(budget), Self.result(nil)]) == 0)
+
+        // The gate's and the triage's Run tables both use this count.
+        let gateReporter = try Self.source("WidenEval/ReleaseGateReporter.swift")
+        let countStart = try #require(
+            gateReporter.range(of: "static func internalSchemaAgentTimeoutCount(_ results: [TextToSQLEvalResult]) -> Int {")
+        )
+        #expect(
+            gateReporter[countStart.upperBound...].prefix(120)
+                .contains("TextToSQLEvalInternalAgentTimeouts.count(results)")
+        )
+        #expect(gateReporter.components(separatedBy: "| Internal schema-agent timeouts | \\(").count == 3)
     }
 
     @Test func summariesRoundTripAndOldRunFilesStillDecode() throws {

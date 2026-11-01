@@ -4677,6 +4677,63 @@ struct SchemaToolSQLAgentTests {
         }
     }
 
+    @Test func forcedTerminalWallClockTimeoutRethrowsTriggerAndCountsAsTimeout() async throws {
+        let schema = Self.makeSchema()
+        let chatTransport = ScriptedThenHangingTransport { request, index in
+            switch index {
+            case 1:
+                return Self.assistantToolCalls([
+                    Self.toolCall(id: "search-forced-timeout", name: "search_schema", arguments: [
+                        "query": "users",
+                        "limit": 2,
+                    ]),
+                ])
+            case 2:
+                let tableID = try Self.tableHandle(named: #""public"."users""#, in: request)
+                return Self.assistantToolCalls([
+                    Self.toolCall(id: "describe-forced-timeout", name: "describe_tables", arguments: [
+                        "table_ids": [tableID],
+                    ]),
+                ])
+            default:
+                // The forced request runs into the wall clock.
+                try Self.expectForcedTerminalRequest(request)
+                return nil
+            }
+        }
+        let agent = makeAgent(
+            schema: schema,
+            chatTransport: chatTransport,
+            configuration: SchemaToolSQLAgentConfiguration(
+                maximumModelTurns: 2,
+                maximumHTTPAttempts: 8,
+                wallClockTimeoutSeconds: 0.5
+            )
+        )
+
+        do {
+            _ = try await agent.generateSQL(
+                question: "List users",
+                schema: schema,
+                context: SQLGenerationContext(),
+                config: SQLGenerationConfig()
+            )
+            Issue.record("Expected the turn-budget failure")
+        } catch let failure as SchemaToolAgentFailure {
+            // The trigger's failure is thrown, as without the forced request.
+            #expect(failure.category == .modelTurnBudgetExhausted)
+            #expect(chatTransport.requests.count == 3)
+            let diagnostics = try #require(failure.backendMetadata?.agentDiagnostics)
+            #expect(diagnostics.forcedTerminalReason == "turnBudget")
+            #expect(diagnostics.forcedTerminalRequestCount == 1)
+            #expect(diagnostics.forcedTerminalSucceeded == false)
+            #expect(diagnostics.forcedTerminalFailure == TextToSQLEvalForcedTerminalSummary.timedOutFailure)
+            #expect(diagnostics.appSideRejectionReason == .budgetExhausted)
+            // The eval still counts the timeout for criterion K9.
+            #expect(TextToSQLEvalInternalAgentTimeouts.timedOut(diagnostics))
+        }
+    }
+
     @Test func forcedTerminalLedgerRejectionGetsSecondForcedRequestThenFails() async throws {
         let schema = Self.makeSchema()
         let uninspectedSQL = "SELECT o.id FROM public.orders AS o ORDER BY o.id LIMIT 100"

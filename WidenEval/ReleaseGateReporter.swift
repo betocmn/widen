@@ -118,9 +118,7 @@ enum TextToSQLReleaseGateReporter {
     }
 
     static func internalSchemaAgentTimeoutCount(_ results: [TextToSQLEvalResult]) -> Int {
-        results.filter {
-            $0.metrics.openRouterAgentDiagnostics?.appSideRejectionReason == .timedOut
-        }.count
+        TextToSQLEvalInternalAgentTimeouts.count(results)
     }
 
     private static func markdown(
