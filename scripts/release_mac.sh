@@ -15,7 +15,7 @@ fi
 APP_NAME="${APP_NAME:-Widen}"
 REPO="${REPO:-betocmn/widen}"
 TEAM_ID="${TEAM_ID:-}"
-DEVELOPER_DIR="${DEVELOPER_DIR:-/Applications/Xcode-26.app/Contents/Developer}"
+DEVELOPER_DIR="$(bash "$ROOT_DIR/scripts/xcode-developer-dir.sh")"
 NOTARY_PROFILE="${NOTARY_PROFILE:-}"
 SPARKLE_ACCOUNT="${SPARKLE_ACCOUNT:-ed25519}"
 SPARKLE_PUBLIC_ED_KEY="${SPARKLE_PUBLIC_ED_KEY:-}"

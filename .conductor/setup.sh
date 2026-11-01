@@ -9,22 +9,10 @@ set -euo pipefail
 SCRIPT_DIR="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)"
 
 if [ "${CONDUCTOR_IS_LOCAL:-1}" = "1" ]; then
-  # Honor an explicit toolchain; otherwise prefer the Makefile's Xcode 26
-  # installation, then the active Xcode, then the standard app location.
-  # Command Line Tools alone do not include xcodebuild.
-  if [ -z "${DEVELOPER_DIR:-}" ]; then
-    for developer_dir in \
-      /Applications/Xcode-26.app/Contents/Developer \
-      "$(xcode-select --print-path 2>/dev/null || true)" \
-      /Applications/Xcode.app/Contents/Developer; do
-      if [ -n "$developer_dir" ] && [ -x "$developer_dir/usr/bin/xcodebuild" ]; then
-        export DEVELOPER_DIR="$developer_dir"
-        break
-      fi
-    done
-  fi
+  DEVELOPER_DIR="$(bash "$SCRIPT_DIR/../scripts/xcode-developer-dir.sh" --optional)"
 
   if [ -n "${DEVELOPER_DIR:-}" ]; then
+    export DEVELOPER_DIR
     # An explicitly configured but unusable Xcode, or a package resolution
     # failure, must still fail setup so the underlying error stays visible.
     make setup

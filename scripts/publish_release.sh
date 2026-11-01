@@ -7,7 +7,6 @@ cd "$ROOT_DIR"
 APP_NAME="${APP_NAME:-Widen}"
 REPO="${REPO:-betocmn/widen}"
 RELEASE_ENV_FILE="${RELEASE_ENV_FILE:-.env.release.local}"
-DEVELOPER_DIR="${DEVELOPER_DIR:-/Applications/Xcode-26.app/Contents/Developer}"
 DRY_RUN=0
 OPEN_RELEASE=1
 BUILD_OVERRIDE=""
@@ -165,7 +164,7 @@ if [ -f "$RELEASE_ENV_FILE" ]; then
   set +a
 fi
 
-DEVELOPER_DIR="${DEVELOPER_DIR:-/Applications/Xcode-26.app/Contents/Developer}"
+DEVELOPER_DIR="$(bash "$ROOT_DIR/scripts/xcode-developer-dir.sh")"
 TEAM_ID="${TEAM_ID:-}"
 NOTARY_PROFILE="${NOTARY_PROFILE:-}"
 SPARKLE_PUBLIC_ED_KEY="${SPARKLE_PUBLIC_ED_KEY:-}"

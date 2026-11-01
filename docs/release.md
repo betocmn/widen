@@ -38,7 +38,8 @@ The script:
 
    Optional values:
 
-   - `DEVELOPER_DIR`: Xcode path. The default is `/Applications/Xcode-26.app/Contents/Developer`.
+   - `DEVELOPER_DIR`: optional Xcode path. By default, use the selected full Xcode,
+     then `/Applications/Xcode.app` or another installed Xcode app (26 or later).
 
    `.env.release.local` is ignored by git. Do not commit it.
 
@@ -65,7 +66,7 @@ The script:
    ```sh
    : "${NOTARY_PROFILE:?Set NOTARY_PROFILE in .env.release.local and load it first}"
    security find-identity -v -p codesigning | rg "Developer ID Application"
-   DEVELOPER_DIR="${DEVELOPER_DIR:-/Applications/Xcode-26.app/Contents/Developer}" \
+   DEVELOPER_DIR="$(bash scripts/xcode-developer-dir.sh)" \
      xcrun notarytool history --keychain-profile "$NOTARY_PROFILE"
    ```
 
@@ -109,7 +110,7 @@ verifies the route OpenRouter will actually use.
 
    ```sh
    make project
-   DEVELOPER_DIR=/Applications/Xcode-26.app/Contents/Developer \
+   DEVELOPER_DIR="$(bash scripts/xcode-developer-dir.sh)" \
      xcodebuild -project Widen.xcodeproj -scheme Widen -configuration Debug \
        -derivedDataPath build test \
        -only-testing:WidenTests/OpenRouterCatalogTests \
@@ -253,7 +254,7 @@ or a GitHub Release:
 make release-mac
 ```
 
-`make release-mac` builds Release with Xcode 26, injects local release env,
+`make release-mac` builds Release with the detected Xcode, injects local release env,
 re-signs Sparkle helpers, notarizes and staples `Widen.app`, creates the
 Sparkle ZIP, generates `appcast.xml`, and creates/signs/notarizes/staples the
 DMG. The appcast enclosure URL points at the versioned GitHub Release ZIP:
