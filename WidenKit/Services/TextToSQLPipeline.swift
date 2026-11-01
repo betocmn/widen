@@ -743,7 +743,7 @@ public struct TextToSQLPipeline: TextToSQLRunning {
                     after: startingGeneration,
                     modelCallBudget: repairModelCallBudget
                 )
-                : 1
+                : GeneratedSQLRepairSupport.verificationRepairModelCallBudget
         )
 
         guard let repairMode = coordinator.beginNextAttempt() else {

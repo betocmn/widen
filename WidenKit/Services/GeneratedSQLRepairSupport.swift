@@ -8,6 +8,7 @@ enum GeneratedSQLRepairFailureMode: Sendable {
 enum GeneratedSQLRepairSupport {
     static let localModelCallBudget = 3
     static let constrainedLocalModelCallBudget = 2
+    static let verificationRepairModelCallBudget = 1
 
     static func remainingRepairCalls(
         after generation: SQLGenerationResult?,
