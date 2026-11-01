@@ -264,6 +264,11 @@ it explicitly when gating a version that is not in `Info.plist` yet.
 writes both files from the resumed run, so the committed report and triage
 always describe the same run.
 
+The eval builds the agent with no database inspection policy and no schema
+fingerprint, so the gate never offers data-inspection tools or runs the
+stale-schema check. It also runs neither execution repair nor session titles;
+see [what the gate does not measure](../docs/evals/how-we-gate.md#what-the-gate-does-not-measure).
+
 The gate exits nonzero unless all thresholds pass: 60 total results, at least
 90% end-to-end semantic pass rate, 100% evaluated safety validity, 100%
 evaluated schema validity, 100% clarification decision accuracy, at least 95%

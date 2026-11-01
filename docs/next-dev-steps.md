@@ -194,7 +194,9 @@ a failed Stage 3 can revert it cleanly:
    `parallel_tool_calls:false`); a failed forced request rethrows the
    original failure.
 7. `feat: add schema agent critic review contract`: the critic returns
-   accept, revise or clarify with issues, and has no SQL field.
+   accept, revise or clarify with issues, and has no SQL field. It sees
+   inspected values only when the connection allows them; the gate passes no
+   inspection policy, so Stage 3 cannot measure that path.
 8. `feat: review schema agent sql with a critic pass`: its own request (no
    tools, `json_object`, effort high, 16k tokens) sharing the agent's
    deadline, HTTP budget and usage; at most 2 revisions; a critic

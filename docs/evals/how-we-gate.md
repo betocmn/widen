@@ -7,10 +7,12 @@ what happens when an experiment fails.
 ## The release gate
 
 `make eval-release` runs a 20-case suite three times (60 results) through the
-same Particle-1 schema-tool pipeline the app uses, with seeded Postgres
-semantic grading: each candidate query executes against a synthetic fixture
-database and its result set is compared to a hand-written golden query's. The
-gate passes only if all of the following hold:
+Particle-1 schema-tool agent the app uses, with seeded Postgres semantic
+grading: each candidate query executes against a synthetic fixture database
+and its result set is compared to a hand-written golden query's. Some app
+paths are left out; see
+[What the gate does not measure](#what-the-gate-does-not-measure). The gate
+passes only if all of the following hold:
 
 | Criterion | Required |
 | --- | --- |
@@ -29,6 +31,19 @@ Particle-1 has not been gated yet, so text-to-SQL stays beta and is not
 described as production-ready. The previous OpenRouter GPT-5.5 profile failed
 the 0.1.0 gate on semantic pass rate. The committed gate report for each
 release lives in [docs/evals/](.).
+
+### What the gate does not measure
+
+- **Execution repair.** When a query fails against your database, the app can
+  send the error to Particle-1 for a fix. The gate grades each result's final
+  SQL but never sends an execution failure back for repair.
+- **Data inspection.** The eval builds the agent with no inspection policy and
+  no schema fingerprint, so the gate never offers the tools that read row
+  counts, column statistics or values, and never runs the check that the
+  schema did not change during generation.
+- **Session titles.** The gate sends no title request.
+
+A passing gate says nothing about these paths.
 
 ## Pinned model and identity check
 

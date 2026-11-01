@@ -603,8 +603,11 @@ override, mock mode, a saved Particle key, and the connection's
 `allowCloudSchemaMetadata`, then builds `SchemaToolSQLAgent` on
 `CloudModelCatalog.productionProfile` with the connection's database
 inspection policy for the cloud audience. There is no backend mode, provider,
-or model preference, so the product path is the same schema-tool agent
-`make eval-release` exercises.
+or model preference. `make eval-release` builds the same agent on the same
+profile, but with no inspection policy, inspection database or schema
+fingerprint, so the gate never offers data-inspection tools or runs the
+stale-schema check. Execution repair (`SessionController`) and session titles
+(`AppState`) run outside the pipeline the gate exercises.
 
 The UI surface is the Settings › LLM tab (`LLMSettingsView`) plus the
 `ParticleStatusChip` toolbar button, which shows `textToSQLStatus` and opens
