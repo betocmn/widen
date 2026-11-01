@@ -307,13 +307,28 @@ public struct CloudRequestFailure: Error, LocalizedError, Equatable, Sendable {
         return copy
     }
 
+    /// True for Particle's `invalid_model_output`: the model's reply failed
+    /// the provider's JSON check. It is the only parsing failure resent.
+    var isInvalidModelOutput: Bool {
+        category == .malformedStructuredResponse
+            && diagnostic.providerCode?.lowercased() == "invalid_model_output"
+    }
+
+    /// Classifies a provider error. In order: the profile's typed error
+    /// codes, the known provider codes, the profile's error types, the known
+    /// error types, OpenRouter's message wording (OpenRouter profiles only),
+    /// and finally the HTTP status.
     static func category(
         errorType: String?,
         providerCode: String? = nil,
         httpStatus: Int?,
-        message: String?
+        message: String?,
+        profile: CloudModelProfile
     ) -> Category {
         let code = providerCode?.lowercased()
+        if let code, let category = profile.errorCodeCategories[code] {
+            return category
+        }
         switch code {
         case "provider_limit", "provider_limit_exceeded", "provider_quota_exceeded":
             return .providerLimit
@@ -324,6 +339,9 @@ public struct CloudRequestFailure: Error, LocalizedError, Equatable, Sendable {
         }
 
         let type = errorType?.lowercased()
+        if let type, let category = profile.errorTypeCategories[type] {
+            return category
+        }
         switch type {
         case "authentication", "invalid_api_key":
             return .authentication
@@ -369,20 +387,22 @@ public struct CloudRequestFailure: Error, LocalizedError, Equatable, Sendable {
             break
         }
 
-        if let message, CloudSQLResponseParser.isProviderOverloadMessage(message) {
-            return .providerOverloaded
-        }
+        if profile.usesOpenRouterRouting {
+            if let message, CloudSQLResponseParser.isProviderOverloadMessage(message) {
+                return .providerOverloaded
+            }
 
-        // OpenRouter reports an exhausted key/credit limit as a plain 403
-        // message without a typed code; classify it as provider budget so
-        // eval runs count it as budget-unavailable, not permission denied.
-        // Gate by status: 401 stays authentication and 5xx stays retryable
-        // even when a provider message mentions a limit. Effective 2xx covers
-        // provider errors delivered inside HTTP-200 envelopes.
-        if let message, CloudSQLResponseParser.isKeyOrCreditLimitMessage(message),
-            httpStatus.map({ [402, 403, 429].contains($0) || (200...299).contains($0) }) ?? true
-        {
-            return .providerLimit
+            // OpenRouter reports an exhausted key/credit limit as a plain 403
+            // message without a typed code; classify it as provider budget so
+            // eval runs count it as budget-unavailable, not permission denied.
+            // Gate by status: 401 stays authentication and 5xx stays retryable
+            // even when a provider message mentions a limit. Effective 2xx
+            // covers provider errors delivered inside HTTP-200 envelopes.
+            if let message, CloudSQLResponseParser.isKeyOrCreditLimitMessage(message),
+                httpStatus.map({ [402, 403, 429].contains($0) || (200...299).contains($0) }) ?? true
+            {
+                return .providerLimit
+            }
         }
 
         switch httpStatus {
@@ -512,7 +532,11 @@ struct ChatCompletionErrorEnvelope: Decodable {
             }
         }
 
+        /// OpenRouter sends the HTTP status here; Particle sends a typed
+        /// string code such as `insufficient_credits`.
         let code: OpenRouterJSONValue?
+        /// Particle's error type, such as `authentication_error`.
+        let type: String?
         let message: String?
         let metadata: Metadata?
 
@@ -527,6 +551,13 @@ struct ChatCompletionErrorEnvelope: Decodable {
             default:
                 nil
             }
+        }
+
+        /// A non-numeric string `code`.
+        var typedCode: String? {
+            guard case .string(let value) = code, Int(value) == nil else { return nil }
+            let trimmed = value.trimmingCharacters(in: .whitespacesAndNewlines)
+            return trimmed.isEmpty ? nil : trimmed
         }
     }
 
@@ -555,19 +586,28 @@ struct ChatCompletionRetryPolicy: Sendable {
         self.maxAttempts = max(1, maxAttempts)
     }
 
+    /// The delay before resending, or nil to stop. `invalidOutputRetries`
+    /// counts earlier resends after `invalid_model_output`; that failure is
+    /// resent once, and every resend still uses an HTTP attempt.
     func retryDelay(
         for failure: CloudRequestFailure,
         attempt: Int,
-        noContentRetries: Int
+        noContentRetries: Int,
+        invalidOutputRetries: Int = 0
     ) -> TimeInterval? {
         guard attempt < maxAttempts else { return nil }
         if failure.category == .noContent, noContentRetries >= 1 { return nil }
-        guard isRetryable(failure.category) else { return nil }
+        let isInvalidModelOutput = failure.isInvalidModelOutput
+        if isInvalidModelOutput {
+            guard invalidOutputRetries < 1 else { return nil }
+        } else {
+            guard isRetryable(failure.category) else { return nil }
+        }
         if let retryAfter = failure.diagnostic.retryAfterSeconds {
             guard retryAfter <= Self.retryAfterCap else { return nil }
             return max(0, retryAfter)
         }
-        let base = attempt == 1 ? 0.5 : 1.0
+        let base = attempt == 1 || isInvalidModelOutput ? 0.5 : 1.0
         let jitter = Double.random(in: 0...0.15)
         return base + jitter
     }

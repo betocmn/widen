@@ -90,6 +90,51 @@ struct CloudSQLGeneratorTests {
         }
     }
 
+    enum ParticleRetry: Sendable {
+        case never
+        case retryable
+        case once
+    }
+
+    /// One row of Particle's error table: a typed code or type at the HTTP
+    /// status Particle sends it with.
+    struct ParticleErrorRow: Sendable, CustomTestStringConvertible {
+        var code: String?
+        var type: String?
+        var status: Int
+        var category: CloudRequestFailure.Category
+        var retry: ParticleRetry
+
+        var testDescription: String {
+            "\(code ?? type ?? "?") → \(category.rawValue)"
+        }
+    }
+
+    private static let particleErrorRows: [ParticleErrorRow] = [
+        .init(code: "invalid_bearer_credential", status: 401, category: .authentication, retry: .never),
+        .init(code: "insufficient_credits", status: 402, category: .paymentRequired, retry: .never),
+        .init(code: "insufficient_scope", status: 403, category: .permissionDenied, retry: .never),
+        .init(code: "model_not_found", status: 404, category: .modelNotFound, retry: .never),
+        .init(code: "request_too_large", status: 413, category: .contextWindow, retry: .never),
+        .init(code: "tokenization_body_too_large", status: 413, category: .contextWindow, retry: .never),
+        .init(code: "context_length_exceeded", status: 400, category: .contextWindow, retry: .never),
+        .init(code: "unsupported_parameter", status: 400, category: .unsupportedFeature, retry: .never),
+        .init(code: "invalid_json", status: 400, category: .invalidRequest, retry: .never),
+        .init(code: "invalid_value", status: 400, category: .invalidRequest, retry: .never),
+        .init(code: "fleet_capacity_exhausted", status: 429, category: .rateLimited, retry: .retryable),
+        .init(code: "internal_error", status: 500, category: .serverFailure, retry: .retryable),
+        .init(code: "invalid_upstream_response", status: 502, category: .providerUnavailable, retry: .retryable),
+        .init(code: "invalid_model_output", status: 502, category: .malformedStructuredResponse, retry: .once),
+        .init(code: "model_unavailable", status: 503, category: .providerUnavailable, retry: .retryable),
+        .init(code: "billing_unavailable", status: 503, category: .providerUnavailable, retry: .retryable),
+        .init(code: "upstream_response_deadline_exceeded", status: 504, category: .timeout, retry: .retryable),
+        .init(type: "authentication_error", status: 401, category: .authentication, retry: .never),
+        .init(type: "insufficient_credits_error", status: 402, category: .paymentRequired, retry: .never),
+        .init(type: "authorization_error", status: 403, category: .permissionDenied, retry: .never),
+        .init(type: "invalid_request_error", status: 400, category: .invalidRequest, retry: .never),
+        .init(type: "rate_limit_error", status: 429, category: .rateLimited, retry: .retryable),
+    ]
+
     private static let chatEndpoint = URL(string: "https://openrouter.test/api/v1/chat/completions")!
     private static let particleChatEndpoint = CloudModelProfile.particleTest.chatCompletionsURL
     private static let particleModelID = CloudModelProfile.particleTest.requestedModelID
@@ -267,7 +312,8 @@ struct CloudSQLGeneratorTests {
             errorType: nil,
             providerCode: nil,
             httpStatus: 403,
-            message: "Key limit exceeded (total limit). Manage it using https://openrouter.ai/keys"
+            message: "Key limit exceeded (total limit). Manage it using https://openrouter.ai/keys",
+            profile: .openRouterTest
         )
         #expect(category == .providerLimit)
         #expect(category.isProviderBudgetUnavailable)
@@ -279,7 +325,8 @@ struct CloudSQLGeneratorTests {
                 errorType: nil,
                 providerCode: nil,
                 httpStatus: 200,
-                message: "Insufficient credits remaining for this key"
+                message: "Insufficient credits remaining for this key",
+                profile: .openRouterTest
             ) == .providerLimit
         )
     }
@@ -304,7 +351,8 @@ struct CloudSQLGeneratorTests {
                 errorType: nil,
                 providerCode: nil,
                 httpStatus: 401,
-                message: "Key limit exceeded for a disabled key"
+                message: "Key limit exceeded for a disabled key",
+                profile: .openRouterTest
             ) == .authentication
         )
         #expect(
@@ -312,7 +360,8 @@ struct CloudSQLGeneratorTests {
                 errorType: nil,
                 providerCode: nil,
                 httpStatus: 500,
-                message: "Upstream provider hit its credit limit"
+                message: "Upstream provider hit its credit limit",
+                profile: .openRouterTest
             ) == .serverFailure
         )
     }
@@ -1180,8 +1229,12 @@ struct CloudSQLGeneratorTests {
         ]
         for (type, status, message, category) in cases {
             #expect(
-                CloudRequestFailure.category(errorType: type, httpStatus: status, message: message)
-                    == category
+                CloudRequestFailure.category(
+                    errorType: type,
+                    httpStatus: status,
+                    message: message,
+                    profile: .openRouterTest
+                ) == category
             )
         }
         #expect(
@@ -1189,7 +1242,8 @@ struct CloudSQLGeneratorTests {
                 errorType: nil,
                 providerCode: "provider_limit",
                 httpStatus: 400,
-                message: nil
+                message: nil,
+                profile: .openRouterTest
             ) == .providerLimit
         )
         #expect(
@@ -1197,7 +1251,8 @@ struct CloudSQLGeneratorTests {
                 errorType: "rate_limit_exceeded",
                 providerCode: "provider_limit",
                 httpStatus: 429,
-                message: nil
+                message: nil,
+                profile: .openRouterTest
             ) == .providerLimit
         )
         #expect(
@@ -1205,7 +1260,8 @@ struct CloudSQLGeneratorTests {
                 errorType: "rate_limit_exceeded",
                 providerCode: "credits",
                 httpStatus: 429,
-                message: nil
+                message: nil,
+                profile: .openRouterTest
             ) == .paymentRequired
         )
 
@@ -1220,6 +1276,228 @@ struct CloudSQLGeneratorTests {
             CloudRequestFailure(category: .networkTransport, message: "offline").category
                 == .networkTransport
         )
+    }
+
+    @Test(arguments: Self.particleErrorRows)
+    func particleErrorsMapToTheirCategories(row: ParticleErrorRow) {
+        let policy = ChatCompletionRetryPolicy()
+        // The typed code or type decides, even at a status that alone would
+        // classify the error as an invalid request.
+        for status in [row.status, 400] {
+            let failure = CloudSQLResponseParser.failure(
+                from: particleErrorResponse(code: row.code, type: row.type, message: "Particle error."),
+                response: response(url: Self.particleChatEndpoint, status: status),
+                requestedModelID: Self.particleModelID,
+                attemptCount: 1,
+                profile: .particleTest
+            )
+            #expect(failure.category == row.category, "HTTP \(status)")
+            #expect(failure.diagnostic.providerCode == row.code)
+            #expect(failure.diagnostic.providerErrorType == row.type)
+            #expect(failure.diagnostic.httpStatus == status)
+
+            let firstResend = policy.retryDelay(for: failure, attempt: 1, noContentRetries: 0)
+            let laterResend = policy.retryDelay(
+                for: failure,
+                attempt: 2,
+                noContentRetries: 0,
+                invalidOutputRetries: 1
+            )
+            switch row.retry {
+            case .never:
+                #expect(firstResend == nil)
+            case .retryable:
+                #expect(firstResend != nil)
+                #expect(laterResend != nil)
+            case .once:
+                #expect(firstResend != nil)
+                #expect(laterResend == nil)
+                #expect(failure.pipelineCategory == .structuredResponseParsing)
+            }
+        }
+    }
+
+    @Test func particleCodeOutranksTypeAndTypeOutranksStatus() {
+        func failure(_ body: Data, status: Int) -> CloudRequestFailure {
+            CloudSQLResponseParser.failure(
+                from: body,
+                response: response(url: Self.particleChatEndpoint, status: status),
+                requestedModelID: Self.particleModelID,
+                attemptCount: 1,
+                profile: .particleTest
+            )
+        }
+
+        #expect(
+            failure(
+                particleErrorResponse(code: "insufficient_credits", type: "rate_limit_error", message: "No credits."),
+                status: 429
+            ).category == .paymentRequired
+        )
+        #expect(
+            failure(
+                particleErrorResponse(code: nil, type: "authorization_error", message: "Missing scope."),
+                status: 400
+            ).category == .permissionDenied
+        )
+        let unknown = failure(
+            particleErrorResponse(code: "a_new_code", type: "server_error", message: "Busy."),
+            status: 503
+        )
+        #expect(unknown.category == .providerOverloaded)
+        #expect(unknown.diagnostic.providerCode == "a_new_code")
+        #expect(unknown.diagnostic.providerErrorType == "server_error")
+
+        // A numeric code is an HTTP status, not a typed code.
+        let numeric = failure(jsonData(["error": ["message": "Slow down.", "code": "429"]]), status: 200)
+        #expect(numeric.category == .rateLimited)
+        #expect(numeric.diagnostic.httpStatus == 429)
+        #expect(numeric.diagnostic.providerCode == nil)
+
+        let fallback = failure(Data("<html>Bad gateway</html>".utf8), status: 502)
+        #expect(fallback.category == .providerUnavailable)
+        #expect(fallback.message == "Particle returned HTTP 502.")
+    }
+
+    @Test func openRouterMessageWordingReclassifiesOnlyOpenRouterFailures() {
+        func category(_ message: String, status: Int, profile: CloudModelProfile) -> CloudRequestFailure.Category {
+            CloudSQLResponseParser.failure(
+                from: jsonData(["error": ["message": message]]),
+                response: response(url: profile.chatCompletionsURL, status: status),
+                requestedModelID: profile.requestedModelID,
+                attemptCount: 1,
+                profile: profile
+            ).category
+        }
+
+        // A 402 that mentions credits is out of credits on Particle; only
+        // OpenRouter's key-limit wording means a provider budget.
+        #expect(category("Insufficient credits remaining for this key", status: 402, profile: .particleTest) == .paymentRequired)
+        #expect(category("Insufficient credits remaining for this key", status: 402, profile: .openRouterTest) == .providerLimit)
+        #expect(category("Key limit exceeded (total limit).", status: 403, profile: .particleTest) == .permissionDenied)
+        #expect(category("Key limit exceeded (total limit).", status: 403, profile: .openRouterTest) == .providerLimit)
+        #expect(category("High demand during peak load.", status: 500, profile: .particleTest) == .serverFailure)
+        #expect(category("High demand during peak load.", status: 500, profile: .openRouterTest) == .providerOverloaded)
+
+        let routing = CloudSQLResponseParser.failure(
+            from: jsonData(["error": ["message": "No endpoints found matching your data policy."]]),
+            response: response(url: Self.particleChatEndpoint, status: 404),
+            requestedModelID: Self.particleModelID,
+            attemptCount: 1,
+            profile: .particleTest
+        )
+        #expect(routing.category == .modelNotFound)
+        #expect(!routing.message.contains("private-routing requirements"))
+
+        // OpenRouter's numeric code and metadata keep their old meaning, and
+        // Particle's codes mean nothing there.
+        let openRouter = CloudSQLResponseParser.failure(
+            from: jsonData(["error": ["message": "Busy.", "code": "fleet_capacity_exhausted"]]),
+            response: response(url: Self.chatEndpoint, status: 503),
+            requestedModelID: Self.modelID,
+            attemptCount: 1,
+            profile: .openRouterTest
+        )
+        #expect(openRouter.category == .providerOverloaded)
+        #expect(
+            CloudSQLResponseParser.failure(
+                from: Data(),
+                response: response(url: Self.chatEndpoint, status: 500),
+                requestedModelID: Self.modelID,
+                attemptCount: 1,
+                profile: .openRouterTest
+            ).message == "OpenRouter returned HTTP 500."
+        )
+    }
+
+    @Test func invalidModelOutputIsResentOnceWithACorrectiveMessage() async throws {
+        let (generator, transport) = makeGenerator(
+            profile: .particleTest,
+            chatResults: [
+                .success((invalidModelOutputResponse(), response(url: Self.particleChatEndpoint, status: 502, headers: ["Retry-After": "0"]))),
+                .success((particleChatResponse(content: goodContent), response(url: Self.particleChatEndpoint, status: 200))),
+            ]
+        )
+
+        let result = try await generator.generateSQL(
+            question: "show users",
+            schema: makeSchema(),
+            config: SQLGenerationConfig()
+        )
+
+        #expect(result.backendMetadata?.requestCount == 2)
+        #expect(result.backendMetadata?.retryCount == 1)
+        #expect(result.generationCallCount == 2)
+        let messages = try transport.requests.map { request in
+            try #require(try jsonBody(request)["messages"] as? [[String: String]])
+        }
+        #expect(messages.map(\.count) == [2, 3])
+        #expect(Array(messages[1].prefix(2)) == messages[0])
+        #expect(messages[1].last?["role"] == "user")
+        #expect(messages[1].last?["content"] == CloudSQLGenerator.invalidOutputCorrection)
+        #expect(CloudSQLGenerator.invalidOutputCorrection.contains("exactly one valid JSON object"))
+        // The corrected resend is still a Particle one-shot request in the
+        // same run, so it keeps the run's cache key.
+        for request in transport.requests {
+            try ParticleTestSupport.expectRequestShape(request, callSite: .oneShotSQL)
+        }
+        let keys = try transport.requests.compactMap { try ParticleTestSupport.promptCacheKey(in: $0) }
+        #expect(Set(keys).count == 1)
+    }
+
+    @Test func repeatedInvalidModelOutputFailsAsStructuredResponseParsing() async throws {
+        let (generator, transport) = makeGenerator(
+            profile: .particleTest,
+            chatResults: Array(
+                repeating: .success((invalidModelOutputResponse(), response(url: Self.particleChatEndpoint, status: 502, headers: ["Retry-After": "0"]))),
+                count: 3
+            )
+        )
+
+        do {
+            _ = try await generator.generateSQL(
+                question: "show users",
+                schema: makeSchema(),
+                config: SQLGenerationConfig()
+            )
+            Issue.record("expected invalid model output failure")
+        } catch let failure as CloudRequestFailure {
+            #expect(failure.category == .malformedStructuredResponse)
+            #expect(failure.diagnostic.providerCode == "invalid_model_output")
+            #expect(failure.diagnostic.attemptCount == 2)
+            #expect(failure.pipelineCategory == .structuredResponseParsing)
+            #expect(SQLGenerationFailure.typed(failure)?.pipelineCategory == .structuredResponseParsing)
+        }
+        // Resent exactly once, leaving the third attempt unused.
+        #expect(transport.requests.count == 2)
+    }
+
+    @Test func particleRateLimitWaitsForRetryAfterOneSecond() async throws {
+        let rateLimited = particleErrorResponse(
+            code: "fleet_capacity_exhausted",
+            type: "rate_limit_error",
+            message: "Fleet capacity exhausted."
+        )
+        let (generator, transport) = makeGenerator(
+            profile: .particleTest,
+            chatResults: [
+                .success((rateLimited, response(url: Self.particleChatEndpoint, status: 429, headers: ["Retry-After": "1"]))),
+                .success((particleChatResponse(content: goodContent), response(url: Self.particleChatEndpoint, status: 200))),
+            ]
+        )
+
+        let started = Date()
+        let result = try await generator.generateSQL(
+            question: "show users",
+            schema: makeSchema(),
+            config: SQLGenerationConfig()
+        )
+
+        #expect(Date().timeIntervalSince(started) >= 0.95)
+        #expect(result.backendMetadata?.retryCount == 1)
+        #expect(transport.requests.count == 2)
+        let failure = CloudRequestFailure(category: .rateLimited, message: "Slow down.", retryAfterSeconds: 1)
+        #expect(ChatCompletionRetryPolicy().retryDelay(for: failure, attempt: 1, noContentRetries: 0) == 1)
     }
 
     @Test func failureDiagnosticKeepsItsSavedJSONKeys() throws {
@@ -1635,11 +1913,9 @@ struct CloudSQLGeneratorTests {
             )
             Issue.record("expected provider failure")
         } catch let failure as CloudRequestFailure {
-            // Particle's 503 carries no typed category yet, so its status decides.
-            #expect(
-                failure.category
-                    == (profile.usesOpenRouterRouting ? .providerUnavailable : .providerOverloaded)
-            )
+            // OpenRouter's provider_unavailable type and Particle's
+            // model_unavailable code both outrank the 503 status.
+            #expect(failure.category == .providerUnavailable)
             #expect(failure.diagnostic.attemptCount == 3)
         }
         #expect(transport.requests.filter { $0.url == profile.chatCompletionsURL }.count == 3)
@@ -2379,8 +2655,23 @@ struct CloudSQLGeneratorTests {
         ])
     }
 
-    private func particleErrorResponse(code: String, type: String, message: String) -> Data {
-        jsonData(["error": ["message": message, "type": type, "code": code]])
+    private func particleErrorResponse(code: String?, type: String?, message: String) -> Data {
+        var error: [String: Any] = ["message": message]
+        if let code {
+            error["code"] = code
+        }
+        if let type {
+            error["type"] = type
+        }
+        return jsonData(["error": error])
+    }
+
+    private func invalidModelOutputResponse() -> Data {
+        particleErrorResponse(
+            code: "invalid_model_output",
+            type: "api_error",
+            message: "The model's output was not valid JSON."
+        )
     }
 
     private func chatResponse(for profile: CloudModelProfile, content: Any?) -> Data {

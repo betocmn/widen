@@ -54,13 +54,15 @@ struct ChatCompletionRequestBuilder: Sendable {
         var reasoningEffort: String?
     }
 
+    /// `correction`, when set, follows the prompt as a second user message.
     func build(
         apiKey: String,
         instructions: String,
         prompt: String,
         capabilities: CloudModelCapabilities,
         callSite: CloudCallSite = .oneShotSQL,
-        promptCacheKey: String? = nil
+        promptCacheKey: String? = nil,
+        correction: String? = nil
     ) throws -> BuiltRequest {
         let policy = profile.policy(for: callSite)
         let mode: StructuredOutputMode =
@@ -68,12 +70,16 @@ struct ChatCompletionRequestBuilder: Sendable {
                 && capabilities.supportsStructuredOutputs
             ? .strictJSONSchema
             : .promptOnlyJSON
+        var messages = [
+            ["role": "system", "content": instructions],
+            ["role": "user", "content": prompt],
+        ]
+        if let correction {
+            messages.append(["role": "user", "content": correction])
+        }
         var body: [String: Any] = [
             "model": profile.requestedModelID,
-            "messages": [
-                ["role": "system", "content": instructions],
-                ["role": "user", "content": prompt],
-            ],
+            "messages": messages,
             "stream": false,
         ]
         if capabilities.supportsTemperature {
@@ -330,7 +336,8 @@ struct CloudSQLResponseParser: Sendable {
                 requestedModelID: requestedModelID,
                 returnedModelID: completion.model,
                 providerName: completion.provider ?? completion.openrouterMetadata?.selectedProvider,
-                attemptCount: requestCount
+                attemptCount: requestCount,
+                profile: profile
             ).withReportedUsage(reportedUsage)
         }
         guard let choice = completion.choices.first else {
@@ -355,7 +362,8 @@ struct CloudSQLResponseParser: Sendable {
                 requestedModelID: requestedModelID,
                 returnedModelID: completion.model,
                 providerName: completion.provider ?? completion.openrouterMetadata?.selectedProvider,
-                attemptCount: requestCount
+                attemptCount: requestCount,
+                profile: profile
             ).withReportedUsage(reportedUsage)
         }
         if choice.finishReason == "error" {
@@ -589,7 +597,8 @@ struct CloudSQLResponseParser: Sendable {
                 requestedModelID: requestedModelID ?? envelope.openrouterMetadata?.requested,
                 returnedModelID: envelope.model,
                 providerName: envelope.provider ?? envelope.openrouterMetadata?.selectedProvider,
-                attemptCount: attemptCount
+                attemptCount: attemptCount,
+                profile: profile
             )
             failure.diagnostic.retryAfterSeconds = retryAfterSeconds
             return failure
@@ -600,9 +609,10 @@ struct CloudSQLResponseParser: Sendable {
                 errorType: nil,
                 providerCode: nil,
                 httpStatus: response.statusCode,
-                message: message
+                message: message,
+                profile: profile
             ),
-            message: "OpenRouter returned HTTP \(response.statusCode).",
+            message: "\(profile.provider.displayName) returned HTTP \(response.statusCode).",
             httpStatus: response.statusCode,
             requestID: requestID,
             requestedModelID: requestedModelID,
@@ -611,6 +621,9 @@ struct CloudSQLResponseParser: Sendable {
         )
     }
 
+    /// OpenRouter puts the error type and provider code in `metadata`;
+    /// Particle sends them as `error.type` and a string `error.code`. Either
+    /// way they are kept as `providerErrorType` and `providerCode`.
     static func failure(
         apiError: ChatCompletionErrorEnvelope.APIError,
         httpStatus: Int?,
@@ -619,26 +632,31 @@ struct CloudSQLResponseParser: Sendable {
         requestedModelID: String?,
         returnedModelID: String?,
         providerName: String?,
-        attemptCount: Int
+        attemptCount: Int,
+        profile: CloudModelProfile
     ) -> CloudRequestFailure {
-        let message = apiError.message ?? "OpenRouter returned an error."
+        let fallbackMessage = "\(profile.provider.displayName) returned an error."
+        let message = apiError.message ?? fallbackMessage
         let effectiveHTTPStatus = apiError.httpStatusCode ?? httpStatus
-        var displayMessage = safeMessage(message)
-        if isProviderRoutingPolicyMessage(message) {
+        let providerErrorType = apiError.metadata?.errorType ?? apiError.type
+        let providerCode = apiError.metadata?.providerCode ?? apiError.typedCode
+        var displayMessage = safeMessage(message, fallback: fallbackMessage)
+        if profile.usesOpenRouterRouting, isProviderRoutingPolicyMessage(message) {
             displayMessage =
                 "No OpenRouter endpoint met Widen's private-routing requirements for this model. Widen requires zero data retention, no provider data collection, and full request-parameter support, and fails closed rather than relaxing them. \(displayMessage)"
         }
         return CloudRequestFailure(
             category: CloudRequestFailure.category(
-                errorType: apiError.metadata?.errorType,
-                providerCode: apiError.metadata?.providerCode,
+                errorType: providerErrorType,
+                providerCode: providerCode,
                 httpStatus: effectiveHTTPStatus,
-                message: message
+                message: message,
+                profile: profile
             ),
             message: displayMessage,
             httpStatus: effectiveHTTPStatus,
-            providerErrorType: apiError.metadata?.errorType,
-            providerCode: apiError.metadata?.providerCode,
+            providerErrorType: providerErrorType,
+            providerCode: providerCode,
             completionID: completionID,
             requestID: requestID,
             requestedModelID: requestedModelID,
@@ -723,9 +741,9 @@ struct CloudSQLResponseParser: Sendable {
             || lower.contains("provisioned throughput")
     }
 
-    private static func safeMessage(_ value: String) -> String {
+    private static func safeMessage(_ value: String, fallback: String) -> String {
         let trimmed = value.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard !trimmed.isEmpty else { return "OpenRouter returned an error." }
+        guard !trimmed.isEmpty else { return fallback }
         return String(trimmed.prefix(240))
     }
 }
@@ -1097,16 +1115,28 @@ public final class CloudSQLGenerator: SQLGenerator, Sendable {
             capabilities: capabilities,
             promptCacheKey: promptCacheKey
         )
+        let corrected = try requestBuilder.build(
+            apiKey: apiKey,
+            instructions: instructions,
+            prompt: prompt,
+            capabilities: capabilities,
+            promptCacheKey: promptCacheKey,
+            correction: Self.invalidOutputCorrection
+        )
         return try await performBuiltRequest(
             built,
+            correctedForInvalidOutput: corrected,
             requestedModelID: model,
             maximumHTTPAttempts: maximumHTTPAttempts,
             usageSink: usageSink
         )
     }
 
+    /// `correctedForInvalidOutput` replaces the request for the one resend
+    /// after `invalid_model_output`; without it the same request is resent.
     private func performBuiltRequest(
         _ built: ChatCompletionRequestBuilder.BuiltRequest,
+        correctedForInvalidOutput: ChatCompletionRequestBuilder.BuiltRequest? = nil,
         requestedModelID: String,
         maximumHTTPAttempts: Int? = nil,
         usageSink: (@Sendable (SQLGenerationUsageEvent) -> Void)? = nil
@@ -1115,8 +1145,10 @@ public final class CloudSQLGenerator: SQLGenerator, Sendable {
             maxAttempts: maximumHTTPAttempts.map { min(retryPolicy.maxAttempts, max(1, $0)) }
                 ?? retryPolicy.maxAttempts
         )
+        var built = built
         var attempt = 1
         var noContentRetries = 0
+        var invalidOutputRetries = 0
         var failedUsage = ChatCompletionUsageAccumulator()
         while true {
             try Task.checkCancellation()
@@ -1152,8 +1184,13 @@ public final class CloudSQLGenerator: SQLGenerator, Sendable {
                     if let delay = effectiveRetryPolicy.retryDelay(
                         for: failure,
                         attempt: attempt,
-                        noContentRetries: max(0, noContentRetries - 1)
+                        noContentRetries: max(0, noContentRetries - 1),
+                        invalidOutputRetries: invalidOutputRetries
                     ) {
+                        if failure.isInvalidModelOutput {
+                            invalidOutputRetries += 1
+                            built = correctedForInvalidOutput ?? built
+                        }
                         attempt += 1
                         try await Task.sleep(nanoseconds: UInt64(delay * 1_000_000_000))
                         continue
@@ -1185,6 +1222,12 @@ public final class CloudSQLGenerator: SQLGenerator, Sendable {
             }
         }
     }
+
+    /// Sent after `invalid_model_output`, when the provider rejected the
+    /// model's reply as invalid JSON.
+    static let invalidOutputCorrection = """
+        Your previous reply was not a valid JSON object. Reply with exactly one valid JSON object and nothing else, using exactly the keys sql, explanation, assumptions, referencedTables, confidence, riskLevel, needsClarification and clarificationQuestion.
+        """
 
     static let jsonInstructions = """
         Respond with a single JSON object and nothing else, using exactly these keys:

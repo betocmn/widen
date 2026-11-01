@@ -1069,6 +1069,9 @@ public final class SchemaToolSQLAgent: SQLGenerator, Sendable {
         )
         var attempt = 1
         var noContentRetries = 0
+        // Particle does not validate tool-call arguments, so an agent turn
+        // resends `invalid_model_output` once unchanged, without a correction.
+        var invalidOutputRetries = 0
         while true {
             try Task.checkCancellation()
             try checkDeadline(deadline)
@@ -1107,11 +1110,13 @@ public final class SchemaToolSQLAgent: SQLGenerator, Sendable {
                     if let delay = retryPolicy.retryDelay(
                         for: failure,
                         attempt: attempt,
-                        noContentRetries: max(0, noContentRetries - 1)
+                        noContentRetries: max(0, noContentRetries - 1),
+                        invalidOutputRetries: invalidOutputRetries
                     ) {
                         guard aggregate.httpAttemptCount < maximumHTTPAttempts else {
                             throw failure.withAttemptCount(attempt)
                         }
+                        if failure.isInvalidModelOutput { invalidOutputRetries += 1 }
                         attempt += 1
                         aggregate.retryCount += 1
                         try await sleep(delay, deadline: deadline)

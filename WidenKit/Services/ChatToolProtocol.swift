@@ -324,7 +324,8 @@ struct ChatToolParser: Sendable {
                 requestedModelID: requestedModelID,
                 returnedModelID: completion.model,
                 providerName: completion.provider ?? completion.openrouterMetadata?.selectedProvider,
-                attemptCount: requestCount
+                attemptCount: requestCount,
+                profile: profile
             ).withReportedUsage(reportedUsage)
         }
         guard let choice = completion.choices.first else {
@@ -349,7 +350,8 @@ struct ChatToolParser: Sendable {
                 requestedModelID: requestedModelID,
                 returnedModelID: completion.model,
                 providerName: completion.provider ?? completion.openrouterMetadata?.selectedProvider,
-                attemptCount: requestCount
+                attemptCount: requestCount,
+                profile: profile
             ).withReportedUsage(reportedUsage)
         }
         if choice.finishReason == "error" {

@@ -4,6 +4,14 @@ import Foundation
 public enum CloudModelProviderID: String, Codable, CaseIterable, Sendable {
     case particle
     case openRouter
+
+    /// The provider's name in failure messages.
+    public var displayName: String {
+        switch self {
+        case .particle: "Particle"
+        case .openRouter: "OpenRouter"
+        }
+    }
 }
 
 /// The `reasoning_effort` values an OpenAI-compatible provider may accept.
@@ -122,7 +130,11 @@ public struct CloudModelProfile: Equatable, Sendable {
     /// OpenRouter's provider block, X-Title and X-OpenRouter-Metadata headers,
     /// routing-message heuristics and catalog invalidation.
     public internal(set) var usesOpenRouterRouting: Bool
+    /// Failure categories for the provider's typed error codes (`error.code`,
+    /// lowercased). They win over every other classification.
     public internal(set) var errorCodeCategories: [String: CloudRequestFailure.Category]
+    /// Failure categories for the provider's error types (`error.type`,
+    /// lowercased), consulted after the codes.
     public internal(set) var errorTypeCategories: [String: CloudRequestFailure.Category]
     public internal(set) var requestIDHeaderNames: [String]
     public internal(set) var requestTimeoutSeconds: TimeInterval
@@ -258,8 +270,35 @@ extension CloudModelProfile {
         echoesReasoningContent: false,
         sendsToolMessageName: false,
         usesOpenRouterRouting: false,
-        errorCodeCategories: [:],
-        errorTypeCategories: [:],
+        errorCodeCategories: [
+            "invalid_bearer_credential": .authentication,
+            "insufficient_credits": .paymentRequired,
+            "insufficient_scope": .permissionDenied,
+            "model_not_found": .modelNotFound,
+            "request_too_large": .contextWindow,
+            "tokenization_body_too_large": .contextWindow,
+            "context_length_exceeded": .contextWindow,
+            "unsupported_parameter": .unsupportedFeature,
+            "invalid_json": .invalidRequest,
+            "invalid_value": .invalidRequest,
+            "fleet_capacity_exhausted": .rateLimited,
+            "internal_error": .serverFailure,
+            "invalid_upstream_response": .providerUnavailable,
+            // The model's output failed the provider's JSON check. It is
+            // retried once with a corrective prompt, then reported as a
+            // parsing failure rather than a transport failure.
+            "invalid_model_output": .malformedStructuredResponse,
+            "model_unavailable": .providerUnavailable,
+            "billing_unavailable": .providerUnavailable,
+            "upstream_response_deadline_exceeded": .timeout,
+        ],
+        errorTypeCategories: [
+            "authentication_error": .authentication,
+            "insufficient_credits_error": .paymentRequired,
+            "authorization_error": .permissionDenied,
+            "invalid_request_error": .invalidRequest,
+            "rate_limit_error": .rateLimited,
+        ],
         requestIDHeaderNames: ["X-Request-Id", "Request-Id"],
         requestTimeoutSeconds: 180,
         resourceTimeoutSeconds: 300,

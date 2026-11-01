@@ -3868,6 +3868,50 @@ struct SchemaToolSQLAgentTests {
         }
     }
 
+    @Test func particleAgentResendsInvalidModelOutputOnceUnchanged() async throws {
+        let schema = Self.makeSchema()
+        let chatTransport = ScriptedHTTPTransport { request, _ in
+            (
+                Self.jsonData([
+                    "error": [
+                        "message": "The model's output was not valid JSON.",
+                        "type": "api_error",
+                        "code": "invalid_model_output",
+                    ],
+                ]),
+                HTTPURLResponse(
+                    url: request.url!,
+                    statusCode: 502,
+                    httpVersion: "HTTP/1.1",
+                    headerFields: ["Retry-After": "0"]
+                )!
+            )
+        }
+        let agent = makeAgent(schema: schema, chatTransport: chatTransport)
+
+        do {
+            _ = try await agent.generateSQL(
+                question: "List users",
+                schema: schema,
+                context: SQLGenerationContext(),
+                config: SQLGenerationConfig()
+            )
+            Issue.record("Expected invalid model output failure")
+        } catch let failure as SchemaToolAgentFailure {
+            #expect(failure.category == .cloudRequestFailure)
+            #expect(failure.cloudFailure?.category == .malformedStructuredResponse)
+            #expect(failure.cloudFailure?.diagnostic.providerCode == "invalid_model_output")
+            #expect(failure.cloudFailure?.diagnostic.attemptCount == 2)
+            #expect(failure.pipelineCategory == .structuredResponseParsing)
+            #expect(failure.backendMetadata?.agentHTTPAttemptCount == 2)
+            #expect(failure.backendMetadata?.retryCount == 1)
+        }
+        // One resend, unchanged: tool-call arguments aren't checked by
+        // Particle, so the agent has no corrective prompt for this failure.
+        #expect(chatTransport.requests.count == 2)
+        #expect(chatTransport.requests[0].httpBody == chatTransport.requests[1].httpBody)
+    }
+
     @Test func catalogLookupCanConsumeBudgetBeforeChatRequest() async throws {
         let schema = Self.makeSchema()
         let chatTransport = ScriptedTransport { _, _ in
