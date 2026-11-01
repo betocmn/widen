@@ -172,7 +172,7 @@ struct TextToSQLEvalCloudSettingsTests {
         let verificationRepairs = GeneratedSQLRepairSupport.verificationRepairModelCallBudget
         // Validation repairs share the request's model-call budget with the
         // first generation; the verification repair comes on top.
-        let validationRepairs = GeneratedSQLRepairSupport.localModelCallBudget - 1
+        let validationRepairs = GeneratedSQLRepairSupport.cloudModelCallBudget - 1
         let margin: TimeInterval = 60
 
         #expect(TextToSQLEvalDefaults.caseTimeoutSeconds == 1_200)

@@ -110,7 +110,7 @@ public struct SQLGenerationContext: Equatable, Sendable {
     /// not schema objects, and are used only to bias deterministic packaging.
     public var schemaSearchQueries: [String]
     /// App-side count of model calls consumed for the current user request,
-    /// including optional local discovery. Used for telemetry and local budget
+    /// including earlier repair attempts. Used for telemetry and repair budget
     /// enforcement only; it is never rendered into prompts.
     public var modelCallCount: Int
     /// User-confirmed business definitions for this database/schema scope.
@@ -150,26 +150,6 @@ public struct SQLGenerationContext: Equatable, Sendable {
     }
 }
 
-public struct SchemaDiscoveryRequestResult: Codable, Equatable, Sendable {
-    public var searchQueries: [String]
-    public var reason: String
-
-    public init(searchQueries: [String], reason: String) {
-        self.searchQueries = Array(searchQueries.prefix(3))
-        self.reason = reason
-    }
-
-    public var sanitizedSearchQueries: [String] {
-        var seen = Set<String>()
-        return searchQueries
-            .map { $0.trimmingCharacters(in: .whitespacesAndNewlines) }
-            .filter { !$0.isEmpty }
-            .filter { seen.insert($0.lowercased()).inserted }
-            .prefix(3)
-            .map { $0 }
-    }
-}
-
 /// A backend that turns an English question plus a schema into one PostgreSQL
 /// statement — a SELECT/WITH read, or an INSERT/UPDATE/DELETE write when the
 /// user asks to modify data. Implementations: `SchemaToolSQLAgent` (a cloud
@@ -183,10 +163,6 @@ public protocol SQLGenerator: Sendable {
         config: SQLGenerationConfig
     ) async throws -> SQLGenerationResult
 }
-
-/// Marker for the constrained on-device SQL path. The shared pipeline uses
-/// this to apply stricter experimental limits without weakening cloud repair.
-public protocol ConstrainedLocalSQLGenerator: SQLGenerator {}
 
 extension SQLGenerator {
     /// Context-free convenience for callers without a conversation.

@@ -22,7 +22,7 @@ struct TextToSQLCallBudgetTests {
         #expect(ChatCompletionRetryPolicy.defaultMaxAttempts == 3)
         #expect(ChatCompletionRetryPolicy().maxAttempts == 3)
 
-        #expect(GeneratedSQLRepairSupport.localModelCallBudget == 3)
+        #expect(GeneratedSQLRepairSupport.cloudModelCallBudget == 3)
         #expect(GeneratedSQLRepairSupport.verificationRepairModelCallBudget == 1)
         #expect(GeneratedSQLRepairCoordinator.maxModelCalls == 2)
     }

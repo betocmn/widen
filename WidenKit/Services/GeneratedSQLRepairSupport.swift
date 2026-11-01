@@ -6,13 +6,12 @@ enum GeneratedSQLRepairFailureMode: Sendable {
 }
 
 enum GeneratedSQLRepairSupport {
-    static let localModelCallBudget = 3
-    static let constrainedLocalModelCallBudget = 2
+    static let cloudModelCallBudget = 3
     static let verificationRepairModelCallBudget = 1
 
     static func remainingRepairCalls(
         after generation: SQLGenerationResult?,
-        modelCallBudget: Int = localModelCallBudget
+        modelCallBudget: Int = cloudModelCallBudget
     ) -> Int {
         let spentModelCalls = max(1, generation?.generationCallCount ?? 1)
         return max(0, modelCallBudget - spentModelCalls)

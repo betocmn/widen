@@ -167,15 +167,6 @@ public final class SessionController: Identifiable {
             return
         }
         let generator = appState.sqlGenerator(connectionID: connectionID, schema: schema)
-        if let validationMessage = Self.constrainedLocalValidationMessage(
-            sql: failedSQL,
-            schema: schema,
-            generator: generator
-        ) {
-            chatVM.appendRunError(validationMessage)
-            appState.sessionDidChange(sessionID)
-            return
-        }
 
         let questionContext = questionContextForRepair(startingSQL: failedSQL)
         let forbiddenIdentifiers = Self.forbiddenIdentifiers(
@@ -682,7 +673,7 @@ public final class SessionController: Identifiable {
         )
         let postgres = appState.postgres(for: connectionID)
         let generator = appState.sqlGenerator(connectionID: connectionID, schema: schema)
-        let repairCallBudget = Self.generatedSQLRepairCallBudget(for: generator)
+        let repairCallBudget = GeneratedSQLRepairSupport.cloudModelCallBudget
         let firstDiagnostic = firstFailure?.diagnostic ?? Self.diagnostic(from: firstError)
         let allowRepairWrites = false
         let forbiddenIdentifiers = Self.forbiddenIdentifiers(
@@ -866,23 +857,6 @@ public final class SessionController: Identifiable {
                 return
             }
 
-            if let validationMessage = Self.constrainedLocalValidationMessage(
-                sql: generatedSQL,
-                schema: schema,
-                generator: generator
-            ) {
-                appendActivity(
-                    "\(repairLabel) was rejected.",
-                    sql: generatedSQL,
-                    error: validationMessage,
-                    appState: appState
-                )
-                restoreStartingGeneration(schema: schema)
-                chatVM.appendRunError(validationMessage)
-                appState.sessionDidChange(sessionID)
-                return
-            }
-
             appendActivity(
                 "Running \(repairLabel.lowercased()) SQL.",
                 sql: generatedSQL,
@@ -996,32 +970,6 @@ public final class SessionController: Identifiable {
     ) -> Int {
         let spentModelCalls = max(1, generation?.generationCallCount ?? 1)
         return max(0, modelCallBudget - spentModelCalls)
-    }
-
-    private static func generatedSQLRepairCallBudget(for generator: any SQLGenerator) -> Int {
-        generator is any ConstrainedLocalSQLGenerator
-            ? GeneratedSQLRepairSupport.constrainedLocalModelCallBudget
-            : GeneratedSQLRepairSupport.localModelCallBudget
-    }
-
-    private static func constrainedLocalValidationMessage(
-        sql: String,
-        schema: DatabaseSchema,
-        generator: any SQLGenerator
-    ) -> String? {
-        guard generator is any ConstrainedLocalSQLGenerator else { return nil }
-        var safety = SQLSafetyValidator.validate(sql)
-        var schemaValidation = SQLSchemaValidator.validate(sql: sql, against: schema)
-        ConstrainedLocalSQLPolicy.apply(
-            safety: &safety,
-            schemaValidation: &schemaValidation
-        )
-        let validation = GeneratedSQLValidator.combine(
-            safety: safety,
-            schemaValidation: schemaValidation
-        )
-        guard !validation.isValid else { return nil }
-        return AppError.validationFailed(validation.errors).localizedDescription
     }
 
     private static func cumulativeGeneratedSQLModelCallCount(

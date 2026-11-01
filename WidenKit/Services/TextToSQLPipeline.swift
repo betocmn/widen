@@ -285,16 +285,6 @@ public struct TextToSQLPipeline: TextToSQLRunning {
         self.generator = generator
     }
 
-    private var usesConstrainedLocalPolicy: Bool {
-        generator is any ConstrainedLocalSQLGenerator
-    }
-
-    private var repairModelCallBudget: Int {
-        usesConstrainedLocalPolicy
-            ? GeneratedSQLRepairSupport.constrainedLocalModelCallBudget
-            : GeneratedSQLRepairSupport.localModelCallBudget
-    }
-
     public func run(_ request: TextToSQLRequest) async throws -> TextToSQLRun {
         let started = Date()
         var trace = TraceBuilder(schema: request.schema)
@@ -478,27 +468,6 @@ public struct TextToSQLPipeline: TextToSQLRunning {
             request: request,
             events: &events
         )
-        if usesConstrainedLocalPolicy && shouldRejectUnsafeLocalSQL(validation.safety) {
-            let failure = TextToSQLPipelineFailure(
-                stage: validationEventStage,
-                category: validationFailureCategory,
-                message: firstError,
-                backendMetadata: result.backendMetadata
-            )
-            trace.append(.validationRepair, outcome: .skipped, since: Date())
-            trace.append(
-                .finalDecision,
-                outcome: .failure,
-                since: Date(),
-                failureCategory: failure.category
-            )
-            return finished(
-                decision: .failed(failure),
-                trace: trace,
-                events: events,
-                started: started
-            )
-        }
         let repairRun = try await runValidationRepair(
             request: request,
             startingGeneration: result.withPipelineSQL(generatedSQL),
@@ -721,8 +690,7 @@ public struct TextToSQLPipeline: TextToSQLRunning {
             )
         let firstError = verificationFailureMessage(verification)
         let diagnostic = verification.diagnostic
-        let allowRepairWrites =
-            !usesConstrainedLocalPolicy && SQLSafetyValidator.validate(startingSQL).kind.isWrite
+        let allowRepairWrites = SQLSafetyValidator.validate(startingSQL).kind.isWrite
         let forbiddenIdentifiers = GeneratedSQLRepairSupport.forbiddenIdentifiers(
             sql: startingSQL,
             error: firstError,
@@ -738,12 +706,7 @@ public struct TextToSQLPipeline: TextToSQLRunning {
                 forbiddenIdentifiers: forbiddenIdentifiers,
                 error: firstError
             ),
-            maxModelCalls: usesConstrainedLocalPolicy
-                ? GeneratedSQLRepairSupport.remainingRepairCalls(
-                    after: startingGeneration,
-                    modelCallBudget: repairModelCallBudget
-                )
-                : GeneratedSQLRepairSupport.verificationRepairModelCallBudget
+            maxModelCalls: GeneratedSQLRepairSupport.verificationRepairModelCallBudget
         )
 
         guard let repairMode = coordinator.beginNextAttempt() else {
@@ -1013,8 +976,7 @@ public struct TextToSQLPipeline: TextToSQLRunning {
                     + [SQLConversationMessage(role: .user, text: request.question)]
             )
         let firstDiagnostic = GeneratedSQLRepairSupport.diagnostic(from: firstError)
-        let allowRepairWrites =
-            !usesConstrainedLocalPolicy && SQLSafetyValidator.validate(startingSQL).kind.isWrite
+        let allowRepairWrites = SQLSafetyValidator.validate(startingSQL).kind.isWrite
         let forbiddenIdentifiers = GeneratedSQLRepairSupport.forbiddenIdentifiers(
             sql: startingSQL,
             error: firstError,
@@ -1031,8 +993,7 @@ public struct TextToSQLPipeline: TextToSQLRunning {
                 error: firstError
             ),
             maxModelCalls: GeneratedSQLRepairSupport.remainingRepairCalls(
-                after: startingGeneration,
-                modelCallBudget: repairModelCallBudget
+                after: startingGeneration
             )
         )
         var accumulatedBackendMetadata = startingGeneration.backendMetadata
@@ -1384,16 +1345,9 @@ public struct TextToSQLPipeline: TextToSQLRunning {
         trace: inout TraceBuilder
     ) -> (safety: SQLValidationResult, schema: SQLSchemaValidationResult, combined: SQLValidationResult) {
         let safetyStart = Date()
-        var safety = SQLSafetyValidator.validate(sql)
+        let safety = SQLSafetyValidator.validate(sql)
         let schemaStart = Date()
-        var schemaValidation = SQLSchemaValidator.validate(sql: sql, against: schema)
-
-        if usesConstrainedLocalPolicy {
-            ConstrainedLocalSQLPolicy.apply(
-                safety: &safety,
-                schemaValidation: &schemaValidation
-            )
-        }
+        let schemaValidation = SQLSchemaValidator.validate(sql: sql, against: schema)
 
         trace.append(
             .safetyValidation,
@@ -1425,20 +1379,7 @@ public struct TextToSQLPipeline: TextToSQLRunning {
         schema: DatabaseSchema,
         fallback: SQLValidationResult?
     ) -> SQLValidationResult {
-        guard usesConstrainedLocalPolicy else {
-            return fallback ?? GeneratedSQLValidator.validate(sql: sql, schema: schema)
-        }
-        var safety = SQLSafetyValidator.validate(sql)
-        var schemaValidation = SQLSchemaValidator.validate(sql: sql, against: schema)
-        ConstrainedLocalSQLPolicy.apply(
-            safety: &safety,
-            schemaValidation: &schemaValidation
-        )
-        return GeneratedSQLValidator.combine(safety: safety, schemaValidation: schemaValidation)
-    }
-
-    private func shouldRejectUnsafeLocalSQL(_ safety: SQLValidationResult) -> Bool {
-        safety.kind.isWrite || safety.safetyIssueKinds.contains { $0.isUnsafeExecutionRisk }
+        fallback ?? GeneratedSQLValidator.validate(sql: sql, schema: schema)
     }
 
     private func failureCategory(for validation: SQLValidationResult) -> TextToSQLFailureCategory {
@@ -1737,46 +1678,6 @@ private func inspectionToolCalls(from error: any Error) -> [DatabaseInspectionTo
         return failure.inspectionToolCalls
     }
     return []
-}
-
-enum ConstrainedLocalSQLPolicy {
-    private static let maxBaseTables = 3
-    private static let maxCTEs = 2
-
-    static func apply(
-        safety: inout SQLValidationResult,
-        schemaValidation: inout SQLSchemaValidationResult
-    ) {
-        if safety.kind.isWrite {
-            safety.isValid = false
-            safety.errors.append(
-                "On-device experimental mode only supports SELECT queries. Use Cloud or write SQL manually for data changes."
-            )
-            safety.safetyIssueKinds.append(.unsupportedStatement)
-        }
-
-        if schemaValidation.referencedTables.count > maxBaseTables {
-            schemaValidation.issues.append(
-                SQLSchemaValidationIssue(
-                    severity: .error,
-                    message:
-                        "On-device experimental mode supports at most \(maxBaseTables) base tables. This query references \(schemaValidation.referencedTables.count). Use Cloud for broader requests.",
-                    kind: .other
-                )
-            )
-        }
-
-        if schemaValidation.analysis.cteNames.count > maxCTEs {
-            schemaValidation.issues.append(
-                SQLSchemaValidationIssue(
-                    severity: .error,
-                    message:
-                        "On-device experimental mode supports simple CTEs only. Use Cloud for deeply nested or multi-step SQL.",
-                    kind: .other
-                )
-            )
-        }
-    }
 }
 
 private extension SQLGenerationMode {
