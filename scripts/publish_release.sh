@@ -184,7 +184,6 @@ need_env NOTARY_PROFILE
 need_env SPARKLE_PUBLIC_ED_KEY
 need_env BUNDLE_ID_PREFIX
 
-[ -d "$DEVELOPER_DIR" ] || die "Xcode not found at DEVELOPER_DIR=$DEVELOPER_DIR"
 git_clean "$ROOT_DIR" || die "current worktree has uncommitted changes; commit or stash them first"
 
 CURRENT_BRANCH="$(git branch --show-current)"

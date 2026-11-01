@@ -115,8 +115,6 @@ need_env NOTARY_PROFILE
 need_env SPARKLE_PUBLIC_ED_KEY
 need_env BUNDLE_ID_PREFIX
 
-[ -d "$DEVELOPER_DIR" ] || die "Xcode not found at DEVELOPER_DIR=$DEVELOPER_DIR"
-
 SPARKLE_BIN="$(find_sparkle_bin || true)"
 if [ -z "$SPARKLE_BIN" ]; then
   xcodebuild \
