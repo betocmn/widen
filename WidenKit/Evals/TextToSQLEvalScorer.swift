@@ -359,7 +359,7 @@ public enum TextToSQLEvalCaseRunner {
                 tokenUsage: observedUsage.totalTokens,
                 estimatedCloudCostUSD: observedUsage.costUSD,
                 estimatedCloudCostSource: observedUsage.costSource
-            ),
+            ).withTokenBreakdown(observedUsage),
             diagnostics: TextToSQLEvalDiagnostics(
                 errorMessage:
                     "Eval case \(evalCase.id) timed out after \(timeoutSeconds) seconds."
@@ -393,7 +393,7 @@ public enum TextToSQLEvalCaseRunner {
                 tokenUsage: observedUsage?.totalTokens,
                 estimatedCloudCostUSD: observedUsage?.costUSD,
                 estimatedCloudCostSource: observedUsage?.costSource
-            ),
+            ).withTokenBreakdown(observedUsage),
             diagnostics: TextToSQLEvalDiagnostics(
                 errorMessage: "Eval case \(evalCase.id) was cancelled."
             ),
@@ -476,7 +476,8 @@ public enum TextToSQLEvalCaseRunner {
                     ?? openRouterDiagnostic?.returnedModelID,
                 openRouterProviderName: backendMetadata?.providerName
                     ?? openRouterDiagnostic?.providerName
-            ).withOpenRouterAgentMetadata(backendMetadata, trace: trace),
+            ).withOpenRouterAgentMetadata(backendMetadata, trace: trace)
+                .withTokenBreakdown(backendMetadata, failure: openRouterDiagnostic),
             diagnostics: TextToSQLEvalDiagnostics(
                 errorMessage: error.localizedDescription,
                 openRouterFailure: openRouterDiagnostic
@@ -550,6 +551,7 @@ public enum TextToSQLEvalCaseRunner {
                 openRouterProviderName: backendMetadata?.providerName
                     ?? failure.openRouterFailure?.providerName
             ).withOpenRouterAgentMetadata(backendMetadata, trace: trace)
+                .withTokenBreakdown(backendMetadata, failure: failure.openRouterFailure)
                 .withPostgresVerification(verificationSnapshot),
             diagnostics: TextToSQLEvalDiagnostics(
                 errorMessage: failure.localizedDescription,
@@ -725,6 +727,7 @@ public enum TextToSQLEvalScorer {
                     openRouterReturnedModelID: backendMetadata?.returnedModelID,
                     openRouterProviderName: backendMetadata?.providerName
                 ).withOpenRouterAgentMetadata(backendMetadata, trace: trace)
+                    .withTokenBreakdown(backendMetadata)
                     .withPostgresVerification(verificationSnapshot),
                 diagnostics: TextToSQLEvalDiagnostics(),
                 generatedSQL: generation.sql.nilIfBlank,
@@ -763,6 +766,7 @@ public enum TextToSQLEvalScorer {
                     openRouterReturnedModelID: backendMetadata?.returnedModelID,
                     openRouterProviderName: backendMetadata?.providerName
                 ).withOpenRouterAgentMetadata(backendMetadata, trace: trace)
+                    .withTokenBreakdown(backendMetadata)
                     .withPostgresVerification(verificationSnapshot),
                 generatedSQL: generation.sql.nilIfBlank,
                 clarificationQuestion: generation.clarificationQuestion,
@@ -799,6 +803,7 @@ public enum TextToSQLEvalScorer {
                     openRouterReturnedModelID: backendMetadata?.returnedModelID,
                     openRouterProviderName: backendMetadata?.providerName
                 ).withOpenRouterAgentMetadata(backendMetadata, trace: trace)
+                    .withTokenBreakdown(backendMetadata)
                     .withPostgresVerification(verificationSnapshot),
                 diagnostics: TextToSQLEvalDiagnostics(safetyErrors: safety.errors),
                 generatedSQL: generation.sql.nilIfBlank,
@@ -879,6 +884,7 @@ public enum TextToSQLEvalScorer {
                 openRouterReturnedModelID: backendMetadata?.returnedModelID,
                 openRouterProviderName: backendMetadata?.providerName
             ).withOpenRouterAgentMetadata(backendMetadata, trace: trace)
+                    .withTokenBreakdown(backendMetadata)
                     .withPostgresVerification(verificationSnapshot),
             diagnostics: TextToSQLEvalDiagnostics(
                 missingTables: missingTables,
@@ -1336,6 +1342,44 @@ private extension TextToSQLEvalMetrics {
             ?? metadata?.agentInspectionToolCallCount
         copy.openRouterAgentTerminalOutcome = metadata?.agentTerminalOutcome
         copy.openRouterAgentDiagnostics = metadata?.agentDiagnostics
+        return copy
+    }
+
+    /// Records the token breakdown from `metadata` when it reported usage
+    /// and from `failure` otherwise, so the counts never mix a generation's
+    /// totals with those of the single request that failed.
+    func withTokenBreakdown(
+        _ metadata: CloudGenerationMetadata?,
+        failure: CloudRequestFailureDiagnostic? = nil
+    ) -> TextToSQLEvalMetrics {
+        var copy = self
+        if let metadata,
+            metadata.promptTokens != nil
+                || metadata.completionTokens != nil
+                || metadata.totalTokens != nil
+        {
+            copy.promptTokens = metadata.promptTokens
+            copy.cachedPromptTokens = metadata.cachedPromptTokens
+            copy.completionTokens = metadata.completionTokens
+            copy.reasoningTokens = metadata.reasoningTokens
+        } else if let failure {
+            copy.promptTokens = failure.promptTokens
+            copy.cachedPromptTokens = failure.cachedPromptTokens
+            copy.completionTokens = failure.completionTokens
+            copy.reasoningTokens = failure.reasoningTokens
+        }
+        return copy
+    }
+
+    /// Records the token breakdown observed before a case timed out or was
+    /// cancelled.
+    func withTokenBreakdown(_ usage: SQLGenerationUsageEvent?) -> TextToSQLEvalMetrics {
+        guard let usage else { return self }
+        var copy = self
+        copy.promptTokens = usage.promptTokens
+        copy.cachedPromptTokens = usage.cachedPromptTokens
+        copy.completionTokens = usage.completionTokens
+        copy.reasoningTokens = usage.reasoningTokens
         return copy
     }
 

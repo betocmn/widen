@@ -92,6 +92,11 @@ public struct TextToSQLEvalCloudSettings: Equatable, Sendable {
         }
     }
 
+    /// The provider a manifest name stands for, or nil for an unknown name.
+    public static func providerID(forManifestName name: String) -> CloudModelProviderID? {
+        CloudModelProviderID.allCases.first { manifestName(for: $0) == name }
+    }
+
     /// The provider of a run manifest. Manifests written before providers
     /// were recorded have none, and every cloud run then used OpenRouter.
     public static func resolvedManifestProvider(

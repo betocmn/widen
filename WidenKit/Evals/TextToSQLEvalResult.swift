@@ -70,6 +70,14 @@ public struct TextToSQLEvalMetrics: Codable, Equatable, Sendable {
     public var modelCallCount: Int?
     public var estimatedInitialPromptCharacters: Int?
     public var tokenUsage: Int?
+    /// The token counts behind `tokenUsage`. Nil when the provider did not
+    /// report them, and in results written before they were recorded.
+    public var promptTokens: Int?
+    /// Prompt tokens served from the provider's prompt cache.
+    public var cachedPromptTokens: Int?
+    public var completionTokens: Int?
+    /// Reasoning tokens, which are billed and counted as completion tokens.
+    public var reasoningTokens: Int?
     public var estimatedCloudCostUSD: Double?
     /// A `CloudCostSource` raw value for `estimatedCloudCostUSD`: `reported`
     /// by the provider, or `estimatedPeakList` from token prices (an upper
@@ -123,6 +131,10 @@ public struct TextToSQLEvalMetrics: Codable, Equatable, Sendable {
         modelCallCount: Int? = nil,
         estimatedInitialPromptCharacters: Int? = nil,
         tokenUsage: Int? = nil,
+        promptTokens: Int? = nil,
+        cachedPromptTokens: Int? = nil,
+        completionTokens: Int? = nil,
+        reasoningTokens: Int? = nil,
         estimatedCloudCostUSD: Double? = nil,
         estimatedCloudCostSource: String? = nil,
         openRouterStructuredOutputMode: String? = nil,
@@ -171,6 +183,10 @@ public struct TextToSQLEvalMetrics: Codable, Equatable, Sendable {
         self.modelCallCount = modelCallCount
         self.estimatedInitialPromptCharacters = estimatedInitialPromptCharacters
         self.tokenUsage = tokenUsage
+        self.promptTokens = promptTokens
+        self.cachedPromptTokens = cachedPromptTokens
+        self.completionTokens = completionTokens
+        self.reasoningTokens = reasoningTokens
         self.estimatedCloudCostUSD = estimatedCloudCostUSD
         self.estimatedCloudCostSource = estimatedCloudCostSource
         self.openRouterStructuredOutputMode = openRouterStructuredOutputMode

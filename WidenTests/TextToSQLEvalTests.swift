@@ -1359,6 +1359,116 @@ struct TextToSQLEvalTests {
         #expect(unpriced.metrics.estimatedCloudCostSource == nil)
     }
 
+    @Test func evalMetricsRecordTheTokenBreakdown() async {
+        let evalCase = TextToSQLEvalCase(
+            id: "commerce.recent-orders",
+            schemaFixture: "commerce",
+            question: "Show the 10 most recent orders",
+            expected: TextToSQLEvalExpectation(decision: .sql)
+        )
+        var metadata = CloudGenerationMetadata(
+            requestedModelID: "particle-1",
+            structuredOutputMode: .promptOnlyJSON,
+            requestCount: 2,
+            retryCount: 0
+        )
+        metadata.promptTokens = 100
+        metadata.cachedPromptTokens = 40
+        metadata.completionTokens = 50
+        metadata.reasoningTokens = 20
+        metadata.totalTokens = 150
+        let scored = TextToSQLEvalScorer.score(
+            evalCase: evalCase,
+            schema: makeCommerceSchema(),
+            generation: SQLGenerationResult(
+                sql: "SELECT id FROM public.orders LIMIT 100",
+                explanation: "Lists orders.",
+                assumptions: [],
+                referencedTables: ["public.orders"],
+                confidence: 0.8,
+                riskLevel: .low,
+                needsClarification: false,
+                clarificationQuestion: nil,
+                backendMetadata: metadata
+            ),
+            options: TextToSQLEvalRunOptions(backend: .cloud, model: "particle-1"),
+            latencyMs: 12
+        )
+        #expect(scored.metrics.promptTokens == 100)
+        #expect(scored.metrics.cachedPromptTokens == 40)
+        #expect(scored.metrics.completionTokens == 50)
+        #expect(scored.metrics.reasoningTokens == 20)
+        #expect(scored.metrics.tokenUsage == 150)
+
+        // The agent's totals win over the one request that failed, so the
+        // breakdown never mixes the two.
+        let lastRequest = CloudRequestFailure(
+            category: .serverFailure,
+            message: "Upstream failed.",
+            requestedModelID: "particle-1",
+            promptTokens: 7,
+            cachedPromptTokens: 7,
+            completionTokens: 1,
+            totalTokens: 8
+        )
+        let agentFailed = await TextToSQLEvalCaseRunner.run(
+            evalCase: evalCase,
+            schema: makeCommerceSchema(),
+            generator: ThrowingGenerator(
+                error: SchemaToolAgentFailure(
+                    category: .schemaToolCallBudgetExhausted,
+                    message: "Schema tool call budget exhausted.",
+                    cloudFailure: lastRequest,
+                    backendMetadata: metadata
+                )
+            ),
+            options: TextToSQLEvalRunOptions(backend: .cloud, model: "particle-1")
+        )
+        #expect(agentFailed.metrics.promptTokens == 100)
+        #expect(agentFailed.metrics.cachedPromptTokens == 40)
+        #expect(agentFailed.metrics.reasoningTokens == 20)
+
+        // Without generation metadata, the failed request's usage is used.
+        let requestFailed = await TextToSQLEvalCaseRunner.run(
+            evalCase: evalCase,
+            schema: makeCommerceSchema(),
+            generator: ThrowingGenerator(
+                error: CloudRequestFailure(
+                    category: .malformedStructuredResponse,
+                    message: "Malformed completion.",
+                    requestedModelID: "particle-1",
+                    promptTokens: 4,
+                    cachedPromptTokens: 1,
+                    completionTokens: 5,
+                    reasoningTokens: 2,
+                    totalTokens: 9
+                )
+            ),
+            options: TextToSQLEvalRunOptions(backend: .cloud, model: "particle-1")
+        )
+        #expect(requestFailed.metrics.promptTokens == 4)
+        #expect(requestFailed.metrics.cachedPromptTokens == 1)
+        #expect(requestFailed.metrics.completionTokens == 5)
+        #expect(requestFailed.metrics.reasoningTokens == 2)
+
+        // A timed-out case keeps the breakdown observed so far.
+        let timedOut = await TextToSQLEvalCaseRunner.run(
+            evalCase: evalCase,
+            schema: makeCommerceSchema(),
+            generator: UsageReportingHangingGenerator(),
+            options: TextToSQLEvalRunOptions(
+                backend: .cloud,
+                model: "particle-1",
+                caseTimeoutSeconds: 0.01
+            )
+        )
+        #expect(timedOut.status == .evalTimeout)
+        #expect(timedOut.metrics.promptTokens == 12)
+        #expect(timedOut.metrics.cachedPromptTokens == nil)
+        #expect(timedOut.metrics.completionTokens == 8)
+        #expect(timedOut.metrics.reasoningTokens == 2)
+    }
+
     @Test func caseTimeoutKeepsTheSourceOfObservedCost() async {
         let evalCase = TextToSQLEvalCase(
             id: "commerce.recent-orders",

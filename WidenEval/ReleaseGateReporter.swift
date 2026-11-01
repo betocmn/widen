@@ -147,8 +147,11 @@ enum TextToSQLReleaseGateReporter {
             "| Schema agent clarification correction | \(tableCell(run.manifest.schemaAgentClarificationCorrectionMode ?? "-")) |",
             "| Schema agent intent coverage | \(tableCell(run.manifest.schemaAgentIntentCoverageMode ?? "-")) |",
             "| Schema agent plan consistency | \(tableCell(run.manifest.schemaAgentPlanConsistencyMode ?? "-")) |",
+            "| Provider | \(tableCell(run.manifest.resolvedProvider ?? "-")) |",
+            "| Endpoint | \(tableCell(run.manifest.providerEndpointHost ?? "-")) |",
             "| Model | \(tableCell(run.manifest.model ?? "-")) |",
-            "| Expected canonical model | \(tableCell(run.manifest.expectedCanonicalModelID ?? "-")) |",
+            "| Expected returned model | \(tableCell(run.manifest.expectedCanonicalModelID ?? "-")) |",
+            "| Reasoning effort | \(tableCell(run.manifest.reasoningEffort ?? "-")) |",
             "| Repeats | \(run.manifest.repeatCount) |",
             "| Results | \(input.totalResults) |",
             "| Complete | \(input.completedResults == input.expectedResults ? "Yes" : "No") |",
@@ -190,6 +193,7 @@ enum TextToSQLReleaseGateReporter {
             lines += evaluation.thresholdFailureMessages.map { "- \($0)" }
         }
 
+        lines += reportedUsageSection(results: releaseGateResults(for: run))
         lines += historicalRegressionSection(results: run.results)
 
         lines += [
@@ -207,6 +211,19 @@ enum TextToSQLReleaseGateReporter {
             "",
         ]
         return lines.joined(separator: "\n")
+    }
+
+    /// Spend for the gate's results, reported for cost tracking only.
+    private static func reportedUsageSection(results: [TextToSQLEvalResult]) -> [String] {
+        [
+            "",
+            "## Reported (not gated)",
+            "",
+            "These figures track spend and do not affect the gate.",
+            "",
+            "| Metric | Value |",
+            "| --- | --- |",
+        ] + TextToSQLEvalUsageTotals(results: results).markdownRows
     }
 
     private static func historicalRegressionSection(results: [TextToSQLEvalResult]) -> [String] {
@@ -467,7 +484,7 @@ enum TextToSQLReleaseTriageReporter {
             "| Schema agent intent coverage | \(tableCell(run.manifest.schemaAgentIntentCoverageMode ?? "-")) |",
             "| Schema agent plan consistency | \(tableCell(run.manifest.schemaAgentPlanConsistencyMode ?? "-")) |",
             "| Model | \(tableCell(run.manifest.model ?? "-")) |",
-            "| Expected canonical model | \(tableCell(run.manifest.expectedCanonicalModelID ?? "-")) |",
+            "| Expected returned model | \(tableCell(run.manifest.expectedCanonicalModelID ?? "-")) |",
             "| Results | \(run.results.count) |",
             "| Complete | \(completeness.isComplete ? "Yes" : "No") |",
             "| Expected results | \(completeness.expectedResultCount) |",
