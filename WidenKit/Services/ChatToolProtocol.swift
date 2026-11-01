@@ -2,14 +2,16 @@ import Foundation
 
 struct ChatToolCall: Codable, Equatable, Sendable {
     /// The id Widen uses inside one run: tool sessions, traces and duplicate
-    /// checks. The agent namespaces it per turn, because a provider may
-    /// reuse its own ids on later turns.
+    /// checks. It is the provider id until that id repeats in the run or is
+    /// too long, because a provider may reuse its own ids on later turns.
     var id: String
     /// The id the provider sent. Requests always echo this one.
     var providerID: String
     var name: String
     var arguments: String
 
+    /// The tool sessions' call-id cap. A longer provider id is namespaced.
+    static let maximumInternalIDBytes = 128
     /// Keeps the namespaced id under the tool sessions' 128-byte call-id cap.
     static let maximumProviderIDBytesInInternalID = 96
 
@@ -33,6 +35,21 @@ struct ChatToolCall: Codable, Equatable, Sendable {
         }
         var copy = self
         copy.id = "\(turn):\(index):\(providerPrefix)"
+        return copy
+    }
+
+    /// The call with its internal id. A provider id the run has not used
+    /// yet and that fits the sessions' cap stays as it is, so tool results
+    /// name the id the model sent and a provider that never reuses ids gets
+    /// the same requests as before. Otherwise the id is namespaced.
+    func internalized(turn: Int, index: Int, usedIDs: Set<String>) -> ChatToolCall {
+        guard !usedIDs.contains(providerID),
+            providerID.utf8.count <= Self.maximumInternalIDBytes
+        else {
+            return namespaced(turn: turn, index: index)
+        }
+        var copy = self
+        copy.id = providerID
         return copy
     }
 }
@@ -484,7 +501,7 @@ struct ChatToolParser: Sendable {
                     attemptCount: requestCount
                 ).withReportedUsage(reportedUsage)
             }
-            // The agent namespaces `id` per turn; `providerID` stays as sent.
+            // The agent picks the internal `id`; `providerID` stays as sent.
             return ChatToolCall(id: id, providerID: id, name: name, arguments: arguments)
         }
         let content = choice.message?.content?.text

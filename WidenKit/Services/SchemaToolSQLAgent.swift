@@ -374,6 +374,7 @@ public final class SchemaToolSQLAgent: SQLGenerator, Sendable {
         diagnostics.intentCoverageMode = configuration.intentCoverageMode.rawValue
         diagnostics.planConsistencyMode = configuration.planConsistencyMode.rawValue
         var seenProviderCallIDs = Set<String>()
+        var internalCallIDs = Set<String>()
         var seenToolSignatures = Set<String>()
         var executedSchemaCallSignatures = Set<String>()
         var zeroResultSearchQueries = Set<String>()
@@ -478,15 +479,18 @@ public final class SchemaToolSQLAgent: SQLGenerator, Sendable {
                 // Results for two calls with one id in the same turn could not
                 // be told apart, so that still fails. A provider may reuse its
                 // ids on later turns: the wire keeps echoing the provider id,
-                // and everything inside the run uses the namespaced id.
+                // and a reused id is namespaced for everything inside the run.
                 guard !parsed.toolCalls.map(\.providerID).hasDuplicates else {
                     throw await agentFailure(.malformedToolCall, "The model reused a tool call ID.", session: session)
                 }
                 diagnostics.providerToolCallIDReuseCount += parsed.toolCalls.filter {
                     !seenProviderCallIDs.insert($0.providerID).inserted
                 }.count
-                let toolCalls = parsed.toolCalls.enumerated().map { index, call in
-                    call.namespaced(turn: turn, index: index)
+                var toolCalls: [ChatToolCall] = []
+                for (index, call) in parsed.toolCalls.enumerated() {
+                    let internalCall = call.internalized(turn: turn, index: index, usedIDs: internalCallIDs)
+                    internalCallIDs.insert(internalCall.id)
+                    toolCalls.append(internalCall)
                 }
                 let assistantToolTurn = ChatToolMessage(
                     role: .assistant,
