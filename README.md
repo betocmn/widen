@@ -103,7 +103,7 @@ are served from GitHub Releases.
 | Apple Silicon | Required only for Apple's optional on-device Foundation Model. |
 | Apple Intelligence enabled | Required only for local AI generation. Manual SQL and cloud models still work without it. |
 | PostgreSQL | Widen is Postgres-only today. [Postgres.app](https://postgresapp.com) works well for local testing. |
-| Xcode 26 | Needed when building from source. |
+| Xcode 26 or later (including Xcode 27) | Needed when building from source. |
 
 ## Sample database for exploring the app
 
@@ -253,9 +253,18 @@ refreshes the active database's schema; **Cmd+,** opens Settings.
 
 ## Build and run
 
-The Makefile pins `DEVELOPER_DIR` to `/Applications/Xcode-26.app`. If your
-Xcode 26 lives elsewhere (e.g. it is your default `/Applications/Xcode.app`),
-override it: `make build DEVELOPER_DIR=/Applications/Xcode.app/Contents/Developer`.
+Setup, Make targets, and release scripts share Xcode discovery: an explicit
+`DEVELOPER_DIR` takes priority, followed by the full Xcode selected by
+`xcode-select`, `/Applications/Xcode.app`, and other `/Applications/Xcode*.app`
+installations. Xcode 26 or later is required; Xcode 27 is supported, and older
+Xcode installations are skipped. To choose a different installation, use
+`make build DEVELOPER_DIR=/path/to/Xcode.app/Contents/Developer`.
+
+If no Xcode 26 or later installation is found, Conductor setup skips package
+resolution and leaves the workspace available for editing. Command Line Tools
+or an older Xcode cannot build or test the app. After installing Xcode, rerun
+`bash .conductor/setup.sh`. Setup and the normal build/test commands do not
+require Apple Intelligence, Apple model downloads, or cloud LLM credentials.
 
 ```sh
 make project   # regenerate Widen.xcodeproj from project.yml (needs xcodegen)
@@ -264,13 +273,13 @@ make run       # build and launch Widen.app
 make test      # unit tests
 make test-db   # unit + Postgres integration tests (needs a local Postgres server)
 make test-fm   # unit + on-device Foundation Models smoke test
-make xcode     # open the project in Xcode 26
+make xcode     # open the project in the selected Xcode
 ```
 
 The committed `Widen.xcodeproj` is generated - edit `project.yml` and run
 `make project` instead of editing project settings by hand. If you open the
-project in Xcode directly, make sure it is **Xcode 26**, not an older default
-Xcode. Widen targets macOS 14, while optional Foundation Models code is compiled
+project in Xcode directly, use **Xcode 26 or later**. Widen targets macOS 14,
+while optional Foundation Models code is compiled
 behind macOS 26 availability checks.
 
 ## Release packaging

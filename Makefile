@@ -1,11 +1,12 @@
 # Widen — build helpers.
 #
-# FoundationModels requires the macOS 26 SDK, which ships with Xcode 26.
-# The default Xcode on this machine may be older, so every target pins
-# DEVELOPER_DIR to Xcode-26.app. Override with:
+# Use the selected Xcode (26 or later), with installed apps as a fallback.
+# Setup, build, test, and release use the same discovery helper. Override with:
 #   make build DEVELOPER_DIR=/Applications/Xcode.app/Contents/Developer
 
-DEVELOPER_DIR ?= /Applications/Xcode-26.app/Contents/Developer
+ifeq ($(strip $(DEVELOPER_DIR)),)
+DEVELOPER_DIR := $(shell bash scripts/xcode-developer-dir.sh --optional)
+endif
 export DEVELOPER_DIR
 
 XCODEBUILD := xcodebuild -project Widen.xcodeproj -scheme Widen -configuration Debug -derivedDataPath build
@@ -242,9 +243,10 @@ release:
 	@test -n "$(VERSION)" || (echo "error: VERSION is required, e.g. make release VERSION=0.1.0" >&2; exit 1)
 	./scripts/publish_release.sh "$(VERSION)" $(PUBLISH_RELEASE_FLAGS)
 
-## Open the project in Xcode 26
+## Open the project in the same Xcode used to build it
 xcode:
-	open -a "Xcode-26" Widen.xcodeproj
+	@developer_dir="$$(bash scripts/xcode-developer-dir.sh)" && \
+	open -a "$${developer_dir%/Contents/Developer}" Widen.xcodeproj
 
 clean:
 	rm -rf build

@@ -23,8 +23,8 @@ problem, proposed behavior, and any tradeoffs.
 Requirements:
 
 - macOS 14 or later to run the app.
-- Xcode 26 to build from source, or override `DEVELOPER_DIR` if your Xcode
-  lives somewhere else.
+- Xcode 26 or later (including Xcode 27) to build from source. The selected
+  Xcode is detected automatically; set `DEVELOPER_DIR` to override it.
 - XcodeGen for regenerating the committed project from `project.yml`.
 - PostgreSQL only if you want to run integration tests or try the sample
   database.

@@ -23,7 +23,7 @@ The repository uses XcodeGen plus Swift Package Manager:
 ```text
 project.yml                 XcodeGen source of truth
 Widen.xcodeproj/            generated project, committed for convenience
-Makefile                    pinned Xcode 26 build/test/run helpers
+Makefile                    build/test/run helpers with shared Xcode discovery
 Widen/                      thin app target
 WidenKit/                   framework with app state, models, services, views
 WidenTests/                 Swift Testing test target
@@ -40,13 +40,16 @@ Apple's `FoundationModels` framework when building with the macOS 26 SDK.
 
 ## Build And Runtime Assumptions
 
-The app deployment target is macOS 14.0. The project still requires Xcode 26
+The app deployment target is macOS 14.0. The project requires Xcode 26 or later
 for source builds because optional Foundation Models and Liquid Glass code are
-compiled behind availability checks against the macOS 26 SDK. The Makefile
-exports:
+compiled behind availability checks against the macOS 26 SDK. Setup, Make
+targets, and release scripts use `scripts/xcode-developer-dir.sh` to honor
+`DEVELOPER_DIR`, then prefer the selected full Xcode, the standard Xcode app,
+and other installed Xcode apps, skipping any older than Xcode 26. For an
+explicit override:
 
 ```sh
-DEVELOPER_DIR=/Applications/Xcode-26.app/Contents/Developer
+make build DEVELOPER_DIR=/path/to/Xcode.app/Contents/Developer
 ```
 
 Use the Make targets as the standard entry points:
@@ -66,19 +69,19 @@ the MVP so it can connect to local PostgreSQL without provisioning. See
 Development Notes And Caveats below for the Keychain-prompt and Postgres.app
 client-permission consequences.
 
-### Dual toolchains: Xcode 26 and Xcode 27 beta
+### Toolchains: Xcode 26 and Xcode 27
 
 The Private Cloud Compute backend uses APIs that only exist in the macOS 27
 SDK (Xcode 27, Swift 6.4). The project must keep building with both
 toolchains:
 
 ```sh
-# Default toolchain (Xcode 26): users build with this today.
+# Use the selected toolchain (Xcode 26 or later).
 make project && make build && make test
 
-# Xcode 27 beta: compiles the PCC code path in. Separate derived data so
+# Explicit Xcode 27: compiles the PCC code path in. Separate derived data so
 # SDK caches never mix; build-xcode27/ is gitignored.
-DEVELOPER_DIR=/Applications/Xcode-beta.app/Contents/Developer \
+DEVELOPER_DIR=/path/to/Xcode-27.app/Contents/Developer \
   xcodebuild -project Widen.xcodeproj -scheme Widen -configuration Debug \
   -derivedDataPath build-xcode27 build
 ```
