@@ -54,7 +54,9 @@ A passing gate says nothing about these paths.
   rather than use an unevaluated model.
 - Particle publishes no dated snapshots, so that check verifies the model name
   only. Particle can change the model behind the name without a Widen release,
-  and Widen cannot detect it. Periodic re-gates stand in for version pinning.
+  and Widen cannot detect it. Instead of version pinning, the gate is rerun
+  before each minor release and whenever a model change is announced or
+  observed ([re-gate procedure](../release.md#particle-model-change-and-re-gate)).
 - Particle states it keeps no inference data by default. That is Particle's
   policy, not something Widen enforces: Particle's API has no per-request
   routing or retention setting, so Widen sends none.

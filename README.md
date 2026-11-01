@@ -57,7 +57,8 @@ Widen requests the `particle-1` model, and every response must report
 `particle-ai/particle-1` or Widen discards it. Particle publishes no dated
 snapshots, so that check verifies the model name only: Particle can update the
 model behind it without a Widen release, and Widen cannot detect the change.
-Periodic re-gates stand in for version pinning.
+Instead of version pinning, the gate is rerun before each minor release and
+whenever a model change is announced or observed.
 
 We publish negative results: pre-registered, paid gate experiments that fail
 their criteria are reverted and documented. See

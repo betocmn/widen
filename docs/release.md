@@ -78,14 +78,16 @@ The script:
      --account "$SPARKLE_ACCOUNT" -p
    ```
 
-## Particle Model Change and Periodic Re-Gate
+## Particle Model Change and Re-Gate
 
 Text-to-SQL requests `particle-1` and discards any completion that does not
 report `particle-ai/particle-1`. Particle publishes no dated snapshots, so
 that check verifies the model name only: Particle can change the model behind
 the name without a Widen release, and there is no earlier version to roll
-back to. Re-gating the shipped configuration is how Widen notices. Run this
-procedure when any of these happens:
+back to. Re-gating the shipped configuration is how Widen notices. Nothing
+schedules a re-gate between the triggers below, so a silent change can go
+unnoticed until one of them fires. Run this procedure when any of these
+happens:
 
 - Particle announces a change to `particle-1`.
 - A user or an eval reports an identity mismatch: a completion that names
@@ -202,7 +204,7 @@ authorize removing beta wording.
 ## Per-Release Steps
 
 Before a minor release, complete the
-[Particle re-gate](#particle-model-change-and-periodic-re-gate) first.
+[Particle re-gate](#particle-model-change-and-re-gate) first.
 
 1. Start a fresh release worktree from `origin/main`:
 

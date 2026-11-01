@@ -21,9 +21,10 @@ fixed; later commits add evidence and records, not changes to them.
 
 * **Particle-1 only.** The app requests `particle-1` and accepts only
   completions that report `particle-ai/particle-1`. Particle publishes no
-  dated snapshots, so only the model name is verified; periodic re-gates
-  ([docs/release.md](release.md#particle-model-change-and-periodic-re-gate))
-  replace the old fail-closed rollover handling.
+  dated snapshots, so only the model name is verified; re-gates before each
+  minor release and on an announced or observed model change
+  ([docs/release.md](release.md#particle-model-change-and-re-gate)) replace
+  the old fail-closed rollover handling.
 * **Apple paths removed.** On-device Foundation Models, the Private Cloud
   Compute stub and the on-device eval backend are gone.
 * **OpenRouter is eval-only.** The app never builds it. WidenEval runs it only
