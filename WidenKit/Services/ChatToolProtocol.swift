@@ -1,9 +1,40 @@
 import Foundation
 
 struct ChatToolCall: Codable, Equatable, Sendable {
+    /// The id Widen uses inside one run: tool sessions, traces and duplicate
+    /// checks. The agent namespaces it per turn, because a provider may
+    /// reuse its own ids on later turns.
     var id: String
+    /// The id the provider sent. Requests always echo this one.
+    var providerID: String
     var name: String
     var arguments: String
+
+    /// Keeps the namespaced id under the tool sessions' 128-byte call-id cap.
+    static let maximumProviderIDBytesInInternalID = 96
+
+    init(id: String, providerID: String? = nil, name: String, arguments: String) {
+        self.id = id
+        self.providerID = providerID ?? id
+        self.name = name
+        self.arguments = arguments
+    }
+
+    /// The call with the internal id `turn:index:providerID`. Only the first
+    /// 96 UTF-8 bytes of the provider id are kept; the turn and index alone
+    /// already make the id unique within a run.
+    func namespaced(turn: Int, index: Int) -> ChatToolCall {
+        var providerPrefix = ""
+        var byteCount = 0
+        for character in providerID {
+            byteCount += character.utf8.count
+            guard byteCount <= Self.maximumProviderIDBytesInInternalID else { break }
+            providerPrefix.append(character)
+        }
+        var copy = self
+        copy.id = "\(turn):\(index):\(providerPrefix)"
+        return copy
+    }
 }
 
 struct ChatToolMessage: Equatable, Sendable {
@@ -17,21 +48,27 @@ struct ChatToolMessage: Equatable, Sendable {
     var role: Role
     var content: String?
     var toolCalls: [ChatToolCall]
+    /// The provider's id of the call this tool message answers.
     var toolCallID: String?
     var toolName: String?
+    /// The provider's reasoning for an assistant turn. It lives only in
+    /// memory for the run and is sent back only when the profile echoes it.
+    var reasoningContent: String?
 
     init(
         role: Role,
         content: String? = nil,
         toolCalls: [ChatToolCall] = [],
         toolCallID: String? = nil,
-        toolName: String? = nil
+        toolName: String? = nil,
+        reasoningContent: String? = nil
     ) {
         self.role = role
         self.content = content
         self.toolCalls = toolCalls
         self.toolCallID = toolCallID
         self.toolName = toolName
+        self.reasoningContent = reasoningContent
     }
 }
 
@@ -132,10 +169,13 @@ struct ChatToolRequestBuilder: Sendable {
                 "role": "assistant",
                 "content": message.content ?? NSNull(),
             ]
+            if profile.echoesReasoningContent, let reasoningContent = message.reasoningContent {
+                body["reasoning_content"] = reasoningContent
+            }
             if !message.toolCalls.isEmpty {
                 body["tool_calls"] = message.toolCalls.map { call in
                     [
-                        "id": call.id,
+                        "id": call.providerID,
                         "type": "function",
                         "function": [
                             "name": call.name,
@@ -163,6 +203,8 @@ struct ChatToolParser: Sendable {
     struct ParsedTurn: Sendable {
         var content: String?
         var toolCalls: [ChatToolCall]
+        /// Held in memory only; never persisted or logged.
+        var reasoningContent: String?
         var metadata: CloudGenerationMetadata
     }
 
@@ -190,12 +232,28 @@ struct ChatToolParser: Sendable {
                 let content: MessageContent?
                 let refusal: String?
                 let toolCalls: [ToolCall]?
+                let reasoningContent: String?
 
                 private enum CodingKeys: String, CodingKey {
                     case role
                     case content
                     case refusal
                     case toolCalls = "tool_calls"
+                    case reasoningContent = "reasoning_content"
+                }
+
+                init(from decoder: any Decoder) throws {
+                    let container = try decoder.container(keyedBy: CodingKeys.self)
+                    role = try container.decodeIfPresent(String.self, forKey: .role)
+                    content = try container.decodeIfPresent(MessageContent.self, forKey: .content)
+                    refusal = try container.decodeIfPresent(String.self, forKey: .refusal)
+                    toolCalls = try container.decodeIfPresent([ToolCall].self, forKey: .toolCalls)
+                    // Reasoning is optional to echo, so an unexpected shape
+                    // drops it instead of failing the turn.
+                    reasoningContent = try? container.decodeIfPresent(
+                        String.self,
+                        forKey: .reasoningContent
+                    )
                 }
             }
 
@@ -426,7 +484,8 @@ struct ChatToolParser: Sendable {
                     attemptCount: requestCount
                 ).withReportedUsage(reportedUsage)
             }
-            return ChatToolCall(id: id, name: name, arguments: arguments)
+            // The agent namespaces `id` per turn; `providerID` stays as sent.
+            return ChatToolCall(id: id, providerID: id, name: name, arguments: arguments)
         }
         let content = choice.message?.content?.text
             .trimmingCharacters(in: .whitespacesAndNewlines)
@@ -482,7 +541,12 @@ struct ChatToolParser: Sendable {
             finishReason: choice.finishReason,
             nativeFinishReason: choice.nativeFinishReason
         )
-        return ParsedTurn(content: content, toolCalls: toolCalls, metadata: metadata)
+        return ParsedTurn(
+            content: content,
+            toolCalls: toolCalls,
+            reasoningContent: choice.message?.reasoningContent?.nilIfEmpty,
+            metadata: metadata
+        )
     }
 }
 

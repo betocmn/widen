@@ -71,6 +71,10 @@ public struct SchemaToolAgentDiagnostics: Codable, Equatable, Sendable {
     public var planConsistencyDivergences: [String]
     public var planConsistencyCorrectionAttempted: Bool
     public var planConsistencyCorrectionSucceeded: Bool
+    /// Tool calls whose provider id repeated one from an earlier turn. The
+    /// agent namespaces ids per turn, so a reuse is recorded, not rejected.
+    /// `nil` when no id was reused, and in sessions saved before it existed.
+    public var providerToolCallIDReuseCount: Int?
 
     public init(
         logicalTurnCount: Int? = nil,
@@ -105,7 +109,8 @@ public struct SchemaToolAgentDiagnostics: Codable, Equatable, Sendable {
         planConsistencyReason: String = "",
         planConsistencyDivergences: [String] = [],
         planConsistencyCorrectionAttempted: Bool = false,
-        planConsistencyCorrectionSucceeded: Bool = false
+        planConsistencyCorrectionSucceeded: Bool = false,
+        providerToolCallIDReuseCount: Int? = nil
     ) {
         self.logicalTurnCount = logicalTurnCount
         self.terminalToolSeen = terminalToolSeen
@@ -140,6 +145,7 @@ public struct SchemaToolAgentDiagnostics: Codable, Equatable, Sendable {
         self.planConsistencyDivergences = planConsistencyDivergences
         self.planConsistencyCorrectionAttempted = planConsistencyCorrectionAttempted
         self.planConsistencyCorrectionSucceeded = planConsistencyCorrectionSucceeded
+        self.providerToolCallIDReuseCount = providerToolCallIDReuseCount
     }
 
     private enum CodingKeys: String, CodingKey {
@@ -176,6 +182,7 @@ public struct SchemaToolAgentDiagnostics: Codable, Equatable, Sendable {
         case planConsistencyDivergences
         case planConsistencyCorrectionAttempted
         case planConsistencyCorrectionSucceeded
+        case providerToolCallIDReuseCount
     }
 
     public init(from decoder: any Decoder) throws {
@@ -300,5 +307,9 @@ public struct SchemaToolAgentDiagnostics: Codable, Equatable, Sendable {
             Bool.self,
             forKey: .planConsistencyCorrectionSucceeded
         ) ?? false
+        providerToolCallIDReuseCount = try? container.decodeIfPresent(
+            Int.self,
+            forKey: .providerToolCallIDReuseCount
+        )
     }
 }

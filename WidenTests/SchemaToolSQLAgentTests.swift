@@ -23,6 +23,27 @@ struct SchemaToolSQLAgentTests {
         #expect(diagnostics.redundantDuplicateToolCallCount == 0)
         #expect(diagnostics.redundantZeroResultSearchCount == 0)
         #expect(diagnostics.redundantJoinPathCallCount == 0)
+        #expect(diagnostics.providerToolCallIDReuseCount == nil)
+    }
+
+    @Test func diagnosticsDecodeProviderToolCallIDReuseCountTolerantly() throws {
+        let decoder = JSONDecoder()
+        let counted = try decoder.decode(
+            SchemaToolAgentDiagnostics.self,
+            from: Data(#"{"providerToolCallIDReuseCount":2}"#.utf8)
+        )
+        #expect(counted.providerToolCallIDReuseCount == 2)
+
+        let wrongType = try decoder.decode(
+            SchemaToolAgentDiagnostics.self,
+            from: Data(#"{"terminalToolSeen":true,"providerToolCallIDReuseCount":"two"}"#.utf8)
+        )
+        #expect(wrongType.providerToolCallIDReuseCount == nil)
+        #expect(wrongType.terminalToolSeen)
+
+        // A run without reuse leaves the key out of the saved JSON.
+        let encoded = String(decoding: try JSONEncoder().encode(SchemaToolAgentDiagnostics()), as: UTF8.self)
+        #expect(!encoded.contains("providerToolCallIDReuseCount"))
     }
 
     @Test func cloudRequestFailureKeepsItsSavedRawValue() throws {
@@ -485,6 +506,210 @@ struct SchemaToolSQLAgentTests {
         #expect(metadata.responseFormatType == nil)
     }
 
+    @Test func providerToolCallIDReusedAcrossTurnsIsNamespacedInsideTheAgent() async throws {
+        let schema = Self.makeSchema()
+        // The provider numbers its calls per turn, so every turn sends call_0.
+        let chatTransport = ScriptedTransport { request, index in
+            switch index {
+            case 1:
+                return Self.particleToolCalls([
+                    Self.toolCall(id: "call_0", name: "search_schema", arguments: [
+                        "query": "users",
+                        "limit": 4,
+                    ]),
+                ])
+            case 2:
+                let tableID = try Self.tableHandle(named: #""public"."users""#, in: request)
+                return Self.particleToolCalls([
+                    Self.toolCall(id: "call_0", name: "describe_tables", arguments: [
+                        "table_ids": [tableID],
+                    ]),
+                ])
+            default:
+                return Self.particleToolCalls([
+                    Self.terminalSQL(
+                        id: "call_0",
+                        sql: "SELECT id, name FROM public.users ORDER BY id LIMIT 100"
+                    ),
+                ])
+            }
+        }
+        let agent = makeAgent(schema: schema, chatTransport: chatTransport)
+
+        let result = try await agent.generateSQL(
+            question: "List users",
+            schema: schema,
+            context: SQLGenerationContext(),
+            config: SQLGenerationConfig()
+        )
+
+        #expect(result.sql == "SELECT id, name FROM public.users ORDER BY id LIMIT 100")
+        // Sessions and traces see one id per call...
+        #expect(result.schemaToolCalls.map(\.callID) == ["1:0:call_0", "2:0:call_0"])
+        #expect(result.schemaToolCalls.allSatisfy { $0.outcome == .success })
+        #expect(result.backendMetadata?.agentDiagnostics?.providerToolCallIDReuseCount == 2)
+        // ...while the wire only ever carries the provider's own id.
+        #expect(chatTransport.requests.count == 3)
+        let lastRequest = try #require(chatTransport.requests.last)
+        #expect(try Self.assistantToolCallIDs(in: lastRequest) == ["call_0", "call_0"])
+        #expect(try Self.toolMessageIDs(in: lastRequest) == ["call_0", "call_0"])
+        let lastMessages = try #require(
+            try Self.requestBody(lastRequest)["messages"] as? [[String: Any]]
+        )
+        #expect(lastMessages.allSatisfy { $0["name"] == nil })
+    }
+
+    @Test func providerToolCallIDRepeatedWithinOneTurnStillFails() async throws {
+        let schema = Self.makeSchema()
+        let chatTransport = ScriptedTransport { _, _ in
+            Self.particleToolCalls([
+                Self.toolCall(id: "call_0", name: "search_schema", arguments: ["query": "users"]),
+                Self.toolCall(id: "call_0", name: "search_schema", arguments: ["query": "orders"]),
+            ])
+        }
+        let agent = makeAgent(schema: schema, chatTransport: chatTransport)
+
+        do {
+            _ = try await agent.generateSQL(
+                question: "List users",
+                schema: schema,
+                context: SQLGenerationContext(),
+                config: SQLGenerationConfig()
+            )
+            Issue.record("Expected a malformed tool call failure")
+        } catch let failure as SchemaToolAgentFailure {
+            #expect(failure.category == .malformedToolCall)
+            #expect(failure.schemaToolCalls.isEmpty)
+            #expect(chatTransport.requests.count == 1)
+        }
+    }
+
+    @Test(arguments: [false, true])
+    func reasoningContentIsEchoedOnlyWhenTheProfileAsks(echoesReasoningContent: Bool) async throws {
+        var profile = CloudModelProfile.particleTest
+        profile.echoesReasoningContent = echoesReasoningContent
+        let schema = Self.makeSchema()
+        let chatTransport = ScriptedTransport { request, index in
+            switch index {
+            case 1:
+                return Self.particleToolCalls(
+                    [
+                        Self.toolCall(id: "call_0", name: "search_schema", arguments: [
+                            "query": "users",
+                            "limit": 4,
+                        ]),
+                    ],
+                    reasoningContent: "reasoning-one: search for users"
+                )
+            case 2:
+                let tableID = try Self.tableHandle(named: #""public"."users""#, in: request)
+                return Self.particleToolCalls(
+                    [
+                        Self.toolCall(id: "call_0", name: "describe_tables", arguments: [
+                            "table_ids": [tableID],
+                        ]),
+                    ],
+                    reasoningContent: "reasoning-two: describe users"
+                )
+            default:
+                return Self.particleToolCalls(
+                    [
+                        Self.terminalSQL(
+                            id: "call_0",
+                            sql: "SELECT id, name FROM public.users ORDER BY id LIMIT 100"
+                        ),
+                    ],
+                    reasoningContent: "reasoning-three: answer"
+                )
+            }
+        }
+        let agent = makeAgent(profile: profile, schema: schema, chatTransport: chatTransport)
+
+        let result = try await agent.generateSQL(
+            question: "List users",
+            schema: schema,
+            context: SQLGenerationContext(),
+            config: SQLGenerationConfig()
+        )
+
+        #expect(result.sql == "SELECT id, name FROM public.users ORDER BY id LIMIT 100")
+        let lastRequest = try #require(chatTransport.requests.last)
+        let messages = try #require(
+            try Self.requestBody(lastRequest)["messages"] as? [[String: Any]]
+        )
+        let echoed = messages
+            .filter { $0["role"] as? String == "assistant" }
+            .map { $0["reasoning_content"] as? String }
+        if echoesReasoningContent {
+            #expect(echoed == ["reasoning-one: search for users", "reasoning-two: describe users"])
+        } else {
+            #expect(echoed == [nil, nil])
+            for request in chatTransport.requests {
+                #expect(!(try Self.requestBodyText(request)).contains("reasoning_content"))
+            }
+        }
+        // Reasoning lives only in memory for the run, never in the result.
+        let saved = String(decoding: try JSONEncoder().encode(result), as: UTF8.self)
+        #expect(!saved.contains("reasoning-"))
+    }
+
+    @Test func toolChatParserKeepsTextReasoningContentAndDropsOtherShapes() throws {
+        let parser = ChatToolParser(profile: .particleTest)
+        let response = HTTPURLResponse(
+            url: CloudModelProfile.particleTest.chatCompletionsURL,
+            statusCode: 200,
+            httpVersion: "HTTP/1.1",
+            headerFields: nil
+        )!
+        let call = Self.toolCall(id: "call_0", name: "search_schema", arguments: ["query": "users"])
+
+        let parsed = try parser.parse(
+            data: Self.particleToolCalls([call], reasoningContent: "look up users"),
+            response: response,
+            requestedModelID: "particle-1",
+            requestCount: 1,
+            retryCount: 0
+        )
+        #expect(parsed.reasoningContent == "look up users")
+        #expect(parsed.toolCalls.map(\.id) == ["call_0"])
+        #expect(parsed.toolCalls.map(\.providerID) == ["call_0"])
+        let metadata = String(decoding: try JSONEncoder().encode(parsed.metadata), as: UTF8.self)
+        #expect(!metadata.contains("look up users"))
+
+        let otherShapes: [Any] = ["", 42, ["text": "structured"]]
+        for reasoning in otherShapes {
+            let parsed = try parser.parse(
+                data: Self.particleToolCalls([call], reasoningContent: reasoning),
+                response: response,
+                requestedModelID: "particle-1",
+                requestCount: 1,
+                retryCount: 0
+            )
+            #expect(parsed.reasoningContent == nil)
+            #expect(parsed.toolCalls.count == 1)
+        }
+    }
+
+    @Test func namespacedToolCallIDKeepsAtMostNinetySixProviderBytes() {
+        let call = ChatToolCall(id: "call_0", name: "search_schema", arguments: "{}")
+        let namespaced = call.namespaced(turn: 3, index: 1)
+        #expect(namespaced.id == "3:1:call_0")
+        #expect(namespaced.providerID == "call_0")
+        #expect(namespaced.name == call.name)
+        #expect(namespaced.arguments == call.arguments)
+
+        // 49 two-byte characters are 98 bytes; the cap keeps 48 whole ones.
+        let wide = ChatToolCall(
+            id: String(repeating: "\u{E9}", count: 49),
+            name: "search_schema",
+            arguments: "{}"
+        )
+        let capped = wide.namespaced(turn: 12, index: 40)
+        #expect(capped.id == "12:40:" + String(repeating: "\u{E9}", count: 48))
+        #expect(capped.providerID == wide.id)
+        #expect(capped.id.utf8.count <= SchemaToolPolicy.cloudAgent.maximumCallIDBytes)
+    }
+
     @Test func multipleSchemaCallsInOneAssistantTurnExecuteInDeclaredOrder() async throws {
         let schema = Self.makeSchema()
         let chatTransport = ScriptedTransport { request, index in
@@ -529,7 +754,7 @@ struct SchemaToolSQLAgentTests {
         )
 
         #expect(result.schemaToolCalls.map { $0.callID } == [
-            "search-users", "search-orders", "describe-users",
+            "1:0:search-users", "1:1:search-orders", "2:0:describe-users",
         ])
     }
 
@@ -593,7 +818,7 @@ struct SchemaToolSQLAgentTests {
         #expect(result.inspectionToolCalls.map(\.toolName) == [
             DatabaseInspectionToolName.inspectRelationSize.rawValue,
         ])
-        #expect(result.inspectionToolCalls.first?.callID == "size-1")
+        #expect(result.inspectionToolCalls.first?.callID == "2:0:size-1")
         #expect(result.inspectionToolCalls.first?.tableID != nil)
         #expect(result.inspectionToolCalls.first?.cloudShareable == true)
         #expect(result.backendMetadata?.agentInspectionToolCallCount == 1)
@@ -652,7 +877,7 @@ struct SchemaToolSQLAgentTests {
         #expect(result.clarificationQuestion?.contains("winner_id") == true)
         #expect(result.clarificationQuestion?.contains("not null") == true)
         #expect(result.schemaToolCalls.map(\.callID) == [
-            "search-evaluations", "search-tools", "describe-preseason",
+            "1:0:search-evaluations", "1:1:search-tools", "2:0:describe-preseason",
         ])
         #expect(result.backendMetadata?.agentDiagnostics?.producedProseInsteadOfTools == true)
         #expect(result.backendMetadata?.agentDiagnostics?.schemaEvidence.describedTableIDs.count == 2)
@@ -2070,8 +2295,8 @@ struct SchemaToolSQLAgentTests {
 
         #expect(!result.needsClarification)
         #expect(result.schemaToolCalls.map(\.callID) == [
-            "search-terminal-required",
-            "describe-terminal-required",
+            "1:0:search-terminal-required",
+            "2:0:describe-terminal-required",
         ])
         #expect(result.sql.contains("COUNT(*) AS wins"))
     }
@@ -2213,7 +2438,7 @@ struct SchemaToolSQLAgentTests {
         } catch let failure as SchemaToolAgentFailure {
             #expect(failure.category == .terminalResultMissing)
             #expect(failure.schemaToolCalls.map(\.callID) == [
-                "search-recent-orders", "describe-recent-orders",
+                "1:0:search-recent-orders", "2:0:describe-recent-orders",
             ])
         }
     }
@@ -2366,7 +2591,7 @@ struct SchemaToolSQLAgentTests {
 
         #expect(result.sql == "SELECT id FROM public.users LIMIT 100")
         #expect(result.schemaToolCalls.map { $0.callID } == [
-            "search-after-correction", "describe-after-correction",
+            "2:0:search-after-correction", "3:0:describe-after-correction",
         ])
         for request in chatTransport.requests {
             try ParticleTestSupport.expectRequestShape(request, callSite: .agentTurn)
@@ -2423,7 +2648,7 @@ struct SchemaToolSQLAgentTests {
         )
 
         #expect(result.sql == "SELECT id FROM public.users LIMIT 100")
-        #expect(result.schemaToolCalls.map { $0.callID } == ["search-users", "describe-users"])
+        #expect(result.schemaToolCalls.map { $0.callID } == ["1:0:search-users", "2:0:describe-users"])
     }
 
     @Test func caseVariantTableInspectionDoesNotAuthorizeLowercaseTable() async throws {
@@ -2477,7 +2702,7 @@ struct SchemaToolSQLAgentTests {
             Issue.record("Expected uninspected lowercase table failure")
         } catch let failure as SchemaToolAgentFailure {
             #expect(failure.category == .uninspectedSchemaObjects)
-            #expect(failure.schemaToolCalls.map(\.callID) == ["search-mixed", "describe-mixed"])
+            #expect(failure.schemaToolCalls.map(\.callID) == ["1:0:search-mixed", "2:0:describe-mixed"])
         }
     }
 
@@ -2534,7 +2759,7 @@ struct SchemaToolSQLAgentTests {
         } catch let failure as SchemaToolAgentFailure {
             #expect(failure.category == .uninspectedSchemaObjects)
             #expect(failure.schemaToolCalls.map(\.callID) == [
-                "search-users", "search-invoices", "find-no-path",
+                "1:0:search-users", "1:1:search-invoices", "2:0:find-no-path",
             ])
         }
     }
@@ -2644,7 +2869,7 @@ struct SchemaToolSQLAgentTests {
         } catch let failure as SchemaToolAgentFailure {
             #expect(failure.category == .staleSchemaSnapshot)
             #expect(failure.schemaToolCalls.map(\.callID) == [
-                "search-before-terminal-stale", "describe-before-terminal-stale",
+                "1:0:search-before-terminal-stale", "2:0:describe-before-terminal-stale",
             ])
         }
     }
@@ -2803,8 +3028,10 @@ struct SchemaToolSQLAgentTests {
         }
     }
 
-    @Test func schemaToolResponsePreservesProviderCallIDWhenSessionRewritesPayloadCallID() async throws {
+    @Test func schemaToolResponseEchoesAnOversizedProviderCallIDWhileTheInternalIDStaysCapped() async throws {
         let schema = Self.makeSchema()
+        // Longer than the sessions' 128-byte call-id cap. The namespaced
+        // internal id keeps only its first 96 bytes, so the call still runs.
         let providerCallID = String(repeating: "c", count: 129)
         let chatTransport = ScriptedTransport { _, index in
             switch index {
@@ -2831,9 +3058,12 @@ struct SchemaToolSQLAgentTests {
         } catch {
             let secondRequest = try #require(chatTransport.requests.dropFirst().first)
             #expect(try Self.toolMessageIDs(in: secondRequest) == [providerCallID])
+            #expect(try Self.assistantToolCallIDs(in: secondRequest) == [providerCallID])
             let toolResult = try #require(Self.toolResults(in: secondRequest).first)
-            #expect(toolResult.callID == "invalid_call_id")
-            #expect(toolResult.error?.code == .argumentOutOfRange)
+            #expect(toolResult.callID == "1:0:" + String(repeating: "c", count: 96))
+            #expect(toolResult.callID.utf8.count <= SchemaToolPolicy.cloudAgent.maximumCallIDBytes)
+            #expect(toolResult.success)
+            #expect(toolResult.error == nil)
         }
     }
 
@@ -2916,7 +3146,7 @@ struct SchemaToolSQLAgentTests {
             Issue.record("Expected wildcard inspection failure")
         } catch let failure as SchemaToolAgentFailure {
             #expect(failure.category == .uninspectedSchemaObjects)
-            #expect(failure.schemaToolCalls.map(\.callID) == ["search-wide", "describe-wide"])
+            #expect(failure.schemaToolCalls.map(\.callID) == ["1:0:search-wide", "2:0:describe-wide"])
         }
     }
 
@@ -2957,7 +3187,7 @@ struct SchemaToolSQLAgentTests {
         )
 
         #expect(result.sql == sql)
-        #expect(result.schemaToolCalls.map(\.callID) == ["search-wide-multiply", "describe-wide-multiply"])
+        #expect(result.schemaToolCalls.map(\.callID) == ["1:0:search-wide-multiply", "2:0:describe-wide-multiply"])
     }
 
     @Test func mixedSchemaAndTerminalCallsFailAfterSingleCorrection() async throws {
@@ -3231,7 +3461,7 @@ struct SchemaToolSQLAgentTests {
             Issue.record("Expected stale snapshot failure")
         } catch let failure as SchemaToolAgentFailure {
             #expect(failure.category == .staleSchemaSnapshot)
-            #expect(failure.schemaToolCalls.map(\.callID) == ["search-before-stale"])
+            #expect(failure.schemaToolCalls.map(\.callID) == ["1:0:search-before-stale"])
         }
     }
 
@@ -3266,7 +3496,7 @@ struct SchemaToolSQLAgentTests {
         } catch let failure as SchemaToolAgentFailure {
             #expect(failure.category == .cloudRequestFailure)
             #expect(failure.cloudFailure?.category == .maxTokensExceeded)
-            #expect(failure.schemaToolCalls.map(\.callID) == ["search-before-provider-failure"])
+            #expect(failure.schemaToolCalls.map(\.callID) == ["1:0:search-before-provider-failure"])
             #expect(failure.backendMetadata?.agentSelectionReason == "tools")
             #expect(failure.backendMetadata?.agentLogicalTurnCount == 1)
             #expect(failure.backendMetadata?.agentHTTPAttemptCount == 2)
@@ -3329,9 +3559,9 @@ struct SchemaToolSQLAgentTests {
         } catch let failure as SchemaToolAgentFailure {
             #expect(failure.category == .schemaToolCallBudgetExhausted)
             #expect(failure.schemaToolCalls.map(\.callID) == [
-                "search-repair-budget",
-                "describe-repair-budget",
-                "search-over-repair-budget",
+                "1:0:search-repair-budget",
+                "2:0:describe-repair-budget",
+                "3:0:search-over-repair-budget",
             ])
             #expect(failure.schemaToolCalls.last?.errorCode == .sessionBudgetExceeded)
             #expect(failure.backendMetadata?.agentDiagnostics?.appSideRejectionReason == .budgetExhausted)
@@ -4218,7 +4448,7 @@ struct SchemaToolSQLAgentTests {
             Issue.record("Expected timeout failure")
         } catch let failure as SchemaToolAgentFailure {
             #expect(failure.category == .wallClockTimeout)
-            #expect(failure.schemaToolCalls.map(\.callID) == ["search-before-timeout"])
+            #expect(failure.schemaToolCalls.map(\.callID) == ["1:0:search-before-timeout"])
             #expect(failure.schemaToolCalls.allSatisfy { $0.errorCode != .sessionBudgetExceeded })
             let diagnostics = failure.backendMetadata?.agentDiagnostics
             #expect(diagnostics?.appSideRejectionReason == .timedOut)
@@ -4299,7 +4529,7 @@ struct SchemaToolSQLAgentTests {
         )
 
         #expect(result.sql == "SELECT id, name FROM public.users ORDER BY id LIMIT 100")
-        #expect(result.schemaToolCalls.map(\.callID) == ["search-dup-1", "describe-dup"])
+        #expect(result.schemaToolCalls.map(\.callID) == ["1:0:search-dup-1", "3:0:describe-dup"])
         #expect(result.backendMetadata?.agentSchemaToolCallCount == 2)
         let diagnostics = result.backendMetadata?.agentDiagnostics
         #expect(diagnostics?.redundantDuplicateToolCallCount == 1)
@@ -4368,7 +4598,7 @@ struct SchemaToolSQLAgentTests {
 
         #expect(result.sql == "SELECT id, name FROM public.users ORDER BY id LIMIT 100")
         #expect(result.schemaToolCalls.map(\.callID) == [
-            "search-zero-1", "search-zero-2", "search-users", "describe-zero",
+            "1:0:search-zero-1", "1:1:search-zero-2", "2:1:search-users", "3:0:describe-zero",
         ])
         let diagnostics = result.backendMetadata?.agentDiagnostics
         #expect(diagnostics?.redundantZeroResultSearchCount == 1)
@@ -4446,7 +4676,7 @@ struct SchemaToolSQLAgentTests {
 
         #expect(result.sql == "SELECT id, name FROM public.users ORDER BY id LIMIT 100")
         #expect(result.schemaToolCalls.map(\.callID) == [
-            "search-join-users", "search-join-orders", "join-forward", "describe-join",
+            "1:0:search-join-users", "1:1:search-join-orders", "2:0:join-forward", "4:0:describe-join",
         ])
         let diagnostics = result.backendMetadata?.agentDiagnostics
         #expect(diagnostics?.redundantJoinPathCallCount == 1)
@@ -4521,8 +4751,8 @@ struct SchemaToolSQLAgentTests {
 
         #expect(result.sql == "SELECT id, name FROM public.users ORDER BY id LIMIT 100")
         #expect(result.schemaToolCalls.map(\.callID) == [
-            "search-scope-users", "search-scope-orders", "join-narrow", "join-wide",
-            "describe-scope",
+            "1:0:search-scope-users", "1:1:search-scope-orders", "2:0:join-narrow", "3:0:join-wide",
+            "4:0:describe-scope",
         ])
         let diagnostics = result.backendMetadata?.agentDiagnostics
         #expect(diagnostics?.redundantJoinPathCallCount == 0)
@@ -4638,7 +4868,7 @@ struct SchemaToolSQLAgentTests {
         )
 
         #expect(result.sql == "SELECT id, name FROM public.users ORDER BY id LIMIT 100")
-        #expect(result.schemaToolCalls.map(\.callID) == ["search-identical-1", "describe-identical"])
+        #expect(result.schemaToolCalls.map(\.callID) == ["1:0:search-identical-1", "4:0:describe-identical"])
         #expect(result.backendMetadata?.agentDiagnostics?.redundantDuplicateToolCallCount == 2)
     }
 
@@ -4671,7 +4901,7 @@ struct SchemaToolSQLAgentTests {
             Issue.record("Expected repeated-call failure")
         } catch let failure as SchemaToolAgentFailure {
             #expect(failure.category == .repeatedToolCallNoProgress)
-            #expect(failure.schemaToolCalls.map(\.callID) == ["search-invalid-1"])
+            #expect(failure.schemaToolCalls.map(\.callID) == ["1:0:search-invalid-1"])
             #expect(failure.backendMetadata?.agentDiagnostics?.redundantDuplicateToolCallCount == 0)
         }
     }
@@ -4737,8 +4967,8 @@ struct SchemaToolSQLAgentTests {
 
         #expect(result.sql == "SELECT id, name FROM public.users ORDER BY id LIMIT 100")
         #expect(result.schemaToolCalls.map(\.callID) == [
-            "search-zero-valid", "search-zero-invalid-limit", "search-users-after-invalid",
-            "describe-after-invalid",
+            "1:0:search-zero-valid", "2:0:search-zero-invalid-limit", "3:0:search-users-after-invalid",
+            "4:0:describe-after-invalid",
         ])
         let diagnostics = result.backendMetadata?.agentDiagnostics
         #expect(diagnostics?.redundantZeroResultSearchCount == 0)
@@ -5018,8 +5248,18 @@ struct SchemaToolSQLAgentTests {
     }
 
     /// A Particle-1 tool-call turn: cached prompt tokens and no `usage.cost`.
-    private static func particleToolCalls(_ calls: [[String: Any]]) -> Data {
-        jsonData([
+    private static func particleToolCalls(
+        _ calls: [[String: Any]],
+        reasoningContent: Any? = nil
+    ) -> Data {
+        var message: [String: Any] = [
+            "role": "assistant",
+            "tool_calls": calls,
+        ]
+        if let reasoningContent {
+            message["reasoning_content"] = reasoningContent
+        }
+        return jsonData([
             "id": "chatcmpl-\(UUID().uuidString)",
             "object": "chat.completion",
             "model": returnedModelID,
@@ -5027,10 +5267,7 @@ struct SchemaToolSQLAgentTests {
                 [
                     "index": 0,
                     "finish_reason": "tool_calls",
-                    "message": [
-                        "role": "assistant",
-                        "tool_calls": calls,
-                    ],
+                    "message": message,
                 ],
             ],
             "usage": [
@@ -5201,6 +5438,17 @@ struct SchemaToolSQLAgentTests {
         return messages.compactMap { message in
             guard message["role"] as? String == "tool" else { return nil }
             return message["tool_call_id"] as? String
+        }
+    }
+
+    private static func assistantToolCallIDs(in request: URLRequest) throws -> [String] {
+        let body = try requestBody(request)
+        let messages = try #require(body["messages"] as? [[String: Any]])
+        return messages.flatMap { message -> [String] in
+            guard message["role"] as? String == "assistant",
+                let calls = message["tool_calls"] as? [[String: Any]]
+            else { return [] }
+            return calls.compactMap { $0["id"] as? String }
         }
     }
 

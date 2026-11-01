@@ -453,14 +453,19 @@ public final class SchemaToolSQLAgent: SQLGenerator, Sendable {
                 aggregate.logicalTurnCount = turn
                 diagnostics.logicalTurnCount = turn
 
-                let toolCalls = parsed.toolCalls
-                guard !toolCalls.isEmpty else {
+                guard !parsed.toolCalls.isEmpty else {
                     if parsed.content?.isEmpty == false {
                         diagnostics.producedProseInsteadOfTools = true
                     }
                     if malformedTerminalCorrections < configuration.maximumMalformedTerminalCorrections {
                         malformedTerminalCorrections += 1
-                        messages.append(ChatToolMessage(role: .assistant, content: parsed.content))
+                        messages.append(
+                            ChatToolMessage(
+                                role: .assistant,
+                                content: parsed.content,
+                                reasoningContent: parsed.reasoningContent
+                            )
+                        )
                         let guidance = evidence.hasSuccessfulSearch
                             ? Self.strictTerminalCorrection
                             : Self.schemaSearchCorrection
@@ -470,11 +475,24 @@ public final class SchemaToolSQLAgent: SQLGenerator, Sendable {
                     throw await agentFailure(.terminalResultMissing, "The model did not call a terminal tool.", session: session)
                 }
 
-                let duplicateCallIDs = toolCalls.map(\.id).hasDuplicates
-                    || toolCalls.contains { !seenProviderCallIDs.insert($0.id).inserted }
-                guard !duplicateCallIDs else {
+                // Results for two calls with one id in the same turn could not
+                // be told apart, so that still fails. A provider may reuse its
+                // ids on later turns: the wire keeps echoing the provider id,
+                // and everything inside the run uses the namespaced id.
+                guard !parsed.toolCalls.map(\.providerID).hasDuplicates else {
                     throw await agentFailure(.malformedToolCall, "The model reused a tool call ID.", session: session)
                 }
+                diagnostics.providerToolCallIDReuseCount += parsed.toolCalls.filter {
+                    !seenProviderCallIDs.insert($0.providerID).inserted
+                }.count
+                let toolCalls = parsed.toolCalls.enumerated().map { index, call in
+                    call.namespaced(turn: turn, index: index)
+                }
+                let assistantToolTurn = ChatToolMessage(
+                    role: .assistant,
+                    toolCalls: toolCalls,
+                    reasoningContent: parsed.reasoningContent
+                )
 
                 let terminalCalls = toolCalls.filter { $0.name == Self.terminalToolName }
                 let knownSchemaCalls = toolCalls.filter { SchemaToolName(rawValue: $0.name) != nil }
@@ -498,7 +516,7 @@ public final class SchemaToolSQLAgent: SQLGenerator, Sendable {
                 if mixesTerminalAndSchema {
                     diagnostics.appSideRejectionReason = .malformedTerminal
                     diagnostics.terminalValidationFailureReason = "mixedTerminalAndSchemaCalls"
-                    messages.append(ChatToolMessage(role: .assistant, toolCalls: toolCalls))
+                    messages.append(assistantToolTurn)
                     if malformedTerminalCorrections < configuration.maximumMalformedTerminalCorrections {
                         malformedTerminalCorrections += 1
                         appendToolErrorResponses(
@@ -520,7 +538,7 @@ public final class SchemaToolSQLAgent: SQLGenerator, Sendable {
                 if terminalCalls.count > 1 {
                     diagnostics.appSideRejectionReason = .malformedTerminal
                     diagnostics.terminalValidationFailureReason = "multipleTerminalCalls"
-                    messages.append(ChatToolMessage(role: .assistant, toolCalls: toolCalls))
+                    messages.append(assistantToolTurn)
                     if malformedTerminalCorrections < configuration.maximumMalformedTerminalCorrections {
                         malformedTerminalCorrections += 1
                         appendToolErrorResponses(
@@ -541,7 +559,7 @@ public final class SchemaToolSQLAgent: SQLGenerator, Sendable {
 
                 if terminalCalls.count == 1 {
                     let terminal = terminalCalls[0]
-                    messages.append(ChatToolMessage(role: .assistant, toolCalls: toolCalls))
+                    messages.append(assistantToolTurn)
                     let terminalResult: TerminalResult
                     do {
                         terminalResult = try Self.parseTerminalResult(terminal.arguments)
@@ -900,7 +918,7 @@ public final class SchemaToolSQLAgent: SQLGenerator, Sendable {
                 }
 
                 if terminalRequiredAfterSufficientEvidence {
-                    messages.append(ChatToolMessage(role: .assistant, toolCalls: toolCalls))
+                    messages.append(assistantToolTurn)
                     appendToolErrorResponses(
                         for: toolCalls,
                         to: &messages,
@@ -919,7 +937,7 @@ public final class SchemaToolSQLAgent: SQLGenerator, Sendable {
                     )
                 }
 
-                messages.append(ChatToolMessage(role: .assistant, toolCalls: toolCalls))
+                messages.append(assistantToolTurn)
                 for call in toolCalls {
                     try Task.checkCancellation()
                     try await checkStaleSnapshot(expected: initialFingerprint)
@@ -999,7 +1017,7 @@ public final class SchemaToolSQLAgent: SQLGenerator, Sendable {
                             session: session
                         )
                     }
-                    messages.append(try toolResponse(result, providerCallID: call.id))
+                    messages.append(try toolResponse(result, providerCallID: call.providerID))
                     if case .schema(let schemaResult) = result, schemaResult.success {
                         Self.recordExecutedSchemaCall(
                             call: call,
@@ -1589,7 +1607,7 @@ public final class SchemaToolSQLAgent: SQLGenerator, Sendable {
         return ChatToolMessage(
             role: .tool,
             content: content,
-            toolCallID: call.id,
+            toolCallID: call.providerID,
             toolName: call.name
         )
     }
@@ -2225,6 +2243,7 @@ private struct SchemaToolAgentDiagnosticState {
     var planConsistencyDivergences: [String] = []
     var planConsistencyCorrectionAttempted = false
     var planConsistencyCorrectionSucceeded = false
+    var providerToolCallIDReuseCount = 0
 
     mutating func recordFailureCategory(_ category: SchemaToolAgentFailure.Category) {
         if category == .wallClockTimeout {
@@ -2377,7 +2396,10 @@ private struct SchemaToolAgentDiagnosticState {
             planConsistencyReason: planConsistencyReason,
             planConsistencyDivergences: planConsistencyDivergences,
             planConsistencyCorrectionAttempted: planConsistencyCorrectionAttempted,
-            planConsistencyCorrectionSucceeded: planConsistencyCorrectionSucceeded
+            planConsistencyCorrectionSucceeded: planConsistencyCorrectionSucceeded,
+            providerToolCallIDReuseCount: providerToolCallIDReuseCount > 0
+                ? providerToolCallIDReuseCount
+                : nil
         )
     }
 }
