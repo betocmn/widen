@@ -40,7 +40,6 @@ public enum TextToSQLEvalSourceManifest {
             "WidenKit/Services/SchemaToolSQLAgent.swift",
             "WidenKit/Services/ChatToolProtocol.swift",
             "WidenKit/Services/SchemaToolAgentClarificationPolicy.swift",
-            "WidenKit/Services/SchemaToolAgentCritic.swift",
             "WidenKit/Services/SchemaToolAgentPlanConsistencyPolicy.swift",
             "WidenKit/Services/SchemaToolAgentSQLIntentCoveragePolicy.swift",
             "WidenKit/Services/SchemaToolRuntime.swift",

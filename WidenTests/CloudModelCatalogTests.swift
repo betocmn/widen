@@ -74,10 +74,6 @@ struct CloudModelCatalogTests {
                     responseFormat: .none
                 )
         )
-        #expect(
-            profile.policy(for: .critic)
-                == CloudCallSitePolicy(reasoningEffort: .high, maxCompletionTokens: 16_000, responseFormat: .jsonObject)
-        )
         #expect(profile.supportsReasoningEffort)
         #expect(profile.parallelToolCalls == true)
         #expect(profile.usesPromptCacheKey)
@@ -136,10 +132,6 @@ struct CloudModelCatalogTests {
                     maxCompletionTokens: 2_048,
                     responseFormat: .strictJSONSchemaWhenAdvertised
                 )
-        )
-        #expect(
-            profile.policy(for: .critic)
-                == CloudCallSitePolicy(reasoningEffort: nil, maxCompletionTokens: 2_048, responseFormat: .jsonObject)
         )
         #expect(!profile.supportsReasoningEffort)
         #expect(profile.parallelToolCalls == nil)
@@ -492,7 +484,7 @@ struct CloudModelCatalogTests {
             expected.reasoningEffort = .low
             #expect(profile.policy(for: callSite) == expected)
         }
-        for callSite in [CloudCallSite.connectivityProbe, .sessionTitle, .critic] {
+        for callSite in [CloudCallSite.connectivityProbe, .sessionTitle] {
             #expect(profile.policy(for: callSite) == CloudModelProfile.particle.policy(for: callSite))
         }
         var unchanged = profile
