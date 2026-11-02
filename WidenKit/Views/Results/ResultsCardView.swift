@@ -75,7 +75,7 @@ struct ResultsCardView: View {
             Button("Export CSV") {
                 exportCSV(result)
             }
-            .widenGlassButtonStyle()
+            .buttonStyle(.bordered)
             .hoverBrightness()
             .controlSize(.small)
         }

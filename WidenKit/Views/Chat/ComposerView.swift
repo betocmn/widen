@@ -49,7 +49,11 @@ struct ComposerView: View {
         }
         .padding(.horizontal, 14)
         .padding(.vertical, 12)
-        .widenGlassEffect(cornerRadius: 18)
+        .background(.background, in: RoundedRectangle(cornerRadius: 18))
+        .overlay {
+            RoundedRectangle(cornerRadius: 18)
+                .strokeBorder(.primary.opacity(0.15))
+        }
         .padding([.horizontal, .bottom], 12)
         .onAppear {
             requestInitialFocus()

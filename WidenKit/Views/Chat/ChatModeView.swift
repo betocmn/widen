@@ -164,7 +164,7 @@ struct ChatModeView: View {
                 Button(notice.actionTitle) {
                     openSettings(for: notice)
                 }
-                .widenGlassButtonStyle()
+                .buttonStyle(.bordered)
                 .hoverBrightness()
                 Text("or paste SQL to run it directly.")
                     .font(.callout)
@@ -540,7 +540,7 @@ private struct SchemaEmptyStatusView: View {
 
             if status.canRefresh {
                 Button("Refresh Schema", action: refresh)
-                    .widenGlassButtonStyle()
+                    .buttonStyle(.bordered)
                     .hoverBrightness()
             }
         }

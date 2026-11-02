@@ -1,6 +1,6 @@
 import SwiftUI
 
-/// One segment of a capsule toggle (Local/Cloud, appearance): icon plus
+/// One segment of the appearance toggle: icon plus
 /// optional label, a filled capsule when selected, and a lighter capsule
 /// while hovered — custom controls don't get the system hover treatment.
 struct CapsuleSegmentButton: View {
@@ -68,7 +68,7 @@ struct HoverHighlight: ViewModifier {
     }
 }
 
-/// Hover feedback for buttons that draw their own shape (glass, bordered):
+/// Hover feedback for buttons that draw their own shape:
 /// a slight brightness lift instead of an extra background.
 struct HoverBrightness: ViewModifier {
     @State private var isHovering = false

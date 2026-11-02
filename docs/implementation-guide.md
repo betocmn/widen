@@ -171,20 +171,22 @@ NavigationSplitView
         (newest = runnable SQLCardView, earlier = StaticSQLCardView) and
         run records render their ResultsCardView while cached
         + ComposerView pinned at the bottom
-    .inspector: SchemaInspectorView (toolbar-toggled, scoped to the open schema)
-  toolbar: one row — sidebar toggle (container-less, at the sidebar's
-           trailing corner; custom because the system one can't drop its
-           glass, with a detail-toolbar fallback while collapsed) ·
-           breadcrumb (status dot · database › schema menu) · Particle-1
-           status chip (ParticleStatusChip; opens Settings › LLM) ·
-           inspector toggle (container-less, window's trailing corner);
-           window title removed. The System/Light/Dark appearance switch
+    SchemaInspectorView: fixed-width trailing content column, scoped to the schema
+  toolbar: system sidebar toggle · Widen title · breadcrumb
+           (status dot · database › schema menu) · Particle-1 status
+           (ParticleStatusChip; opens Settings › LLM) · inspector toggle.
+           macOS manages the control backgrounds and spacing.
+           The System/Light/Dark appearance switch
            lives in the sidebar footer next to "Add Database".
 ```
 
-The breadcrumb and the status chip are plain toolbar content on purpose: the
-macOS 26 toolbar already wraps items in glass, so any custom `.glassEffect`
-capsule renders as a double rounded container.
+The sidebar uses the built-in toggle, with no custom toolbar spacers or
+background overrides. The schema inspector is a regular trailing content column
+with a system material background, avoiding a second native split controller
+around `NavigationSplitView`. The window minimum is 1000 points with the schema
+panel open and 700 with it closed; the initial size is set on the window scene.
+There is no automatic panel toggle based on content geometry. Table and column
+lists hide their scroll backgrounds so the panel keeps one continuous material.
 
 On first render, `MainView` runs `await appState.onLaunch()`. It also
 watches `appState.openSettingsRequest` and opens the Settings window via
@@ -958,7 +960,7 @@ Key views:
   SQL; Return submits, Option+Return inserts a newline (no
   `.keyboardShortcut(.defaultAction)` on the send button — it would
   double-fire with `onSubmit`).
-- `Chat/MessageBubbleView`: user bubble is glass, assistant/error bubbles use
+- `Chat/MessageBubbleView`: user bubbles use an accent tint; assistant/error bubbles use
   a plain material to keep scrolling cheap; `.result` records render as a
   compact row when their result is no longer cached.
 - `Chat/SQLCardView`: the read-only active SQL card (dashed accent border,
@@ -980,17 +982,15 @@ Key views:
   with cascade-delete warning; archive restore / delete forever.
 - `ParticleStatusChip`: the toolbar's text-to-SQL status — Particle-1 ready,
   mock AI, or a warning — as a plain button that opens Settings › LLM.
-- `ErrorBannerView`: dismissible app-level error banner (red-tinted glass).
+- `ErrorBannerView`: dismissible app-level error banner with a red tint.
 - `LoadingView`: small reusable loading indicator.
 
 Appearance: the `"WidenAppearance"` AppStorage key (`AppearancePreference`)
-drives `.preferredColorScheme` on the window and Settings roots. The detail
-toolbar sun/moon button flips to the opposite of the effective scheme; the
-"System" reset lives in Settings › General. Liquid Glass styling is routed
-through `AdaptiveGlass.swift`: it uses native glass on macOS 26+ and regular
-macOS material/button styles on older supported releases. The toolbar
-breadcrumb, sidebar, inspector, transcript bubbles, and results grid
-intentionally keep plain system materials.
+drives `NSApplication.appearance`, keeping window chrome and content in sync.
+Light, Dark, and System are available in the sidebar footer and Settings.
+Controls use standard bordered button styles, and content uses system
+backgrounds, regular materials, or simple color tints. There are no custom
+Liquid Glass effects or macOS-version-specific toolbar layout branches.
 
 Keyboard behavior:
 
