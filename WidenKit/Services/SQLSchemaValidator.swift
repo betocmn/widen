@@ -2025,7 +2025,7 @@ public enum GeneratedSQLPostprocessor {
             )
             copy.groundingConcepts = review.evaluation.concepts
             if allowGroundingClarification,
-                let pending = review.evaluation.pendingClarification
+                var pending = review.evaluation.pendingClarification
             {
                 if schemaToolEvidenceAllowsSQL(
                     question: question,
@@ -2034,6 +2034,36 @@ public enum GeneratedSQLPostprocessor {
                     generation: generation
                 ) {
                     return copy
+                }
+                if copy.backendMetadata?.agentDiagnostics?.groundingJudgment != nil {
+                    let decision = groundingJudgeDecision(
+                        review: review,
+                        pending: pending,
+                        question: question,
+                        sql: sql,
+                        databaseContext: databaseContext,
+                        confirmedSemanticBindings: confirmedSemanticBindings,
+                        generation: generation
+                    )
+                    copy.backendMetadata?.agentDiagnostics?.groundingJudgment?.postprocessorOutcome =
+                        decision.recordedOutcome
+                    switch decision {
+                    case .release(let concepts):
+                        // The SQL goes on to canonicalization, safety and
+                        // schema validation and PREPARE like any other.
+                        copy.groundingConcepts = concepts
+                        return copy
+                    case .reAim(let concept, _):
+                        pending = makePendingClarification(
+                            for: concept,
+                            question: question,
+                            schema: schema,
+                            referencedTables: schemaValidation.referencedTables,
+                            databaseContext: databaseContext
+                        )
+                    case .lexical:
+                        break
+                    }
                 }
                 copy.sql = ""
                 copy.explanation = pending.question
@@ -2139,6 +2169,167 @@ public enum GeneratedSQLPostprocessor {
             sql: generation.sql
         )
         return coverage.decision == .covered
+    }
+
+    /// Why a recorded grounding judgment did not let the SQL stand, as the
+    /// postprocessor outcome names it.
+    private enum GroundingJudgeBlock: String {
+        /// The diagnostics do not say the judge was on.
+        case judgeDisabled
+        /// The judge skipped this SQL or failed.
+        case notJudged
+        /// The judgment is for another SQL, question, context, definition
+        /// list or set of flagged words.
+        case digestMismatch
+        case notTerminalSQL
+        case undescribedTables
+        case write
+        case literalRejected
+        /// Intent coverage says the question must be clarified.
+        case mustClarify
+        /// The critic's last verdict was `clarify`.
+        case criticClarify
+        /// An intent-coverage or plan-consistency rejection still stands.
+        case stickyRejection
+        /// A flagged word has no label that lets SQL stand.
+        case unreleasableTerm
+    }
+
+    private enum GroundingJudgeDecision {
+        /// Keep the SQL, with these concepts.
+        case release([SQLGroundingConcept])
+        /// Ask about this word instead of the first flagged one.
+        case reAim(SQLGroundingConcept, GroundingJudgeBlock)
+        /// Ask the lexical clarification as it is.
+        case lexical(GroundingJudgeBlock)
+
+        var recordedOutcome: String {
+            switch self {
+            case .release: "released"
+            case .reAim(_, let block): "reAimed:\(block.rawValue)"
+            case .lexical(let block): "lexical:\(block.rawValue)"
+            }
+        }
+    }
+
+    /// Labels that let SQL stand once verified.
+    private static let releasableGroundingJudgeLabels = Set(
+        [
+            SchemaToolAgentGroundingJudgeLabel.requestWording,
+            .queryOperation,
+            .schemaMatch,
+            .contextDefined,
+            .questionDefined,
+        ].map(\.rawValue)
+    )
+
+    /// Labels whose word a held-back SQL's clarification asks about.
+    private static let reAimGroundingJudgeLabels = Set(
+        [SchemaToolAgentGroundingJudgeLabel.needsDefinition, .unsupported].map(\.rawValue)
+    )
+
+    /// What the agent's grounding judgment lets the postprocessor do with SQL
+    /// it would replace with its lexical clarification. The judgment counts
+    /// only when the judge was on, judged, and its digest matches this SQL,
+    /// question, context, confirmed definitions and flagged words. It then
+    /// releases the SQL only when the agent ended on a SQL terminal, the
+    /// tools described every table the SQL reads, the SQL only reads, no
+    /// flagged word matches a rejected literal, intent coverage (a frozen
+    /// backstop, evaluated in every mode) does not say the question must be
+    /// clarified, the critic did not ask to clarify, no intent or plan
+    /// rejection stands, and every flagged word has a verified label that
+    /// lets SQL stand. Otherwise the clarification asks about the first word
+    /// the judge said needs a definition or is unsupported, when that is not
+    /// already the word it asks about.
+    private static func groundingJudgeDecision(
+        review: GroundingReviewCandidate,
+        pending: PendingClarification,
+        question: String,
+        sql: String,
+        databaseContext: String,
+        confirmedSemanticBindings: [String],
+        generation: SQLGenerationResult
+    ) -> GroundingJudgeDecision {
+        guard let diagnostics = generation.backendMetadata?.agentDiagnostics,
+            let judgment = diagnostics.groundingJudgment,
+            diagnostics.groundingJudgeMode == SchemaToolAgentGroundingJudgeMode.enabled.rawValue
+        else { return .lexical(.judgeDisabled) }
+        guard judgment.outcome == SchemaToolAgentGroundingJudgeOutcome.judged.rawValue else {
+            return .lexical(.notJudged)
+        }
+        guard judgment.inputDigest == SchemaToolAgentGroundingJudgment.inputDigest(
+            sql: sql,
+            question: question,
+            databaseContext: databaseContext,
+            confirmedSemanticBindings: confirmedSemanticBindings,
+            terms: review.unresolvedTerms
+        ) else { return .lexical(.digestMismatch) }
+
+        var judgedTerms: [String: SchemaToolAgentGroundingJudgedTerm] = [:]
+        for term in judgment.terms where judgedTerms[term.term.lowercased()] == nil {
+            judgedTerms[term.term.lowercased()] = term
+        }
+        let block: GroundingJudgeBlock? =
+            if !diagnostics.terminalToolSeen || diagnostics.terminalAction != "sql" {
+                .notTerminalSQL
+            } else if !describedTablesCover(
+                review.referencedTables,
+                describedTableIDs: diagnostics.schemaEvidence.describedTableIDs
+            ) {
+                .undescribedTables
+            } else if SQLSafetyValidator.validate(sql).kind != .read {
+                .write
+            } else if !review.literalRejectedTerms.isEmpty {
+                .literalRejected
+            } else if SchemaToolAgentSQLIntentCoveragePolicy.evaluate(
+                question: question,
+                databaseContext: databaseContext,
+                evidence: diagnostics.schemaEvidence,
+                sql: generation.sql
+            ).decision == .mustClarify {
+                .mustClarify
+            } else if diagnostics.criticFinalOutcome == "clarifyNotTrusted" {
+                .criticClarify
+            } else if diagnostics.appSideRejectionReason == .intentCoverageRejected
+                || diagnostics.appSideRejectionReason == .planConsistencyRejected
+            {
+                .stickyRejection
+            } else if !review.unresolvedTerms.allSatisfy({ term in
+                judgedTerms[term.lowercased()].map {
+                    $0.verified && releasableGroundingJudgeLabels.contains($0.label)
+                } ?? false
+            }) {
+                .unreleasableTerm
+            } else {
+                nil
+            }
+        guard let block else {
+            return .release(
+                review.evaluation.concepts.map { concept in
+                    guard concept.state == .unsupported,
+                        let judged = judgedTerms[concept.term.lowercased()]
+                    else { return concept }
+                    var grounded = concept
+                    grounded.state = .grounded
+                    grounded.required = false
+                    grounded.evidence = [
+                        judged.evidence.isEmpty
+                            ? "judge \(judged.label)"
+                            : "judge \(judged.label): \(judged.evidence)",
+                    ]
+                    return grounded
+                }
+            )
+        }
+        let target = judgment.terms
+            .first { reAimGroundingJudgeLabels.contains($0.label) }
+            .flatMap { judged in
+                review.evaluation.concepts.first {
+                    $0.state == .unsupported && $0.term.lowercased() == judged.term.lowercased()
+                }
+            }
+        guard let target, target.term != pending.concept.term else { return .lexical(block) }
+        return .reAim(target, block)
     }
 
     private static func anchoredWindowClarification(

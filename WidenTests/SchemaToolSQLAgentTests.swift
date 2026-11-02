@@ -6438,6 +6438,78 @@ struct SchemaToolSQLAgentTests {
         #expect(result.backendMetadata?.agentDiagnostics?.groundingJudgment == nil)
     }
 
+    @Test func postprocessorKeepsAgentSQLItsJudgmentLetsStand() async throws {
+        let schema = Self.makeSchema()
+        let question = "Write a query that lists user names"
+        let databaseContext = "Users are the people who sign in."
+        let bindings = ["names: the public.users.name column"]
+        let sql = "SELECT id, name FROM public.users LIMIT 100"
+        let lexical = GeneratedSQLPostprocessor.enriched(
+            SQLGenerationResult(
+                sql: sql,
+                explanation: "Generated SQL with schema tools.",
+                assumptions: [],
+                referencedTables: [],
+                confidence: 0.5,
+                riskLevel: .medium,
+                needsClarification: false,
+                clarificationQuestion: nil
+            ),
+            question: question,
+            schema: schema,
+            databaseContext: databaseContext,
+            confirmedSemanticBindings: bindings
+        )
+        #expect(lexical.pendingClarification?.concept.term == "write")
+
+        for (label, outcome) in [("request_wording", "released"), ("needs_definition", "reAimed:unreleasableTerm")] {
+            let chatTransport = Self.criticScript([
+                { _ in Self.particleToolCalls([Self.terminalSQL(id: "answer-end-to-end", sql: sql)]) },
+                { request in
+                    let prompt = try Self.criticUserPrompt(in: request)
+                    #expect(prompt.contains("Database context (authoritative):\n\(databaseContext)"))
+                    #expect(prompt.contains("Confirmed definitions (authoritative):\n- \(bindings[0])"))
+                    return Self.groundingJudgeReply([
+                        ["term": "write", "label": "request_wording"],
+                        ["term": "query", "label": label],
+                    ])
+                },
+            ])
+            let agent = makeAgent(
+                schema: schema,
+                chatTransport: chatTransport,
+                configuration: Self.groundingJudgeConfiguration(),
+                groundingJudgeMode: .enabled
+            )
+            var config = SQLGenerationConfig()
+            config.databaseContext = databaseContext
+
+            let generated = try await agent.generateSQL(
+                question: question,
+                schema: schema,
+                context: SQLGenerationContext(confirmedSemanticBindings: bindings),
+                config: config
+            )
+            let enriched = GeneratedSQLPostprocessor.enriched(
+                generated,
+                question: question,
+                schema: schema,
+                databaseContext: databaseContext,
+                confirmedSemanticBindings: bindings
+            )
+
+            #expect(chatTransport.requests.count == 4)
+            #expect(enriched.backendMetadata?.agentDiagnostics?.groundingJudgment?.postprocessorOutcome == outcome)
+            if outcome == "released" {
+                #expect(!enriched.needsClarification)
+                #expect(enriched.sql == sql)
+            } else {
+                #expect(enriched.needsClarification)
+                #expect(enriched.pendingClarification?.concept.term == "query")
+            }
+        }
+    }
+
     @Test func zeroModelTurnBudgetReturnsTypedFailure() async throws {
         let schema = Self.makeSchema()
         let chatTransport = ScriptedTransport { _, _ in
