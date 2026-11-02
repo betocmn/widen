@@ -629,6 +629,50 @@ clarification decisions 11/12. That matches the GPT-5.5 comparator (20/60,
 grounding postprocessor still turns most correct SQL into clarifications
 (the largest triage bucket), which is the next experiment's target.
 
+#### Stage 5
+
+Recorded 2026-11-02. **The grounding judge failed G9 (P95 latency), so the
+fifteen candidate commits were reverted** (`Revert "…"` commits `50fe82d` …
+`60f91ed`). The kept commits `8c1af2d` and `e1c0e98` stay; the code is
+otherwise Stage 4's. The gate reports were kept beside the run artifacts and
+`docs/evals/0.2.0*.md` still hold Stage 4's.
+
+Gate: `make eval-release-triage RELEASE_VERSION=0.2.0 MAX_CLOUD_COST_USD=0.75`
+at commit `8eb66a3`. Probe: `make eval-grounding-probe REPEAT=2
+MAX_CLOUD_COST_USD=0.30`.
+
+| Criterion | Off (paired) | On | C (Stage 4) | Result |
+| --- | --- | --- | --- | --- |
+| V valid (60/60, identity, tools, transport, cost, 0 eval timeouts) | - | all met | - | pass |
+| G1 end-to-end semantic passes ≥ off + 5 | 19/60 | 27/60 | 19/60 | pass |
+| G2 end-to-end ≥ C − 2 | - | 27/60 | 19/60 | pass |
+| G3 clarification decisions ≥ max(C, off); 0 releases on expected-clarify | 11/12 | 11/12; 0 | 11/12 | pass |
+| G4 expected-SQL answered with a clarification ≤ off − 15 | 33/48 | 6/48 | - | pass |
+| G5 safety / schema; release-rule violations | - | 42/42 / 42/42; 0 | - | pass |
+| G6 judge-released expected-SQL results passing semantically | - | 8 of 27 (30%) | - | pass |
+| G7 judged / failed of judgeable results | - | 40/40 / 0 | - | pass |
+| G8 internal timeouts / no-progress repairs | - | 0 / 0 | 0 / 0 | pass |
+| G9 cost per result ≤ $0.0040; P95 ≤ 26.7 s | - | $0.0036; **29.2 s** | $0.00265; 11.7 s | **fail** |
+| G10 no case loses ≥ 2 of 3 passes, on vs off | - | none did | - | pass |
+| P0 probe valid (36/36, identity, transport) | - | all met | - | pass |
+| P1 judge releases on ambiguous probe results ≤ 2 | - | 0 | - | pass |
+| P2 probe decision matches ≥ off + 3 | 16/34 | 32/34 | - | pass |
+
+The judge ran on all 40 judgeable results (15 more were skipped because no
+word was flagged), labelled 53 words (25 query operations, 10 schema matches,
+3 context-defined, 2 question-defined, 13 needing a definition) and released
+27 results. The `mustClarify` backstop kept 8 clarifications, unreleasable
+words kept 5, and the judge vetoed one release. Per-case gains (on vs off):
+`support.unclustered-feedback` 0 → 3, `support.frequent-feedback-cluster`
+0 → 2, `saas.users-without-membership` 0 → 2 and
+`commerce.customers-without-orders` 0 → 1.
+
+Latency (diagnostics, not gated): judged results had a median of 13.8 s
+against 8.2 s for the rest, a median of 8.2 s more than the same results in
+Stage 4, so the judge's high-effort call is most of the added time. The P95
+result itself (29.2 s) was one the judge did not touch, so run-to-run
+variance also contributed.
+
 #### Spend ledger
 
 Record each command after it finishes: the probe's estimated cost from its
@@ -648,8 +692,8 @@ column after each command and record the larger figure.
 | 2 | `make eval-release-triage` | $1.40 | $0.1409 | $0.2081 |
 | 3 | `make eval-release-triage` | $2.25 | $0.2821 | $0.4902 |
 | 4 | `make eval-release-triage` | $0.50 | $0.1592 | $0.6494 |
-| 5 | `make eval-release-triage` | $0.75 | - | - |
-| 5 | `make eval-grounding-probe` | $0.30 | - | - |
+| 5 | `make eval-release-triage` | $0.75 | $0.2159 | $0.8653 |
+| 5 | `make eval-grounding-probe` | $0.30 | $0.1485 | $1.0138 |
 
 ## Completed and remaining work
 

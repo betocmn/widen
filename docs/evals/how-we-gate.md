@@ -74,6 +74,7 @@ sanitized evidence stays published.
 | --- | --- |
 | Extra-calls layer: larger agent budgets, repair accounting by logical invocation, a forced final answer and an LLM critic pass | Rejected — clarification decisions rose from 7/12 to 11/12 and tool-budget failures fell to zero, but end-to-end semantic passes fell from 16/60 to 12/60 because the critic trimmed projections; all eleven commits were reverted. |
 | Budget layer with the critic off (the same eleven commits re-landed, critic disabled by default) | Kept — end-to-end semantic passes 16/60 → 19/60, clarification decisions 7/12 → 11/12, tool-budget failures 4 → 1, P95 latency 15.5 s → 11.7 s, cost per result +13%; no case lost two passes. |
+| Verified grounding judge (one Particle-1 call labels each word the lexical grounder flags; verified labels release the agent's SQL) | Rejected — end-to-end semantic passes 19/60 → 27/60 paired in the same run, false clarifications 33 → 6, held-out probe decisions 16/34 → 32/34, but P95 latency 29.2 s exceeded the 26.7 s ceiling; all fifteen commits were reverted. |
 
 ### Previous provider (OpenRouter GPT-5.5/5.6, before 0.2.0) — results don't transfer
 
