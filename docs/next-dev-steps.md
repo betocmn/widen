@@ -321,6 +321,41 @@ shipped configuration's gate `summary.md`. No new spend.
   The first two print nothing and the third prints only `0`s. Never `cat`,
   dump the environment or `set -x` near `.env.eval.local`.
 
+#### Stage 4: the budget side of the layer, critic off (preregistered 2026-11-02)
+
+Stage 3's attribution put every gain on the budget side and every loss on the
+critic's projection revisions. Stage 4 measures the same eleven layer commits
+re-landed unchanged (`Reapply "…"` commits `6c41b51` … `b4456d3`, identical
+in code to Stage 3's `9a9f55f`) plus `5d1885b`
+`feat: turn the schema agent critic off by default`, which leaves the critic
+available only through `--schema-agent-critic on` and drops the PRIVACY.md
+review sentence. These twelve commits are the candidate; the comparator is
+Stage 2. Funded from the maintainer's 2026-11-02 authorization (branch cap
+$15.00; $0.4902 spent so far).
+
+```sh
+make eval-release-triage RELEASE_VERSION=0.2.0 MAX_CLOUD_COST_USD=0.50
+```
+
+Ceiling: a $0.75 allocation minus a $0.25 reserve (3 × Stage 3's highest
+per-result cost is $0.034, so the $0.25 floor applies).
+
+**Keep the candidate only if all hold (compared with Stage 2):** K1–K11 exactly
+as written for Stage 3 above, with "layer" meaning these twelve commits, and
+K12 replaced by: zero critic calls, and zero provider rejections of forced
+requests (same definition as above). The same K12 definitions and the
+never-rerun rule apply.
+
+**Pass:** commit `docs: publish the Particle-1 release gate with the budget
+layer`: the 0.2.0 reports from this run, a how-we-gate row, and the PR 59
+"six-call limit" superseded note. Stage 4 then becomes the comparator for
+the next experiment.
+
+**Fail:** copy the Stage 4 reports into its run directory,
+`git restore docs/evals/0.2.0*.md`, `git revert --no-edit` the twelve
+commits newest first, `make build && make test`, and commit
+`docs: record failed budget layer gate`.
+
 ### Evidence
 
 #### Stage 1
@@ -487,6 +522,7 @@ column after each command and record the larger figure.
 | 1 | `make eval-db-cloud-agent` (medium) | $0.03 | $0.0115 | $0.0672 |
 | 2 | `make eval-release-triage` | $1.40 | $0.1409 | $0.2081 |
 | 3 | `make eval-release-triage` | $2.25 | $0.2821 | $0.4902 |
+| 4 | `make eval-release-triage` | $0.50 | - | - |
 
 ## Completed and remaining work
 
