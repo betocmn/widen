@@ -40,6 +40,15 @@ public enum SchemaToolAgentCriticMode: String, Codable, Equatable, Sendable {
     case enabled
 }
 
+/// Whether the agent asks a model if the question words the grounding pass
+/// would flag in its final SQL need a definition. The judge never sees the
+/// SQL; its verified labels are recorded for the postprocessor, and any skip
+/// or failure keeps the lexical grounding decision.
+public enum SchemaToolAgentGroundingJudgeMode: String, Codable, Equatable, Sendable {
+    case disabled
+    case enabled
+}
+
 public struct SchemaToolSQLAgentConfiguration: Equatable, Sendable {
     public var maximumSchemaToolCalls: Int
     public var maximumRepairSchemaToolCalls: Int
@@ -89,6 +98,15 @@ public struct SchemaToolSQLAgentConfiguration: Equatable, Sendable {
     /// A run with less than this left after a review keeps its SQL instead
     /// of revising it.
     public var criticRevisionMinimumRemainingSeconds: TimeInterval
+    /// The grounding judge looks at the final SQL of every mode, forced
+    /// final requests included. Off by default until its eval gate passes.
+    public var groundingJudgeMode: SchemaToolAgentGroundingJudgeMode
+    /// HTTP attempts the judge's request may use, including the one resend
+    /// after `invalid_model_output`. They also count against
+    /// `maximumHTTPAttempts`.
+    public var maximumGroundingJudgeHTTPAttempts: Int
+    /// A run with less than this left on its wall clock skips the judge.
+    public var groundingJudgeMinimumRemainingSeconds: TimeInterval
 
     public init(
         maximumSchemaToolCalls: Int = 12,
@@ -115,7 +133,10 @@ public struct SchemaToolSQLAgentConfiguration: Equatable, Sendable {
         maximumCriticRevisions: Int = 2,
         maximumCriticHTTPAttempts: Int = 2,
         criticMinimumRemainingSeconds: TimeInterval = 30,
-        criticRevisionMinimumRemainingSeconds: TimeInterval = 60
+        criticRevisionMinimumRemainingSeconds: TimeInterval = 60,
+        groundingJudgeMode: SchemaToolAgentGroundingJudgeMode = .disabled,
+        maximumGroundingJudgeHTTPAttempts: Int = 2,
+        groundingJudgeMinimumRemainingSeconds: TimeInterval = 15
     ) {
         self.maximumSchemaToolCalls = maximumSchemaToolCalls
         self.maximumRepairSchemaToolCalls = maximumRepairSchemaToolCalls
@@ -142,13 +163,16 @@ public struct SchemaToolSQLAgentConfiguration: Equatable, Sendable {
         self.maximumCriticHTTPAttempts = maximumCriticHTTPAttempts
         self.criticMinimumRemainingSeconds = criticMinimumRemainingSeconds
         self.criticRevisionMinimumRemainingSeconds = criticRevisionMinimumRemainingSeconds
+        self.groundingJudgeMode = groundingJudgeMode
+        self.maximumGroundingJudgeHTTPAttempts = maximumGroundingJudgeHTTPAttempts
+        self.groundingJudgeMinimumRemainingSeconds = groundingJudgeMinimumRemainingSeconds
     }
 
     public static let `default` = SchemaToolSQLAgentConfiguration()
 
     /// The call budgets and wall clock, as an eval records them in its run
     /// manifest for evidence. Keys are stable; values are plain numbers,
-    /// except the forced-terminal and critic modes' names.
+    /// except the forced-terminal, critic and grounding judge modes' names.
     public var reportedSettings: [String: String] {
         [
             "maximumModelTurns": String(maximumModelTurns),
@@ -174,6 +198,12 @@ public struct SchemaToolSQLAgentConfiguration: Equatable, Sendable {
             "criticRevisionMinimumRemainingSeconds": String(
                 format: "%g",
                 criticRevisionMinimumRemainingSeconds
+            ),
+            "groundingJudgeMode": groundingJudgeMode.rawValue,
+            "maximumGroundingJudgeHTTPAttempts": String(maximumGroundingJudgeHTTPAttempts),
+            "groundingJudgeMinimumRemainingSeconds": String(
+                format: "%g",
+                groundingJudgeMinimumRemainingSeconds
             ),
         ]
     }
@@ -504,6 +534,9 @@ public final class SchemaToolSQLAgent: SQLGenerator, Sendable {
         diagnostics.planConsistencyMode = configuration.planConsistencyMode.rawValue
         if configuration.criticMode == .enabled {
             diagnostics.criticMode = configuration.criticMode.rawValue
+        }
+        if configuration.groundingJudgeMode == .enabled {
+            diagnostics.groundingJudgeMode = configuration.groundingJudgeMode.rawValue
         }
         var seenProviderCallIDs = Set<String>()
         var internalCallIDs = Set<String>()
@@ -1273,6 +1306,21 @@ public final class SchemaToolSQLAgent: SQLGenerator, Sendable {
                                 }
                             }
                         }
+                        try await judgeGroundingIfFlagged(
+                            sql: terminalResult.sql,
+                            question: question,
+                            schema: schema,
+                            context: context,
+                            config: config,
+                            evidence: evidence,
+                            capabilities: capabilities,
+                            promptCacheKey: promptCacheKey,
+                            initialFingerprint: initialFingerprint,
+                            aggregate: &aggregate,
+                            maximumHTTPAttempts: availableHTTPAttempts,
+                            deadline: deadline,
+                            diagnostics: &diagnostics
+                        )
                         aggregate.terminalOutcome = "sql"
                         diagnostics.recordSQLTerminalAccepted(
                             afterOverClarificationCorrection: overClarificationCorrections > 0,
@@ -2382,9 +2430,168 @@ public final class SchemaToolSQLAgent: SQLGenerator, Sendable {
         } catch is CancellationError {
             throw CancellationError()
         } catch {
-            diagnostics.recordCriticFailure(Self.criticFailureDescription(error))
+            diagnostics.recordCriticFailure(Self.advisoryFailureDescription(error))
             return nil
         }
+    }
+
+    /// Asks the grounding judge whether the question words the grounding
+    /// pass would flag in `sql`, the run's accepted SQL, need a definition,
+    /// and records the verified labels with a digest of the SQL and its
+    /// inputs. The judge request copies the critic's: no tools, the judge
+    /// call site's effort, token cap and `json_object`, at most
+    /// `maximumGroundingJudgeHTTPAttempts` attempts, and the run's deadline,
+    /// HTTP budget, usage sink and metadata. It never carries the SQL, its
+    /// plan or data values. Skips with the reason recorded when nothing is
+    /// flagged, the anchored-window rule applies, a flagged word matches a
+    /// rejected literal, the SQL writes, a referenced table was not
+    /// described, too many words are flagged, or the deadline or HTTP budget
+    /// is near. Every failure but cancellation and a schema change is
+    /// recorded and keeps the lexical decision.
+    private func judgeGroundingIfFlagged(
+        sql: String,
+        question: String,
+        schema: DatabaseSchema,
+        context: SQLGenerationContext,
+        config: SQLGenerationConfig,
+        evidence: SchemaToolEvidenceLedger,
+        capabilities: CloudModelCapabilities,
+        promptCacheKey: String?,
+        initialFingerprint: String,
+        aggregate: inout AgentMetadataAccumulator,
+        maximumHTTPAttempts: Int,
+        deadline: Date,
+        diagnostics: inout SchemaToolAgentDiagnosticState
+    ) async throws {
+        guard configuration.groundingJudgeMode == .enabled else { return }
+        let review = GeneratedSQLPostprocessor.groundingReview(
+            sql: sql,
+            question: question,
+            schema: schema,
+            databaseContext: config.databaseContext,
+            confirmedSemanticBindings: context.confirmedSemanticBindings
+        )
+        let inputDigest = SchemaToolAgentGroundingJudgment.inputDigest(
+            sql: sql,
+            question: question,
+            databaseContext: config.databaseContext,
+            confirmedSemanticBindings: context.confirmedSemanticBindings,
+            terms: review?.unresolvedTerms ?? []
+        )
+        guard let review else {
+            let anchored = GeneratedSQLPostprocessor.anchoredWindowReplacesSQL(
+                sql,
+                question: question,
+                databaseContext: config.databaseContext
+            )
+            diagnostics.groundingJudgment = SchemaToolAgentGroundingJudgment(
+                outcome: (anchored
+                    ? SchemaToolAgentGroundingJudgeOutcome.skippedAnchored
+                    : .skippedNoFlags).rawValue,
+                inputDigest: inputDigest
+            )
+            return
+        }
+        let skip: SchemaToolAgentGroundingJudgeOutcome? =
+            if !review.literalRejectedTerms.isEmpty {
+                .skippedLiteralRejected
+            } else if SQLSafetyValidator.validate(sql).kind.isWrite {
+                .skippedWrite
+            } else if !GeneratedSQLPostprocessor.describedTablesCover(
+                review.referencedTables,
+                describedTableIDs: evidence.describedTableIDs
+            ) {
+                .skippedUndescribedTables
+            } else if review.unresolvedTerms.count > SchemaToolAgentGroundingJudge.maximumFlaggedTermCount {
+                // A request carries at most that many words, and the
+                // postprocessor needs a label for every one.
+                .skippedTooManyTerms
+            } else if deadline.timeIntervalSinceNow < configuration.groundingJudgeMinimumRemainingSeconds {
+                .skippedDeadline
+            } else if aggregate.httpAttemptCount >= maximumHTTPAttempts {
+                .skippedHTTPBudget
+            } else {
+                nil
+            }
+        if let skip {
+            diagnostics.groundingJudgment = SchemaToolAgentGroundingJudgment(
+                outcome: skip.rawValue,
+                inputDigest: inputDigest
+            )
+            return
+        }
+
+        let request = SchemaToolAgentGroundingJudgeRequest(
+            question: question,
+            mode: context.mode,
+            recentQuestions: context.recentQuestions,
+            currentSQL: context.currentSQL,
+            databaseContext: config.databaseContext,
+            confirmedSemanticBindings: context.confirmedSemanticBindings,
+            schemaEvidence: evidence.criticSchemaEvidence,
+            schema: schema,
+            referencedTables: review.referencedTables,
+            flaggedTerms: review.unresolvedTerms
+        )
+        let policy = profile.policy(for: .groundingJudge)
+        let systemMessage = ChatToolMessage(role: .system, content: SchemaToolAgentGroundingJudge.systemPrompt)
+        let userPrompt = SchemaToolAgentGroundingJudge.userPrompt(for: request)
+        var judgment = SchemaToolAgentGroundingJudgment(
+            outcome: SchemaToolAgentGroundingJudgeOutcome.judged.rawValue,
+            inputDigest: inputDigest,
+            callCount: 1
+        )
+        do {
+            let parsed = try await performRequest(
+                messages: [systemMessage, ChatToolMessage(role: .user, content: userPrompt)],
+                tools: [],
+                options: ChatRequestOptions(
+                    toolChoice: .omitted,
+                    responseFormat: policy.responseFormat == .jsonObject ? .jsonObject : .omitted,
+                    reasoningEffort: policy.reasoningEffort,
+                    maximumCompletionTokens: policy.maxCompletionTokens,
+                    promptCacheKey: promptCacheKey.map { "\($0)-grounding" }
+                ),
+                capabilities: capabilities,
+                aggregate: &aggregate,
+                maximumHTTPAttempts: maximumHTTPAttempts,
+                deadline: deadline,
+                usageSink: config.usageSink,
+                maximumAttempts: configuration.maximumGroundingJudgeHTTPAttempts,
+                // One user message, so the resend never carries two in a row.
+                invalidOutputMessages: [
+                    systemMessage,
+                    ChatToolMessage(
+                        role: .user,
+                        content: userPrompt + "\n\n" + SchemaToolAgentGroundingJudge.invalidOutputCorrection
+                    ),
+                ]
+            )
+            let reply = try SchemaToolAgentGroundingJudge.parseReply(
+                parsed.content ?? "",
+                flaggedTerms: request.flaggedTerms
+            )
+            judgment.terms = SchemaToolAgentGroundingJudge.verify(
+                reply: reply,
+                request: request,
+                sqlAnalysis: SQLReferenceAnalyzer.analyze(sql),
+                schema: schema
+            ).map {
+                SchemaToolAgentGroundingJudgedTerm(
+                    term: $0.term,
+                    label: $0.label.rawValue,
+                    verified: $0.verified,
+                    evidence: $0.evidence
+                )
+            }
+        } catch is CancellationError {
+            throw CancellationError()
+        } catch {
+            judgment.outcome = SchemaToolAgentGroundingJudgeOutcome.failed.rawValue
+            judgment.failureReason = Self.advisoryFailureDescription(error)
+        }
+        diagnostics.groundingJudgment = judgment
+        try await checkStaleSnapshot(expected: initialFingerprint)
     }
 
     /// Answers with the SQL the critic last sent back for revision, as the
@@ -2419,12 +2626,14 @@ public final class SchemaToolSQLAgent: SQLGenerator, Sendable {
         )
     }
 
-    /// The diagnostics' name for a failed review: the parse error, the
-    /// provider's failure category after `cloudRequestFailure:`, or the
-    /// agent's failure category.
-    private static func criticFailureDescription(_ error: any Error) -> String {
+    /// The diagnostics' name for a failed review or grounding judgment: the
+    /// parse error, the provider's failure category after
+    /// `cloudRequestFailure:`, or the agent's failure category.
+    private static func advisoryFailureDescription(_ error: any Error) -> String {
         switch error {
         case let failure as SchemaToolAgentCriticParseError:
+            failure.rawValue
+        case let failure as SchemaToolAgentGroundingJudgeParseError:
             failure.rawValue
         case let failure as CloudRequestFailure:
             "cloudRequestFailure:\(failure.category.rawValue)"
@@ -3128,6 +3337,8 @@ private struct SchemaToolAgentDiagnosticState {
     var criticIssueKinds: [String] = []
     var criticFailureReason: String?
     var criticSharedDataValues = false
+    var groundingJudgeMode: String?
+    var groundingJudgment: SchemaToolAgentGroundingJudgment?
 
     static let maximumCriticIssueKindCount = 12
 
@@ -3176,7 +3387,8 @@ private struct SchemaToolAgentDiagnosticState {
 
     /// The diagnostics for a released critic fallback: those saved when the
     /// critic asked for the revision, with this run's later turn, forced
-    /// terminal and critic facts, and `outcome`.
+    /// terminal and critic facts, and `outcome`. They were saved before any
+    /// grounding judgment, so the released SQL keeps the lexical decision.
     func releasingCriticFallback(
         _ saved: SchemaToolAgentDiagnostics,
         outcome: String,
@@ -3380,7 +3592,9 @@ private struct SchemaToolAgentDiagnosticState {
             criticFinalOutcome: criticFinalOutcome,
             criticIssueKinds: criticIssueKinds.isEmpty ? nil : criticIssueKinds,
             criticFailureReason: criticFailureReason,
-            criticSharedDataValues: criticCallCount > 0 ? criticSharedDataValues : nil
+            criticSharedDataValues: criticCallCount > 0 ? criticSharedDataValues : nil,
+            groundingJudgeMode: groundingJudgeMode,
+            groundingJudgment: groundingJudgment
         )
     }
 }
@@ -3425,6 +3639,11 @@ private struct SchemaToolEvidenceLedger {
 
     var validationTableUniverse: Set<String> {
         describedTables.union(joinPathTables)
+    }
+
+    /// The tables `describe_tables` returned, as the diagnostics record them.
+    var describedTableIDs: [String] {
+        describedTables.sorted()
     }
 
     private var schema: DatabaseSchema

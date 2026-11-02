@@ -221,6 +221,9 @@ struct TextToSQLEvalCloudSettingsTests {
                 "maximumCriticHTTPAttempts": "2",
                 "criticMinimumRemainingSeconds": "30",
                 "criticRevisionMinimumRemainingSeconds": "60",
+                "groundingJudgeMode": "disabled",
+                "maximumGroundingJudgeHTTPAttempts": "2",
+                "groundingJudgeMinimumRemainingSeconds": "15",
             ]
         )
         var configuration = SchemaToolSQLAgentConfiguration.default
