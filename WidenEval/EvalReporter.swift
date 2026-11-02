@@ -88,7 +88,6 @@ enum EvalReporter {
             "| Schema agent clarification correction | \(tableCell(run.manifest.schemaAgentClarificationCorrectionMode ?? "-")) |",
             "| Schema agent intent coverage | \(tableCell(run.manifest.schemaAgentIntentCoverageMode ?? "-")) |",
             "| Schema agent plan consistency | \(tableCell(run.manifest.schemaAgentPlanConsistencyMode ?? "-")) |",
-            "| Schema agent critic | \(tableCell(run.manifest.schemaAgentCriticMode ?? "-")) |",
             "| Provider | \(tableCell(run.manifest.resolvedProvider ?? "-")) |",
             "| Endpoint host | \(tableCell(run.manifest.providerEndpointHost ?? "-")) |",
             "| Model | \(tableCell(run.manifest.model ?? "-")) |",
@@ -241,7 +240,7 @@ enum EvalReporter {
         let agentHTTPAttempts = summary.totalAgentHTTPAttempts.map(String.init) ?? "-"
         let toolBudgetFailures = summary.toolBudgetFailureCount.map(String.init) ?? "-"
 
-        var lines: [String] = [
+        return [
             "",
             "## \(title)",
             "",
@@ -276,10 +275,6 @@ enum EvalReporter {
             "| Agent logical model turns | \(agentTurns) |",
             "| Agent HTTP attempts | \(agentHTTPAttempts) |",
             "| Tool-budget failures | \(toolBudgetFailures) |",
-        ]
-        lines += TextToSQLEvalForcedTerminalSummary.markdownRows(summary.forcedTerminal)
-        lines += TextToSQLEvalCriticSummary.markdownRows(summary.schemaAgentCritic)
-        lines += [
             "| Repeated repair fingerprint/no-progress repairs | \(summary.repeatedNoProgressRepairCount) |",
             "| Avg estimated initial prompt characters | \(averagePromptSize) |",
             "| Max estimated initial prompt characters | \(maxPromptSize) |",
@@ -297,7 +292,6 @@ enum EvalReporter {
             "| P95 | \(summary.latency.p95Ms) |",
             "| Max | \(summary.latency.maxMs) |",
         ]
-        return lines
     }
 
     private static func statusCountSection(title: String, summary: EvalRunSummary) -> [String] {
@@ -737,12 +731,6 @@ extension EvalRunManifest {
     /// provider field resolve to OpenRouter, the only provider they could use.
     var resolvedProvider: String? {
         TextToSQLEvalCloudSettings.resolvedManifestProvider(provider, backendMode: backendMode)
-    }
-
-    /// The schema agent's critic mode, from the agent configuration. Nil
-    /// for a run without the schema agent or from before the critic.
-    var schemaAgentCriticMode: String? {
-        TextToSQLEvalSchemaAgentCritic.recordedMode(in: agentConfiguration)
     }
 
     /// The provider's name for report headings, such as "Particle".

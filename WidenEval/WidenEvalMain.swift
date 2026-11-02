@@ -273,7 +273,6 @@ enum EvalExplicitOption: Hashable {
     case schemaAgentClarificationCorrectionMode
     case schemaAgentIntentCoverageMode
     case schemaAgentPlanConsistencyMode
-    case schemaAgentCriticMode
     case model
     case reasoningEffort
     case suitePath
@@ -290,8 +289,6 @@ struct EvalCLIOptions {
         .diagnosticsOnly
     var schemaAgentIntentCoverageMode: SchemaToolAgentIntentCoverageMode = .diagnosticsOnly
     var schemaAgentPlanConsistencyMode: SchemaToolAgentPlanConsistencyMode = .diagnosticsOnly
-    /// On by default, as in the app.
-    var schemaAgentCriticMode: SchemaToolAgentCriticMode = .enabled
     /// The provider follows from the model: `particle-1` is Particle-1 and
     /// an OpenRouter `vendor/model` ID runs through OpenRouter.
     var model: String = TextToSQLEvalDefaults.requestedModelID
@@ -335,7 +332,6 @@ struct EvalCLIOptions {
           --schema-agent-clarification-correction disabled|diagnostics|experimental
           --schema-agent-intent-coverage disabled|diagnostics|reject-only|experimental
           --schema-agent-plan-consistency disabled|diagnostics|experimental
-          --schema-agent-critic on|off|enabled|disabled (default: on)
           --model <model-id> (default: \(TextToSQLEvalDefaults.requestedModelID); a vendor/model ID runs through OpenRouter)
           --reasoning-effort \(ReasoningEffort.allCases.map(\.rawValue).joined(separator: "|")) (eval-only; \(TextToSQLEvalDefaults.requestedModelID) only)
           --suite <path>
@@ -417,13 +413,6 @@ struct EvalCLIOptions {
                 }
                 options.schemaAgentPlanConsistencyMode = mode
                 options.explicitOptions.insert(.schemaAgentPlanConsistencyMode)
-            case "--schema-agent-critic":
-                let value = try nextValue(after: argument)
-                guard let mode = TextToSQLEvalSchemaAgentCritic.mode(flagValue: value) else {
-                    throw EvalCLIError.invalidValue(argument, value)
-                }
-                options.schemaAgentCriticMode = mode
-                options.explicitOptions.insert(.schemaAgentCriticMode)
             case "--model":
                 options.model = try nextValue(after: argument)
                 options.explicitOptions.insert(.model)

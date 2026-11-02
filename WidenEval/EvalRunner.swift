@@ -36,8 +36,7 @@ struct EvalRunManifest: Codable {
     /// The `reasoning_effort` sent from the run's call site (agent turns for
     /// the tools agent, one-shot SQL for legacy), or nil when none was sent.
     var reasoningEffort: String?
-    /// The schema agent's reported budgets, for evidence, and its critic
-    /// mode, which a resume inherits and must match.
+    /// The schema agent's reported budgets, for evidence only.
     var agentConfiguration: [String: String]?
     var osVersion: String
     var architecture: String
@@ -134,12 +133,6 @@ struct EvalRunSummary: Codable {
     var repeatedNoProgressRepairCount: Int
     var averageEstimatedInitialPromptCharacters: Double?
     var maxEstimatedInitialPromptCharacters: Int?
-    /// Nil when no result ran with the critic on, and in runs written
-    /// before it was recorded.
-    var schemaAgentCritic: TextToSQLEvalCriticSummary?
-    /// Nil when no result has schema-agent diagnostics, and in runs written
-    /// before it was recorded.
-    var forcedTerminal: TextToSQLEvalForcedTerminalSummary?
 }
 
 struct LatencySummary: Codable {
@@ -253,14 +246,6 @@ struct EvalRunner {
         let negativeControlMetadataHash = options.semanticDatabase
             ? Self.negativeControlMetadataHash(cases: selectedCases)
             : nil
-        let agentConfiguration = options.usesCloudSchemaAgent
-            ? EvalCloudSchemaToolSQLGenerator.baseConfiguration(
-                clarificationCorrectionMode: options.schemaAgentClarificationCorrectionMode,
-                intentCoverageMode: options.schemaAgentIntentCoverageMode,
-                planConsistencyMode: options.schemaAgentPlanConsistencyMode,
-                criticMode: options.schemaAgentCriticMode
-            ).reportedSettings
-            : nil
         let currentCompatibility = TextToSQLEvalResumeCompatibilityManifest(
             suiteName: suite.name,
             suiteVersion: suite.version,
@@ -283,7 +268,6 @@ struct EvalRunner {
             schemaAgentPlanConsistencyMode: options.usesCloudSchemaAgent
                 ? options.schemaAgentPlanConsistencyMode.rawValue
                 : nil,
-            schemaAgentCriticMode: TextToSQLEvalSchemaAgentCritic.recordedMode(in: agentConfiguration),
             semanticDatabaseEnabled: options.semanticDatabase,
             scorerSourceHash: scorerSourceHash,
             semanticComparatorSourceHash: semanticComparatorSourceHash,
@@ -378,7 +362,13 @@ struct EvalRunner {
                 provider: cloud.provider,
                 providerEndpointHost: cloud.endpointHost,
                 reasoningEffort: reasoningEffort,
-                agentConfiguration: agentConfiguration,
+                agentConfiguration: options.usesCloudSchemaAgent
+                    ? EvalCloudSchemaToolSQLGenerator.baseConfiguration(
+                        clarificationCorrectionMode: options.schemaAgentClarificationCorrectionMode,
+                        intentCoverageMode: options.schemaAgentIntentCoverageMode,
+                        planConsistencyMode: options.schemaAgentPlanConsistencyMode
+                    ).reportedSettings
+                    : nil,
                 osVersion: ProcessInfo.processInfo.operatingSystemVersionString,
                 architecture: Self.architecture(),
                 caseCount: selectedCases.count,
@@ -621,11 +611,6 @@ struct EvalRunner {
         {
             options.schemaAgentPlanConsistencyMode = mode
         }
-        options.schemaAgentCriticMode = TextToSQLEvalSchemaAgentCritic.resumedMode(
-            current: options.schemaAgentCriticMode,
-            isExplicit: options.explicitOptions.contains(.schemaAgentCriticMode),
-            previousAgentConfiguration: previousRun.manifest.agentConfiguration
-        )
         if let model = previousRun.manifest.model, !options.explicitOptions.contains(.model) {
             options.model = model
         }
@@ -1111,8 +1096,7 @@ struct EvalRunner {
                     maximumHTTPAttempts: maximumHTTPAttempts,
                     clarificationCorrectionMode: options.schemaAgentClarificationCorrectionMode,
                     intentCoverageMode: options.schemaAgentIntentCoverageMode,
-                    planConsistencyMode: options.schemaAgentPlanConsistencyMode,
-                    criticMode: options.schemaAgentCriticMode
+                    planConsistencyMode: options.schemaAgentPlanConsistencyMode
                 )
             }
             return CloudSQLGenerator(
@@ -1479,9 +1463,7 @@ struct EvalRunner {
             averageEstimatedInitialPromptCharacters: promptEstimateValues.isEmpty
                 ? nil
                 : Double(promptEstimateValues.reduce(0, +)) / Double(promptEstimateValues.count),
-            maxEstimatedInitialPromptCharacters: promptEstimateValues.max(),
-            schemaAgentCritic: TextToSQLEvalCriticSummary(results: results),
-            forcedTerminal: TextToSQLEvalForcedTerminalSummary(results: results)
+            maxEstimatedInitialPromptCharacters: promptEstimateValues.max()
         )
     }
 
@@ -1687,7 +1669,6 @@ private extension EvalRunManifest {
             schemaAgentClarificationCorrectionMode: schemaAgentClarificationCorrectionMode,
             schemaAgentIntentCoverageMode: schemaAgentIntentCoverageMode,
             schemaAgentPlanConsistencyMode: schemaAgentPlanConsistencyMode,
-            schemaAgentCriticMode: schemaAgentCriticMode,
             semanticDatabaseEnabled: semanticDatabaseEnabled,
             scorerSourceHash: scorerSourceHash,
             semanticComparatorSourceHash: semanticComparatorSourceHash,
@@ -1859,7 +1840,6 @@ private struct EvalCloudSchemaToolSQLGenerator: SQLGenerator, Sendable {
     var clarificationCorrectionMode: SchemaToolAgentClarificationCorrectionMode
     var intentCoverageMode: SchemaToolAgentIntentCoverageMode
     var planConsistencyMode: SchemaToolAgentPlanConsistencyMode
-    var criticMode: SchemaToolAgentCriticMode
 
     func generateSQL(
         question: String,
@@ -1892,14 +1872,12 @@ private struct EvalCloudSchemaToolSQLGenerator: SQLGenerator, Sendable {
     static func baseConfiguration(
         clarificationCorrectionMode: SchemaToolAgentClarificationCorrectionMode,
         intentCoverageMode: SchemaToolAgentIntentCoverageMode,
-        planConsistencyMode: SchemaToolAgentPlanConsistencyMode,
-        criticMode: SchemaToolAgentCriticMode
+        planConsistencyMode: SchemaToolAgentPlanConsistencyMode
     ) -> SchemaToolSQLAgentConfiguration {
         var configuration = SchemaToolSQLAgentConfiguration.default
         configuration.clarificationCorrectionMode = clarificationCorrectionMode
         configuration.intentCoverageMode = intentCoverageMode
         configuration.planConsistencyMode = planConsistencyMode
-        configuration.criticMode = criticMode
         return configuration
     }
 
@@ -1907,8 +1885,7 @@ private struct EvalCloudSchemaToolSQLGenerator: SQLGenerator, Sendable {
         var configuration = Self.baseConfiguration(
             clarificationCorrectionMode: clarificationCorrectionMode,
             intentCoverageMode: intentCoverageMode,
-            planConsistencyMode: planConsistencyMode,
-            criticMode: criticMode
+            planConsistencyMode: planConsistencyMode
         )
         if let maximumHTTPAttempts {
             configuration.maximumHTTPAttempts = min(
