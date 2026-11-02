@@ -2081,31 +2081,6 @@ public enum GeneratedSQLPostprocessor {
         return review.evaluation.pendingClarification == nil ? nil : review
     }
 
-    /// Whether the anchored-window rule replaces `sql` with a question about
-    /// the window's anchor. Nothing lets SQL past that rule.
-    static func anchoredWindowReplacesSQL(
-        _ sql: String,
-        question: String,
-        databaseContext: String
-    ) -> Bool {
-        anchoredWindowClarification(
-            question: question,
-            sql: sql.trimmingCharacters(in: .whitespacesAndNewlines),
-            databaseContext: databaseContext
-        ) != nil
-    }
-
-    /// Whether the SQL reads at least one table and the schema tools
-    /// described every table it reads, compared case-insensitively.
-    static func describedTablesCover(
-        _ referencedTables: [String],
-        describedTableIDs: [String]
-    ) -> Bool {
-        let described = Set(describedTableIDs.map { $0.lowercased() })
-        return !referencedTables.isEmpty
-            && referencedTables.allSatisfy { described.contains($0.lowercased()) }
-    }
-
     private static func schemaToolEvidenceAllowsSQL(
         question: String,
         databaseContext: String,
