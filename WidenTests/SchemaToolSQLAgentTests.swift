@@ -66,6 +66,46 @@ struct SchemaToolSQLAgentTests {
         #expect(!encoded.contains("terminalIgnoredArgumentKeyCount"))
     }
 
+    @Test func diagnosticsDecodeToolBudgetFieldsTolerantly() throws {
+        let decoder = JSONDecoder()
+        let recorded = try decoder.decode(
+            SchemaToolAgentDiagnostics.self,
+            from: Data(
+                (#"{"budgetRejectedToolCallCount":3,"resultBudgetToolErrorCount":1,"#
+                    + #""toolBudgetExhausted":true,"inspectionBudgetExhausted":true}"#).utf8
+            )
+        )
+        #expect(recorded.budgetRejectedToolCallCount == 3)
+        #expect(recorded.resultBudgetToolErrorCount == 1)
+        #expect(recorded.toolBudgetExhausted == true)
+        #expect(recorded.inspectionBudgetExhausted == true)
+
+        let wrongTypes = try decoder.decode(
+            SchemaToolAgentDiagnostics.self,
+            from: Data(
+                (#"{"terminalToolSeen":true,"budgetRejectedToolCallCount":"three","#
+                    + #""resultBudgetToolErrorCount":[1],"toolBudgetExhausted":"yes","#
+                    + #""inspectionBudgetExhausted":{}}"#).utf8
+            )
+        )
+        #expect(wrongTypes.terminalToolSeen)
+        #expect(wrongTypes.budgetRejectedToolCallCount == nil)
+        #expect(wrongTypes.resultBudgetToolErrorCount == nil)
+        #expect(wrongTypes.toolBudgetExhausted == nil)
+        #expect(wrongTypes.inspectionBudgetExhausted == nil)
+
+        // A run that stayed within its tool budgets saves none of the keys.
+        let encoded = String(decoding: try JSONEncoder().encode(SchemaToolAgentDiagnostics()), as: UTF8.self)
+        for key in [
+            "budgetRejectedToolCallCount",
+            "resultBudgetToolErrorCount",
+            "toolBudgetExhausted",
+            "inspectionBudgetExhausted",
+        ] {
+            #expect(!encoded.contains(key))
+        }
+    }
+
     @Test func cloudRequestFailureKeepsItsSavedRawValue() throws {
         // Older builds wrote this category as openRouterRequestFailure; the
         // renamed case must keep reading and writing that raw value.
@@ -1004,6 +1044,16 @@ struct SchemaToolSQLAgentTests {
                         "limit": 4,
                     ]),
                 ])
+            case 4:
+                // The over-budget call got an answer and the run went on;
+                // calling the spent session again ends it.
+                #expect(try Self.toolMessageErrorCodes(in: request).last == "sessionBudgetExceeded")
+                return Self.assistantToolCalls([
+                    Self.toolCall(id: "still-over-budget", name: "search_schema", arguments: [
+                        "query": "more preseason metadata",
+                        "limit": 4,
+                    ]),
+                ])
             default:
                 throw URLError(.badServerResponse)
             }
@@ -1025,6 +1075,8 @@ struct SchemaToolSQLAgentTests {
         #expect(result.clarificationQuestion?.contains("winner_id") == true)
         #expect(result.backendMetadata?.agentTerminalOutcome == "clarify_fallback")
         #expect(result.backendMetadata?.agentDiagnostics?.appSideRejectionReason == .clarificationRejected)
+        #expect(result.backendMetadata?.agentDiagnostics?.toolBudgetExhausted == true)
+        #expect(chatTransport.requests.count == 4)
     }
 
     @Test func fallbackSkipsContextResolvedWinnerAndAsksTimeField() async throws {
@@ -1053,6 +1105,13 @@ struct SchemaToolSQLAgentTests {
                 return Self.assistantToolCalls([
                     Self.toolCall(id: "over-budget-skip-resolved", name: "search_schema", arguments: [
                         "query": "extra preseason metadata",
+                        "limit": 4,
+                    ]),
+                ])
+            case 4:
+                return Self.assistantToolCalls([
+                    Self.toolCall(id: "still-over-budget-skip-resolved", name: "search_schema", arguments: [
+                        "query": "more preseason metadata",
                         "limit": 4,
                     ]),
                 ])
@@ -3861,6 +3920,13 @@ struct SchemaToolSQLAgentTests {
                         "limit": 2,
                     ]),
                 ])
+            case 4:
+                return Self.assistantToolCalls([
+                    Self.toolCall(id: "search-still-over-repair-budget", name: "search_schema", arguments: [
+                        "query": "customers",
+                        "limit": 2,
+                    ]),
+                ])
             default:
                 throw URLError(.badServerResponse)
             }
@@ -3897,6 +3963,329 @@ struct SchemaToolSQLAgentTests {
             #expect(failure.schemaToolCalls.last?.errorCode == .sessionBudgetExceeded)
             #expect(failure.backendMetadata?.agentDiagnostics?.appSideRejectionReason == .budgetExhausted)
         }
+    }
+
+    @Test func overBudgetParallelBatchRunsTheCallsThatFitAndKeepsRunning() async throws {
+        let schema = Self.makeSchema()
+        let chatTransport = ScriptedTransport { request, index in
+            switch index {
+            case 1:
+                return Self.assistantToolCalls([
+                    Self.toolCall(id: "search-batch", name: "search_schema", arguments: [
+                        "query": "users",
+                        "limit": 2,
+                    ]),
+                ])
+            case 2:
+                let tableID = try Self.tableHandle(named: #""public"."users""#, in: request)
+                return Self.assistantToolCalls([
+                    Self.toolCall(id: "describe-batch", name: "describe_tables", arguments: [
+                        "table_ids": [tableID],
+                    ]),
+                    Self.toolCall(id: "search-orders-batch", name: "search_schema", arguments: [
+                        "query": "orders",
+                        "limit": 2,
+                    ]),
+                    Self.toolCall(id: "search-audit-batch", name: "search_schema", arguments: [
+                        "query": "audit",
+                        "limit": 2,
+                    ]),
+                    Self.toolCall(id: "search-events-batch", name: "search_schema", arguments: [
+                        "query": "events",
+                        "limit": 2,
+                    ]),
+                ])
+            case 3:
+                // Every call in the batch got exactly one tool message: the
+                // two that fit ran, the rest got session-budget errors.
+                #expect(try Self.toolMessageIDs(in: request) == [
+                    "search-batch",
+                    "describe-batch",
+                    "search-orders-batch",
+                    "search-audit-batch",
+                    "search-events-batch",
+                ])
+                #expect(try Self.toolMessageErrorCodes(in: request) == [
+                    nil,
+                    nil,
+                    nil,
+                    "sessionBudgetExceeded",
+                    "sessionBudgetExceeded",
+                ])
+                return Self.assistantToolCalls([
+                    Self.terminalSQL(
+                        id: "answer-batch",
+                        sql: "SELECT id, name FROM public.users ORDER BY id LIMIT 100"
+                    ),
+                ])
+            default:
+                throw URLError(.badServerResponse)
+            }
+        }
+        let agent = makeAgent(
+            schema: schema,
+            chatTransport: chatTransport,
+            configuration: SchemaToolSQLAgentConfiguration(
+                maximumSchemaToolCalls: 3,
+                maximumRepairSchemaToolCalls: 2,
+                maximumModelTurns: 6,
+                maximumMalformedTerminalCorrections: 1,
+                maximumRepeatedToolCorrections: 1,
+                maximumInvalidTerminalSQLCorrections: 1,
+                maximumHTTPAttempts: 8,
+                wallClockTimeoutSeconds: 10
+            )
+        )
+
+        let result = try await agent.generateSQL(
+            question: "List users",
+            schema: schema,
+            context: SQLGenerationContext(),
+            config: SQLGenerationConfig()
+        )
+
+        #expect(result.sql == "SELECT id, name FROM public.users ORDER BY id LIMIT 100")
+        #expect(chatTransport.requests.count == 3)
+        // The call that hit the budget is traced by its session; the call
+        // after it never reached the session.
+        #expect(result.schemaToolCalls.map(\.callID) == [
+            "search-batch",
+            "describe-batch",
+            "search-orders-batch",
+            "search-audit-batch",
+        ])
+        #expect(result.schemaToolCalls.last?.outcome == .error)
+        #expect(result.schemaToolCalls.last?.errorCode == .sessionBudgetExceeded)
+        let diagnostics = try #require(result.backendMetadata?.agentDiagnostics)
+        #expect(diagnostics.budgetRejectedToolCallCount == 2)
+        #expect(diagnostics.toolBudgetExhausted == true)
+        #expect(diagnostics.inspectionBudgetExhausted == nil)
+        #expect(diagnostics.resultBudgetToolErrorCount == nil)
+        // The run recovered, so it records no budget rejection.
+        #expect(diagnostics.appSideRejectionReason == nil)
+        #expect(diagnostics.terminalValidationFailureReason == nil)
+    }
+
+    @Test func rawSchemaToolErrorBecomesAToolErrorInsteadOfEscaping() async throws {
+        let schema = Self.makeSchema()
+        let chatTransport = ScriptedTransport { request, index in
+            switch index {
+            case 1:
+                return Self.assistantToolCalls([
+                    Self.toolCall(id: "search-raw", name: "search_schema", arguments: [
+                        "query": "users",
+                        "limit": 2,
+                    ]),
+                ])
+            case 2:
+                #expect(try Self.toolMessageIDs(in: request) == ["search-raw"])
+                #expect(try Self.toolMessageErrorCodes(in: request) == ["sessionBudgetExceeded"])
+                return Self.assistantToolCalls([
+                    Self.toolCall(id: "search-raw-again", name: "search_schema", arguments: [
+                        "query": "orders",
+                        "limit": 2,
+                    ]),
+                ])
+            default:
+                throw URLError(.badServerResponse)
+            }
+        }
+        // A session too small to hold even its own budget error throws the
+        // error raw instead of returning it.
+        let agent = makeAgent(
+            schema: schema,
+            chatTransport: chatTransport,
+            schemaToolPolicy: SchemaToolPolicy(
+                maximumCallCount: 4,
+                maximumResultBytes: 16_000,
+                maximumSessionResultBytes: 100
+            )
+        )
+
+        do {
+            _ = try await agent.generateSQL(
+                question: "List users",
+                schema: schema,
+                context: SQLGenerationContext(),
+                config: SQLGenerationConfig()
+            )
+            Issue.record("Expected the spent session to end the run")
+        } catch let failure as SchemaToolAgentFailure {
+            #expect(failure.category == .schemaToolCallBudgetExhausted)
+            #expect(chatTransport.requests.count == 2)
+            let diagnostics = try #require(failure.backendMetadata?.agentDiagnostics)
+            #expect(diagnostics.toolBudgetExhausted == true)
+            #expect(diagnostics.budgetRejectedToolCallCount == 1)
+            #expect(diagnostics.appSideRejectionReason == .budgetExhausted)
+        }
+    }
+
+    @Test func perCallResultBudgetErrorStaysInBand() async throws {
+        var schema = Self.makeSchema()
+        var wideColumns = [Self.column("wide_events", "id", type: "uuid", ordinal: 1)]
+        var wideKeys = [
+            SchemaKeyConstraintInfo(
+                constraintName: "wide_events_pkey",
+                schema: "public",
+                table: "wide_events",
+                kind: .primaryKey,
+                columns: ["id"]
+            ),
+        ]
+        for index in 0..<24 {
+            let columnName = "oversized_payload_column_\(index)"
+            wideColumns.append(Self.column("wide_events", columnName, type: "text", ordinal: index + 2))
+            wideKeys.append(
+                SchemaKeyConstraintInfo(
+                    constraintName: "wide_events_extremely_verbose_unique_constraint_name_\(index)_kept_to_force_minimal_card_over_budget",
+                    schema: "public",
+                    table: "wide_events",
+                    kind: .unique,
+                    columns: [columnName]
+                )
+            )
+        }
+        schema.tables.append(
+            TableInfo(
+                schema: "public",
+                name: "wide_events",
+                type: .baseTable,
+                columns: wideColumns,
+                keyConstraints: wideKeys
+            )
+        )
+        let chatTransport = ScriptedTransport { request, index in
+            switch index {
+            case 1:
+                return Self.assistantToolCalls([
+                    Self.toolCall(id: "search-users-in-band", name: "search_schema", arguments: [
+                        "query": "users",
+                        "limit": 1,
+                    ]),
+                    Self.toolCall(id: "search-wide-in-band", name: "search_schema", arguments: [
+                        "query": "wide_events",
+                        "limit": 1,
+                    ]),
+                ])
+            case 2:
+                let users = try Self.tableHandle(named: #""public"."users""#, in: request)
+                let wide = try Self.tableHandle(named: #""public"."wide_events""#, in: request)
+                return Self.assistantToolCalls([
+                    Self.toolCall(id: "describe-wide-in-band", name: "describe_tables", arguments: [
+                        "table_ids": [wide],
+                    ]),
+                    Self.toolCall(id: "describe-users-in-band", name: "describe_tables", arguments: [
+                        "table_ids": [users],
+                    ]),
+                ])
+            case 3:
+                #expect(try Self.toolMessageErrorCodes(in: request) == [
+                    nil,
+                    nil,
+                    "resultBudgetExceeded",
+                    nil,
+                ])
+                return Self.assistantToolCalls([
+                    Self.terminalSQL(
+                        id: "answer-in-band",
+                        sql: "SELECT id, name FROM public.users ORDER BY id LIMIT 100"
+                    ),
+                ])
+            default:
+                throw URLError(.badServerResponse)
+            }
+        }
+        let agent = makeAgent(
+            schema: schema,
+            chatTransport: chatTransport,
+            schemaToolPolicy: SchemaToolPolicy(
+                maximumCallCount: 4,
+                maximumResultBytes: 2_500,
+                maximumSessionResultBytes: 20_000
+            )
+        )
+
+        let result = try await agent.generateSQL(
+            question: "List users",
+            schema: schema,
+            context: SQLGenerationContext(),
+            config: SQLGenerationConfig()
+        )
+
+        // The oversized result did not spend the session: the next call in
+        // the same batch ran, and the run finished.
+        #expect(result.sql == "SELECT id, name FROM public.users ORDER BY id LIMIT 100")
+        #expect(result.schemaToolCalls.map(\.errorCode) == [nil, nil, .resultBudgetExceeded, nil])
+        let diagnostics = try #require(result.backendMetadata?.agentDiagnostics)
+        #expect(diagnostics.resultBudgetToolErrorCount == 1)
+        #expect(diagnostics.toolBudgetExhausted == nil)
+        #expect(diagnostics.budgetRejectedToolCallCount == nil)
+        #expect(diagnostics.appSideRejectionReason == nil)
+    }
+
+    @Test func repairModeAllowsFourSchemaToolCallsByDefault() async throws {
+        let schema = Self.makeSchema()
+        let chatTransport = ScriptedTransport { request, index in
+            switch index {
+            case 1:
+                return Self.assistantToolCalls([
+                    Self.toolCall(id: "search-repair-four", name: "search_schema", arguments: [
+                        "query": "users",
+                        "limit": 2,
+                    ]),
+                ])
+            case 2:
+                let tableID = try Self.tableHandle(named: #""public"."users""#, in: request)
+                return Self.assistantToolCalls([
+                    Self.toolCall(id: "describe-repair-four", name: "describe_tables", arguments: [
+                        "table_ids": [tableID],
+                    ]),
+                    Self.toolCall(id: "search-orders-repair-four", name: "search_schema", arguments: [
+                        "query": "orders",
+                        "limit": 2,
+                    ]),
+                    Self.toolCall(id: "search-audit-repair-four", name: "search_schema", arguments: [
+                        "query": "audit",
+                        "limit": 2,
+                    ]),
+                ])
+            case 3:
+                return Self.assistantToolCalls([
+                    Self.toolCall(id: "search-over-repair-four", name: "search_schema", arguments: [
+                        "query": "events",
+                        "limit": 2,
+                    ]),
+                ])
+            case 4:
+                return Self.assistantToolCalls([
+                    Self.terminalSQL(
+                        id: "answer-repair-four",
+                        sql: "SELECT id, name FROM public.users ORDER BY id LIMIT 100"
+                    ),
+                ])
+            default:
+                throw URLError(.badServerResponse)
+            }
+        }
+        let agent = makeAgent(
+            schema: schema,
+            chatTransport: chatTransport,
+            configuration: SchemaToolSQLAgentConfiguration()
+        )
+
+        let result = try await agent.generateSQL(
+            question: "Repair the failed query",
+            schema: schema,
+            context: SQLGenerationContext(mode: .repair),
+            config: SQLGenerationConfig()
+        )
+
+        #expect(result.sql == "SELECT id, name FROM public.users ORDER BY id LIMIT 100")
+        #expect(result.schemaToolCalls.count == 5)
+        #expect(result.schemaToolCalls.prefix(4).allSatisfy { $0.outcome == .success })
+        #expect(result.schemaToolCalls.last?.callID == "search-over-repair-four")
+        #expect(result.schemaToolCalls.last?.errorCode == .sessionBudgetExceeded)
+        #expect(result.backendMetadata?.agentDiagnostics?.toolBudgetExhausted == true)
     }
 
     @Test func zeroModelTurnBudgetReturnsTypedFailure() async throws {
@@ -5642,6 +6031,7 @@ struct SchemaToolSQLAgentTests {
             maximumHTTPAttempts: 8,
             wallClockTimeoutSeconds: 10
         ),
+        schemaToolPolicy: SchemaToolPolicy = .cloudAgent,
         databaseInspectionPolicy: DatabaseInspectionPolicy = .disabled,
         databaseInspectionDatabase: (any DatabaseInspectionQuerying)? = nil,
         currentSchemaFingerprint: (@Sendable () async throws -> String)? = nil
@@ -5662,6 +6052,7 @@ struct SchemaToolSQLAgentTests {
             sessionFactory: SchemaToolSessionFactory(
                 indexStore: SchemaSearchIndexStore(directory: Self.temporaryDirectory())
             ),
+            schemaToolPolicy: schemaToolPolicy,
             databaseInspectionPolicy: databaseInspectionPolicy,
             databaseInspectionDatabase: databaseInspectionDatabase,
             legacyGenerator: legacyGenerator ?? LegacyGenerator(),
@@ -5955,6 +6346,20 @@ struct SchemaToolSQLAgentTests {
         return messages.compactMap { message in
             guard message["role"] as? String == "tool" else { return nil }
             return message["tool_call_id"] as? String
+        }
+    }
+
+    /// The error code of each tool message in `request`, `nil` for a tool
+    /// result without an error. Synthesized tool errors are included.
+    private static func toolMessageErrorCodes(in request: URLRequest) throws -> [String?] {
+        let body = try requestBody(request)
+        let messages = try #require(body["messages"] as? [[String: Any]])
+        return try messages.compactMap { message -> String?? in
+            guard message["role"] as? String == "tool" else { return nil }
+            let content = try #require(message["content"] as? String)
+            let object = try JSONSerialization.jsonObject(with: Data(content.utf8)) as? [String: Any]
+            let error = object?["error"] as? [String: Any]
+            return .some(error?["code"] as? String)
         }
     }
 

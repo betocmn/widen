@@ -212,6 +212,9 @@ public final class SchemaToolSQLAgent: SQLGenerator, Sendable {
     private let parser: ChatToolParser
     private let retryPolicy = ChatCompletionRetryPolicy()
     private let sessionFactory: SchemaToolSessionFactory
+    /// The schema tools' byte budgets; the call budget comes from
+    /// `configuration` and the run's mode.
+    private let baseSchemaToolPolicy: SchemaToolPolicy
     private let databaseInspectionSessionFactory: DatabaseInspectionToolSessionFactory
     private let databaseInspectionPolicy: DatabaseInspectionPolicy
     private let databaseInspectionDatabase: (any DatabaseInspectionQuerying)?
@@ -270,6 +273,7 @@ public final class SchemaToolSQLAgent: SQLGenerator, Sendable {
         transport: any HTTPTransport,
         capabilityResolver: CloudCapabilityResolver,
         sessionFactory: SchemaToolSessionFactory,
+        schemaToolPolicy: SchemaToolPolicy = .cloudAgent,
         databaseInspectionSessionFactory: DatabaseInspectionToolSessionFactory =
             DatabaseInspectionToolSessionFactory(),
         databaseInspectionPolicy: DatabaseInspectionPolicy = .disabled,
@@ -287,6 +291,7 @@ public final class SchemaToolSQLAgent: SQLGenerator, Sendable {
         self.requestBuilder = ChatToolRequestBuilder(profile: profile)
         self.parser = ChatToolParser(profile: profile)
         self.sessionFactory = sessionFactory
+        self.baseSchemaToolPolicy = schemaToolPolicy
         self.databaseInspectionSessionFactory = databaseInspectionSessionFactory
         self.databaseInspectionPolicy = databaseInspectionPolicy
         self.databaseInspectionDatabase = databaseInspectionDatabase
@@ -1019,6 +1024,24 @@ public final class SchemaToolSQLAgent: SQLGenerator, Sendable {
                     )
                 }
 
+                // A session that ran out of budget on an earlier turn stays
+                // out. A model that keeps calling it gets the budget failure,
+                // and with it the inspected-evidence fallback.
+                let exhaustedBeforeBatch = diagnostics.exhaustedToolSessions
+                if toolCalls.contains(where: { call in
+                    Self.toolSessionKind(of: call, hasInspectionSession: inspectionSession != nil)
+                        .map(exhaustedBeforeBatch.contains) ?? false
+                }) {
+                    throw await toolBudgetExhaustedFailure(
+                        question: question,
+                        databaseContext: config.databaseContext,
+                        evidence: evidence,
+                        session: session,
+                        inspectionSession: inspectionSession,
+                        diagnostics: &diagnostics
+                    )
+                }
+
                 messages.append(assistantToolTurn)
                 for call in toolCalls {
                     try Task.checkCancellation()
@@ -1026,6 +1049,17 @@ public final class SchemaToolSQLAgent: SQLGenerator, Sendable {
                     try checkDeadline(deadline)
                     if let unknown = unknownCalls.first(where: { $0.id == call.id }) {
                         messages.append(toolErrorResponse(call: unknown, code: "unknown_tool", message: "Unknown tool."))
+                        continue
+                    }
+                    // An earlier call in this batch used up the session's
+                    // budget. The rest still get one tool message each, so
+                    // the run can go on to a terminal answer.
+                    if let sessionKind = Self.toolSessionKind(
+                        of: call,
+                        hasInspectionSession: inspectionSession != nil
+                    ), diagnostics.exhaustedToolSessions.contains(sessionKind) {
+                        diagnostics.budgetRejectedToolCallCount += 1
+                        messages.append(budgetRejectionResponse(call: call, session: sessionKind))
                         continue
                     }
                     if let interception = Self.redundantSchemaCallInterception(
@@ -1063,41 +1097,43 @@ public final class SchemaToolSQLAgent: SQLGenerator, Sendable {
                             session: session
                         )
                     }
-                    let result = try await invokeToolCall(
-                        call,
-                        schemaSession: session,
-                        inspectionSession: inspectionSession
-                    )
+                    let result: ToolInvocationResult
+                    do {
+                        result = try await invokeToolCall(
+                            call,
+                            schemaSession: session,
+                            inspectionSession: inspectionSession
+                        )
+                    } catch let error as SchemaToolError {
+                        // A session that cannot fit even its own budget error
+                        // throws it instead, and is spent from then on.
+                        diagnostics.exhaustedToolSessions.insert(.schema)
+                        diagnostics.budgetRejectedToolCallCount += 1
+                        messages.append(
+                            toolErrorResponse(call: call, code: error.code.rawValue, message: error.message)
+                        )
+                        continue
+                    } catch let error as DatabaseInspectionError {
+                        diagnostics.exhaustedToolSessions.insert(.inspection)
+                        diagnostics.budgetRejectedToolCallCount += 1
+                        messages.append(
+                            toolErrorResponse(call: call, code: error.code.rawValue, message: error.message)
+                        )
+                        continue
+                    }
                     if case .schema(let schemaResult) = result {
                         evidence.record(schemaResult)
                     }
                     if result.isSessionBudgetExceeded {
-                        diagnostics.appSideRejectionReason = .budgetExhausted
-                        let inspectionTraces = await inspectionSession?.tracesSnapshot() ?? []
-                        let facts = SchemaToolAgentAnswerabilityPolicy.evaluate(
-                            originalQuestion: question,
-                            databaseContext: config.databaseContext,
-                            evidence: evidence.summary(inspectionToolCalls: inspectionTraces),
-                            terminalAction: "clarify",
-                            terminalClarificationQuestion: "Which concrete database decision remains unresolved?"
-                        )
-                        if facts.evidenceSufficientForSQL {
-                            diagnostics.recordClarificationPolicy(facts)
-                            diagnostics.terminalValidationFailureReason = "budgetExhaustedAfterSufficientEvidence"
-                        }
-                        throw await agentFailure(
-                            .schemaToolCallBudgetExhausted,
-                            "Schema or inspection tool call budget exhausted.",
-                            session: session
-                        )
-                    }
-                    if result.isResultBudgetExceeded {
-                        diagnostics.appSideRejectionReason = .budgetExhausted
-                        throw await agentFailure(
-                            .schemaToolByteBudgetExhausted,
-                            "Schema or inspection tool byte budget exhausted.",
-                            session: session
-                        )
+                        // The call that hit the budget gets the session's own
+                        // error; any later call to the session is rejected.
+                        diagnostics.exhaustedToolSessions.insert(result.sessionKind)
+                        diagnostics.budgetRejectedToolCallCount += 1
+                    } else if result.isResultBudgetExceeded {
+                        // Only this result was too large. The session goes
+                        // on, and the error suggests fewer IDs or a lower
+                        // limit.
+                        diagnostics.resultBudgetToolErrorCount += 1
                     }
                     messages.append(try toolResponse(result, providerCallID: call.providerID))
                     if case .schema(let schemaResult) = result, schemaResult.success {
@@ -1112,6 +1148,16 @@ public final class SchemaToolSQLAgent: SQLGenerator, Sendable {
                 }
             }
 
+            if !diagnostics.exhaustedToolSessions.isEmpty {
+                throw await toolBudgetExhaustedFailure(
+                    question: question,
+                    databaseContext: config.databaseContext,
+                    evidence: evidence,
+                    session: session,
+                    inspectionSession: inspectionSession,
+                    diagnostics: &diagnostics
+                )
+            }
             throw await agentFailure(
                 .modelTurnBudgetExhausted,
                 "The schema-tool agent exhausted its model-turn budget.",
@@ -1464,7 +1510,7 @@ public final class SchemaToolSQLAgent: SQLGenerator, Sendable {
     }
 
     private func schemaToolPolicy(for mode: SQLGenerationMode) -> SchemaToolPolicy {
-        var policy = SchemaToolPolicy.cloudAgent
+        var policy = baseSchemaToolPolicy
         policy.maximumCallCount = mode == .repair || mode == .reconstructAfterFailedRepair
             ? configuration.maximumRepairSchemaToolCalls
             : configuration.maximumSchemaToolCalls
@@ -1596,6 +1642,30 @@ public final class SchemaToolSQLAgent: SQLGenerator, Sendable {
                 result.error?.code == .resultBudgetExceeded
             }
         }
+
+        var sessionKind: AgentToolSessionKind {
+            switch self {
+            case .schema:
+                .schema
+            case .inspection:
+                .inspection
+            }
+        }
+    }
+
+    /// The session `call` would run in, or `nil` for the terminal tool and
+    /// unknown tools, which have no budget.
+    private static func toolSessionKind(
+        of call: ChatToolCall,
+        hasInspectionSession: Bool
+    ) -> AgentToolSessionKind? {
+        if SchemaToolName(rawValue: call.name) != nil {
+            return .schema
+        }
+        if DatabaseInspectionToolName(rawValue: call.name) != nil, hasInspectionSession {
+            return .inspection
+        }
+        return nil
     }
 
     private func invokeToolCall(
@@ -1703,6 +1773,60 @@ public final class SchemaToolSQLAgent: SQLGenerator, Sendable {
         messages.append(contentsOf: calls.map { call in
             toolErrorResponse(call: call, code: code, message: message)
         })
+    }
+
+    /// The answer to a call whose session ran out of budget earlier in the
+    /// batch, with the session's own error code.
+    private func budgetRejectionResponse(
+        call: ChatToolCall,
+        session kind: AgentToolSessionKind
+    ) -> ChatToolMessage {
+        switch kind {
+        case .schema:
+            toolErrorResponse(
+                call: call,
+                code: SchemaToolErrorCode.sessionBudgetExceeded.rawValue,
+                message: "Schema tool call budget exhausted. Answer with \(Self.terminalToolName) using the schema already inspected."
+            )
+        case .inspection:
+            toolErrorResponse(
+                call: call,
+                code: DatabaseInspectionErrorCode.sessionBudgetExceeded.rawValue,
+                message: "Database inspection call budget exhausted. Continue without more inspection calls."
+            )
+        }
+    }
+
+    /// The failure for a run whose schema or inspection session ran out of
+    /// budget. The budget rejection and its evidence facts are recorded only
+    /// here, when the failure is thrown, so a run that recovers after an
+    /// over-budget batch keeps clean diagnostics.
+    private func toolBudgetExhaustedFailure(
+        question: String,
+        databaseContext: String,
+        evidence: SchemaToolEvidenceLedger,
+        session: SchemaToolSession,
+        inspectionSession: DatabaseInspectionToolSession?,
+        diagnostics: inout SchemaToolAgentDiagnosticState
+    ) async -> SchemaToolAgentFailure {
+        diagnostics.appSideRejectionReason = .budgetExhausted
+        let inspectionTraces = await inspectionSession?.tracesSnapshot() ?? []
+        let facts = SchemaToolAgentAnswerabilityPolicy.evaluate(
+            originalQuestion: question,
+            databaseContext: databaseContext,
+            evidence: evidence.summary(inspectionToolCalls: inspectionTraces),
+            terminalAction: "clarify",
+            terminalClarificationQuestion: "Which concrete database decision remains unresolved?"
+        )
+        if facts.evidenceSufficientForSQL {
+            diagnostics.recordClarificationPolicy(facts)
+            diagnostics.terminalValidationFailureReason = "budgetExhaustedAfterSufficientEvidence"
+        }
+        return await agentFailure(
+            .schemaToolCallBudgetExhausted,
+            "Schema or inspection tool call budget exhausted.",
+            session: session
+        )
     }
 
     private func correction(_ text: String) -> ChatToolMessage {
@@ -2319,6 +2443,12 @@ extension SchemaToolSQLAgent {
     }
 }
 
+/// The tool session a call runs in. Each has its own call and byte budget.
+private enum AgentToolSessionKind: Hashable {
+    case schema
+    case inspection
+}
+
 private struct SchemaToolAgentDiagnosticState {
     var logicalTurnCount: Int?
     var terminalToolSeen = false
@@ -2354,6 +2484,9 @@ private struct SchemaToolAgentDiagnosticState {
     var planConsistencyCorrectionSucceeded = false
     var providerToolCallIDReuseCount = 0
     var terminalIgnoredArgumentKeyCount = 0
+    var budgetRejectedToolCallCount = 0
+    var resultBudgetToolErrorCount = 0
+    var exhaustedToolSessions: Set<AgentToolSessionKind> = []
 
     mutating func recordFailureCategory(_ category: SchemaToolAgentFailure.Category) {
         if category == .wallClockTimeout {
@@ -2512,7 +2645,15 @@ private struct SchemaToolAgentDiagnosticState {
                 : nil,
             terminalIgnoredArgumentKeyCount: terminalIgnoredArgumentKeyCount > 0
                 ? terminalIgnoredArgumentKeyCount
-                : nil
+                : nil,
+            budgetRejectedToolCallCount: budgetRejectedToolCallCount > 0
+                ? budgetRejectedToolCallCount
+                : nil,
+            resultBudgetToolErrorCount: resultBudgetToolErrorCount > 0
+                ? resultBudgetToolErrorCount
+                : nil,
+            toolBudgetExhausted: exhaustedToolSessions.contains(.schema) ? true : nil,
+            inspectionBudgetExhausted: exhaustedToolSessions.contains(.inspection) ? true : nil
         )
     }
 }

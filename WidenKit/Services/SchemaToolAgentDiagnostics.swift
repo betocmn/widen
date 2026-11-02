@@ -79,6 +79,20 @@ public struct SchemaToolAgentDiagnostics: Codable, Equatable, Sendable {
     /// of the wrong type, summed over the run's terminal calls. Only the
     /// count is kept, never the key names. `nil` when nothing was ignored.
     public var terminalIgnoredArgumentKeyCount: Int?
+    /// Tool calls answered with a session-budget error instead of running,
+    /// including the calls left over in a batch after the budget ran out.
+    /// `nil` when every call fit.
+    public var budgetRejectedToolCallCount: Int?
+    /// Tool calls whose single result was too large for the per-call byte
+    /// budget. The session goes on, so the model can retry with fewer IDs.
+    /// `nil` when no result was too large.
+    public var resultBudgetToolErrorCount: Int?
+    /// `true` once the schema tool session ran out of calls or bytes.
+    /// `nil` when it never did.
+    public var toolBudgetExhausted: Bool?
+    /// `true` once the database inspection session ran out of calls or
+    /// bytes. `nil` when it never did, or the run had no inspection.
+    public var inspectionBudgetExhausted: Bool?
 
     public init(
         logicalTurnCount: Int? = nil,
@@ -115,7 +129,11 @@ public struct SchemaToolAgentDiagnostics: Codable, Equatable, Sendable {
         planConsistencyCorrectionAttempted: Bool = false,
         planConsistencyCorrectionSucceeded: Bool = false,
         providerToolCallIDReuseCount: Int? = nil,
-        terminalIgnoredArgumentKeyCount: Int? = nil
+        terminalIgnoredArgumentKeyCount: Int? = nil,
+        budgetRejectedToolCallCount: Int? = nil,
+        resultBudgetToolErrorCount: Int? = nil,
+        toolBudgetExhausted: Bool? = nil,
+        inspectionBudgetExhausted: Bool? = nil
     ) {
         self.logicalTurnCount = logicalTurnCount
         self.terminalToolSeen = terminalToolSeen
@@ -152,6 +170,10 @@ public struct SchemaToolAgentDiagnostics: Codable, Equatable, Sendable {
         self.planConsistencyCorrectionSucceeded = planConsistencyCorrectionSucceeded
         self.providerToolCallIDReuseCount = providerToolCallIDReuseCount
         self.terminalIgnoredArgumentKeyCount = terminalIgnoredArgumentKeyCount
+        self.budgetRejectedToolCallCount = budgetRejectedToolCallCount
+        self.resultBudgetToolErrorCount = resultBudgetToolErrorCount
+        self.toolBudgetExhausted = toolBudgetExhausted
+        self.inspectionBudgetExhausted = inspectionBudgetExhausted
     }
 
     private enum CodingKeys: String, CodingKey {
@@ -190,6 +212,10 @@ public struct SchemaToolAgentDiagnostics: Codable, Equatable, Sendable {
         case planConsistencyCorrectionSucceeded
         case providerToolCallIDReuseCount
         case terminalIgnoredArgumentKeyCount
+        case budgetRejectedToolCallCount
+        case resultBudgetToolErrorCount
+        case toolBudgetExhausted
+        case inspectionBudgetExhausted
     }
 
     public init(from decoder: any Decoder) throws {
@@ -321,6 +347,22 @@ public struct SchemaToolAgentDiagnostics: Codable, Equatable, Sendable {
         terminalIgnoredArgumentKeyCount = try? container.decodeIfPresent(
             Int.self,
             forKey: .terminalIgnoredArgumentKeyCount
+        )
+        budgetRejectedToolCallCount = try? container.decodeIfPresent(
+            Int.self,
+            forKey: .budgetRejectedToolCallCount
+        )
+        resultBudgetToolErrorCount = try? container.decodeIfPresent(
+            Int.self,
+            forKey: .resultBudgetToolErrorCount
+        )
+        toolBudgetExhausted = try? container.decodeIfPresent(
+            Bool.self,
+            forKey: .toolBudgetExhausted
+        )
+        inspectionBudgetExhausted = try? container.decodeIfPresent(
+            Bool.self,
+            forKey: .inspectionBudgetExhausted
         )
     }
 }
