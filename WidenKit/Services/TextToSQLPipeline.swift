@@ -106,10 +106,19 @@ public struct TextToSQLGroundingJudgeDivergence: Equatable, Sendable {
     public var kind: Kind
     /// The clarification `enriched` asks without the judgment.
     public var lexicalClarificationQuestion: String
+    /// For a release, the release rules the kept SQL breaks when checked
+    /// again: empty unless the decision rule has a bug. Always empty for a
+    /// re-aim.
+    public var releaseViolations: [GroundingJudgeReleaseViolation]
 
-    public init(kind: Kind, lexicalClarificationQuestion: String) {
+    public init(
+        kind: Kind,
+        lexicalClarificationQuestion: String,
+        releaseViolations: [GroundingJudgeReleaseViolation] = []
+    ) {
         self.kind = kind
         self.lexicalClarificationQuestion = lexicalClarificationQuestion
+        self.releaseViolations = releaseViolations
     }
 }
 
@@ -1712,7 +1721,14 @@ public struct TextToSQLPipeline: TextToSQLRunning {
         if !postprocessed.needsClarification {
             return TextToSQLGroundingJudgeDivergence(
                 kind: .released,
-                lexicalClarificationQuestion: lexicalQuestion
+                lexicalClarificationQuestion: lexicalQuestion,
+                releaseViolations: GeneratedSQLPostprocessor.groundingJudgeReleaseViolations(
+                    generated,
+                    question: question,
+                    schema: request.schema,
+                    databaseContext: request.config.databaseContext,
+                    confirmedSemanticBindings: confirmedSemanticBindings
+                )
             )
         }
         let judgedQuestion = postprocessed.clarificationQuestion?

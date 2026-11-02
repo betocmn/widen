@@ -3316,6 +3316,157 @@ struct SQLSchemaValidatorTests {
         #expect(postprocessorOutcome(of: reAimed) == "reAimed:unreleasableTerm")
     }
 
+    @Test func releaseViolationsRecheckEveryRule() {
+        func violations(
+            _ sql: String,
+            question: String,
+            schema: DatabaseSchema,
+            databaseContext: String = "",
+            metadata: CloudGenerationMetadata
+        ) -> [GroundingJudgeReleaseViolation] {
+            GeneratedSQLPostprocessor.groundingJudgeReleaseViolations(
+                sqlGeneration(sql, backendMetadata: metadata),
+                question: question,
+                schema: schema,
+                databaseContext: databaseContext
+            )
+        }
+        let users = makeUsersOrdersSchema()
+        let released = judgedMetadata(
+            sql: Self.writeSQL,
+            question: Self.writeQuestion,
+            schema: users,
+            describedTableIDs: ["public.users"],
+            terms: Self.writeTerms
+        )
+
+        // A release `enriched` makes breaks none of them.
+        let kept = GeneratedSQLPostprocessor.enriched(
+            sqlGeneration(Self.writeSQL, backendMetadata: released),
+            question: Self.writeQuestion,
+            schema: users,
+            databaseContext: ""
+        )
+        #expect(!kept.needsClarification)
+        #expect(
+            GeneratedSQLPostprocessor.groundingJudgeReleaseViolations(
+                kept,
+                question: Self.writeQuestion,
+                schema: users,
+                databaseContext: ""
+            ).isEmpty
+        )
+
+        // Each rule, broken on its own.
+        #expect(
+            violations(Self.writeSQL, question: "Write a query that lists user emails please", schema: users, metadata: released)
+                == [.digestMismatch]
+        )
+        #expect(
+            violations(
+                Self.writeSQL,
+                question: Self.writeQuestion,
+                schema: users,
+                metadata: judgedMetadata(
+                    sql: Self.writeSQL,
+                    question: Self.writeQuestion,
+                    schema: users,
+                    describedTableIDs: ["public.orders"],
+                    terms: Self.writeTerms
+                )
+            ) == [.undescribedTables]
+        )
+        let deleteSQL = "DELETE FROM public.users WHERE id = 7"
+        let deleteQuestion = "Write a query that removes the user with id 7"
+        #expect(
+            violations(
+                deleteSQL,
+                question: deleteQuestion,
+                schema: users,
+                metadata: judgedMetadata(
+                    sql: deleteSQL,
+                    question: deleteQuestion,
+                    schema: users,
+                    describedTableIDs: ["public.users"],
+                    terms: Self.writeTerms
+                )
+            ) == [.write]
+        )
+        let activeSQL = "SELECT COUNT(*) FROM public.users WHERE status = 'active'"
+        let activeQuestion = "how many active users do we have?"
+        #expect(
+            violations(
+                activeSQL,
+                question: activeQuestion,
+                schema: makeUsersUnconstrainedStatusSchema(),
+                metadata: judgedMetadata(
+                    sql: activeSQL,
+                    question: activeQuestion,
+                    schema: makeUsersUnconstrainedStatusSchema(),
+                    describedTableIDs: ["public.users"],
+                    terms: [judged("active", "schema_match", evidence: "public.users.status")]
+                )
+            ) == [.literalRejected]
+        )
+        let bestSQL = """
+            SELECT c.id, c.email, SUM(o.total_cents) AS paid_revenue_cents
+            FROM public.customers AS c
+            JOIN public.orders AS o ON o.customer_id = c.id
+            WHERE o.status = 'paid'
+            GROUP BY c.id, c.email
+            ORDER BY paid_revenue_cents DESC
+            LIMIT 10
+            """
+        let bestQuestion = "Who are our best customers?"
+        #expect(
+            violations(
+                bestSQL,
+                question: bestQuestion,
+                schema: makeCustomerRevenueSchema(),
+                metadata: judgedMetadata(
+                    sql: bestSQL,
+                    question: bestQuestion,
+                    schema: makeCustomerRevenueSchema(),
+                    describedTableIDs: ["public.customers", "public.orders"],
+                    terms: [judged("best", "query_operation")]
+                )
+            ) == [.mustClarify]
+        )
+        let anchoredSQL = """
+            SELECT t.name, t.slug, COUNT(*) AS wins
+            FROM public.preseason_match_evaluation AS e
+            JOIN public.preseason_tool AS t ON e.winner_id = t.id
+            WHERE e.winner_id IS NOT NULL
+              AND e."createdAt" >= NOW() - INTERVAL '14 days'
+            GROUP BY t.name, t.slug
+            ORDER BY COUNT(*) DESC
+            """
+        let anchoredQuestion = "Which tools have the most wins in the two weeks ending 2026-06-24 12:00 UTC?"
+        #expect(
+            violations(
+                anchoredSQL,
+                question: anchoredQuestion,
+                schema: makePreseasonWinnerSchema(),
+                metadata: judgedMetadata(
+                    sql: anchoredSQL,
+                    question: anchoredQuestion,
+                    schema: makePreseasonWinnerSchema(),
+                    describedTableIDs: ["public.preseason_match_evaluation", "public.preseason_tool"],
+                    terms: [judged("wins", "query_operation")]
+                )
+            ).contains(.anchoredWindow)
+        )
+        // Without diagnostics no judgment is bound and no table described.
+        #expect(
+            GeneratedSQLPostprocessor.groundingJudgeReleaseViolations(
+                sqlGeneration(Self.writeSQL),
+                question: Self.writeQuestion,
+                schema: users,
+                databaseContext: ""
+            ) == [.digestMismatch, .undescribedTables]
+        )
+    }
+
     private func makeUsersOrdersSchema() -> DatabaseSchema {
         DatabaseSchema(
             schemas: [SchemaInfo(name: "public")],
