@@ -28,12 +28,6 @@ validation or database error being repaired. Database error messages from the
 session are sent so Particle-1 can fix failed queries; they can quote a value
 from your data, and other fields can include literals you typed.
 
-When Widen's word check cannot match a word in your question to the schema,
-Widen may ask Particle-1 whether that word needs a definition before it asks
-you. That request sends the question, the unmatched words, saved database
-context, remembered definitions, and schema metadata for the tables involved;
-it never sends drafted SQL or data values.
-
 Each connection has its own controls under Advanced Privacy in
 Settings > Databases:
 

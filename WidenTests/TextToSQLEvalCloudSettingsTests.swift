@@ -221,7 +221,7 @@ struct TextToSQLEvalCloudSettingsTests {
                 "maximumCriticHTTPAttempts": "2",
                 "criticMinimumRemainingSeconds": "30",
                 "criticRevisionMinimumRemainingSeconds": "60",
-                "groundingJudgeMode": "enabled",
+                "groundingJudgeMode": "disabled",
                 "maximumGroundingJudgeHTTPAttempts": "2",
                 "groundingJudgeMinimumRemainingSeconds": "15",
             ]
