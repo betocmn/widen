@@ -37,8 +37,9 @@ fixed; later commits add evidence and records, not changes to them.
   lands after Stage 2 and is kept only if Stage 3 passes.
 * **Not approved:** plan-consistency enforcement by default (it stays
   `diagnosticsOnly`) and k-candidate voting.
-* **PR 59's "six-call limit is unchanged"** decision is to be superseded by
-  the extra-calls layer if Stage 3 keeps it.
+* **PR 59's "six-call limit is unchanged"** decision is superseded: the
+  budget layer kept by Stage 4 raises the agent to 12 schema calls and 12
+  turns.
 * **Gate version 0.2.0.** Always pass `RELEASE_VERSION=0.2.0`; the Makefile
   otherwise defaults to the `Info.plist` version, 0.1.1. `docs/evals/0.1.0.md`
   and `docs/evals/0.1.0-triage.md` stay as GPT-5.5 history.
@@ -504,6 +505,42 @@ budget three times in Stage 2 and now clarified correctly three times (one
 via a forced final answer). The critic recorded 5 clarify verdicts, none
 trusted, and never failed open.
 
+#### Stage 4
+
+Recorded 2026-11-02. **The budget layer passed every criterion and is kept**
+(the twelve candidate commits, critic off). Its reports are now
+`docs/evals/0.2.0.md` and `docs/evals/0.2.0-triage.md`, and this run is the
+comparator for the next experiment.
+
+`make eval-release-triage RELEASE_VERSION=0.2.0 MAX_CLOUD_COST_USD=0.50` at
+commit `c0b0c4b`:
+
+| Criterion | Stage 2 | Stage 4 | Result |
+| --- | --- | --- | --- |
+| K1 valid (60/60, identity, tools, candidate-only diff, < 72 h) | - | 60/60, 60/60, 60/60 | pass |
+| K2 end-to-end semantic ≥ Stage 2 − 2 | 16/60 | 19/60 | pass |
+| K3 no case loses ≥ 2 of 3 passes | - | none did | pass |
+| K4 safety / schema | 14/14 / 14/14 | 15/15 / 15/15 | pass |
+| K5 clarification decisions | 7/12 | 11/12 | pass |
+| K6 critic invariant violations | - | 0 (critic off) | pass |
+| K7 transport | 60/60 | 60/60 | pass |
+| K8 repeated/no-progress repairs | 0 | 0 | pass |
+| K9 eval / internal agent timeouts | 0 / 0 | 0 / 0 | pass |
+| K10 cost per result (≤ 3×) | $0.00235 | $0.00265 (1.13×) | pass |
+| K11 P95 latency (≤ 45.5 s) | 15.5 s | 11.7 s | pass |
+| K12 critic calls / forced requests rejected | - | 0 / 0 | pass |
+
+Per-case changes in end-to-end passes (of 3): `support.important-cluster`
+1 → 3, `saas.healthy-accounts` 0 → 2, `commerce.recent-orders` 2 → 3,
+`preseason.verified-tools` 3 → 2 and `preseason.top-wins-defined` 1 → 0.
+Tool-budget failures fell from 4 to 1, structured parsing rose from 56/60 to
+59/60, and three forced final answers were attempted (two succeeded, none
+rejected). The gate still fails: end-to-end semantic passes are 19/60 and
+clarification decisions 11/12. That matches the GPT-5.5 comparator (20/60,
+11/12) at about one twenty-fourth of its cost ($0.159 against $3.838). The
+grounding postprocessor still turns most correct SQL into clarifications
+(the largest triage bucket), which is the next experiment's target.
+
 #### Spend ledger
 
 Record each command after it finishes: the probe's estimated cost from its
@@ -522,7 +559,7 @@ column after each command and record the larger figure.
 | 1 | `make eval-db-cloud-agent` (medium) | $0.03 | $0.0115 | $0.0672 |
 | 2 | `make eval-release-triage` | $1.40 | $0.1409 | $0.2081 |
 | 3 | `make eval-release-triage` | $2.25 | $0.2821 | $0.4902 |
-| 4 | `make eval-release-triage` | $0.50 | - | - |
+| 4 | `make eval-release-triage` | $0.50 | $0.1592 | $0.6494 |
 
 ## Completed and remaining work
 
