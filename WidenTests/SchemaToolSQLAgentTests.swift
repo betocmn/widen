@@ -2646,62 +2646,6 @@ struct SchemaToolSQLAgentTests {
         }
     }
 
-    @Test(arguments: [
-        (
-            "What is our most important feedback cluster?",
-            #"I found public.feedback_item.cluster_id. Which of these should define "important"?"#
-        ),
-        // Every word is grounded in the described tables, so the question
-        // names the first one the grounder treats as meaningful.
-        (
-            "Show the feedback cluster",
-            #"I found public.feedback_item.cluster_id. Which of these should define "feedback"?"#
-        ),
-    ])
-    func fallbackMetricClarificationNamesAQuestionWord(
-        question: String,
-        expectedClarification: String
-    ) async throws {
-        let schema = Self.makeFeedbackClusterSchema()
-        let chatTransport = ScriptedTransport { request, index in
-            switch index {
-            case 1:
-                return Self.assistantToolCalls([
-                    Self.toolCall(id: "search-feedback-cluster", name: "search_schema", arguments: [
-                        "query": "feedback item cluster",
-                        "limit": 4,
-                    ]),
-                ])
-            case 2:
-                let items = try Self.tableHandle(named: #""public"."feedback_item""#, in: request)
-                let clusters = try Self.tableHandle(named: #""public"."feedback_cluster""#, in: request)
-                return Self.assistantToolCalls([
-                    Self.toolCall(id: "describe-feedback-cluster", name: "describe_tables", arguments: [
-                        "table_ids": [items, clusters],
-                    ]),
-                ])
-            case 3:
-                return Self.assistantText("I need to ask which clusters matter.")
-            case 4:
-                return Self.assistantText("Still no terminal call.")
-            default:
-                throw URLError(.badServerResponse)
-            }
-        }
-        let agent = makeAgent(schema: schema, chatTransport: chatTransport)
-
-        let result = try await agent.generateSQL(
-            question: question,
-            schema: schema,
-            context: SQLGenerationContext(),
-            config: SQLGenerationConfig()
-        )
-
-        #expect(result.needsClarification)
-        #expect(result.clarificationQuestion == expectedClarification)
-        #expect(result.backendMetadata?.agentTerminalOutcome == "clarify_fallback")
-    }
-
     @Test func preseasonTopWinsDefinedCanReturnValidatedSQLFromDatabaseContext() async throws {
         let schema = Self.makePreseasonSchema()
         let sql = """
@@ -8175,34 +8119,6 @@ struct SchemaToolSQLAgentTests {
                     columns: [
                         column("orders", "id", type: "integer", ordinal: 1),
                         column("orders", "total_cents", type: "integer", ordinal: 2),
-                    ]
-                ),
-            ]
-        )
-    }
-
-    private static func makeFeedbackClusterSchema() -> DatabaseSchema {
-        DatabaseSchema(
-            schemas: [SchemaInfo(name: "public")],
-            tables: [
-                TableInfo(
-                    schema: "public",
-                    name: "feedback_cluster",
-                    type: .baseTable,
-                    columns: [
-                        column("feedback_cluster", "id", type: "integer", ordinal: 1),
-                        column("feedback_cluster", "name", type: "text", ordinal: 2),
-                        column("feedback_cluster", "priority", type: "integer", ordinal: 3),
-                    ]
-                ),
-                TableInfo(
-                    schema: "public",
-                    name: "feedback_item",
-                    type: .baseTable,
-                    columns: [
-                        column("feedback_item", "id", type: "integer", ordinal: 1),
-                        column("feedback_item", "cluster_id", type: "integer", ordinal: 2),
-                        column("feedback_item", "body", type: "text", ordinal: 3),
                     ]
                 ),
             ]

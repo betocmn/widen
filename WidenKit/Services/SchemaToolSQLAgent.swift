@@ -925,17 +925,14 @@ public final class SchemaToolSQLAgent: SQLGenerator, Sendable {
                         if configuration.clarificationCorrectionMode
                             == .correctOverClarificationExperimental,
                             policyDecision.decision == .genericClarification,
-                            let fallbackQuestion = evidence.fallbackClarificationQuestions(
-                                for: question,
-                                databaseContext: databaseContext,
-                                confirmedSemanticBindings: context.confirmedSemanticBindings
-                            ).first(where: {
-                                !SchemaToolAgentClarificationPolicy.databaseContextResolvesClarification(
-                                    databaseContext,
-                                    question: question,
-                                    clarification: $0
-                                )
-                            })
+                            let fallbackQuestion = evidence.fallbackClarificationQuestions(for: question)
+                                .first(where: {
+                                    !SchemaToolAgentClarificationPolicy.databaseContextResolvesClarification(
+                                        databaseContext,
+                                        question: question,
+                                        clarification: $0
+                                    )
+                                })
                         {
                             finalTerminalResult = TerminalResult(
                                 action: .clarify,
@@ -1073,11 +1070,7 @@ public final class SchemaToolSQLAgent: SQLGenerator, Sendable {
                                     )
                                 }
                                 let clarificationQuestion = intentCoverage.clarificationQuestion
-                                    ?? evidence.fallbackClarificationQuestion(
-                                        for: question,
-                                        databaseContext: config.databaseContext,
-                                        confirmedSemanticBindings: context.confirmedSemanticBindings
-                                    )
+                                    ?? evidence.fallbackClarificationQuestion(for: question)
                                     ?? "Which concrete database decision remains unresolved?"
                                 let finalTerminalResult = TerminalResult(
                                     action: .clarify,
@@ -1806,11 +1799,7 @@ public final class SchemaToolSQLAgent: SQLGenerator, Sendable {
         diagnostics: SchemaToolAgentDiagnosticState
     ) async throws -> SQLGenerationResult? {
         guard Self.canFallbackToInspectedClarification(failure.category),
-            let fallbackQuestion = evidence.fallbackClarificationQuestions(
-                for: question,
-                databaseContext: databaseContext,
-                confirmedSemanticBindings: context.confirmedSemanticBindings
-            ).first(where: {
+            let fallbackQuestion = evidence.fallbackClarificationQuestions(for: question).first(where: {
                 !SchemaToolAgentClarificationPolicy.databaseContextResolvesClarification(
                     databaseContext,
                     question: question,
@@ -3725,23 +3714,11 @@ private struct SchemaToolEvidenceLedger {
         )
     }
 
-    func fallbackClarificationQuestion(
-        for question: String,
-        databaseContext: String,
-        confirmedSemanticBindings: [String]
-    ) -> String? {
-        fallbackClarificationQuestions(
-            for: question,
-            databaseContext: databaseContext,
-            confirmedSemanticBindings: confirmedSemanticBindings
-        ).first
+    func fallbackClarificationQuestion(for question: String) -> String? {
+        fallbackClarificationQuestions(for: question).first
     }
 
-    func fallbackClarificationQuestions(
-        for question: String,
-        databaseContext: String,
-        confirmedSemanticBindings: [String]
-    ) -> [String] {
+    func fallbackClarificationQuestions(for question: String) -> [String] {
         guard hasSuccessfulSearch, !describedTables.isEmpty else { return [] }
         var questions: [String] = []
         if let winner = winnerAmbiguityQuestion(for: question) {
@@ -3753,11 +3730,7 @@ private struct SchemaToolEvidenceLedger {
         if let relationship = relationshipAmbiguityQuestion(for: question) {
             questions.append(relationship)
         }
-        if let metric = metricAmbiguityQuestion(
-            for: question,
-            databaseContext: databaseContext,
-            confirmedSemanticBindings: confirmedSemanticBindings
-        ) {
+        if let metric = metricAmbiguityQuestion(for: question) {
             questions.append(metric)
         }
         return questions
@@ -3803,15 +3776,12 @@ private struct SchemaToolEvidenceLedger {
         return "I found these paths: \(paths). Which relationship should Widen use?"
     }
 
-    private func metricAmbiguityQuestion(
-        for question: String,
-        databaseContext: String,
-        confirmedSemanticBindings: [String]
-    ) -> String? {
+    private func metricAmbiguityQuestion(for question: String) -> String? {
         let ignoredTerms: Set<String> = ["show", "see", "just", "most", "frequent"]
         let candidates = Self.normalizedTokens(in: question).filter {
             !ignoredTerms.contains($0) && $0.count > 3
         }
+        guard let term = candidates.first else { return nil }
         let columns = exposedColumns
             .filter { column in
                 let lower = Self.lastSQLPathComponent(column)?.lowercased() ?? column.lowercased()
@@ -3819,35 +3789,8 @@ private struct SchemaToolEvidenceLedger {
             }
             .sorted()
             .prefix(4)
-        guard !columns.isEmpty,
-            let term = undefinedQuestionTerm(
-                in: question,
-                databaseContext: databaseContext,
-                confirmedSemanticBindings: confirmedSemanticBindings
-            )
-        else { return nil }
-        return "I found \(columns.joined(separator: ", ")). Which of these should define \"\(term)\"?"
-    }
-
-    /// The word the clarification asks about: the first question word the
-    /// postprocessor's grounder cannot match to the described tables, the
-    /// database context or confirmed definitions, else the first word it
-    /// treats as meaningful.
-    private func undefinedQuestionTerm(
-        in question: String,
-        databaseContext: String,
-        confirmedSemanticBindings: [String]
-    ) -> String? {
-        let grounding = GeneratedSQLPostprocessor.groundingEvaluation(
-            question: question,
-            sql: "",
-            referencedTables: describedTables.sorted(),
-            schema: schema,
-            databaseContext: databaseContext,
-            confirmedSemanticBindings: confirmedSemanticBindings
-        )
-        return grounding.concepts.first(where: { $0.state == .unsupported })?.term
-            ?? GeneratedSQLPostprocessor.meaningfulRequestWords(question).first
+        guard !columns.isEmpty else { return nil }
+        return "I found \(columns.joined(separator: ", ")). Which should define \(term)?"
     }
 
     private func ownerCandidateSummary(for validation: SQLSchemaValidationResult) -> String {
