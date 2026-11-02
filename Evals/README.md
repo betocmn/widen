@@ -32,7 +32,6 @@ make eval-db-cloud         # plus seeded Postgres semantic grading
 make eval-db-cloud-agent CASES="<case-id> <case-id>"
 make eval-db-cloud-agent-case CASE=preseason.top-wins-defined
 make eval-db-case CASE=preseason.top-wins-defined
-make eval-grounding-probe GROUNDING_JUDGE=on   # held-out grounding probe
 make eval-release          # release gate (see Release Gate)
 make eval-release-triage   # release gate plus redacted failure triage
 make eval-release-resume RESUME=.eval-results/<timestamp>
@@ -47,8 +46,8 @@ Every target except `eval-retrieval*`, `eval-schema-tools` and
 `eval-inspection-tools` sends paid requests. `MODEL` defaults to `particle-1`,
 and `CLOUD_AGENT` to `tools`. `MODEL=openai/gpt-5.5` runs an OpenRouter
 comparison on the non-gate targets; the release-gate targets refuse it (see
-Release Gate). The `eval-smoke`, `eval-cloud*`, `eval-case`, `eval-db-*` and
-`eval-grounding-probe` targets also pass `CASE`, `CASES`, `REPEAT`, `CASE_TIMEOUT_SECONDS`, `OUTPUT`,
+Release Gate). The `eval-smoke`, `eval-cloud*`, `eval-case` and `eval-db-*`
+targets also pass `CASE`, `CASES`, `REPEAT`, `CASE_TIMEOUT_SECONDS`, `OUTPUT`,
 `FAIL_UNDER`, `REASONING_EFFORT`, `GROUNDING_JUDGE` and `MAX_CLOUD_COST_USD`
 through to WidenEval. The focused `eval-release-preseason`,
 `eval-release-overclarification` and `eval-release-sql-shape` targets rerun
@@ -257,13 +256,6 @@ quality. Results without a divergence are their own off arm. The
 `groundingJudgeOffArm*` fields hold the paired values, never the clarification
 or any SQL, and summaries report the judge's counts and both arms as ungated
 rows.
-
-`make eval-grounding-probe` runs `Evals/suites/grounding-probe-v1.json` through
-the schema-tool agent with seeded Postgres semantic grading. The suite is a
-held-out probe for the grounding judge: new questions over the existing
-fixtures, half of them ambiguous where the fixture schema defines nothing, and
-half answerable but with words the lexical grounding pass flags. It is not a
-gate and writes no release docs.
 
 ## Release Gate
 

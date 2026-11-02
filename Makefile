@@ -78,7 +78,7 @@ endif
 REQUIRE_PINNED_MODEL = @test "$(MODEL)" = "$(PINNED_MODEL)" || test "$(ALLOW_MODEL_OVERRIDE)" = "1" || { echo "error: release gate requires MODEL=$(PINNED_MODEL) (Particle-1) but got MODEL=$(MODEL); set ALLOW_MODEL_OVERRIDE=1 to run an engineering comparison" >&2; exit 1; }
 MODEL_OVERRIDE_ARGS = $(if $(filter 1,$(ALLOW_MODEL_OVERRIDE)),--allow-model-override,)
 
-.PHONY: project build test test-db eval-build eval-cloud eval-cloud-agent eval-case eval-cloud-agent-case eval-retrieval eval-retrieval-case eval-schema-tools eval-inspection-tools eval-db-cloud eval-db-cloud-agent eval-db-cloud-agent-case eval-release eval-release-triage eval-release-preseason eval-release-overclarification eval-release-sql-shape eval-release-resume eval-db-case eval-smoke eval-provider-probe eval-grounding-probe setup run run-conductor release release-mac xcode clean
+.PHONY: project build test test-db eval-build eval-cloud eval-cloud-agent eval-case eval-cloud-agent-case eval-retrieval eval-retrieval-case eval-schema-tools eval-inspection-tools eval-db-cloud eval-db-cloud-agent eval-db-cloud-agent-case eval-release eval-release-triage eval-release-preseason eval-release-overclarification eval-release-sql-shape eval-release-resume eval-db-case eval-smoke eval-provider-probe setup run run-conductor release release-mac xcode clean
 
 ## Regenerate Widen.xcodeproj from project.yml
 project:
@@ -234,13 +234,6 @@ eval-db-case: eval-build
 	@test -n "$(CASE)" || (echo "error: CASE is required" >&2; exit 1)
 	@set -a; if [ -f .env.eval.local ]; then . ./.env.eval.local; fi; set +a; \
 	$(EVAL) --model "$(MODEL)" --semantic-db $(EVAL_ARGS)
-
-## Run the held-out grounding probe suite with seeded Postgres semantic grading
-## through the schema-tool agent. Not a gate: GROUNDING_JUDGE=on|off, REPEAT,
-## MAX_CLOUD_COST_USD and OUTPUT pass through like the other eval targets.
-eval-grounding-probe: eval-build
-	@set -a; if [ -f .env.eval.local ]; then . ./.env.eval.local; fi; set +a; \
-	$(EVAL) --model "$(MODEL)" --cloud-agent tools --suite Evals/suites/grounding-probe-v1.json --semantic-db $(filter-out --suite Evals/suites/text-to-sql-v1.json,$(EVAL_ARGS))
 
 ## Build and launch the app
 run: build
