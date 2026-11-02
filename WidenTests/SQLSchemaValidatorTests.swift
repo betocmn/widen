@@ -3274,6 +3274,48 @@ struct SQLSchemaValidatorTests {
         }
     }
 
+    @Test func selfRunningCallersNeverKeepJudgedSQL() {
+        let schema = makeUsersOrdersSchema()
+        let lexical = GeneratedSQLPostprocessor.enriched(
+            sqlGeneration(Self.writeSQL),
+            question: Self.writeQuestion,
+            schema: schema,
+            databaseContext: ""
+        )
+        func enriched(_ terms: [SchemaToolAgentGroundingJudgedTerm]) -> SQLGenerationResult {
+            GeneratedSQLPostprocessor.enriched(
+                sqlGeneration(
+                    Self.writeSQL,
+                    backendMetadata: judgedMetadata(
+                        sql: Self.writeSQL,
+                        question: Self.writeQuestion,
+                        schema: schema,
+                        describedTableIDs: ["public.users"],
+                        terms: terms
+                    )
+                ),
+                question: Self.writeQuestion,
+                schema: schema,
+                databaseContext: "",
+                allowGroundingJudgeRelease: false
+            )
+        }
+
+        // A judgment that would keep the SQL keeps the lexical question.
+        let kept = enriched(Self.writeTerms)
+        #expect(kept.needsClarification)
+        #expect(kept.sql.isEmpty)
+        #expect(kept.clarificationQuestion == lexical.clarificationQuestion)
+        #expect(kept.pendingClarification?.concept.term == "write")
+        #expect(postprocessorOutcome(of: kept) == "lexical:releaseNotAllowed")
+
+        // It can still point the clarification at another word.
+        let reAimed = enriched([judged("write", "request_wording"), judged("query", "unsupported", verified: false)])
+        #expect(reAimed.needsClarification)
+        #expect(reAimed.pendingClarification?.concept.term == "query")
+        #expect(postprocessorOutcome(of: reAimed) == "reAimed:unreleasableTerm")
+    }
+
     private func makeUsersOrdersSchema() -> DatabaseSchema {
         DatabaseSchema(
             schemas: [SchemaInfo(name: "public")],
