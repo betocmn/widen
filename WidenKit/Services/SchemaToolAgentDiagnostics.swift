@@ -1,3 +1,4 @@
+import CryptoKit
 import Foundation
 
 public enum SchemaToolAppRejectionReason: String, Codable, CaseIterable, Equatable, Sendable {
@@ -34,6 +35,121 @@ public struct SchemaToolEvidenceSummary: Codable, Equatable, Sendable {
         self.exposedForeignKeyPathIDs = exposedForeignKeyPathIDs
         self.inspectedConstraintToolUsed = inspectedConstraintToolUsed
         self.inspectedValueToolUsed = inspectedValueToolUsed
+    }
+}
+
+/// How the grounding judge step ended for a run's final SQL. Saved as its raw
+/// string in `SchemaToolAgentGroundingJudgment.outcome`, so a value a newer
+/// build writes still decodes.
+public enum SchemaToolAgentGroundingJudgeOutcome: String, CaseIterable, Equatable, Sendable {
+    /// The judge answered and its labels were verified.
+    case judged
+    /// The request or its reply failed; `failureReason` says how.
+    case failed
+    /// The grounding pass would keep the SQL as it is.
+    case skippedNoFlags
+    /// The anchored-window rule replaces the SQL whatever the judge says.
+    case skippedAnchored
+    /// A flagged word shares a token with a SQL literal the grounding pass
+    /// rejected.
+    case skippedLiteralRejected
+    case skippedWrite
+    /// The SQL reads no table, or one the schema tools did not describe.
+    case skippedUndescribedTables
+    /// More words were flagged than one request may carry.
+    case skippedTooManyTerms
+    case skippedDeadline
+    case skippedHTTPBudget
+}
+
+/// One flagged question word as the grounding judge labeled it, after local
+/// verification.
+public struct SchemaToolAgentGroundingJudgedTerm: Codable, Equatable, Sendable {
+    public var term: String
+    /// The label's raw string, such as `request_wording` or
+    /// `needs_definition`; `invalid` when the reply left the word out or gave
+    /// it an unknown label.
+    public var label: String
+    /// Whether the label lets the SQL stand: `request_wording` and
+    /// `query_operation` always, and `schema_match`, `context_defined` and
+    /// `question_defined` only when their evidence checked out.
+    public var verified: Bool
+    /// The judge's citation or quote, at most 200 characters.
+    public var evidence: String
+
+    public init(term: String, label: String, verified: Bool, evidence: String) {
+        self.term = term
+        self.label = label
+        self.verified = verified
+        self.evidence = evidence
+    }
+}
+
+/// What the grounding judge said about the question words the grounding pass
+/// would flag in a run's final SQL, bound to that SQL and its inputs by
+/// `inputDigest`. It never carries the SQL itself.
+public struct SchemaToolAgentGroundingJudgment: Codable, Equatable, Sendable {
+    /// A `SchemaToolAgentGroundingJudgeOutcome` raw value.
+    public var outcome: String
+    /// `inputDigest(sql:question:databaseContext:confirmedSemanticBindings:terms:)`
+    /// of the final SQL, the run's question, context and confirmed
+    /// definitions, and the flagged words.
+    public var inputDigest: String
+    /// One entry per flagged word, in question order. Empty unless judged.
+    public var terms: [SchemaToolAgentGroundingJudgedTerm]
+    /// Judge requests sent, failed ones included: 0 or 1.
+    public var callCount: Int
+    /// Why the request failed: `invalidJSON`, `invalidShape`,
+    /// `cloudRequestFailure:` and the provider's failure category, or the
+    /// agent failure category. `nil` unless it failed.
+    public var failureReason: String?
+    /// What the postprocessor did with the judgment, written when it would
+    /// otherwise replace the SQL with a clarification: `released`, or
+    /// `reAimed:` or `lexical:` followed by why the SQL was not released.
+    /// `nil` when the postprocessor had no such decision to make.
+    public var postprocessorOutcome: String?
+
+    public init(
+        outcome: String,
+        inputDigest: String,
+        terms: [SchemaToolAgentGroundingJudgedTerm] = [],
+        callCount: Int = 0,
+        failureReason: String? = nil,
+        postprocessorOutcome: String? = nil
+    ) {
+        self.outcome = outcome
+        self.inputDigest = inputDigest
+        self.terms = terms
+        self.callCount = callCount
+        self.failureReason = failureReason
+        self.postprocessorOutcome = postprocessorOutcome
+    }
+
+    /// The SHA-256, in lowercase hex, of the normalized SQL text and the
+    /// trimmed question, database context, confirmed definitions and flagged
+    /// words, each length-prefixed so no two inputs share a digest by
+    /// moving text between parts.
+    public static func inputDigest(
+        sql: String,
+        question: String,
+        databaseContext: String,
+        confirmedSemanticBindings: [String],
+        terms: [String]
+    ) -> String {
+        var hasher = SHA256()
+        func append(_ part: String) {
+            let bytes = Data(part.utf8)
+            hasher.update(data: Data("\(bytes.count):".utf8))
+            hasher.update(data: bytes)
+        }
+        append(SQLTextFingerprint(sql).value)
+        append(question.trimmingCharacters(in: .whitespacesAndNewlines))
+        append(databaseContext.trimmingCharacters(in: .whitespacesAndNewlines))
+        append(String(confirmedSemanticBindings.count))
+        confirmedSemanticBindings.forEach { append($0.trimmingCharacters(in: .whitespacesAndNewlines)) }
+        append(String(terms.count))
+        terms.forEach(append)
+        return hasher.finalize().map { String(format: "%02x", $0) }.joined()
     }
 }
 
@@ -132,6 +248,12 @@ public struct SchemaToolAgentDiagnostics: Codable, Equatable, Sendable {
     /// Whether a review request carried inspected data values, for privacy
     /// audits. `nil` when no review request was sent.
     public var criticSharedDataValues: Bool?
+    /// `enabled` when the run could ask the grounding judge about its final
+    /// SQL. `nil` when the judge was off.
+    public var groundingJudgeMode: String?
+    /// The grounding judge step for the run's final SQL. `nil` when the
+    /// judge was off or the run did not end in SQL it accepted.
+    public var groundingJudgment: SchemaToolAgentGroundingJudgment?
 
     public init(
         logicalTurnCount: Int? = nil,
@@ -184,7 +306,9 @@ public struct SchemaToolAgentDiagnostics: Codable, Equatable, Sendable {
         criticFinalOutcome: String? = nil,
         criticIssueKinds: [String]? = nil,
         criticFailureReason: String? = nil,
-        criticSharedDataValues: Bool? = nil
+        criticSharedDataValues: Bool? = nil,
+        groundingJudgeMode: String? = nil,
+        groundingJudgment: SchemaToolAgentGroundingJudgment? = nil
     ) {
         self.logicalTurnCount = logicalTurnCount
         self.terminalToolSeen = terminalToolSeen
@@ -237,6 +361,8 @@ public struct SchemaToolAgentDiagnostics: Codable, Equatable, Sendable {
         self.criticIssueKinds = criticIssueKinds
         self.criticFailureReason = criticFailureReason
         self.criticSharedDataValues = criticSharedDataValues
+        self.groundingJudgeMode = groundingJudgeMode
+        self.groundingJudgment = groundingJudgment
     }
 
     private enum CodingKeys: String, CodingKey {
@@ -291,6 +417,8 @@ public struct SchemaToolAgentDiagnostics: Codable, Equatable, Sendable {
         case criticIssueKinds
         case criticFailureReason
         case criticSharedDataValues
+        case groundingJudgeMode
+        case groundingJudgment
     }
 
     public init(from decoder: any Decoder) throws {
@@ -465,6 +593,13 @@ public struct SchemaToolAgentDiagnostics: Codable, Equatable, Sendable {
         criticSharedDataValues = try? container.decodeIfPresent(
             Bool.self,
             forKey: .criticSharedDataValues
+        )
+        groundingJudgeMode = try? container.decodeIfPresent(String.self, forKey: .groundingJudgeMode)
+        // A judgment this build can't read is dropped, which keeps the
+        // lexical grounding decision.
+        groundingJudgment = try? container.decodeIfPresent(
+            SchemaToolAgentGroundingJudgment.self,
+            forKey: .groundingJudgment
         )
     }
 }
