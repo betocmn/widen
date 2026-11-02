@@ -107,6 +107,31 @@ public struct SchemaToolAgentDiagnostics: Codable, Equatable, Sendable {
     /// failure category, or the agent failure category. `nil` unless they
     /// failed.
     public var forcedTerminalFailure: String?
+    /// `enabled` when the run could ask the critic to review its SQL. `nil`
+    /// when the critic was off.
+    public var criticMode: String?
+    /// Critic review requests sent, failed ones included. `nil` when none was.
+    public var criticCallCount: Int?
+    /// Each review's verdict after validation, `accept`, `revise` or
+    /// `clarify`, or `error` for a review that failed. `nil` when none ran.
+    public var criticVerdicts: [String]?
+    /// Revisions the critic sent back to the agent. `nil` when none was.
+    public var criticRevisionCount: Int?
+    /// How the critic step ended for the run's SQL, such as `accepted`,
+    /// `revisedAccepted`, `failedOpen`, a `skipped…` reason or a
+    /// `…ReleasedPrevious` outcome that kept the SQL from before a revision.
+    /// `nil` when the run's answer never reached the critic step.
+    public var criticFinalOutcome: String?
+    /// The kinds of the issues revisions sent back, at most 12. `nil` when
+    /// there were none.
+    public var criticIssueKinds: [String]?
+    /// Why the last failed review failed: `invalidJSON`, `invalidShape`,
+    /// `cloudRequestFailure:` and the provider's failure category, or the
+    /// agent failure category. `nil` unless a review failed.
+    public var criticFailureReason: String?
+    /// Whether a review request carried inspected data values, for privacy
+    /// audits. `nil` when no review request was sent.
+    public var criticSharedDataValues: Bool?
 
     public init(
         logicalTurnCount: Int? = nil,
@@ -151,7 +176,15 @@ public struct SchemaToolAgentDiagnostics: Codable, Equatable, Sendable {
         forcedTerminalReason: String? = nil,
         forcedTerminalRequestCount: Int? = nil,
         forcedTerminalSucceeded: Bool? = nil,
-        forcedTerminalFailure: String? = nil
+        forcedTerminalFailure: String? = nil,
+        criticMode: String? = nil,
+        criticCallCount: Int? = nil,
+        criticVerdicts: [String]? = nil,
+        criticRevisionCount: Int? = nil,
+        criticFinalOutcome: String? = nil,
+        criticIssueKinds: [String]? = nil,
+        criticFailureReason: String? = nil,
+        criticSharedDataValues: Bool? = nil
     ) {
         self.logicalTurnCount = logicalTurnCount
         self.terminalToolSeen = terminalToolSeen
@@ -196,6 +229,14 @@ public struct SchemaToolAgentDiagnostics: Codable, Equatable, Sendable {
         self.forcedTerminalRequestCount = forcedTerminalRequestCount
         self.forcedTerminalSucceeded = forcedTerminalSucceeded
         self.forcedTerminalFailure = forcedTerminalFailure
+        self.criticMode = criticMode
+        self.criticCallCount = criticCallCount
+        self.criticVerdicts = criticVerdicts
+        self.criticRevisionCount = criticRevisionCount
+        self.criticFinalOutcome = criticFinalOutcome
+        self.criticIssueKinds = criticIssueKinds
+        self.criticFailureReason = criticFailureReason
+        self.criticSharedDataValues = criticSharedDataValues
     }
 
     private enum CodingKeys: String, CodingKey {
@@ -242,6 +283,14 @@ public struct SchemaToolAgentDiagnostics: Codable, Equatable, Sendable {
         case forcedTerminalRequestCount
         case forcedTerminalSucceeded
         case forcedTerminalFailure
+        case criticMode
+        case criticCallCount
+        case criticVerdicts
+        case criticRevisionCount
+        case criticFinalOutcome
+        case criticIssueKinds
+        case criticFailureReason
+        case criticSharedDataValues
     }
 
     public init(from decoder: any Decoder) throws {
@@ -405,6 +454,17 @@ public struct SchemaToolAgentDiagnostics: Codable, Equatable, Sendable {
         forcedTerminalFailure = try? container.decodeIfPresent(
             String.self,
             forKey: .forcedTerminalFailure
+        )
+        criticMode = try? container.decodeIfPresent(String.self, forKey: .criticMode)
+        criticCallCount = try? container.decodeIfPresent(Int.self, forKey: .criticCallCount)
+        criticVerdicts = try? container.decodeIfPresent([String].self, forKey: .criticVerdicts)
+        criticRevisionCount = try? container.decodeIfPresent(Int.self, forKey: .criticRevisionCount)
+        criticFinalOutcome = try? container.decodeIfPresent(String.self, forKey: .criticFinalOutcome)
+        criticIssueKinds = try? container.decodeIfPresent([String].self, forKey: .criticIssueKinds)
+        criticFailureReason = try? container.decodeIfPresent(String.self, forKey: .criticFailureReason)
+        criticSharedDataValues = try? container.decodeIfPresent(
+            Bool.self,
+            forKey: .criticSharedDataValues
         )
     }
 }

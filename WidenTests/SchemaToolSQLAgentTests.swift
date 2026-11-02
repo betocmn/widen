@@ -280,6 +280,19 @@ struct SchemaToolSQLAgentTests {
         }
     }
 
+    private final class UsageEventRecorder: @unchecked Sendable {
+        private let lock = NSLock()
+        private var recorded: [SQLGenerationUsageEvent] = []
+
+        var events: [SQLGenerationUsageEvent] {
+            lock.withLock { recorded }
+        }
+
+        func record(_ event: SQLGenerationUsageEvent) {
+            lock.withLock { recorded.append(event) }
+        }
+    }
+
     private final class LegacyGenerator: SQLGenerator, @unchecked Sendable {
         private let lock = NSLock()
         private var recordedCallCount = 0
@@ -4872,6 +4885,663 @@ struct SchemaToolSQLAgentTests {
         #expect(diagnostics.forcedTerminalSucceeded == true)
     }
 
+    // MARK: - Critic
+
+    @Test func productionDefaultEnablesTheCritic() {
+        // The app and evals build the agent with the default configuration.
+        #expect(SchemaToolSQLAgentConfiguration.default.criticMode == .enabled)
+        #expect(SchemaToolAgentCriticMode.enabled.rawValue == "enabled")
+        #expect(SchemaToolAgentCriticMode.disabled.rawValue == "disabled")
+    }
+
+    @Test func diagnosticsDecodeCriticFieldsTolerantly() throws {
+        let decoder = JSONDecoder()
+        let recorded = try decoder.decode(
+            SchemaToolAgentDiagnostics.self,
+            from: Data(
+                (#"{"criticMode":"enabled","criticCallCount":2,"criticVerdicts":["revise","accept"],"#
+                    + #""criticRevisionCount":1,"criticFinalOutcome":"revisedAccepted","#
+                    + #""criticIssueKinds":["filter"],"criticFailureReason":"invalidJSON","#
+                    + #""criticSharedDataValues":false,"criticFutureField":{"kind":"later"}}"#).utf8
+            )
+        )
+        #expect(recorded.criticMode == "enabled")
+        #expect(recorded.criticCallCount == 2)
+        #expect(recorded.criticVerdicts == ["revise", "accept"])
+        #expect(recorded.criticRevisionCount == 1)
+        #expect(recorded.criticFinalOutcome == "revisedAccepted")
+        #expect(recorded.criticIssueKinds == ["filter"])
+        #expect(recorded.criticFailureReason == "invalidJSON")
+        #expect(recorded.criticSharedDataValues == false)
+
+        let wrongTypes = try decoder.decode(
+            SchemaToolAgentDiagnostics.self,
+            from: Data(
+                (#"{"terminalToolSeen":true,"criticMode":1,"criticCallCount":"two","#
+                    + #""criticVerdicts":"accept","criticRevisionCount":[],"criticFinalOutcome":{},"#
+                    + #""criticIssueKinds":[1],"criticFailureReason":false,"criticSharedDataValues":"no"}"#).utf8
+            )
+        )
+        #expect(wrongTypes.terminalToolSeen)
+        #expect(wrongTypes.criticMode == nil)
+        #expect(wrongTypes.criticCallCount == nil)
+        #expect(wrongTypes.criticVerdicts == nil)
+        #expect(wrongTypes.criticRevisionCount == nil)
+        #expect(wrongTypes.criticFinalOutcome == nil)
+        #expect(wrongTypes.criticIssueKinds == nil)
+        #expect(wrongTypes.criticFailureReason == nil)
+        #expect(wrongTypes.criticSharedDataValues == nil)
+
+        // Sessions saved before the critic existed decode with none of it.
+        let old = try decoder.decode(
+            SchemaToolAgentDiagnostics.self,
+            from: Data(#"{"terminalToolSeen":true,"terminalAction":"sql"}"#.utf8)
+        )
+        #expect(old.criticMode == nil)
+        #expect(old.criticCallCount == nil)
+        #expect(old.criticFinalOutcome == nil)
+        #expect(old.criticSharedDataValues == nil)
+
+        // A run without the critic saves none of the keys.
+        let encoded = String(decoding: try JSONEncoder().encode(SchemaToolAgentDiagnostics()), as: UTF8.self)
+        #expect(!encoded.contains("critic"))
+    }
+
+    @Test func criticAcceptReviewsInAToolFreeRequestAndKeepsTheSQL() async throws {
+        let schema = Self.makeSchema()
+        let sql = "SELECT id, name FROM public.users ORDER BY id LIMIT 100"
+        let chatTransport = Self.criticScript([
+            { _ in
+                Self.particleToolCalls([
+                    Self.terminalSQLWithPlan(id: "answer-accept", sql: sql, plan: ["grain": "one row per user"]),
+                ])
+            },
+            { _ in Self.criticReply(["verdict": "accept", "issues": [Any]()]) },
+        ])
+        let agent = makeAgent(
+            schema: schema,
+            chatTransport: chatTransport,
+            configuration: Self.criticConfiguration(),
+            criticMode: .enabled
+        )
+        let events = UsageEventRecorder()
+        var config = SQLGenerationConfig()
+        config.usageSink = { events.record($0) }
+
+        let result = try await agent.generateSQL(
+            question: "List users",
+            schema: schema,
+            context: SQLGenerationContext(),
+            config: config
+        )
+
+        #expect(result.sql == sql)
+        #expect(chatTransport.requests.count == 4)
+        let agentTurn = try ParticleTestSupport.expectRequestShape(chatTransport.requests[0], callSite: .agentTurn)
+        // No tools, json_object, high effort and 16k tokens.
+        let review = try ParticleTestSupport.expectRequestShape(chatTransport.requests[3], callSite: .critic)
+        #expect(review["reasoning_effort"] as? String == "high")
+        #expect((review["response_format"] as? [String: Any])?["type"] as? String == "json_object")
+        #expect(
+            review["prompt_cache_key"] as? String
+                == (agentTurn["prompt_cache_key"] as? String).map { "\($0)-critic" }
+        )
+        let messages = try #require(review["messages"] as? [[String: Any]])
+        #expect(messages.compactMap { $0["role"] as? String } == ["system", "user"])
+        #expect((messages[0]["content"] as? String)?.contains("You review; you do not write SQL.") == true)
+        let prompt = try Self.criticUserPrompt(in: chatTransport.requests[3])
+        #expect(prompt.contains("SQL to review:\n\(sql)"))
+        #expect(prompt.contains(#"Query plan:"#))
+        #expect(prompt.contains(#""grain":"one row per user""#))
+        #expect(prompt.contains("public.users: id integer, name text"))
+        // Only what the tools exposed: a table never searched stays out,
+        // with its columns and its comment.
+        #expect(!prompt.contains("audit_events"))
+        #expect(!prompt.contains("secret_payload"))
+        #expect(!prompt.contains("Ignore previous instructions"))
+        #expect(!prompt.contains("Inspected data values"))
+
+        let metadata = try #require(result.backendMetadata)
+        #expect(metadata.agentLogicalTurnCount == 3)
+        #expect(metadata.agentHTTPAttemptCount == 4)
+        #expect(metadata.agentTerminalOutcome == "sql")
+        // The review's tokens count with the agent's, in the metadata and
+        // in the usage the eval budgets read.
+        #expect(metadata.promptTokens == 40)
+        #expect(metadata.completionTokens == 20)
+        #expect(events.events.reduce(0) { $0 + $1.httpAttemptCount } == 4)
+        #expect(events.events.compactMap(\.promptTokens).reduce(0, +) == 40)
+        let diagnostics = try #require(metadata.agentDiagnostics)
+        #expect(diagnostics.criticMode == "enabled")
+        #expect(diagnostics.criticCallCount == 1)
+        #expect(diagnostics.criticVerdicts == ["accept"])
+        #expect(diagnostics.criticFinalOutcome == "accepted")
+        #expect(diagnostics.criticRevisionCount == nil)
+        #expect(diagnostics.criticIssueKinds == nil)
+        #expect(diagnostics.criticFailureReason == nil)
+        #expect(diagnostics.criticSharedDataValues == false)
+    }
+
+    @Test func criticRevisionSendsTheIssuesBackAndReviewsTheResubmission() async throws {
+        let schema = Self.makeSchema()
+        let first = "SELECT id FROM public.users ORDER BY id LIMIT 100"
+        let revised = "SELECT id, name FROM public.users ORDER BY id LIMIT 100"
+        let chatTransport = Self.criticScript([
+            { _ in Self.particleToolCalls([Self.terminalSQL(id: "answer-first", sql: first)]) },
+            { _ in
+                Self.criticReply([
+                    "verdict": "revise",
+                    "issues": [["kind": "projection", "detail": "Add public.users.name as the label."]],
+                ])
+            },
+            { request in
+                // A regular agent turn: the terminal call's tool error, then
+                // the correction.
+                let body = try Self.requestBody(request)
+                #expect(body["tools"] is [Any])
+                #expect(body["tool_choice"] as? String == "required")
+                #expect(try Self.toolMessageErrorCodes(in: request).last == "critic_revision")
+                let messages = try #require(body["messages"] as? [[String: Any]])
+                let toolError = try #require(messages.dropLast().last?["content"] as? String)
+                #expect(toolError.contains("Advisory review from a second model."))
+                #expect(toolError.contains("[projection] Add public.users.name as the label."))
+                #expect(messages.last?["role"] as? String == "user")
+                #expect(messages.last?["content"] as? String == Self.criticRevisionInstruction)
+                return Self.particleToolCalls([Self.terminalSQL(id: "answer-revised", sql: revised)])
+            },
+            { request in
+                let prompt = try Self.criticUserPrompt(in: request)
+                #expect(prompt.contains("SQL to review:\n\(revised)"))
+                return Self.criticReply(["verdict": "accept"])
+            },
+        ])
+        let agent = makeAgent(
+            schema: schema,
+            chatTransport: chatTransport,
+            configuration: Self.criticConfiguration(),
+            criticMode: .enabled
+        )
+
+        let result = try await agent.generateSQL(
+            question: "List users",
+            schema: schema,
+            context: SQLGenerationContext(),
+            config: SQLGenerationConfig()
+        )
+
+        #expect(result.sql == revised)
+        #expect(chatTransport.requests.count == 6)
+        #expect(result.backendMetadata?.agentLogicalTurnCount == 4)
+        let diagnostics = try #require(result.backendMetadata?.agentDiagnostics)
+        #expect(diagnostics.criticCallCount == 2)
+        #expect(diagnostics.criticVerdicts == ["revise", "accept"])
+        #expect(diagnostics.criticRevisionCount == 1)
+        #expect(diagnostics.criticIssueKinds == ["projection"])
+        #expect(diagnostics.criticFinalOutcome == "revisedAccepted")
+    }
+
+    @Test func twoRevisionsReachTheLimitWithoutAThirdReview() async throws {
+        let schema = Self.makeSchema()
+        let sqls = [
+            "SELECT id FROM public.users LIMIT 100",
+            "SELECT id, name FROM public.users LIMIT 100",
+            "SELECT id, name FROM public.users ORDER BY name LIMIT 100",
+        ]
+        let revise = Self.criticReply([
+            "verdict": "revise",
+            "issues": [["kind": "ordering_limit", "detail": "Order by public.users.name."]],
+        ])
+        let chatTransport = Self.criticScript([
+            { _ in Self.particleToolCalls([Self.terminalSQL(id: "answer-0", sql: sqls[0])]) },
+            { _ in revise },
+            { _ in Self.particleToolCalls([Self.terminalSQL(id: "answer-1", sql: sqls[1])]) },
+            { _ in revise },
+            { _ in Self.particleToolCalls([Self.terminalSQL(id: "answer-2", sql: sqls[2])]) },
+        ])
+        let agent = makeAgent(
+            schema: schema,
+            chatTransport: chatTransport,
+            configuration: Self.criticConfiguration(),
+            criticMode: .enabled
+        )
+
+        let result = try await agent.generateSQL(
+            question: "List users by name",
+            schema: schema,
+            context: SQLGenerationContext(),
+            config: SQLGenerationConfig()
+        )
+
+        #expect(result.sql == sqls[2])
+        #expect(chatTransport.requests.count == 7)
+        let diagnostics = try #require(result.backendMetadata?.agentDiagnostics)
+        #expect(diagnostics.criticCallCount == 2)
+        #expect(diagnostics.criticVerdicts == ["revise", "revise"])
+        #expect(diagnostics.criticRevisionCount == 2)
+        #expect(diagnostics.criticIssueKinds == ["ordering_limit", "ordering_limit"])
+        #expect(diagnostics.criticFinalOutcome == "revisionLimitReached")
+    }
+
+    @Test func unchangedResubmissionKeepsTheSQLWithoutAnotherReview() async throws {
+        let schema = Self.makeSchema()
+        let sql = "SELECT id, name FROM public.users LIMIT 100"
+        let chatTransport = Self.criticScript([
+            { _ in Self.particleToolCalls([Self.terminalSQL(id: "answer-kept", sql: sql)]) },
+            { _ in
+                Self.criticReply([
+                    "verdict": "revise",
+                    "issues": [["kind": "filter", "detail": "Keep only active users."]],
+                ])
+            },
+            // The agent declines the issue: the same SQL up to whitespace.
+            { _ in
+                Self.particleToolCalls([
+                    Self.terminalSQL(id: "answer-kept-again", sql: "SELECT id, name\n  FROM public.users LIMIT 100"),
+                ])
+            },
+        ])
+        let agent = makeAgent(
+            schema: schema,
+            chatTransport: chatTransport,
+            configuration: Self.criticConfiguration(),
+            criticMode: .enabled
+        )
+
+        let result = try await agent.generateSQL(
+            question: "List users",
+            schema: schema,
+            context: SQLGenerationContext(),
+            config: SQLGenerationConfig()
+        )
+
+        #expect(result.sql == "SELECT id, name\n  FROM public.users LIMIT 100")
+        #expect(chatTransport.requests.count == 5)
+        let diagnostics = try #require(result.backendMetadata?.agentDiagnostics)
+        #expect(diagnostics.criticCallCount == 1)
+        #expect(diagnostics.criticRevisionCount == 1)
+        #expect(diagnostics.criticFinalOutcome == "agentKeptSQL")
+    }
+
+    @Test func ledgerFailureAfterARevisionReleasesThePreviousSQL() async throws {
+        let schema = Self.makeSchema()
+        let sql = "SELECT id, name FROM public.users LIMIT 100"
+        let uninspectedSQL = "SELECT o.id FROM public.orders AS o ORDER BY o.id LIMIT 100"
+        let chatTransport = Self.criticScript([
+            { _ in Self.particleToolCalls([Self.terminalSQL(id: "answer-valid", sql: sql)]) },
+            { _ in
+                Self.criticReply([
+                    "verdict": "revise",
+                    "issues": [["kind": "join", "detail": "Use public.orders instead."]],
+                ])
+            },
+            { _ in Self.particleToolCalls([Self.terminalSQL(id: "answer-uninspected", sql: uninspectedSQL)]) },
+            { request in
+                let errorCodes = try Self.toolMessageErrorCodes(in: request)
+                #expect(errorCodes.last == "uninspected_schema_objects")
+                return Self.particleToolCalls([Self.terminalSQL(id: "answer-uninspected-again", sql: uninspectedSQL)])
+            },
+        ])
+        let agent = makeAgent(
+            schema: schema,
+            chatTransport: chatTransport,
+            configuration: Self.criticConfiguration(),
+            criticMode: .enabled
+        )
+
+        let result = try await agent.generateSQL(
+            question: "List users",
+            schema: schema,
+            context: SQLGenerationContext(),
+            config: SQLGenerationConfig()
+        )
+
+        // The run answers as it would have before the revision, with the
+        // diagnostics saved then: no rejection from the failed revision.
+        #expect(result.sql == sql)
+        #expect(!result.needsClarification)
+        #expect(chatTransport.requests.count == 6)
+        #expect(result.backendMetadata?.agentTerminalOutcome == "sql")
+        #expect(result.backendMetadata?.agentHTTPAttemptCount == 6)
+        let diagnostics = try #require(result.backendMetadata?.agentDiagnostics)
+        #expect(diagnostics.criticFinalOutcome == "revisionFailedReleasedPrevious")
+        #expect(diagnostics.criticRevisionCount == 1)
+        #expect(diagnostics.terminalAction == "sql")
+        #expect(diagnostics.appSideRejectionReason == nil)
+        #expect(diagnostics.terminalValidationFailureReason == nil)
+    }
+
+    @Test func clarificationAfterARevisionReleasesThePreviousSQL() async throws {
+        let schema = Self.makeSchema()
+        let sql = "SELECT id, name FROM public.users LIMIT 100"
+        let chatTransport = Self.criticScript([
+            { _ in Self.particleToolCalls([Self.terminalSQL(id: "answer-sql", sql: sql)]) },
+            { _ in
+                Self.criticReply([
+                    "verdict": "revise",
+                    "issues": [["kind": "filter", "detail": "Which users count as active?"]],
+                ])
+            },
+            { _ in
+                Self.particleToolCalls([
+                    Self.terminalClarification(id: "answer-clarify", question: "Which users count as active?"),
+                ])
+            },
+        ])
+        let agent = makeAgent(
+            schema: schema,
+            chatTransport: chatTransport,
+            configuration: Self.criticConfiguration(),
+            criticMode: .enabled
+        )
+
+        let result = try await agent.generateSQL(
+            question: "List users",
+            schema: schema,
+            context: SQLGenerationContext(),
+            config: SQLGenerationConfig()
+        )
+
+        // A revision may change the SQL, never the decision to answer.
+        #expect(result.sql == sql)
+        #expect(!result.needsClarification)
+        #expect(chatTransport.requests.count == 5)
+        let diagnostics = try #require(result.backendMetadata?.agentDiagnostics)
+        #expect(diagnostics.criticFinalOutcome == "revisionTurnedClarifyReleasedPrevious")
+        #expect(diagnostics.terminalAction == "sql")
+    }
+
+    @Test func readRevisedIntoAWriteReleasesThePreviousSQL() async throws {
+        let schema = Self.makeSchema()
+        let sql = "SELECT id, name FROM public.users LIMIT 100"
+        let chatTransport = Self.criticScript([
+            { _ in Self.particleToolCalls([Self.terminalSQL(id: "answer-read", sql: sql)]) },
+            { _ in
+                Self.criticReply([
+                    "verdict": "revise",
+                    "issues": [["kind": "other", "detail": "Rename user 1 to Ada first."]],
+                ])
+            },
+            { _ in
+                Self.particleToolCalls([
+                    Self.terminalSQL(id: "answer-write", sql: "UPDATE public.users SET name = 'Ada' WHERE id = 1"),
+                ])
+            },
+        ])
+        let agent = makeAgent(
+            schema: schema,
+            chatTransport: chatTransport,
+            configuration: Self.criticConfiguration(),
+            criticMode: .enabled
+        )
+
+        let result = try await agent.generateSQL(
+            question: "List users",
+            schema: schema,
+            context: SQLGenerationContext(),
+            config: SQLGenerationConfig()
+        )
+
+        #expect(result.sql == sql)
+        #expect(chatTransport.requests.count == 5)
+        let diagnostics = try #require(result.backendMetadata?.agentDiagnostics)
+        #expect(diagnostics.criticFinalOutcome == "revisionChangedKindReleasedPrevious")
+    }
+
+    @Test func criticTransportFailureFailsOpen() async throws {
+        let schema = Self.makeSchema()
+        let sql = "SELECT id, name FROM public.users LIMIT 100"
+        let chatTransport = ScriptedHTTPTransport { request, index in
+            let data: Data
+            switch index {
+            case 1:
+                data = Self.particleToolCalls([
+                    Self.toolCall(id: "search-critic-down", name: "search_schema", arguments: [
+                        "query": "users",
+                        "limit": 2,
+                    ]),
+                ])
+            case 2:
+                let tableID = try Self.tableHandle(named: #""public"."users""#, in: request)
+                data = Self.particleToolCalls([
+                    Self.toolCall(id: "describe-critic-down", name: "describe_tables", arguments: [
+                        "table_ids": [tableID],
+                    ]),
+                ])
+            case 3:
+                data = Self.particleToolCalls([Self.terminalSQL(id: "answer-critic-down", sql: sql)])
+            case 4, 5:
+                return (
+                    Self.jsonData([
+                        "error": [
+                            "message": "The model is unavailable.",
+                            "type": "api_error",
+                            "code": "model_unavailable",
+                        ],
+                    ]),
+                    HTTPURLResponse(
+                        url: request.url!,
+                        statusCode: 503,
+                        httpVersion: "HTTP/1.1",
+                        headerFields: ["Retry-After": "0"]
+                    )!
+                )
+            default:
+                Issue.record("A review gets at most two attempts")
+                throw URLError(.badServerResponse)
+            }
+            return (
+                data,
+                HTTPURLResponse(
+                    url: request.url!,
+                    statusCode: 200,
+                    httpVersion: "HTTP/1.1",
+                    headerFields: ["Content-Type": "application/json"]
+                )!
+            )
+        }
+        let agent = makeAgent(
+            schema: schema,
+            chatTransport: chatTransport,
+            configuration: Self.criticConfiguration(),
+            criticMode: .enabled
+        )
+
+        let result = try await agent.generateSQL(
+            question: "List users",
+            schema: schema,
+            context: SQLGenerationContext(),
+            config: SQLGenerationConfig()
+        )
+
+        #expect(result.sql == sql)
+        #expect(chatTransport.requests.count == 5)
+        #expect(result.backendMetadata?.agentHTTPAttemptCount == 5)
+        let diagnostics = try #require(result.backendMetadata?.agentDiagnostics)
+        #expect(diagnostics.criticCallCount == 1)
+        #expect(diagnostics.criticVerdicts == ["error"])
+        #expect(diagnostics.criticFinalOutcome == "failedOpen")
+        #expect(diagnostics.criticFailureReason == "cloudRequestFailure:providerUnavailable")
+        #expect(diagnostics.appSideRejectionReason == nil)
+    }
+
+    @Test func criticReplyWithoutJSONFailsOpen() async throws {
+        let schema = Self.makeSchema()
+        let sql = "SELECT id, name FROM public.users LIMIT 100"
+        let chatTransport = Self.criticScript([
+            { _ in Self.particleToolCalls([Self.terminalSQL(id: "answer-prose-review", sql: sql)]) },
+            { _ in Self.assistantText("Looks right to me.") },
+        ])
+        let agent = makeAgent(
+            schema: schema,
+            chatTransport: chatTransport,
+            configuration: Self.criticConfiguration(),
+            criticMode: .enabled
+        )
+
+        let result = try await agent.generateSQL(
+            question: "List users",
+            schema: schema,
+            context: SQLGenerationContext(),
+            config: SQLGenerationConfig()
+        )
+
+        // A reply the parser cannot read is not resent.
+        #expect(result.sql == sql)
+        #expect(chatTransport.requests.count == 4)
+        let diagnostics = try #require(result.backendMetadata?.agentDiagnostics)
+        #expect(diagnostics.criticVerdicts == ["error"])
+        #expect(diagnostics.criticFinalOutcome == "failedOpen")
+        #expect(diagnostics.criticFailureReason == "invalidJSON")
+    }
+
+    @Test func criticResendsInvalidModelOutputOnceWithACorrection() async throws {
+        let schema = Self.makeSchema()
+        let sql = "SELECT id, name FROM public.users LIMIT 100"
+        let chatTransport = ScriptedHTTPTransport { request, index in
+            let data: Data
+            switch index {
+            case 1:
+                data = Self.particleToolCalls([
+                    Self.toolCall(id: "search-critic-invalid", name: "search_schema", arguments: [
+                        "query": "users",
+                        "limit": 2,
+                    ]),
+                ])
+            case 2:
+                let tableID = try Self.tableHandle(named: #""public"."users""#, in: request)
+                data = Self.particleToolCalls([
+                    Self.toolCall(id: "describe-critic-invalid", name: "describe_tables", arguments: [
+                        "table_ids": [tableID],
+                    ]),
+                ])
+            case 3:
+                data = Self.particleToolCalls([Self.terminalSQL(id: "answer-critic-invalid", sql: sql)])
+            case 4:
+                return (
+                    Self.jsonData([
+                        "error": [
+                            "message": "The model's output was not valid JSON.",
+                            "type": "api_error",
+                            "code": "invalid_model_output",
+                        ],
+                    ]),
+                    HTTPURLResponse(
+                        url: request.url!,
+                        statusCode: 502,
+                        httpVersion: "HTTP/1.1",
+                        headerFields: ["Retry-After": "0"]
+                    )!
+                )
+            case 5:
+                // The resend carries the correction in its one user message.
+                let body = try Self.requestBody(request)
+                let messages = try #require(body["messages"] as? [[String: Any]])
+                #expect(messages.compactMap { $0["role"] as? String } == ["system", "user"])
+                #expect(
+                    (messages.last?["content"] as? String)?
+                        .hasSuffix("\n\nReturn only the JSON object described above.") == true
+                )
+                data = Self.criticReply(["verdict": "accept"])
+            default:
+                throw URLError(.badServerResponse)
+            }
+            return (
+                data,
+                HTTPURLResponse(
+                    url: request.url!,
+                    statusCode: 200,
+                    httpVersion: "HTTP/1.1",
+                    headerFields: ["Content-Type": "application/json"]
+                )!
+            )
+        }
+        let agent = makeAgent(
+            schema: schema,
+            chatTransport: chatTransport,
+            configuration: Self.criticConfiguration(),
+            criticMode: .enabled
+        )
+
+        let result = try await agent.generateSQL(
+            question: "List users",
+            schema: schema,
+            context: SQLGenerationContext(),
+            config: SQLGenerationConfig()
+        )
+
+        #expect(result.sql == sql)
+        #expect(chatTransport.requests.count == 5)
+        let diagnostics = try #require(result.backendMetadata?.agentDiagnostics)
+        #expect(diagnostics.criticCallCount == 1)
+        #expect(diagnostics.criticVerdicts == ["accept"])
+        #expect(diagnostics.criticFinalOutcome == "accepted")
+    }
+
+    @Test func criticSkipsRepairRuns() async throws {
+        try await expectCriticSkipped(
+            "skippedRepairMode",
+            context: SQLGenerationContext(mode: .repair),
+            configuration: Self.criticConfiguration()
+        )
+    }
+
+    @Test func criticSkipsForcedTerminalAnswers() async throws {
+        // The third request is forced on a two-turn budget.
+        try await expectCriticSkipped(
+            "skippedForcedTerminal",
+            configuration: Self.criticConfiguration(maximumModelTurns: 2)
+        )
+    }
+
+    @Test func criticSkipsRunsNearTheirDeadline() async throws {
+        try await expectCriticSkipped(
+            "skippedDeadline",
+            configuration: Self.criticConfiguration(wallClockTimeoutSeconds: 10)
+        )
+    }
+
+    @Test func criticSkipsRunsWithNoTurnLeftForARevision() async throws {
+        try await expectCriticSkipped(
+            "skippedNoTurns",
+            configuration: Self.criticConfiguration(maximumModelTurns: 3)
+        )
+    }
+
+    /// Runs search, describe and one SQL answer with the critic on, and
+    /// expects no review request and the skip `outcome`.
+    private func expectCriticSkipped(
+        _ outcome: String,
+        context: SQLGenerationContext = SQLGenerationContext(),
+        configuration: SchemaToolSQLAgentConfiguration
+    ) async throws {
+        let schema = Self.makeSchema()
+        let sql = "SELECT id, name FROM public.users LIMIT 100"
+        let chatTransport = Self.criticScript([
+            { _ in Self.particleToolCalls([Self.terminalSQL(id: "answer-skip", sql: sql)]) },
+        ])
+        let agent = makeAgent(
+            schema: schema,
+            chatTransport: chatTransport,
+            configuration: configuration,
+            criticMode: .enabled
+        )
+
+        let result = try await agent.generateSQL(
+            question: "List users",
+            schema: schema,
+            context: context,
+            config: SQLGenerationConfig()
+        )
+
+        #expect(result.sql == sql)
+        #expect(chatTransport.requests.count == 3)
+        let diagnostics = try #require(result.backendMetadata?.agentDiagnostics)
+        #expect(diagnostics.criticMode == "enabled")
+        #expect(diagnostics.criticFinalOutcome == outcome)
+        #expect(diagnostics.criticCallCount == nil)
+        #expect(diagnostics.criticSharedDataValues == nil)
+    }
+
     @Test func zeroModelTurnBudgetReturnsTypedFailure() async throws {
         let schema = Self.makeSchema()
         let chatTransport = ScriptedTransport { _, _ in
@@ -5931,6 +6601,11 @@ struct SchemaToolSQLAgentTests {
         #expect(configuration.forcedTerminalMode == .terminalToolOnly)
         #expect(configuration.maximumForcedTerminalRequests == 2)
         #expect(configuration.forcedTerminalTimeReserveSeconds == 45)
+        #expect(configuration.criticMode == .enabled)
+        #expect(configuration.maximumCriticRevisions == 2)
+        #expect(configuration.maximumCriticHTTPAttempts == 2)
+        #expect(configuration.criticMinimumRemainingSeconds == 30)
+        #expect(configuration.criticRevisionMinimumRemainingSeconds == 60)
         #expect(SchemaToolPolicy.cloudAgent.maximumResultBytes == 16_000)
         #expect(SchemaToolPolicy.cloudAgent.maximumSessionResultBytes == 64_000)
     }
@@ -6619,6 +7294,7 @@ struct SchemaToolSQLAgentTests {
             wallClockTimeoutSeconds: 10
         ),
         forcedTerminalTimeReserveSeconds: TimeInterval = 0,
+        criticMode: SchemaToolAgentCriticMode = .disabled,
         schemaToolPolicy: SchemaToolPolicy = .cloudAgent,
         databaseInspectionPolicy: DatabaseInspectionPolicy = .disabled,
         databaseInspectionDatabase: (any DatabaseInspectionQuerying)? = nil,
@@ -6629,6 +7305,10 @@ struct SchemaToolSQLAgentTests {
         // the reserve off unless a test sets one.
         var configuration = configuration
         configuration.forcedTerminalTimeReserveSeconds = forcedTerminalTimeReserveSeconds
+        // The critic adds a request after every accepted SQL answer, so the
+        // helper keeps it off unless a test turns it on; scripted request
+        // indices then stay as they were.
+        configuration.criticMode = criticMode
         let catalog = OpenRouterModelCatalogService(
             profile: profile,
             transport: catalogTransport ?? ScriptedTransport { _, _ in Self.catalogResponse() },
@@ -7000,6 +7680,69 @@ struct SchemaToolSQLAgentTests {
             return calls.compactMap { $0["id"] as? String }
         }
     }
+
+    /// The helper's budgets, with a wall clock long enough for the critic's
+    /// 30 s review and 60 s revision thresholds.
+    private static func criticConfiguration(
+        maximumModelTurns: Int = 6,
+        wallClockTimeoutSeconds: TimeInterval = 120
+    ) -> SchemaToolSQLAgentConfiguration {
+        SchemaToolSQLAgentConfiguration(
+            maximumSchemaToolCalls: 4,
+            maximumRepairSchemaToolCalls: 2,
+            maximumModelTurns: maximumModelTurns,
+            maximumMalformedTerminalCorrections: 1,
+            maximumRepeatedToolCorrections: 1,
+            maximumInvalidTerminalSQLCorrections: 1,
+            maximumHTTPAttempts: 12,
+            wallClockTimeoutSeconds: wallClockTimeoutSeconds
+        )
+    }
+
+    /// Searches for users and describes them, then answers each later
+    /// request with the next of `steps`. A request past the script fails.
+    private static func criticScript(
+        _ steps: [@Sendable (URLRequest) throws -> Data]
+    ) -> ScriptedTransport {
+        ScriptedTransport { request, index in
+            switch index {
+            case 1:
+                return Self.particleToolCalls([
+                    Self.toolCall(id: "search-critic", name: "search_schema", arguments: [
+                        "query": "users",
+                        "limit": 2,
+                    ]),
+                ])
+            case 2:
+                let tableID = try Self.tableHandle(named: #""public"."users""#, in: request)
+                return Self.particleToolCalls([
+                    Self.toolCall(id: "describe-critic", name: "describe_tables", arguments: [
+                        "table_ids": [tableID],
+                    ]),
+                ])
+            case let index where index - 3 < steps.count:
+                return try steps[index - 3](request)
+            default:
+                Issue.record("Unexpected request \(index)")
+                throw URLError(.badServerResponse)
+            }
+        }
+    }
+
+    private static func criticReply(_ review: [String: Any]) -> Data {
+        assistantText(jsonString(review))
+    }
+
+    /// The user prompt of a review request, which sends no tools.
+    private static func criticUserPrompt(in request: URLRequest) throws -> String {
+        let body = try requestBody(request)
+        #expect(body["tools"] == nil)
+        let messages = try #require(body["messages"] as? [[String: Any]])
+        return try #require(messages.last?["content"] as? String)
+    }
+
+    private static let criticRevisionInstruction =
+        "Address each issue only if it is correct for the question, context and inspected schema. If an issue is wrong, resubmit your SQL unchanged. Use schema tools only if an issue needs an object you have not inspected. Finish with submit_text_to_sql_result(action='sql') and a matching query_plan."
 
     private static func requestBody(_ request: URLRequest) throws -> [String: Any] {
         let data = try #require(request.httpBody)

@@ -475,8 +475,9 @@ struct ParticleBackendSelectionTests {
         )
         #expect(oneShotResult.sql == ParticleLeakFixtures.oneShotSQL)
 
+        // Three agent turns, the critic's review and the one-shot request.
         let requests = transport.requests
-        #expect(requests.count == 4)
+        #expect(requests.count == 5)
         for request in requests {
             #expect(request.url?.scheme == "https")
             #expect(request.url?.host == "api.particle.ai")
@@ -540,6 +541,15 @@ private enum ParticleLeakFixtures {
     static func response(to request: URLRequest) throws -> Data {
         let data = try #require(request.httpBody)
         let body = try #require(try JSONSerialization.jsonObject(with: data) as? [String: Any])
+        let messages = try #require(body["messages"] as? [[String: Any]])
+        let instructions = messages.first?["content"] as? String ?? ""
+        if instructions.contains("You review; you do not write SQL.") {
+            // The agent's critic review of its SQL.
+            return completion(message: [
+                "role": "assistant",
+                "content": jsonString(["verdict": "accept", "issues": [String]()]),
+            ], finishReason: "stop")
+        }
         guard body["tools"] != nil else {
             return completion(message: [
                 "role": "assistant",
@@ -555,7 +565,6 @@ private enum ParticleLeakFixtures {
                 ]),
             ], finishReason: "stop")
         }
-        let messages = try #require(body["messages"] as? [[String: Any]])
         let toolResults = messages.filter { $0["role"] as? String == "tool" }
         let call: [String: Any]
         switch toolResults.count {
