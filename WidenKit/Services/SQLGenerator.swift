@@ -110,9 +110,8 @@ public struct SQLGenerationContext: Equatable, Sendable {
     /// not schema objects, and are used only to bias deterministic packaging.
     public var schemaSearchQueries: [String]
     /// App-side count of model calls consumed for the current user request,
-    /// including earlier repair attempts and HTTP retries. Used for telemetry
-    /// and the eval HTTP-attempt budget only; repair budgets count logical
-    /// generator invocations instead. It is never rendered into prompts.
+    /// including earlier repair attempts. Used for telemetry and repair budget
+    /// enforcement only; it is never rendered into prompts.
     public var modelCallCount: Int
     /// User-confirmed business definitions for this database/schema scope.
     /// These are app-managed semantic bindings, separate from connection

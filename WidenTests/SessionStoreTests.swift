@@ -324,54 +324,6 @@ struct SessionStoreTests {
         #expect(generation.backendMetadata?.structuredOutputMode == .promptOnlyJSON)
     }
 
-    @Test func savedGenerationWithoutInvocationCountSpendsOneInvocation() throws {
-        let (store, dir) = makeTempStore()
-        defer { try? FileManager.default.removeItem(at: dir) }
-        try writeSessionsFile(SavedCloudSessionsFixture.json, for: store)
-
-        let generation = try #require(try store.load().first?.lastGeneration)
-
-        // Older builds wrote an HTTP-inclusive call count and no invocation
-        // count; repair budgets read that as one invocation.
-        #expect(generation.generationCallCount == 2)
-        #expect(generation.generatorInvocationCount == nil)
-        #expect(TextToSQLRepairPolicy.spentInvocations(after: generation) == 1)
-    }
-
-    @Test func unreadableInvocationCountReadsAsLegacy() throws {
-        let session = try loadFixture(
-            replacing: #""generationCallCount": 2,"#,
-            with: #""generationCallCount": 2, "generatorInvocationCount": "two","#
-        )
-
-        let generation = try #require(session.lastGeneration)
-        #expect(generation.generatorInvocationCount == nil)
-        #expect(generation.generationCallCount == 2)
-        #expect(generation.backendMetadata?.structuredOutputMode == .promptOnlyJSON)
-    }
-
-    @Test func generatorInvocationCountSurvivesSaveAndLoad() throws {
-        let (store, dir) = makeTempStore()
-        defer { try? FileManager.default.removeItem(at: dir) }
-        var generation = makeGeneration()
-        generation.generationCallCount = 11
-        generation.generatorInvocationCount = 3
-        var session = QuerySession(connectionID: UUID())
-        session.messages = [
-            ChatMessage(role: .assistant, text: generation.explanation, generation: generation),
-        ]
-        session.lastGeneration = generation
-
-        try store.save([session])
-        let restored = try #require(try store.load().first)
-
-        #expect(restored.lastGeneration == generation)
-        #expect(restored.lastGeneration?.generatorInvocationCount == 3)
-        #expect(restored.messages.first?.generation?.generatorInvocationCount == 3)
-        let saved = try String(contentsOf: store.fileURL, encoding: .utf8)
-        #expect(saved.contains("generatorInvocationCount"))
-    }
-
     @Test func persistedEnumRawValuesAreFrozen() {
         // These raw values are stored in sessions.json and in eval results.
         // An older build can't decode a case it doesn't know, so adding,

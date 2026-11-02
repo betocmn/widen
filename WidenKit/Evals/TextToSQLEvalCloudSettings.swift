@@ -4,12 +4,11 @@ public enum TextToSQLEvalDefaults {
     /// The model a text-to-SQL eval runs when `--model` is not passed.
     public static let requestedModelID = CloudModelProfile.particle.requestedModelID
 
-    /// The per-case eval timeout. One case can run the first generation and
-    /// the validation and verification repairs the repair policy allows, each
-    /// bounded by the agent's wall clock for its mode, and no repair starts
-    /// after the policy's cutoff. This stays well above that worst case, so an
-    /// eval timeout never cuts off an agent that is still within its own
-    /// limits.
+    /// The per-case eval timeout. One case can run the first generation, the
+    /// validation repairs that share its model-call budget, and a verification
+    /// repair, each bounded by the agent wall clock. This stays well above
+    /// their sum, so an eval timeout never cuts off an agent that is still
+    /// within its own limits.
     public static let caseTimeoutSeconds: Double = 1_200
 }
 

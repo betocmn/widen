@@ -207,7 +207,7 @@ public final class SessionController: Identifiable {
                 ),
                 priorFingerprints: [Self.normalizedSQL(failedSQL)]
             ),
-            modelCallCount: GeneratedSQLRepairSupport.cumulativeModelCallCount(
+            modelCallCount: Self.cumulativeGeneratedSQLModelCallCount(
                 after: startingGeneration,
                 attempt: 1
             ),
@@ -238,8 +238,6 @@ public final class SessionController: Identifiable {
                 schema: schema,
                 context: context,
                 config: config
-            ).withGeneratorInvocationCount(
-                TextToSQLRepairPolicy.spentInvocations(after: startingGeneration) + 1
             )
             appState.noteTextToSQLOutcome(.answered)
             generation = GeneratedSQLPostprocessor.enriched(
@@ -647,23 +645,15 @@ public final class SessionController: Identifiable {
         let startingGeneration = startingGeneration
             ?? generatedAssistant(matchingSQL: startingSQL)
             ?? queryVM.generation?.withSQL(startingSQL)
-        let repairStartedAt = Date()
-        let repairPolicy = TextToSQLRepairPolicy.default
-        let executionRepairBudget = repairPolicy.remainingRepairs(
-            cap: repairPolicy.maximumExecutionRepairs,
-            after: startingGeneration
-        )
-        let initialStatus = retryStatus(
-            appState: appState,
-            attempt: 1,
-            maxAttempts: max(1, executionRepairBudget),
-            error: firstError
-        )
         let ownsGenerationState = !chatVM.isGenerating
         if ownsGenerationState {
-            chatVM.beginGeneration(status: initialStatus)
+            chatVM.beginGeneration(
+                status: retryStatus(appState: appState, attempt: 1, error: firstError)
+            )
         } else {
-            chatVM.updateGenerationStatus(initialStatus)
+            chatVM.updateGenerationStatus(
+                retryStatus(appState: appState, attempt: 1, error: firstError)
+            )
         }
         appendActivity(
             "Generated SQL failed while running.",
@@ -703,7 +693,7 @@ public final class SessionController: Identifiable {
         )
         let postgres = appState.postgres(for: connectionID)
         let generator = appState.sqlGenerator(connectionID: connectionID, schema: schema)
-        let spentInvocations = TextToSQLRepairPolicy.spentInvocations(after: startingGeneration)
+        let repairCallBudget = GeneratedSQLRepairSupport.cloudModelCallBudget
         let firstDiagnostic = firstFailure?.diagnostic ?? Self.diagnostic(from: firstError)
         let allowRepairWrites = false
         let forbiddenIdentifiers = Self.forbiddenIdentifiers(
@@ -721,19 +711,19 @@ public final class SessionController: Identifiable {
                 forbiddenIdentifiers: forbiddenIdentifiers,
                 error: firstError,
             ),
-            maxModelCalls: executionRepairBudget
+            maxModelCalls: Self.remainingGeneratedSQLRepairCalls(
+                after: startingGeneration,
+                modelCallBudget: repairCallBudget
+            )
         )
 
-        var attemptNumber = 0
-        while repairPolicy.allowsRepairStart(requestStartedAt: repairStartedAt),
-            let repairMode = coordinator.beginNextAttempt()
-        {
-            attemptNumber += 1
+        while let repairMode = coordinator.beginNextAttempt() {
+            let attemptNumber = repairMode == .repair ? 1 : 2
             chatVM.updateGenerationStatus(
                 retryStatus(
                     appState: appState,
                     attempt: attemptNumber,
-                    maxAttempts: executionRepairBudget,
+                    maxAttempts: max(1, repairCallBudget - 1),
                     error: coordinator.constraints.lastError
                 )
             )
@@ -754,7 +744,7 @@ public final class SessionController: Identifiable {
                 currentSQL: repairMode == .repair ? repairContext.failedSQL : nil,
                 lastRunError: repairMode == .repair ? coordinator.constraints.lastError : nil,
                 repairContext: repairContext,
-                modelCallCount: GeneratedSQLRepairSupport.cumulativeModelCallCount(
+                modelCallCount: Self.cumulativeGeneratedSQLModelCallCount(
                     after: startingGeneration,
                     attempt: attemptNumber
                 ),
@@ -771,7 +761,7 @@ public final class SessionController: Identifiable {
                     schema: schema,
                     context: context,
                     config: config
-                ).withGeneratorInvocationCount(spentInvocations + attemptNumber)
+                )
                 appState.noteTextToSQLOutcome(.answered)
                 generation = GeneratedSQLPostprocessor.enriched(
                     generated,
@@ -810,7 +800,7 @@ public final class SessionController: Identifiable {
                 else {
                     restoreStartingGeneration(schema: schema)
                     chatVM.appendRunError(
-                        repairFailureMessage(attempts: coordinator.attempts, appState: appState)
+                        repairFailureMessage(attempts: coordinator.attempts)
                     )
                     appState.sessionDidChange(sessionID)
                     return
@@ -836,8 +826,7 @@ public final class SessionController: Identifiable {
                 appendActivity(
                     "\(repairLabel) was rejected.",
                     sql: evaluation.sql ?? generation.sql,
-                    error: evaluation.message
-                        ?? GeneratedSQLRepairSupport.repairRejectionMessage(reason),
+                    error: evaluation.message ?? Self.repairRejectionMessage(reason),
                     appState: appState
                 )
                 if reason.isZeroProgressRepair {
@@ -869,7 +858,7 @@ public final class SessionController: Identifiable {
                 }
                 restoreStartingGeneration(schema: schema)
                 chatVM.appendRunError(
-                    repairFailureMessage(attempts: coordinator.attempts, appState: appState)
+                    repairFailureMessage(attempts: coordinator.attempts)
                 )
                 appState.sessionDidChange(sessionID)
                 return
@@ -886,7 +875,7 @@ public final class SessionController: Identifiable {
                 )
                 restoreStartingGeneration(schema: schema)
                 chatVM.appendRunError(
-                    repairFailureMessage(attempts: coordinator.attempts, appState: appState)
+                    repairFailureMessage(attempts: coordinator.attempts)
                 )
                 appState.sessionDidChange(sessionID)
                 return
@@ -995,10 +984,24 @@ public final class SessionController: Identifiable {
         }
 
         restoreStartingGeneration(schema: schema)
-        chatVM.appendRunError(
-            repairFailureMessage(attempts: coordinator.attempts, appState: appState)
-        )
+        chatVM.appendRunError(repairFailureMessage(attempts: coordinator.attempts))
         appState.sessionDidChange(sessionID)
+    }
+
+    private static func remainingGeneratedSQLRepairCalls(
+        after generation: SQLGenerationResult?,
+        modelCallBudget: Int
+    ) -> Int {
+        let spentModelCalls = max(1, generation?.generationCallCount ?? 1)
+        return max(0, modelCallBudget - spentModelCalls)
+    }
+
+    private static func cumulativeGeneratedSQLModelCallCount(
+        after generation: SQLGenerationResult?,
+        attempt: Int
+    ) -> Int {
+        let spentModelCalls = max(1, generation?.generationCallCount ?? 1)
+        return spentModelCalls + max(0, attempt)
     }
 
     private func appendAssistantGeneration(_ generation: SQLGenerationResult) {
@@ -1084,10 +1087,27 @@ public final class SessionController: Identifiable {
         }
     }
 
+    private static func repairRejectionMessage(
+        _ reason: SQLRepairCandidateRejectionReason
+    ) -> String {
+        switch reason {
+        case .emptySQL:
+            "The model did not return corrected SQL."
+        case .repeatedFingerprint:
+            "The model repeated SQL that already failed."
+        case .forbiddenIdentifier(let identifier):
+            "The model reused forbidden identifier \(identifier)."
+        case .validationFailure:
+            "The SQL still failed validation."
+        case .unsafeWrite:
+            "The model produced a data-modifying query while repairing a read."
+        }
+    }
+
     private func retryStatus(
         appState: AppState,
         attempt: Int,
-        maxAttempts: Int,
+        maxAttempts: Int = GeneratedSQLRepairCoordinator.maxModelCalls,
         error: String
     ) -> String {
         return """
@@ -1097,14 +1117,40 @@ public final class SessionController: Identifiable {
     }
 
     private func repairFailureMessage(
-        attempts: [SQLRepairAttempt],
-        appState: AppState
+        attempts: [SQLRepairAttempt]
     ) -> String {
-        GeneratedSQLRepairSupport.repairFailureMessage(
-            attempts: attempts,
-            mode: .execution,
-            backendDisplayName: appState.activeBackendDisplayName
-        )
+        let lastError = attempts.last?.error ?? "Unknown database error."
+        let history = attempts
+            .map { attempt in
+                "- \(attempt.label): \(Self.truncated(attempt.error, to: 220))"
+            }
+            .joined(separator: "\n")
+        let recoveryGuidance =
+            "The failed SQL and repair attempts are shown above in the chat. "
+            + "The editor was restored to the last valid or original generation. "
+            + "Add more context to your question, or to Query Context in Database Settings, then try again."
+        if attempts.count <= 1 {
+            return """
+                The generated SQL already used this request's model-call budget, so I did not ask the model to repair it.
+
+                Last error: \(lastError)
+
+                Errors seen:
+                \(history)
+
+                \(recoveryGuidance)
+                """
+        }
+        return """
+            I tried a focused repair and, when needed, one reconstruction, but the database still rejected it.
+
+            Last error: \(lastError)
+
+            Errors seen:
+            \(history)
+
+            \(recoveryGuidance)
+            """
     }
 
     private func questionContextForRepair(

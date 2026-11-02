@@ -41,9 +41,6 @@ public struct SchemaToolSQLAgentConfiguration: Equatable, Sendable {
     public var maximumHTTPAttempts: Int
     public var countCapabilityLookupHTTPAttempts: Bool
     public var wallClockTimeoutSeconds: TimeInterval
-    /// The wall clock for a repair or reconstruction run, shorter than the
-    /// first generation's because the pipeline may chain several repairs.
-    public var repairWallClockTimeoutSeconds: TimeInterval
     public var clarificationCorrectionMode: SchemaToolAgentClarificationCorrectionMode
     public var intentCoverageMode: SchemaToolAgentIntentCoverageMode
     public var planConsistencyMode: SchemaToolAgentPlanConsistencyMode
@@ -62,7 +59,6 @@ public struct SchemaToolSQLAgentConfiguration: Equatable, Sendable {
         maximumHTTPAttempts: Int = 12,
         countCapabilityLookupHTTPAttempts: Bool = false,
         wallClockTimeoutSeconds: TimeInterval = 180,
-        repairWallClockTimeoutSeconds: TimeInterval = 120,
         clarificationCorrectionMode: SchemaToolAgentClarificationCorrectionMode = .diagnosticsOnly,
         intentCoverageMode: SchemaToolAgentIntentCoverageMode = .diagnosticsOnly,
         planConsistencyMode: SchemaToolAgentPlanConsistencyMode = .diagnosticsOnly
@@ -80,7 +76,6 @@ public struct SchemaToolSQLAgentConfiguration: Equatable, Sendable {
         self.maximumHTTPAttempts = maximumHTTPAttempts
         self.countCapabilityLookupHTTPAttempts = countCapabilityLookupHTTPAttempts
         self.wallClockTimeoutSeconds = wallClockTimeoutSeconds
-        self.repairWallClockTimeoutSeconds = repairWallClockTimeoutSeconds
         self.clarificationCorrectionMode = clarificationCorrectionMode
         self.intentCoverageMode = intentCoverageMode
         self.planConsistencyMode = planConsistencyMode
@@ -104,15 +99,7 @@ public struct SchemaToolSQLAgentConfiguration: Equatable, Sendable {
             "maximumPlanConsistencyCorrections": String(maximumPlanConsistencyCorrections),
             "maximumTerminalRequiredCorrections": String(maximumTerminalRequiredCorrections),
             "wallClockTimeoutSeconds": String(format: "%g", wallClockTimeoutSeconds),
-            "repairWallClockTimeoutSeconds": String(format: "%g", repairWallClockTimeoutSeconds),
         ]
-    }
-
-    /// The wall clock for one agent run in `mode`.
-    public func wallClockTimeoutSeconds(for mode: SQLGenerationMode) -> TimeInterval {
-        mode == .repair || mode == .reconstructAfterFailedRepair
-            ? repairWallClockTimeoutSeconds
-            : wallClockTimeoutSeconds
     }
 }
 
@@ -441,9 +428,7 @@ public final class SchemaToolSQLAgent: SQLGenerator, Sendable {
         var planConsistencyCorrections = 0
         var terminalRequiredAfterSufficientEvidence = false
         var terminalRequiredCorrections = 0
-        let deadline = Date().addingTimeInterval(
-            configuration.wallClockTimeoutSeconds(for: context.mode)
-        )
+        let deadline = Date().addingTimeInterval(configuration.wallClockTimeoutSeconds)
         let promptCacheKey = profile.makePromptCacheKey()
 
         do {
