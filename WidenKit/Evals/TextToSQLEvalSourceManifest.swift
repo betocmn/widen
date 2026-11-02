@@ -16,6 +16,7 @@ public enum TextToSQLEvalSourceManifest {
             "WidenKit/Evals/TextToSQLEvalCloudSettings.swift",
             "WidenKit/Evals/TextToSQLEvalWithheldSQL.swift",
             "WidenKit/Evals/TextToSQLEvalGroundingJudge.swift",
+            "WidenKit/Evals/TextToSQLEvalExtraCallsMetrics.swift",
             "WidenEval/EvalRunner.swift",
             "WidenKit/Models/SQLGenerationResult.swift",
             "WidenKit/Services/TextToSQLPipeline.swift",
@@ -26,6 +27,8 @@ public enum TextToSQLEvalSourceManifest {
             "WidenKit/Services/SQLSafetyValidator.swift",
             "WidenKit/Services/SQLSchemaValidator.swift",
             "WidenKit/Services/SchemaPromptPackager.swift",
+            "WidenKit/Services/SchemaRelevanceRanker.swift",
+            "WidenKit/Services/SchemaIndex.swift",
             "WidenKit/Services/GeneratedSQLRepairCoordinator.swift",
             "WidenKit/Services/GeneratedSQLRepairSupport.swift",
             "WidenKit/Services/GeneratedSQLVerifier.swift",
@@ -41,6 +44,7 @@ public enum TextToSQLEvalSourceManifest {
         ] + (includesSchemaToolAgent ? [
             "WidenKit/Services/SchemaToolSQLAgent.swift",
             "WidenKit/Services/ChatToolProtocol.swift",
+            "WidenKit/Services/JSONValue.swift",
             "WidenKit/Services/SchemaToolAgentClarificationPolicy.swift",
             "WidenKit/Services/SchemaToolAgentCritic.swift",
             "WidenKit/Services/SchemaToolAgentGroundingJudge.swift",
@@ -48,6 +52,11 @@ public enum TextToSQLEvalSourceManifest {
             "WidenKit/Services/SchemaToolAgentSQLIntentCoveragePolicy.swift",
             "WidenKit/Services/SchemaToolRuntime.swift",
             "WidenKit/Services/SchemaToolSession.swift",
+            "WidenKit/Services/SchemaSearchIndexStore.swift",
+            "WidenKit/Services/SchemaSearchIndexing.swift",
+            "WidenKit/Services/SchemaSearchTokenizer.swift",
+            "WidenKit/Services/SchemaSearchTypes.swift",
+            "WidenKit/Services/LocalSchemaSearcher.swift",
         ] : [])
     }
 

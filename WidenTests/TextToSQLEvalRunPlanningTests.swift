@@ -1257,6 +1257,23 @@ struct TextToSQLEvalRunPlanningTests {
         #expect(!oneShotPaths.contains("WidenKit/Services/SchemaToolAgentCritic.swift"))
         #expect(agentPaths.contains("WidenKit/Services/SchemaToolAgentGroundingJudge.swift"))
         #expect(!oneShotPaths.contains("WidenKit/Services/SchemaToolAgentGroundingJudge.swift"))
+        // The grounder's tokens, which also verify the judge's quotes, and
+        // the one-shot prompt ranking, plus the critic's flag and summary rows.
+        #expect(oneShotPaths.contains("WidenKit/Services/SchemaIndex.swift"))
+        #expect(oneShotPaths.contains("WidenKit/Services/SchemaRelevanceRanker.swift"))
+        #expect(oneShotPaths.contains("WidenKit/Evals/TextToSQLEvalExtraCallsMetrics.swift"))
+        // The agent's tool arguments and its search_schema index.
+        for path in [
+            "WidenKit/Services/JSONValue.swift",
+            "WidenKit/Services/SchemaSearchIndexStore.swift",
+            "WidenKit/Services/SchemaSearchIndexing.swift",
+            "WidenKit/Services/SchemaSearchTokenizer.swift",
+            "WidenKit/Services/SchemaSearchTypes.swift",
+            "WidenKit/Services/LocalSchemaSearcher.swift",
+        ] {
+            #expect(agentPaths.contains(path), "\(path)")
+            #expect(!oneShotPaths.contains(path), "\(path)")
+        }
 
         let hash = try TextToSQLEvalSourceManifest.sourceHash(
             relativePaths: agentPaths,
