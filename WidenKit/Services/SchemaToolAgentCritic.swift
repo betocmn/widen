@@ -132,7 +132,7 @@ struct SchemaToolAgentCriticReview: Equatable, Sendable {
     var note: String?
 }
 
-enum SchemaToolAgentCriticParseError: String, Error, Equatable, Sendable {
+enum SchemaToolAgentCriticParseError: Error, Equatable, Sendable {
     /// No JSON object could be read from the reply.
     case invalidJSON
     /// The JSON object has no known verdict.
