@@ -34,8 +34,8 @@ endif
 RELEASE_VERSION ?= $(shell /usr/libexec/PlistBuddy -c 'Print CFBundleShortVersionString' Widen/Info.plist 2>/dev/null || echo 0.1.0)
 # EVAL_ARGS feeds the non-gate targets. The release-gate targets (eval-release,
 # eval-release-triage, eval-release-resume) take only MAX_CLOUD_COST_USD, via
-# CLOUD_COST_ARGS, so CASE, CASES, REPEAT and REASONING_EFFORT never change a
-# gate run.
+# CLOUD_COST_ARGS, so CASE, CASES, REPEAT, REASONING_EFFORT and GROUNDING_JUDGE
+# never change a gate run.
 EVAL_ARGS := --suite Evals/suites/text-to-sql-v1.json
 ifdef CASE
 EVAL_ARGS += --case $(CASE)
@@ -59,6 +59,11 @@ endif
 # An eval-only reasoning effort for Particle-1 experiments, e.g. REASONING_EFFORT=medium.
 ifdef REASONING_EFFORT
 EVAL_ARGS += --reasoning-effort $(REASONING_EFFORT)
+endif
+# The schema agent's grounding judge for engineering runs, GROUNDING_JUDGE=on
+# or off. Without it the eval follows the app's default.
+ifdef GROUNDING_JUDGE
+EVAL_ARGS += --schema-agent-grounding-judge $(GROUNDING_JUDGE)
 endif
 CLOUD_COST_ARGS :=
 ifdef MAX_CLOUD_COST_USD

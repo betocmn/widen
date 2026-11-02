@@ -89,6 +89,7 @@ enum EvalReporter {
             "| Schema agent intent coverage | \(tableCell(run.manifest.schemaAgentIntentCoverageMode ?? "-")) |",
             "| Schema agent plan consistency | \(tableCell(run.manifest.schemaAgentPlanConsistencyMode ?? "-")) |",
             "| Schema agent critic | \(tableCell(run.manifest.schemaAgentCriticMode ?? "-")) |",
+            "| Schema agent grounding judge | \(tableCell(run.manifest.schemaAgentGroundingJudgeMode ?? "-")) |",
             "| Provider | \(tableCell(run.manifest.resolvedProvider ?? "-")) |",
             "| Endpoint host | \(tableCell(run.manifest.providerEndpointHost ?? "-")) |",
             "| Model | \(tableCell(run.manifest.model ?? "-")) |",
@@ -280,6 +281,7 @@ enum EvalReporter {
         lines += TextToSQLEvalForcedTerminalSummary.markdownRows(summary.forcedTerminal)
         lines += TextToSQLEvalCriticSummary.markdownRows(summary.schemaAgentCritic)
         lines += TextToSQLEvalWithheldSQLSummary.markdownRows(summary.withheldSQL)
+        lines += TextToSQLEvalGroundingJudgeSummary.markdownRows(summary.groundingJudge)
         lines += [
             "| Repeated repair fingerprint/no-progress repairs | \(summary.repeatedNoProgressRepairCount) |",
             "| Avg estimated initial prompt characters | \(averagePromptSize) |",
@@ -744,6 +746,13 @@ extension EvalRunManifest {
     /// for a run without the schema agent or from before the critic.
     var schemaAgentCriticMode: String? {
         TextToSQLEvalSchemaAgentCritic.recordedMode(in: agentConfiguration)
+    }
+
+    /// The schema agent's grounding judge mode, from the agent
+    /// configuration. Nil for a run without the schema agent or from before
+    /// the judge, which ran without it.
+    var schemaAgentGroundingJudgeMode: String? {
+        TextToSQLEvalSchemaAgentGroundingJudge.recordedMode(in: agentConfiguration)
     }
 
     /// The provider's name for report headings, such as "Particle".

@@ -274,6 +274,7 @@ enum EvalExplicitOption: Hashable {
     case schemaAgentIntentCoverageMode
     case schemaAgentPlanConsistencyMode
     case schemaAgentCriticMode
+    case schemaAgentGroundingJudgeMode
     case model
     case reasoningEffort
     case suitePath
@@ -292,6 +293,9 @@ struct EvalCLIOptions {
     var schemaAgentPlanConsistencyMode: SchemaToolAgentPlanConsistencyMode = .diagnosticsOnly
     /// Off by default, as in the app.
     var schemaAgentCriticMode: SchemaToolAgentCriticMode = .disabled
+    /// Follows the app's default.
+    var schemaAgentGroundingJudgeMode: SchemaToolAgentGroundingJudgeMode =
+        SchemaToolSQLAgentConfiguration.default.groundingJudgeMode
     /// The provider follows from the model: `particle-1` is Particle-1 and
     /// an OpenRouter `vendor/model` ID runs through OpenRouter.
     var model: String = TextToSQLEvalDefaults.requestedModelID
@@ -336,6 +340,7 @@ struct EvalCLIOptions {
           --schema-agent-intent-coverage disabled|diagnostics|reject-only|experimental
           --schema-agent-plan-consistency disabled|diagnostics|experimental
           --schema-agent-critic on|off|enabled|disabled (default: off)
+          --schema-agent-grounding-judge on|off|enabled|disabled (default: the app's, now \(SchemaToolSQLAgentConfiguration.default.groundingJudgeMode == .enabled ? "on" : "off"))
           --model <model-id> (default: \(TextToSQLEvalDefaults.requestedModelID); a vendor/model ID runs through OpenRouter)
           --reasoning-effort \(ReasoningEffort.allCases.map(\.rawValue).joined(separator: "|")) (eval-only; \(TextToSQLEvalDefaults.requestedModelID) only)
           --suite <path>
@@ -424,6 +429,13 @@ struct EvalCLIOptions {
                 }
                 options.schemaAgentCriticMode = mode
                 options.explicitOptions.insert(.schemaAgentCriticMode)
+            case "--schema-agent-grounding-judge":
+                let value = try nextValue(after: argument)
+                guard let mode = TextToSQLEvalSchemaAgentGroundingJudge.mode(flagValue: value) else {
+                    throw EvalCLIError.invalidValue(argument, value)
+                }
+                options.schemaAgentGroundingJudgeMode = mode
+                options.explicitOptions.insert(.schemaAgentGroundingJudgeMode)
             case "--model":
                 options.model = try nextValue(after: argument)
                 options.explicitOptions.insert(.model)

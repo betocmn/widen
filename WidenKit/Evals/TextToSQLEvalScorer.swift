@@ -303,7 +303,9 @@ public enum TextToSQLEvalCaseRunner {
                     options: options,
                     latencyMs: elapsedMilliseconds(since: started),
                     trace: run.trace
-                ).recordingWithheldSQL(run.groundingWithheldSQL)
+                )
+                .recordingWithheldSQL(run.groundingWithheldSQL)
+                .recordingGroundingJudgeDivergence(run.groundingJudgeDivergence, evalCase: evalCase)
             case .failed(let failure):
                 return pipelineFailureResult(
                     evalCase: evalCase,
@@ -312,6 +314,7 @@ public enum TextToSQLEvalCaseRunner {
                     latencyMs: elapsedMilliseconds(since: started),
                     trace: run.trace
                 )
+                .recordingGroundingJudgeDivergence(run.groundingJudgeDivergence, evalCase: evalCase)
             }
         } catch is CancellationError {
             return cancellationResult(
@@ -923,7 +926,7 @@ public enum TextToSQLEvalScorer {
         return Double(total - missing) / Double(total)
     }
 
-    private static func clarificationQuality(
+    static func clarificationQuality(
         _ value: String?,
         mustMentionAny configuredConcepts: [String]
     ) -> Bool {

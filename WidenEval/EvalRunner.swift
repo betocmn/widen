@@ -143,6 +143,9 @@ struct EvalRunSummary: Codable {
     /// Nil when no result withheld SQL, and in runs written before it was
     /// recorded.
     var withheldSQL: TextToSQLEvalWithheldSQLSummary?
+    /// Nil when no result ran with the grounding judge on, and in runs
+    /// written before it was recorded.
+    var groundingJudge: TextToSQLEvalGroundingJudgeSummary?
 }
 
 struct LatencySummary: Codable {
@@ -261,6 +264,7 @@ struct EvalRunner {
                 clarificationCorrectionMode: options.schemaAgentClarificationCorrectionMode,
                 intentCoverageMode: options.schemaAgentIntentCoverageMode,
                 planConsistencyMode: options.schemaAgentPlanConsistencyMode,
+                groundingJudgeMode: options.schemaAgentGroundingJudgeMode,
                 criticMode: options.schemaAgentCriticMode
             ).reportedSettings
             : nil
@@ -287,6 +291,9 @@ struct EvalRunner {
                 ? options.schemaAgentPlanConsistencyMode.rawValue
                 : nil,
             schemaAgentCriticMode: TextToSQLEvalSchemaAgentCritic.recordedMode(in: agentConfiguration),
+            schemaAgentGroundingJudgeMode: TextToSQLEvalSchemaAgentGroundingJudge.recordedMode(
+                in: agentConfiguration
+            ),
             semanticDatabaseEnabled: options.semanticDatabase,
             scorerSourceHash: scorerSourceHash,
             semanticComparatorSourceHash: semanticComparatorSourceHash,
@@ -463,7 +470,7 @@ struct EvalRunner {
                 }
                 let backendState = backendStates[key.backend]
 
-                let result: TextToSQLEvalResult
+                var result: TextToSQLEvalResult
                 if let unavailable = backendState?.unavailableReason {
                     result = backendUnavailableResult(
                         evalCase: evalCase,
@@ -554,6 +561,11 @@ struct EvalRunner {
                         repeatIndex: key.repeatIndex
                     )
                 }
+                // The paired judge-off arm, once the result's own end-to-end
+                // value is known.
+                if options.usesGroundingJudge {
+                    result = result.withGroundingJudgeOffArm()
+                }
 
                 results.append(result)
                 budgetTracker.record(result)
@@ -628,6 +640,11 @@ struct EvalRunner {
         options.schemaAgentCriticMode = TextToSQLEvalSchemaAgentCritic.resumedMode(
             current: options.schemaAgentCriticMode,
             isExplicit: options.explicitOptions.contains(.schemaAgentCriticMode),
+            previousAgentConfiguration: previousRun.manifest.agentConfiguration
+        )
+        options.schemaAgentGroundingJudgeMode = TextToSQLEvalSchemaAgentGroundingJudge.resumedMode(
+            current: options.schemaAgentGroundingJudgeMode,
+            isExplicit: options.explicitOptions.contains(.schemaAgentGroundingJudgeMode),
             previousAgentConfiguration: previousRun.manifest.agentConfiguration
         )
         if let model = previousRun.manifest.model, !options.explicitOptions.contains(.model) {
@@ -1164,6 +1181,7 @@ struct EvalRunner {
                     clarificationCorrectionMode: options.schemaAgentClarificationCorrectionMode,
                     intentCoverageMode: options.schemaAgentIntentCoverageMode,
                     planConsistencyMode: options.schemaAgentPlanConsistencyMode,
+                    groundingJudgeMode: options.schemaAgentGroundingJudgeMode,
                     criticMode: options.schemaAgentCriticMode
                 )
             }
@@ -1534,7 +1552,11 @@ struct EvalRunner {
             maxEstimatedInitialPromptCharacters: promptEstimateValues.max(),
             schemaAgentCritic: TextToSQLEvalCriticSummary(results: results),
             forcedTerminal: TextToSQLEvalForcedTerminalSummary(results: results),
-            withheldSQL: TextToSQLEvalWithheldSQLSummary(results: results)
+            withheldSQL: TextToSQLEvalWithheldSQLSummary(results: results),
+            groundingJudge: TextToSQLEvalGroundingJudgeSummary(
+                results: results,
+                expectedDecisions: casesByID.mapValues(\.expected.decision)
+            )
         )
     }
 
@@ -1741,6 +1763,7 @@ private extension EvalRunManifest {
             schemaAgentIntentCoverageMode: schemaAgentIntentCoverageMode,
             schemaAgentPlanConsistencyMode: schemaAgentPlanConsistencyMode,
             schemaAgentCriticMode: schemaAgentCriticMode,
+            schemaAgentGroundingJudgeMode: schemaAgentGroundingJudgeMode,
             semanticDatabaseEnabled: semanticDatabaseEnabled,
             scorerSourceHash: scorerSourceHash,
             semanticComparatorSourceHash: semanticComparatorSourceHash,
@@ -1753,6 +1776,10 @@ private extension EvalRunManifest {
 private extension EvalCLIOptions {
     var usesCloudSchemaAgent: Bool {
         backendMode.backends.contains(.cloud) && cloudAgentMode == .tools
+    }
+
+    var usesGroundingJudge: Bool {
+        usesCloudSchemaAgent && schemaAgentGroundingJudgeMode == .enabled
     }
 
     /// The call site whose policy the run's cloud requests follow.
@@ -1912,6 +1939,7 @@ private struct EvalCloudSchemaToolSQLGenerator: SQLGenerator, Sendable {
     var clarificationCorrectionMode: SchemaToolAgentClarificationCorrectionMode
     var intentCoverageMode: SchemaToolAgentIntentCoverageMode
     var planConsistencyMode: SchemaToolAgentPlanConsistencyMode
+    var groundingJudgeMode: SchemaToolAgentGroundingJudgeMode
     var criticMode: SchemaToolAgentCriticMode
 
     func generateSQL(
@@ -1946,12 +1974,14 @@ private struct EvalCloudSchemaToolSQLGenerator: SQLGenerator, Sendable {
         clarificationCorrectionMode: SchemaToolAgentClarificationCorrectionMode,
         intentCoverageMode: SchemaToolAgentIntentCoverageMode,
         planConsistencyMode: SchemaToolAgentPlanConsistencyMode,
+        groundingJudgeMode: SchemaToolAgentGroundingJudgeMode,
         criticMode: SchemaToolAgentCriticMode
     ) -> SchemaToolSQLAgentConfiguration {
         var configuration = SchemaToolSQLAgentConfiguration.default
         configuration.clarificationCorrectionMode = clarificationCorrectionMode
         configuration.intentCoverageMode = intentCoverageMode
         configuration.planConsistencyMode = planConsistencyMode
+        configuration.groundingJudgeMode = groundingJudgeMode
         configuration.criticMode = criticMode
         return configuration
     }
@@ -1961,6 +1991,7 @@ private struct EvalCloudSchemaToolSQLGenerator: SQLGenerator, Sendable {
             clarificationCorrectionMode: clarificationCorrectionMode,
             intentCoverageMode: intentCoverageMode,
             planConsistencyMode: planConsistencyMode,
+            groundingJudgeMode: groundingJudgeMode,
             criticMode: criticMode
         )
         if let maximumHTTPAttempts {

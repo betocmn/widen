@@ -48,8 +48,8 @@ and `CLOUD_AGENT` to `tools`. `MODEL=openai/gpt-5.5` runs an OpenRouter
 comparison on the non-gate targets; the release-gate targets refuse it (see
 Release Gate). The `eval-smoke`, `eval-cloud*`, `eval-case` and `eval-db-*`
 targets also pass `CASE`, `CASES`, `REPEAT`, `CASE_TIMEOUT_SECONDS`, `OUTPUT`,
-`FAIL_UNDER`, `REASONING_EFFORT` and `MAX_CLOUD_COST_USD` through to
-WidenEval. The focused `eval-release-preseason`,
+`FAIL_UNDER`, `REASONING_EFFORT`, `GROUNDING_JUDGE` and `MAX_CLOUD_COST_USD`
+through to WidenEval. The focused `eval-release-preseason`,
 `eval-release-overclarification` and `eval-release-sql-shape` targets rerun
 subsets of the gate suite with triage output in the run directory only.
 `make eval-provider-probe` always probes Particle-1 and writes `probe.json`
@@ -243,6 +243,20 @@ record only `groundingWithheldSQL`, `withheldSQLSemanticStatus` and
 changes a result's status. Summaries report the withheld counts as ungated
 rows.
 
+`--schema-agent-grounding-judge on|off` (`GROUNDING_JUDGE=on|off` on the
+non-gate targets) turns the schema agent's grounding judge on or off; without
+it the eval follows the app's default. The mode is recorded in the manifest's
+agent configuration, a resume inherits it, and a manifest without it reads as
+off. With the judge on, each result also records its paired judge-off arm from
+the same run: where the judgment first changed what the grounding
+postprocessor returned (`groundingJudgeDivergence`, `released` or `reAimed`),
+the run would otherwise have ended on the lexical clarification, so the off
+arm fails a case that expects SQL and otherwise scores that clarification's
+quality. Results without a divergence are their own off arm. The
+`groundingJudgeOffArm*` fields hold the paired values, never the clarification
+or any SQL, and summaries report the judge's counts and both arms as ungated
+rows.
+
 ## Release Gate
 
 `make eval-release` is the release gate and runs the pinned production model,
@@ -261,8 +275,8 @@ result.
 The target runs `Evals/suites/text-to-sql-v1.json` with `--cloud-agent tools`,
 `--semantic-db`, and `--repeat 3`, because the Particle-1 schema-tool agent is
 the path every connected session uses. Of the pass-through variables, the gate
-targets take only `MAX_CLOUD_COST_USD`; `CASE`, `CASES`, `REPEAT`, and
-`REASONING_EFFORT` never change a gate run. The normal
+targets take only `MAX_CLOUD_COST_USD`; `CASE`, `CASES`, `REPEAT`,
+`REASONING_EFFORT` and `GROUNDING_JUDGE` never change a gate run. The normal
 `.eval-results/<timestamp>/` artifacts are written, then
 `docs/evals/<RELEASE_VERSION>.md` is written with the gate result.
 `RELEASE_VERSION` defaults to the app's `CFBundleShortVersionString`, so pass
