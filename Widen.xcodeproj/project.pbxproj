@@ -69,6 +69,7 @@
 		48022A27EFAA78F2CBCC864D /* SidebarView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 55003AE18B47B04247233530 /* SidebarView.swift */; };
 		4805A6487DFC49CEDD9B4367 /* SchemaToolAgentClarificationPolicy.swift in Sources */ = {isa = PBXBuildFile; fileRef = CF56E4A1E0277C27CEFB756F /* SchemaToolAgentClarificationPolicy.swift */; };
 		48936314F226416F73E3FF44 /* TextToSQLSemanticComparator.swift in Sources */ = {isa = PBXBuildFile; fileRef = 47AD256A6A78E4494C7AC8D9 /* TextToSQLSemanticComparator.swift */; };
+		4928763091DA5052C273D4F7 /* SchemaToolAgentGroundingJudgeTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = A2CC9F89944B7F2E54134F5C /* SchemaToolAgentGroundingJudgeTests.swift */; };
 		49D036B9E3F976916C4023DC /* SchemaStore.swift in Sources */ = {isa = PBXBuildFile; fileRef = F63EE53E94C2C5F8EDC5DD47 /* SchemaStore.swift */; };
 		4A75EC7A4C514B92BE04945E /* ResultsGridView.swift in Sources */ = {isa = PBXBuildFile; fileRef = A0D6E491DE3F8E28E3DE6BA0 /* ResultsGridView.swift */; };
 		4F7981200C894F36EB6CA063 /* SchemaToolAgentPlanConsistencyPolicyTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 04EE287E3B3BEC70BE34320B /* SchemaToolAgentPlanConsistencyPolicyTests.swift */; };
@@ -107,6 +108,7 @@
 		84E1A393495DA1BE21BD9BCF /* SchemaSearchTokenizer.swift in Sources */ = {isa = PBXBuildFile; fileRef = EECF1FE27D78BA25AAC6F833 /* SchemaSearchTokenizer.swift */; };
 		85C5BCDFB12237BF548DCEB7 /* TextToSQLEvalExtraCallsMetrics.swift in Sources */ = {isa = PBXBuildFile; fileRef = 0FDEE1011E83AE7C02287B9B /* TextToSQLEvalExtraCallsMetrics.swift */; };
 		8783F4DD167746CC6848410E /* CredentialHostGuardTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 0557157EA8EA6AB3211372DC /* CredentialHostGuardTests.swift */; };
+		892D71D1A595F2108ADD4B3C /* SchemaToolAgentGroundingJudge.swift in Sources */ = {isa = PBXBuildFile; fileRef = 98912E3E8C1DB3F54C4E17EC /* SchemaToolAgentGroundingJudge.swift */; };
 		89E8175EE7A65895715004C8 /* ConnectionStore.swift in Sources */ = {isa = PBXBuildFile; fileRef = 6DBE4DAF98A714DFDE7DF54E /* ConnectionStore.swift */; };
 		8A32737A8620531A6D474C93 /* GeneratedSQLRepairCoordinator.swift in Sources */ = {isa = PBXBuildFile; fileRef = D357EBFEA721E116CB5B66BB /* GeneratedSQLRepairCoordinator.swift */; };
 		8C7B53F2B10338BB399CA9FA /* LoadingView.swift in Sources */ = {isa = PBXBuildFile; fileRef = CB98264D45BE6021646B47AA /* LoadingView.swift */; };
@@ -351,6 +353,7 @@
 		980EE95F99B9CDF2F26BBC47 /* ErrorBannerView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ErrorBannerView.swift; sourceTree = "<group>"; };
 		9857673C2A5C95A2420DDF7B /* SQLGenerationErrorCopyTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SQLGenerationErrorCopyTests.swift; sourceTree = "<group>"; };
 		986958ED550CCF8A916F0E59 /* SchemaToolRuntime.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SchemaToolRuntime.swift; sourceTree = "<group>"; };
+		98912E3E8C1DB3F54C4E17EC /* SchemaToolAgentGroundingJudge.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SchemaToolAgentGroundingJudge.swift; sourceTree = "<group>"; };
 		9A793F5D8A55E1A72D80DF91 /* TextToSQLPipeline.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = TextToSQLPipeline.swift; sourceTree = "<group>"; };
 		9A9428FA3340AEA769E37207 /* DatabaseInspectionEvalReporter.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = DatabaseInspectionEvalReporter.swift; sourceTree = "<group>"; };
 		9AA8DD4D47860928536D57B0 /* EvalReportRedactionTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = EvalReportRedactionTests.swift; sourceTree = "<group>"; };
@@ -359,6 +362,7 @@
 		A103E85DE2A899598A7072B5 /* JSONValue.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = JSONValue.swift; sourceTree = "<group>"; };
 		A181CFBD27E3620C8C3C902E /* MainView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MainView.swift; sourceTree = "<group>"; };
 		A287B7ABA46C2CE732510671 /* WidenKit.framework */ = {isa = PBXFileReference; explicitFileType = wrapper.framework; includeInIndex = 0; path = WidenKit.framework; sourceTree = BUILT_PRODUCTS_DIR; };
+		A2CC9F89944B7F2E54134F5C /* SchemaToolAgentGroundingJudgeTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SchemaToolAgentGroundingJudgeTests.swift; sourceTree = "<group>"; };
 		A3B9A1CC6E0205BFB23382B5 /* KeychainService.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = KeychainService.swift; sourceTree = "<group>"; };
 		A5EB4C4ABF5F9444F28736EF /* AppearancePreference.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AppearancePreference.swift; sourceTree = "<group>"; };
 		A8D7D7EDCCE8B5638DAF4989 /* AppStateSchemaTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AppStateSchemaTests.swift; sourceTree = "<group>"; };
@@ -587,6 +591,7 @@
 				6765AEA72CE58BC6D644FE4C /* SchemaStoreTests.swift */,
 				1197CB405BF15DE517E3D68A /* SchemaToolAgentClarificationPolicyTests.swift */,
 				5BCD36750F1CCAF277FDD239 /* SchemaToolAgentCriticTests.swift */,
+				A2CC9F89944B7F2E54134F5C /* SchemaToolAgentGroundingJudgeTests.swift */,
 				04EE287E3B3BEC70BE34320B /* SchemaToolAgentPlanConsistencyPolicyTests.swift */,
 				EF857029FDAFBBB5384501D4 /* SchemaToolAgentSQLIntentCoveragePolicyTests.swift */,
 				ECC242A6EC0F2F26FE09C27B /* SchemaToolSessionTests.swift */,
@@ -654,6 +659,7 @@
 				CF56E4A1E0277C27CEFB756F /* SchemaToolAgentClarificationPolicy.swift */,
 				BF5064CD5E34675D67EF55C1 /* SchemaToolAgentCritic.swift */,
 				B3102945C5452267DB125B9F /* SchemaToolAgentDiagnostics.swift */,
+				98912E3E8C1DB3F54C4E17EC /* SchemaToolAgentGroundingJudge.swift */,
 				06C730A57FB8D00BF29C8A72 /* SchemaToolAgentPlanConsistencyPolicy.swift */,
 				5D054FB0E6529D1B4B3876A2 /* SchemaToolAgentSQLIntentCoveragePolicy.swift */,
 				986958ED550CCF8A916F0E59 /* SchemaToolRuntime.swift */,
@@ -975,6 +981,7 @@
 				C8CC0F98FA9581466F034692 /* SchemaStoreTests.swift in Sources */,
 				908299E4B6FEB203AE58B684 /* SchemaToolAgentClarificationPolicyTests.swift in Sources */,
 				D0C3BFED85F6A599BC38B3BE /* SchemaToolAgentCriticTests.swift in Sources */,
+				4928763091DA5052C273D4F7 /* SchemaToolAgentGroundingJudgeTests.swift in Sources */,
 				4F7981200C894F36EB6CA063 /* SchemaToolAgentPlanConsistencyPolicyTests.swift in Sources */,
 				1E1E51C710BC2763556B5BD0 /* SchemaToolAgentSQLIntentCoveragePolicyTests.swift in Sources */,
 				80615CA01F67727C46443BCA /* SchemaToolSQLAgentTests.swift in Sources */,
@@ -1106,6 +1113,7 @@
 				4805A6487DFC49CEDD9B4367 /* SchemaToolAgentClarificationPolicy.swift in Sources */,
 				2F1078A434608DAFEC4D119C /* SchemaToolAgentCritic.swift in Sources */,
 				6D6561701DBDB54AAC713632 /* SchemaToolAgentDiagnostics.swift in Sources */,
+				892D71D1A595F2108ADD4B3C /* SchemaToolAgentGroundingJudge.swift in Sources */,
 				983FE968DD62FD3A9CCA7A9E /* SchemaToolAgentPlanConsistencyPolicy.swift in Sources */,
 				8468F986D084D1862AE1D4C7 /* SchemaToolAgentSQLIntentCoveragePolicy.swift in Sources */,
 				7A1376525CF19C362A717496 /* SchemaToolRuntime.swift in Sources */,
