@@ -54,8 +54,10 @@ public enum TextToSQLEvalSchemaAgentCritic {
 public struct TextToSQLEvalCriticSummary: Codable, Equatable, Sendable {
     /// Results whose answer was SQL the critic could review: the critic was
     /// on and the run's SQL reached the critic step (its final outcome is
-    /// set), outside repair mode. A run skips the critic near its deadline,
-    /// at its HTTP or turn budget, and on a forced final answer. Those skips
+    /// set), outside repair mode and not from a forced final request, the
+    /// two answers the critic skips by design. A forced answer is never
+    /// reviewed, even one forced after a revision. A run also skips the
+    /// critic near its deadline and at its HTTP or turn budget. Those skips
     /// stay eligible, so they count as SQL the layer left unreviewed.
     /// Clarifications and failed runs have no outcome, unless a revision
     /// released the SQL from before it.
@@ -81,6 +83,11 @@ public struct TextToSQLEvalCriticSummary: Codable, Equatable, Sendable {
     public static let failedOpenVerdict = "error"
     /// The final outcome of SQL from a repair run, which is never reviewed.
     public static let repairModeOutcome = "skippedRepairMode"
+    /// The final outcome of a forced final answer, which is never reviewed.
+    public static let forcedTerminalOutcome = "skippedForcedTerminal"
+    /// The final outcomes of SQL the critic skips by design, which is not
+    /// eligible for review.
+    public static let ineligibleOutcomes: Set<String> = [repairModeOutcome, forcedTerminalOutcome]
     /// The suffix of the outcomes that released the SQL from before a
     /// revision, because the revision turned into a clarification, changed
     /// the statement kind or failed.
@@ -115,7 +122,7 @@ public struct TextToSQLEvalCriticSummary: Codable, Equatable, Sendable {
         guard !diagnostics.isEmpty else { return nil }
         let eligible = diagnostics.filter {
             guard let outcome = $0.criticFinalOutcome else { return false }
-            return outcome != Self.repairModeOutcome
+            return !Self.ineligibleOutcomes.contains(outcome)
         }
         let verdicts = diagnostics.flatMap { $0.criticVerdicts ?? [] }
         self.init(
