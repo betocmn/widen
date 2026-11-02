@@ -241,17 +241,26 @@ light/dark mode; pick "System" in Settings › General to follow macOS again.
    columns, types, constraints, and foreign keys it needs through bounded
    schema tools that Widen answers from the open schema (system schemas
    excluded), plus data inspection tools when the connection allows them. It
-   then submits either one SQL statement or a clarification question.
-3. The SQL appears in the chat as a dashed card, validated deterministically:
+   then submits either one SQL statement or a clarification question, within
+   fixed budgets (12 model turns, 12 schema lookups and 180 s); a run that
+   runs out of budget or time is asked for its final answer instead.
+3. A word check matches your question against the schema the SQL uses, the
+   connection's database context, and definitions you confirmed. If a word
+   matches nothing, Widen may ask Particle-1 in a separate request whether it
+   needs a definition; that request carries the question, the unmatched words
+   and schema metadata, never the SQL or data values. Widen checks the
+   answer's citations itself and keeps the SQL only when every word checks
+   out; otherwise it asks you what the word means.
+4. The SQL appears in the chat as a dashed card, validated deterministically:
    only one read or `INSERT`/`UPDATE`/`DELETE` statement, no semicolons, no
    DDL/transaction keywords, no `pg_sleep`/`dblink`/`lo_*`. Validation issues
    sit behind the card's status icon. Keep chatting (or paste corrected SQL)
    until it's right.
-4. Run executes reads in a `BEGIN READ ONLY` transaction and writes in a normal
+5. Run executes reads in a `BEGIN READ ONLY` transaction and writes in a normal
    transaction with `SET LOCAL statement_timeout` (default 10s). Read queries
    without a `LIMIT` are wrapped in a subquery with your default row limit
    (default 100).
-5. The results flow into the same chat thread: a bordered table card appears
+6. The results flow into the same chat thread: a bordered table card appears
    where the run happened (first 10 rows, "View more" for the rest), with
    Copy as CSV and Export CSV. Every run is recorded in the transcript, and
    the conversation just keeps going underneath.

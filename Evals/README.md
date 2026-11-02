@@ -82,6 +82,8 @@ Without the key, every case records `backendUnavailable` with
 --schema-agent-clarification-correction disabled|diagnostics|experimental
 --schema-agent-intent-coverage disabled|diagnostics|reject-only|experimental
 --schema-agent-plan-consistency disabled|diagnostics|experimental
+--schema-agent-critic on|off|enabled|disabled (default: off)
+--schema-agent-grounding-judge on|off|enabled|disabled (default: the app's, now on)
 --model <model-id> (default: particle-1; a vendor/model ID runs through OpenRouter)
 --reasoning-effort none|minimal|low|medium|high|xhigh|max|ultra (eval-only; particle-1 only)
 --suite <path>
@@ -117,15 +119,19 @@ Without the key, every case records `backendUnavailable` with
 `--backend` accepts only `cloud`; `local` and `both` fail because the
 on-device backend was removed. `--cloud-agent` defaults to `tools`, the
 schema-tool agent the app uses; `legacy` runs the one-shot generator. The
-`--schema-agent-*` flags switch experimental agent policies and default to
-diagnostics only.
+clarification-correction, intent-coverage and plan-consistency flags switch
+experimental agent policies and default to diagnostics only. The critic and
+grounding judge flags are described in Critic And Grounding Judge.
 
 `--reasoning-effort` is eval-only: it overrides the effort Particle-1 agent
 turns and one-shot SQL send for the run, and is rejected for OpenRouter
-models. A release-gate or triage run needs `--allow-model-override` to use
-it, and then keeps its summaries in the run directory: only the production
-effort writes the committed `docs/evals/` files. The run manifest records the
-provider, its endpoint host, the effort sent, and the agent's call budgets.
+models. The grounding judge and critic keep their own call-site efforts
+(low and high). A release-gate or triage run needs `--allow-model-override`
+to use it, and then keeps its summaries in the run directory: only the
+production effort writes the committed `docs/evals/` files. The run manifest
+records the provider, its endpoint host, the effort sent, and the agent's
+configuration: its call budgets, wall clocks, and forced-answer, critic and
+grounding judge settings.
 
 `--max-cloud-cost-usd`, `--max-http-attempts` and `--max-completed-results`
 cap a run. They are checked before each result, so a run can overshoot the
@@ -247,19 +253,45 @@ record only `groundingWithheldSQL`, `withheldSQLSemanticStatus` and
 changes a result's status. Summaries report the withheld counts as ungated
 rows.
 
+## Critic And Grounding Judge
+
+The schema agent's extra calls are described in
+[the implementation guide](../docs/implementation-guide.md#schema-tool-agent-grounding-and-repairs).
+Summaries of schema-agent runs report forced final answers as ungated rows:
+attempted, succeeded, their reasons, timeouts, and forced requests the
+provider rejected.
+
+`--schema-agent-critic on|off` turns on the critic, which the app keeps off:
+in the 0.2.0 Stage 3 gate its revisions trimmed columns the expected results
+keep. It defaults to off and has no Make variable, so pass it to the
+`WidenEval` binary that `make eval-build` builds
+(`build/Build/Products/Debug/WidenEval`). With the critic on, summaries
+report its eligible SQL terminals, reviewed results, calls, failed-open
+calls, verdicts, final outcomes, revisions, and releases of pre-revision SQL;
+without it those rows show dashes. A resume inherits the recorded mode.
+
 `--schema-agent-grounding-judge on|off` (`GROUNDING_JUDGE=on|off` on the
 non-gate targets) turns the schema agent's grounding judge on or off; without
-it the eval follows the app's default. The mode is recorded in the manifest's
-agent configuration, a resume inherits it, and a manifest without it reads as
-off. With the judge on, each result also records its paired judge-off arm from
-the same run: where the judgment first changed what the grounding
-postprocessor returned (`groundingJudgeDivergence`, `released` or `reAimed`),
-the run would otherwise have ended on the lexical clarification, so the off
-arm fails a case that expects SQL and otherwise scores that clarification's
-quality. Results without a divergence are their own off arm. The
-`groundingJudgeOffArm*` fields hold the paired values, never the clarification
-or any SQL, and summaries report the judge's counts and both arms as ungated
-rows.
+it the eval follows the app's default, on. The mode is recorded in the
+manifest's agent configuration, a resume inherits it, and a manifest without
+it reads as off. With the judge on, each result also records its paired
+judge-off arm from the same run: where the judgment first changed what the
+grounding postprocessor returned (`groundingJudgeDivergence`, `released` or
+`reAimed`), the run would otherwise have ended on the lexical clarification,
+so the off arm fails a case that expects SQL and otherwise scores that
+clarification's quality. Results without a divergence are their own off arm.
+The `groundingJudgeOffArm*` fields hold the paired values, never the
+clarification or any SQL.
+
+Summaries report the judge's counts as ungated rows: eligible results,
+judgeable results (eligible minus the agent's rule-based skips), judged and
+failed results, skip reasons, labels, verified terms, postprocessor outcomes,
+vetoed, released and re-aimed results, releases on expected-clarify results,
+and the semantic passes of released expected-SQL results. Release-rule
+violations re-check every released result against each rule and are 0 unless
+the decision rule has a bug. Paired rows give both arms of end-to-end passes,
+clarification decisions, decision matches, and expected-SQL results answered
+with a clarification.
 
 `make eval-grounding-probe` runs `Evals/suites/grounding-probe-v1.json` through
 the schema-tool agent with seeded Postgres semantic grading. The suite is a
@@ -287,7 +319,9 @@ The target runs `Evals/suites/text-to-sql-v1.json` with `--cloud-agent tools`,
 `--semantic-db`, and `--repeat 3`, because the Particle-1 schema-tool agent is
 the path every connected session uses. Of the pass-through variables, the gate
 targets take only `MAX_CLOUD_COST_USD`; `CASE`, `CASES`, `REPEAT`,
-`REASONING_EFFORT` and `GROUNDING_JUDGE` never change a gate run. The normal
+`REASONING_EFFORT` and `GROUNDING_JUDGE` never change a gate run. They pass
+no `--schema-agent-*` flag either, so the gate runs the app's agent
+configuration: critic off, grounding judge on. The normal
 `.eval-results/<timestamp>/` artifacts are written, then
 `docs/evals/<RELEASE_VERSION>.md` is written with the gate result.
 `RELEASE_VERSION` defaults to the app's `CFBundleShortVersionString`, so pass

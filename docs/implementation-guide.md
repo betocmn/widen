@@ -400,11 +400,11 @@ ComposerView submit
       yes: ChatViewModel.submitDirectSQL(queryVM:)
         append user ChatMessage (the SQL itself)
         queryVM.setDirectSQL(sql)          // no model call
-      no: ChatViewModel.submit(schema:generator:config:queryVM:)
+      no: SessionController.submitGeneratedSQL(appState:)
         trim input
         require loaded schema              // promptSchema(for:) — open schema only
         append user ChatMessage
-        call generator.generateSQL(...)
+        TextToSQLPipeline.run(...)         // generate, ground, validate, repair
         append assistant or clarification ChatMessage
         queryVM.setGeneration(result)
     sessionDidChange -> debounced save
@@ -455,8 +455,9 @@ Every generation starts fresh, with no chat history kept at the provider, so
 follow-ups work through `SQLGenerationContext` (defined with the
 `SQLGenerator` protocol): up to three earlier user questions, the recent
 conversation, the SQL currently on screen, and the last run error, each with
-a tight character budget. `ChatViewModel.submit` assembles it from the
-transcript and `QueryResultViewModel` before appending the new question —
+a tight character budget, plus the connection's confirmed definitions.
+`SessionController.submitGeneratedSQL` assembles it from the transcript and
+`QueryResultViewModel` before appending the new question —
 this is what lets "the query is failing" produce a corrected version of the
 failing SQL instead of an unrelated query.
 
@@ -515,10 +516,10 @@ There are four implementations:
   Instead of a full schema prompt, it gives Particle-1 bounded,
   host-controlled schema tools (plus privacy-gated database inspection tools
   when the connection allows them) and finishes when the model calls the
-  terminal tool `submit_text_to_sql_result`. Limits on model turns,
-  schema-tool calls, HTTP attempts, and wall-clock time live in
-  `SchemaToolSQLAgentConfiguration.default`. Users cannot turn the agent off
-  or choose another model.
+  terminal tool `submit_text_to_sql_result`. It runs with
+  `SchemaToolSQLAgentConfiguration.default` (see "Schema-Tool Agent,
+  Grounding, And Repairs"). Users cannot turn the agent off or choose another
+  model.
 - `CloudSQLGenerator` (`WidenKit/Services/CloudSQLGenerator.swift`): the
   legacy one-shot generator. It sends the packaged schema prompt in one
   request and parses one JSON object. WidenEval runs it with
@@ -554,15 +555,18 @@ profile the app builds:
 | `oneShotSQL` | `high` | 16,000 | `json_object` |
 | `connectivityProbe` | `none` | 256 | `json_object` |
 | `sessionTitle` | `none` | 64 | None |
+| `groundingJudge` | `low` | 8,000 | `json_object`; no tools |
+| `critic` | `high` | 16,000 | `json_object`; no tools |
 
 Agent turns and one-shot requests send one `prompt_cache_key` per generation
-run. Particle requests never send a `provider` routing object, `temperature`,
-`max_tokens`, `n`, `seed`, OpenRouter's `X-` headers, or a tool-message
-`name`. Particle reports no `usage.cost`, so `costUSD` is estimated from the
-usage tokens at the peak list prices above and recorded with `costSource`
-`estimatedPeakList`; it is an upper bound. Every completion must report
-`particle-ai/particle-1` before its content is used. Particle publishes no
-dated snapshots, so this verifies the model name only.
+run; the grounding judge and the critic send it with a `-grounding` or
+`-critic` suffix. Particle requests never send a `provider` routing object,
+`temperature`, `max_tokens`, `n`, `seed`, OpenRouter's `X-` headers, or a
+tool-message `name`. Particle reports no `usage.cost`, so `costUSD` is
+estimated from the usage tokens at the peak list prices above and recorded
+with `costSource` `estimatedPeakList`; it is an upper bound. Every completion
+must report `particle-ai/particle-1` before its content is used. Particle
+publishes no dated snapshots, so this verifies the model name only.
 
 Failures become `CloudRequestFailure`
 (`WidenKit/Services/ChatCompletionsCore.swift`) with a category from
@@ -571,8 +575,9 @@ A rejected key (401), missing credits (402), missing inference scope (403),
 unknown model (404), or too-large request (413) is not retried. Rate limits
 (429, with a `Retry-After` of up to 15 seconds) and 5xx responses are retried
 within the HTTP-attempt budget. `invalid_model_output` is resent once (the
-one-shot generator adds a corrective message; agent turns resend unchanged)
-and is then reported as a parsing failure, not a transport failure.
+one-shot generator adds a corrective message, the grounding judge and the
+critic append one to their prompt, and agent turns resend unchanged) and is
+then reported as a parsing failure, not a transport failure.
 
 `CloudModelProfile.authorizedRequest(_:apiKey:)` is the only code that sets
 `Authorization`. Before anything is sent, it refuses a URL that is not https
@@ -604,10 +609,11 @@ override, mock mode, a saved Particle key, and the connection's
 `CloudModelCatalog.productionProfile` with the connection's database
 inspection policy for the cloud audience. There is no backend mode, provider,
 or model preference. `make eval-release` builds the same agent on the same
-profile, but with no inspection policy, inspection database or schema
-fingerprint, so the gate never offers data-inspection tools or runs the
-stale-schema check. Execution repair (`SessionController`) and session titles
-(`AppState`) run outside the pipeline the gate exercises.
+profile and configuration (critic off, grounding judge on), but with no
+inspection policy, inspection database or schema fingerprint, so the gate
+never offers data-inspection tools or runs the stale-schema check. Execution
+repair (`SessionController`) and session titles (`AppState`) run outside the
+pipeline the gate exercises.
 
 The UI surface is the Settings › LLM tab (`LLMSettingsView`) plus the
 `ParticleStatusChip` toolbar button, which shows `textToSQLStatus` and opens
@@ -646,6 +652,149 @@ Keychain item `Widen`/`openrouter-api-key`. The flag is set before the
 attempt, so a failed or cancelled delete is never retried. The old key is
 only deleted, never read, so it can never reach the Particle slot. The test
 initializer injects a no-op Keychain deleter.
+
+## Schema-Tool Agent, Grounding, And Repairs
+
+`SessionController.submitGeneratedSQL` runs each question through
+`TextToSQLPipeline` (`WidenKit/Services/TextToSQLPipeline.swift`): one
+generator call, the grounding postprocessor, canonicalization, safety and
+schema validation, PostgreSQL verification (`PREPARE`) when the database is
+connected, and validation or verification repairs. WidenEval runs the same
+pipeline.
+
+### Agent configuration
+
+`SchemaToolSQLAgentConfiguration.default` is the shipped configuration. The
+app builds the agent with it unchanged. WidenEval changes only the modes its
+`--schema-agent-*` flags set, records that as the run manifest's
+`agentConfiguration`, and clamps HTTP attempts per case under
+`--max-http-attempts`. `TextToSQLCallBudgetTests` pins these values:
+
+| Setting | Default |
+|---|---|
+| Model turns | 12 |
+| Schema-tool calls | 12; 4 in repair and reconstruction runs |
+| HTTP attempts, every request in the run | 30 |
+| Malformed-terminal, repeated-tool and invalid-terminal-SQL corrections | 2 each |
+| Over-clarification, intent-coverage, plan-consistency and terminal-required corrections | 1 each |
+| Wall clock | 180 s; 120 s for repair and reconstruction runs |
+| Forced final answer | `terminalToolOnly`; at most 2 requests; 45 s reserve |
+| Grounding judge | on; 2 HTTP attempts; skipped with under 15 s left |
+| Critic | off; when on, 2 revisions and 2 HTTP attempts per review |
+
+Schema-tool results are capped at 16,000 bytes per call and 64,000 per run
+(`SchemaToolPolicy.cloudAgent`). Database inspection keeps its own budget of
+4 calls, 8,000 bytes per call and 20,000 per run. The clarification
+correction, intent-coverage and plan-consistency policies stay
+`diagnosticsOnly`.
+
+**Forced final answer.** When a run spends its schema-tool budget, ends its
+last model turn without a terminal answer, keeps calling tools after the
+terminal-required correction, or has searched the schema and has under 45 s
+left, the agent sends a forced final request: only the terminal tool, named
+in `tool_choice`, with `parallel_tool_calls: false` and an instruction to
+answer now. A run sends at most two. They don't count as model turns but
+spend HTTP attempts and the wall clock, and their SQL goes through the same
+evidence checks. A forced request that fails, or answers without the
+terminal tool, rethrows the failure that triggered it, so the
+inspected-evidence clarification fallback still applies.
+
+### Grounding and the grounding judge
+
+`GeneratedSQLPostprocessor.enriched`, in
+`WidenKit/Services/SQLSchemaValidator.swift`, runs on every generation before
+validation. Its lexical grounding pass matches the question's words against
+the schema the SQL references, the database context and confirmed
+definitions. When a word matches nothing, or the SQL uses the current time
+where the question or context names an explicit window anchor (the
+anchored-window rule), it replaces the SQL with a clarification.
+
+The grounding judge (`WidenKit/Services/SchemaToolAgentGroundingJudge.swift`,
+on by default) is one more Particle-1 request from the agent, at the
+`groundingJudge` call site: low reasoning effort (at high effort its call
+pushed the 0.2.0 gate's P95 latency over its ceiling), 8,000 completion
+tokens, `json_object`, no tools, and at most 2 HTTP attempts within the run's
+deadline and HTTP budget. The agent sends it after accepting SQL in any mode,
+forced final answers included, when the lexical pass would replace that SQL.
+It sends the question, up to 3 recent questions (follow-ups only), the
+database context, the last 12 confirmed definitions, the tables, columns,
+types and foreign keys the schema tools returned, the allowed values and
+comments of those columns on tables the SQL reads (at most 8,000 bytes), and
+the first 8 flagged words. It never sends the SQL under review, the SQL a
+follow-up edits, a query plan, or data values. It is skipped, with the reason
+recorded, when a flagged word matches a SQL literal the grounder rejected,
+the SQL writes, a table it reads was never described, more than 8 words are
+flagged, under 15 s are left, or the HTTP budget is spent. Any skip or failure
+keeps the lexical decision.
+
+The judge labels each word `request_wording`, `query_operation`,
+`schema_match`, `context_defined`, `question_defined`, `needs_definition` or
+`unsupported`. The reply is parsed leniently and verified deterministically:
+`schema_match` must cite an existing table, column or allowed value on a
+table the SQL reads, and a cited column must be one the SQL uses;
+`context_defined` must quote at least 12 characters of the context or a
+definition; `question_defined` must quote at least 8 characters of the
+question that name the word and say more than it. `request_wording` and
+`query_operation` need no citation, and the other labels never verify.
+
+`enriched` uses a judgment only when its digest matches the exact SQL,
+question, context, definitions and flagged words. It then keeps the SQL only
+if every flagged word has a verified label, the agent ended on a SQL
+terminal, the schema tools described every table the SQL reads, the SQL only
+reads, no flagged word matches a rejected literal, intent coverage does not
+say `mustClarify`, the critic did not ask to clarify, and no intent or plan
+rejection stands. The anchored-window rule always wins. Otherwise the
+judgment can only re-aim the
+clarification at the first word it labelled `needs_definition` or
+`unsupported`. It never adds a clarification the lexical pass would not ask,
+and kept SQL still goes through canonicalization, safety and schema
+validation, and `PREPARE`. `groundingJudgeReleaseViolations` re-checks the
+release rules for evals. Callers that run the SQL they get back pass
+`allowGroundingJudgeRelease: false`: the app's execution repair loop may
+re-aim a clarification but never keeps SQL only the judge let stand, so that
+SQL always waits for the user's Run.
+
+### The dormant critic
+
+`SchemaToolAgentCritic` (`WidenKit/Services/SchemaToolAgentCritic.swift`) is a
+second-opinion review the agent can request before answering: one `critic`
+request (high effort, 16,000 tokens, `json_object`, no tools, at most 2 HTTP
+attempts) carrying the question and its context, the tool-exposed schema, the
+SQL and its query plan, and inspected values only when the connection lets
+them reach the cloud. It answers `accept`, `revise` with issues, or
+`clarify`. The agent revises at most twice, records a `clarify` verdict
+without trusting it, and keeps the reviewed SQL on any critic failure. The
+critic skips repair and reconstruction runs, forced final answers, and runs
+with under 30 s left, and a run with under 60 s left keeps its SQL instead of
+revising it. It is off by default: in the 0.2.0 Stage 3 gate its revisions
+trimmed columns the expected results keep, so only WidenEval's
+`--schema-agent-critic on` turns it on. PRIVACY.md does not describe its
+request.
+
+### Repair accounting
+
+`TextToSQLRepairPolicy` (`WidenKit/Services/GeneratedSQLRepairSupport.swift`)
+bounds the repairs one request may ask for. It counts logical generator
+invocations (`SQLGenerationResult.generatorInvocationCount`), not HTTP
+attempts, so a schema-agent run that sent many requests counts once; a
+generation saved by an older build counts as one.
+
+| Budget | Default |
+|---|---|
+| Generator invocations per request, first generation included | 5 |
+| Validation repairs (a focused repair and one reconstruction) | 2 |
+| PostgreSQL verification repairs | 1 |
+| Execution repairs | 2 |
+| No repair starts after | 300 s |
+
+Each stage's cap is bounded by what is left of the request's five
+invocations. `TextToSQLPipeline` runs validation and verification repairs.
+Execution repair is `SessionController.repairGeneratedSQL`: when a generated
+read the user ran fails, it asks for up to two repairs and runs each repaired
+read itself, never a write; its 300 s cutoff counts from the start of the
+repair loop. A failed write instead offers a one-shot Try Again that only
+refills the editor. Agent repair and reconstruction runs get 4 schema-tool
+calls and the 120 s wall clock.
 
 ## Generated Result Model
 
@@ -894,8 +1043,9 @@ Main suites:
   filtering. These touch the real `WidenSelectedSchemaNames` UserDefaults
   key and clean it up in `defer`.
 - `SessionControllerTests`: run records appended on success/failure with the
-  snapshotted SQL, and the direct-SQL submit path (via the
-  executor-injectable internal initializer).
+  snapshotted SQL, the direct-SQL submit path (via the executor-injectable
+  internal initializer), and execution repair that grounds repaired SQL and
+  never runs SQL only a grounding judgment kept.
 - `SessionTitleTests`: fallback truncation, sanitizer rules, mock generator
   determinism.
 - `PostgresIntegrationTests`: gated local PostgreSQL tests for connection,
@@ -917,7 +1067,24 @@ Main suites:
   pre-0.2.0 requests.
 - `SchemaToolSQLAgentTests` and `CloudSQLGeneratorTests`: request shape,
   parsing, retries, error mapping, identity checks, and cost, on the
-  Particle and OpenRouter test profiles from `ChatCompletionsTestSupport.swift`.
+  Particle and OpenRouter test profiles from `ChatCompletionsTestSupport.swift`;
+  the agent tests also cover forced final answers and the grounding judge and
+  critic requests.
+- `TextToSQLCallBudgetTests`: the agent, schema-tool, inspection, retry, and
+  repair budgets, so any change to them is deliberate.
+- `TextToSQLPipelineTests`: pipeline stages, repairs and their invocation
+  counts, withheld SQL, judge divergences, and judge-kept SQL still passing
+  safety and schema validation and `PREPARE`.
+- `SQLSchemaValidatorTests`: schema validation and the grounding
+  postprocessor, including every judge release rule, re-aims, and
+  `allowGroundingJudgeRelease: false`.
+- `SchemaToolAgentGroundingJudgeTests` and `SchemaToolAgentCriticTests`: the
+  judge request's contents and caps, its prompt, lenient parsing and
+  deterministic verification; the critic's review contract.
+- `TextToSQLEvalExtraCallsMetricsTests`, `TextToSQLEvalGroundingJudgeTests`,
+  `TextToSQLEvalGroundingProbeTests`, and `TextToSQLEvalWithheldSQLTests`: the
+  eval's critic and judge flags, forced-answer, critic and judge counts, the
+  paired judge-off arm, the probe suite, and withheld-SQL scoring.
 - `CloudConnectivityCheckTests`, `ParticleConnectionTestPresentationTests`,
   `ParticleTitleGeneratorTests`, `RetiredAIStateCleanupTests`, and
   `SQLGenerationErrorCopyTests`: Test Connection and its Settings grid,
@@ -965,6 +1132,22 @@ Change the prompt:
 3. Run `make eval-schema-tools` (no model calls). Measuring the effect on
    Particle-1 needs the paid eval targets in `Evals/README.md`.
 4. Keep the prompt concise; Particle-1 bills every input token.
+5. The grounding judge's prompt lives in `SchemaToolAgentGroundingJudge`;
+   `SchemaToolAgentGroundingJudgeTests` keeps every word the grounder flags
+   in the gate suite and the grounding probe out of its system prompt.
+
+Change an agent budget, the grounding judge, or the critic:
+
+1. Change `SchemaToolSQLAgentConfiguration`'s defaults,
+   `TextToSQLRepairPolicy`, or the profile's `groundingJudge` / `critic`
+   call-site policy.
+2. Update `TextToSQLCallBudgetTests` (and `CloudModelCatalogTests` for a
+   call-site policy).
+3. Measure it with a preregistered paid gate run, as
+   `docs/next-dev-steps.md` records for 0.2.0; the run manifest's
+   `agentConfiguration` shows what ran.
+4. Turning the critic on in the app also needs a PRIVACY.md note: it sends
+   the drafted SQL, its query plan and, when allowed, inspected values.
 
 Add a result display feature:
 
@@ -1003,6 +1186,18 @@ Add per-session state:
   fixed. Changing either model ID requires a new release and release-gate
   evaluation. OpenRouter stays an eval-only comparison provider that the app
   and view layers never reference.
+- The app and the release gate run the agent with
+  `SchemaToolSQLAgentConfiguration.default`. Its budgets, the repair policy,
+  and the judge and critic defaults change only with
+  `TextToSQLCallBudgetTests` and a gate run that measures the change.
+- The grounding judge never receives SQL, a query plan, or data values, and
+  never adds a clarification. Its labels count only after local
+  verification and a digest match, and the postprocessor keeps SQL on them
+  only when every release rule holds; kept SQL still passes safety and
+  schema validation and `PREPARE`. A caller that runs SQL without the
+  user's review passes `allowGroundingJudgeRelease: false`.
+- The critic stays off by default and is reachable only through WidenEval's
+  `--schema-agent-critic on`.
 - Particle requests carry no routing or retention object. Zero data retention
   is Particle's stated policy, not something Widen enforces; don't describe
   it otherwise.
@@ -1015,7 +1210,9 @@ Add per-session state:
 - Query results are never persisted; `sessions.json` holds transcripts, SQL
   text, and generation metadata only.
 - A manual session rename is never overwritten by the auto-namer.
-- Generated SQL is never auto-executed.
+- Generated SQL is never auto-executed. The one exception is execution
+  repair, which runs a repaired read after a generated read the user ran
+  failed, and never a write.
 - No generated SQL bypasses safety validation, schema validation, PostgreSQL
   verification when available, or manual Run.
 - Manual and generated SQL share the exact same validation and execution path.
@@ -1042,10 +1239,15 @@ For most onboarding or agent work, read these files in order:
 7. `WidenKit/Services/SchemaToolSQLAgent.swift` and
    `WidenKit/Models/CloudModelProfile.swift` for text-to-SQL with Particle-1
    and request signing.
-8. `WidenKit/Services/SQLPromptBuilder.swift` for prompt shape.
-9. `WidenKit/ViewModels/QueryResultViewModel.swift` for SQL preview and run
-   behavior.
-10. `WidenTests/SQLSafetyValidatorTests.swift` and
+8. `WidenKit/Services/TextToSQLPipeline.swift`,
+   `WidenKit/Services/GeneratedSQLRepairSupport.swift`,
+   `GeneratedSQLPostprocessor` in `WidenKit/Services/SQLSchemaValidator.swift`,
+   and `WidenKit/Services/SchemaToolAgentGroundingJudge.swift` for validation,
+   repairs, and grounding.
+9. `WidenKit/Services/SQLPromptBuilder.swift` for prompt shape.
+10. `WidenKit/ViewModels/QueryResultViewModel.swift` for SQL preview and run
+    behavior.
+11. `WidenTests/SQLSafetyValidatorTests.swift` and
     `WidenTests/PostgresIntegrationTests.swift` for expected behavior.
 
 When in doubt, preserve the existing service boundaries and add tests around
