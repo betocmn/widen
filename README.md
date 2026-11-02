@@ -8,7 +8,7 @@
 Open-source, native Postgres GUI for macOS. Ask questions in English; review
 the SQL before it runs.
 
-![Widen — Postgres SQL agent for macOS](https://widen.dev/screenshots/widen-postgres-sql-agent-macos.webp)
+![Widen — Postgres SQL agent for macOS](docs/screenshots/widen-postgres-sql-agent-macos.webp)
 
 [Download for Mac](https://github.com/betocmn/widen/releases/latest/download/Widen.dmg)
 · [Build from source](#build-and-run)
