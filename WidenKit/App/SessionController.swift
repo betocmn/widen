@@ -773,17 +773,13 @@ public final class SessionController: Identifiable {
                     config: config
                 ).withGeneratorInvocationCount(spentInvocations + attemptNumber)
                 appState.noteTextToSQLOutcome(.answered)
-                // This loop runs the SQL it accepts, so a grounding judgment
-                // may re-aim the clarification but never keeps SQL here: SQL
-                // only the judge let stand waits for the user's Run.
                 generation = GeneratedSQLPostprocessor.enriched(
                     generated,
                     question: questionContext.question,
                     schema: schema,
                     databaseContext: config.databaseContext,
                     confirmedSemanticBindings: context.confirmedSemanticBindings,
-                    allowGroundingClarification: true,
-                    allowGroundingJudgeRelease: false
+                    allowGroundingClarification: true
                 )
             } catch {
                 appState.noteTextToSQLOutcome(

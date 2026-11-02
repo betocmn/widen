@@ -1979,19 +1979,13 @@ public struct GroundingReviewCandidate: Equatable, Sendable {
 }
 
 public enum GeneratedSQLPostprocessor {
-    /// `allowGroundingJudgeRelease` is false where the caller runs the SQL
-    /// it gets back without the user's review, as the app's execution repair
-    /// loop does. There a grounding judgment can still re-aim a clarification
-    /// but never keeps SQL the grounding pass would replace, so SQL only the
-    /// judge let stand always waits for the user's Run.
     public static func enriched(
         _ generation: SQLGenerationResult,
         question: String,
         schema: DatabaseSchema,
         databaseContext: String,
         confirmedSemanticBindings: [String] = [],
-        allowGroundingClarification: Bool = true,
-        allowGroundingJudgeRelease: Bool = true
+        allowGroundingClarification: Bool = true
     ) -> SQLGenerationResult {
         var copy = generation
         copy.generationSchemaName = schema.singleSchemaName
@@ -2042,7 +2036,7 @@ public enum GeneratedSQLPostprocessor {
                     return copy
                 }
                 if copy.backendMetadata?.agentDiagnostics?.groundingJudgment != nil {
-                    var decision = groundingJudgeDecision(
+                    let decision = groundingJudgeDecision(
                         review: review,
                         pending: pending,
                         question: question,
@@ -2051,9 +2045,6 @@ public enum GeneratedSQLPostprocessor {
                         confirmedSemanticBindings: confirmedSemanticBindings,
                         generation: generation
                     )
-                    if case .release = decision, !allowGroundingJudgeRelease {
-                        decision = .lexical(.releaseNotAllowed)
-                    }
                     copy.backendMetadata?.agentDiagnostics?.groundingJudgment?.postprocessorOutcome =
                         decision.recordedOutcome
                     switch decision {
@@ -2202,9 +2193,6 @@ public enum GeneratedSQLPostprocessor {
         case stickyRejection
         /// A flagged word has no label that lets SQL stand.
         case unreleasableTerm
-        /// The judgment would keep the SQL, but the caller runs the SQL it
-        /// keeps without the user's review.
-        case releaseNotAllowed
     }
 
     private enum GroundingJudgeDecision {
