@@ -8,7 +8,8 @@ import Testing
 /// 180 s) to fit high reasoning. Repair budgets count logical generator
 /// invocations, not HTTP attempts, and repair runs get a shorter wall clock.
 /// The extra-calls layer doubles the agent's turn, schema-call and correction
-/// budgets for Particle-1; reverting the layer restores six calls.
+/// budgets for Particle-1 and adds up to two forced final requests;
+/// reverting the layer restores six calls and no forced requests.
 @Suite("Text-to-SQL call budgets")
 struct TextToSQLCallBudgetTests {
     @Test func particleAgentBudgetsMatchTheExtraCallsLayer() {
@@ -26,6 +27,9 @@ struct TextToSQLCallBudgetTests {
         #expect(agent.maximumPlanConsistencyCorrections == 1)
         #expect(agent.maximumTerminalRequiredCorrections == 1)
         #expect(agent.wallClockTimeoutSeconds == 180)
+        #expect(agent.forcedTerminalMode == .terminalToolOnly)
+        #expect(agent.maximumForcedTerminalRequests == 2)
+        #expect(agent.forcedTerminalTimeReserveSeconds == 45)
 
         let schemaTools = SchemaToolPolicy.cloudAgent
         #expect(schemaTools.maximumResultBytes == 16_000)

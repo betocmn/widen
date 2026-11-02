@@ -106,6 +106,45 @@ struct SchemaToolSQLAgentTests {
         }
     }
 
+    @Test func diagnosticsDecodeForcedTerminalFieldsTolerantly() throws {
+        let decoder = JSONDecoder()
+        let recorded = try decoder.decode(
+            SchemaToolAgentDiagnostics.self,
+            from: Data(
+                (#"{"forcedTerminalReason":"toolBudget","forcedTerminalRequestCount":2,"#
+                    + #""forcedTerminalSucceeded":false,"forcedTerminalFailure":"nonTerminalResponse"}"#).utf8
+            )
+        )
+        #expect(recorded.forcedTerminalReason == "toolBudget")
+        #expect(recorded.forcedTerminalRequestCount == 2)
+        #expect(recorded.forcedTerminalSucceeded == false)
+        #expect(recorded.forcedTerminalFailure == "nonTerminalResponse")
+
+        let wrongTypes = try decoder.decode(
+            SchemaToolAgentDiagnostics.self,
+            from: Data(
+                (#"{"terminalToolSeen":true,"forcedTerminalReason":1,"forcedTerminalRequestCount":"two","#
+                    + #""forcedTerminalSucceeded":"yes","forcedTerminalFailure":[]}"#).utf8
+            )
+        )
+        #expect(wrongTypes.terminalToolSeen)
+        #expect(wrongTypes.forcedTerminalReason == nil)
+        #expect(wrongTypes.forcedTerminalRequestCount == nil)
+        #expect(wrongTypes.forcedTerminalSucceeded == nil)
+        #expect(wrongTypes.forcedTerminalFailure == nil)
+
+        // A run that never forced its answer saves none of the keys.
+        let encoded = String(decoding: try JSONEncoder().encode(SchemaToolAgentDiagnostics()), as: UTF8.self)
+        for key in [
+            "forcedTerminalReason",
+            "forcedTerminalRequestCount",
+            "forcedTerminalSucceeded",
+            "forcedTerminalFailure",
+        ] {
+            #expect(!encoded.contains(key))
+        }
+    }
+
     @Test func cloudRequestFailureKeepsItsSavedRawValue() throws {
         // Older builds wrote this category as openRouterRequestFailure; the
         // renamed case must keep reading and writing that raw value.
@@ -4288,6 +4327,551 @@ struct SchemaToolSQLAgentTests {
         #expect(result.backendMetadata?.agentDiagnostics?.toolBudgetExhausted == true)
     }
 
+    @Test func forcedTerminalAfterToolBudgetReturnsSQL() async throws {
+        let schema = Self.makeSchema()
+        let sql = "SELECT id, name FROM public.users ORDER BY id LIMIT 100"
+        let chatTransport = ScriptedTransport { request, index in
+            switch index {
+            case 1:
+                return Self.assistantToolCalls([
+                    Self.toolCall(id: "search-forced", name: "search_schema", arguments: [
+                        "query": "users",
+                        "limit": 2,
+                    ]),
+                ])
+            case 2:
+                let tableID = try Self.tableHandle(named: #""public"."users""#, in: request)
+                return Self.assistantToolCalls([
+                    Self.toolCall(id: "describe-forced", name: "describe_tables", arguments: [
+                        "table_ids": [tableID],
+                    ]),
+                    Self.toolCall(id: "search-orders-forced", name: "search_schema", arguments: [
+                        "query": "orders",
+                        "limit": 2,
+                    ]),
+                ])
+            case 3:
+                // The batch spent the schema session, so the next request
+                // asks only for the terminal answer.
+                try Self.expectForcedTerminalRequest(request)
+                #expect(try Self.toolMessageErrorCodes(in: request) == [nil, nil, "sessionBudgetExceeded"])
+                return Self.assistantToolCalls([
+                    Self.terminalSQL(id: "answer-forced", sql: sql),
+                ])
+            default:
+                throw URLError(.badServerResponse)
+            }
+        }
+        let agent = makeAgent(
+            schema: schema,
+            chatTransport: chatTransport,
+            configuration: SchemaToolSQLAgentConfiguration(
+                maximumSchemaToolCalls: 2,
+                maximumModelTurns: 6,
+                maximumHTTPAttempts: 8,
+                wallClockTimeoutSeconds: 10
+            )
+        )
+
+        let result = try await agent.generateSQL(
+            question: "List users",
+            schema: schema,
+            context: SQLGenerationContext(),
+            config: SQLGenerationConfig()
+        )
+
+        #expect(result.sql == sql)
+        #expect(chatTransport.requests.count == 3)
+        let first = try ParticleTestSupport.expectRequestShape(chatTransport.requests[0], callSite: .agentTurn)
+        let forced = try Self.requestBody(chatTransport.requests[2])
+        #expect(forced["prompt_cache_key"] as? String == first["prompt_cache_key"] as? String)
+        #expect(forced["reasoning_effort"] as? String == "high")
+        #expect(result.backendMetadata?.agentLogicalTurnCount == 3)
+        let diagnostics = try #require(result.backendMetadata?.agentDiagnostics)
+        #expect(diagnostics.forcedTerminalReason == "toolBudget")
+        #expect(diagnostics.forcedTerminalRequestCount == 1)
+        #expect(diagnostics.forcedTerminalSucceeded == true)
+        #expect(diagnostics.forcedTerminalFailure == nil)
+        #expect(diagnostics.toolBudgetExhausted == true)
+        // The forced answer recovered the run, so no budget rejection stays.
+        #expect(diagnostics.appSideRejectionReason == nil)
+        #expect(diagnostics.terminalValidationFailureReason == nil)
+    }
+
+    @Test func forcedTerminalTransportFailureKeepsEvidenceFallback() async throws {
+        let schema = Self.makePreseasonSchema()
+        let chatTransport = ScriptedHTTPTransport { request, index in
+            let data: Data
+            switch index {
+            case 1:
+                data = Self.assistantToolCalls([
+                    Self.toolCall(id: "search-forced-rejected", name: "search_schema", arguments: [
+                        "query": "preseason winner wins",
+                        "limit": 4,
+                    ]),
+                ])
+            case 2:
+                let evaluations = try Self.tableHandle(
+                    named: #""public"."preseason_match_evaluation""#,
+                    in: request
+                )
+                let tools = try Self.tableHandle(named: #""public"."preseason_tool""#, in: request)
+                data = Self.assistantToolCalls([
+                    Self.toolCall(id: "describe-forced-rejected", name: "describe_tables", arguments: [
+                        "table_ids": [evaluations, tools],
+                    ]),
+                    Self.toolCall(id: "over-budget-forced-rejected", name: "search_schema", arguments: [
+                        "query": "extra preseason metadata",
+                        "limit": 4,
+                    ]),
+                ])
+            default:
+                // The provider rejects the forced request's shape.
+                try Self.expectForcedTerminalRequest(request)
+                return (
+                    Self.jsonData([
+                        "error": [
+                            "message": "tool_choice is not supported with this request",
+                            "type": "invalid_request_error",
+                            "code": "invalid_value",
+                        ],
+                    ]),
+                    HTTPURLResponse(
+                        url: request.url!,
+                        statusCode: 400,
+                        httpVersion: "HTTP/1.1",
+                        headerFields: ["Content-Type": "application/json"]
+                    )!
+                )
+            }
+            return (
+                data,
+                HTTPURLResponse(
+                    url: request.url!,
+                    statusCode: 200,
+                    httpVersion: "HTTP/1.1",
+                    headerFields: ["Content-Type": "application/json"]
+                )!
+            )
+        }
+        let agent = makeAgent(
+            schema: schema,
+            chatTransport: chatTransport,
+            configuration: SchemaToolSQLAgentConfiguration(maximumSchemaToolCalls: 2)
+        )
+
+        let result = try await agent.generateSQL(
+            question: "Tools with the most wins in the last two weeks",
+            schema: schema,
+            context: SQLGenerationContext(),
+            config: SQLGenerationConfig()
+        )
+
+        // The run ends as it would have without the forced request: with the
+        // budget failure's evidence-grounded clarification.
+        #expect(result.needsClarification)
+        #expect(result.clarificationQuestion?.contains("winner_id") == true)
+        #expect(result.backendMetadata?.agentTerminalOutcome == "clarify_fallback")
+        #expect(chatTransport.requests.count == 3)
+        let diagnostics = try #require(result.backendMetadata?.agentDiagnostics)
+        #expect(diagnostics.appSideRejectionReason == .clarificationRejected)
+        #expect(diagnostics.toolBudgetExhausted == true)
+        #expect(diagnostics.forcedTerminalReason == "toolBudget")
+        #expect(diagnostics.forcedTerminalRequestCount == 1)
+        #expect(diagnostics.forcedTerminalSucceeded == false)
+        #expect(diagnostics.forcedTerminalFailure == "cloudRequestFailure:invalidRequest")
+    }
+
+    @Test(arguments: [
+        SchemaToolAgentForcedTerminalMode.terminalToolOnly,
+        .allToolsNamedChoice,
+    ])
+    func forcedTerminalOnTurnBudget(mode: SchemaToolAgentForcedTerminalMode) async throws {
+        let schema = Self.makeSchema()
+        let sql = "SELECT id, name FROM public.users ORDER BY id LIMIT 100"
+        let chatTransport = ScriptedTransport { request, index in
+            switch index {
+            case 1:
+                return Self.assistantToolCalls([
+                    Self.toolCall(id: "search-turn-budget", name: "search_schema", arguments: [
+                        "query": "users",
+                        "limit": 2,
+                    ]),
+                ])
+            case 2:
+                let tableID = try Self.tableHandle(named: #""public"."users""#, in: request)
+                return Self.assistantToolCalls([
+                    Self.toolCall(id: "describe-turn-budget", name: "describe_tables", arguments: [
+                        "table_ids": [tableID],
+                    ]),
+                ])
+            case 3:
+                try Self.expectForcedTerminalRequest(request, allTools: mode == .allToolsNamedChoice)
+                return Self.assistantToolCalls([
+                    Self.terminalSQL(id: "answer-turn-budget", sql: sql),
+                ])
+            default:
+                throw URLError(.badServerResponse)
+            }
+        }
+        let agent = makeAgent(
+            schema: schema,
+            chatTransport: chatTransport,
+            configuration: SchemaToolSQLAgentConfiguration(
+                maximumModelTurns: 2,
+                maximumHTTPAttempts: 8,
+                wallClockTimeoutSeconds: 10,
+                forcedTerminalMode: mode
+            )
+        )
+
+        let result = try await agent.generateSQL(
+            question: "List users",
+            schema: schema,
+            context: SQLGenerationContext(),
+            config: SQLGenerationConfig()
+        )
+
+        // The forced request is a third request on a two-turn budget.
+        #expect(result.sql == sql)
+        #expect(chatTransport.requests.count == 3)
+        let diagnostics = try #require(result.backendMetadata?.agentDiagnostics)
+        #expect(diagnostics.forcedTerminalReason == "turnBudget")
+        #expect(diagnostics.forcedTerminalRequestCount == 1)
+        #expect(diagnostics.forcedTerminalSucceeded == true)
+        #expect(diagnostics.toolBudgetExhausted == nil)
+    }
+
+    @Test func disabledForcedTerminalKeepsTheTurnBudgetFailure() async throws {
+        let schema = Self.makeSchema()
+        let chatTransport = ScriptedTransport { request, index in
+            switch index {
+            case 1:
+                return Self.assistantToolCalls([
+                    Self.toolCall(id: "search-disabled", name: "search_schema", arguments: [
+                        "query": "users",
+                        "limit": 2,
+                    ]),
+                ])
+            case 2:
+                let tableID = try Self.tableHandle(named: #""public"."users""#, in: request)
+                return Self.assistantToolCalls([
+                    Self.toolCall(id: "describe-disabled", name: "describe_tables", arguments: [
+                        "table_ids": [tableID],
+                    ]),
+                ])
+            default:
+                Issue.record("Unexpected forced request")
+                throw URLError(.badServerResponse)
+            }
+        }
+        let agent = makeAgent(
+            schema: schema,
+            chatTransport: chatTransport,
+            configuration: SchemaToolSQLAgentConfiguration(
+                maximumModelTurns: 2,
+                maximumHTTPAttempts: 8,
+                wallClockTimeoutSeconds: 10,
+                forcedTerminalMode: .disabled
+            ),
+            forcedTerminalTimeReserveSeconds: 60
+        )
+
+        do {
+            _ = try await agent.generateSQL(
+                question: "List users",
+                schema: schema,
+                context: SQLGenerationContext(),
+                config: SQLGenerationConfig()
+            )
+            Issue.record("Expected model-turn budget failure")
+        } catch let failure as SchemaToolAgentFailure {
+            #expect(failure.category == .modelTurnBudgetExhausted)
+            #expect(chatTransport.requests.count == 2)
+            let diagnostics = try #require(failure.backendMetadata?.agentDiagnostics)
+            #expect(diagnostics.forcedTerminalReason == nil)
+            #expect(diagnostics.forcedTerminalRequestCount == nil)
+            #expect(diagnostics.forcedTerminalSucceeded == nil)
+            #expect(diagnostics.forcedTerminalFailure == nil)
+        }
+    }
+
+    @Test func forcedTerminalNonTerminalResponseRethrowsTrigger() async throws {
+        let schema = Self.makeSchema()
+        let chatTransport = ScriptedTransport { request, index in
+            switch index {
+            case 1:
+                return Self.assistantToolCalls([
+                    Self.toolCall(id: "search-non-terminal", name: "search_schema", arguments: [
+                        "query": "users",
+                        "limit": 2,
+                    ]),
+                ])
+            case 2:
+                let tableID = try Self.tableHandle(named: #""public"."users""#, in: request)
+                return Self.assistantToolCalls([
+                    Self.toolCall(id: "describe-non-terminal", name: "describe_tables", arguments: [
+                        "table_ids": [tableID],
+                    ]),
+                ])
+            case 3:
+                try Self.expectForcedTerminalRequest(request)
+                return Self.assistantToolCalls([
+                    Self.toolCall(id: "search-instead-of-answer", name: "search_schema", arguments: [
+                        "query": "orders",
+                        "limit": 2,
+                    ]),
+                ])
+            default:
+                Issue.record("A non-terminal forced answer must end the run")
+                throw URLError(.badServerResponse)
+            }
+        }
+        let agent = makeAgent(
+            schema: schema,
+            chatTransport: chatTransport,
+            configuration: SchemaToolSQLAgentConfiguration(
+                maximumModelTurns: 2,
+                maximumHTTPAttempts: 8,
+                wallClockTimeoutSeconds: 10
+            )
+        )
+
+        do {
+            _ = try await agent.generateSQL(
+                question: "List users",
+                schema: schema,
+                context: SQLGenerationContext(),
+                config: SQLGenerationConfig()
+            )
+            Issue.record("Expected the turn-budget failure")
+        } catch let failure as SchemaToolAgentFailure {
+            #expect(failure.category == .modelTurnBudgetExhausted)
+            #expect(chatTransport.requests.count == 3)
+            // The forced response's tool call never ran.
+            #expect(failure.schemaToolCalls.map(\.callID) == ["search-non-terminal", "describe-non-terminal"])
+            let diagnostics = try #require(failure.backendMetadata?.agentDiagnostics)
+            #expect(diagnostics.forcedTerminalReason == "turnBudget")
+            #expect(diagnostics.forcedTerminalRequestCount == 1)
+            #expect(diagnostics.forcedTerminalSucceeded == false)
+            #expect(diagnostics.forcedTerminalFailure == "nonTerminalResponse")
+            #expect(diagnostics.appSideRejectionReason == .budgetExhausted)
+        }
+    }
+
+    @Test func forcedTerminalLedgerRejectionGetsSecondForcedRequestThenFails() async throws {
+        let schema = Self.makeSchema()
+        let uninspectedSQL = "SELECT o.id FROM public.orders AS o ORDER BY o.id LIMIT 100"
+        let chatTransport = ScriptedTransport { request, index in
+            switch index {
+            case 1:
+                return Self.assistantToolCalls([
+                    Self.toolCall(id: "search-ledger", name: "search_schema", arguments: [
+                        "query": "users",
+                        "limit": 2,
+                    ]),
+                ])
+            case 2:
+                let tableID = try Self.tableHandle(named: #""public"."users""#, in: request)
+                return Self.assistantToolCalls([
+                    Self.toolCall(id: "describe-ledger", name: "describe_tables", arguments: [
+                        "table_ids": [tableID],
+                    ]),
+                ])
+            case 3, 4:
+                try Self.expectForcedTerminalRequest(request)
+                if index == 4 {
+                    // The ledger's tool error and correction come before the
+                    // second forced request, folded into one user message.
+                    #expect(try Self.toolMessageErrorCodes(in: request).last == "uninspected_schema_objects")
+                    let messages = try #require(try Self.requestBody(request)["messages"] as? [[String: Any]])
+                    #expect(messages.dropLast().last?["role"] as? String == "tool")
+                    let content = try #require(messages.last?["content"] as? String)
+                    #expect(content.hasPrefix("Inspect the missing table or column"))
+                }
+                return Self.assistantToolCalls([
+                    Self.terminalSQL(id: "answer-ledger-\(index)", sql: uninspectedSQL),
+                ])
+            default:
+                Issue.record("Only two forced requests are allowed")
+                throw URLError(.badServerResponse)
+            }
+        }
+        let agent = makeAgent(
+            schema: schema,
+            chatTransport: chatTransport,
+            configuration: SchemaToolSQLAgentConfiguration(
+                maximumModelTurns: 2,
+                maximumInvalidTerminalSQLCorrections: 2,
+                maximumHTTPAttempts: 8,
+                wallClockTimeoutSeconds: 10
+            )
+        )
+
+        do {
+            _ = try await agent.generateSQL(
+                question: "List orders",
+                schema: schema,
+                context: SQLGenerationContext(),
+                config: SQLGenerationConfig()
+            )
+            Issue.record("Expected the turn-budget failure")
+        } catch let failure as SchemaToolAgentFailure {
+            #expect(failure.category == .modelTurnBudgetExhausted)
+            #expect(chatTransport.requests.count == 4)
+            let diagnostics = try #require(failure.backendMetadata?.agentDiagnostics)
+            #expect(diagnostics.forcedTerminalReason == "turnBudget")
+            #expect(diagnostics.forcedTerminalRequestCount == 2)
+            #expect(diagnostics.forcedTerminalSucceeded == false)
+            #expect(diagnostics.forcedTerminalFailure == "requestLimitReached")
+            // The last forced answer's ledger rejection is what the run saw.
+            #expect(diagnostics.appSideRejectionReason == .uninspectedObject)
+        }
+    }
+
+    @Test func timeReserveForcesTerminal() async throws {
+        let schema = Self.makeSchema()
+        let question = "Which status marks a user as active?"
+        let chatTransport = ScriptedTransport { request, index in
+            switch index {
+            case 1:
+                return Self.assistantToolCalls([
+                    Self.toolCall(id: "search-reserve", name: "search_schema", arguments: [
+                        "query": "users",
+                        "limit": 2,
+                    ]),
+                ])
+            case 2:
+                // The reserve covers the whole wall clock, so the first turn
+                // after a successful search is forced.
+                try Self.expectForcedTerminalRequest(request)
+                return Self.assistantToolCalls([
+                    Self.terminalClarification(id: "answer-reserve", question: question),
+                ])
+            default:
+                throw URLError(.badServerResponse)
+            }
+        }
+        let agent = makeAgent(
+            schema: schema,
+            chatTransport: chatTransport,
+            forcedTerminalTimeReserveSeconds: 60
+        )
+
+        let result = try await agent.generateSQL(
+            question: "List active users",
+            schema: schema,
+            context: SQLGenerationContext(),
+            config: SQLGenerationConfig()
+        )
+
+        #expect(result.needsClarification)
+        #expect(result.clarificationQuestion == question)
+        #expect(chatTransport.requests.count == 2)
+        let diagnostics = try #require(result.backendMetadata?.agentDiagnostics)
+        #expect(diagnostics.forcedTerminalReason == "timeReserve")
+        #expect(diagnostics.forcedTerminalRequestCount == 1)
+        #expect(diagnostics.forcedTerminalSucceeded == true)
+    }
+
+    @Test func secondTerminalRequiredViolationForcesTerminal() async throws {
+        let schema = Self.makePreseasonSchema()
+        let sql = """
+            SELECT t.id, t.name, COUNT(*) AS wins
+            FROM public.preseason_tool AS t
+            JOIN public.preseason_match_evaluation AS e ON e.winner_id = t.id
+            WHERE e.winner_id IS NOT NULL
+              AND e."createdAt" >= NOW() - INTERVAL '14 days'
+            GROUP BY t.id, t.name
+            ORDER BY wins DESC
+            LIMIT 10
+            """
+        let chatTransport = ScriptedTransport { request, index in
+            switch index {
+            case 1:
+                return Self.assistantToolCalls([
+                    Self.toolCall(id: "search-second-violation", name: "search_schema", arguments: [
+                        "query": "preseason winner wins",
+                        "limit": 4,
+                    ]),
+                ])
+            case 2:
+                let evaluations = try Self.tableHandle(
+                    named: #""public"."preseason_match_evaluation""#,
+                    in: request
+                )
+                let tools = try Self.tableHandle(named: #""public"."preseason_tool""#, in: request)
+                return Self.assistantToolCalls([
+                    Self.toolCall(id: "describe-second-violation", name: "describe_tables", arguments: [
+                        "table_ids": [evaluations, tools],
+                    ]),
+                ])
+            case 3:
+                return Self.assistantToolCalls([
+                    Self.terminalClarification(
+                        id: "terminal-overclarify-second-violation",
+                        question: "What column, condition, or table defines wins for this question?"
+                    ),
+                ])
+            case 4:
+                return Self.assistantToolCalls([
+                    Self.toolCall(id: "first-violation", name: "search_schema", arguments: [
+                        "query": "more win evidence",
+                        "limit": 4,
+                    ]),
+                ])
+            case 5:
+                #expect(try Self.requestBodyText(request).contains("terminal_required_after_sufficient_evidence"))
+                return Self.assistantToolCalls([
+                    Self.toolCall(id: "second-violation", name: "search_schema", arguments: [
+                        "query": "even more win evidence",
+                        "limit": 4,
+                    ]),
+                ])
+            case 6:
+                // Both violating calls got their tool error before the
+                // forced request.
+                try Self.expectForcedTerminalRequest(request)
+                #expect(try Array(Self.toolMessageErrorCodes(in: request).suffix(2)) == [
+                    "terminal_required_after_sufficient_evidence",
+                    "terminal_required_after_sufficient_evidence",
+                ])
+                return Self.assistantToolCalls([
+                    Self.terminalSQL(id: "terminal-after-forced", sql: sql),
+                ])
+            default:
+                throw URLError(.badServerResponse)
+            }
+        }
+        let agent = makeAgent(
+            schema: schema,
+            chatTransport: chatTransport,
+            configuration: Self.experimentalCorrectionConfiguration()
+        )
+
+        let result = try await agent.generateSQL(
+            question: "Which tools have the most wins in the last two weeks?",
+            schema: schema,
+            context: SQLGenerationContext(),
+            config: SQLGenerationConfig(
+                databaseContext:
+                    "Each evaluation with a non-null winner_id records one win. Use evaluation createdAt as the time of the win."
+            )
+        )
+
+        #expect(!result.needsClarification)
+        #expect(result.sql.contains("COUNT(*) AS wins"))
+        #expect(chatTransport.requests.count == 6)
+        #expect(result.schemaToolCalls.map(\.callID) == [
+            "search-second-violation",
+            "describe-second-violation",
+        ])
+        let diagnostics = try #require(result.backendMetadata?.agentDiagnostics)
+        #expect(diagnostics.forcedTerminalReason == "terminalRequired")
+        #expect(diagnostics.forcedTerminalRequestCount == 1)
+        #expect(diagnostics.forcedTerminalSucceeded == true)
+    }
+
     @Test func zeroModelTurnBudgetReturnsTypedFailure() async throws {
         let schema = Self.makeSchema()
         let chatTransport = ScriptedTransport { _, _ in
@@ -5344,6 +5928,9 @@ struct SchemaToolSQLAgentTests {
         #expect(configuration.clarificationCorrectionMode == .diagnosticsOnly)
         #expect(configuration.intentCoverageMode == .diagnosticsOnly)
         #expect(configuration.planConsistencyMode == .diagnosticsOnly)
+        #expect(configuration.forcedTerminalMode == .terminalToolOnly)
+        #expect(configuration.maximumForcedTerminalRequests == 2)
+        #expect(configuration.forcedTerminalTimeReserveSeconds == 45)
         #expect(SchemaToolPolicy.cloudAgent.maximumResultBytes == 16_000)
         #expect(SchemaToolPolicy.cloudAgent.maximumSessionResultBytes == 64_000)
     }
@@ -6031,11 +6618,17 @@ struct SchemaToolSQLAgentTests {
             maximumHTTPAttempts: 8,
             wallClockTimeoutSeconds: 10
         ),
+        forcedTerminalTimeReserveSeconds: TimeInterval = 0,
         schemaToolPolicy: SchemaToolPolicy = .cloudAgent,
         databaseInspectionPolicy: DatabaseInspectionPolicy = .disabled,
         databaseInspectionDatabase: (any DatabaseInspectionQuerying)? = nil,
         currentSchemaFingerprint: (@Sendable () async throws -> String)? = nil
     ) -> SchemaToolSQLAgent {
+        // Test wall clocks are far shorter than the 45 s time reserve, which
+        // would force every turn after the first search. The helper turns
+        // the reserve off unless a test sets one.
+        var configuration = configuration
+        configuration.forcedTerminalTimeReserveSeconds = forcedTerminalTimeReserveSeconds
         let catalog = OpenRouterModelCatalogService(
             profile: profile,
             transport: catalogTransport ?? ScriptedTransport { _, _ in Self.catalogResponse() },
@@ -6361,6 +6954,40 @@ struct SchemaToolSQLAgentTests {
             let error = object?["error"] as? [String: Any]
             return .some(error?["code"] as? String)
         }
+    }
+
+    private static let forcedTerminalInstruction =
+        "Do not call other tools. Call submit_text_to_sql_result exactly once now: action='sql' using only inspected tables/columns with a matching query_plan, or action='clarify' naming the one unresolved database decision."
+
+    /// Asserts `request` is a forced final request: the terminal tool named
+    /// in `tool_choice`, one call at a time, the forced instruction last and
+    /// never two user messages in a row. Only the terminal tool is sent
+    /// unless `allTools`.
+    private static func expectForcedTerminalRequest(
+        _ request: URLRequest,
+        allTools: Bool = false
+    ) throws {
+        let body = try requestBody(request)
+        let tools = try #require(body["tools"] as? [[String: Any]])
+        let toolNames = tools.compactMap { ($0["function"] as? [String: Any])?["name"] as? String }
+        if allTools {
+            #expect(toolNames.count > 1)
+            #expect(toolNames.last == SchemaToolSQLAgent.terminalToolName)
+        } else {
+            #expect(toolNames == [SchemaToolSQLAgent.terminalToolName])
+        }
+        let toolChoice = try #require(body["tool_choice"] as? [String: Any])
+        #expect(toolChoice["type"] as? String == "function")
+        #expect(
+            (toolChoice["function"] as? [String: Any])?["name"] as? String
+                == SchemaToolSQLAgent.terminalToolName
+        )
+        #expect(body["parallel_tool_calls"] as? Bool == false)
+        let messages = try #require(body["messages"] as? [[String: Any]])
+        #expect(messages.last?["role"] as? String == "user")
+        #expect((messages.last?["content"] as? String)?.hasSuffix(forcedTerminalInstruction) == true)
+        let roles = messages.compactMap { $0["role"] as? String }
+        #expect(!zip(roles, roles.dropFirst()).contains { $0 == "user" && $1 == "user" })
     }
 
     private static func assistantToolCallIDs(in request: URLRequest) throws -> [String] {

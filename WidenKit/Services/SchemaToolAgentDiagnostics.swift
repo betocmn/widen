@@ -93,6 +93,20 @@ public struct SchemaToolAgentDiagnostics: Codable, Equatable, Sendable {
     /// `true` once the database inspection session ran out of calls or
     /// bytes. `nil` when it never did, or the run had no inspection.
     public var inspectionBudgetExhausted: Bool?
+    /// Why the run forced a final terminal request: `toolBudget`,
+    /// `turnBudget`, `terminalRequired` or `timeReserve`. `nil` when it
+    /// forced none.
+    public var forcedTerminalReason: String?
+    /// Forced final requests sent. `nil` when none was.
+    public var forcedTerminalRequestCount: Int?
+    /// Whether a forced request ended in an accepted terminal answer. `nil`
+    /// when the run forced none.
+    public var forcedTerminalSucceeded: Bool?
+    /// How the forced requests failed: `nonTerminalResponse`,
+    /// `requestLimitReached`, `cloudRequestFailure:` and the provider's
+    /// failure category, or the agent failure category. `nil` unless they
+    /// failed.
+    public var forcedTerminalFailure: String?
 
     public init(
         logicalTurnCount: Int? = nil,
@@ -133,7 +147,11 @@ public struct SchemaToolAgentDiagnostics: Codable, Equatable, Sendable {
         budgetRejectedToolCallCount: Int? = nil,
         resultBudgetToolErrorCount: Int? = nil,
         toolBudgetExhausted: Bool? = nil,
-        inspectionBudgetExhausted: Bool? = nil
+        inspectionBudgetExhausted: Bool? = nil,
+        forcedTerminalReason: String? = nil,
+        forcedTerminalRequestCount: Int? = nil,
+        forcedTerminalSucceeded: Bool? = nil,
+        forcedTerminalFailure: String? = nil
     ) {
         self.logicalTurnCount = logicalTurnCount
         self.terminalToolSeen = terminalToolSeen
@@ -174,6 +192,10 @@ public struct SchemaToolAgentDiagnostics: Codable, Equatable, Sendable {
         self.resultBudgetToolErrorCount = resultBudgetToolErrorCount
         self.toolBudgetExhausted = toolBudgetExhausted
         self.inspectionBudgetExhausted = inspectionBudgetExhausted
+        self.forcedTerminalReason = forcedTerminalReason
+        self.forcedTerminalRequestCount = forcedTerminalRequestCount
+        self.forcedTerminalSucceeded = forcedTerminalSucceeded
+        self.forcedTerminalFailure = forcedTerminalFailure
     }
 
     private enum CodingKeys: String, CodingKey {
@@ -216,6 +238,10 @@ public struct SchemaToolAgentDiagnostics: Codable, Equatable, Sendable {
         case resultBudgetToolErrorCount
         case toolBudgetExhausted
         case inspectionBudgetExhausted
+        case forcedTerminalReason
+        case forcedTerminalRequestCount
+        case forcedTerminalSucceeded
+        case forcedTerminalFailure
     }
 
     public init(from decoder: any Decoder) throws {
@@ -363,6 +389,22 @@ public struct SchemaToolAgentDiagnostics: Codable, Equatable, Sendable {
         inspectionBudgetExhausted = try? container.decodeIfPresent(
             Bool.self,
             forKey: .inspectionBudgetExhausted
+        )
+        forcedTerminalReason = try? container.decodeIfPresent(
+            String.self,
+            forKey: .forcedTerminalReason
+        )
+        forcedTerminalRequestCount = try? container.decodeIfPresent(
+            Int.self,
+            forKey: .forcedTerminalRequestCount
+        )
+        forcedTerminalSucceeded = try? container.decodeIfPresent(
+            Bool.self,
+            forKey: .forcedTerminalSucceeded
+        )
+        forcedTerminalFailure = try? container.decodeIfPresent(
+            String.self,
+            forKey: .forcedTerminalFailure
         )
     }
 }
