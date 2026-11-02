@@ -235,6 +235,14 @@ availability, static/semantic cross-tabs, stable result digests, and concise
 mismatch categories. They do not include raw result rows. Detailed synthetic
 diffs, if added later, must stay under `.eval-results/`.
 
+When the grounding postprocessor replaces generated SQL with a clarification,
+a semantic run also compares that withheld SQL with the golden SQL for cases
+that expect SQL, after the same safety, read-only and schema guards. Results
+record only `groundingWithheldSQL`, `withheldSQLSemanticStatus` and
+`withheldSQLSemanticPassed`, never the withheld SQL, and the comparison never
+changes a result's status. Summaries report the withheld counts as ungated
+rows.
+
 ## Release Gate
 
 `make eval-release` is the release gate and runs the pinned production model,

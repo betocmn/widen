@@ -62,15 +62,22 @@ public struct TextToSQLRun: Equatable, Sendable {
     public var finalDecision: TextToSQLDecision
     public var trace: TextToSQLTrace
     public var events: [TextToSQLPipelineEvent]
+    /// The generated SQL that `GeneratedSQLPostprocessor.enriched` replaced
+    /// with the clarification this run ended on. Nil when the run did not end
+    /// on such a replacement. A run is never persisted, so this SQL stays in
+    /// memory; evals score it without writing it.
+    public var groundingWithheldSQL: String?
 
     public init(
         finalDecision: TextToSQLDecision,
         trace: TextToSQLTrace,
-        events: [TextToSQLPipelineEvent] = []
+        events: [TextToSQLPipelineEvent] = [],
+        groundingWithheldSQL: String? = nil
     ) {
         self.finalDecision = finalDecision
         self.trace = trace
         self.events = events
+        self.groundingWithheldSQL = groundingWithheldSQL
     }
 }
 
@@ -364,7 +371,11 @@ public struct TextToSQLPipeline: TextToSQLRunning {
                 decision: .clarification(result),
                 trace: trace,
                 events: events,
-                started: started
+                started: started,
+                groundingWithheldSQL: Self.groundingWithheldSQL(
+                    generated: generated,
+                    postprocessed: result
+                )
             )
         }
 
@@ -490,7 +501,8 @@ public struct TextToSQLPipeline: TextToSQLRunning {
             decision: repairRun.decision,
             trace: trace,
             events: events,
-            started: started
+            started: started,
+            groundingWithheldSQL: repairRun.groundingWithheldSQL
         )
     }
 
@@ -578,7 +590,8 @@ public struct TextToSQLPipeline: TextToSQLRunning {
             decision: repairRun.decision,
             trace: trace,
             events: events,
-            started: started
+            started: started,
+            groundingWithheldSQL: repairRun.groundingWithheldSQL
         )
     }
 
@@ -757,6 +770,7 @@ public struct TextToSQLPipeline: TextToSQLRunning {
         )
 
         let generation: SQLGenerationResult
+        let groundingWithheldSQL: String?
         do {
             let generated = try await generator.generateSQL(
                 question: repairQuestionContext.question,
@@ -776,6 +790,10 @@ public struct TextToSQLPipeline: TextToSQLRunning {
                 confirmedSemanticBindings: context.confirmedSemanticBindings,
                 allowGroundingClarification: request.allowGroundingClarification
             ).accumulatingBackendUsage(from: startingGeneration.backendMetadata)
+            groundingWithheldSQL = Self.groundingWithheldSQL(
+                generated: generated,
+                postprocessed: generation
+            )
         } catch is CancellationError {
             trace.append(
                 .postgresVerificationRepair,
@@ -840,7 +858,10 @@ public struct TextToSQLPipeline: TextToSQLRunning {
                 modelCallCount: generation.generationCallCount,
                 verificationRepairAttempted: true
             )
-            return RepairRun(decision: .clarification(generation))
+            return RepairRun(
+                decision: .clarification(generation),
+                groundingWithheldSQL: groundingWithheldSQL
+            )
 
         case .rejected(let reason):
             let category = failureCategory(for: reason, evaluation: evaluation)
@@ -1050,6 +1071,7 @@ public struct TextToSQLPipeline: TextToSQLRunning {
             )
 
             let generation: SQLGenerationResult
+            let groundingWithheldSQL: String?
             let stageStart = Date()
             do {
                 let generated = try await generator.generateSQL(
@@ -1069,6 +1091,10 @@ public struct TextToSQLPipeline: TextToSQLRunning {
                     allowGroundingClarification: request.allowGroundingClarification
                 ).accumulatingBackendUsage(from: accumulatedBackendMetadata)
                 accumulatedBackendMetadata = generation.backendMetadata
+                groundingWithheldSQL = Self.groundingWithheldSQL(
+                    generated: generated,
+                    postprocessed: generation
+                )
             } catch is CancellationError {
                 trace.append(
                     .validationRepair,
@@ -1149,7 +1175,10 @@ public struct TextToSQLPipeline: TextToSQLRunning {
                     request: request,
                     events: &events
                 )
-                return RepairRun(decision: .clarification(generation))
+                return RepairRun(
+                    decision: .clarification(generation),
+                    groundingWithheldSQL: groundingWithheldSQL
+                )
 
             case .rejected(let reason):
                 let category = failureCategory(for: reason, evaluation: evaluation)
@@ -1558,7 +1587,8 @@ public struct TextToSQLPipeline: TextToSQLRunning {
         decision: TextToSQLDecision,
         trace: TraceBuilder,
         events: [TextToSQLPipelineEvent],
-        started: Date
+        started: Date,
+        groundingWithheldSQL: String? = nil
     ) -> TextToSQLRun {
         TextToSQLRun(
             finalDecision: decision,
@@ -1572,14 +1602,30 @@ public struct TextToSQLPipeline: TextToSQLRunning {
                 schemaToolCalls: trace.schemaToolCalls,
                 inspectionToolCalls: trace.inspectionToolCalls
             ),
-            events: events
+            events: events,
+            groundingWithheldSQL: groundingWithheldSQL
         )
+    }
+
+    /// The SQL the postprocessor withheld: the generator answered with SQL
+    /// and `enriched` turned that answer into a clarification. Nil when the
+    /// generator asked for the clarification itself or the SQL was kept.
+    private static func groundingWithheldSQL(
+        generated: SQLGenerationResult,
+        postprocessed: SQLGenerationResult
+    ) -> String? {
+        guard !generated.needsClarification, postprocessed.needsClarification else { return nil }
+        let sql = generated.sql.trimmingCharacters(in: .whitespacesAndNewlines)
+        return sql.isEmpty ? nil : sql
     }
 }
 
 private struct RepairRun {
     var decision: TextToSQLDecision
     var failureCategory: TextToSQLFailureCategory?
+    /// The SQL `enriched` withheld when the repair's answer became the
+    /// clarification in `decision`.
+    var groundingWithheldSQL: String?
 
     var isSuccessful: Bool {
         switch decision {

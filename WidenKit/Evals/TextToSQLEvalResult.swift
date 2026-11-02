@@ -115,6 +115,20 @@ public struct TextToSQLEvalMetrics: Codable, Equatable, Sendable {
     public var goldenResultDigest: String?
     public var candidateResultDigest: String?
     public var semanticMismatchCategory: String?
+    /// True when the grounding postprocessor replaced the generated SQL with
+    /// the clarification this result answered with. Nil otherwise, and in
+    /// results written before it was recorded. The SQL itself is never
+    /// written; see `TextToSQLEvalResult.withheldSQL`.
+    public var groundingWithheldSQL: Bool?
+    /// How the withheld SQL compared with the golden SQL on the seeded
+    /// database, for results that expected SQL in a semantic run:
+    /// `candidateExecutionFailure` when the safety or schema guards stopped
+    /// it before execution. It never changes `status` or `endToEndPassed`.
+    public var withheldSQLSemanticStatus: TextToSQLSemanticStatus?
+    /// Whether the withheld SQL matched the golden result; false when the
+    /// guards stopped it. Nil when it was not compared, or when the golden
+    /// SQL or the database failed and the comparison could not judge it.
+    public var withheldSQLSemanticPassed: Bool?
 
     public init(
         backendAvailable: Bool,
@@ -167,7 +181,10 @@ public struct TextToSQLEvalMetrics: Codable, Equatable, Sendable {
         executionLatencyMs: Int? = nil,
         goldenResultDigest: String? = nil,
         candidateResultDigest: String? = nil,
-        semanticMismatchCategory: String? = nil
+        semanticMismatchCategory: String? = nil,
+        groundingWithheldSQL: Bool? = nil,
+        withheldSQLSemanticStatus: TextToSQLSemanticStatus? = nil,
+        withheldSQLSemanticPassed: Bool? = nil
     ) {
         self.backendAvailable = backendAvailable
         self.transportSuccess = transportSuccess
@@ -220,6 +237,9 @@ public struct TextToSQLEvalMetrics: Codable, Equatable, Sendable {
         self.goldenResultDigest = goldenResultDigest
         self.candidateResultDigest = candidateResultDigest
         self.semanticMismatchCategory = semanticMismatchCategory
+        self.groundingWithheldSQL = groundingWithheldSQL
+        self.withheldSQLSemanticStatus = withheldSQLSemanticStatus
+        self.withheldSQLSemanticPassed = withheldSQLSemanticPassed
     }
 }
 
@@ -294,6 +314,28 @@ public struct TextToSQLEvalResult: Codable, Equatable, Sendable {
     public var referencedColumnBindings: [String]
     public var estimatedInitialPrompt: String?
     public var trace: TextToSQLTrace?
+    /// The SQL the grounding postprocessor withheld, kept in memory so a
+    /// semantic run can score it. It is not encoded: cases.jsonl records only
+    /// `metrics.groundingWithheldSQL` and the withheld SQL's semantic status,
+    /// and a decoded result has none. `generatedSQL` stays the SQL the
+    /// result answered with.
+    public var withheldSQL: String? = nil
+
+    private enum CodingKeys: String, CodingKey {
+        case caseID
+        case backend
+        case model
+        case repeatIndex
+        case status
+        case metrics
+        case diagnostics
+        case generatedSQL
+        case clarificationQuestion
+        case referencedTables
+        case referencedColumnBindings
+        case estimatedInitialPrompt
+        case trace
+    }
 
     public init(
         caseID: String,

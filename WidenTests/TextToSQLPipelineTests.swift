@@ -774,6 +774,149 @@ struct TextToSQLPipelineTests {
         #expect(generation.needsClarification)
     }
 
+    @Test func groundingReplacementRecordsTheWithheldSQL() async throws {
+        let sql = "SELECT id FROM public.users WHERE status = 'active' LIMIT 100"
+        let generator = ScriptedGenerator([.success(generation(sql: "  \(sql)\n"))])
+
+        let result = try await TextToSQLPipeline(generator: generator).run(
+            TextToSQLRequest(
+                question: "show active users",
+                schema: makeStatusSchema()
+            )
+        )
+
+        guard case .clarification(let generation) = result.finalDecision else {
+            Issue.record("expected grounding clarification decision")
+            return
+        }
+        // The decision carries no SQL; only the run remembers what was withheld.
+        #expect(generation.sql.isEmpty)
+        #expect(generation.pendingClarification?.concept.term == "active")
+        #expect(result.groundingWithheldSQL == sql)
+    }
+
+    @Test func withheldSQLIsRecordedOnlyWhenGroundingReplacesSQL() async throws {
+        let activeSQL = "SELECT id FROM public.users WHERE status = 'active' LIMIT 100"
+
+        let kept = try await run(
+            ScriptedGenerator([.success(generation(sql: "SELECT id FROM public.users LIMIT 100"))])
+        )
+        guard case .sql = kept.finalDecision else {
+            Issue.record("expected SQL decision")
+            return
+        }
+        #expect(kept.groundingWithheldSQL == nil)
+
+        // The generator's own clarification withholds nothing.
+        let asked = try await run(
+            ScriptedGenerator([
+                .success(
+                    generation(
+                        sql: "",
+                        needsClarification: true,
+                        clarificationQuestion: "Which users should be shown?"
+                    )
+                )
+            ])
+        )
+        guard case .clarification = asked.finalDecision else {
+            Issue.record("expected clarification decision")
+            return
+        }
+        #expect(asked.groundingWithheldSQL == nil)
+
+        let ungrounded = try await TextToSQLPipeline(
+            generator: ScriptedGenerator([.success(generation(sql: activeSQL))])
+        ).run(
+            TextToSQLRequest(
+                question: "show active users",
+                schema: makeStatusSchema(),
+                allowGroundingClarification: false
+            )
+        )
+        guard case .sql = ungrounded.finalDecision else {
+            Issue.record("expected SQL decision with grounding disabled")
+            return
+        }
+        #expect(ungrounded.groundingWithheldSQL == nil)
+
+        let failed = try await run(
+            ScriptedGenerator([.failure(SQLGenerationFailure.transport("Timed out."))])
+        )
+        guard case .failed = failed.finalDecision else {
+            Issue.record("expected failed decision")
+            return
+        }
+        #expect(failed.groundingWithheldSQL == nil)
+    }
+
+    @Test func validationRepairGroundingReplacementRecordsTheRepairSQL() async throws {
+        let repairSQL = "SELECT id FROM public.users WHERE status = 'active' LIMIT 100"
+        let generator = ScriptedGenerator([
+            .success(generation(sql: "SELECT missing FROM public.users")),
+            .success(generation(sql: repairSQL)),
+        ])
+
+        let result = try await TextToSQLPipeline(generator: generator).run(
+            TextToSQLRequest(
+                question: "show active users",
+                schema: makeStatusSchema(),
+                config: SQLGenerationConfig(defaultRowLimit: 100)
+            )
+        )
+
+        guard case .clarification(let generation) = result.finalDecision else {
+            Issue.record("expected grounding clarification after validation repair")
+            return
+        }
+        #expect(generator.contexts.count == 2)
+        #expect(generator.contexts[1].mode == .repair)
+        #expect(generation.pendingClarification?.concept.term == "active")
+        #expect(result.groundingWithheldSQL == repairSQL)
+    }
+
+    @Test func verificationRepairGroundingReplacementRecordsTheRepairSQL() async throws {
+        // The first SQL is grounded by the table it reads; the repair reads
+        // a table that does not ground "active", so grounding withholds it.
+        var schema = makeStatusSchema()
+        schema.tables.append(
+            TableInfo(
+                schema: "public",
+                name: "active_users",
+                type: .baseTable,
+                columns: [column("active_users", "id", type: "integer", ordinal: 1)]
+            )
+        )
+        let originalSQL = "SELECT id FROM public.active_users LIMIT 100"
+        let repairSQL = "SELECT id FROM public.users WHERE status = 'active' LIMIT 100"
+        let generator = ScriptedGenerator([
+            .success(generation(sql: originalSQL)),
+            .success(generation(sql: repairSQL)),
+        ])
+        let verifier = ScriptedVerifier([
+            .success(verificationFailure(.undefinedFunction, sqlState: "42883"))
+        ])
+
+        let result = try await TextToSQLPipeline(generator: generator).run(
+            TextToSQLRequest(
+                question: "show active users",
+                schema: schema,
+                config: SQLGenerationConfig(defaultRowLimit: 100),
+                sqlVerifier: verifier,
+                verificationConnection: verificationConnection()
+            )
+        )
+
+        guard case .clarification(let generation) = result.finalDecision else {
+            Issue.record("expected grounding clarification after verification repair")
+            return
+        }
+        #expect(verifier.requests.map(\.sql) == [originalSQL])
+        #expect(generator.contexts.count == 2)
+        #expect(generation.pendingClarification?.concept.term == "active")
+        #expect(result.groundingWithheldSQL == repairSQL)
+    }
+
     @Test func mixedCaseIdentifierIsDeterministicallyQuoted() async throws {
         let result = try await run(
             ScriptedGenerator([

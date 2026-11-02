@@ -771,6 +771,117 @@ struct TextToSQLEvalTests {
         #expect(result.metrics.decisionMatches)
     }
 
+    @Test func evalRunnerKeepsWithheldSQLWithoutChangingTheScore() async throws {
+        let sql = "SELECT id FROM public.customers WHERE status = 'active' LIMIT 100"
+        let generator = StaticGenerator(
+            result: SQLGenerationResult(
+                sql: sql,
+                explanation: "Lists active customers.",
+                assumptions: [],
+                referencedTables: [],
+                confidence: 0.8,
+                riskLevel: .medium,
+                needsClarification: false,
+                clarificationQuestion: nil
+            )
+        )
+        let expectsSQL = TextToSQLEvalCase(
+            id: "commerce.active-customers",
+            schemaFixture: "commerce",
+            question: "Show active customers",
+            expected: TextToSQLEvalExpectation(
+                decision: .sql,
+                requiredTables: ["public.customers"]
+            )
+        )
+        let expectsClarification = TextToSQLEvalCase(
+            id: "commerce.active-customers",
+            schemaFixture: "commerce",
+            question: "Show active customers",
+            expected: TextToSQLEvalExpectation(
+                decision: .clarify,
+                clarificationMustMentionAny: ["active", "status"]
+            )
+        )
+
+        // Grounding withholds the SQL either way; the scores are exactly the
+        // ones a clarification earns, and the SQL is kept beside them.
+        let wrong = await TextToSQLEvalCaseRunner.run(
+            evalCase: expectsSQL,
+            schema: makeCommerceSchema(),
+            generator: generator,
+            options: TextToSQLEvalRunOptions(backend: .cloud)
+        )
+        #expect(wrong.status == .wrongDecision)
+        #expect(!wrong.metrics.decisionMatches)
+        #expect(wrong.generatedSQL == nil)
+        #expect(wrong.withheldSQL == sql)
+        #expect(wrong.metrics.groundingWithheldSQL == true)
+        #expect(wrong.metrics.withheldSQLSemanticStatus == nil)
+        #expect(wrong.metrics.withheldSQLSemanticPassed == nil)
+
+        let right = await TextToSQLEvalCaseRunner.run(
+            evalCase: expectsClarification,
+            schema: makeCommerceSchema(),
+            generator: generator,
+            options: TextToSQLEvalRunOptions(backend: .cloud)
+        )
+        #expect(right.status == .passed)
+        #expect(right.withheldSQL == sql)
+        #expect(right.metrics.groundingWithheldSQL == true)
+
+        let kept = await TextToSQLEvalCaseRunner.run(
+            evalCase: expectsSQL,
+            schema: makeCommerceSchema(),
+            generator: generator,
+            options: TextToSQLEvalRunOptions(
+                backend: .cloud,
+                testOnlyDisableGroundingClarification: true
+            )
+        )
+        #expect(kept.status == .passed)
+        #expect(kept.generatedSQL == sql)
+        #expect(kept.withheldSQL == nil)
+        #expect(kept.metrics.groundingWithheldSQL == nil)
+    }
+
+    @Test func withheldSQLIsNeverWrittenToResults() throws {
+        let sql = "SELECT id FROM public.customers WHERE status = 'withheld-marker' LIMIT 100"
+        var result = TextToSQLEvalResult(
+            caseID: "commerce.active-customers",
+            backend: .cloud,
+            repeatIndex: 1,
+            status: .wrongDecision,
+            metrics: TextToSQLEvalMetrics(
+                backendAvailable: true,
+                transportSuccess: true,
+                structuredResponseParsed: true,
+                decisionMatches: false,
+                latencyMs: 1
+            ),
+            clarificationQuestion: "What defines \"active\"?"
+        ).recordingWithheldSQL(sql)
+        result = result.withWithheldSQLSemantic(status: .passed)
+        #expect(result.withheldSQL == sql)
+
+        let encoder = JSONEncoder()
+        encoder.outputFormatting = [.sortedKeys]
+        let line = String(decoding: try encoder.encode(result), as: UTF8.self)
+        #expect(!line.contains("withheld-marker"))
+        #expect(!line.contains(#""withheldSQL""#))
+        #expect(line.contains(#""groundingWithheldSQL":true"#))
+        #expect(line.contains(#""withheldSQLSemanticStatus":"passed""#))
+        #expect(line.contains(#""withheldSQLSemanticPassed":true"#))
+
+        let decoded = try JSONDecoder().decode(TextToSQLEvalResult.self, from: Data(line.utf8))
+        #expect(decoded.withheldSQL == nil)
+        #expect(decoded.generatedSQL == nil)
+        #expect(decoded.metrics == result.metrics)
+        var withoutSQL = result
+        withoutSQL.withheldSQL = nil
+        #expect(decoded == withoutSQL)
+    }
+
     @Test func forbiddenColumnBindingFailsShapeScore() async {
         let evalCase = TextToSQLEvalCase(
             id: "preseason.forbidden-tool-a",

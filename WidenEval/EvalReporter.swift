@@ -279,6 +279,7 @@ enum EvalReporter {
         ]
         lines += TextToSQLEvalForcedTerminalSummary.markdownRows(summary.forcedTerminal)
         lines += TextToSQLEvalCriticSummary.markdownRows(summary.schemaAgentCritic)
+        lines += TextToSQLEvalWithheldSQLSummary.markdownRows(summary.withheldSQL)
         lines += [
             "| Repeated repair fingerprint/no-progress repairs | \(summary.repeatedNoProgressRepairCount) |",
             "| Avg estimated initial prompt characters | \(averagePromptSize) |",

@@ -303,7 +303,7 @@ public enum TextToSQLEvalCaseRunner {
                     options: options,
                     latencyMs: elapsedMilliseconds(since: started),
                     trace: run.trace
-                )
+                ).recordingWithheldSQL(run.groundingWithheldSQL)
             case .failed(let failure):
                 return pipelineFailureResult(
                     evalCase: evalCase,

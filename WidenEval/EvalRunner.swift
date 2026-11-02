@@ -140,6 +140,9 @@ struct EvalRunSummary: Codable {
     /// Nil when no result has schema-agent diagnostics, and in runs written
     /// before it was recorded.
     var forcedTerminal: TextToSQLEvalForcedTerminalSummary?
+    /// Nil when no result withheld SQL, and in runs written before it was
+    /// recorded.
+    var withheldSQL: TextToSQLEvalWithheldSQLSummary?
 }
 
 struct LatencySummary: Codable {
@@ -537,7 +540,8 @@ struct EvalRunner {
                     if let semanticPreparation {
                         result = await semanticPreparation.annotate(
                             staticResult,
-                            evalCase: evalCase
+                            evalCase: evalCase,
+                            schema: schema
                         )
                     } else {
                         result = staticResult
@@ -814,6 +818,15 @@ struct EvalRunner {
 
         func annotate(
             _ result: TextToSQLEvalResult,
+            evalCase: TextToSQLEvalCase,
+            schema: DatabaseSchema
+        ) async -> TextToSQLEvalResult {
+            let annotated = await annotateAnswer(result, evalCase: evalCase)
+            return await scoringWithheldSQL(annotated, evalCase: evalCase, schema: schema)
+        }
+
+        private func annotateAnswer(
+            _ result: TextToSQLEvalResult,
             evalCase: TextToSQLEvalCase
         ) async -> TextToSQLEvalResult {
             guard evalCase.expected.decision == .sql else {
@@ -869,6 +882,45 @@ struct EvalRunner {
                     comparisonMode: semantic.comparisonMode,
                     message: "PostgreSQL semantic execution failed: \(error.localizedDescription)"
                 )
+            }
+        }
+
+        /// Compares the SQL the grounding postprocessor withheld with the
+        /// golden SQL, for results that expected SQL. It records only the
+        /// withheld SQL's metrics and never changes the result's status.
+        private func scoringWithheldSQL(
+            _ result: TextToSQLEvalResult,
+            evalCase: TextToSQLEvalCase,
+            schema: DatabaseSchema
+        ) async -> TextToSQLEvalResult {
+            switch TextToSQLEvalWithheldSQL.scoring(for: result, evalCase: evalCase, schema: schema) {
+            case .skipped:
+                return result
+            case .rejectedByGuards:
+                return result.withWithheldSQLSemantic(status: .candidateExecutionFailure)
+            case .compare(let withheldSQL):
+                guard let goldenSQL = evalCase.expected.goldenSQL?.trimmingCharacters(
+                    in: .whitespacesAndNewlines
+                ),
+                    !goldenSQL.isEmpty,
+                    let semantic = evalCase.expected.semantic,
+                    let database = databases[evalCase.schemaFixture]
+                else {
+                    return result.withWithheldSQLSemantic(status: .notApplicable)
+                }
+                do {
+                    let output = try await executor.executePair(
+                        goldenSQL: goldenSQL,
+                        candidateSQL: withheldSQL,
+                        expectation: semantic,
+                        database: database
+                    )
+                    return result.withWithheldSQLSemantic(
+                        status: TextToSQLEvalWithheldSQL.semanticStatus(for: output)
+                    )
+                } catch {
+                    return result.withWithheldSQLSemantic(status: .semanticEnvironmentUnavailable)
+                }
             }
         }
     }
@@ -1481,7 +1533,8 @@ struct EvalRunner {
                 : Double(promptEstimateValues.reduce(0, +)) / Double(promptEstimateValues.count),
             maxEstimatedInitialPromptCharacters: promptEstimateValues.max(),
             schemaAgentCritic: TextToSQLEvalCriticSummary(results: results),
-            forcedTerminal: TextToSQLEvalForcedTerminalSummary(results: results)
+            forcedTerminal: TextToSQLEvalForcedTerminalSummary(results: results),
+            withheldSQL: TextToSQLEvalWithheldSQLSummary(results: results)
         )
     }
 

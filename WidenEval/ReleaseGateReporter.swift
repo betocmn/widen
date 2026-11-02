@@ -217,16 +217,17 @@ enum TextToSQLReleaseGateReporter {
         return lines.joined(separator: "\n")
     }
 
-    /// Spend for the gate's results, and how often the schema agent forced
-    /// a final answer or asked its critic, reported for tracking only. The
-    /// forced-answer and critic counts are the extra-calls layer's K12
-    /// evidence that the layer ran.
+    /// Spend for the gate's results, how often the schema agent forced a
+    /// final answer or asked its critic, and the SQL the grounding
+    /// postprocessor withheld, reported for tracking only. The forced-answer
+    /// and critic counts are the extra-calls layer's K12 evidence that the
+    /// layer ran.
     private static func reportedUsageSection(results: [TextToSQLEvalResult]) -> [String] {
         var lines = [
             "",
             "## Reported (not gated)",
             "",
-            "These figures track spend and the schema agent's extra calls, and do not affect the gate.",
+            "These figures track spend, the schema agent's extra calls and the SQL grounding withheld, and do not affect the gate.",
             "",
             "| Metric | Value |",
             "| --- | --- |",
@@ -236,6 +237,9 @@ enum TextToSQLReleaseGateReporter {
             TextToSQLEvalForcedTerminalSummary(results: results)
         )
         lines += TextToSQLEvalCriticSummary.markdownRows(TextToSQLEvalCriticSummary(results: results))
+        lines += TextToSQLEvalWithheldSQLSummary.markdownRows(
+            TextToSQLEvalWithheldSQLSummary(results: results)
+        )
         return lines
     }
 
