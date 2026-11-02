@@ -569,12 +569,9 @@ struct SchemaToolAgentGroundingJudgeTests {
         }
     }
 
-    /// The suites whose flagged words must stay out of the system prompt,
-    /// the held-out grounding probe included.
-    private static let vocabularySuitePaths = [
-        "Evals/suites/text-to-sql-v1.json",
-        "Evals/suites/grounding-probe-v1.json",
-    ]
+    /// The suites whose flagged words must stay out of the system prompt. A
+    /// committed grounding-judge probe belongs here too.
+    private static let vocabularySuitePaths = ["Evals/suites/text-to-sql-v1.json"]
 
     private static let question = "Show total paid revenue per customer"
     private static let databaseContext = "Revenue is the sum of total_cents for paid orders."
