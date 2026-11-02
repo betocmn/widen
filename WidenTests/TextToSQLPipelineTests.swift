@@ -240,6 +240,7 @@ struct TextToSQLPipelineTests {
         needsClarification: Bool = false,
         clarificationQuestion: String? = nil,
         generationCallCount: Int? = nil,
+        generatorInvocationCount: Int? = nil,
         backendMetadata: CloudGenerationMetadata? = nil,
         schemaToolCalls: [SchemaToolCallTrace] = [],
         inspectionToolCalls: [DatabaseInspectionToolCallTrace] = []
@@ -254,6 +255,7 @@ struct TextToSQLPipelineTests {
             needsClarification: needsClarification,
             clarificationQuestion: clarificationQuestion,
             generationCallCount: generationCallCount,
+            generatorInvocationCount: generatorInvocationCount,
             backendMetadata: backendMetadata,
             schemaToolCalls: schemaToolCalls,
             inspectionToolCalls: inspectionToolCalls
@@ -323,9 +325,10 @@ struct TextToSQLPipelineTests {
     private func run(
         _ generator: ScriptedGenerator,
         verifier: (any GeneratedSQLVerifying)? = nil,
-        verificationConnection: PostgresConnectionHandle? = nil
+        verificationConnection: PostgresConnectionHandle? = nil,
+        repairPolicy: TextToSQLRepairPolicy = .default
     ) async throws -> TextToSQLRun {
-        try await TextToSQLPipeline(generator: generator).run(
+        try await TextToSQLPipeline(generator: generator, repairPolicy: repairPolicy).run(
             TextToSQLRequest(
                 question: "show users",
                 schema: makeSchema(),
@@ -1247,11 +1250,14 @@ struct TextToSQLPipelineTests {
     @Test func unsafeValidationRepairReturnsSafetyFailure() async throws {
         let unsafeSQL = "SELECT id FROM public.users; DROP TABLE public.users"
         let generator = ScriptedGenerator([
-            .success(generation(sql: "SELECT missing FROM public.users", generationCallCount: 2)),
+            .success(generation(sql: "SELECT missing FROM public.users")),
             .success(generation(sql: unsafeSQL)),
         ])
 
-        let result = try await run(generator)
+        let result = try await run(
+            generator,
+            repairPolicy: TextToSQLRepairPolicy(maximumValidationRepairs: 1)
+        )
 
         guard case .failed(let failure) = result.finalDecision else {
             Issue.record("expected failure decision")
@@ -1404,6 +1410,156 @@ struct TextToSQLPipelineTests {
 
         #expect(result.trace.modelCalls == 2)
         #expect(generator.contexts[1].modelCallCount == 2)
+    }
+
+    @Test func agentHTTPAttemptsDoNotStarveValidationRepair() async throws {
+        // A schema-agent run reports its HTTP attempts in the call count;
+        // the repair budget counts it as one invocation.
+        let generator = ScriptedGenerator([
+            .success(generation(sql: "SELECT missing FROM public.users", generationCallCount: 9)),
+            .success(generation(sql: "SELECT id FROM public.users LIMIT 100", generationCallCount: 13)),
+        ])
+
+        let result = try await run(generator)
+
+        guard case .sql(let generation) = result.finalDecision else {
+            Issue.record("expected repaired SQL decision")
+            return
+        }
+        #expect(generation.sql == "SELECT id FROM public.users LIMIT 100")
+        #expect(generation.generatorInvocationCount == 2)
+        #expect(generator.contexts.count == 2)
+        #expect(generator.contexts[1].mode == .repair)
+        // The HTTP-inclusive count still reaches the generator for the eval
+        // HTTP budget and telemetry.
+        #expect(generator.contexts[1].modelCallCount == 10)
+        #expect(result.trace.modelCalls == 13)
+    }
+
+    @Test(
+        arguments: zip(
+            ["SELECT missing FROM public.users", "SELECT AVG(COUNT(*) OVER ()) FROM public.users"],
+            [TextToSQLFailureCategory.schemaValidation, .safetyValidation]
+        )
+    )
+    func exhaustedInvocationBudgetReportsValidationCategory(
+        sql: String,
+        category: TextToSQLFailureCategory
+    ) async throws {
+        let generator = ScriptedGenerator([
+            .success(generation(sql: sql)),
+            .success(generation(sql: "SELECT id FROM public.users LIMIT 100")),
+        ])
+
+        let result = try await run(
+            generator,
+            repairPolicy: TextToSQLRepairPolicy(maximumGeneratorInvocationsPerRequest: 1)
+        )
+
+        guard case .failed(let failure) = result.finalDecision else {
+            Issue.record("expected failure decision")
+            return
+        }
+        #expect(failure.stage == .validationRepair)
+        #expect(failure.category == category)
+        #expect(failure.message.contains("This request already used its repair budget"))
+        #expect(failure.message.contains("did not ask Particle-1 to repair the query again"))
+        #expect(generator.contexts.count == 1)
+        #expect(!result.events.map(\.kind).contains(.validationRepairStarted))
+        #expect(!result.trace.stages.contains { $0.failureCategory == .repeatedNoProgressRepair })
+        #expect(result.trace.stages.contains {
+            $0.stage == .validationRepair && $0.outcome == .skipped
+        })
+        #expect(result.trace.stages.contains {
+            $0.stage == .finalDecision && $0.outcome == .failure && $0.failureCategory == category
+        })
+    }
+
+    @Test func repairNotStartedAfterCutoff() async throws {
+        let noTimeLeft = TextToSQLRepairPolicy(repairStartCutoffSeconds: 0)
+        let invalid = ScriptedGenerator([
+            .success(generation(sql: "SELECT missing FROM public.users")),
+            .success(generation(sql: "SELECT id FROM public.users LIMIT 100")),
+        ])
+
+        let validationResult = try await run(invalid, repairPolicy: noTimeLeft)
+
+        guard case .failed(let validationFailure) = validationResult.finalDecision else {
+            Issue.record("expected failure decision")
+            return
+        }
+        #expect(validationFailure.category == .schemaValidation)
+        #expect(validationFailure.message.contains("already used its repair budget"))
+        #expect(invalid.contexts.count == 1)
+
+        let sql = "SELECT id FROM public.users LIMIT 100"
+        let rejected = ScriptedGenerator([
+            .success(generation(sql: sql)),
+            .success(generation(sql: #"SELECT "createdAt" FROM public.users LIMIT 100"#)),
+        ])
+        let verifier = ScriptedVerifier([
+            .success(verificationFailure(.undefinedFunction, sqlState: "42883")),
+        ])
+
+        let verificationResult = try await run(
+            rejected,
+            verifier: verifier,
+            verificationConnection: verificationConnection(),
+            repairPolicy: noTimeLeft
+        )
+
+        guard case .failed(let verificationFailure) = verificationResult.finalDecision else {
+            Issue.record("expected failure decision")
+            return
+        }
+        #expect(verificationFailure.stage == .postgresVerificationRepair)
+        #expect(verificationFailure.category == .postgresVerification)
+        #expect(rejected.contexts.count == 1)
+        #expect(verifier.requests.map(\.sql) == [sql])
+        #expect(!verificationResult.events.map(\.kind).contains(.postgresVerificationRepairStarted))
+    }
+
+    @Test func repairResultsRecordInvocationCount() async throws {
+        let valid = ScriptedGenerator([
+            // Generators never own the count; the pipeline overwrites it.
+            .success(generation(sql: "SELECT id FROM public.users LIMIT 100", generatorInvocationCount: 7)),
+        ])
+
+        let validResult = try await run(valid)
+
+        guard case .sql(let first) = validResult.finalDecision else {
+            Issue.record("expected SQL decision")
+            return
+        }
+        #expect(first.generatorInvocationCount == 1)
+
+        let repairedSQL = "SELECT id FROM public.users LIMIT 100"
+        let verifiedSQL = "SELECT id FROM public.users LIMIT 50"
+        let repaired = ScriptedGenerator([
+            .success(generation(sql: "SELECT missing FROM public.users")),
+            .success(generation(sql: repairedSQL)),
+            .success(generation(sql: verifiedSQL)),
+        ])
+        let verifier = ScriptedVerifier([
+            .success(verificationFailure(.undefinedFunction, sqlState: "42883")),
+            .success(.passed(elapsedMs: 3)),
+        ])
+
+        let repairedResult = try await run(
+            repaired,
+            verifier: verifier,
+            verificationConnection: verificationConnection()
+        )
+
+        guard case .sql(let final) = repairedResult.finalDecision else {
+            Issue.record("expected repaired SQL decision")
+            return
+        }
+        #expect(final.sql == verifiedSQL)
+        // The first generation, a validation repair, then a verification repair.
+        #expect(final.generatorInvocationCount == 3)
+        #expect(repaired.contexts.map(\.mode) == [.initial, .repair, .repair])
+        #expect(verifier.requests.map(\.sql) == [repairedSQL, verifiedSQL])
     }
 
     @Test func repairSchemaToolTracesPreserveRepeatedProviderCallIDs() async throws {

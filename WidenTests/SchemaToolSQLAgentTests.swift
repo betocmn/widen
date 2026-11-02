@@ -4808,6 +4808,42 @@ struct SchemaToolSQLAgentTests {
         }
     }
 
+    @Test func repairRunIsBoundedByTheRepairWallClock() async throws {
+        let schema = Self.makeSchema()
+        let chatTransport = HangingTransport()
+        let agent = makeAgent(
+            schema: schema,
+            chatTransport: chatTransport,
+            configuration: SchemaToolSQLAgentConfiguration(
+                maximumSchemaToolCalls: 4,
+                maximumRepairSchemaToolCalls: 2,
+                maximumModelTurns: 6,
+                maximumMalformedTerminalCorrections: 1,
+                maximumRepeatedToolCorrections: 1,
+                maximumHTTPAttempts: 8,
+                wallClockTimeoutSeconds: 10,
+                repairWallClockTimeoutSeconds: 0.03
+            )
+        )
+        let started = ContinuousClock.now
+
+        do {
+            _ = try await agent.generateSQL(
+                question: "List users",
+                schema: schema,
+                context: SQLGenerationContext(mode: .repair, modelCallCount: 2),
+                config: SQLGenerationConfig()
+            )
+            Issue.record("Expected timeout failure")
+        } catch let failure as SchemaToolAgentFailure {
+            let elapsed = started.duration(to: .now)
+            #expect(failure.category == .wallClockTimeout)
+            #expect(chatTransport.requests.count == 1)
+            #expect(chatTransport.wasCancelled)
+            #expect(elapsed < .milliseconds(500))
+        }
+    }
+
     @Test func preToolWallClockTimeoutIsNotClassifiedAsBudgetExhaustion() async throws {
         let schema = Self.makeSchema()
         let chatTransport = HangingTransport()
