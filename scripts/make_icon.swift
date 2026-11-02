@@ -1,5 +1,5 @@
-// Generates the app icon PNGs for Widen from a square master image.
-// Usage: swift scripts/make_icon.swift Widen/Assets.xcassets/AppIcon.appiconset [master.png]
+// Generates the app icon PNGs for Widen from the website's vector logo.
+// Usage: swift scripts/make_icon.swift [output-directory] [master.svg|master.png]
 import AppKit
 
 let outDir = CommandLine.arguments.count > 1
@@ -7,7 +7,8 @@ let outDir = CommandLine.arguments.count > 1
     : "Widen/Assets.xcassets/AppIcon.appiconset"
 let sourcePath = CommandLine.arguments.count > 2
     ? CommandLine.arguments[2]
-    : "\(outDir)/icon_1024.png"
+    : URL(fileURLWithPath: #filePath).deletingLastPathComponent()
+        .appendingPathComponent("app_icon.svg").path
 let sizes = [16, 32, 64, 128, 256, 512, 1024]
 
 guard let source = NSImage(contentsOfFile: sourcePath) else {

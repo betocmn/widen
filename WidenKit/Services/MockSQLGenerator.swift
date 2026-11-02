@@ -1,7 +1,6 @@
 import Foundation
 
-/// Deterministic stand-in for the real model. Used in tests, when
-/// FoundationModels is unavailable at compile time, and behind the
+/// Deterministic stand-in for the real model. Used in tests and behind the
 /// "Use mock AI" developer toggle.
 public struct MockSQLGenerator: SQLGenerator {
     public init() {}

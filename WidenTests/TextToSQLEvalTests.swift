@@ -51,7 +51,7 @@ struct TextToSQLEvalTests {
                     generationCallCount: 1
                 )
             }
-            throw OpenRouterFailure(
+            throw CloudRequestFailure(
                 category: .rateLimited,
                 message: "Rate limit exceeded.",
                 httpStatus: 429,
@@ -68,7 +68,7 @@ struct TextToSQLEvalTests {
             context: SQLGenerationContext,
             config: SQLGenerationConfig
         ) async throws -> SQLGenerationResult {
-            var metadata = OpenRouterGenerationMetadata(
+            var metadata = CloudGenerationMetadata(
                 requestedModelID: "test/model",
                 returnedModelID: "test/returned",
                 providerName: "TestProvider",
@@ -90,7 +90,7 @@ struct TextToSQLEvalTests {
             metadata.agentLogicalTurnCount = 2
             metadata.agentHTTPAttemptCount = 3
             metadata.agentSchemaToolCallCount = 1
-            throw OpenRouterSchemaToolAgentFailure(
+            throw SchemaToolAgentFailure(
                 category: .schemaToolCallBudgetExhausted,
                 message: "Schema tool call budget exhausted.",
                 backendMetadata: metadata,
@@ -120,7 +120,7 @@ struct TextToSQLEvalTests {
             config: SQLGenerationConfig
         ) async throws -> SQLGenerationResult {
             if context.mode == .initial {
-                var metadata = OpenRouterGenerationMetadata(
+                var metadata = CloudGenerationMetadata(
                     requestedModelID: "test/model",
                     structuredOutputMode: .promptOnlyJSON,
                     requestCount: 1,
@@ -141,7 +141,7 @@ struct TextToSQLEvalTests {
                     backendMetadata: metadata
                 )
             }
-            var metadata = OpenRouterGenerationMetadata(
+            var metadata = CloudGenerationMetadata(
                 requestedModelID: "test/model",
                 structuredOutputMode: .promptOnlyJSON,
                 requestCount: 1,
@@ -151,7 +151,7 @@ struct TextToSQLEvalTests {
             metadata.agentLogicalTurnCount = 1
             metadata.agentHTTPAttemptCount = 1
             metadata.agentSchemaToolCallCount = 1
-            throw OpenRouterSchemaToolAgentFailure(
+            throw SchemaToolAgentFailure(
                 category: .schemaToolCallBudgetExhausted,
                 message: "Schema tool call budget exhausted.",
                 backendMetadata: metadata,
@@ -185,6 +185,8 @@ struct TextToSQLEvalTests {
     }
 
     private struct UsageReportingHangingGenerator: SQLGenerator {
+        var costSource: String? = nil
+
         func generateSQL(
             question: String,
             schema: DatabaseSchema,
@@ -199,7 +201,8 @@ struct TextToSQLEvalTests {
                     completionTokens: 8,
                     reasoningTokens: 2,
                     totalTokens: 20,
-                    costUSD: 0.02
+                    costUSD: 0.02,
+                    costSource: costSource
                 )
             )
             try await Task.sleep(nanoseconds: 60_000_000_000)
@@ -258,7 +261,7 @@ struct TextToSQLEvalTests {
             evalCase: evalCase,
             schema: makeCommerceSchema(),
             generation: generation,
-            options: TextToSQLEvalRunOptions(backend: .local),
+            options: TextToSQLEvalRunOptions(backend: .cloud),
             latencyMs: 12
         )
 
@@ -306,7 +309,7 @@ struct TextToSQLEvalTests {
             evalCase: evalCase,
             schema: makeCommerceSchema(),
             generation: generation,
-            options: TextToSQLEvalRunOptions(backend: .local),
+            options: TextToSQLEvalRunOptions(backend: .cloud),
             latencyMs: 12,
             trace: TextToSQLTrace(stages: [], modelCalls: 2, elapsedMs: 12)
         )
@@ -347,7 +350,7 @@ struct TextToSQLEvalTests {
             evalCase: evalCase,
             schema: makeCommerceSchema(),
             generator: generator,
-            options: TextToSQLEvalRunOptions(backend: .local)
+            options: TextToSQLEvalRunOptions(backend: .cloud)
         )
 
         #expect(result.status == .wrongSchemaObjects)
@@ -718,7 +721,7 @@ struct TextToSQLEvalTests {
             evalCase: evalCase,
             schema: makeCommerceSchema(),
             generator: generator,
-            options: TextToSQLEvalRunOptions(backend: .local)
+            options: TextToSQLEvalRunOptions(backend: .cloud)
         )
 
         #expect(result.status == .passed)
@@ -759,13 +762,124 @@ struct TextToSQLEvalTests {
             schema: makeCommerceSchema(),
             generator: generator,
             options: TextToSQLEvalRunOptions(
-                backend: .local,
+                backend: .cloud,
                 testOnlyDisableGroundingClarification: true
             )
         )
 
         #expect(result.status == .passed)
         #expect(result.metrics.decisionMatches)
+    }
+
+    @Test func evalRunnerKeepsWithheldSQLWithoutChangingTheScore() async throws {
+        let sql = "SELECT id FROM public.customers WHERE status = 'active' LIMIT 100"
+        let generator = StaticGenerator(
+            result: SQLGenerationResult(
+                sql: sql,
+                explanation: "Lists active customers.",
+                assumptions: [],
+                referencedTables: [],
+                confidence: 0.8,
+                riskLevel: .medium,
+                needsClarification: false,
+                clarificationQuestion: nil
+            )
+        )
+        let expectsSQL = TextToSQLEvalCase(
+            id: "commerce.active-customers",
+            schemaFixture: "commerce",
+            question: "Show active customers",
+            expected: TextToSQLEvalExpectation(
+                decision: .sql,
+                requiredTables: ["public.customers"]
+            )
+        )
+        let expectsClarification = TextToSQLEvalCase(
+            id: "commerce.active-customers",
+            schemaFixture: "commerce",
+            question: "Show active customers",
+            expected: TextToSQLEvalExpectation(
+                decision: .clarify,
+                clarificationMustMentionAny: ["active", "status"]
+            )
+        )
+
+        // Grounding withholds the SQL either way; the scores are exactly the
+        // ones a clarification earns, and the SQL is kept beside them.
+        let wrong = await TextToSQLEvalCaseRunner.run(
+            evalCase: expectsSQL,
+            schema: makeCommerceSchema(),
+            generator: generator,
+            options: TextToSQLEvalRunOptions(backend: .cloud)
+        )
+        #expect(wrong.status == .wrongDecision)
+        #expect(!wrong.metrics.decisionMatches)
+        #expect(wrong.generatedSQL == nil)
+        #expect(wrong.withheldSQL == sql)
+        #expect(wrong.metrics.groundingWithheldSQL == true)
+        #expect(wrong.metrics.withheldSQLSemanticStatus == nil)
+        #expect(wrong.metrics.withheldSQLSemanticPassed == nil)
+
+        let right = await TextToSQLEvalCaseRunner.run(
+            evalCase: expectsClarification,
+            schema: makeCommerceSchema(),
+            generator: generator,
+            options: TextToSQLEvalRunOptions(backend: .cloud)
+        )
+        #expect(right.status == .passed)
+        #expect(right.withheldSQL == sql)
+        #expect(right.metrics.groundingWithheldSQL == true)
+
+        let kept = await TextToSQLEvalCaseRunner.run(
+            evalCase: expectsSQL,
+            schema: makeCommerceSchema(),
+            generator: generator,
+            options: TextToSQLEvalRunOptions(
+                backend: .cloud,
+                testOnlyDisableGroundingClarification: true
+            )
+        )
+        #expect(kept.status == .passed)
+        #expect(kept.generatedSQL == sql)
+        #expect(kept.withheldSQL == nil)
+        #expect(kept.metrics.groundingWithheldSQL == nil)
+    }
+
+    @Test func withheldSQLIsNeverWrittenToResults() throws {
+        let sql = "SELECT id FROM public.customers WHERE status = 'withheld-marker' LIMIT 100"
+        var result = TextToSQLEvalResult(
+            caseID: "commerce.active-customers",
+            backend: .cloud,
+            repeatIndex: 1,
+            status: .wrongDecision,
+            metrics: TextToSQLEvalMetrics(
+                backendAvailable: true,
+                transportSuccess: true,
+                structuredResponseParsed: true,
+                decisionMatches: false,
+                latencyMs: 1
+            ),
+            clarificationQuestion: "What defines \"active\"?"
+        ).recordingWithheldSQL(sql)
+        result = result.withWithheldSQLSemantic(status: .passed)
+        #expect(result.withheldSQL == sql)
+
+        let encoder = JSONEncoder()
+        encoder.outputFormatting = [.sortedKeys]
+        let line = String(decoding: try encoder.encode(result), as: UTF8.self)
+        #expect(!line.contains("withheld-marker"))
+        #expect(!line.contains(#""withheldSQL""#))
+        #expect(line.contains(#""groundingWithheldSQL":true"#))
+        #expect(line.contains(#""withheldSQLSemanticStatus":"passed""#))
+        #expect(line.contains(#""withheldSQLSemanticPassed":true"#))
+
+        let decoded = try JSONDecoder().decode(TextToSQLEvalResult.self, from: Data(line.utf8))
+        #expect(decoded.withheldSQL == nil)
+        #expect(decoded.generatedSQL == nil)
+        #expect(decoded.metrics == result.metrics)
+        var withoutSQL = result
+        withoutSQL.withheldSQL = nil
+        #expect(decoded == withoutSQL)
     }
 
     @Test func forbiddenColumnBindingFailsShapeScore() async {
@@ -802,7 +916,7 @@ struct TextToSQLEvalTests {
             evalCase: evalCase,
             schema: makePreseasonSchema(),
             generation: generation,
-            options: TextToSQLEvalRunOptions(backend: .local),
+            options: TextToSQLEvalRunOptions(backend: .cloud),
             latencyMs: 12
         )
 
@@ -853,7 +967,7 @@ struct TextToSQLEvalTests {
             evalCase: evalCase,
             schema: makeCommerceSchema(),
             generation: generation,
-            options: TextToSQLEvalRunOptions(backend: .local),
+            options: TextToSQLEvalRunOptions(backend: .cloud),
             latencyMs: 12
         )
 
@@ -900,7 +1014,7 @@ struct TextToSQLEvalTests {
             evalCase: evalCase,
             schema: makeCommerceSchema(),
             generation: generation,
-            options: TextToSQLEvalRunOptions(backend: .local),
+            options: TextToSQLEvalRunOptions(backend: .cloud),
             latencyMs: 12
         )
 
@@ -920,7 +1034,7 @@ struct TextToSQLEvalTests {
             evalCase: evalCase,
             schema: makeCommerceSchema(),
             generator: ThrowingGenerator(error: SQLGenerationFailure.backendUnavailable("No model.")),
-            options: TextToSQLEvalRunOptions(backend: .local)
+            options: TextToSQLEvalRunOptions(backend: .cloud)
         )
 
         #expect(result.status == .backendUnavailable)
@@ -940,11 +1054,11 @@ struct TextToSQLEvalTests {
             evalCase: evalCase,
             schema: makeCommerceSchema(),
             generator: ThrowingGenerator(
-                error: OpenRouterFailure(
+                error: CloudRequestFailure(
                     category: .paymentRequired,
                     message: "Payment required.",
                     httpStatus: 402,
-                    openRouterErrorType: "insufficient_credits",
+                    providerErrorType: "insufficient_credits",
                     providerCode: "credits",
                     requestedModelID: "test/model"
                 )
@@ -970,10 +1084,10 @@ struct TextToSQLEvalTests {
             evalCase: evalCase,
             schema: makeCommerceSchema(),
             generator: ThrowingGenerator(
-                error: OpenRouterFailure(
+                error: CloudRequestFailure(
                     category: .providerLimit,
                     message: "Provider limit.",
-                    openRouterErrorType: "provider_limit_exceeded",
+                    providerErrorType: "provider_limit_exceeded",
                     providerCode: "provider_limit",
                     requestedModelID: "test/model"
                 )
@@ -1015,7 +1129,7 @@ struct TextToSQLEvalTests {
             question: "Show the 10 most recent orders",
             expected: TextToSQLEvalExpectation(decision: .sql)
         )
-        let metadata = OpenRouterGenerationMetadata(
+        let metadata = CloudGenerationMetadata(
             requestedModelID: "test/model",
             structuredOutputMode: .promptOnlyJSON,
             requestCount: 2,
@@ -1026,7 +1140,7 @@ struct TextToSQLEvalTests {
             evalCase: evalCase,
             schema: makeCommerceSchema(),
             generator: ThrowingGenerator(
-                error: OpenRouterHTTPAttemptBudgetExhausted(
+                error: HTTPAttemptBudgetExhausted(
                     message: "OpenRouter HTTP-attempt budget exhausted.",
                     backendMetadata: metadata
                 )
@@ -1075,7 +1189,7 @@ struct TextToSQLEvalTests {
             schema: makeCommerceSchema(),
             generator: hangingGenerator,
             options: TextToSQLEvalRunOptions(
-                backend: .local,
+                backend: .cloud,
                 caseTimeoutSeconds: 0.01
             )
         )
@@ -1106,7 +1220,7 @@ struct TextToSQLEvalTests {
                     clarificationQuestion: nil
                 )
             ),
-            options: TextToSQLEvalRunOptions(backend: .local)
+            options: TextToSQLEvalRunOptions(backend: .cloud)
         )
 
         #expect(nextResult.status == .passed)
@@ -1151,7 +1265,7 @@ struct TextToSQLEvalTests {
                 schema: makeCommerceSchema(),
                 generator: hangingGenerator,
                 options: TextToSQLEvalRunOptions(
-                    backend: .local,
+                    backend: .cloud,
                     caseTimeoutSeconds: 60
                 )
             )
@@ -1183,7 +1297,7 @@ struct TextToSQLEvalTests {
             schema: makeCommerceSchema(),
             generator: BlockingGenerator(),
             options: TextToSQLEvalRunOptions(
-                backend: .local,
+                backend: .cloud,
                 caseTimeoutSeconds: 0.01
             )
         )
@@ -1217,7 +1331,7 @@ struct TextToSQLEvalTests {
                 )
             ),
             options: TextToSQLEvalRunOptions(
-                backend: .local,
+                backend: .cloud,
                 caseTimeoutSeconds: .greatestFiniteMagnitude
             )
         )
@@ -1259,7 +1373,7 @@ struct TextToSQLEvalTests {
             question: "Show the 10 most recent orders",
             expected: TextToSQLEvalExpectation(decision: .sql)
         )
-        let failure = OpenRouterFailure(
+        let failure = CloudRequestFailure(
             category: .malformedStructuredResponse,
             message: "Malformed completion.",
             requestedModelID: "test/model",
@@ -1282,6 +1396,216 @@ struct TextToSQLEvalTests {
         #expect(result.metrics.estimatedCloudCostUSD == 0.25)
     }
 
+    @Test func evalMetricsRecordTheSourceOfTheirCost() async {
+        let evalCase = TextToSQLEvalCase(
+            id: "commerce.recent-orders",
+            schemaFixture: "commerce",
+            question: "Show the 10 most recent orders",
+            expected: TextToSQLEvalExpectation(decision: .sql)
+        )
+        let estimated = CloudCostSource.estimatedPeakList.rawValue
+        let reported = CloudCostSource.reported.rawValue
+        var metadata = CloudGenerationMetadata(
+            requestedModelID: "particle-1",
+            structuredOutputMode: .promptOnlyJSON,
+            requestCount: 1,
+            retryCount: 0
+        )
+        metadata.totalTokens = 150
+        metadata.costUSD = 0.000_066
+        metadata.costSource = estimated
+        let scored = TextToSQLEvalScorer.score(
+            evalCase: evalCase,
+            schema: makeCommerceSchema(),
+            generation: SQLGenerationResult(
+                sql: "SELECT id FROM public.orders LIMIT 100",
+                explanation: "Lists orders.",
+                assumptions: [],
+                referencedTables: ["public.orders"],
+                confidence: 0.8,
+                riskLevel: .low,
+                needsClarification: false,
+                clarificationQuestion: nil,
+                backendMetadata: metadata
+            ),
+            options: TextToSQLEvalRunOptions(backend: .cloud, model: "particle-1"),
+            latencyMs: 12
+        )
+        #expect(scored.metrics.estimatedCloudCostUSD == 0.000_066)
+        #expect(scored.metrics.estimatedCloudCostSource == estimated)
+
+        let failed = await TextToSQLEvalCaseRunner.run(
+            evalCase: evalCase,
+            schema: makeCommerceSchema(),
+            generator: ThrowingGenerator(
+                error: CloudRequestFailure(
+                    category: .malformedStructuredResponse,
+                    message: "Malformed completion.",
+                    requestedModelID: "test/model",
+                    totalTokens: 9,
+                    costUSD: 0.25,
+                    costSource: reported
+                )
+            ),
+            options: TextToSQLEvalRunOptions(backend: .cloud, model: "test/model")
+        )
+        #expect(failed.metrics.estimatedCloudCostUSD == 0.25)
+        #expect(failed.metrics.estimatedCloudCostSource == reported)
+
+        let unpriced = await TextToSQLEvalCaseRunner.run(
+            evalCase: evalCase,
+            schema: makeCommerceSchema(),
+            generator: ThrowingGenerator(
+                error: CloudRequestFailure(
+                    category: .malformedStructuredResponse,
+                    message: "Malformed completion.",
+                    requestedModelID: "test/model",
+                    totalTokens: 9
+                )
+            ),
+            options: TextToSQLEvalRunOptions(backend: .cloud, model: "test/model")
+        )
+        #expect(unpriced.metrics.tokenUsage == 9)
+        #expect(unpriced.metrics.estimatedCloudCostUSD == nil)
+        #expect(unpriced.metrics.estimatedCloudCostSource == nil)
+    }
+
+    @Test func evalMetricsRecordTheTokenBreakdown() async {
+        let evalCase = TextToSQLEvalCase(
+            id: "commerce.recent-orders",
+            schemaFixture: "commerce",
+            question: "Show the 10 most recent orders",
+            expected: TextToSQLEvalExpectation(decision: .sql)
+        )
+        var metadata = CloudGenerationMetadata(
+            requestedModelID: "particle-1",
+            structuredOutputMode: .promptOnlyJSON,
+            requestCount: 2,
+            retryCount: 0
+        )
+        metadata.promptTokens = 100
+        metadata.cachedPromptTokens = 40
+        metadata.completionTokens = 50
+        metadata.reasoningTokens = 20
+        metadata.totalTokens = 150
+        let scored = TextToSQLEvalScorer.score(
+            evalCase: evalCase,
+            schema: makeCommerceSchema(),
+            generation: SQLGenerationResult(
+                sql: "SELECT id FROM public.orders LIMIT 100",
+                explanation: "Lists orders.",
+                assumptions: [],
+                referencedTables: ["public.orders"],
+                confidence: 0.8,
+                riskLevel: .low,
+                needsClarification: false,
+                clarificationQuestion: nil,
+                backendMetadata: metadata
+            ),
+            options: TextToSQLEvalRunOptions(backend: .cloud, model: "particle-1"),
+            latencyMs: 12
+        )
+        #expect(scored.metrics.promptTokens == 100)
+        #expect(scored.metrics.cachedPromptTokens == 40)
+        #expect(scored.metrics.completionTokens == 50)
+        #expect(scored.metrics.reasoningTokens == 20)
+        #expect(scored.metrics.tokenUsage == 150)
+
+        // The agent's totals win over the one request that failed, so the
+        // breakdown never mixes the two.
+        let lastRequest = CloudRequestFailure(
+            category: .serverFailure,
+            message: "Upstream failed.",
+            requestedModelID: "particle-1",
+            promptTokens: 7,
+            cachedPromptTokens: 7,
+            completionTokens: 1,
+            totalTokens: 8
+        )
+        let agentFailed = await TextToSQLEvalCaseRunner.run(
+            evalCase: evalCase,
+            schema: makeCommerceSchema(),
+            generator: ThrowingGenerator(
+                error: SchemaToolAgentFailure(
+                    category: .schemaToolCallBudgetExhausted,
+                    message: "Schema tool call budget exhausted.",
+                    cloudFailure: lastRequest,
+                    backendMetadata: metadata
+                )
+            ),
+            options: TextToSQLEvalRunOptions(backend: .cloud, model: "particle-1")
+        )
+        #expect(agentFailed.metrics.promptTokens == 100)
+        #expect(agentFailed.metrics.cachedPromptTokens == 40)
+        #expect(agentFailed.metrics.reasoningTokens == 20)
+
+        // Without generation metadata, the failed request's usage is used.
+        let requestFailed = await TextToSQLEvalCaseRunner.run(
+            evalCase: evalCase,
+            schema: makeCommerceSchema(),
+            generator: ThrowingGenerator(
+                error: CloudRequestFailure(
+                    category: .malformedStructuredResponse,
+                    message: "Malformed completion.",
+                    requestedModelID: "particle-1",
+                    promptTokens: 4,
+                    cachedPromptTokens: 1,
+                    completionTokens: 5,
+                    reasoningTokens: 2,
+                    totalTokens: 9
+                )
+            ),
+            options: TextToSQLEvalRunOptions(backend: .cloud, model: "particle-1")
+        )
+        #expect(requestFailed.metrics.promptTokens == 4)
+        #expect(requestFailed.metrics.cachedPromptTokens == 1)
+        #expect(requestFailed.metrics.completionTokens == 5)
+        #expect(requestFailed.metrics.reasoningTokens == 2)
+
+        // A timed-out case keeps the breakdown observed so far.
+        let timedOut = await TextToSQLEvalCaseRunner.run(
+            evalCase: evalCase,
+            schema: makeCommerceSchema(),
+            generator: UsageReportingHangingGenerator(),
+            options: TextToSQLEvalRunOptions(
+                backend: .cloud,
+                model: "particle-1",
+                caseTimeoutSeconds: 0.01
+            )
+        )
+        #expect(timedOut.status == .evalTimeout)
+        #expect(timedOut.metrics.promptTokens == 12)
+        #expect(timedOut.metrics.cachedPromptTokens == nil)
+        #expect(timedOut.metrics.completionTokens == 8)
+        #expect(timedOut.metrics.reasoningTokens == 2)
+    }
+
+    @Test func caseTimeoutKeepsTheSourceOfObservedCost() async {
+        let evalCase = TextToSQLEvalCase(
+            id: "commerce.recent-orders",
+            schemaFixture: "commerce",
+            question: "Show the 10 most recent orders",
+            expected: TextToSQLEvalExpectation(decision: .sql)
+        )
+
+        let result = await TextToSQLEvalCaseRunner.run(
+            evalCase: evalCase,
+            schema: makeCommerceSchema(),
+            generator: UsageReportingHangingGenerator(
+                costSource: CloudCostSource.estimatedPeakList.rawValue
+            ),
+            options: TextToSQLEvalRunOptions(
+                backend: .cloud,
+                model: "particle-1",
+                caseTimeoutSeconds: 0.01
+            )
+        )
+
+        #expect(result.status == .evalTimeout)
+        #expect(result.metrics.estimatedCloudCostUSD == 0.02)
+        #expect(result.metrics.estimatedCloudCostSource == CloudCostSource.estimatedPeakList.rawValue)
+    }
+
     @Test func localStructuredDecodeFailureCountsAsParseFailure() async {
         let evalCase = TextToSQLEvalCase(
             id: "commerce.recent-orders",
@@ -1298,7 +1622,7 @@ struct TextToSQLEvalTests {
                     "The local model failed to decode structured output."
                 )
             ),
-            options: TextToSQLEvalRunOptions(backend: .local)
+            options: TextToSQLEvalRunOptions(backend: .cloud)
         )
 
         #expect(result.status == .parseFailure)
@@ -1322,7 +1646,7 @@ struct TextToSQLEvalTests {
                     "The schema and question exceed the local model's context window."
                 )
             ),
-            options: TextToSQLEvalRunOptions(backend: .local)
+            options: TextToSQLEvalRunOptions(backend: .cloud)
         )
 
         #expect(result.status == .contextWindowFailure)
@@ -1344,7 +1668,7 @@ struct TextToSQLEvalTests {
             generator: ThrowingGenerator(
                 error: SQLGenerationFailure.generation("The local model declined to answer.")
             ),
-            options: TextToSQLEvalRunOptions(backend: .local)
+            options: TextToSQLEvalRunOptions(backend: .cloud)
         )
 
         #expect(result.status == .generationFailure)
@@ -1430,7 +1754,7 @@ struct TextToSQLEvalTests {
             question: "Show the 10 most recent orders",
             expected: TextToSQLEvalExpectation(decision: .sql)
         )
-        var metadata = OpenRouterGenerationMetadata(
+        var metadata = CloudGenerationMetadata(
             requestedModelID: "test/model",
             structuredOutputMode: .promptOnlyJSON,
             requestCount: 1,
@@ -1498,7 +1822,7 @@ struct TextToSQLEvalTests {
             evalCase: evalCase,
             schema: makeCommerceSchema(),
             generation: generation,
-            options: TextToSQLEvalRunOptions(backend: .local),
+            options: TextToSQLEvalRunOptions(backend: .cloud),
             latencyMs: 12
         )
 
@@ -1544,7 +1868,7 @@ struct TextToSQLEvalTests {
             evalCase: evalCase,
             schema: makeCommerceSchema(),
             generation: generation,
-            options: TextToSQLEvalRunOptions(backend: .local),
+            options: TextToSQLEvalRunOptions(backend: .cloud),
             latencyMs: 12
         )
 
@@ -1588,7 +1912,7 @@ struct TextToSQLEvalTests {
             evalCase: evalCase,
             schema: makeCommerceSchema(),
             generation: generation,
-            options: TextToSQLEvalRunOptions(backend: .local),
+            options: TextToSQLEvalRunOptions(backend: .cloud),
             latencyMs: 12
         )
 
@@ -1632,7 +1956,7 @@ struct TextToSQLEvalTests {
                 evalCase: evalCase,
                 schema: makePreseasonSchema(),
                 generation: generation,
-                options: TextToSQLEvalRunOptions(backend: .local),
+                options: TextToSQLEvalRunOptions(backend: .cloud),
                 latencyMs: 12
             )
 
@@ -1671,7 +1995,7 @@ struct TextToSQLEvalTests {
             evalCase: evalCase,
             schema: makePreseasonSchema(),
             generation: generation,
-            options: TextToSQLEvalRunOptions(backend: .local),
+            options: TextToSQLEvalRunOptions(backend: .cloud),
             latencyMs: 12
         )
 
@@ -1692,6 +2016,53 @@ struct TextToSQLEvalTests {
         let suite = try JSONDecoder().decode(TextToSQLEvalSuite.self, from: suiteData)
 
         try TextToSQLEvalSuiteValidator.validate(suite: suite, suiteURL: suiteURL)
+    }
+
+    @Test func validatesProviderSmokeSuiteAndRunnerPrefix() throws {
+        let root = URL(fileURLWithPath: #filePath)
+            .deletingLastPathComponent()
+            .deletingLastPathComponent()
+        let suiteURL = root.appendingPathComponent("Evals/suites/provider-smoke-v1.json")
+        let suiteData = try Data(contentsOf: suiteURL)
+        let suite = try JSONDecoder().decode(TextToSQLEvalSuite.self, from: suiteData)
+
+        try TextToSQLEvalSuiteValidator.validate(suite: suite, suiteURL: suiteURL)
+        #expect(suite.name == "provider-smoke-v1")
+        #expect(suite.name.hasPrefix("provider-smoke"))
+        #expect(!suite.cases.isEmpty)
+        #expect(suite.cases.allSatisfy { $0.id.hasPrefix("smoke.") })
+        #expect(Set(suite.cases.map(\.schemaFixture)) == ["provider-smoke"])
+        #expect(
+            FileManager.default.fileExists(
+                atPath: root.appendingPathComponent("Evals/schemas/provider-smoke-schema.json").path
+            )
+        )
+        #expect(
+            !FileManager.default.fileExists(
+                atPath: root.appendingPathComponent("Evals/suites/openrouter-smoke-v1.json").path
+            )
+        )
+
+        let runnerText = try String(
+            contentsOf: root.appendingPathComponent("WidenEval/EvalRunner.swift"),
+            encoding: .utf8
+        )
+        #expect(runnerText.contains(#"suite.name.hasPrefix("provider-smoke")"#))
+        #expect(runnerText.contains(#""provider-transport-smoke""#))
+        #expect(runnerText.contains(#""provider-transport-smoke-v1""#))
+
+        let reporterText = try String(
+            contentsOf: root.appendingPathComponent("WidenEval/EvalReporter.swift"),
+            encoding: .utf8
+        )
+        #expect(reporterText.contains(#""provider-transport-smoke""#))
+        #expect(reporterText.contains(#""openrouter-transport-smoke""#))
+
+        let makefileText = try String(
+            contentsOf: root.appendingPathComponent("Makefile"),
+            encoding: .utf8
+        )
+        #expect(makefileText.contains("--suite Evals/suites/provider-smoke-v1.json"))
     }
 
     @Test func staticSuiteValidationAllowsSQLCasesWithoutSemanticMetadata() throws {

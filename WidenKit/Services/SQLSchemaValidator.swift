@@ -1951,14 +1951,66 @@ private struct IdentifierExpression: Equatable {
     }
 }
 
+/// The grounding decision the postprocessor makes about accepted SQL that it
+/// would replace with a clarification: the question words it could not match
+/// to the referenced tables, the database context or confirmed definitions.
+public struct GroundingReviewCandidate: Equatable, Sendable {
+    /// Tables the SQL references, as the schema validator resolved them.
+    public var referencedTables: [String]
+    /// Every question word the grounder could not match, in question order.
+    public var unresolvedTerms: [String]
+    /// Unresolved words that share a token with a SQL string literal the
+    /// grounder rejected: a value outside the compared column's allowed values,
+    /// or a status value nothing in the schema, context or definitions proves.
+    public var literalRejectedTerms: [String]
+    public var evaluation: SQLGroundingEvaluation
+
+    public init(
+        referencedTables: [String],
+        unresolvedTerms: [String],
+        literalRejectedTerms: [String],
+        evaluation: SQLGroundingEvaluation
+    ) {
+        self.referencedTables = referencedTables
+        self.unresolvedTerms = unresolvedTerms
+        self.literalRejectedTerms = literalRejectedTerms
+        self.evaluation = evaluation
+    }
+}
+
+/// A rule a grounding judgment must never get past when it keeps SQL the
+/// grounding pass would replace, named as
+/// `GeneratedSQLPostprocessor.groundingJudgeReleaseViolations` reports it.
+public enum GroundingJudgeReleaseViolation: String, CaseIterable, Equatable, Sendable {
+    /// No judgment is bound to this SQL, question, database context,
+    /// confirmed definitions and flagged words.
+    case digestMismatch
+    /// The SQL does not only read.
+    case write
+    /// A flagged word matches a SQL literal the grounding pass rejected.
+    case literalRejected
+    /// The anchored-window rule replaces the SQL.
+    case anchoredWindow
+    /// The SQL reads no table, or one the schema tools did not describe.
+    case undescribedTables
+    /// Intent coverage says the question must be clarified.
+    case mustClarify
+}
+
 public enum GeneratedSQLPostprocessor {
+    /// `allowGroundingJudgeRelease` is false where the caller runs the SQL
+    /// it gets back without the user's review, as the app's execution repair
+    /// loop does. There a grounding judgment can still re-aim a clarification
+    /// but never keeps SQL the grounding pass would replace, so SQL only the
+    /// judge let stand always waits for the user's Run.
     public static func enriched(
         _ generation: SQLGenerationResult,
         question: String,
         schema: DatabaseSchema,
         databaseContext: String,
         confirmedSemanticBindings: [String] = [],
-        allowGroundingClarification: Bool = true
+        allowGroundingClarification: Bool = true,
+        allowGroundingJudgeRelease: Bool = true
     ) -> SQLGenerationResult {
         var copy = generation
         copy.generationSchemaName = schema.singleSchemaName
@@ -1988,7 +2040,7 @@ public enum GeneratedSQLPostprocessor {
                 copy.riskLevel = .medium
                 return copy
             }
-            let grounding = groundingEvaluation(
+            let review = reviewGrounding(
                 question: question,
                 sql: sql,
                 referencedTables: schemaValidation.referencedTables,
@@ -1996,9 +2048,9 @@ public enum GeneratedSQLPostprocessor {
                 databaseContext: databaseContext,
                 confirmedSemanticBindings: confirmedSemanticBindings
             )
-            copy.groundingConcepts = grounding.concepts
+            copy.groundingConcepts = review.evaluation.concepts
             if allowGroundingClarification,
-                let pending = grounding.pendingClarification
+                var pending = review.evaluation.pendingClarification
             {
                 if schemaToolEvidenceAllowsSQL(
                     question: question,
@@ -2007,6 +2059,39 @@ public enum GeneratedSQLPostprocessor {
                     generation: generation
                 ) {
                     return copy
+                }
+                if copy.backendMetadata?.agentDiagnostics?.groundingJudgment != nil {
+                    var decision = groundingJudgeDecision(
+                        review: review,
+                        pending: pending,
+                        question: question,
+                        sql: sql,
+                        databaseContext: databaseContext,
+                        confirmedSemanticBindings: confirmedSemanticBindings,
+                        generation: generation
+                    )
+                    if case .release = decision, !allowGroundingJudgeRelease {
+                        decision = .lexical(.releaseNotAllowed)
+                    }
+                    copy.backendMetadata?.agentDiagnostics?.groundingJudgment?.postprocessorOutcome =
+                        decision.recordedOutcome
+                    switch decision {
+                    case .release(let concepts):
+                        // The SQL goes on to canonicalization, safety and
+                        // schema validation and PREPARE like any other.
+                        copy.groundingConcepts = concepts
+                        return copy
+                    case .reAim(let concept, _):
+                        pending = makePendingClarification(
+                            for: concept,
+                            question: question,
+                            schema: schema,
+                            referencedTables: schemaValidation.referencedTables,
+                            databaseContext: databaseContext
+                        )
+                    case .lexical:
+                        break
+                    }
                 }
                 copy.sql = ""
                 copy.explanation = pending.question
@@ -2020,6 +2105,117 @@ public enum GeneratedSQLPostprocessor {
             }
         }
         return copy
+    }
+
+    /// The words `enriched` would ask about instead of keeping this SQL, so
+    /// a caller sees the same terms the postprocessor will act on. Nil when
+    /// there is no SQL, the SQL has definite schema errors, the anchored-window
+    /// rule replaces it, or every question word is grounded.
+    public static func groundingReview(
+        sql: String,
+        question: String,
+        schema: DatabaseSchema,
+        databaseContext: String,
+        confirmedSemanticBindings: [String] = []
+    ) -> GroundingReviewCandidate? {
+        let sql = sql.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !sql.isEmpty else { return nil }
+        let schemaValidation = SQLSchemaValidator.validate(sql: sql, against: schema)
+        guard !schemaValidation.hasDefiniteErrors,
+            anchoredWindowClarification(
+                question: question,
+                sql: sql,
+                databaseContext: databaseContext
+            ) == nil
+        else { return nil }
+        let review = reviewGrounding(
+            question: question,
+            sql: sql,
+            referencedTables: schemaValidation.referencedTables,
+            schema: schema,
+            databaseContext: databaseContext,
+            confirmedSemanticBindings: confirmedSemanticBindings
+        )
+        return review.evaluation.pendingClarification == nil ? nil : review
+    }
+
+    /// The release rules `generation` breaks, checked again from its SQL, the
+    /// inputs and its agent diagnostics after `enriched` kept SQL only its
+    /// grounding judgment let stand. Empty, as the decision rule requires;
+    /// evals count anything else, which would be a bug.
+    public static func groundingJudgeReleaseViolations(
+        _ generation: SQLGenerationResult,
+        question: String,
+        schema: DatabaseSchema,
+        databaseContext: String,
+        confirmedSemanticBindings: [String] = []
+    ) -> [GroundingJudgeReleaseViolation] {
+        let sql = generation.sql.trimmingCharacters(in: .whitespacesAndNewlines)
+        let diagnostics = generation.backendMetadata?.agentDiagnostics
+        let referencedTables = SQLSchemaValidator.validate(sql: sql, against: schema).referencedTables
+        let review = reviewGrounding(
+            question: question,
+            sql: sql,
+            referencedTables: referencedTables,
+            schema: schema,
+            databaseContext: databaseContext,
+            confirmedSemanticBindings: confirmedSemanticBindings
+        )
+        let digest = SchemaToolAgentGroundingJudgment.inputDigest(
+            sql: sql,
+            question: question,
+            databaseContext: databaseContext,
+            confirmedSemanticBindings: confirmedSemanticBindings,
+            terms: review.unresolvedTerms
+        )
+        let mustClarify = diagnostics.map {
+            SchemaToolAgentSQLIntentCoveragePolicy.evaluate(
+                question: question,
+                databaseContext: databaseContext,
+                evidence: $0.schemaEvidence,
+                sql: generation.sql
+            ).decision == .mustClarify
+        } ?? false
+        let violations: [(GroundingJudgeReleaseViolation, Bool)] = [
+            (.digestMismatch, diagnostics?.groundingJudgment?.inputDigest != digest),
+            (.write, SQLSafetyValidator.validate(sql).kind != .read),
+            (.literalRejected, !review.literalRejectedTerms.isEmpty),
+            (.anchoredWindow, anchoredWindowReplacesSQL(sql, question: question, databaseContext: databaseContext)),
+            (
+                .undescribedTables,
+                !describedTablesCover(
+                    referencedTables,
+                    describedTableIDs: diagnostics?.schemaEvidence.describedTableIDs ?? []
+                )
+            ),
+            (.mustClarify, mustClarify),
+        ]
+        return violations.filter(\.1).map(\.0)
+    }
+
+    /// Whether the anchored-window rule replaces `sql` with a question about
+    /// the window's anchor. Nothing lets SQL past that rule.
+    static func anchoredWindowReplacesSQL(
+        _ sql: String,
+        question: String,
+        databaseContext: String
+    ) -> Bool {
+        anchoredWindowClarification(
+            question: question,
+            sql: sql.trimmingCharacters(in: .whitespacesAndNewlines),
+            databaseContext: databaseContext
+        ) != nil
+    }
+
+    /// Whether the SQL reads at least one table and the schema tools
+    /// described every table it reads, compared case-insensitively.
+    static func describedTablesCover(
+        _ referencedTables: [String],
+        describedTableIDs: [String]
+    ) -> Bool {
+        let described = Set(describedTableIDs.map { $0.lowercased() })
+        return !referencedTables.isEmpty
+            && referencedTables.allSatisfy { described.contains($0.lowercased()) }
     }
 
     private static func schemaToolEvidenceAllowsSQL(
@@ -2055,6 +2251,170 @@ public enum GeneratedSQLPostprocessor {
             sql: generation.sql
         )
         return coverage.decision == .covered
+    }
+
+    /// Why a recorded grounding judgment did not let the SQL stand, as the
+    /// postprocessor outcome names it.
+    private enum GroundingJudgeBlock: String {
+        /// The diagnostics do not say the judge was on.
+        case judgeDisabled
+        /// The judge skipped this SQL or failed.
+        case notJudged
+        /// The judgment is for another SQL, question, context, definition
+        /// list or set of flagged words.
+        case digestMismatch
+        case notTerminalSQL
+        case undescribedTables
+        case write
+        case literalRejected
+        /// Intent coverage says the question must be clarified.
+        case mustClarify
+        /// The critic's last verdict was `clarify`.
+        case criticClarify
+        /// An intent-coverage or plan-consistency rejection still stands.
+        case stickyRejection
+        /// A flagged word has no label that lets SQL stand.
+        case unreleasableTerm
+        /// The judgment would keep the SQL, but the caller runs the SQL it
+        /// keeps without the user's review.
+        case releaseNotAllowed
+    }
+
+    private enum GroundingJudgeDecision {
+        /// Keep the SQL, with these concepts.
+        case release([SQLGroundingConcept])
+        /// Ask about this word instead of the first flagged one.
+        case reAim(SQLGroundingConcept, GroundingJudgeBlock)
+        /// Ask the lexical clarification as it is.
+        case lexical(GroundingJudgeBlock)
+
+        var recordedOutcome: String {
+            switch self {
+            case .release: "released"
+            case .reAim(_, let block): "reAimed:\(block.rawValue)"
+            case .lexical(let block): "lexical:\(block.rawValue)"
+            }
+        }
+    }
+
+    /// Labels that let SQL stand once verified.
+    private static let releasableGroundingJudgeLabels = Set(
+        [
+            SchemaToolAgentGroundingJudgeLabel.requestWording,
+            .queryOperation,
+            .schemaMatch,
+            .contextDefined,
+            .questionDefined,
+        ].map(\.rawValue)
+    )
+
+    /// Labels whose word a held-back SQL's clarification asks about.
+    private static let reAimGroundingJudgeLabels = Set(
+        [SchemaToolAgentGroundingJudgeLabel.needsDefinition, .unsupported].map(\.rawValue)
+    )
+
+    /// What the agent's grounding judgment lets the postprocessor do with SQL
+    /// it would replace with its lexical clarification. The judgment counts
+    /// only when the judge was on, judged, and its digest matches this SQL,
+    /// question, context, confirmed definitions and flagged words. It then
+    /// releases the SQL only when the agent ended on a SQL terminal, the
+    /// tools described every table the SQL reads, the SQL only reads, no
+    /// flagged word matches a rejected literal, intent coverage (a frozen
+    /// backstop, evaluated in every mode) does not say the question must be
+    /// clarified, the critic did not ask to clarify, no intent or plan
+    /// rejection stands, and every flagged word has a verified label that
+    /// lets SQL stand. Otherwise the clarification asks about the first word
+    /// the judge said needs a definition or is unsupported, when that is not
+    /// already the word it asks about.
+    private static func groundingJudgeDecision(
+        review: GroundingReviewCandidate,
+        pending: PendingClarification,
+        question: String,
+        sql: String,
+        databaseContext: String,
+        confirmedSemanticBindings: [String],
+        generation: SQLGenerationResult
+    ) -> GroundingJudgeDecision {
+        guard let diagnostics = generation.backendMetadata?.agentDiagnostics,
+            let judgment = diagnostics.groundingJudgment,
+            diagnostics.groundingJudgeMode == SchemaToolAgentGroundingJudgeMode.enabled.rawValue
+        else { return .lexical(.judgeDisabled) }
+        guard judgment.outcome == SchemaToolAgentGroundingJudgeOutcome.judged.rawValue else {
+            return .lexical(.notJudged)
+        }
+        guard judgment.inputDigest == SchemaToolAgentGroundingJudgment.inputDigest(
+            sql: sql,
+            question: question,
+            databaseContext: databaseContext,
+            confirmedSemanticBindings: confirmedSemanticBindings,
+            terms: review.unresolvedTerms
+        ) else { return .lexical(.digestMismatch) }
+
+        var judgedTerms: [String: SchemaToolAgentGroundingJudgedTerm] = [:]
+        for term in judgment.terms where judgedTerms[term.term.lowercased()] == nil {
+            judgedTerms[term.term.lowercased()] = term
+        }
+        let block: GroundingJudgeBlock? =
+            if !diagnostics.terminalToolSeen || diagnostics.terminalAction != "sql" {
+                .notTerminalSQL
+            } else if !describedTablesCover(
+                review.referencedTables,
+                describedTableIDs: diagnostics.schemaEvidence.describedTableIDs
+            ) {
+                .undescribedTables
+            } else if SQLSafetyValidator.validate(sql).kind != .read {
+                .write
+            } else if !review.literalRejectedTerms.isEmpty {
+                .literalRejected
+            } else if SchemaToolAgentSQLIntentCoveragePolicy.evaluate(
+                question: question,
+                databaseContext: databaseContext,
+                evidence: diagnostics.schemaEvidence,
+                sql: generation.sql
+            ).decision == .mustClarify {
+                .mustClarify
+            } else if diagnostics.criticFinalOutcome == "clarifyNotTrusted" {
+                .criticClarify
+            } else if diagnostics.appSideRejectionReason == .intentCoverageRejected
+                || diagnostics.appSideRejectionReason == .planConsistencyRejected
+            {
+                .stickyRejection
+            } else if !review.unresolvedTerms.allSatisfy({ term in
+                judgedTerms[term.lowercased()].map {
+                    $0.verified && releasableGroundingJudgeLabels.contains($0.label)
+                } ?? false
+            }) {
+                .unreleasableTerm
+            } else {
+                nil
+            }
+        guard let block else {
+            return .release(
+                review.evaluation.concepts.map { concept in
+                    guard concept.state == .unsupported,
+                        let judged = judgedTerms[concept.term.lowercased()]
+                    else { return concept }
+                    var grounded = concept
+                    grounded.state = .grounded
+                    grounded.required = false
+                    grounded.evidence = [
+                        judged.evidence.isEmpty
+                            ? "judge \(judged.label)"
+                            : "judge \(judged.label): \(judged.evidence)",
+                    ]
+                    return grounded
+                }
+            )
+        }
+        let target = judgment.terms
+            .first { reAimGroundingJudgeLabels.contains($0.label) }
+            .flatMap { judged in
+                review.evaluation.concepts.first {
+                    $0.state == .unsupported && $0.term.lowercased() == judged.term.lowercased()
+                }
+            }
+        guard let target, target.term != pending.concept.term else { return .lexical(block) }
+        return .reAim(target, block)
     }
 
     private static func anchoredWindowClarification(
@@ -2147,6 +2507,24 @@ public enum GeneratedSQLPostprocessor {
         databaseContext: String,
         confirmedSemanticBindings: [String] = []
     ) -> SQLGroundingEvaluation {
+        reviewGrounding(
+            question: question,
+            sql: sql,
+            referencedTables: referencedTables,
+            schema: schema,
+            databaseContext: databaseContext,
+            confirmedSemanticBindings: confirmedSemanticBindings
+        ).evaluation
+    }
+
+    private static func reviewGrounding(
+        question: String,
+        sql: String,
+        referencedTables: [String],
+        schema: DatabaseSchema,
+        databaseContext: String,
+        confirmedSemanticBindings: [String]
+    ) -> GroundingReviewCandidate {
         let schemaAndContextTokens = referencedSchemaTokens(
             referencedTables: referencedTables,
             schema: schema
@@ -2159,7 +2537,12 @@ public enum GeneratedSQLPostprocessor {
 
         let terms = meaningfulRequestWords(question)
         guard !terms.isEmpty else {
-            return SQLGroundingEvaluation(concepts: notRequiredConcepts(question))
+            return GroundingReviewCandidate(
+                referencedTables: referencedTables,
+                unresolvedTerms: [],
+                literalRejectedTerms: [],
+                evaluation: SQLGroundingEvaluation(concepts: notRequiredConcepts(question))
+            )
         }
         let literalTokens = literalValueTokenEvaluation(
             in: sql,
@@ -2167,10 +2550,13 @@ public enum GeneratedSQLPostprocessor {
             schema: schema,
             availableTokens: literalProofTokens
         )
+        let literalRejected = terms.filter { word in
+            SchemaIndex.tokens(in: word).contains(where: literalTokens.rejected.contains)
+        }
         let unresolved = terms.filter { word in
             let variants = SchemaIndex.tokens(in: word)
             guard !variants.isEmpty else { return false }
-            if variants.contains(where: literalTokens.rejected.contains) {
+            if literalRejected.contains(word) {
                 return true
             }
             if variants.contains(where: literalTokens.accepted.contains) {
@@ -2185,7 +2571,7 @@ public enum GeneratedSQLPostprocessor {
             let variants = SchemaIndex.tokens(in: term)
             let state: GroundingState
             let evidence: [String]
-            if variants.contains(where: literalTokens.rejected.contains) || unresolved.contains(term) {
+            if unresolved.contains(term) {
                 state = .unsupported
                 evidence = []
             } else if variants.contains(where: literalTokens.accepted.contains)
@@ -2214,28 +2600,49 @@ public enum GeneratedSQLPostprocessor {
         }
 
         concepts.append(contentsOf: notRequiredConcepts(question))
-        guard let first = concepts.first(where: {
+        let pending = concepts.first(where: {
             $0.required && ($0.state == .unsupported || $0.state == .ambiguous)
-        }) else {
-            return SQLGroundingEvaluation(concepts: concepts)
+        }).map { first in
+            makePendingClarification(
+                for: first,
+                question: question,
+                schema: schema,
+                referencedTables: referencedTables,
+                databaseContext: databaseContext
+            )
         }
+        return GroundingReviewCandidate(
+            referencedTables: referencedTables,
+            unresolvedTerms: unresolved,
+            literalRejectedTerms: literalRejected,
+            evaluation: SQLGroundingEvaluation(concepts: concepts, pendingClarification: pending)
+        )
+    }
 
-        let options = clarificationOptions(for: first, schema: schema, referencedTables: referencedTables)
+    /// The clarification for one ungrounded concept, with the winner,
+    /// time-field and allowed-value wording whichever term is chosen.
+    private static func makePendingClarification(
+        for concept: SQLGroundingConcept,
+        question: String,
+        schema: DatabaseSchema,
+        referencedTables: [String],
+        databaseContext: String
+    ) -> PendingClarification {
+        let options = clarificationOptions(for: concept, schema: schema, referencedTables: referencedTables)
         let clarificationQuestion = clarificationQuestion(
-            for: first,
+            for: concept,
             question: question,
             schema: schema,
             referencedTables: referencedTables,
             databaseContext: databaseContext
         )
-        let pending = PendingClarification(
-            concept: first,
+        return PendingClarification(
+            concept: concept,
             originalQuestion: question,
             question: clarificationQuestion,
             options: options,
-            evidence: first.evidence
+            evidence: concept.evidence
         )
-        return SQLGroundingEvaluation(concepts: concepts, pendingClarification: pending)
     }
 
     private static func clarificationQuestion(
@@ -2977,7 +3384,7 @@ public enum GeneratedSQLPostprocessor {
         return tokens
     }
 
-    private static func meaningfulRequestWords(_ question: String) -> [String] {
+    static func meaningfulRequestWords(_ question: String) -> [String] {
         let words = rawWords(in: question)
         var seen = Set<String>()
         return words.enumerated().compactMap { index, word in

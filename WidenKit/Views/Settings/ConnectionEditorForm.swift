@@ -80,7 +80,7 @@ struct ConnectionEditorForm: View {
                                 RoundedRectangle(cornerRadius: 6)
                                     .stroke(Color.primary.opacity(0.12), lineWidth: 1)
                             }
-                            .help("Included with each text-to-SQL generation for the selected backend.")
+                            .help("Included with each text-to-SQL request to Particle-1.")
 
                             Text("\(viewModel.databaseContext.count) / \(SQLPromptBuilder.maxDatabaseContextCharacters.formatted()) characters")
                                 .font(.caption2.monospacedDigit())
@@ -135,10 +135,8 @@ struct ConnectionEditorForm: View {
             actionBar
         }
         .sheet(isPresented: $showAutofillSheet) {
-            if let parser = appState.connectionDetailsParser {
-                ConnectionAutofillSheet(viewModel: viewModel, parser: parser) {
-                    showAutofillSheet = false
-                }
+            ConnectionAutofillSheet(viewModel: viewModel, parser: appState.connectionDetailsParser) {
+                showAutofillSheet = false
             }
         }
     }
@@ -146,15 +144,15 @@ struct ConnectionEditorForm: View {
     private var privacySection: some View {
         SettingsSectionPanel(title: "Advanced Privacy", systemImage: "lock.shield") {
             VStack(alignment: .leading, spacing: 10) {
-                Text("Cloud SQL generation can send your question and allowed schema metadata: table/column names, comments, constraints, and enum values. Inspected data values are sent to cloud models only when both local inspection and cloud data inspection are enabled here.")
+                Text("Text-to-SQL sends your question and the schema metadata allowed here to Particle: table and column names, comments, constraints, and enum values. Data inspection on its own sends Particle only approximate row counts and column statistics, such as the share of nulls and the number of distinct values. Inspected data values are sent to Particle only when both data inspection and sending inspected values are enabled here. Turning off schema metadata sharing turns off text-to-SQL for this connection; you can still browse the schema and run SQL.")
                     .font(.caption)
                     .foregroundStyle(.secondary)
                     .fixedSize(horizontal: false, vertical: true)
 
-                Toggle("Allow sending schema metadata to cloud models", isOn: $viewModel.allowCloudSchemaMetadata)
+                Toggle("Allow sending schema metadata to Particle (required for text-to-SQL)", isOn: $viewModel.allowCloudSchemaMetadata)
                     .toggleStyle(.checkbox)
 
-                Toggle("Allow local data inspection for AI assistance", isOn: $viewModel.allowLocalDataInspection)
+                Toggle("Allow Widen to inspect data to improve SQL (sends row counts and column statistics to Particle)", isOn: $viewModel.allowLocalDataInspection)
                     .toggleStyle(.checkbox)
                     .onChange(of: viewModel.allowLocalDataInspection) { _, enabled in
                         if !enabled {
@@ -163,7 +161,7 @@ struct ConnectionEditorForm: View {
                         }
                     }
 
-                Toggle("Allow sending inspected data values to cloud models", isOn: $viewModel.allowCloudDataInspection)
+                Toggle("Allow sending inspected data values to Particle", isOn: $viewModel.allowCloudDataInspection)
                     .toggleStyle(.checkbox)
                     .disabled(!viewModel.allowLocalDataInspection)
 
@@ -239,9 +237,8 @@ struct ConnectionEditorForm: View {
         .padding(.vertical, 7)
     }
 
-    /// Opens the paste-autofill sheet. Parsing stays local: structured URLs
-    /// and key-value entries are deterministic, and free-form text uses the
-    /// on-device model when available.
+    /// Opens the paste-autofill sheet. Parsing is deterministic and local:
+    /// pasted text can contain credentials, so it never reaches a model.
     private var autofillButton: some View {
         Button {
             showAutofillSheet = true
@@ -249,11 +246,7 @@ struct ConnectionEditorForm: View {
             Label("Paste Details…", systemImage: "doc.on.clipboard")
                 .font(.callout)
         }
-        .disabled(appState.connectionAutofillUnavailableMessage != nil)
-        .help(
-            appState.connectionAutofillUnavailableMessage
-                ?? "Paste a connection URL or .env details to fill this form locally. Nothing leaves this Mac."
-        )
+        .help("Paste a connection URL or .env details to fill this form locally. Nothing leaves this Mac.")
     }
 
     private var actionBar: some View {

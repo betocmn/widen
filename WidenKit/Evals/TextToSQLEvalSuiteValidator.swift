@@ -213,7 +213,7 @@ public enum TextToSQLEvalSuiteValidator {
                 needsClarification: false,
                 clarificationQuestion: nil
             ),
-            options: TextToSQLEvalRunOptions(backend: .local),
+            options: TextToSQLEvalRunOptions(backend: .cloud),
             latencyMs: 0
         )
         if result.status != .passed {

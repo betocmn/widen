@@ -34,6 +34,7 @@ struct WidenApp: App {
                 }
         }
         .windowResizability(.contentMinSize)
+        .defaultSize(width: 1_280, height: 700)
         .commands {
             CommandGroup(after: .appInfo) {
                 if updaterModel.isConfigured {

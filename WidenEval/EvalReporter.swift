@@ -88,8 +88,13 @@ enum EvalReporter {
             "| Schema agent clarification correction | \(tableCell(run.manifest.schemaAgentClarificationCorrectionMode ?? "-")) |",
             "| Schema agent intent coverage | \(tableCell(run.manifest.schemaAgentIntentCoverageMode ?? "-")) |",
             "| Schema agent plan consistency | \(tableCell(run.manifest.schemaAgentPlanConsistencyMode ?? "-")) |",
+            "| Schema agent critic | \(tableCell(run.manifest.schemaAgentCriticMode ?? "-")) |",
+            "| Schema agent grounding judge | \(tableCell(run.manifest.schemaAgentGroundingJudgeMode ?? "-")) |",
+            "| Provider | \(tableCell(run.manifest.resolvedProvider ?? "-")) |",
+            "| Endpoint host | \(tableCell(run.manifest.providerEndpointHost ?? "-")) |",
             "| Model | \(tableCell(run.manifest.model ?? "-")) |",
-            "| Expected canonical model | \(tableCell(run.manifest.expectedCanonicalModelID ?? "-")) |",
+            "| Expected returned model | \(tableCell(run.manifest.expectedCanonicalModelID ?? "-")) |",
+            "| Reasoning effort | \(tableCell(run.manifest.reasoningEffort ?? "-")) |",
             "| OS | \(tableCell(run.manifest.osVersion)) |",
             "| Architecture | \(tableCell(run.manifest.architecture)) |",
             "| Cases | \(run.manifest.caseCount) |",
@@ -139,7 +144,10 @@ enum EvalReporter {
             title: "PostgreSQL Verification Status Counts",
             summary: run.summary
         )
-        lines += openRouterSection(results: run.results)
+        lines += providerSection(
+            results: run.results,
+            providerDisplayName: run.manifest.providerDisplayName
+        )
         lines += semanticStatusCountSection(title: "Semantic Status Counts", summary: run.summary)
         lines += staticSemanticCrossTabSection(title: "Static/Semantic Cross-Tab", summary: run.summary)
         if run.backendSummaries.count > 1 {
@@ -191,8 +199,9 @@ enum EvalReporter {
     }
 
     private static func evaluationScope(for run: EvalRun) -> String {
-        if run.manifest.evaluationMode == "openrouter-transport-smoke" {
-            return "**Evaluation scope:** The smoke run invokes the shared production text-to-SQL pipeline only to exercise OpenRouter transport, request-mode selection, structured-response parsing, retry accounting, and safe provider diagnostics. It does not establish SQL semantic accuracy."
+        // Runs recorded before the provider-smoke rename keep the legacy mode name.
+        if ["provider-transport-smoke", "openrouter-transport-smoke"].contains(run.manifest.evaluationMode) {
+            return "**Evaluation scope:** The smoke run invokes the shared production text-to-SQL pipeline only to exercise provider transport, request-mode selection, structured-response parsing, retry accounting, and safe provider diagnostics. It does not establish SQL semantic accuracy."
         }
 
         let verificationAttempted = postgresVerificationAttempted(in: run.summary)
@@ -223,15 +232,17 @@ enum EvalReporter {
         let maxPromptSize = summary.maxEstimatedInitialPromptCharacters.map(String.init) ?? "-"
         let modelCalls = summary.totalModelCalls.map(String.init) ?? "-"
         let tokenUsage = summary.totalTokenUsage.map(String.init) ?? "-"
-        let cloudCost = summary.estimatedCloudCostUSD
-            .map { String(format: "$%.6f", $0) } ?? "-"
+        let cloudCost = TextToSQLEvalUsageTotals.formattedCost(
+            summary.estimatedCloudCostUSD,
+            source: summary.estimatedCloudCostSource
+        )
         let schemaToolCalls = summary.totalSchemaToolCalls.map(String.init) ?? "-"
         let inspectionToolCalls = summary.totalInspectionToolCalls.map(String.init) ?? "-"
         let agentTurns = summary.totalAgentModelTurns.map(String.init) ?? "-"
         let agentHTTPAttempts = summary.totalAgentHTTPAttempts.map(String.init) ?? "-"
         let toolBudgetFailures = summary.toolBudgetFailureCount.map(String.init) ?? "-"
 
-        return [
+        var lines: [String] = [
             "",
             "## \(title)",
             "",
@@ -266,11 +277,18 @@ enum EvalReporter {
             "| Agent logical model turns | \(agentTurns) |",
             "| Agent HTTP attempts | \(agentHTTPAttempts) |",
             "| Tool-budget failures | \(toolBudgetFailures) |",
+        ]
+        lines += TextToSQLEvalForcedTerminalSummary.markdownRows(summary.forcedTerminal)
+        lines += TextToSQLEvalCriticSummary.markdownRows(summary.schemaAgentCritic)
+        lines += TextToSQLEvalWithheldSQLSummary.markdownRows(summary.withheldSQL)
+        lines += TextToSQLEvalGroundingJudgeSummary.markdownRows(summary.groundingJudge)
+        lines += [
             "| Repeated repair fingerprint/no-progress repairs | \(summary.repeatedNoProgressRepairCount) |",
             "| Avg estimated initial prompt characters | \(averagePromptSize) |",
             "| Max estimated initial prompt characters | \(maxPromptSize) |",
             "| Token usage | \(tokenUsage) |",
             "| Estimated cloud cost | \(cloudCost) |",
+            "| Estimated cloud cost source | \(tableCell(summary.estimatedCloudCostSource ?? "-")) |",
             "",
             "### Latency",
             "",
@@ -282,6 +300,7 @@ enum EvalReporter {
             "| P95 | \(summary.latency.p95Ms) |",
             "| Max | \(summary.latency.maxMs) |",
         ]
+        return lines
     }
 
     private static func statusCountSection(title: String, summary: EvalRunSummary) -> [String] {
@@ -316,8 +335,11 @@ enum EvalReporter {
         return lines
     }
 
-    private static func openRouterSection(results: [TextToSQLEvalResult]) -> [String] {
-        let openRouterResults = results.filter { result in
+    private static func providerSection(
+        results: [TextToSQLEvalResult],
+        providerDisplayName: String?
+    ) -> [String] {
+        let providerResults = results.filter { result in
             result.backend == .cloud
                 && (
                     result.metrics.openRouterStructuredOutputMode != nil
@@ -332,45 +354,47 @@ enum EvalReporter {
                         || result.metrics.openRouterAgentTerminalOutcome != nil
                 )
         }
-        guard !openRouterResults.isEmpty else { return [] }
+        guard !providerResults.isEmpty else { return [] }
 
-        let retries = openRouterResults.compactMap(\.metrics.openRouterRetryCount)
+        let retries = providerResults.compactMap(\.metrics.openRouterRetryCount)
         let retryTotal = retries.reduce(0, +)
         let retryAverage = retries.isEmpty ? "-" : String(format: "%.2f", Double(retryTotal) / Double(retries.count))
-        let tokenUsage = openRouterResults.compactMap(\.metrics.tokenUsage).reduce(0, +)
-        let cost = openRouterResults.compactMap(\.metrics.estimatedCloudCostUSD).reduce(0, +)
-        let failureCounts = counts(openRouterResults.compactMap(\.diagnostics.openRouterFailureCategory))
-        let modeCounts = counts(openRouterResults.compactMap(\.metrics.openRouterStructuredOutputMode))
+        // Timed-out and cancelled cases keep the usage observed so far, so
+        // every cloud result counts toward tokens and cost.
+        let usage = TextToSQLEvalUsageTotals(results: results.filter { $0.backend == .cloud })
+        let failureCounts = counts(providerResults.compactMap(\.diagnostics.openRouterFailureCategory))
+        let modeCounts = counts(providerResults.compactMap(\.metrics.openRouterStructuredOutputMode))
         let returnedModelCounts = counts(
-            openRouterResults.compactMap {
+            providerResults.compactMap {
                 $0.metrics.openRouterReturnedModelID ?? $0.diagnostics.openRouterReturnedModelID
             }
         )
-        let providerCounts = counts(
-            openRouterResults.compactMap {
+        let upstreamProviderCounts = counts(
+            providerResults.compactMap {
                 $0.metrics.openRouterProviderName ?? $0.diagnostics.openRouterProviderName
             }
         )
-        let selectionCounts = counts(openRouterResults.compactMap(\.metrics.openRouterAgentSelectionReason))
-        let terminalCounts = counts(openRouterResults.compactMap(\.metrics.openRouterAgentTerminalOutcome))
-        let schemaToolCalls = openRouterResults.compactMap(\.metrics.openRouterSchemaToolCallCount)
+        let selectionCounts = counts(providerResults.compactMap(\.metrics.openRouterAgentSelectionReason))
+        let terminalCounts = counts(providerResults.compactMap(\.metrics.openRouterAgentTerminalOutcome))
+        let schemaToolCalls = providerResults.compactMap(\.metrics.openRouterSchemaToolCallCount)
             .reduce(0, +)
-        let inspectionToolCalls = openRouterResults.compactMap(\.metrics.openRouterInspectionToolCallCount)
+        let inspectionToolCalls = providerResults.compactMap(\.metrics.openRouterInspectionToolCallCount)
             .reduce(0, +)
-        let agentTurns = openRouterResults.compactMap(\.metrics.openRouterAgentLogicalTurnCount)
+        let agentTurns = providerResults.compactMap(\.metrics.openRouterAgentLogicalTurnCount)
             .reduce(0, +)
-        let agentHTTPAttempts = openRouterResults.compactMap(\.metrics.openRouterAgentHTTPAttemptCount)
+        let agentHTTPAttempts = providerResults.compactMap(\.metrics.openRouterAgentHTTPAttemptCount)
             .reduce(0, +)
-        let transportAttemptResults = openRouterResults.filter {
+        let transportAttemptResults = providerResults.filter {
             $0.status != .skippedBudgetLimit && !$0.status.isProviderBudgetUnavailable
         }
-        let providerBudgetUnavailable = openRouterResults.filter {
+        let providerBudgetUnavailable = providerResults.filter {
             $0.status.isProviderBudgetUnavailable
         }.count
 
         var lines = [
             "",
-            "## OpenRouter Transport",
+            providerDisplayName.map { "## Provider Transport (\(tableCell($0)))" }
+                ?? "## Provider Transport",
             "",
             "| Metric | Value |",
             "| --- | --- |",
@@ -384,10 +408,11 @@ enum EvalReporter {
             "| Inspection-tool calls | \(inspectionToolCalls == 0 ? "-" : String(inspectionToolCalls)) |",
             "| Agent logical model turns | \(agentTurns == 0 ? "-" : String(agentTurns)) |",
             "| Agent HTTP attempts | \(agentHTTPAttempts == 0 ? "-" : String(agentHTTPAttempts)) |",
-            "| Token usage | \(tokenUsage == 0 ? "-" : String(tokenUsage)) |",
-            "| Estimated cloud cost | \(cost == 0 ? "-" : String(format: "$%.6f", cost)) |",
+        ]
+        lines += usage.markdownRows
+        lines += [
             "",
-            "### OpenRouter Output Modes",
+            "### Output Modes",
             "",
             "| Mode | Count |",
             "| --- | ---: |",
@@ -395,7 +420,7 @@ enum EvalReporter {
         lines += tableRows(modeCounts)
         lines += [
             "",
-            "### OpenRouter Agent Selection",
+            "### Agent Selection",
             "",
             "| Selection | Count |",
             "| --- | ---: |",
@@ -403,7 +428,7 @@ enum EvalReporter {
         lines += tableRows(selectionCounts)
         lines += [
             "",
-            "### OpenRouter Agent Terminal Outcomes",
+            "### Agent Terminal Outcomes",
             "",
             "| Outcome | Count |",
             "| --- | ---: |",
@@ -411,7 +436,7 @@ enum EvalReporter {
         lines += tableRows(terminalCounts)
         lines += [
             "",
-            "### OpenRouter Failures",
+            "### Provider Failures",
             "",
             "| Category | Count |",
             "| --- | ---: |",
@@ -419,20 +444,23 @@ enum EvalReporter {
         lines += tableRows(failureCounts)
         lines += [
             "",
-            "### OpenRouter Returned Models",
+            "### Returned Models",
             "",
             "| Model | Count |",
             "| --- | ---: |",
         ]
         lines += tableRows(returnedModelCounts)
-        lines += [
-            "",
-            "### OpenRouter Providers",
-            "",
-            "| Provider | Count |",
-            "| --- | ---: |",
-        ]
-        lines += tableRows(providerCounts)
+        // Only routers such as OpenRouter name an upstream provider.
+        if !upstreamProviderCounts.isEmpty {
+            lines += [
+                "",
+                "### Upstream Providers",
+                "",
+                "| Provider | Count |",
+                "| --- | ---: |",
+            ]
+            lines += tableRows(upstreamProviderCounts)
+        }
         return lines
     }
 
@@ -527,7 +555,7 @@ enum EvalReporter {
             let statuses = sorted.map(\.status.rawValue)
             return RepeatCaseSummary(
                 caseID: sorted.first?.caseID ?? "-",
-                backend: sorted.first?.backend ?? .local,
+                backend: sorted.first?.backend ?? .cloud,
                 passCount: passCount,
                 repeatCount: sorted.count,
                 statuses: statuses,
@@ -619,10 +647,10 @@ enum EvalReporter {
             parts.append("schema: \(result.diagnostics.schemaErrors.joined(separator: " "))")
         }
         if let error = result.diagnostics.errorMessage {
-            parts.append(error)
+            parts.append(EvalReportRedaction.redactedProviderMessage(error))
         }
         if let category = result.diagnostics.openRouterFailureCategory {
-            parts.append("openrouter: \(category)")
+            parts.append("provider failure: \(category)")
         }
         if let kind = result.diagnostics.postgresVerificationDiagnosticKind
             ?? result.metrics.postgresVerificationDiagnosticKind
@@ -648,7 +676,7 @@ enum EvalReporter {
         if let provider = result.metrics.openRouterProviderName
             ?? result.diagnostics.openRouterProviderName
         {
-            parts.append("provider: \(provider)")
+            parts.append("upstream provider: \(provider)")
         }
         if let queryPlan = result.metrics.openRouterAgentDiagnostics?.terminalQueryPlan,
             let summary = QueryPlanReportSummary.redactedSummary(for: queryPlan)
@@ -704,6 +732,34 @@ enum EvalReporter {
             .replacingOccurrences(of: "\r", with: " ")
             .replacingOccurrences(of: "|", with: "\\|")
             .trimmingCharacters(in: .whitespacesAndNewlines)
+    }
+}
+
+extension EvalRunManifest {
+    /// `"particle"` or `"openrouter"`. Cloud runs whose manifest predates the
+    /// provider field resolve to OpenRouter, the only provider they could use.
+    var resolvedProvider: String? {
+        TextToSQLEvalCloudSettings.resolvedManifestProvider(provider, backendMode: backendMode)
+    }
+
+    /// The schema agent's critic mode, from the agent configuration. Nil
+    /// for a run without the schema agent or from before the critic.
+    var schemaAgentCriticMode: String? {
+        TextToSQLEvalSchemaAgentCritic.recordedMode(in: agentConfiguration)
+    }
+
+    /// The schema agent's grounding judge mode, from the agent
+    /// configuration. Nil for a run without the schema agent or from before
+    /// the judge, which ran without it.
+    var schemaAgentGroundingJudgeMode: String? {
+        TextToSQLEvalSchemaAgentGroundingJudge.recordedMode(in: agentConfiguration)
+    }
+
+    /// The provider's name for report headings, such as "Particle".
+    var providerDisplayName: String? {
+        resolvedProvider.map {
+            TextToSQLEvalCloudSettings.providerID(forManifestName: $0)?.displayName ?? $0
+        }
     }
 }
 

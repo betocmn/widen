@@ -62,15 +62,63 @@ public struct TextToSQLRun: Equatable, Sendable {
     public var finalDecision: TextToSQLDecision
     public var trace: TextToSQLTrace
     public var events: [TextToSQLPipelineEvent]
+    /// The generated SQL that `GeneratedSQLPostprocessor.enriched` replaced
+    /// with the clarification this run ended on. Nil when the run did not end
+    /// on such a replacement. A run is never persisted, so this SQL stays in
+    /// memory; evals score it without writing it.
+    public var groundingWithheldSQL: String?
+    /// The first `enriched` call where the agent's grounding judgment changed
+    /// the result. Nil when the judgment changed nothing, as with the judge
+    /// off. Like `groundingWithheldSQL` it stays in memory; evals derive the
+    /// judge-off result from it.
+    public var groundingJudgeDivergence: TextToSQLGroundingJudgeDivergence?
 
     public init(
         finalDecision: TextToSQLDecision,
         trace: TextToSQLTrace,
-        events: [TextToSQLPipelineEvent] = []
+        events: [TextToSQLPipelineEvent] = [],
+        groundingWithheldSQL: String? = nil,
+        groundingJudgeDivergence: TextToSQLGroundingJudgeDivergence? = nil
     ) {
         self.finalDecision = finalDecision
         self.trace = trace
         self.events = events
+        self.groundingWithheldSQL = groundingWithheldSQL
+        self.groundingJudgeDivergence = groundingJudgeDivergence
+    }
+}
+
+/// Where a grounding judgment made `GeneratedSQLPostprocessor.enriched`
+/// return something other than its lexical result for the same generation.
+/// A clarification from `enriched` ends a run on every path, so with the
+/// judge off the run would have ended there, on `lexicalClarificationQuestion`.
+/// That holds up to the judge request's own time and HTTP attempts, which
+/// only later repair runs could feel.
+public struct TextToSQLGroundingJudgeDivergence: Equatable, Sendable {
+    public enum Kind: String, Equatable, Sendable {
+        /// The judgment kept SQL the lexical pass would have replaced with a
+        /// clarification.
+        case released
+        /// The judgment pointed the clarification at another flagged word.
+        case reAimed
+    }
+
+    public var kind: Kind
+    /// The clarification `enriched` asks without the judgment.
+    public var lexicalClarificationQuestion: String
+    /// For a release, the release rules the kept SQL breaks when checked
+    /// again: empty unless the decision rule has a bug. Always empty for a
+    /// re-aim.
+    public var releaseViolations: [GroundingJudgeReleaseViolation]
+
+    public init(
+        kind: Kind,
+        lexicalClarificationQuestion: String,
+        releaseViolations: [GroundingJudgeReleaseViolation] = []
+    ) {
+        self.kind = kind
+        self.lexicalClarificationQuestion = lexicalClarificationQuestion
+        self.releaseViolations = releaseViolations
     }
 }
 
@@ -80,7 +128,7 @@ public enum TextToSQLDecision: Equatable, Sendable {
     case failed(TextToSQLPipelineFailure)
 }
 
-public enum TextToSQLStage: String, Codable, Equatable, Sendable {
+public enum TextToSQLStage: String, Codable, CaseIterable, Equatable, Sendable {
     case modelGeneration
     case postprocessing
     case canonicalization
@@ -98,7 +146,7 @@ public enum TextToSQLStageOutcome: String, Codable, Equatable, Sendable {
     case skipped
 }
 
-public enum TextToSQLFailureCategory: String, Codable, Equatable, Sendable {
+public enum TextToSQLFailureCategory: String, Codable, CaseIterable, Equatable, Sendable {
     case backendUnavailable
     case transport
     case contextWindow
@@ -118,8 +166,8 @@ public struct TextToSQLPipelineFailure: Error, LocalizedError, Codable, Equatabl
     public var category: TextToSQLFailureCategory
     public var message: String
     public var validationIssueIDs: [String]
-    public var openRouterFailure: OpenRouterFailureDiagnostic?
-    public var backendMetadata: OpenRouterGenerationMetadata?
+    public var openRouterFailure: CloudRequestFailureDiagnostic?
+    public var backendMetadata: CloudGenerationMetadata?
     public var databaseDiagnostic: DatabaseDiagnostic?
     public var verificationStatus: SQLVerificationStatus?
 
@@ -128,8 +176,8 @@ public struct TextToSQLPipelineFailure: Error, LocalizedError, Codable, Equatabl
         category: TextToSQLFailureCategory,
         message: String,
         validationIssueIDs: [String] = [],
-        openRouterFailure: OpenRouterFailureDiagnostic? = nil,
-        backendMetadata: OpenRouterGenerationMetadata? = nil,
+        openRouterFailure: CloudRequestFailureDiagnostic? = nil,
+        backendMetadata: CloudGenerationMetadata? = nil,
         databaseDiagnostic: DatabaseDiagnostic? = nil,
         verificationStatus: SQLVerificationStatus? = nil
     ) {
@@ -280,19 +328,11 @@ public struct TextToSQLPipelineEvent: Equatable, Sendable {
 
 public struct TextToSQLPipeline: TextToSQLRunning {
     private let generator: any SQLGenerator
+    private let repairPolicy: TextToSQLRepairPolicy
 
-    public init(generator: any SQLGenerator) {
+    public init(generator: any SQLGenerator, repairPolicy: TextToSQLRepairPolicy = .default) {
         self.generator = generator
-    }
-
-    private var usesConstrainedLocalPolicy: Bool {
-        generator is any ConstrainedLocalSQLGenerator
-    }
-
-    private var repairModelCallBudget: Int {
-        usesConstrainedLocalPolicy
-            ? GeneratedSQLRepairSupport.constrainedLocalModelCallBudget
-            : GeneratedSQLRepairSupport.localModelCallBudget
+        self.repairPolicy = repairPolicy
     }
 
     public func run(_ request: TextToSQLRequest) async throws -> TextToSQLRun {
@@ -308,7 +348,7 @@ public struct TextToSQLPipeline: TextToSQLRunning {
                 schema: request.schema,
                 context: request.context,
                 config: request.config
-            )
+            ).withGeneratorInvocationCount(1)
             trace.mergeSchemaToolCalls(generated.schemaToolCalls)
             trace.mergeInspectionToolCalls(generated.inspectionToolCalls)
             trace.append(
@@ -352,6 +392,15 @@ public struct TextToSQLPipeline: TextToSQLRunning {
             confirmedSemanticBindings: request.context.confirmedSemanticBindings,
             allowGroundingClarification: request.allowGroundingClarification
         )
+        trace.recordGroundingJudgeDivergence(
+            Self.groundingJudgeDivergence(
+                generated: generated,
+                postprocessed: result,
+                question: request.question,
+                confirmedSemanticBindings: request.context.confirmedSemanticBindings,
+                request: request
+            )
+        )
         trace.append(
             .postprocessing,
             outcome: .success,
@@ -372,7 +421,11 @@ public struct TextToSQLPipeline: TextToSQLRunning {
                 decision: .clarification(result),
                 trace: trace,
                 events: events,
-                started: started
+                started: started,
+                groundingWithheldSQL: Self.groundingWithheldSQL(
+                    generated: generated,
+                    postprocessed: result
+                )
             )
         }
 
@@ -478,32 +531,13 @@ public struct TextToSQLPipeline: TextToSQLRunning {
             request: request,
             events: &events
         )
-        if usesConstrainedLocalPolicy && shouldRejectUnsafeLocalSQL(validation.safety) {
-            let failure = TextToSQLPipelineFailure(
-                stage: validationEventStage,
-                category: validationFailureCategory,
-                message: firstError,
-                backendMetadata: result.backendMetadata
-            )
-            trace.append(.validationRepair, outcome: .skipped, since: Date())
-            trace.append(
-                .finalDecision,
-                outcome: .failure,
-                since: Date(),
-                failureCategory: failure.category
-            )
-            return finished(
-                decision: .failed(failure),
-                trace: trace,
-                events: events,
-                started: started
-            )
-        }
         let repairRun = try await runValidationRepair(
             request: request,
             startingGeneration: result.withPipelineSQL(generatedSQL),
             startingSQL: generatedSQL,
             firstError: firstError,
+            firstFailureCategory: validationFailureCategory,
+            requestStartedAt: started,
             trace: &trace,
             events: &events
         )
@@ -517,7 +551,8 @@ public struct TextToSQLPipeline: TextToSQLRunning {
             decision: repairRun.decision,
             trace: trace,
             events: events,
-            started: started
+            started: started,
+            groundingWithheldSQL: repairRun.groundingWithheldSQL
         )
     }
 
@@ -591,6 +626,7 @@ public struct TextToSQLPipeline: TextToSQLRunning {
             startingGeneration: generation,
             startingSQL: sql,
             verification: verification,
+            requestStartedAt: started,
             trace: &trace,
             events: &events
         )
@@ -604,7 +640,8 @@ public struct TextToSQLPipeline: TextToSQLRunning {
             decision: repairRun.decision,
             trace: trace,
             events: events,
-            started: started
+            started: started,
+            groundingWithheldSQL: repairRun.groundingWithheldSQL
         )
     }
 
@@ -708,6 +745,7 @@ public struct TextToSQLPipeline: TextToSQLRunning {
         startingGeneration: SQLGenerationResult,
         startingSQL: String,
         verification: SQLVerificationResult,
+        requestStartedAt: Date,
         trace: inout TraceBuilder,
         events: inout [TextToSQLPipelineEvent]
     ) async throws -> RepairRun {
@@ -721,8 +759,7 @@ public struct TextToSQLPipeline: TextToSQLRunning {
             )
         let firstError = verificationFailureMessage(verification)
         let diagnostic = verification.diagnostic
-        let allowRepairWrites =
-            !usesConstrainedLocalPolicy && SQLSafetyValidator.validate(startingSQL).kind.isWrite
+        let allowRepairWrites = SQLSafetyValidator.validate(startingSQL).kind.isWrite
         let forbiddenIdentifiers = GeneratedSQLRepairSupport.forbiddenIdentifiers(
             sql: startingSQL,
             error: firstError,
@@ -738,15 +775,15 @@ public struct TextToSQLPipeline: TextToSQLRunning {
                 forbiddenIdentifiers: forbiddenIdentifiers,
                 error: firstError
             ),
-            maxModelCalls: usesConstrainedLocalPolicy
-                ? GeneratedSQLRepairSupport.remainingRepairCalls(
-                    after: startingGeneration,
-                    modelCallBudget: repairModelCallBudget
-                )
-                : 1
+            maxModelCalls: repairPolicy.remainingRepairs(
+                cap: repairPolicy.maximumVerificationRepairs,
+                after: startingGeneration
+            )
         )
 
-        guard let repairMode = coordinator.beginNextAttempt() else {
+        guard repairPolicy.allowsRepairStart(requestStartedAt: requestStartedAt),
+            let repairMode = coordinator.beginNextAttempt()
+        else {
             var failure = postgresVerificationFailure(
                 stage: .postgresVerificationRepair,
                 verification: verification
@@ -783,12 +820,15 @@ public struct TextToSQLPipeline: TextToSQLRunning {
         )
 
         let generation: SQLGenerationResult
+        let groundingWithheldSQL: String?
         do {
             let generated = try await generator.generateSQL(
                 question: repairQuestionContext.question,
                 schema: request.schema,
                 context: context,
                 config: request.config
+            ).withGeneratorInvocationCount(
+                TextToSQLRepairPolicy.spentInvocations(after: startingGeneration) + 1
             )
             trace.mergeSchemaToolCalls(generated.schemaToolCalls)
             trace.mergeInspectionToolCalls(generated.inspectionToolCalls)
@@ -800,6 +840,19 @@ public struct TextToSQLPipeline: TextToSQLRunning {
                 confirmedSemanticBindings: context.confirmedSemanticBindings,
                 allowGroundingClarification: request.allowGroundingClarification
             ).accumulatingBackendUsage(from: startingGeneration.backendMetadata)
+            groundingWithheldSQL = Self.groundingWithheldSQL(
+                generated: generated,
+                postprocessed: generation
+            )
+            trace.recordGroundingJudgeDivergence(
+                Self.groundingJudgeDivergence(
+                    generated: generated,
+                    postprocessed: generation,
+                    question: repairQuestionContext.question,
+                    confirmedSemanticBindings: context.confirmedSemanticBindings,
+                    request: request
+                )
+            )
         } catch is CancellationError {
             trace.append(
                 .postgresVerificationRepair,
@@ -864,7 +917,10 @@ public struct TextToSQLPipeline: TextToSQLRunning {
                 modelCallCount: generation.generationCallCount,
                 verificationRepairAttempted: true
             )
-            return RepairRun(decision: .clarification(generation))
+            return RepairRun(
+                decision: .clarification(generation),
+                groundingWithheldSQL: groundingWithheldSQL
+            )
 
         case .rejected(let reason):
             let category = failureCategory(for: reason, evaluation: evaluation)
@@ -1001,6 +1057,8 @@ public struct TextToSQLPipeline: TextToSQLRunning {
         startingGeneration: SQLGenerationResult,
         startingSQL: String,
         firstError: String,
+        firstFailureCategory: TextToSQLFailureCategory,
+        requestStartedAt: Date,
         trace: inout TraceBuilder,
         events: inout [TextToSQLPipelineEvent]
     ) async throws -> RepairRun {
@@ -1013,8 +1071,7 @@ public struct TextToSQLPipeline: TextToSQLRunning {
                     + [SQLConversationMessage(role: .user, text: request.question)]
             )
         let firstDiagnostic = GeneratedSQLRepairSupport.diagnostic(from: firstError)
-        let allowRepairWrites =
-            !usesConstrainedLocalPolicy && SQLSafetyValidator.validate(startingSQL).kind.isWrite
+        let allowRepairWrites = SQLSafetyValidator.validate(startingSQL).kind.isWrite
         let forbiddenIdentifiers = GeneratedSQLRepairSupport.forbiddenIdentifiers(
             sql: startingSQL,
             error: firstError,
@@ -1030,15 +1087,20 @@ public struct TextToSQLPipeline: TextToSQLRunning {
                 forbiddenIdentifiers: forbiddenIdentifiers,
                 error: firstError
             ),
-            maxModelCalls: GeneratedSQLRepairSupport.remainingRepairCalls(
-                after: startingGeneration,
-                modelCallBudget: repairModelCallBudget
+            maxModelCalls: repairPolicy.remainingRepairs(
+                cap: repairPolicy.maximumValidationRepairs,
+                after: startingGeneration
             )
         )
+        let spentInvocations = TextToSQLRepairPolicy.spentInvocations(after: startingGeneration)
         var accumulatedBackendMetadata = startingGeneration.backendMetadata
+        var attemptNumber = 0
+        var lastRejectionCategory: TextToSQLFailureCategory?
 
-        while let repairMode = coordinator.beginNextAttempt() {
-            let attemptNumber = repairMode == .repair ? 1 : 2
+        while repairPolicy.allowsRepairStart(requestStartedAt: requestStartedAt),
+            let repairMode = coordinator.beginNextAttempt()
+        {
+            attemptNumber += 1
             let repairContext = coordinator.repairContext(for: repairMode)
             let repairLabel = repairMode.activityLabel
             await record(
@@ -1068,6 +1130,7 @@ public struct TextToSQLPipeline: TextToSQLRunning {
             )
 
             let generation: SQLGenerationResult
+            let groundingWithheldSQL: String?
             let stageStart = Date()
             do {
                 let generated = try await generator.generateSQL(
@@ -1075,7 +1138,7 @@ public struct TextToSQLPipeline: TextToSQLRunning {
                     schema: request.schema,
                     context: context,
                     config: request.config
-                )
+                ).withGeneratorInvocationCount(spentInvocations + attemptNumber)
                 trace.mergeSchemaToolCalls(generated.schemaToolCalls)
                 trace.mergeInspectionToolCalls(generated.inspectionToolCalls)
                 generation = GeneratedSQLPostprocessor.enriched(
@@ -1087,6 +1150,19 @@ public struct TextToSQLPipeline: TextToSQLRunning {
                     allowGroundingClarification: request.allowGroundingClarification
                 ).accumulatingBackendUsage(from: accumulatedBackendMetadata)
                 accumulatedBackendMetadata = generation.backendMetadata
+                groundingWithheldSQL = Self.groundingWithheldSQL(
+                    generated: generated,
+                    postprocessed: generation
+                )
+                trace.recordGroundingJudgeDivergence(
+                    Self.groundingJudgeDivergence(
+                        generated: generated,
+                        postprocessed: generation,
+                        question: repairQuestionContext.question,
+                        confirmedSemanticBindings: context.confirmedSemanticBindings,
+                        request: request
+                    )
+                )
             } catch is CancellationError {
                 trace.append(
                     .validationRepair,
@@ -1167,7 +1243,10 @@ public struct TextToSQLPipeline: TextToSQLRunning {
                     request: request,
                     events: &events
                 )
-                return RepairRun(decision: .clarification(generation))
+                return RepairRun(
+                    decision: .clarification(generation),
+                    groundingWithheldSQL: groundingWithheldSQL
+                )
 
             case .rejected(let reason):
                 let category = failureCategory(for: reason, evaluation: evaluation)
@@ -1226,6 +1305,7 @@ public struct TextToSQLPipeline: TextToSQLRunning {
                     }
                 }
                 if evaluation.allowsReconstruction, coordinator.canRequestAnotherModelCall {
+                    lastRejectionCategory = category
                     continue
                 }
                 var failure = repairFailure(attempts: coordinator.attempts, category: category)
@@ -1342,6 +1422,7 @@ public struct TextToSQLPipeline: TextToSQLRunning {
                     startingGeneration: generation,
                     startingSQL: generatedSQL,
                     verification: verification,
+                    requestStartedAt: requestStartedAt,
                     trace: &trace,
                     events: &events
                 )
@@ -1354,17 +1435,18 @@ public struct TextToSQLPipeline: TextToSQLRunning {
             return RepairRun(decision: .failed(failure), failureCategory: failure.category)
         }
 
+        // The invocation budget or the repair-start cutoff stopped repairs,
+        // either before the first one (the validation failure stands) or
+        // before the reconstruction a rejected repair allowed (its rejection
+        // stands, already traced).
         var failure = repairFailure(
             attempts: coordinator.attempts,
-            category: .repeatedNoProgressRepair
+            category: lastRejectionCategory ?? firstFailureCategory
         )
         failure.backendMetadata = accumulatedBackendMetadata
-        trace.append(
-            .validationRepair,
-            outcome: .failure,
-            since: Date(),
-            failureCategory: failure.category
-        )
+        if attemptNumber == 0 {
+            trace.append(.validationRepair, outcome: .skipped, since: Date())
+        }
         return RepairRun(decision: .failed(failure), failureCategory: failure.category)
     }
 
@@ -1384,16 +1466,9 @@ public struct TextToSQLPipeline: TextToSQLRunning {
         trace: inout TraceBuilder
     ) -> (safety: SQLValidationResult, schema: SQLSchemaValidationResult, combined: SQLValidationResult) {
         let safetyStart = Date()
-        var safety = SQLSafetyValidator.validate(sql)
+        let safety = SQLSafetyValidator.validate(sql)
         let schemaStart = Date()
-        var schemaValidation = SQLSchemaValidator.validate(sql: sql, against: schema)
-
-        if usesConstrainedLocalPolicy {
-            ConstrainedLocalSQLPolicy.apply(
-                safety: &safety,
-                schemaValidation: &schemaValidation
-            )
-        }
+        let schemaValidation = SQLSchemaValidator.validate(sql: sql, against: schema)
 
         trace.append(
             .safetyValidation,
@@ -1425,20 +1500,7 @@ public struct TextToSQLPipeline: TextToSQLRunning {
         schema: DatabaseSchema,
         fallback: SQLValidationResult?
     ) -> SQLValidationResult {
-        guard usesConstrainedLocalPolicy else {
-            return fallback ?? GeneratedSQLValidator.validate(sql: sql, schema: schema)
-        }
-        var safety = SQLSafetyValidator.validate(sql)
-        var schemaValidation = SQLSchemaValidator.validate(sql: sql, against: schema)
-        ConstrainedLocalSQLPolicy.apply(
-            safety: &safety,
-            schemaValidation: &schemaValidation
-        )
-        return GeneratedSQLValidator.combine(safety: safety, schemaValidation: schemaValidation)
-    }
-
-    private func shouldRejectUnsafeLocalSQL(_ safety: SQLValidationResult) -> Bool {
-        safety.kind.isWrite || safety.safetyIssueKinds.contains { $0.isUnsafeExecutionRisk }
+        fallback ?? GeneratedSQLValidator.validate(sql: sql, schema: schema)
     }
 
     private func failureCategory(for validation: SQLValidationResult) -> TextToSQLFailureCategory {
@@ -1497,19 +1559,19 @@ public struct TextToSQLPipeline: TextToSQLRunning {
     private func generationFailure(
         _ error: any Error,
         stage: TextToSQLStage,
-        priorBackendMetadata: OpenRouterGenerationMetadata? = nil
+        priorBackendMetadata: CloudGenerationMetadata? = nil
     ) -> TextToSQLPipelineFailure {
         if let failure = SQLGenerationFailure.typed(error) {
-            let openRouterDiagnostic: OpenRouterFailureDiagnostic?
-            let backendMetadata: OpenRouterGenerationMetadata?
-            if case .openRouter(let openRouterFailure) = failure {
+            let openRouterDiagnostic: CloudRequestFailureDiagnostic?
+            let backendMetadata: CloudGenerationMetadata?
+            if case .cloudRequest(let openRouterFailure) = failure {
                 openRouterDiagnostic = openRouterFailure.diagnostic
                 backendMetadata = nil
             } else if case .httpBudgetExhausted(let budgetFailure) = failure {
                 openRouterDiagnostic = nil
                 backendMetadata = budgetFailure.backendMetadata
             } else if case .schemaToolAgent(let agentFailure) = failure,
-                let openRouterFailure = agentFailure.openRouterFailure
+                let openRouterFailure = agentFailure.cloudFailure
             {
                 openRouterDiagnostic = openRouterFailure.diagnostic
                 backendMetadata = agentFailure.backendMetadata
@@ -1523,7 +1585,7 @@ public struct TextToSQLPipeline: TextToSQLRunning {
             let accumulatedMetadata = backendMetadata
                 .map { $0.accumulatingPipelineUsage(from: priorBackendMetadata) }
                 ?? openRouterDiagnostic.flatMap {
-                    OpenRouterGenerationMetadata.pipelineFailureMetadata(
+                    CloudGenerationMetadata.pipelineFailureMetadata(
                         from: $0,
                         prior: priorBackendMetadata
                     )
@@ -1593,7 +1655,8 @@ public struct TextToSQLPipeline: TextToSQLRunning {
         decision: TextToSQLDecision,
         trace: TraceBuilder,
         events: [TextToSQLPipelineEvent],
-        started: Date
+        started: Date,
+        groundingWithheldSQL: String? = nil
     ) -> TextToSQLRun {
         TextToSQLRun(
             finalDecision: decision,
@@ -1607,7 +1670,73 @@ public struct TextToSQLPipeline: TextToSQLRunning {
                 schemaToolCalls: trace.schemaToolCalls,
                 inspectionToolCalls: trace.inspectionToolCalls
             ),
-            events: events
+            events: events,
+            groundingWithheldSQL: groundingWithheldSQL,
+            groundingJudgeDivergence: trace.groundingJudgeDivergence
+        )
+    }
+
+    /// The SQL the postprocessor withheld: the generator answered with SQL
+    /// and `enriched` turned that answer into a clarification. Nil when the
+    /// generator asked for the clarification itself or the SQL was kept.
+    private static func groundingWithheldSQL(
+        generated: SQLGenerationResult,
+        postprocessed: SQLGenerationResult
+    ) -> String? {
+        guard !generated.needsClarification, postprocessed.needsClarification else { return nil }
+        let sql = generated.sql.trimmingCharacters(in: .whitespacesAndNewlines)
+        return sql.isEmpty ? nil : sql
+    }
+
+    /// How the generation's grounding judgment changed what `enriched`
+    /// returned. `enriched` is pure, so running it again without the
+    /// judgment gives exactly the lexical result. Nil when the generation
+    /// carries no judgment, or `enriched` had no clarification to keep or
+    /// re-aim (it records a postprocessor outcome only then).
+    private static func groundingJudgeDivergence(
+        generated: SQLGenerationResult,
+        postprocessed: SQLGenerationResult,
+        question: String,
+        confirmedSemanticBindings: [String],
+        request: TextToSQLRequest
+    ) -> TextToSQLGroundingJudgeDivergence? {
+        guard generated.backendMetadata?.agentDiagnostics?.groundingJudgment != nil,
+            postprocessed.backendMetadata?.agentDiagnostics?.groundingJudgment?.postprocessorOutcome != nil
+        else { return nil }
+        var unjudged = generated
+        unjudged.backendMetadata?.agentDiagnostics?.groundingJudgment = nil
+        let lexical = GeneratedSQLPostprocessor.enriched(
+            unjudged,
+            question: question,
+            schema: request.schema,
+            databaseContext: request.config.databaseContext,
+            confirmedSemanticBindings: confirmedSemanticBindings,
+            allowGroundingClarification: request.allowGroundingClarification
+        )
+        guard lexical.needsClarification,
+            let lexicalQuestion = lexical.clarificationQuestion?
+                .trimmingCharacters(in: .whitespacesAndNewlines),
+            !lexicalQuestion.isEmpty
+        else { return nil }
+        if !postprocessed.needsClarification {
+            return TextToSQLGroundingJudgeDivergence(
+                kind: .released,
+                lexicalClarificationQuestion: lexicalQuestion,
+                releaseViolations: GeneratedSQLPostprocessor.groundingJudgeReleaseViolations(
+                    generated,
+                    question: question,
+                    schema: request.schema,
+                    databaseContext: request.config.databaseContext,
+                    confirmedSemanticBindings: confirmedSemanticBindings
+                )
+            )
+        }
+        let judgedQuestion = postprocessed.clarificationQuestion?
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+        guard judgedQuestion != lexicalQuestion else { return nil }
+        return TextToSQLGroundingJudgeDivergence(
+            kind: .reAimed,
+            lexicalClarificationQuestion: lexicalQuestion
         )
     }
 }
@@ -1615,6 +1744,9 @@ public struct TextToSQLPipeline: TextToSQLRunning {
 private struct RepairRun {
     var decision: TextToSQLDecision
     var failureCategory: TextToSQLFailureCategory?
+    /// The SQL `enriched` withheld when the repair's answer became the
+    /// clarification in `decision`.
+    var groundingWithheldSQL: String?
 
     var isSuccessful: Bool {
         switch decision {
@@ -1631,9 +1763,18 @@ private struct TraceBuilder {
     var stages: [TextToSQLStageResult] = []
     var schemaToolCalls: [SchemaToolCallTrace] = []
     var inspectionToolCalls: [DatabaseInspectionToolCallTrace] = []
+    /// The run's first grounding-judge divergence. Every path that calls
+    /// `enriched` carries this builder, and with the judge off the run would
+    /// have ended at the first one, so later ones are ignored.
+    private(set) var groundingJudgeDivergence: TextToSQLGroundingJudgeDivergence?
 
     init(schema: DatabaseSchema) {
         self.schemaFingerprint = Self.fingerprint(schema)
+    }
+
+    mutating func recordGroundingJudgeDivergence(_ divergence: TextToSQLGroundingJudgeDivergence?) {
+        guard groundingJudgeDivergence == nil else { return }
+        groundingJudgeDivergence = divergence
     }
 
     mutating func append(
@@ -1720,7 +1861,7 @@ private struct TraceBuilder {
 }
 
 private func schemaToolCalls(from error: any Error) -> [SchemaToolCallTrace] {
-    if let failure = error as? OpenRouterSchemaToolAgentFailure {
+    if let failure = error as? SchemaToolAgentFailure {
         return failure.schemaToolCalls
     }
     if case .schemaToolAgent(let failure)? = SQLGenerationFailure.typed(error) {
@@ -1730,53 +1871,13 @@ private func schemaToolCalls(from error: any Error) -> [SchemaToolCallTrace] {
 }
 
 private func inspectionToolCalls(from error: any Error) -> [DatabaseInspectionToolCallTrace] {
-    if let failure = error as? OpenRouterSchemaToolAgentFailure {
+    if let failure = error as? SchemaToolAgentFailure {
         return failure.inspectionToolCalls
     }
     if case .schemaToolAgent(let failure)? = SQLGenerationFailure.typed(error) {
         return failure.inspectionToolCalls
     }
     return []
-}
-
-enum ConstrainedLocalSQLPolicy {
-    private static let maxBaseTables = 3
-    private static let maxCTEs = 2
-
-    static func apply(
-        safety: inout SQLValidationResult,
-        schemaValidation: inout SQLSchemaValidationResult
-    ) {
-        if safety.kind.isWrite {
-            safety.isValid = false
-            safety.errors.append(
-                "On-device experimental mode only supports SELECT queries. Use Cloud or write SQL manually for data changes."
-            )
-            safety.safetyIssueKinds.append(.unsupportedStatement)
-        }
-
-        if schemaValidation.referencedTables.count > maxBaseTables {
-            schemaValidation.issues.append(
-                SQLSchemaValidationIssue(
-                    severity: .error,
-                    message:
-                        "On-device experimental mode supports at most \(maxBaseTables) base tables. This query references \(schemaValidation.referencedTables.count). Use Cloud for broader requests.",
-                    kind: .other
-                )
-            )
-        }
-
-        if schemaValidation.analysis.cteNames.count > maxCTEs {
-            schemaValidation.issues.append(
-                SQLSchemaValidationIssue(
-                    severity: .error,
-                    message:
-                        "On-device experimental mode supports simple CTEs only. Use Cloud for deeply nested or multi-step SQL.",
-                    kind: .other
-                )
-            )
-        }
-    }
 }
 
 private extension SQLGenerationMode {
@@ -1802,7 +1903,7 @@ private extension SQLGenerationResult {
     }
 
     func accumulatingBackendUsage(
-        from priorMetadata: OpenRouterGenerationMetadata?
+        from priorMetadata: CloudGenerationMetadata?
     ) -> SQLGenerationResult {
         var copy = self
         if let backendMetadata {
@@ -1815,7 +1916,7 @@ private extension SQLGenerationResult {
 
     static func pipelineClarification(
         _ question: String,
-        backendMetadata: OpenRouterGenerationMetadata? = nil
+        backendMetadata: CloudGenerationMetadata? = nil
     ) -> SQLGenerationResult {
         SQLGenerationResult(
             sql: "",
@@ -1831,13 +1932,14 @@ private extension SQLGenerationResult {
     }
 }
 
-private extension OpenRouterGenerationMetadata {
+private extension CloudGenerationMetadata {
     func accumulatingPipelineUsage(
-        from priorMetadata: OpenRouterGenerationMetadata?
-    ) -> OpenRouterGenerationMetadata {
+        from priorMetadata: CloudGenerationMetadata?
+    ) -> CloudGenerationMetadata {
         guard let priorMetadata else { return self }
 
         var copy = self
+        copy.providerID = copy.providerID ?? priorMetadata.providerID
         copy.requestedModelID = copy.requestedModelID.isEmpty
             ? priorMetadata.requestedModelID
             : copy.requestedModelID
@@ -1845,12 +1947,19 @@ private extension OpenRouterGenerationMetadata {
         copy.providerName = copy.providerName ?? priorMetadata.providerName
         copy.completionID = copy.completionID ?? priorMetadata.completionID
         copy.requestID = copy.requestID ?? priorMetadata.requestID
+        copy.responseFormatType = copy.responseFormatType ?? priorMetadata.responseFormatType
+        copy.reasoningEffort = copy.reasoningEffort ?? priorMetadata.reasoningEffort
         copy.retryCount += priorMetadata.retryCount
         copy.promptTokens = Self.sum(priorMetadata.promptTokens, copy.promptTokens)
+        copy.cachedPromptTokens = Self.sum(
+            priorMetadata.cachedPromptTokens,
+            copy.cachedPromptTokens
+        )
         copy.completionTokens = Self.sum(priorMetadata.completionTokens, copy.completionTokens)
         copy.reasoningTokens = Self.sum(priorMetadata.reasoningTokens, copy.reasoningTokens)
         copy.totalTokens = Self.sum(priorMetadata.totalTokens, copy.totalTokens)
         copy.costUSD = Self.sum(priorMetadata.costUSD, copy.costUSD)
+        copy.costSource = CloudCostSource.combined(priorMetadata.costSource, copy.costSource)
         copy.serviceTier = copy.serviceTier ?? priorMetadata.serviceTier
         copy.finishReason = copy.finishReason ?? priorMetadata.finishReason
         copy.nativeFinishReason = copy.nativeFinishReason ?? priorMetadata.nativeFinishReason
@@ -1899,13 +2008,13 @@ private extension OpenRouterGenerationMetadata {
     }
 
     static func pipelineFailureMetadata(
-        from diagnostic: OpenRouterFailureDiagnostic,
-        prior: OpenRouterGenerationMetadata?
-    ) -> OpenRouterGenerationMetadata? {
+        from diagnostic: CloudRequestFailureDiagnostic,
+        prior: CloudGenerationMetadata?
+    ) -> CloudGenerationMetadata? {
         guard let requestedModelID = diagnostic.requestedModelID ?? prior?.requestedModelID else {
             return nil
         }
-        let current = OpenRouterGenerationMetadata(
+        let current = CloudGenerationMetadata(
             requestedModelID: requestedModelID,
             returnedModelID: diagnostic.returnedModelID,
             providerName: diagnostic.providerName,
@@ -1915,10 +2024,12 @@ private extension OpenRouterGenerationMetadata {
             requestCount: max(0, diagnostic.attemptCount),
             retryCount: max(0, diagnostic.attemptCount - 1),
             promptTokens: diagnostic.promptTokens,
+            cachedPromptTokens: diagnostic.cachedPromptTokens,
             completionTokens: diagnostic.completionTokens,
             reasoningTokens: diagnostic.reasoningTokens,
             totalTokens: diagnostic.totalTokens,
             costUSD: diagnostic.costUSD,
+            costSource: diagnostic.costSource,
             serviceTier: nil,
             finishReason: nil,
             nativeFinishReason: nil

@@ -118,9 +118,9 @@ public final class ChatViewModel {
             return
         }
 
-        // Built before appending the new question: the on-device model is
-        // stateless per request, so follow-ups ("just last week", "the query
-        // is failing") only work if the prompt carries what they refer to.
+        // Built before appending the new question: the model is stateless
+        // per request, so follow-ups ("just last week", "the query is
+        // failing") only work if the prompt carries what they refer to.
         let context = SQLGenerationContext(
             recentQuestions: messages.filter { $0.role == .user }.suffix(3).map(\.text),
             originalQuestion: messages.originalUserQuestion(),

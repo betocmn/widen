@@ -1,9 +1,5 @@
 import Foundation
 
-#if canImport(FoundationModels)
-    import FoundationModels
-#endif
-
 import WidenKit
 
 @main
@@ -17,6 +13,13 @@ enum WidenEvalMain {
             }
 
             await GenerationLog.shared.setEnabled(options.recordPrompts)
+
+            if options.providerProbe {
+                if !(try await runProviderProbe(options: options)) {
+                    exit(1)
+                }
+                return
+            }
 
             if let releaseTriageInputPath = options.releaseTriageInputPath {
                 let triageOutput = try TextToSQLReleaseTriageReporter.writeExisting(
@@ -172,6 +175,11 @@ enum WidenEvalMain {
                     exit(1)
                 }
             }
+        } catch let error as DecodingError {
+            // A decoding error's localized description is generic; its context
+            // names the actual problem, such as results from a removed backend.
+            fputs("WidenEval failed: \(error.contextDescription)\n", stderr)
+            exit(1)
         } catch {
             fputs("WidenEval failed: \(error.localizedDescription)\n", stderr)
             exit(1)
@@ -179,19 +187,77 @@ enum WidenEvalMain {
     }
 }
 
+extension WidenEvalMain {
+    /// Probes Particle-1's chat API with the Particle eval key only, and
+    /// returns whether every critical check passed. Without a key it sends
+    /// nothing and writes nothing.
+    private static func runProviderProbe(options: EvalCLIOptions) async throws -> Bool {
+        guard let apiKey = ProviderAPIProbe.apiKey(in: ProcessInfo.processInfo.environment) else {
+            fputs(ProviderAPIProbe.missingAPIKeyMessage + "\n", stderr)
+            return false
+        }
+        print(
+            "Probing \(CloudModelProfile.particle.displayName) at \(CloudModelProfile.particle.baseURL.host ?? "its provider host") with up to \(ProviderAPIProbe.maximumCompletionCount) small completions."
+        )
+        let report = await ProviderAPIProbe(apiKey: apiKey).run()
+        let paths = try report.write(
+            to: providerProbeDirectory(base: options.outputDirectory),
+            apiKey: apiKey
+        )
+        print("Wrote provider probe results to \(paths.directory.path)")
+        print("Summary: \(paths.markdown.path)")
+        print(report.costLine)
+        for warning in report.warnings {
+            print("Warning: \(warning)")
+        }
+        guard report.passed else {
+            fputs(
+                "Provider probe failed: \(report.criticalFailures.joined(separator: "; "))\n",
+                stderr
+            )
+            return false
+        }
+        return true
+    }
+
+    private static func providerProbeDirectory(base: String) -> URL {
+        let name = "provider-probe-" + DateFormatter.evalTimestamp.string(from: Date())
+        let baseURL = URL(fileURLWithPath: base, isDirectory: true)
+        var candidate = baseURL.appendingPathComponent(name, isDirectory: true)
+        var suffix = 1
+        while FileManager.default.fileExists(atPath: candidate.path) {
+            candidate = baseURL.appendingPathComponent("\(name)-\(suffix)", isDirectory: true)
+            suffix += 1
+        }
+        return candidate
+    }
+}
+
+private extension DecodingError {
+    var contextDescription: String {
+        switch self {
+        case .dataCorrupted(let context),
+            .keyNotFound(_, let context),
+            .typeMismatch(_, let context),
+            .valueNotFound(_, let context):
+            context.debugDescription
+        @unknown default:
+            localizedDescription
+        }
+    }
+}
+
 enum EvalBackendMode: String {
-    case local
     case cloud
-    case both
+
+    /// Backend modes that earlier releases accepted and that now fail with a
+    /// clear message instead of a generic invalid-value error.
+    static let removedRawValues: Set<String> = ["local", "both"]
 
     var backends: [TextToSQLEvalBackend] {
         switch self {
-        case .local:
-            [.local]
         case .cloud:
             [.cloud]
-        case .both:
-            [.local, .cloud]
         }
     }
 }
@@ -207,7 +273,10 @@ enum EvalExplicitOption: Hashable {
     case schemaAgentClarificationCorrectionMode
     case schemaAgentIntentCoverageMode
     case schemaAgentPlanConsistencyMode
+    case schemaAgentCriticMode
+    case schemaAgentGroundingJudgeMode
     case model
+    case reasoningEffort
     case suitePath
     case repeatCount
     case caseTimeoutSeconds
@@ -216,18 +285,27 @@ enum EvalExplicitOption: Hashable {
 }
 
 struct EvalCLIOptions {
-    var backendMode: EvalBackendMode = .local
-    var cloudAgentMode: EvalCloudAgentMode = .legacy
+    var backendMode: EvalBackendMode = .cloud
+    var cloudAgentMode: EvalCloudAgentMode = .tools
     var schemaAgentClarificationCorrectionMode: SchemaToolAgentClarificationCorrectionMode =
         .diagnosticsOnly
     var schemaAgentIntentCoverageMode: SchemaToolAgentIntentCoverageMode = .diagnosticsOnly
     var schemaAgentPlanConsistencyMode: SchemaToolAgentPlanConsistencyMode = .diagnosticsOnly
-    var model: String = OpenRouterCatalog.productionProfile.requestedModelID
+    /// Off by default, as in the app.
+    var schemaAgentCriticMode: SchemaToolAgentCriticMode = .disabled
+    /// Follows the app's default.
+    var schemaAgentGroundingJudgeMode: SchemaToolAgentGroundingJudgeMode =
+        SchemaToolSQLAgentConfiguration.default.groundingJudgeMode
+    /// The provider follows from the model: `particle-1` is Particle-1 and
+    /// an OpenRouter `vendor/model` ID runs through OpenRouter.
+    var model: String = TextToSQLEvalDefaults.requestedModelID
+    /// Eval-only; overrides the effort agent turns and one-shot SQL send.
+    var reasoningEffort: ReasoningEffort?
     var suitePath: String = "Evals/suites/text-to-sql-v1.json"
     var caseID: String?
     var caseIDs: [String] = []
     var repeatCount: Int = 1
-    var caseTimeoutSeconds: Double = 120
+    var caseTimeoutSeconds: Double = TextToSQLEvalDefaults.caseTimeoutSeconds
     var outputDirectory: String = ".eval-results"
     var recordPrompts = false
     var failUnder: Double?
@@ -248,6 +326,7 @@ struct EvalCLIOptions {
     var maxHTTPAttempts: Int?
     var maxCompletedResults: Int?
     var stopBeforeProviderLimit = false
+    var providerProbe = false
     var explicitOptions: Set<EvalExplicitOption> = []
     var showHelp = false
 
@@ -255,16 +334,19 @@ struct EvalCLIOptions {
         WidenEval
 
         Options:
-          --backend local|cloud|both
-          --cloud-agent legacy|tools
+          --backend cloud
+          --cloud-agent legacy|tools (default: tools)
           --schema-agent-clarification-correction disabled|diagnostics|experimental
           --schema-agent-intent-coverage disabled|diagnostics|reject-only|experimental
           --schema-agent-plan-consistency disabled|diagnostics|experimental
-          --model <openrouter-model-id>
+          --schema-agent-critic on|off|enabled|disabled (default: off)
+          --schema-agent-grounding-judge on|off|enabled|disabled (default: the app's, now \(SchemaToolSQLAgentConfiguration.default.groundingJudgeMode == .enabled ? "on" : "off"))
+          --model <model-id> (default: \(TextToSQLEvalDefaults.requestedModelID); a vendor/model ID runs through OpenRouter)
+          --reasoning-effort \(ReasoningEffort.allCases.map(\.rawValue).joined(separator: "|")) (eval-only; \(TextToSQLEvalDefaults.requestedModelID) only)
           --suite <path>
           --case <case-id>
           --repeat <n>
-          --case-timeout-seconds <n>
+          --case-timeout-seconds <n> (default: \(Int(TextToSQLEvalDefaults.caseTimeoutSeconds)))
           --output <directory>
           --record-prompts
           --fail-under <percentage>
@@ -285,6 +367,7 @@ struct EvalCLIOptions {
           --retriever legacy|index|both
           --schema-tools
           --inspection-tools
+          --provider-probe
           --help
         """
 
@@ -303,6 +386,9 @@ struct EvalCLIOptions {
             switch argument {
             case "--backend":
                 let value = try nextValue(after: argument)
+                if EvalBackendMode.removedRawValues.contains(value) {
+                    throw EvalCLIError.removedBackend(value)
+                }
                 guard let backend = EvalBackendMode(rawValue: value) else {
                     throw EvalCLIError.invalidValue(argument, value)
                 }
@@ -336,9 +422,30 @@ struct EvalCLIOptions {
                 }
                 options.schemaAgentPlanConsistencyMode = mode
                 options.explicitOptions.insert(.schemaAgentPlanConsistencyMode)
+            case "--schema-agent-critic":
+                let value = try nextValue(after: argument)
+                guard let mode = TextToSQLEvalSchemaAgentCritic.mode(flagValue: value) else {
+                    throw EvalCLIError.invalidValue(argument, value)
+                }
+                options.schemaAgentCriticMode = mode
+                options.explicitOptions.insert(.schemaAgentCriticMode)
+            case "--schema-agent-grounding-judge":
+                let value = try nextValue(after: argument)
+                guard let mode = TextToSQLEvalSchemaAgentGroundingJudge.mode(flagValue: value) else {
+                    throw EvalCLIError.invalidValue(argument, value)
+                }
+                options.schemaAgentGroundingJudgeMode = mode
+                options.explicitOptions.insert(.schemaAgentGroundingJudgeMode)
             case "--model":
                 options.model = try nextValue(after: argument)
                 options.explicitOptions.insert(.model)
+            case "--reasoning-effort":
+                let value = try nextValue(after: argument)
+                guard let effort = ReasoningEffort(rawValue: value) else {
+                    throw EvalCLIError.invalidValue(argument, value)
+                }
+                options.reasoningEffort = effort
+                options.explicitOptions.insert(.reasoningEffort)
             case "--suite":
                 options.suitePath = try nextValue(after: argument)
                 options.explicitOptions.insert(.suitePath)
@@ -436,6 +543,8 @@ struct EvalCLIOptions {
                 options.schemaTools = true
             case "--inspection-tools":
                 options.inspectionTools = true
+            case "--provider-probe":
+                options.providerProbe = true
             case "--help", "-h":
                 options.showHelp = true
             default:
@@ -514,6 +623,7 @@ enum EvalCLIError: LocalizedError {
     case unknownArgument(String)
     case resumeSelectionWithoutRun
     case releaseTriageVersionWithoutOutput
+    case removedBackend(String)
 
     var errorDescription: String? {
         switch self {
@@ -527,6 +637,8 @@ enum EvalCLIError: LocalizedError {
             "Resume selection flags require --resume-run."
         case .releaseTriageVersionWithoutOutput:
             "--release-triage-version requires --write-release-triage or --triage-release."
+        case .removedBackend(let backendMode):
+            "--backend \(backendMode) is no longer supported because the on-device backend was removed; use --backend cloud."
         }
     }
 }

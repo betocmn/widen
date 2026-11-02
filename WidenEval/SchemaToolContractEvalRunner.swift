@@ -796,7 +796,7 @@ enum SchemaToolContractEvalReporter {
         var lines = [
             "# Schema Tool Contract Eval",
             "",
-            "**Evaluation scope:** deterministic schema tools only. No model, OpenRouter, Foundation Models, PostgreSQL, SQL generation, repair, validation, or semantic grading is used.",
+            "**Evaluation scope:** deterministic schema tools only. No LLM provider, PostgreSQL, SQL generation, repair, validation, or semantic grading is used.",
             "",
             "## Summary",
             "",

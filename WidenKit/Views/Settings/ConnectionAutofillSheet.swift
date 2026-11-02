@@ -1,8 +1,8 @@
 import SwiftUI
 
-/// Paste-autofill sheet: the user pastes connection details in any format
-/// (URL, .env entries, prose) and local parsers fill the editor form. The
-/// pasted text never leaves the Mac.
+/// Paste-autofill sheet: the user pastes a connection URL or .env-style
+/// entries and a deterministic parser fills the editor form on this Mac.
+/// Pasted text can contain credentials, so it never reaches any model.
 struct ConnectionAutofillSheet: View {
     @Bindable var viewModel: ConnectionSettingsViewModel
     var parser: any ConnectionDetailsParsing
@@ -17,7 +17,7 @@ struct ConnectionAutofillSheet: View {
                 .font(.headline)
 
             Text(
-                "Paste a connection URL, .env entries, or any text that mentions the host, database, and credentials. URLs and simple key-value entries are parsed directly; free-form text uses Apple's on-device model when available. Nothing leaves this Mac."
+                "Paste a connection URL or .env-style KEY=VALUE entries. Widen parses them on this Mac with fixed rules — nothing is sent to Particle or any other model, and nothing leaves this Mac."
             )
             .font(.caption)
             .foregroundStyle(.secondary)

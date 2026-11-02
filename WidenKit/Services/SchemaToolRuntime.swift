@@ -80,7 +80,7 @@ public enum SchemaToolRegistry {
     }
 
     public static func estimatedDefinitionTokens() throws -> Int {
-        PromptBudget.localFoundationModels.estimatedTokenCount(for: try definitionByteCount())
+        PromptTokenEstimator.tokens(forCharacters: try definitionByteCount())
     }
 
     private static func objectSchema(
@@ -143,7 +143,7 @@ public struct SchemaToolInvocation: Codable, Equatable, Sendable {
     }
 }
 
-public enum SchemaToolErrorCode: String, Codable, Equatable, Hashable, Sendable {
+public enum SchemaToolErrorCode: String, Codable, CaseIterable, Equatable, Hashable, Sendable {
     case unknownTool
     case malformedArguments
     case missingArgument
@@ -223,7 +223,7 @@ public struct SchemaToolResult: Codable, Equatable, Sendable {
     }
 }
 
-public enum SchemaToolCallOutcome: String, Codable, Equatable, Sendable {
+public enum SchemaToolCallOutcome: String, Codable, CaseIterable, Equatable, Sendable {
     case success
     case error
 }
@@ -297,14 +297,8 @@ public struct SchemaToolPolicy: Codable, Equatable, Sendable {
 
     public static let cloudAgent = SchemaToolPolicy(
         maximumCallCount: 4,
-        maximumResultBytes: 8_000,
-        maximumSessionResultBytes: 20_000
-    )
-
-    public static let localAgent = SchemaToolPolicy(
-        maximumCallCount: 2,
-        maximumResultBytes: 3_000,
-        maximumSessionResultBytes: 5_000
+        maximumResultBytes: 16_000,
+        maximumSessionResultBytes: 64_000
     )
 }
 

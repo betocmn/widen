@@ -12,18 +12,32 @@ concurrency:
 
 jobs:
   test:
-    name: Build and Test
-    runs-on: macos-26
+    name: Build and Test (${{ matrix.os }})
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: macOS 15
+            runner: macos-15
+          - os: macOS 26
+            runner: macos-26
+          - os: macOS 27
+            runner: xcode-27
+    runs-on: ${{ matrix.runner }}
 
     steps:
       - name: Checkout code
         uses: actions/checkout@v4
 
-      - name: Show Xcode version
-        run: xcodebuild -version
+      - name: Select supported Xcode
+        run: |
+          developer_dir="$(env -u DEVELOPER_DIR bash scripts/xcode-developer-dir.sh)"
+          echo "DEVELOPER_DIR=$developer_dir" >> "$GITHUB_ENV"
+          DEVELOPER_DIR="$developer_dir" xcodebuild -version
+          sw_vers
 
       - name: Resolve dependencies
-        run: make setup DEVELOPER_DIR="$(xcode-select -p)"
+        run: make setup
 
       - name: Run unit tests
-        run: make test DEVELOPER_DIR="$(xcode-select -p)"
+        run: make test

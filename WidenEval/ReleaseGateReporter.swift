@@ -10,10 +10,6 @@ struct TextToSQLReleaseGateOutput {
 
 extension EvalRun {
     var committedDocIneligibility: TextToSQLReleaseGateModelPolicy.CommittedDocIneligibility? {
-        let backendIncludesCloud = manifest.backendMode == TextToSQLEvalBackend.cloud.rawValue
-            || manifest.backendMode == "both"
-            || backendSummaries[.cloud] != nil
-            || results.contains { $0.backend == .cloud }
         let cloudEvaluatedResultCount = results.filter {
             $0.backend == .cloud
                 && $0.metrics.backendAvailable
@@ -21,9 +17,32 @@ extension EvalRun {
         }.count
         return TextToSQLReleaseGateModelPolicy.committedDocIneligibility(
             model: manifest.model,
-            expectedCanonicalModelID: manifest.expectedCanonicalModelID,
-            backendIncludesCloud: backendIncludesCloud,
+            expectedReturnedModelID: manifest.expectedCanonicalModelID,
+            reasoningEffort: manifest.reasoningEffort,
+            callSite: manifest.cloudCallSite,
+            agentModes: manifest.releaseGateAgentModes,
             cloudEvaluatedResultCount: cloudEvaluatedResultCount
+        )
+    }
+}
+
+extension EvalRunManifest {
+    /// The call site whose policy the run's cloud requests followed, and so
+    /// the one its recorded reasoning effort belongs to.
+    var cloudCallSite: CloudCallSite {
+        cloudAgentMode == EvalCloudAgentMode.tools.rawValue ? .agentTurn : .oneShotSQL
+    }
+
+    /// The schema agent modes the run recorded, which committed docs require
+    /// to be the app's. Nil for a run without the schema agent.
+    var releaseGateAgentModes: TextToSQLReleaseGateModelPolicy.AgentModes? {
+        guard cloudCallSite == .agentTurn else { return nil }
+        return TextToSQLReleaseGateModelPolicy.AgentModes(
+            clarificationCorrection: schemaAgentClarificationCorrectionMode,
+            intentCoverage: schemaAgentIntentCoverageMode,
+            planConsistency: schemaAgentPlanConsistencyMode,
+            critic: schemaAgentCriticMode,
+            groundingJudge: schemaAgentGroundingJudgeMode
         )
     }
 }
@@ -113,9 +132,7 @@ enum TextToSQLReleaseGateReporter {
     }
 
     static func internalSchemaAgentTimeoutCount(_ results: [TextToSQLEvalResult]) -> Int {
-        results.filter {
-            $0.metrics.openRouterAgentDiagnostics?.appSideRejectionReason == .timedOut
-        }.count
+        TextToSQLEvalInternalAgentTimeouts.count(results)
     }
 
     private static func markdown(
@@ -147,8 +164,13 @@ enum TextToSQLReleaseGateReporter {
             "| Schema agent clarification correction | \(tableCell(run.manifest.schemaAgentClarificationCorrectionMode ?? "-")) |",
             "| Schema agent intent coverage | \(tableCell(run.manifest.schemaAgentIntentCoverageMode ?? "-")) |",
             "| Schema agent plan consistency | \(tableCell(run.manifest.schemaAgentPlanConsistencyMode ?? "-")) |",
+            "| Schema agent critic | \(tableCell(run.manifest.schemaAgentCriticMode ?? "-")) |",
+            "| Schema agent grounding judge | \(tableCell(run.manifest.schemaAgentGroundingJudgeMode ?? "-")) |",
+            "| Provider | \(tableCell(run.manifest.resolvedProvider ?? "-")) |",
+            "| Endpoint | \(tableCell(run.manifest.providerEndpointHost ?? "-")) |",
             "| Model | \(tableCell(run.manifest.model ?? "-")) |",
-            "| Expected canonical model | \(tableCell(run.manifest.expectedCanonicalModelID ?? "-")) |",
+            "| Expected returned model | \(tableCell(run.manifest.expectedCanonicalModelID ?? "-")) |",
+            "| Reasoning effort | \(tableCell(run.manifest.reasoningEffort ?? "-")) |",
             "| Repeats | \(run.manifest.repeatCount) |",
             "| Results | \(input.totalResults) |",
             "| Complete | \(input.completedResults == input.expectedResults ? "Yes" : "No") |",
@@ -190,6 +212,10 @@ enum TextToSQLReleaseGateReporter {
             lines += evaluation.thresholdFailureMessages.map { "- \($0)" }
         }
 
+        lines += reportedUsageSection(
+            results: releaseGateResults(for: run),
+            groundingJudge: (run.backendSummaries[.cloud] ?? run.summary).groundingJudge
+        )
         lines += historicalRegressionSection(results: run.results)
 
         lines += [
@@ -207,6 +233,38 @@ enum TextToSQLReleaseGateReporter {
             "",
         ]
         return lines.joined(separator: "\n")
+    }
+
+    /// Spend for the gate's results, how often the schema agent forced a
+    /// final answer or asked its critic, the SQL the grounding postprocessor
+    /// withheld, and the grounding judge's counts with their paired
+    /// judge-off arm, reported for tracking only. The forced-answer and
+    /// critic counts are the extra-calls layer's K12 evidence that the layer
+    /// ran. The judge counts come from the run summary, which knows each
+    /// case's expected decision.
+    private static func reportedUsageSection(
+        results: [TextToSQLEvalResult],
+        groundingJudge: TextToSQLEvalGroundingJudgeSummary?
+    ) -> [String] {
+        var lines = [
+            "",
+            "## Reported (not gated)",
+            "",
+            "These figures track spend, the schema agent's extra calls, the SQL grounding withheld and the grounding judge, and do not affect the gate.",
+            "",
+            "| Metric | Value |",
+            "| --- | --- |",
+        ]
+        lines += TextToSQLEvalUsageTotals(results: results).markdownRows
+        lines += TextToSQLEvalForcedTerminalSummary.markdownRows(
+            TextToSQLEvalForcedTerminalSummary(results: results)
+        )
+        lines += TextToSQLEvalCriticSummary.markdownRows(TextToSQLEvalCriticSummary(results: results))
+        lines += TextToSQLEvalWithheldSQLSummary.markdownRows(
+            TextToSQLEvalWithheldSQLSummary(results: results)
+        )
+        lines += TextToSQLEvalGroundingJudgeSummary.markdownRows(groundingJudge)
+        return lines
     }
 
     private static func historicalRegressionSection(results: [TextToSQLEvalResult]) -> [String] {
@@ -390,13 +448,22 @@ enum TextToSQLReleaseTriageReporter {
             from: Data(contentsOf: runURL)
         )
         // Offline re-triage publishes committed docs too, so it enforces the
-        // same pinned-model policy as evaluated runs — and even with the
-        // override, a non-pinned run never replaces the committed copy.
-        let backendIncludesCloud = runFile.manifest.backendMode == "cloud"
-            || runFile.manifest.backendMode == "both"
+        // same pinned-model, reasoning-effort and agent-mode policy as
+        // evaluated runs — and even with the override, a non-pinned,
+        // non-default-effort or non-production-mode run never replaces the
+        // committed copy.
+        var reasoningEffortOverride: ReasoningEffort?
+        if copyVersion != nil {
+            reasoningEffortOverride = try TextToSQLEvalCloudSettings.resumedReasoningEffortOverride(
+                previousReasoningEffort: runFile.manifest.reasoningEffort,
+                requestedModelID: runFile.manifest.model ?? "",
+                callSite: runFile.manifest.cloudCallSite
+            )
+        }
         try TextToSQLReleaseGateModelPolicy.validate(
             model: runFile.manifest.model,
-            backendIncludesCloud: backendIncludesCloud,
+            reasoningEffortOverride: reasoningEffortOverride,
+            agentModes: runFile.manifest.releaseGateAgentModes,
             releaseGateVersion: nil,
             releaseTriageVersion: copyVersion,
             allowModelOverride: allowModelOverride
@@ -466,8 +533,13 @@ enum TextToSQLReleaseTriageReporter {
             "| Schema agent clarification correction | \(tableCell(run.manifest.schemaAgentClarificationCorrectionMode ?? "-")) |",
             "| Schema agent intent coverage | \(tableCell(run.manifest.schemaAgentIntentCoverageMode ?? "-")) |",
             "| Schema agent plan consistency | \(tableCell(run.manifest.schemaAgentPlanConsistencyMode ?? "-")) |",
+            "| Schema agent critic | \(tableCell(run.manifest.schemaAgentCriticMode ?? "-")) |",
+            "| Schema agent grounding judge | \(tableCell(run.manifest.schemaAgentGroundingJudgeMode ?? "-")) |",
+            "| Provider | \(tableCell(run.manifest.resolvedProvider ?? "-")) |",
+            "| Endpoint | \(tableCell(run.manifest.providerEndpointHost ?? "-")) |",
             "| Model | \(tableCell(run.manifest.model ?? "-")) |",
-            "| Expected canonical model | \(tableCell(run.manifest.expectedCanonicalModelID ?? "-")) |",
+            "| Expected returned model | \(tableCell(run.manifest.expectedCanonicalModelID ?? "-")) |",
+            "| Reasoning effort | \(tableCell(run.manifest.reasoningEffort ?? "-")) |",
             "| Results | \(run.results.count) |",
             "| Complete | \(completeness.isComplete ? "Yes" : "No") |",
             "| Expected results | \(completeness.expectedResultCount) |",
@@ -713,17 +785,10 @@ enum TextToSQLReleaseTriageReporter {
         }
     }
 
+    /// Only the cloud backend remains. A legacy "both" manifest expects cloud
+    /// keys only; its on-device results fail to decode with a clear error.
     private static func backends(for backendMode: String) -> [TextToSQLEvalBackend] {
-        switch backendMode {
-        case "local":
-            return [.local]
-        case "cloud":
-            return [.cloud]
-        case "both":
-            return [.local, .cloud]
-        default:
-            return [.cloud]
-        }
+        [.cloud]
     }
 
     private static func orderedUniqueCaseIDs(_ results: [TextToSQLEvalResult]) -> [String] {
@@ -806,13 +871,14 @@ enum TextToSQLReleaseTriageReporter {
         }
 
         private static func policySummary(
-            _ diagnostics: OpenRouterSchemaToolAgentDiagnostics?
+            _ diagnostics: SchemaToolAgentDiagnostics?
         ) -> String {
             guard let diagnostics,
                 !diagnostics.clarificationPolicyDecision.isEmpty
                     || !diagnostics.sqlIntentCoverageDecision.isEmpty
                     || !diagnostics.planConsistencyDecision.isEmpty
                     || diagnostics.planConsistencyCorrectionAttempted
+                    || diagnostics.groundingJudgment != nil
             else { return "-" }
             var parts: [String] = []
             if !diagnostics.clarificationPolicyDecision.isEmpty {
@@ -851,6 +917,12 @@ enum TextToSQLReleaseTriageReporter {
                         : "plan correction attempted"
                 )
             }
+            if let judgment = diagnostics.groundingJudgment {
+                parts.append(
+                    "judge: " + ([judgment.outcome] + [judgment.postprocessorOutcome].compactMap { $0 })
+                        .joined(separator: ", ")
+                )
+            }
             return parts.joined(separator: "; ")
         }
 
@@ -869,7 +941,7 @@ enum TextToSQLReleaseTriageReporter {
             return SchemaToolAgentSQLIntentCoveragePolicy.semanticMismatchCategory(
                 question: evalCase?.question ?? "",
                 databaseContext: evalCase?.databaseContext ?? "",
-                evidence: diagnostics?.schemaEvidence ?? OpenRouterSchemaToolEvidenceSummary(),
+                evidence: diagnostics?.schemaEvidence ?? SchemaToolEvidenceSummary(),
                 sql: result.generatedSQL ?? "",
                 comparatorMismatchCategory: result.metrics.semanticMismatchCategory
             )

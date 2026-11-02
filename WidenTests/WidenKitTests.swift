@@ -61,6 +61,16 @@ struct WidenKitSmokeTests {
         #expect(!state.loadingSchemas.contains(id))
     }
 
+    @Test func mockGeneratorReturnsSafeConstantQuery() async throws {
+        let result = try await MockSQLGenerator().generateSQL(
+            question: "anything",
+            schema: makeSchema(),
+            config: SQLGenerationConfig()
+        )
+        #expect(result.sql == "SELECT 1 AS test_value")
+        #expect(SQLSafetyValidator.validate(result.sql).isValid)
+    }
+
     private func makeSchema() -> DatabaseSchema {
         DatabaseSchema(
             schemas: [SchemaInfo(name: "public")],

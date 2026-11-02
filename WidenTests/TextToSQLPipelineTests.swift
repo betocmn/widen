@@ -36,10 +36,6 @@ struct TextToSQLPipelineTests {
         }
     }
 
-    private final class ConstrainedScriptedGenerator: ScriptedGenerator, ConstrainedLocalSQLGenerator,
-        @unchecked Sendable
-    {}
-
     private final class ScriptedVerifier: GeneratedSQLVerifying, @unchecked Sendable {
         struct Request: Sendable, Equatable {
             var sql: String
@@ -244,7 +240,8 @@ struct TextToSQLPipelineTests {
         needsClarification: Bool = false,
         clarificationQuestion: String? = nil,
         generationCallCount: Int? = nil,
-        backendMetadata: OpenRouterGenerationMetadata? = nil,
+        generatorInvocationCount: Int? = nil,
+        backendMetadata: CloudGenerationMetadata? = nil,
         schemaToolCalls: [SchemaToolCallTrace] = [],
         inspectionToolCalls: [DatabaseInspectionToolCallTrace] = []
     ) -> SQLGenerationResult {
@@ -258,6 +255,7 @@ struct TextToSQLPipelineTests {
             needsClarification: needsClarification,
             clarificationQuestion: clarificationQuestion,
             generationCallCount: generationCallCount,
+            generatorInvocationCount: generatorInvocationCount,
             backendMetadata: backendMetadata,
             schemaToolCalls: schemaToolCalls,
             inspectionToolCalls: inspectionToolCalls
@@ -268,9 +266,11 @@ struct TextToSQLPipelineTests {
         costUSD: Double,
         totalTokens: Int,
         requestCount: Int = 1,
-        retryCount: Int = 0
-    ) -> OpenRouterGenerationMetadata {
-        OpenRouterGenerationMetadata(
+        retryCount: Int = 0,
+        cachedPromptTokens: Int? = nil,
+        costSource: String? = nil
+    ) -> CloudGenerationMetadata {
+        CloudGenerationMetadata(
             requestedModelID: "test/model",
             returnedModelID: "test/model-version",
             providerName: "TestProvider",
@@ -280,10 +280,12 @@ struct TextToSQLPipelineTests {
             requestCount: requestCount,
             retryCount: retryCount,
             promptTokens: totalTokens / 2,
+            cachedPromptTokens: cachedPromptTokens,
             completionTokens: totalTokens - (totalTokens / 2),
             reasoningTokens: nil,
             totalTokens: totalTokens,
             costUSD: costUSD,
+            costSource: costSource,
             serviceTier: nil,
             finishReason: "stop",
             nativeFinishReason: nil
@@ -323,9 +325,10 @@ struct TextToSQLPipelineTests {
     private func run(
         _ generator: ScriptedGenerator,
         verifier: (any GeneratedSQLVerifying)? = nil,
-        verificationConnection: PostgresConnectionHandle? = nil
+        verificationConnection: PostgresConnectionHandle? = nil,
+        repairPolicy: TextToSQLRepairPolicy = .default
     ) async throws -> TextToSQLRun {
-        try await TextToSQLPipeline(generator: generator).run(
+        try await TextToSQLPipeline(generator: generator, repairPolicy: repairPolicy).run(
             TextToSQLRequest(
                 question: "show users",
                 schema: makeSchema(),
@@ -725,95 +728,6 @@ struct TextToSQLPipelineTests {
         #expect(result.trace.stages.contains { $0.stage == .postgresVerificationRepair })
     }
 
-    @Test func constrainedLocalStopsAfterValidationRepairWhenVerificationFails() async throws {
-        let invalidSQL = "SELECT missing FROM public.users"
-        let validationRepairedSQL = "SELECT id FROM public.users LIMIT 100"
-        let generator = ConstrainedScriptedGenerator(
-            [
-                .success(generation(sql: invalidSQL)),
-                .success(generation(sql: validationRepairedSQL)),
-                .success(generation(sql: "SELECT id FROM public.users WHERE id > 0 LIMIT 100")),
-            ],
-            echoModelCallCount: true
-        )
-        let verifier = ScriptedVerifier([
-            .success(verificationFailure(.undefinedFunction, sqlState: "42883"))
-        ])
-
-        let result = try await run(
-            generator,
-            verifier: verifier,
-            verificationConnection: verificationConnection()
-        )
-
-        guard case .failed(let failure) = result.finalDecision else {
-            Issue.record("expected failed decision")
-            return
-        }
-        #expect(failure.stage == .postgresVerificationRepair)
-        #expect(failure.category == .postgresVerification)
-        #expect(generator.contexts.count == 2)
-        #expect(generator.contexts[0].modelCallCount == 0)
-        #expect(generator.contexts[1].modelCallCount == 2)
-        #expect(verifier.requests.map(\.sql) == [validationRepairedSQL])
-        #expect(!result.events.map(\.kind).contains(.postgresVerificationRepairStarted))
-    }
-
-    @Test func constrainedLocalRejectsWritesBeforeRepairBudgetIsSpent() async throws {
-        let generator = ConstrainedScriptedGenerator([
-            .success(generation(sql: "INSERT INTO public.users (id) VALUES (1)", generationCallCount: 1)),
-            .success(generation(sql: "SELECT id FROM public.users LIMIT 100")),
-        ])
-
-        let result = try await run(generator)
-
-        guard case .failed(let failure) = result.finalDecision else {
-            Issue.record("expected failed decision")
-            return
-        }
-        #expect(failure.stage == .safetyValidation)
-        #expect(failure.category == .safetyValidation)
-        #expect(generator.contexts.count == 1)
-        #expect(result.events.contains {
-            $0.kind == .validationFailed
-                && $0.stage == .safetyValidation
-                && $0.failureCategory == .safetyValidation
-        })
-        #expect(result.trace.stages.contains {
-            $0.stage == .safetyValidation
-                && $0.outcome == .failure
-        })
-        #expect(!result.events.map(\.kind).contains(.validationRepairStarted))
-    }
-
-    @Test func constrainedLocalRejectsUnsafeReadsBeforeRepairBudgetIsSpent() async throws {
-        let generator = ConstrainedScriptedGenerator([
-            .success(
-                generation(
-                    sql: "WITH d AS (DELETE FROM public.users WHERE id = 1 RETURNING id) SELECT id FROM d",
-                    generationCallCount: 1
-                )
-            ),
-            .success(generation(sql: "SELECT id FROM public.users LIMIT 100")),
-        ])
-
-        let result = try await run(generator)
-
-        guard case .failed(let failure) = result.finalDecision else {
-            Issue.record("expected failed decision")
-            return
-        }
-        #expect(failure.stage == .safetyValidation)
-        #expect(failure.category == .safetyValidation)
-        #expect(generator.contexts.count == 1)
-        #expect(result.events.contains {
-            $0.kind == .validationFailed
-                && $0.stage == .safetyValidation
-                && $0.failureCategory == .safetyValidation
-        })
-        #expect(!result.events.map(\.kind).contains(.validationRepairStarted))
-    }
-
     @Test func clarificationReturnsFinalClarification() async throws {
         let result = try await run(
             ScriptedGenerator([
@@ -858,6 +772,426 @@ struct TextToSQLPipelineTests {
         #expect(generator.contexts.count == 1)
         #expect(generation.pendingClarification?.concept.term == "active")
         #expect(generation.needsClarification)
+    }
+
+    @Test func groundingReplacementRecordsTheWithheldSQL() async throws {
+        let sql = "SELECT id FROM public.users WHERE status = 'active' LIMIT 100"
+        let generator = ScriptedGenerator([.success(generation(sql: "  \(sql)\n"))])
+
+        let result = try await TextToSQLPipeline(generator: generator).run(
+            TextToSQLRequest(
+                question: "show active users",
+                schema: makeStatusSchema()
+            )
+        )
+
+        guard case .clarification(let generation) = result.finalDecision else {
+            Issue.record("expected grounding clarification decision")
+            return
+        }
+        // The decision carries no SQL; only the run remembers what was withheld.
+        #expect(generation.sql.isEmpty)
+        #expect(generation.pendingClarification?.concept.term == "active")
+        #expect(result.groundingWithheldSQL == sql)
+    }
+
+    @Test func withheldSQLIsRecordedOnlyWhenGroundingReplacesSQL() async throws {
+        let activeSQL = "SELECT id FROM public.users WHERE status = 'active' LIMIT 100"
+
+        let kept = try await run(
+            ScriptedGenerator([.success(generation(sql: "SELECT id FROM public.users LIMIT 100"))])
+        )
+        guard case .sql = kept.finalDecision else {
+            Issue.record("expected SQL decision")
+            return
+        }
+        #expect(kept.groundingWithheldSQL == nil)
+
+        // The generator's own clarification withholds nothing.
+        let asked = try await run(
+            ScriptedGenerator([
+                .success(
+                    generation(
+                        sql: "",
+                        needsClarification: true,
+                        clarificationQuestion: "Which users should be shown?"
+                    )
+                )
+            ])
+        )
+        guard case .clarification = asked.finalDecision else {
+            Issue.record("expected clarification decision")
+            return
+        }
+        #expect(asked.groundingWithheldSQL == nil)
+
+        let ungrounded = try await TextToSQLPipeline(
+            generator: ScriptedGenerator([.success(generation(sql: activeSQL))])
+        ).run(
+            TextToSQLRequest(
+                question: "show active users",
+                schema: makeStatusSchema(),
+                allowGroundingClarification: false
+            )
+        )
+        guard case .sql = ungrounded.finalDecision else {
+            Issue.record("expected SQL decision with grounding disabled")
+            return
+        }
+        #expect(ungrounded.groundingWithheldSQL == nil)
+
+        let failed = try await run(
+            ScriptedGenerator([.failure(SQLGenerationFailure.transport("Timed out."))])
+        )
+        guard case .failed = failed.finalDecision else {
+            Issue.record("expected failed decision")
+            return
+        }
+        #expect(failed.groundingWithheldSQL == nil)
+    }
+
+    @Test func judgeReleasedSQLStillGoesThroughSafetySchemaValidationAndPrepare() async throws {
+        let question = "Write a query that lists users"
+        let sql = "SELECT id FROM public.users LIMIT 100"
+        let request = { (verifier: ScriptedVerifier) in
+            TextToSQLRequest(
+                question: question,
+                schema: makeSchema(),
+                config: SQLGenerationConfig(defaultRowLimit: 100),
+                sqlVerifier: verifier,
+                verificationConnection: verificationConnection()
+            )
+        }
+
+        // Without a judgment the grounding pass withholds it.
+        let lexical = try await TextToSQLPipeline(
+            generator: ScriptedGenerator([.success(generation(sql: sql))])
+        ).run(request(ScriptedVerifier([])))
+        guard case .clarification = lexical.finalDecision else {
+            Issue.record("expected grounding clarification decision")
+            return
+        }
+
+        let verifier = ScriptedVerifier([.success(.passed(elapsedMs: 3))])
+        let released = try await TextToSQLPipeline(
+            generator: ScriptedGenerator([
+                .success(generation(sql: sql, backendMetadata: judgedMetadata(sql: sql, question: question)))
+            ])
+        ).run(request(verifier))
+
+        guard case .sql(let judged) = released.finalDecision else {
+            Issue.record("expected the judged SQL")
+            return
+        }
+        #expect(judged.sql == sql)
+        #expect(judged.backendMetadata?.agentDiagnostics?.groundingJudgment?.postprocessorOutcome == "released")
+        #expect(released.groundingWithheldSQL == nil)
+        // PREPARE only: generated SQL is never run.
+        #expect(verifier.requests == [.init(sql: sql, safetyMode: .generatedRead)])
+        let stages: [TextToSQLStage] = [.canonicalization, .safetyValidation, .schemaValidation]
+        for stage in stages {
+            #expect(released.trace.stages.contains { $0.stage == stage && $0.outcome == .success })
+        }
+        #expect(released.trace.stages.contains {
+            $0.stage == .postgresVerification
+                && $0.outcome == .success
+                && $0.verificationStatus == .passed
+        })
+
+        // A released SQL the safety validator rejects never reaches PREPARE.
+        let unsafeSQL = "SELECT id FROM public.users WHERE pg_sleep(1) IS NOT NULL LIMIT 100"
+        let unsafeVerifier = ScriptedVerifier([])
+        let unsafe = try await TextToSQLPipeline(
+            generator: ScriptedGenerator([
+                .success(
+                    generation(sql: unsafeSQL, backendMetadata: judgedMetadata(sql: unsafeSQL, question: question))
+                ),
+                .failure(SQLGenerationFailure.generation("No repair available.")),
+            ])
+        ).run(request(unsafeVerifier))
+
+        guard case .failed = unsafe.finalDecision else {
+            Issue.record("expected the unsafe SQL to fail validation")
+            return
+        }
+        #expect(unsafeVerifier.requests.isEmpty)
+        #expect(unsafe.trace.stages.contains { $0.stage == .safetyValidation && $0.outcome == .failure })
+    }
+
+    @Test func judgeDivergenceRecordsTheLexicalClarificationItReplaced() async throws {
+        let question = "Write a query that lists users"
+        let sql = "SELECT id FROM public.users LIMIT 100"
+        func run(_ metadata: CloudGenerationMetadata?) async throws -> TextToSQLRun {
+            try await TextToSQLPipeline(
+                generator: ScriptedGenerator([.success(generation(sql: sql, backendMetadata: metadata))])
+            ).run(
+                TextToSQLRequest(
+                    question: question,
+                    schema: makeSchema(),
+                    config: SQLGenerationConfig(defaultRowLimit: 100)
+                )
+            )
+        }
+
+        let lexical = try await run(nil)
+        guard case .clarification(let lexicalClarification) = lexical.finalDecision else {
+            Issue.record("expected grounding clarification decision")
+            return
+        }
+        let lexicalQuestion = try #require(lexicalClarification.clarificationQuestion)
+        #expect(lexicalClarification.pendingClarification?.concept.term == "write")
+        #expect(lexical.groundingJudgeDivergence == nil)
+
+        // Released: the run keeps the SQL and remembers the question the
+        // lexical pass would have asked instead.
+        let released = try await run(judgedMetadata(sql: sql, question: question))
+        guard case .sql = released.finalDecision else {
+            Issue.record("expected the judged SQL")
+            return
+        }
+        #expect(
+            released.groundingJudgeDivergence
+                == TextToSQLGroundingJudgeDivergence(kind: .released, lexicalClarificationQuestion: lexicalQuestion)
+        )
+        // Checked again, the release breaks none of the release rules.
+        #expect(released.groundingJudgeDivergence?.releaseViolations == [])
+
+        // Re-aimed: the clarification asks about "query" instead of "write".
+        let reAimed = try await run(
+            judgedMetadata(sql: sql, question: question, labels: ["query": "needs_definition"])
+        )
+        guard case .clarification(let reAimedClarification) = reAimed.finalDecision else {
+            Issue.record("expected the re-aimed clarification")
+            return
+        }
+        #expect(reAimedClarification.pendingClarification?.concept.term == "query")
+        #expect(reAimedClarification.clarificationQuestion != lexicalQuestion)
+        #expect(
+            reAimed.groundingJudgeDivergence
+                == TextToSQLGroundingJudgeDivergence(kind: .reAimed, lexicalClarificationQuestion: lexicalQuestion)
+        )
+
+        // A judgment that asks the lexical question changes nothing.
+        let unchanged = try await run(
+            judgedMetadata(sql: sql, question: question, labels: ["write": "needs_definition"])
+        )
+        guard case .clarification(let unchangedClarification) = unchanged.finalDecision else {
+            Issue.record("expected the lexical clarification")
+            return
+        }
+        #expect(unchangedClarification.clarificationQuestion == lexicalQuestion)
+        #expect(
+            unchangedClarification.backendMetadata?.agentDiagnostics?.groundingJudgment?.postprocessorOutcome
+                == "lexical:unreleasableTerm"
+        )
+        #expect(unchanged.groundingJudgeDivergence == nil)
+    }
+
+    @Test func judgeDivergenceIsRecordedInRepairsAndOnlyTheFirstCounts() async throws {
+        let question = "Write a query that lists users"
+        let lexicalQuestion = try #require(
+            GeneratedSQLPostprocessor.enriched(
+                generation(sql: "SELECT id FROM public.users LIMIT 100"),
+                question: question,
+                schema: makeSchema(),
+                databaseContext: ""
+            ).clarificationQuestion
+        )
+        let request = TextToSQLRequest(
+            question: question,
+            schema: makeSchema(),
+            config: SQLGenerationConfig(defaultRowLimit: 100)
+        )
+
+        // The first SQL has a schema error, which the grounding pass leaves
+        // to validation; the repair's SQL is the one the judge keeps.
+        let repairSQL = "SELECT id FROM public.users LIMIT 50"
+        let repaired = try await TextToSQLPipeline(
+            generator: ScriptedGenerator([
+                .success(generation(sql: "SELECT missing FROM public.users")),
+                .success(
+                    generation(sql: repairSQL, backendMetadata: judgedMetadata(sql: repairSQL, question: question))
+                ),
+            ])
+        ).run(request)
+        guard case .sql(let repairedGeneration) = repaired.finalDecision else {
+            Issue.record("expected the repair's judged SQL")
+            return
+        }
+        #expect(repairedGeneration.sql == repairSQL)
+        #expect(
+            repaired.groundingJudgeDivergence
+                == TextToSQLGroundingJudgeDivergence(kind: .released, lexicalClarificationQuestion: lexicalQuestion)
+        )
+
+        // A released SQL that fails safety validation is repaired; the
+        // repair's own re-aim comes after the run would have ended with the
+        // judge off, so the first divergence stands, even on a failed run.
+        let unsafeSQL = "SELECT id FROM public.users WHERE pg_sleep(1) IS NOT NULL LIMIT 100"
+        let unsafeLexicalQuestion = try #require(
+            GeneratedSQLPostprocessor.enriched(
+                generation(sql: unsafeSQL),
+                question: question,
+                schema: makeSchema(),
+                databaseContext: ""
+            ).clarificationQuestion
+        )
+        let reAimed = try await TextToSQLPipeline(
+            generator: ScriptedGenerator([
+                .success(generation(sql: unsafeSQL, backendMetadata: judgedMetadata(sql: unsafeSQL, question: question))),
+                .success(
+                    generation(
+                        sql: repairSQL,
+                        backendMetadata: judgedMetadata(
+                            sql: repairSQL,
+                            question: question,
+                            labels: ["query": "needs_definition"]
+                        )
+                    )
+                ),
+            ])
+        ).run(request)
+        guard case .clarification(let reAimedGeneration) = reAimed.finalDecision else {
+            Issue.record("expected the repair's re-aimed clarification")
+            return
+        }
+        #expect(reAimedGeneration.pendingClarification?.concept.term == "query")
+        #expect(
+            reAimed.groundingJudgeDivergence
+                == TextToSQLGroundingJudgeDivergence(
+                    kind: .released,
+                    lexicalClarificationQuestion: unsafeLexicalQuestion
+                )
+        )
+
+        let failed = try await TextToSQLPipeline(
+            generator: ScriptedGenerator([
+                .success(generation(sql: unsafeSQL, backendMetadata: judgedMetadata(sql: unsafeSQL, question: question))),
+                .failure(SQLGenerationFailure.generation("No repair available.")),
+            ])
+        ).run(request)
+        guard case .failed = failed.finalDecision else {
+            Issue.record("expected the unsafe SQL to fail")
+            return
+        }
+        #expect(failed.groundingJudgeDivergence?.kind == .released)
+    }
+
+    /// Schema-tool metadata with a judged grounding judgment, bound to this
+    /// SQL and question, that labels `write` and `query` as `labels` says,
+    /// `request_wording` by default. Only `request_wording` verifies.
+    private func judgedMetadata(
+        sql: String,
+        question: String,
+        labels: [String: String] = [:]
+    ) -> CloudGenerationMetadata {
+        var metadata = CloudGenerationMetadata(
+            requestedModelID: "particle-1",
+            structuredOutputMode: .promptOnlyJSON,
+            requestCount: 1,
+            retryCount: 0
+        )
+        metadata.agentSelectionReason = "tools"
+        metadata.agentTerminalOutcome = "sql"
+        metadata.agentDiagnostics = SchemaToolAgentDiagnostics(
+            terminalToolSeen: true,
+            terminalAction: "sql",
+            schemaEvidence: SchemaToolEvidenceSummary(
+                searched: true,
+                describedTableIDs: ["public.users"],
+                exposedColumnIDs: ["public.users.id"]
+            ),
+            intentCoverageMode: SchemaToolAgentIntentCoverageMode.diagnosticsOnly.rawValue,
+            groundingJudgeMode: SchemaToolAgentGroundingJudgeMode.enabled.rawValue,
+            groundingJudgment: SchemaToolAgentGroundingJudgment(
+                outcome: SchemaToolAgentGroundingJudgeOutcome.judged.rawValue,
+                inputDigest: SchemaToolAgentGroundingJudgment.inputDigest(
+                    sql: sql,
+                    question: question,
+                    databaseContext: "",
+                    confirmedSemanticBindings: [],
+                    terms: ["write", "query"]
+                ),
+                terms: ["write", "query"].map { term in
+                    let label = labels[term] ?? "request_wording"
+                    return SchemaToolAgentGroundingJudgedTerm(
+                        term: term,
+                        label: label,
+                        verified: label == "request_wording",
+                        evidence: ""
+                    )
+                },
+                callCount: 1
+            )
+        )
+        return metadata
+    }
+
+    @Test func validationRepairGroundingReplacementRecordsTheRepairSQL() async throws {
+        let repairSQL = "SELECT id FROM public.users WHERE status = 'active' LIMIT 100"
+        let generator = ScriptedGenerator([
+            .success(generation(sql: "SELECT missing FROM public.users")),
+            .success(generation(sql: repairSQL)),
+        ])
+
+        let result = try await TextToSQLPipeline(generator: generator).run(
+            TextToSQLRequest(
+                question: "show active users",
+                schema: makeStatusSchema(),
+                config: SQLGenerationConfig(defaultRowLimit: 100)
+            )
+        )
+
+        guard case .clarification(let generation) = result.finalDecision else {
+            Issue.record("expected grounding clarification after validation repair")
+            return
+        }
+        #expect(generator.contexts.count == 2)
+        #expect(generator.contexts[1].mode == .repair)
+        #expect(generation.pendingClarification?.concept.term == "active")
+        #expect(result.groundingWithheldSQL == repairSQL)
+    }
+
+    @Test func verificationRepairGroundingReplacementRecordsTheRepairSQL() async throws {
+        // The first SQL is grounded by the table it reads; the repair reads
+        // a table that does not ground "active", so grounding withholds it.
+        var schema = makeStatusSchema()
+        schema.tables.append(
+            TableInfo(
+                schema: "public",
+                name: "active_users",
+                type: .baseTable,
+                columns: [column("active_users", "id", type: "integer", ordinal: 1)]
+            )
+        )
+        let originalSQL = "SELECT id FROM public.active_users LIMIT 100"
+        let repairSQL = "SELECT id FROM public.users WHERE status = 'active' LIMIT 100"
+        let generator = ScriptedGenerator([
+            .success(generation(sql: originalSQL)),
+            .success(generation(sql: repairSQL)),
+        ])
+        let verifier = ScriptedVerifier([
+            .success(verificationFailure(.undefinedFunction, sqlState: "42883"))
+        ])
+
+        let result = try await TextToSQLPipeline(generator: generator).run(
+            TextToSQLRequest(
+                question: "show active users",
+                schema: schema,
+                config: SQLGenerationConfig(defaultRowLimit: 100),
+                sqlVerifier: verifier,
+                verificationConnection: verificationConnection()
+            )
+        )
+
+        guard case .clarification(let generation) = result.finalDecision else {
+            Issue.record("expected grounding clarification after verification repair")
+            return
+        }
+        #expect(verifier.requests.map(\.sql) == [originalSQL])
+        #expect(generator.contexts.count == 2)
+        #expect(generation.pendingClarification?.concept.term == "active")
+        #expect(result.groundingWithheldSQL == repairSQL)
     }
 
     @Test func mixedCaseIdentifierIsDeterministicallyQuoted() async throws {
@@ -1191,6 +1525,8 @@ struct TextToSQLPipelineTests {
         #expect(failure.message.contains("still failed validation"))
         #expect(failure.message.contains("I did not show the rejected SQL"))
         #expect(!failure.message.contains("rejected SQL and repair attempts are shown above"))
+        #expect(failure.message.contains("Query Context in Database Settings"))
+        #expect(!failure.message.contains("cloud model"))
     }
 
     @Test func repairGeneratorFailureReturnsFailedDecision() async throws {
@@ -1202,7 +1538,7 @@ struct TextToSQLPipelineTests {
                 )
             ),
             .failure(
-                OpenRouterFailure(
+                CloudRequestFailure(
                     category: .providerUnavailable,
                     message: "Provider failed after billing the request.",
                     requestedModelID: "test/model",
@@ -1229,6 +1565,82 @@ struct TextToSQLPipelineTests {
         #expect(abs((failure.backendMetadata?.costUSD ?? 0) - 0.03) < 0.000_001)
         #expect(generator.contexts.count == 2)
         #expect(result.trace.modelCalls == 2)
+    }
+
+    @Test func repairUsageSumsCachedTokensAndKeepsAnEstimatedCostSource() async throws {
+        let estimated = CloudCostSource.estimatedPeakList.rawValue
+        let repaired = ScriptedGenerator([
+            .success(
+                generation(
+                    sql: "SELECT missing FROM public.users",
+                    backendMetadata: backendMetadata(
+                        costUSD: 0.01,
+                        totalTokens: 10,
+                        cachedPromptTokens: 4,
+                        costSource: estimated
+                    )
+                )
+            ),
+            .success(
+                generation(
+                    sql: "SELECT id FROM public.users LIMIT 100",
+                    backendMetadata: backendMetadata(
+                        costUSD: 0.02,
+                        totalTokens: 20,
+                        cachedPromptTokens: 6,
+                        costSource: CloudCostSource.reported.rawValue
+                    )
+                )
+            ),
+        ])
+
+        let success = try await run(repaired)
+
+        guard case .sql(let repairedGeneration) = success.finalDecision else {
+            Issue.record("expected repaired SQL decision")
+            return
+        }
+        #expect(repairedGeneration.backendMetadata?.cachedPromptTokens == 10)
+        #expect(repairedGeneration.backendMetadata?.costSource == estimated)
+        #expect(abs((repairedGeneration.backendMetadata?.costUSD ?? 0) - 0.03) < 0.000_001)
+
+        let failedRepair = ScriptedGenerator([
+            .success(
+                generation(
+                    sql: "SELECT missing FROM public.users",
+                    backendMetadata: backendMetadata(
+                        costUSD: 0.01,
+                        totalTokens: 10,
+                        cachedPromptTokens: 4,
+                        costSource: estimated
+                    )
+                )
+            ),
+            .failure(
+                CloudRequestFailure(
+                    category: .providerUnavailable,
+                    message: "Provider failed after billing the request.",
+                    requestedModelID: "test/model",
+                    promptTokens: 10,
+                    cachedPromptTokens: 6,
+                    completionTokens: 10,
+                    totalTokens: 20,
+                    costUSD: 0.02,
+                    costSource: estimated,
+                    attemptCount: 1
+                )
+            ),
+        ])
+
+        let failure = try await run(failedRepair)
+
+        guard case .failed(let failed) = failure.finalDecision else {
+            Issue.record("expected failure decision")
+            return
+        }
+        #expect(failed.backendMetadata?.cachedPromptTokens == 10)
+        #expect(failed.backendMetadata?.costSource == estimated)
+        #expect(abs((failed.backendMetadata?.costUSD ?? 0) - 0.03) < 0.000_001)
     }
 
     @Test func unsafeWriteRepairForReadIsRejected() async throws {
@@ -1258,11 +1670,14 @@ struct TextToSQLPipelineTests {
     @Test func unsafeValidationRepairReturnsSafetyFailure() async throws {
         let unsafeSQL = "SELECT id FROM public.users; DROP TABLE public.users"
         let generator = ScriptedGenerator([
-            .success(generation(sql: "SELECT missing FROM public.users", generationCallCount: 2)),
+            .success(generation(sql: "SELECT missing FROM public.users")),
             .success(generation(sql: unsafeSQL)),
         ])
 
-        let result = try await run(generator)
+        let result = try await run(
+            generator,
+            repairPolicy: TextToSQLRepairPolicy(maximumValidationRepairs: 1)
+        )
 
         guard case .failed(let failure) = result.finalDecision else {
             Issue.record("expected failure decision")
@@ -1371,7 +1786,7 @@ struct TextToSQLPipelineTests {
         ),
         (
             SQLGenerationFailure.httpBudgetExhausted(
-                OpenRouterHTTPAttemptBudgetExhausted(message: "HTTP budget exhausted.")
+                HTTPAttemptBudgetExhausted(message: "HTTP budget exhausted.")
             ),
             TextToSQLFailureCategory.httpBudgetExhausted
         ),
@@ -1415,6 +1830,156 @@ struct TextToSQLPipelineTests {
 
         #expect(result.trace.modelCalls == 2)
         #expect(generator.contexts[1].modelCallCount == 2)
+    }
+
+    @Test func agentHTTPAttemptsDoNotStarveValidationRepair() async throws {
+        // A schema-agent run reports its HTTP attempts in the call count;
+        // the repair budget counts it as one invocation.
+        let generator = ScriptedGenerator([
+            .success(generation(sql: "SELECT missing FROM public.users", generationCallCount: 9)),
+            .success(generation(sql: "SELECT id FROM public.users LIMIT 100", generationCallCount: 13)),
+        ])
+
+        let result = try await run(generator)
+
+        guard case .sql(let generation) = result.finalDecision else {
+            Issue.record("expected repaired SQL decision")
+            return
+        }
+        #expect(generation.sql == "SELECT id FROM public.users LIMIT 100")
+        #expect(generation.generatorInvocationCount == 2)
+        #expect(generator.contexts.count == 2)
+        #expect(generator.contexts[1].mode == .repair)
+        // The HTTP-inclusive count still reaches the generator for the eval
+        // HTTP budget and telemetry.
+        #expect(generator.contexts[1].modelCallCount == 10)
+        #expect(result.trace.modelCalls == 13)
+    }
+
+    @Test(
+        arguments: zip(
+            ["SELECT missing FROM public.users", "SELECT AVG(COUNT(*) OVER ()) FROM public.users"],
+            [TextToSQLFailureCategory.schemaValidation, .safetyValidation]
+        )
+    )
+    func exhaustedInvocationBudgetReportsValidationCategory(
+        sql: String,
+        category: TextToSQLFailureCategory
+    ) async throws {
+        let generator = ScriptedGenerator([
+            .success(generation(sql: sql)),
+            .success(generation(sql: "SELECT id FROM public.users LIMIT 100")),
+        ])
+
+        let result = try await run(
+            generator,
+            repairPolicy: TextToSQLRepairPolicy(maximumGeneratorInvocationsPerRequest: 1)
+        )
+
+        guard case .failed(let failure) = result.finalDecision else {
+            Issue.record("expected failure decision")
+            return
+        }
+        #expect(failure.stage == .validationRepair)
+        #expect(failure.category == category)
+        #expect(failure.message.contains("This request already used its repair budget"))
+        #expect(failure.message.contains("did not ask Particle-1 to repair the query again"))
+        #expect(generator.contexts.count == 1)
+        #expect(!result.events.map(\.kind).contains(.validationRepairStarted))
+        #expect(!result.trace.stages.contains { $0.failureCategory == .repeatedNoProgressRepair })
+        #expect(result.trace.stages.contains {
+            $0.stage == .validationRepair && $0.outcome == .skipped
+        })
+        #expect(result.trace.stages.contains {
+            $0.stage == .finalDecision && $0.outcome == .failure && $0.failureCategory == category
+        })
+    }
+
+    @Test func repairNotStartedAfterCutoff() async throws {
+        let noTimeLeft = TextToSQLRepairPolicy(repairStartCutoffSeconds: 0)
+        let invalid = ScriptedGenerator([
+            .success(generation(sql: "SELECT missing FROM public.users")),
+            .success(generation(sql: "SELECT id FROM public.users LIMIT 100")),
+        ])
+
+        let validationResult = try await run(invalid, repairPolicy: noTimeLeft)
+
+        guard case .failed(let validationFailure) = validationResult.finalDecision else {
+            Issue.record("expected failure decision")
+            return
+        }
+        #expect(validationFailure.category == .schemaValidation)
+        #expect(validationFailure.message.contains("already used its repair budget"))
+        #expect(invalid.contexts.count == 1)
+
+        let sql = "SELECT id FROM public.users LIMIT 100"
+        let rejected = ScriptedGenerator([
+            .success(generation(sql: sql)),
+            .success(generation(sql: #"SELECT "createdAt" FROM public.users LIMIT 100"#)),
+        ])
+        let verifier = ScriptedVerifier([
+            .success(verificationFailure(.undefinedFunction, sqlState: "42883")),
+        ])
+
+        let verificationResult = try await run(
+            rejected,
+            verifier: verifier,
+            verificationConnection: verificationConnection(),
+            repairPolicy: noTimeLeft
+        )
+
+        guard case .failed(let verificationFailure) = verificationResult.finalDecision else {
+            Issue.record("expected failure decision")
+            return
+        }
+        #expect(verificationFailure.stage == .postgresVerificationRepair)
+        #expect(verificationFailure.category == .postgresVerification)
+        #expect(rejected.contexts.count == 1)
+        #expect(verifier.requests.map(\.sql) == [sql])
+        #expect(!verificationResult.events.map(\.kind).contains(.postgresVerificationRepairStarted))
+    }
+
+    @Test func repairResultsRecordInvocationCount() async throws {
+        let valid = ScriptedGenerator([
+            // Generators never own the count; the pipeline overwrites it.
+            .success(generation(sql: "SELECT id FROM public.users LIMIT 100", generatorInvocationCount: 7)),
+        ])
+
+        let validResult = try await run(valid)
+
+        guard case .sql(let first) = validResult.finalDecision else {
+            Issue.record("expected SQL decision")
+            return
+        }
+        #expect(first.generatorInvocationCount == 1)
+
+        let repairedSQL = "SELECT id FROM public.users LIMIT 100"
+        let verifiedSQL = "SELECT id FROM public.users LIMIT 50"
+        let repaired = ScriptedGenerator([
+            .success(generation(sql: "SELECT missing FROM public.users")),
+            .success(generation(sql: repairedSQL)),
+            .success(generation(sql: verifiedSQL)),
+        ])
+        let verifier = ScriptedVerifier([
+            .success(verificationFailure(.undefinedFunction, sqlState: "42883")),
+            .success(.passed(elapsedMs: 3)),
+        ])
+
+        let repairedResult = try await run(
+            repaired,
+            verifier: verifier,
+            verificationConnection: verificationConnection()
+        )
+
+        guard case .sql(let final) = repairedResult.finalDecision else {
+            Issue.record("expected repaired SQL decision")
+            return
+        }
+        #expect(final.sql == verifiedSQL)
+        // The first generation, a validation repair, then a verification repair.
+        #expect(final.generatorInvocationCount == 3)
+        #expect(repaired.contexts.map(\.mode) == [.initial, .repair, .repair])
+        #expect(verifier.requests.map(\.sql) == [repairedSQL, verifiedSQL])
     }
 
     @Test func repairSchemaToolTracesPreserveRepeatedProviderCallIDs() async throws {
@@ -1542,7 +2107,7 @@ struct TextToSQLPipelineTests {
             evalCase: evalCase,
             schema: makeSchema(),
             generator: generator,
-            options: TextToSQLEvalRunOptions(backend: .local)
+            options: TextToSQLEvalRunOptions(backend: .cloud)
         )
 
         #expect(result.status == .passed)

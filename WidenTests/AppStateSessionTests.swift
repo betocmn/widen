@@ -401,6 +401,159 @@ struct AppStateSessionTests {
         #expect(state.session(for: session.id)?.title == "My Title")
     }
 
+    // MARK: - Particle-1 title gating
+
+    private static let particleKey = "pai-test-0123456789abcdef"
+
+    /// One closed gate in front of a Particle-1 title.
+    enum ClosedTitleGate: String, CaseIterable, Sendable {
+        case directSQL, noKey, emptyKey, mockAI, metadataSharingOff, unknownConnection
+        case noConnection, runtimeIssue
+    }
+
+    /// A state where every gate is open: a saved key, mock AI off, and a
+    /// connection that shares schema metadata. Tests add sessions directly,
+    /// because selecting one would try to connect to the database.
+    private func makeTitleGateState() -> (AppState, URL, DatabaseConnectionConfig) {
+        let (state, dir) = makeState()
+        let connection = DatabaseConnectionConfig(database: "db", username: "u")
+        state.connections = [connection]
+        state.particleAPIKeyOverride = .some(Self.particleKey)
+        // Another suite may have mock mode on while this state initializes.
+        state.useMockAI = false
+        return (state, dir, connection)
+    }
+
+    @Test func particleNamesNaturalLanguageQuestionsWhenEveryGateIsOpen() {
+        let (state, dir, connection) = makeTitleGateState()
+        defer { try? FileManager.default.removeItem(at: dir) }
+
+        let generator = state.titleGenerator(for: .naturalLanguage, connectionID: connection.id)
+
+        let particle = generator as? ParticleTitleGenerator
+        #expect(particle != nil)
+        #expect(particle?.profile == .particle)
+        #expect(particle?.timeoutSeconds == ParticleTitleGenerator.defaultTimeoutSeconds)
+    }
+
+    @Test(arguments: ClosedTitleGate.allCases)
+    func anyClosedGateKeepsTheTitleOnThisMac(gate: ClosedTitleGate) {
+        let (state, dir, connection) = makeTitleGateState()
+        defer { try? FileManager.default.removeItem(at: dir) }
+        var factoryCalls = 0
+        state.particleTitleGeneratorFactory = { _ in
+            factoryCalls += 1
+            return StubTitleGenerator(result: "Particle Title")
+        }
+        var source = SessionTitleSource.naturalLanguage
+        var connectionID: UUID? = connection.id
+        switch gate {
+        case .directSQL: source = .directSQL
+        case .noKey: state.particleAPIKeyOverride = .some(nil)
+        case .emptyKey: state.particleAPIKeyOverride = .some("")
+        case .mockAI: state.useMockAI = true
+        case .metadataSharingOff: state.connections[0].allowCloudSchemaMetadata = false
+        case .unknownConnection: connectionID = UUID()
+        case .noConnection: connectionID = nil
+        case .runtimeIssue: state.noteTextToSQLOutcome(.failed(.authentication))
+        }
+
+        let generator = state.titleGenerator(for: source, connectionID: connectionID)
+        state.useMockAI = false
+
+        #expect(generator is MockTitleGenerator)
+        #expect(factoryCalls == 0)
+    }
+
+    @Test func autoTitleUsesParticleOnlyForAnAllowedQuestion() async {
+        let (state, dir, connection) = makeTitleGateState()
+        defer { try? FileManager.default.removeItem(at: dir) }
+        var factoryKeys: [String] = []
+        state.particleTitleGeneratorFactory = { key in
+            factoryKeys.append(key)
+            return StubTitleGenerator(result: "\"Top Spenders.\"")
+        }
+        let question = QuerySession(connectionID: connection.id)
+        let directSQL = QuerySession(connectionID: connection.id)
+        state.sessions = [question, directSQL]
+
+        await state.autoTitleSession(
+            question.id,
+            question: "Which users have spent the most?",
+            source: .naturalLanguage,
+            connectionID: connection.id
+        )
+        await state.autoTitleSession(
+            directSQL.id,
+            question: "SELECT * FROM users",
+            source: .directSQL,
+            connectionID: connection.id
+        )
+
+        #expect(factoryKeys == [Self.particleKey])
+        #expect(state.session(for: question.id)?.title == "Top Spenders")
+        #expect(state.session(for: directSQL.id)?.title == "Select * From Users")
+    }
+
+    @Test func particleTitleFailureFallsBackToTheQuestion() async {
+        let (state, dir, connection) = makeTitleGateState()
+        defer { try? FileManager.default.removeItem(at: dir) }
+        state.particleTitleGeneratorFactory = { _ in FailingTitleGenerator() }
+        let session = QuerySession(connectionID: connection.id)
+        state.sessions = [session]
+
+        await state.autoTitleSession(
+            session.id,
+            question: "Which users have spent the most?",
+            source: .naturalLanguage,
+            connectionID: connection.id
+        )
+
+        #expect(state.session(for: session.id)?.title == "Which Users Have Spent The Most?")
+    }
+
+    /// Without a factory, the Particle-1 title request goes through the
+    /// app's cloud transport seam to api.particle.ai and nowhere else.
+    @Test func particleTitleRequestsOnlyEverContactParticle() async throws {
+        let (state, dir, connection) = makeTitleGateState()
+        defer { try? FileManager.default.removeItem(at: dir) }
+        let transport = RecordingTransport { request, _ in
+            let body: [String: Any] = [
+                "id": "chatcmpl-title",
+                "model": "particle-ai/particle-1",
+                "choices": [
+                    [
+                        "index": 0,
+                        "finish_reason": "stop",
+                        "message": ["role": "assistant", "content": "Top Spenders"],
+                    ]
+                ],
+            ]
+            return (
+                try JSONSerialization.data(withJSONObject: body),
+                RecordingTransport.response(to: request)
+            )
+        }
+        state.cloudTransportOverride = transport
+        let session = QuerySession(connectionID: connection.id)
+        state.sessions = [session]
+
+        await state.autoTitleSession(
+            session.id,
+            question: "Which users have spent the most?",
+            source: .naturalLanguage,
+            connectionID: connection.id
+        )
+
+        #expect(state.session(for: session.id)?.title == "Top Spenders")
+        let requests = transport.requests
+        #expect(requests.count == 1)
+        for request in requests {
+            #expect(request.url?.host == "api.particle.ai")
+            #expect(request.value(forHTTPHeaderField: "Authorization") == "Bearer \(Self.particleKey)")
+        }
+    }
+
     @Test func launchDoesNotAutoSelectRestoredSessionOrFirstDatabase() async throws {
         UserDefaults.standard.removeObject(forKey: "WidenSelectedSessionID")
         let (state, dir) = makeState()
@@ -421,6 +574,49 @@ struct AppStateSessionTests {
         #expect(state.sidebarSelection == nil)
         #expect(state.activeConnectionID == nil)
         #expect(state.openSettingsRequest == 0)
+    }
+
+    #if DEBUG
+        @Test func debugLaunchArgumentOpensTheRequestedSettingsTab() {
+            let (state, dir) = makeState()
+            defer { try? FileManager.default.removeItem(at: dir) }
+
+            state.openDebugSettingsTab(from: [
+                "Widen", "-WidenUseMockAI", "YES", "-WidenDebugOpenSettingsTab", "llm",
+            ])
+            #expect(state.settingsTab == .llm)
+            #expect(state.openSettingsRequest == 1)
+
+            state.openDebugSettingsTab(from: ["Widen", "-WidenDebugOpenSettingsTab", "Databases"])
+            #expect(state.settingsTab == .databases)
+            #expect(state.openSettingsRequest == 2)
+
+            for arguments in [
+                ["Widen"],
+                ["Widen", "-WidenDebugOpenSettingsTab"],
+                ["Widen", "-WidenDebugOpenSettingsTab", "privacy"],
+            ] {
+                state.openDebugSettingsTab(from: arguments)
+            }
+            #expect(state.settingsTab == .databases)
+            #expect(state.openSettingsRequest == 2)
+        }
+    #endif
+
+    @Test func launchWithUnreadableSessionsNamesTheBackupInTheBanner() async throws {
+        let (state, dir) = makeState()
+        defer { try? FileManager.default.removeItem(at: dir) }
+        try FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
+        try Data("not json".utf8).write(to: state.sessionStore.fileURL)
+
+        await state.onLaunch()
+
+        let backup = try #require(
+            FileManager.default.contentsOfDirectory(atPath: dir.path)
+                .first { $0.hasPrefix("sessions.unreadable-") }
+        )
+        #expect(state.sessions.isEmpty)
+        #expect(state.errorBanner?.contains(backup) == true)
     }
 
     @Test func launchWithNoDatabasesLeavesWelcomeState() async {

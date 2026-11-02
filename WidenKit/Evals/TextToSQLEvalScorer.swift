@@ -136,10 +136,12 @@ public enum TextToSQLEvalCaseRunner {
             lock.withLock {
                 usage.httpAttemptCount += event.httpAttemptCount
                 Self.add(event.promptTokens, to: &usage.promptTokens)
+                Self.add(event.cachedPromptTokens, to: &usage.cachedPromptTokens)
                 Self.add(event.completionTokens, to: &usage.completionTokens)
                 Self.add(event.reasoningTokens, to: &usage.reasoningTokens)
                 Self.add(event.totalTokens, to: &usage.totalTokens)
                 Self.add(event.costUSD, to: &usage.costUSD)
+                usage.costSource = CloudCostSource.combined(usage.costSource, event.costSource)
             }
         }
 
@@ -255,13 +257,18 @@ public enum TextToSQLEvalCaseRunner {
         }
     }
 
+    /// The longest timeout sleep: one year. On the macOS 15 concurrency
+    /// runtime, `Task.sleep(nanoseconds: UInt64.max)` returns at once, which
+    /// timed out cases immediately; a year is still longer than any case.
+    private static let maximumTimeoutNanoseconds: UInt64 = 365 * 24 * 60 * 60 * 1_000_000_000
+
     private static func timeoutDuration(for timeoutSeconds: Double) -> (
         seconds: Double, nanoseconds: UInt64
     ) {
         let seconds = timeoutSeconds.isFinite && timeoutSeconds > 0 ? timeoutSeconds : 120
         let nanoseconds = seconds * 1_000_000_000
-        guard nanoseconds < Double(UInt64.max) else {
-            return (seconds, UInt64.max)
+        guard nanoseconds < Double(maximumTimeoutNanoseconds) else {
+            return (seconds, maximumTimeoutNanoseconds)
         }
         return (seconds, UInt64(max(1.0, nanoseconds)))
     }
@@ -302,6 +309,8 @@ public enum TextToSQLEvalCaseRunner {
                     latencyMs: elapsedMilliseconds(since: started),
                     trace: run.trace
                 )
+                .recordingWithheldSQL(run.groundingWithheldSQL)
+                .recordingGroundingJudgeDivergence(run.groundingJudgeDivergence, evalCase: evalCase)
             case .failed(let failure):
                 return pipelineFailureResult(
                     evalCase: evalCase,
@@ -310,6 +319,7 @@ public enum TextToSQLEvalCaseRunner {
                     latencyMs: elapsedMilliseconds(since: started),
                     trace: run.trace
                 )
+                .recordingGroundingJudgeDivergence(run.groundingJudgeDivergence, evalCase: evalCase)
             }
         } catch is CancellationError {
             return cancellationResult(
@@ -355,8 +365,9 @@ public enum TextToSQLEvalCaseRunner {
                     ? observedUsage.httpAttemptCount : nil,
                 estimatedInitialPromptCharacters: options.estimatedInitialPromptCharacters,
                 tokenUsage: observedUsage.totalTokens,
-                estimatedCloudCostUSD: observedUsage.costUSD
-            ),
+                estimatedCloudCostUSD: observedUsage.costUSD,
+                estimatedCloudCostSource: observedUsage.costSource
+            ).withTokenBreakdown(observedUsage),
             diagnostics: TextToSQLEvalDiagnostics(
                 errorMessage:
                     "Eval case \(evalCase.id) timed out after \(timeoutSeconds) seconds."
@@ -388,8 +399,9 @@ public enum TextToSQLEvalCaseRunner {
                 },
                 estimatedInitialPromptCharacters: options.estimatedInitialPromptCharacters,
                 tokenUsage: observedUsage?.totalTokens,
-                estimatedCloudCostUSD: observedUsage?.costUSD
-            ),
+                estimatedCloudCostUSD: observedUsage?.costUSD,
+                estimatedCloudCostSource: observedUsage?.costSource
+            ).withTokenBreakdown(observedUsage),
             diagnostics: TextToSQLEvalDiagnostics(
                 errorMessage: "Eval case \(evalCase.id) was cancelled."
             ),
@@ -406,10 +418,10 @@ public enum TextToSQLEvalCaseRunner {
         let typed = SQLGenerationFailure.typed(error)
         let status = typed.map(status(for:)) ?? .transportFailure
         let budgetSkipped = status == .skippedBudgetLimit
-        let openRouterDiagnostic: OpenRouterFailureDiagnostic?
-        let backendMetadata: OpenRouterGenerationMetadata?
+        let openRouterDiagnostic: CloudRequestFailureDiagnostic?
+        let backendMetadata: CloudGenerationMetadata?
         let trace: TextToSQLTrace?
-        if let typed, case .openRouter(let failure) = typed {
+        if let typed, case .cloudRequest(let failure) = typed {
             openRouterDiagnostic = failure.diagnostic
             backendMetadata = nil
             trace = nil
@@ -418,7 +430,7 @@ public enum TextToSQLEvalCaseRunner {
             backendMetadata = failure.backendMetadata
             trace = nil
         } else if let typed, case .schemaToolAgent(let failure) = typed {
-            openRouterDiagnostic = failure.openRouterFailure?.diagnostic
+            openRouterDiagnostic = failure.cloudFailure?.diagnostic
             backendMetadata = failure.backendMetadata
             trace = agentFailureTrace(failure, latencyMs: latencyMs)
         } else {
@@ -459,6 +471,10 @@ public enum TextToSQLEvalCaseRunner {
                 tokenUsage: backendMetadata?.totalTokens ?? openRouterDiagnostic?.totalTokens,
                 estimatedCloudCostUSD: backendMetadata?.costUSD
                     ?? openRouterDiagnostic?.costUSD,
+                estimatedCloudCostSource: costSource(
+                    metadata: backendMetadata,
+                    failure: openRouterDiagnostic
+                ),
                 openRouterStructuredOutputMode: backendMetadata?.structuredOutputMode.rawValue,
                 openRouterRetryCount: backendMetadata?.retryCount
                     ?? openRouterDiagnostic.map { max(0, $0.attemptCount - 1) },
@@ -468,7 +484,8 @@ public enum TextToSQLEvalCaseRunner {
                     ?? openRouterDiagnostic?.returnedModelID,
                 openRouterProviderName: backendMetadata?.providerName
                     ?? openRouterDiagnostic?.providerName
-            ).withOpenRouterAgentMetadata(backendMetadata, trace: trace),
+            ).withOpenRouterAgentMetadata(backendMetadata, trace: trace)
+                .withTokenBreakdown(backendMetadata, failure: openRouterDiagnostic),
             diagnostics: TextToSQLEvalDiagnostics(
                 errorMessage: error.localizedDescription,
                 openRouterFailure: openRouterDiagnostic
@@ -528,6 +545,10 @@ public enum TextToSQLEvalCaseRunner {
                     ?? failure.openRouterFailure?.totalTokens,
                 estimatedCloudCostUSD: backendMetadata?.costUSD
                     ?? failure.openRouterFailure?.costUSD,
+                estimatedCloudCostSource: costSource(
+                    metadata: backendMetadata,
+                    failure: failure.openRouterFailure
+                ),
                 openRouterStructuredOutputMode: backendMetadata?.structuredOutputMode.rawValue,
                 openRouterRetryCount: backendMetadata?.retryCount
                     ?? failure.openRouterFailure.map { max(0, $0.attemptCount - 1) },
@@ -538,6 +559,7 @@ public enum TextToSQLEvalCaseRunner {
                 openRouterProviderName: backendMetadata?.providerName
                     ?? failure.openRouterFailure?.providerName
             ).withOpenRouterAgentMetadata(backendMetadata, trace: trace)
+                .withTokenBreakdown(backendMetadata, failure: failure.openRouterFailure)
                 .withPostgresVerification(verificationSnapshot),
             diagnostics: TextToSQLEvalDiagnostics(
                 errorMessage: failure.localizedDescription,
@@ -551,8 +573,8 @@ public enum TextToSQLEvalCaseRunner {
 
     private static func failureModelCallCount(
         trace: TextToSQLTrace,
-        openRouterFailure: OpenRouterFailureDiagnostic?,
-        backendMetadata: OpenRouterGenerationMetadata? = nil
+        openRouterFailure: CloudRequestFailureDiagnostic?,
+        backendMetadata: CloudGenerationMetadata? = nil
     ) -> Int? {
         if let agentAttemptCount = backendMetadata?.agentHTTPAttemptCount {
             // Pipeline aggregation makes the agent total cumulative across
@@ -572,8 +594,17 @@ public enum TextToSQLEvalCaseRunner {
         return trace.modelCalls + max(0, attemptCount - 1)
     }
 
+    /// The source of the cost a failure result records, which is the
+    /// metadata's cost when it has one and the request failure's otherwise.
+    private static func costSource(
+        metadata: CloudGenerationMetadata?,
+        failure: CloudRequestFailureDiagnostic?
+    ) -> String? {
+        metadata?.costUSD != nil ? metadata?.costSource : failure?.costSource
+    }
+
     private static func agentFailureTrace(
-        _ failure: OpenRouterSchemaToolAgentFailure,
+        _ failure: SchemaToolAgentFailure,
         latencyMs: Int
     ) -> TextToSQLTrace? {
         guard !failure.schemaToolCalls.isEmpty || !failure.inspectionToolCalls.isEmpty else {
@@ -590,12 +621,12 @@ public enum TextToSQLEvalCaseRunner {
 
     private static func status(for failure: SQLGenerationFailure) -> TextToSQLEvalCaseStatus {
         switch failure {
-        case .openRouter(let failure):
+        case .cloudRequest(let failure):
             return status(for: failure.category) ?? status(for: failure.pipelineCategory)
         case .httpBudgetExhausted:
             return .skippedBudgetLimit
         case .schemaToolAgent(let failure):
-            if let status = failure.openRouterFailure.flatMap({ status(for: $0.category) }) {
+            if let status = failure.cloudFailure.flatMap({ status(for: $0.category) }) {
                 return status
             }
             return status(for: failure.pipelineCategory)
@@ -606,7 +637,7 @@ public enum TextToSQLEvalCaseRunner {
     }
 
     private static func status(
-        for category: OpenRouterFailure.Category
+        for category: CloudRequestFailure.Category
     ) -> TextToSQLEvalCaseStatus? {
         switch category {
         case .paymentRequired:
@@ -697,12 +728,14 @@ public enum TextToSQLEvalScorer {
                     estimatedInitialPromptCharacters: options.estimatedInitialPromptCharacters,
                     tokenUsage: backendMetadata?.totalTokens,
                     estimatedCloudCostUSD: backendMetadata?.costUSD,
+                    estimatedCloudCostSource: backendMetadata?.costSource,
                     openRouterStructuredOutputMode: backendMetadata?.structuredOutputMode.rawValue,
                     openRouterRetryCount: backendMetadata?.retryCount,
                     openRouterRequestedModelID: backendMetadata?.requestedModelID,
                     openRouterReturnedModelID: backendMetadata?.returnedModelID,
                     openRouterProviderName: backendMetadata?.providerName
                 ).withOpenRouterAgentMetadata(backendMetadata, trace: trace)
+                    .withTokenBreakdown(backendMetadata)
                     .withPostgresVerification(verificationSnapshot),
                 diagnostics: TextToSQLEvalDiagnostics(),
                 generatedSQL: generation.sql.nilIfBlank,
@@ -734,12 +767,14 @@ public enum TextToSQLEvalScorer {
                     estimatedInitialPromptCharacters: options.estimatedInitialPromptCharacters,
                     tokenUsage: backendMetadata?.totalTokens,
                     estimatedCloudCostUSD: backendMetadata?.costUSD,
+                    estimatedCloudCostSource: backendMetadata?.costSource,
                     openRouterStructuredOutputMode: backendMetadata?.structuredOutputMode.rawValue,
                     openRouterRetryCount: backendMetadata?.retryCount,
                     openRouterRequestedModelID: backendMetadata?.requestedModelID,
                     openRouterReturnedModelID: backendMetadata?.returnedModelID,
                     openRouterProviderName: backendMetadata?.providerName
                 ).withOpenRouterAgentMetadata(backendMetadata, trace: trace)
+                    .withTokenBreakdown(backendMetadata)
                     .withPostgresVerification(verificationSnapshot),
                 generatedSQL: generation.sql.nilIfBlank,
                 clarificationQuestion: generation.clarificationQuestion,
@@ -769,12 +804,14 @@ public enum TextToSQLEvalScorer {
                     estimatedInitialPromptCharacters: options.estimatedInitialPromptCharacters,
                     tokenUsage: backendMetadata?.totalTokens,
                     estimatedCloudCostUSD: backendMetadata?.costUSD,
+                    estimatedCloudCostSource: backendMetadata?.costSource,
                     openRouterStructuredOutputMode: backendMetadata?.structuredOutputMode.rawValue,
                     openRouterRetryCount: backendMetadata?.retryCount,
                     openRouterRequestedModelID: backendMetadata?.requestedModelID,
                     openRouterReturnedModelID: backendMetadata?.returnedModelID,
                     openRouterProviderName: backendMetadata?.providerName
                 ).withOpenRouterAgentMetadata(backendMetadata, trace: trace)
+                    .withTokenBreakdown(backendMetadata)
                     .withPostgresVerification(verificationSnapshot),
                 diagnostics: TextToSQLEvalDiagnostics(safetyErrors: safety.errors),
                 generatedSQL: generation.sql.nilIfBlank,
@@ -848,12 +885,14 @@ public enum TextToSQLEvalScorer {
                 estimatedInitialPromptCharacters: options.estimatedInitialPromptCharacters,
                 tokenUsage: backendMetadata?.totalTokens,
                 estimatedCloudCostUSD: backendMetadata?.costUSD,
+                estimatedCloudCostSource: backendMetadata?.costSource,
                 openRouterStructuredOutputMode: backendMetadata?.structuredOutputMode.rawValue,
                 openRouterRetryCount: backendMetadata?.retryCount,
                 openRouterRequestedModelID: backendMetadata?.requestedModelID,
                 openRouterReturnedModelID: backendMetadata?.returnedModelID,
                 openRouterProviderName: backendMetadata?.providerName
             ).withOpenRouterAgentMetadata(backendMetadata, trace: trace)
+                    .withTokenBreakdown(backendMetadata)
                     .withPostgresVerification(verificationSnapshot),
             diagnostics: TextToSQLEvalDiagnostics(
                 missingTables: missingTables,
@@ -892,7 +931,7 @@ public enum TextToSQLEvalScorer {
         return Double(total - missing) / Double(total)
     }
 
-    private static func clarificationQuality(
+    static func clarificationQuality(
         _ value: String?,
         mustMentionAny configuredConcepts: [String]
     ) -> Bool {
@@ -1291,7 +1330,7 @@ private struct EvalPostgresVerificationSnapshot {
 
 private extension TextToSQLEvalMetrics {
     func withOpenRouterAgentMetadata(
-        _ metadata: OpenRouterGenerationMetadata?,
+        _ metadata: CloudGenerationMetadata?,
         trace: TextToSQLTrace?
     ) -> TextToSQLEvalMetrics {
         var copy = self
@@ -1311,6 +1350,44 @@ private extension TextToSQLEvalMetrics {
             ?? metadata?.agentInspectionToolCallCount
         copy.openRouterAgentTerminalOutcome = metadata?.agentTerminalOutcome
         copy.openRouterAgentDiagnostics = metadata?.agentDiagnostics
+        return copy
+    }
+
+    /// Records the token breakdown from `metadata` when it reported usage
+    /// and from `failure` otherwise, so the counts never mix a generation's
+    /// totals with those of the single request that failed.
+    func withTokenBreakdown(
+        _ metadata: CloudGenerationMetadata?,
+        failure: CloudRequestFailureDiagnostic? = nil
+    ) -> TextToSQLEvalMetrics {
+        var copy = self
+        if let metadata,
+            metadata.promptTokens != nil
+                || metadata.completionTokens != nil
+                || metadata.totalTokens != nil
+        {
+            copy.promptTokens = metadata.promptTokens
+            copy.cachedPromptTokens = metadata.cachedPromptTokens
+            copy.completionTokens = metadata.completionTokens
+            copy.reasoningTokens = metadata.reasoningTokens
+        } else if let failure {
+            copy.promptTokens = failure.promptTokens
+            copy.cachedPromptTokens = failure.cachedPromptTokens
+            copy.completionTokens = failure.completionTokens
+            copy.reasoningTokens = failure.reasoningTokens
+        }
+        return copy
+    }
+
+    /// Records the token breakdown observed before a case timed out or was
+    /// cancelled.
+    func withTokenBreakdown(_ usage: SQLGenerationUsageEvent?) -> TextToSQLEvalMetrics {
+        guard let usage else { return self }
+        var copy = self
+        copy.promptTokens = usage.promptTokens
+        copy.cachedPromptTokens = usage.cachedPromptTokens
+        copy.completionTokens = usage.completionTokens
+        copy.reasoningTokens = usage.reasoningTokens
         return copy
     }
 

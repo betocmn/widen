@@ -3,12 +3,12 @@ import Foundation
 /// Deterministically extracts connection fields from a `postgres://` or
 /// `postgresql://` URL found in pasted text.
 ///
-/// A connection URL has a fixed structure, so it is parsed in code rather than
-/// handed to the on-device model — the small model sometimes truncates a
-/// dotted username (e.g. Supabase's `postgres.<project-ref>`) or mis-splits the
-/// password. Parsing is done by hand instead of with `URLComponents` because
-/// real-world Postgres passwords often contain unencoded `@`, `/`, or `:`,
-/// which make `URL(string:)` return nil or split in the wrong place.
+/// A connection URL has a fixed structure, so it is parsed in code and never
+/// handed to a model; pasted text can contain credentials. Parsing is done by
+/// hand instead of with `URLComponents` because real-world Postgres passwords
+/// often contain unencoded `@`, `/`, or `:`, which make `URL(string:)` return
+/// nil or split in the wrong place, and a dotted username (e.g. Supabase's
+/// `postgres.<project-ref>`) must survive intact.
 public enum ConnectionURLParser {
     /// Extracts the fields of the first connection URL in `text`, or nil when
     /// the text contains no recognizable `postgres`/`postgresql` URL.

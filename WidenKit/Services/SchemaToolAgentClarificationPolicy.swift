@@ -43,7 +43,7 @@ public enum SchemaToolAgentAnswerabilityPolicy {
     public static func evaluate(
         originalQuestion: String,
         databaseContext: String,
-        evidence: OpenRouterSchemaToolEvidenceSummary,
+        evidence: SchemaToolEvidenceSummary,
         terminalAction: String,
         terminalClarificationQuestion: String
     ) -> SchemaToolAgentClarificationPolicyResult {
@@ -59,7 +59,7 @@ public enum SchemaToolAgentAnswerabilityPolicy {
     public static func answerableWithSQL(
         question: String,
         databaseContext: String,
-        evidence: OpenRouterSchemaToolEvidenceSummary
+        evidence: SchemaToolEvidenceSummary
     ) -> Bool {
         SchemaToolAgentClarificationPolicy.evidenceSufficientForSQL(
             question: question,
@@ -73,7 +73,7 @@ public enum SchemaToolAgentClarificationPolicy {
     public static func evaluate(
         originalQuestion: String,
         databaseContext: String,
-        evidence: OpenRouterSchemaToolEvidenceSummary,
+        evidence: SchemaToolEvidenceSummary,
         terminalAction: String,
         terminalClarificationQuestion: String
     ) -> SchemaToolAgentClarificationPolicyResult {
@@ -191,7 +191,7 @@ public enum SchemaToolAgentClarificationPolicy {
     public static func evidenceSufficientForSQL(
         question: String,
         databaseContextFactKinds: [String],
-        evidence: OpenRouterSchemaToolEvidenceSummary
+        evidence: SchemaToolEvidenceSummary
     ) -> Bool {
         guard evidence.searched,
             !evidence.describedTableIDs.isEmpty,
@@ -231,7 +231,7 @@ public enum SchemaToolAgentClarificationPolicy {
     public static func evidenceSufficientForSQL(
         question: String,
         databaseContext: String,
-        evidence: OpenRouterSchemaToolEvidenceSummary
+        evidence: SchemaToolEvidenceSummary
     ) -> Bool {
         evidenceSufficientForSQL(
             question: question,
@@ -247,7 +247,7 @@ public enum SchemaToolAgentClarificationPolicy {
     private static func isConcreteAmbiguityProtected(
         question: String,
         contextFactKinds: [String],
-        evidence: OpenRouterSchemaToolEvidenceSummary,
+        evidence: SchemaToolEvidenceSummary,
         unresolvedKinds: [SchemaToolAgentUnresolvedDecisionKind]
     ) -> Bool {
         let contextFacts = Set(contextFactKinds)
@@ -434,7 +434,7 @@ public enum SchemaToolAgentClarificationPolicy {
 
     private static func hasStatusOrBooleanSupport(
         pattern: SQLPatternSignals,
-        evidence: OpenRouterSchemaToolEvidenceSummary
+        evidence: SchemaToolEvidenceSummary
     ) -> Bool {
         let columnNames = evidence.exposedColumnIDs.compactMap(lastSQLPathComponent).map { $0.lowercased() }
         guard !columnNames.isEmpty else { return false }
@@ -454,11 +454,11 @@ public enum SchemaToolAgentClarificationPolicy {
         }
     }
 
-    private static func hasDateOrTimeColumn(_ evidence: OpenRouterSchemaToolEvidenceSummary) -> Bool {
+    private static func hasDateOrTimeColumn(_ evidence: SchemaToolEvidenceSummary) -> Bool {
         dateOrTimeColumnCount(evidence) > 0
     }
 
-    private static func dateOrTimeColumnCount(_ evidence: OpenRouterSchemaToolEvidenceSummary) -> Int {
+    private static func dateOrTimeColumnCount(_ evidence: SchemaToolEvidenceSummary) -> Int {
         evidence.exposedColumnIDs.filter { column in
             let name = lastSQLPathComponent(column) ?? column
             let lower = name.lowercased()
@@ -473,7 +473,7 @@ public enum SchemaToolAgentClarificationPolicy {
         }.count
     }
 
-    private static func hasMissingRowsSupport(_ evidence: OpenRouterSchemaToolEvidenceSummary) -> Bool {
+    private static func hasMissingRowsSupport(_ evidence: SchemaToolEvidenceSummary) -> Bool {
         if !evidence.exposedForeignKeyPathIDs.isEmpty { return true }
         return evidence.exposedColumnIDs.contains { column in
             let lower = (lastSQLPathComponent(column) ?? column).lowercased()

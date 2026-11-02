@@ -1121,9 +1121,12 @@ struct QueryExecutionIntegrationTests {
 
 @Suite("Semantic eval database integration", .enabled(if: integrationEnabled), .serialized)
 struct TextToSQLSemanticDatabaseIntegrationTests {
-    @Test func fixturesMatchSchemaAndNegativeControlsFailEquivalence() async throws {
+    /// The release suite and the held-out grounding probe share the seeded
+    /// fixture databases.
+    @Test(arguments: ["Evals/suites/text-to-sql-v1.json", "Evals/suites/grounding-probe-v1.json"])
+    func fixturesMatchSchemaAndNegativeControlsFailEquivalence(suitePath: String) async throws {
         let root = repositoryRoot()
-        let suiteURL = root.appendingPathComponent("Evals/suites/text-to-sql-v1.json")
+        let suiteURL = root.appendingPathComponent(suitePath)
         let suiteData = try Data(contentsOf: suiteURL)
         let suite = try JSONDecoder().decode(TextToSQLEvalSuite.self, from: suiteData)
         let schemaDirectory = root.appendingPathComponent("Evals/schemas", isDirectory: true)

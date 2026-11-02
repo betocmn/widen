@@ -47,4 +47,60 @@ struct EvalReportRedactionTests {
         let message = "No endpoints found matching your data policy (Zero data retention)."
         #expect(EvalReportRedaction.redactedProviderMessage(message) == message)
     }
+
+    @Test func redactsParticleKeyTokens() {
+        let redacted = EvalReportRedaction.redactedProviderMessage(
+            "Key pai-Ab3dEf9h_IjKl-MnOpQrStUv rejected; quoted \"pai-0123456789abcdef\" too"
+        )
+        #expect(!redacted.contains("pai-"))
+        #expect(redacted == "Key [redacted-key] rejected; quoted \"[redacted-key]\" too")
+    }
+
+    @Test func redactsBearerCredentials() {
+        let redacted = EvalReportRedaction.redactedProviderMessage(
+            "Sent Authorization: Bearer pai-Ab3dEf9hIjKlMnOp and bearer sk-short"
+        )
+        #expect(!redacted.contains("pai-"))
+        #expect(!redacted.contains("sk-short"))
+        #expect(redacted == "Sent Authorization: [redacted-key] and [redacted-key]")
+    }
+
+    @Test func redactsParticleURLsWithAndWithoutScheme() {
+        let schemeless = EvalReportRedaction.redactedProviderMessage(
+            "Add credits at platform.particle.ai/settings/keys before retrying"
+        )
+        #expect(schemeless == "Add credits at [redacted-url] before retrying")
+        let bareDomain = EvalReportRedaction.redactedProviderMessage(
+            "See PARTICLE.AI/docs/errors"
+        )
+        #expect(bareDomain == "See [redacted-url]")
+        let withScheme = EvalReportRedaction.redactedProviderMessage(
+            "POST https://api.particle.ai/v1/chat/completions failed"
+        )
+        #expect(withScheme == "POST [redacted-url] failed")
+    }
+
+    @Test func leavesParticleModelIDsAndBareHostUntouched() {
+        let message =
+            "Model particle-ai/particle-1 (requested particle-1) answered from api.particle.ai."
+        #expect(EvalReportRedaction.redactedProviderMessage(message) == message)
+        let errorCode = "invalid_bearer_credential: insufficient_credits"
+        #expect(EvalReportRedaction.redactedProviderMessage(errorCode) == errorCode)
+    }
+
+    @Test func evalReporterRedactsDiagnosticErrorMessages() throws {
+        let reporter = URL(fileURLWithPath: #filePath)
+            .deletingLastPathComponent()
+            .deletingLastPathComponent()
+            .appendingPathComponent("WidenEval/EvalReporter.swift")
+        let source = try String(contentsOf: reporter, encoding: .utf8)
+        let start = try #require(
+            source.range(of: "private static func diagnosticsSummary(")
+        )
+        let body = String(source[start.lowerBound...])
+
+        #expect(body.contains("if let error = result.diagnostics.errorMessage {"))
+        #expect(body.contains("parts.append(EvalReportRedaction.redactedProviderMessage(error))"))
+        #expect(!body.contains("parts.append(error)"))
+    }
 }

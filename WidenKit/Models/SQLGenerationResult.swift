@@ -119,11 +119,16 @@ public struct SQLGenerationResult: Codable, Equatable, Sendable {
     public var clarificationQuestion: String?
     public var generationSchemaName: String?
     public var generationCallCount: Int?
+    /// Logical generator invocations this request has spent, counting the
+    /// first generation and each repair as one however many HTTP attempts it
+    /// made. Set by the caller that invoked the generator, never by the
+    /// generator itself. Nil on generations saved by older builds.
+    public var generatorInvocationCount: Int?
     public var groundingConcepts: [SQLGroundingConcept]
     public var clarificationOptions: [ClarificationOption]
     public var pendingClarificationID: UUID?
     public var pendingClarification: PendingClarification?
-    public var backendMetadata: OpenRouterGenerationMetadata?
+    public var backendMetadata: CloudGenerationMetadata?
     public var schemaToolCalls: [SchemaToolCallTrace]
     public var inspectionToolCalls: [DatabaseInspectionToolCallTrace]
 
@@ -138,6 +143,7 @@ public struct SQLGenerationResult: Codable, Equatable, Sendable {
         case clarificationQuestion
         case generationSchemaName
         case generationCallCount
+        case generatorInvocationCount
         case groundingConcepts
         case clarificationOptions
         case pendingClarificationID
@@ -158,11 +164,12 @@ public struct SQLGenerationResult: Codable, Equatable, Sendable {
         clarificationQuestion: String?,
         generationSchemaName: String? = nil,
         generationCallCount: Int? = nil,
+        generatorInvocationCount: Int? = nil,
         groundingConcepts: [SQLGroundingConcept] = [],
         clarificationOptions: [ClarificationOption] = [],
         pendingClarificationID: UUID? = nil,
         pendingClarification: PendingClarification? = nil,
-        backendMetadata: OpenRouterGenerationMetadata? = nil,
+        backendMetadata: CloudGenerationMetadata? = nil,
         schemaToolCalls: [SchemaToolCallTrace] = [],
         inspectionToolCalls: [DatabaseInspectionToolCallTrace] = []
     ) {
@@ -176,6 +183,7 @@ public struct SQLGenerationResult: Codable, Equatable, Sendable {
         self.clarificationQuestion = clarificationQuestion
         self.generationSchemaName = generationSchemaName
         self.generationCallCount = generationCallCount
+        self.generatorInvocationCount = generatorInvocationCount
         self.groundingConcepts = groundingConcepts
         self.clarificationOptions = clarificationOptions
         self.pendingClarificationID = pendingClarificationID
@@ -206,6 +214,12 @@ public struct SQLGenerationResult: Codable, Equatable, Sendable {
             Int.self,
             forKey: .generationCallCount
         )
+        // Repair accounting only: an unreadable count reads as a legacy
+        // generation, which spends one invocation.
+        generatorInvocationCount = try? container.decodeIfPresent(
+            Int.self,
+            forKey: .generatorInvocationCount
+        )
         groundingConcepts = try container.decodeIfPresent(
             [SQLGroundingConcept].self,
             forKey: .groundingConcepts
@@ -222,18 +236,21 @@ public struct SQLGenerationResult: Codable, Equatable, Sendable {
             PendingClarification.self,
             forKey: .pendingClarification
         )
-        backendMetadata = try container.decodeIfPresent(
-            OpenRouterGenerationMetadata.self,
+        // Diagnostics only: a value this build can't read (say, an enum case
+        // written by a newer build) drops the diagnostics, never the whole
+        // saved session.
+        backendMetadata = try? container.decodeIfPresent(
+            CloudGenerationMetadata.self,
             forKey: .backendMetadata
         )
-        schemaToolCalls = try container.decodeIfPresent(
+        schemaToolCalls = (try? container.decodeIfPresent(
             [SchemaToolCallTrace].self,
             forKey: .schemaToolCalls
-        ) ?? []
-        inspectionToolCalls = try container.decodeIfPresent(
+        )) ?? []
+        inspectionToolCalls = (try? container.decodeIfPresent(
             [DatabaseInspectionToolCallTrace].self,
             forKey: .inspectionToolCalls
-        ) ?? []
+        )) ?? []
     }
 
     public func encode(to encoder: any Encoder) throws {
@@ -248,6 +265,7 @@ public struct SQLGenerationResult: Codable, Equatable, Sendable {
         try container.encodeIfPresent(clarificationQuestion, forKey: .clarificationQuestion)
         try container.encodeIfPresent(generationSchemaName, forKey: .generationSchemaName)
         try container.encodeIfPresent(generationCallCount, forKey: .generationCallCount)
+        try container.encodeIfPresent(generatorInvocationCount, forKey: .generatorInvocationCount)
         if !groundingConcepts.isEmpty {
             try container.encode(groundingConcepts, forKey: .groundingConcepts)
         }
@@ -278,18 +296,32 @@ extension SQLGenerationResult {
         confidence: \(confidence) · risk: \(riskLevel.rawValue) · needsClarification: \(needsClarification)
         clarificationQuestion: \(clarificationQuestion ?? "-")
         generationCallCount: \(generationCallCount.map(String.init) ?? "-")
+        generatorInvocationCount: \(generatorInvocationCount.map(String.init) ?? "-")
         groundingConcepts: \(groundingConcepts.map { "\($0.term):\($0.state.rawValue)" }.joined(separator: ", "))
         """
+    }
+}
+
+extension SQLGenerationResult {
+    /// A copy stamped with the caller's count of logical generator
+    /// invocations for this request.
+    func withGeneratorInvocationCount(_ count: Int) -> SQLGenerationResult {
+        var copy = self
+        copy.generatorInvocationCount = count
+        return copy
     }
 }
 
 struct SQLGenerationUsageEvent: Equatable, Sendable {
     var httpAttemptCount: Int
     var promptTokens: Int?
+    var cachedPromptTokens: Int?
     var completionTokens: Int?
     var reasoningTokens: Int?
     var totalTokens: Int?
     var costUSD: Double?
+    /// A `CloudCostSource` raw value.
+    var costSource: String?
 
     static func httpAttempts(_ count: Int) -> SQLGenerationUsageEvent {
         SQLGenerationUsageEvent(

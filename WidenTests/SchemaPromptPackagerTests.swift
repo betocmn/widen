@@ -5,6 +5,17 @@ import Testing
 
 @Suite("Schema prompt packager")
 struct SchemaPromptPackagerTests {
+    @Test func promptTokenEstimatorRoundsCharactersUpToWholeTokens() {
+        #expect(PromptTokenEstimator.charactersPerToken == 3)
+        #expect(PromptTokenEstimator.envelopeOverheadTokens == 320)
+        #expect(PromptTokenEstimator.tokens(forCharacters: -5) == 0)
+        #expect(PromptTokenEstimator.tokens(forCharacters: 0) == 0)
+        #expect(PromptTokenEstimator.tokens(forCharacters: 1) == 1)
+        #expect(PromptTokenEstimator.tokens(forCharacters: 3) == 1)
+        #expect(PromptTokenEstimator.tokens(forCharacters: 4) == 2)
+        #expect(PromptTokenEstimator.tokens(forCharacters: 3_000) == 1_000)
+    }
+
     @Test func missingMatchBatchRanksPreseasonMatchBatchFirst() {
         let schema = makePreseasonSchema(extraTables: 20)
         let diagnostic = DatabaseDiagnostic(
@@ -415,19 +426,23 @@ struct SchemaPromptPackagerTests {
         #expect(package.diagnostics.compressionLevel != .full)
     }
 
-    @Test func schemaDiscoverySearchFindsWinningToolTables() {
+    @Test func schemaRankingFindsWinningToolTables() {
         let schema = makeWinningToolSchema(extraTables: 30)
-        let tables = SchemaDiscoveryService.search(
+        let tables = SchemaRelevanceRanker.rank(
             schema: schema,
-            queries: ["winning tools last two weeks match evaluation winner_id createdAt"],
-            limit: 5
-        ).map(\.qualifiedName)
+            input: SchemaRankingInput(
+                question: "winning tools last two weeks match evaluation winner_id createdAt"
+            )
+        )
+        .filter { $0.score > 0 }
+        .prefix(5)
+        .map(\.table.qualifiedName)
 
         #expect(tables.contains("public.preseason_match_evaluation"))
         #expect(tables.contains("public.preseason_tool"))
     }
 
-    @Test func schemaRankingAndSearchUseConstrainedValues() {
+    @Test func schemaRankingUsesConstrainedValues() {
         let schema = DatabaseSchema(
             schemas: [SchemaInfo(name: "public")],
             tables: [
@@ -469,11 +484,13 @@ struct SchemaPromptPackagerTests {
             schema: schema,
             input: SchemaRankingInput(question: "count approved")
         )
-        let searchResults = SchemaDiscoveryService.search(
+        let searchResults = SchemaRelevanceRanker.rank(
             schema: schema,
-            queries: ["approved"],
-            limit: 2
-        ).map(\.qualifiedName)
+            input: SchemaRankingInput(question: "approved")
+        )
+        .filter { $0.score > 0 }
+        .prefix(2)
+        .map(\.table.qualifiedName)
 
         #expect(ranked.first?.table.qualifiedName == "public.review_queue")
         #expect(searchResults.contains("public.review_queue"))

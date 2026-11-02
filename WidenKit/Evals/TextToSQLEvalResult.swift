@@ -1,8 +1,28 @@
 import Foundation
 
 public enum TextToSQLEvalBackend: String, Codable, CaseIterable, Equatable, Sendable {
-    case local
     case cloud
+
+    public static let removedOnDeviceBackendMessage =
+        "Eval results from the removed on-device backend (\"local\") cannot be resumed or triaged."
+
+    public init(from decoder: any Decoder) throws {
+        let container = try decoder.singleValueContainer()
+        let rawValue = try container.decode(String.self)
+        if let backend = Self(rawValue: rawValue) {
+            self = backend
+        } else if rawValue == "local" {
+            throw DecodingError.dataCorruptedError(
+                in: container,
+                debugDescription: Self.removedOnDeviceBackendMessage
+            )
+        } else {
+            throw DecodingError.dataCorruptedError(
+                in: container,
+                debugDescription: "Unknown eval backend \"\(rawValue)\"."
+            )
+        }
+    }
 }
 
 public enum TextToSQLEvalCaseStatus: String, Codable, CaseIterable, Equatable, Sendable {
@@ -50,7 +70,20 @@ public struct TextToSQLEvalMetrics: Codable, Equatable, Sendable {
     public var modelCallCount: Int?
     public var estimatedInitialPromptCharacters: Int?
     public var tokenUsage: Int?
+    /// The token counts behind `tokenUsage`. Nil when the provider did not
+    /// report them, and in results written before they were recorded.
+    public var promptTokens: Int?
+    /// Prompt tokens served from the provider's prompt cache.
+    public var cachedPromptTokens: Int?
+    public var completionTokens: Int?
+    /// Reasoning tokens, which are billed and counted as completion tokens.
+    public var reasoningTokens: Int?
     public var estimatedCloudCostUSD: Double?
+    /// A `CloudCostSource` raw value for `estimatedCloudCostUSD`: `reported`
+    /// by the provider, or `estimatedPeakList` from token prices (an upper
+    /// bound). Nil when no cost was recorded, and in results written before
+    /// the source was recorded.
+    public var estimatedCloudCostSource: String?
     public var openRouterStructuredOutputMode: String?
     public var openRouterRetryCount: Int?
     public var openRouterRequestedModelID: String?
@@ -62,7 +95,7 @@ public struct TextToSQLEvalMetrics: Codable, Equatable, Sendable {
     public var openRouterSchemaToolCallCount: Int?
     public var openRouterInspectionToolCallCount: Int?
     public var openRouterAgentTerminalOutcome: String?
-    public var openRouterAgentDiagnostics: OpenRouterSchemaToolAgentDiagnostics?
+    public var openRouterAgentDiagnostics: SchemaToolAgentDiagnostics?
     public var postgresVerificationStatus: SQLVerificationStatus?
     public var postgresVerificationSQLState: String?
     public var postgresVerificationDiagnosticKind: DatabaseDiagnosticKind?
@@ -82,6 +115,45 @@ public struct TextToSQLEvalMetrics: Codable, Equatable, Sendable {
     public var goldenResultDigest: String?
     public var candidateResultDigest: String?
     public var semanticMismatchCategory: String?
+    /// True when the grounding postprocessor replaced the generated SQL with
+    /// the clarification this result answered with. Nil otherwise, and in
+    /// results written before it was recorded. The SQL itself is never
+    /// written; see `TextToSQLEvalResult.withheldSQL`.
+    public var groundingWithheldSQL: Bool?
+    /// How the withheld SQL compared with the golden SQL on the seeded
+    /// database, for results that expected SQL in a semantic run:
+    /// `candidateExecutionFailure` when the safety or schema guards stopped
+    /// it before execution. It never changes `status` or `endToEndPassed`.
+    public var withheldSQLSemanticStatus: TextToSQLSemanticStatus?
+    /// Whether the withheld SQL matched the golden result; false when the
+    /// guards stopped it. Nil when it was not compared, or when the golden
+    /// SQL or the database failed and the comparison could not judge it.
+    public var withheldSQLSemanticPassed: Bool?
+    /// How the grounding judge changed this result's answer, at the run's
+    /// first `TextToSQLGroundingJudgeDivergence`: `released` or `reAimed`.
+    /// Nil when it changed nothing, when the judge was off, and in results
+    /// written before it was recorded.
+    public var groundingJudgeDivergence: String?
+    /// The paired judge-off arm of `decisionMatches`. A result that did not
+    /// diverge equals its own; one that did would have answered with the
+    /// lexical clarification, which matches only a case that expects one.
+    /// Nil when the judge was off, and in results written before it.
+    public var groundingJudgeOffArmDecisionMatches: Bool?
+    /// The paired judge-off arm of `status == .passed`. A result that did not
+    /// diverge equals its own; one that did fails when its case expects SQL,
+    /// and otherwise passes when the lexical clarification meets the case's
+    /// clarification quality check. Nil when the judge was off.
+    public var groundingJudgeOffArmPassed: Bool?
+    /// The paired judge-off arm of `endToEndPassed`: its own value without a
+    /// divergence, `groundingJudgeOffArmPassed` with one. Nil when
+    /// `endToEndPassed` is, as outside semantic runs, and when the judge was
+    /// off.
+    public var groundingJudgeOffArmEndToEndPassed: Bool?
+    /// For a `released` divergence, the `GroundingJudgeReleaseViolation`
+    /// names of the release rules the kept SQL breaks when checked again,
+    /// which the decision rule keeps empty. Nil without a release, and in
+    /// results written before it was recorded.
+    public var groundingJudgeReleaseViolations: [String]?
 
     public init(
         backendAvailable: Bool,
@@ -98,7 +170,12 @@ public struct TextToSQLEvalMetrics: Codable, Equatable, Sendable {
         modelCallCount: Int? = nil,
         estimatedInitialPromptCharacters: Int? = nil,
         tokenUsage: Int? = nil,
+        promptTokens: Int? = nil,
+        cachedPromptTokens: Int? = nil,
+        completionTokens: Int? = nil,
+        reasoningTokens: Int? = nil,
         estimatedCloudCostUSD: Double? = nil,
+        estimatedCloudCostSource: String? = nil,
         openRouterStructuredOutputMode: String? = nil,
         openRouterRetryCount: Int? = nil,
         openRouterRequestedModelID: String? = nil,
@@ -110,7 +187,7 @@ public struct TextToSQLEvalMetrics: Codable, Equatable, Sendable {
         openRouterSchemaToolCallCount: Int? = nil,
         openRouterInspectionToolCallCount: Int? = nil,
         openRouterAgentTerminalOutcome: String? = nil,
-        openRouterAgentDiagnostics: OpenRouterSchemaToolAgentDiagnostics? = nil,
+        openRouterAgentDiagnostics: SchemaToolAgentDiagnostics? = nil,
         postgresVerificationStatus: SQLVerificationStatus? = nil,
         postgresVerificationSQLState: String? = nil,
         postgresVerificationDiagnosticKind: DatabaseDiagnosticKind? = nil,
@@ -129,7 +206,15 @@ public struct TextToSQLEvalMetrics: Codable, Equatable, Sendable {
         executionLatencyMs: Int? = nil,
         goldenResultDigest: String? = nil,
         candidateResultDigest: String? = nil,
-        semanticMismatchCategory: String? = nil
+        semanticMismatchCategory: String? = nil,
+        groundingWithheldSQL: Bool? = nil,
+        withheldSQLSemanticStatus: TextToSQLSemanticStatus? = nil,
+        withheldSQLSemanticPassed: Bool? = nil,
+        groundingJudgeDivergence: String? = nil,
+        groundingJudgeOffArmDecisionMatches: Bool? = nil,
+        groundingJudgeOffArmPassed: Bool? = nil,
+        groundingJudgeOffArmEndToEndPassed: Bool? = nil,
+        groundingJudgeReleaseViolations: [String]? = nil
     ) {
         self.backendAvailable = backendAvailable
         self.transportSuccess = transportSuccess
@@ -145,7 +230,12 @@ public struct TextToSQLEvalMetrics: Codable, Equatable, Sendable {
         self.modelCallCount = modelCallCount
         self.estimatedInitialPromptCharacters = estimatedInitialPromptCharacters
         self.tokenUsage = tokenUsage
+        self.promptTokens = promptTokens
+        self.cachedPromptTokens = cachedPromptTokens
+        self.completionTokens = completionTokens
+        self.reasoningTokens = reasoningTokens
         self.estimatedCloudCostUSD = estimatedCloudCostUSD
+        self.estimatedCloudCostSource = estimatedCloudCostSource
         self.openRouterStructuredOutputMode = openRouterStructuredOutputMode
         self.openRouterRetryCount = openRouterRetryCount
         self.openRouterRequestedModelID = openRouterRequestedModelID
@@ -177,6 +267,14 @@ public struct TextToSQLEvalMetrics: Codable, Equatable, Sendable {
         self.goldenResultDigest = goldenResultDigest
         self.candidateResultDigest = candidateResultDigest
         self.semanticMismatchCategory = semanticMismatchCategory
+        self.groundingWithheldSQL = groundingWithheldSQL
+        self.withheldSQLSemanticStatus = withheldSQLSemanticStatus
+        self.withheldSQLSemanticPassed = withheldSQLSemanticPassed
+        self.groundingJudgeDivergence = groundingJudgeDivergence
+        self.groundingJudgeOffArmDecisionMatches = groundingJudgeOffArmDecisionMatches
+        self.groundingJudgeOffArmPassed = groundingJudgeOffArmPassed
+        self.groundingJudgeOffArmEndToEndPassed = groundingJudgeOffArmEndToEndPassed
+        self.groundingJudgeReleaseViolations = groundingJudgeReleaseViolations
     }
 }
 
@@ -210,7 +308,7 @@ public struct TextToSQLEvalDiagnostics: Codable, Equatable, Sendable {
         safetyErrors: [String] = [],
         schemaErrors: [String] = [],
         errorMessage: String? = nil,
-        openRouterFailure: OpenRouterFailureDiagnostic? = nil,
+        openRouterFailure: CloudRequestFailureDiagnostic? = nil,
         postgresVerificationDiagnostic: DatabaseDiagnostic? = nil
     ) {
         self.missingTables = missingTables
@@ -221,7 +319,7 @@ public struct TextToSQLEvalDiagnostics: Codable, Equatable, Sendable {
         self.errorMessage = errorMessage
         self.openRouterFailureCategory = openRouterFailure?.category.rawValue
         self.openRouterHTTPStatus = openRouterFailure?.httpStatus
-        self.openRouterErrorType = openRouterFailure?.openRouterErrorType
+        self.openRouterErrorType = openRouterFailure?.providerErrorType
         self.openRouterProviderCode = openRouterFailure?.providerCode
         self.openRouterCompletionID = openRouterFailure?.completionID
         self.openRouterRequestID = openRouterFailure?.requestID
@@ -251,6 +349,28 @@ public struct TextToSQLEvalResult: Codable, Equatable, Sendable {
     public var referencedColumnBindings: [String]
     public var estimatedInitialPrompt: String?
     public var trace: TextToSQLTrace?
+    /// The SQL the grounding postprocessor withheld, kept in memory so a
+    /// semantic run can score it. It is not encoded: cases.jsonl records only
+    /// `metrics.groundingWithheldSQL` and the withheld SQL's semantic status,
+    /// and a decoded result has none. `generatedSQL` stays the SQL the
+    /// result answered with.
+    public var withheldSQL: String? = nil
+
+    private enum CodingKeys: String, CodingKey {
+        case caseID
+        case backend
+        case model
+        case repeatIndex
+        case status
+        case metrics
+        case diagnostics
+        case generatedSQL
+        case clarificationQuestion
+        case referencedTables
+        case referencedColumnBindings
+        case estimatedInitialPrompt
+        case trace
+    }
 
     public init(
         caseID: String,

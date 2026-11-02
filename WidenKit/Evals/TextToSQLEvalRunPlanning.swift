@@ -191,6 +191,27 @@ public struct TextToSQLEvalBudgetLimits: Equatable, Sendable {
         self.maxHTTPAttempts = maxHTTPAttempts
         self.maxCompletedResults = maxCompletedResults
     }
+
+    /// Throws before any request when a cloud-cost budget is set for a
+    /// profile that neither reports `usage.cost` nor has prices to estimate
+    /// it from tokens, because that budget could never be enforced.
+    public func validateCostAccounting(for profile: CloudModelProfile) throws {
+        guard maxCloudCostUSD != nil, profile.pricing == nil, !profile.reportsUsageCost else {
+            return
+        }
+        throw TextToSQLEvalCostAccountingError.unpricedProfile(displayName: profile.displayName)
+    }
+}
+
+public enum TextToSQLEvalCostAccountingError: LocalizedError, Equatable, Sendable {
+    case unpricedProfile(displayName: String)
+
+    public var errorDescription: String? {
+        switch self {
+        case .unpricedProfile(let displayName):
+            "--max-cloud-cost-usd cannot be enforced for \(displayName): it reports no request cost and has no token prices to estimate one. Run without a cost budget, or bound the run with --max-http-attempts."
+        }
+    }
 }
 
 public struct TextToSQLEvalBudgetState: Equatable, Sendable {
@@ -198,6 +219,10 @@ public struct TextToSQLEvalBudgetState: Equatable, Sendable {
     public private(set) var cloudCostUSD: Decimal
     public private(set) var httpAttempts: Int
     public private(set) var completedResults: Int
+    /// Set when a cloud-cost budget is in force and a result used tokens but
+    /// recorded no cost, so the budget can no longer be enforced. The run
+    /// stops and fails instead of spending past a cap it cannot see.
+    public private(set) var costAccountingFailure: String?
 
     public init(
         limits: TextToSQLEvalBudgetLimits,
@@ -207,12 +232,16 @@ public struct TextToSQLEvalBudgetState: Equatable, Sendable {
         self.cloudCostUSD = 0
         self.httpAttempts = 0
         self.completedResults = 0
+        self.costAccountingFailure = nil
         for result in seedResults {
             record(result)
         }
     }
 
     public func stopReasonBeforeNextResult(backend: TextToSQLEvalBackend) -> String? {
+        if let costAccountingFailure {
+            return costAccountingFailure
+        }
         if let maxCompletedResults = limits.maxCompletedResults,
             completedResults >= maxCompletedResults
         {
@@ -222,7 +251,7 @@ public struct TextToSQLEvalBudgetState: Equatable, Sendable {
         if let maxHTTPAttempts = limits.maxHTTPAttempts,
             httpAttempts >= maxHTTPAttempts
         {
-            return "Eval OpenRouter HTTP-attempt budget reached (\(httpAttempts)/\(maxHTTPAttempts))."
+            return "Eval provider HTTP-attempt budget reached (\(httpAttempts)/\(maxHTTPAttempts))."
         }
         if let maxCloudCostUSD = limits.maxCloudCostUSD,
             cloudCostUSD >= maxCloudCostUSD
@@ -246,6 +275,12 @@ public struct TextToSQLEvalBudgetState: Equatable, Sendable {
         guard result.backend == .cloud else { return }
         if let cost = result.metrics.estimatedCloudCostUSD {
             cloudCostUSD += Decimal(cost)
+        } else if limits.maxCloudCostUSD != nil,
+            costAccountingFailure == nil,
+            let tokens = result.metrics.tokenUsage,
+            tokens > 0
+        {
+            costAccountingFailure = "Eval cloud-cost budget cannot be enforced: \(result.caseID) (repeat \(result.repeatIndex)) used \(tokens) tokens but recorded no cost."
         }
         let attemptCounts = [
             result.metrics.modelCallCount,
@@ -267,13 +302,24 @@ public struct TextToSQLEvalResumeCompatibilityManifest: Equatable, Sendable {
     public var suiteVersion: String
     public var suiteFileHash: String
     public var schemaFixtureHashes: [String: String]
+    /// `"particle"` or `"openrouter"`; nil in manifests written before
+    /// providers were recorded, which resolves to OpenRouter for cloud runs.
+    public var provider: String?
     public var model: String?
     public var expectedCanonicalModelID: String?
     public var backendMode: String
     public var cloudAgentMode: String?
+    /// The `reasoning_effort` the run sent, or nil when it sent none.
+    public var reasoningEffort: String?
     public var schemaAgentClarificationCorrectionMode: String?
     public var schemaAgentIntentCoverageMode: String?
     public var schemaAgentPlanConsistencyMode: String?
+    /// The critic mode the run's agent configuration recorded, or nil for a
+    /// run without the schema agent or from before the critic existed.
+    public var schemaAgentCriticMode: String?
+    /// The grounding judge mode the run's agent configuration recorded, or
+    /// nil for a run without the schema agent or from before the judge.
+    public var schemaAgentGroundingJudgeMode: String?
     public var semanticDatabaseEnabled: Bool
     public var scorerSourceHash: String
     public var semanticComparatorSourceHash: String?
@@ -285,13 +331,17 @@ public struct TextToSQLEvalResumeCompatibilityManifest: Equatable, Sendable {
         suiteVersion: String,
         suiteFileHash: String,
         schemaFixtureHashes: [String: String],
+        provider: String? = nil,
         model: String?,
         expectedCanonicalModelID: String? = nil,
         backendMode: String,
         cloudAgentMode: String?,
+        reasoningEffort: String? = nil,
         schemaAgentClarificationCorrectionMode: String? = nil,
         schemaAgentIntentCoverageMode: String? = nil,
         schemaAgentPlanConsistencyMode: String? = nil,
+        schemaAgentCriticMode: String? = nil,
+        schemaAgentGroundingJudgeMode: String? = nil,
         semanticDatabaseEnabled: Bool,
         scorerSourceHash: String,
         semanticComparatorSourceHash: String?,
@@ -302,13 +352,17 @@ public struct TextToSQLEvalResumeCompatibilityManifest: Equatable, Sendable {
         self.suiteVersion = suiteVersion
         self.suiteFileHash = suiteFileHash
         self.schemaFixtureHashes = schemaFixtureHashes
+        self.provider = provider
         self.model = model
         self.expectedCanonicalModelID = expectedCanonicalModelID
         self.backendMode = backendMode
         self.cloudAgentMode = cloudAgentMode
+        self.reasoningEffort = reasoningEffort
         self.schemaAgentClarificationCorrectionMode = schemaAgentClarificationCorrectionMode
         self.schemaAgentIntentCoverageMode = schemaAgentIntentCoverageMode
         self.schemaAgentPlanConsistencyMode = schemaAgentPlanConsistencyMode
+        self.schemaAgentCriticMode = schemaAgentCriticMode
+        self.schemaAgentGroundingJudgeMode = schemaAgentGroundingJudgeMode
         self.semanticDatabaseEnabled = semanticDatabaseEnabled
         self.scorerSourceHash = scorerSourceHash
         self.semanticComparatorSourceHash = semanticComparatorSourceHash
@@ -361,6 +415,18 @@ public enum TextToSQLEvalResumeCompatibility {
             current.schemaFixtureHashes,
             issues: &issues
         )
+        compare(
+            "provider",
+            TextToSQLEvalCloudSettings.resolvedManifestProvider(
+                previous.provider,
+                backendMode: previous.backendMode
+            ) ?? "-",
+            TextToSQLEvalCloudSettings.resolvedManifestProvider(
+                current.provider,
+                backendMode: current.backendMode
+            ) ?? "-",
+            issues: &issues
+        )
         compare("model", previous.model ?? "-", current.model ?? "-", issues: &issues)
         compare(
             "expected canonical model",
@@ -373,6 +439,12 @@ public enum TextToSQLEvalResumeCompatibility {
             "cloud agent",
             previous.cloudAgentMode ?? "-",
             current.cloudAgentMode ?? "-",
+            issues: &issues
+        )
+        compare(
+            "reasoning effort",
+            previous.reasoningEffort ?? "-",
+            current.reasoningEffort ?? "-",
             issues: &issues
         )
         compare(
@@ -391,6 +463,18 @@ public enum TextToSQLEvalResumeCompatibility {
             "schema agent plan consistency mode",
             normalizedSchemaAgentPlanConsistencyMode(previous.schemaAgentPlanConsistencyMode),
             normalizedSchemaAgentPlanConsistencyMode(current.schemaAgentPlanConsistencyMode),
+            issues: &issues
+        )
+        compare(
+            "schema agent critic mode",
+            normalizedSchemaAgentCriticMode(previous.schemaAgentCriticMode),
+            normalizedSchemaAgentCriticMode(current.schemaAgentCriticMode),
+            issues: &issues
+        )
+        compare(
+            "schema agent grounding judge mode",
+            normalizedSchemaAgentGroundingJudgeMode(previous.schemaAgentGroundingJudgeMode),
+            normalizedSchemaAgentGroundingJudgeMode(current.schemaAgentGroundingJudgeMode),
             issues: &issues
         )
         compare(
@@ -469,6 +553,16 @@ public enum TextToSQLEvalResumeCompatibility {
 
     private static func normalizedSchemaAgentPlanConsistencyMode(_ value: String?) -> String {
         value ?? SchemaToolAgentPlanConsistencyMode.diagnosticsOnly.rawValue
+    }
+
+    /// A run that recorded no critic mode ran without the critic.
+    private static func normalizedSchemaAgentCriticMode(_ value: String?) -> String {
+        value ?? SchemaToolAgentCriticMode.disabled.rawValue
+    }
+
+    /// A run that recorded no grounding judge mode ran without the judge.
+    private static func normalizedSchemaAgentGroundingJudgeMode(_ value: String?) -> String {
+        value ?? SchemaToolAgentGroundingJudgeMode.disabled.rawValue
     }
 }
 

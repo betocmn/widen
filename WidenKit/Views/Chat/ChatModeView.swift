@@ -17,14 +17,14 @@ struct ChatModeView: View {
         @Bindable var chatVM = controller.chatVM
 
         VStack(spacing: 0) {
-            if let message = appState.modelAvailabilityMessage {
+            if let notice = textToSQLNotice {
                 HStack(spacing: 8) {
-                    Label(message, systemImage: "exclamationmark.triangle")
+                    Label(notice.message, systemImage: "exclamationmark.triangle")
                         .font(.caption)
                         .foregroundStyle(.orange)
                     Spacer(minLength: 8)
-                    Button("Open LLM Settings…") {
-                        appState.openSettings(tab: .llm)
+                    Button(notice.actionTitle) {
+                        openSettings(for: notice)
                     }
                     .controlSize(.small)
                 }
@@ -127,14 +127,19 @@ struct ChatModeView: View {
         }
     }
 
-    /// True when the default OpenRouter cloud path cannot generate yet — the
-    /// empty state then leads with key setup instead of inviting questions
-    /// it cannot answer.
-    private var needsCloudSetup: Bool {
-        !appState.useMockAI
-            && appState.aiBackendMode == .cloud
-            && appState.cloudProvider == .openRouter
-            && appState.cloudBackendStatus != .ready
+    /// Set when text-to-SQL cannot answer here — the empty state then leads
+    /// with the fix instead of inviting questions it cannot answer.
+    private var textToSQLNotice: TextToSQLChatNotice? {
+        TextToSQLChatNotice(appState: appState, connectionID: controller.connectionID)
+    }
+
+    private func openSettings(for notice: TextToSQLChatNotice) {
+        switch notice {
+        case .model:
+            appState.openSettings(tab: .llm)
+        case .connection:
+            appState.openDatabaseSettings(connectionID: controller.connectionID)
+        }
     }
 
     private var emptyHint: some View {
@@ -143,14 +148,23 @@ struct ChatModeView: View {
                 SchemaEmptyStatusView(status: schemaStatus) {
                     Task { await appState.refreshSchema(for: controller.connectionID) }
                 }
-            } else if needsCloudSetup {
-                Text("Cloud SQL generation needs an OpenRouter API key")
+            } else if let notice = textToSQLNotice {
+                Text(notice.title)
                     .font(.title3)
                     .foregroundStyle(.secondary)
-                Button("Open LLM Settings…") {
-                    appState.openSettings(tab: .llm)
+                    .multilineTextAlignment(.center)
+                    .frame(maxWidth: 460)
+                if let detail = notice.detail {
+                    Text(detail)
+                        .font(.callout)
+                        .foregroundStyle(.secondary)
+                        .multilineTextAlignment(.center)
+                        .frame(maxWidth: 460)
                 }
-                .widenGlassButtonStyle()
+                Button(notice.actionTitle) {
+                    openSettings(for: notice)
+                }
+                .buttonStyle(.bordered)
                 .hoverBrightness()
                 Text("or paste SQL to run it directly.")
                     .font(.callout)
@@ -347,6 +361,66 @@ struct ChatModeView: View {
     }
 }
 
+/// Why text-to-SQL cannot answer in a chat, and where the fix lives. The
+/// chat banner and the empty state both show it.
+enum TextToSQLChatNotice: Equatable {
+    /// The key is missing or Particle refused it; fixed in Settings › LLM.
+    case model(TextToSQLStatus)
+    /// The connection turned off schema metadata sharing; fixed in its
+    /// Database Settings.
+    case connection(String)
+
+    /// nil when text-to-SQL can answer for `connectionID`. A key problem
+    /// comes first: it blocks every connection.
+    @MainActor
+    init?(appState: AppState, connectionID: UUID) {
+        let status = appState.textToSQLStatus
+        if status.needsAttention {
+            self = .model(status)
+        } else if let message = appState.textToSQLUnavailableMessage(for: connectionID) {
+            self = .connection(message)
+        } else {
+            return nil
+        }
+    }
+
+    /// The banner's one line.
+    var message: String {
+        switch self {
+        case .model(let status): status.message ?? title
+        case .connection(let message): message
+        }
+    }
+
+    /// The empty state's headline.
+    var title: String {
+        switch self {
+        case .model(.unavailable):
+            "\(CloudModelCatalog.productionProfile.displayName) needs attention"
+        case .model:
+            "Text-to-SQL needs a Particle API key"
+        case .connection(let message):
+            message
+        }
+    }
+
+    /// The empty state's line under the headline, when the headline alone
+    /// does not say what went wrong.
+    var detail: String? {
+        switch self {
+        case .model(.unavailable(let message)): message
+        case .model, .connection: nil
+        }
+    }
+
+    var actionTitle: String {
+        switch self {
+        case .model: "Open LLM Settings…"
+        case .connection: "Open Database Settings…"
+        }
+    }
+}
+
 private enum SchemaStatus: Equatable {
     case loading
     case missing
@@ -466,7 +540,7 @@ private struct SchemaEmptyStatusView: View {
 
             if status.canRefresh {
                 Button("Refresh Schema", action: refresh)
-                    .widenGlassButtonStyle()
+                    .buttonStyle(.bordered)
                     .hoverBrightness()
             }
         }

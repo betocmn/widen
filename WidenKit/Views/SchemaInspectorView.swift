@@ -74,9 +74,6 @@ public struct SchemaInspectorView: View {
                 appState.schemaVM.selectedTableID = nil
             }
         }
-        // The inspector pane lays its content out slightly wider than its
-        // visible width, so compensate to keep a trailing margin.
-        .padding(.trailing, 10)
     }
 
     /// The database name; the schema picker on the next line says the rest.
@@ -116,6 +113,7 @@ public struct SchemaInspectorView: View {
 
     @ViewBuilder
     private var tableList: some View {
+        @Bindable var schemaVM = appState.schemaVM
         let tables = appState.schemaVM.tables(in: activeSchema, schemaName: selectedSchemaName)
 
         if activeConnectionID == nil {
@@ -185,15 +183,12 @@ public struct SchemaInspectorView: View {
             .foregroundStyle(.secondary)
             .frame(maxWidth: .infinity, maxHeight: .infinity)
         } else {
-            List {
+            List(selection: $schemaVM.selectedTableID) {
                 ForEach(tables) { table in
                     tableRow(table)
+                    .tag(table.id)
                     .contentShape(Rectangle())
                     .listRowSeparator(.hidden)
-                    .listRowBackground(tableRowBackground(for: table))
-                    .onTapGesture {
-                        selectTable(table)
-                    }
                     .simultaneousGesture(
                         TapGesture(count: 2)
                             .onEnded {
@@ -209,6 +204,9 @@ public struct SchemaInspectorView: View {
                     }
                 }
             }
+            .listStyle(.plain)
+            // Let the native inspector material show through the table list.
+            .scrollContentBackground(.hidden)
         }
     }
 
@@ -218,18 +216,11 @@ public struct SchemaInspectorView: View {
                 .foregroundStyle(.secondary)
                 .imageScale(.small)
             Text(table.name)
+                .lineLimit(1)
+                .truncationMode(.middle)
         }
-    }
-
-    @ViewBuilder
-    private func tableRowBackground(for table: TableInfo) -> some View {
-        if appState.schemaVM.selectedTableID == table.id {
-            RoundedRectangle(cornerRadius: 6)
-                .fill(Color.accentColor.opacity(0.18))
-                .padding(.horizontal, 5)
-        } else {
-            Color.clear
-        }
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .help(table.qualifiedName)
     }
 
     private func selectTable(_ table: TableInfo) {

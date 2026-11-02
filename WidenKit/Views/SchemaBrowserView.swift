@@ -18,6 +18,7 @@ public struct SchemaBrowserView: View {
                     .font(.caption.bold())
                     .lineLimit(1)
                     .truncationMode(.middle)
+                    .help(table.qualifiedName)
             }
             .padding(.horizontal, 10)
             .padding(.top, 8)
@@ -26,15 +27,20 @@ public struct SchemaBrowserView: View {
                 HStack(alignment: .firstTextBaseline) {
                     Text(column.name)
                         .font(.caption.monospaced())
+                        .lineLimit(1)
+                        .truncationMode(.middle)
+                        .help(column.name)
                     Spacer(minLength: 8)
                     Text(column.dataType + (column.isNullable ? "" : " · not null"))
                         .font(.caption2)
                         .foregroundStyle(.secondary)
                         .lineLimit(1)
+                        .help(column.dataType + (column.isNullable ? "" : " · not null"))
                 }
                 .listRowSeparator(.hidden)
             }
             .listStyle(.plain)
+            .scrollContentBackground(.hidden)
         }
     }
 }

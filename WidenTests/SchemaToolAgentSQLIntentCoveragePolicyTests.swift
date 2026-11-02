@@ -3243,7 +3243,7 @@ struct SchemaToolAgentSQLIntentCoveragePolicyTests {
     private func evaluate(
         question: String,
         databaseContext: String = "",
-        evidence: OpenRouterSchemaToolEvidenceSummary,
+        evidence: SchemaToolEvidenceSummary,
         sql: String
     ) -> SchemaToolAgentSQLIntentCoverageResult {
         SchemaToolAgentSQLIntentCoveragePolicy.evaluate(
@@ -3257,8 +3257,8 @@ struct SchemaToolAgentSQLIntentCoveragePolicyTests {
     private func evidence(
         columns: [String],
         joinPaths: [String] = []
-    ) -> OpenRouterSchemaToolEvidenceSummary {
-        OpenRouterSchemaToolEvidenceSummary(
+    ) -> SchemaToolEvidenceSummary {
+        SchemaToolEvidenceSummary(
             searched: true,
             describedTableIDs: ["public.example"],
             exposedColumnIDs: columns,

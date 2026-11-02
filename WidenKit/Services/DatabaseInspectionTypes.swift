@@ -12,7 +12,7 @@ public enum DatabaseInspectionResultAudience: String, Codable, Equatable, Sendab
     case cloud
 }
 
-public enum DatabaseInspectionErrorCode: String, Codable, Equatable, Hashable, Sendable {
+public enum DatabaseInspectionErrorCode: String, Codable, CaseIterable, Equatable, Hashable, Sendable {
     case unknownTool
     case malformedArguments
     case missingArgument
@@ -183,7 +183,7 @@ public struct DatabaseInspectionPolicy: Codable, Equatable, Sendable {
         allowSampleRows: Bool = false,
         allowFullTableScans: Bool = false,
         allowDistinctValuesInProfiles: Bool = false,
-        audience: DatabaseInspectionResultAudience = .local,
+        audience: DatabaseInspectionResultAudience = .cloud,
         maximumCallCount: Int = 4,
         maximumResultBytes: Int = 8_000,
         maximumSessionResultBytes: Int = 20_000,

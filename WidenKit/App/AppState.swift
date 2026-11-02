@@ -21,18 +21,6 @@ public enum SidebarItem: Hashable, Sendable {
     case session(UUID)
 }
 
-public struct LLMCompatibilityAlert: Identifiable, Equatable, Sendable {
-    public enum Kind: Equatable, Sendable {
-        case appleIntelligenceDisabled
-        case localUnavailable
-    }
-
-    public let id = UUID()
-    public let kind: Kind
-    public let title: String
-    public let message: String
-}
-
 /// Root application state. Owns the services, the configured connections,
 /// and the persistent query sessions shared across views.
 @MainActor
@@ -60,7 +48,12 @@ public final class AppState {
     public var connectionStates: [UUID: ConnectionStatus] = [:]
     /// Schema cache per connection. Kept across disconnects so reconnecting
     /// is instant; dropped when the connection's endpoint changes.
-    public var schemas: [UUID: DatabaseSchema] = [:]
+    public var schemas: [UUID: DatabaseSchema] = [:] {
+        didSet { schemaRevision &+= 1 }
+    }
+    /// Bumped on every change to `schemas`, so a cached schema fingerprint
+    /// is reused only while the schemas it hashed are unchanged.
+    @ObservationIgnored private var schemaRevision = 0
     public var loadingSchemas: Set<UUID> = []
     private var services: [UUID: PostgresService] = [:]
 
@@ -109,123 +102,134 @@ public final class AppState {
     public var databaseSettingsRequest = 0
     public var pendingDatabaseSettingsRequest: DatabaseSettingsRequest?
     public var errorBanner: String?
-    public var llmCompatibilityAlert: LLMCompatibilityAlert?
 
-    /// Developer toggle: use the deterministic mock generator instead of the
-    /// on-device model.
+    /// Developer toggle: use the deterministic mock generator instead of
+    /// Particle-1.
     public var useMockAI = UserDefaults.standard.bool(forKey: AppState.useMockAIKey) {
         didSet { UserDefaults.standard.set(useMockAI, forKey: Self.useMockAIKey) }
     }
     private static let useMockAIKey = "WidenUseMockAI"
     private static let selectedSessionKey = "WidenSelectedSessionID"
 
-    /// Whether SQL generation uses the on-device model or the configured
-    /// cloud pro backend. The toolbar toggle flips this.
-    public var aiBackendMode: AIBackendMode =
-        AIBackendMode(
-            rawValue: UserDefaults.standard.string(forKey: AppState.aiBackendModeKey) ?? "")
-        ?? .cloud
-    {
-        didSet { UserDefaults.standard.set(aiBackendMode.rawValue, forKey: Self.aiBackendModeKey) }
-    }
-    private static let aiBackendModeKey = "WidenAIBackendMode"
-
-    /// Which provider serves cloud generations. Defaults to OpenRouter —
-    /// it works on every Mac today; Apple's Private Cloud Compute is an
-    /// explicit opt-in (and only surfaces its requirements once selected).
-    public var cloudProvider: CloudAIProvider =
-        CloudAIProvider(
-            rawValue: UserDefaults.standard.string(forKey: AppState.cloudProviderKey) ?? "")
-        ?? .openRouter
-    {
-        didSet { UserDefaults.standard.set(cloudProvider.rawValue, forKey: Self.cloudProviderKey) }
-    }
-    private static let cloudProviderKey = "WidenCloudAIProvider"
-
-    private static let openRouterModelIDKey = "WidenOpenRouterModelID"
-    private static let openRouterSchemaToolAgentEnabledKey =
-        "WidenOpenRouterSchemaToolAgentEnabled"
-    private static let legacyExperimentalCloudSchemaAgentEnabledKey =
-        "WidenExperimentalCloudSchemaAgentEnabled"
+    static let missingParticleAPIKeyMessage = "Add a Particle API key in Settings › LLM."
 
     /// Test seam, mirrors `titleGeneratorOverride`: `.some(value)` replaces
-    /// the Keychain lookup, including `.some(nil)` to force "no key stored".
-    var openRouterAPIKeyOverride: String??
-    /// Test seams for host-dependent model availability.
-    var pccAvailabilityMessageOverride: String??
-    var pccQuotaLimitReachedMessageOverride: String??
-    var localModelAvailabilityMessageOverride: String??
-    var localLLMEligibilityOverride: LocalLLMEligibility?
+    /// the Keychain lookup and save, including `.some(nil)` to force "no key
+    /// stored", so tests never touch the real Keychain.
+    var particleAPIKeyOverride: String??
+    /// Test seam: the transport every Particle generator sends through.
+    var cloudTransportOverride: (any HTTPTransport)?
     var sqlGeneratorOverride: (any SQLGenerator)?
     var queryExecutorOverride: (any QueryExecuting)?
 
-    /// Whether the chosen cloud provider can serve requests right now.
-    public var cloudBackendStatus: CloudBackendStatus {
-        switch cloudProvider {
-        case .applePCC:
-            if let message = pccAvailabilityMessage {
-                return .unavailable(message)
-            }
-            if let message = pccQuotaLimitReachedMessage {
-                return .unavailable(message)
-            }
-            return .ready
-        case .openRouter:
-            guard let key = openRouterAPIKey, !key.isEmpty else {
-                return .notConfigured("Add an OpenRouter API key in Settings › LLM.")
-            }
-            return .ready
+    /// Set when Particle refused the key or account on a real request, and
+    /// cleared by the next answer or a key change. In memory only.
+    public private(set) var particleRuntimeIssue: ParticleRuntimeIssue?
+    /// Bumped on every key save or removal. The key lives in the Keychain,
+    /// which Observation cannot see, so reading this makes views that show
+    /// the status refresh when the key changes.
+    private var particleAPIKeyRevision = 0
+
+    /// Whether text-to-SQL can answer: mock mode first, then a saved key,
+    /// then any runtime issue Particle reported.
+    public var textToSQLStatus: TextToSQLStatus {
+        if useMockAI { return .mock }
+        guard let key = particleAPIKey, !key.isEmpty else {
+            return .notConfigured(Self.missingParticleAPIKeyMessage)
         }
+        if let particleRuntimeIssue {
+            return .unavailable(particleRuntimeIssue.message)
+        }
+        return .ready
     }
 
-    private var openRouterAPIKey: String? {
-        if let openRouterAPIKeyOverride { return openRouterAPIKeyOverride }
-        return (try? keychain.loadOpenRouterAPIKey()) ?? nil
+    private var particleAPIKey: String? {
+        _ = particleAPIKeyRevision
+        if let particleAPIKeyOverride { return particleAPIKeyOverride }
+        return (try? keychain.loadParticleAPIKey()) ?? nil
     }
 
-    private var pccAvailabilityMessage: String? {
-        if let pccAvailabilityMessageOverride { return pccAvailabilityMessageOverride }
-        return PCCSupport.availabilityMessage
-    }
-
-    private var pccQuotaLimitReachedMessage: String? {
-        if let pccQuotaLimitReachedMessageOverride { return pccQuotaLimitReachedMessageOverride }
-        return PCCSupport.quotaLimitReachedMessage
-    }
-
-    /// Saves (empty deletes) the OpenRouter API key. Keychain only; the key
-    /// never touches UserDefaults.
+    /// Saves (empty deletes) the Particle API key. Keychain only; the key
+    /// never touches UserDefaults. A key that belongs to another provider is
+    /// refused with a banner, so it can never be sent to Particle.
     @discardableResult
-    public func setOpenRouterAPIKey(_ key: String) -> Bool {
+    public func setParticleAPIKey(_ key: String) -> Bool {
+        let key = key.trimmingCharacters(in: .whitespacesAndNewlines)
+        let normalizedKey = key.lowercased()
+        guard
+            !CloudModelCatalog.productionProfile.foreignAPIKeyPrefixes.contains(where: {
+                normalizedKey.hasPrefix($0.lowercased())
+            })
+        else {
+            errorBanner =
+                "That is an OpenRouter key (sk-or-…). Text-to-SQL uses Particle-1, so paste a Particle API key (pai-…) from platform.particle.ai."
+            return false
+        }
         do {
-            try keychain.saveOpenRouterAPIKey(key)
-            return true
+            if particleAPIKeyOverride != nil {
+                particleAPIKeyOverride = .some(key.isEmpty ? nil : key)
+            } else {
+                try keychain.saveParticleAPIKey(key)
+            }
         } catch {
             errorBanner = error.localizedDescription
             return false
         }
+        particleAPIKeyRevision &+= 1
+        particleRuntimeIssue = nil
+        return true
     }
 
-    /// The stored OpenRouter API key, for the Settings field.
-    public func loadOpenRouterAPIKey() -> String? {
+    /// The stored Particle API key, for the Settings field.
+    public func loadParticleAPIKey() -> String? {
+        if let particleAPIKeyOverride { return particleAPIKeyOverride }
         do {
-            return try keychain.loadOpenRouterAPIKey()
+            return try keychain.loadParticleAPIKey()
         } catch {
             errorBanner = error.localizedDescription
             return nil
         }
     }
 
-    /// The active SQL generation backend: mock takes precedence, then the selected
-    /// backend if it is available. Production never silently swaps to another
-    /// backend when the selected one is unavailable.
+    /// Records what a text-to-SQL run says about the Particle account. A
+    /// rejected key, missing credits or missing inference scope is kept until
+    /// a later run answers or the key changes; other failures leave the
+    /// status alone. Mock runs say nothing about the account.
+    func noteTextToSQLOutcome(_ outcome: TextToSQLRunOutcome) {
+        guard !useMockAI else { return }
+        switch outcome {
+        case .answered:
+            if particleRuntimeIssue != nil {
+                particleRuntimeIssue = nil
+            }
+        case .failed(let category):
+            if let issue = category.flatMap(ParticleRuntimeIssue.init(category:)) {
+                particleRuntimeIssue = issue
+            }
+        }
+    }
+
+    /// Why text-to-SQL is off for one connection, or nil when it may run.
+    /// A connection that turns off schema metadata sharing sends nothing to
+    /// Particle, so it cannot generate SQL.
+    public func textToSQLUnavailableMessage(for connectionID: UUID) -> String? {
+        guard !useMockAI,
+            let connection = connection(for: connectionID),
+            !connection.allowCloudSchemaMetadata
+        else { return nil }
+        return "Text-to-SQL is off for this connection because schema metadata sharing is turned off."
+    }
+
+    /// The active SQL generation backend: mock takes precedence, then
+    /// Particle-1 when a key is saved. Without a key, generation fails with a
+    /// message that points at Settings › LLM.
     public var sqlGenerator: any SQLGenerator {
         makeSQLGenerator(connectionID: nil, schema: nil)
     }
 
     /// Connection-aware generation path used by live database sessions. The
-    /// OpenRouter schema-tool agent needs host-controlled connection and schema
-    /// scope; callers without that context keep using `sqlGenerator`.
+    /// schema-tool agent needs host-controlled connection and schema scope;
+    /// callers without that context keep using `sqlGenerator`.
     public func sqlGenerator(
         connectionID: UUID,
         schema: DatabaseSchema
@@ -239,84 +243,39 @@ public final class AppState {
     ) -> any SQLGenerator {
         if let sqlGeneratorOverride { return sqlGeneratorOverride }
         if useMockAI { return MockSQLGenerator() }
-        let generationConnection: DatabaseConnectionConfig?
-        if let connectionID {
-            generationConnection = connection(for: connectionID)
-        } else {
-            generationConnection = nil
+        guard let key = particleAPIKey, !key.isEmpty else {
+            return UnavailableSQLGenerator(message: Self.missingParticleAPIKeyMessage)
         }
-        if aiBackendMode == .cloud {
-            guard case .ready = cloudBackendStatus else {
-                return UnavailableSQLGenerator(
-                    message: cloudBackendStatus.message
-                        ?? "The selected cloud model is unavailable. Check Settings › LLM.")
-            }
-            if let generationConnection, !generationConnection.allowCloudSchemaMetadata {
-                return UnavailableSQLGenerator(
-                    message: "Cloud SQL generation is disabled for this connection because schema metadata sharing is turned off in Database Settings."
+        let profile = CloudModelCatalog.productionProfile
+        let generationConnection = connectionID.flatMap { connection(for: $0) }
+        if let generationConnection, !generationConnection.allowCloudSchemaMetadata {
+            return UnavailableSQLGenerator(
+                message: "\(profile.displayName) SQL generation is disabled for this connection because schema metadata sharing is turned off in Database Settings."
+            )
+        }
+        if let connectionID, let schema {
+            let selectedSchemas = selectedSchemaSet(from: schema)
+            return SchemaToolSQLAgent(
+                apiKey: key,
+                profile: profile,
+                connectionID: connectionID,
+                selectedSchemas: selectedSchemas,
+                transport: cloudTransportOverride,
+                indexStore: schemaSearchIndexStore ?? SchemaSearchIndexStore(),
+                databaseInspectionPolicy: generationConnection?.databaseInspectionPolicy(
+                    audience: DatabaseInspectionResultAudience.cloud
+                ) ?? .disabled,
+                databaseInspectionDatabase: databaseInspectionDatabase(
+                    for: connectionID,
+                    connection: generationConnection
+                ),
+                currentSchemaFingerprint: schemaFingerprintProvider(
+                    connectionID: connectionID,
+                    selectedSchemas: selectedSchemas
                 )
-            }
-            switch cloudProvider {
-            case .openRouter:
-                if let key = openRouterAPIKey, !key.isEmpty {
-                    let profile = OpenRouterCatalog.productionProfile
-                    if let connectionID,
-                        let schema
-                    {
-                        let selectedSchemas = selectedSchemaSet(from: schema)
-                        return OpenRouterSchemaToolSQLAgent(
-                            apiKey: key,
-                            model: profile.requestedModelID,
-                            expectedCanonicalModelID: profile.expectedCanonicalModelID,
-                            connectionID: connectionID,
-                            selectedSchemas: selectedSchemas,
-                            databaseInspectionPolicy: generationConnection?.databaseInspectionPolicy(
-                                audience: DatabaseInspectionResultAudience.cloud
-                            ) ?? .disabled,
-                            databaseInspectionDatabase: databaseInspectionDatabase(
-                                for: connectionID,
-                                connection: generationConnection
-                            ),
-                            currentSchemaFingerprint: schemaFingerprintProvider(
-                                connectionID: connectionID,
-                                selectedSchemas: selectedSchemas
-                            )
-                        )
-                    }
-                    return OpenRouterSQLGenerator(
-                        apiKey: key,
-                        model: profile.requestedModelID,
-                        expectedCanonicalModelID: profile.expectedCanonicalModelID
-                    )
-                }
-            case .applePCC:
-                if let generator = PCCSupport.makeGenerator() {
-                    return generator
-                }
-            }
-            return UnavailableSQLGenerator(
-                message: "The selected cloud model is unavailable. Check Settings › LLM.")
+            )
         }
-
-        let localStatus = localLLMEligibility
-        guard localStatus.canShowLocalBackendOption else {
-            return UnavailableSQLGenerator(message: localStatus.message)
-        }
-        guard localStatus.isReady else {
-            return UnavailableSQLGenerator(message: localStatus.message)
-        }
-
-        #if canImport(FoundationModels)
-            if #available(macOS 26.0, *) {
-                return FoundationModelsSQLGenerator()
-            }
-        #else
-            return UnavailableSQLGenerator(
-                message: LocalLLMEligibility.sdkUnavailable(
-                    "The FoundationModels framework is not available to this build."
-                ).message)
-        #endif
-        return UnavailableSQLGenerator(message: localStatus.message)
+        return CloudSQLGenerator(apiKey: key, profile: profile, transport: cloudTransportOverride)
     }
 
     private func selectedSchemaSet(from schema: DatabaseSchema) -> [String] {
@@ -324,108 +283,113 @@ public final class AppState {
         return names.sorted()
     }
 
-    private func schemaFingerprintProvider(
+    private struct SchemaFingerprintKey: Hashable {
+        var connectionID: UUID
+        var selectedSchemas: [String]
+    }
+
+    /// Fingerprints hashed while `schemaRevision` was
+    /// `schemaFingerprintCacheRevision`.
+    @ObservationIgnored private var schemaFingerprintCache: [SchemaFingerprintKey: String] = [:]
+    @ObservationIgnored private var schemaFingerprintCacheRevision = 0
+    /// Test seam: how many times a scoped schema has been hashed.
+    @ObservationIgnored private(set) var schemaFingerprintComputationCount = 0
+
+    /// The schema-tool agent calls this on every turn and tool call, and
+    /// fails as stale when the answer no longer matches its starting
+    /// snapshot.
+    func schemaFingerprintProvider(
         connectionID: UUID,
         selectedSchemas: [String]
     ) -> @Sendable () async throws -> String {
         { [weak self] in
             try await MainActor.run {
-                guard let self, let schema = self.schemas[connectionID] else { return "" }
-                let scopedSchema: DatabaseSchema
-                if selectedSchemas.count == 1, let name = selectedSchemas.first {
-                    scopedSchema = schema.filtered(toSchema: name)
-                } else {
-                    scopedSchema = schema
-                }
-                let snapshot = SchemaSearchSnapshot(
+                guard let self else { return "" }
+                return try self.schemaFingerprint(
                     connectionID: connectionID,
-                    selectedSchemas: selectedSchemas,
-                    schema: scopedSchema
+                    selectedSchemas: selectedSchemas
                 )
-                return try SchemaSearchIndexStore.cacheKey(for: snapshot).schemaFingerprint
             }
         }
+    }
+
+    /// Hashing the whole scoped schema on the main actor is costly, so the
+    /// fingerprint is reused until `schemas` changes.
+    private func schemaFingerprint(
+        connectionID: UUID,
+        selectedSchemas: [String]
+    ) throws -> String {
+        guard let schema = schemas[connectionID] else { return "" }
+        if schemaFingerprintCacheRevision != schemaRevision {
+            schemaFingerprintCache.removeAll()
+            schemaFingerprintCacheRevision = schemaRevision
+        }
+        let key = SchemaFingerprintKey(connectionID: connectionID, selectedSchemas: selectedSchemas)
+        if let cached = schemaFingerprintCache[key] {
+            return cached
+        }
+        let scopedSchema: DatabaseSchema
+        if selectedSchemas.count == 1, let name = selectedSchemas.first {
+            scopedSchema = schema.filtered(toSchema: name)
+        } else {
+            scopedSchema = schema
+        }
+        let snapshot = SchemaSearchSnapshot(
+            connectionID: connectionID,
+            selectedSchemas: selectedSchemas,
+            schema: scopedSchema
+        )
+        let fingerprint = try SchemaSearchIndexStore.cacheKey(for: snapshot).schemaFingerprint
+        schemaFingerprintComputationCount += 1
+        schemaFingerprintCache[key] = fingerprint
+        return fingerprint
     }
 
     /// Label for the backend now serving generations, phrased to follow
     /// "Generating SQL with …" in the spinner and Settings.
     public var activeBackendDisplayName: String {
-        if useMockAI { return "the mock generator" }
-        if aiBackendMode == .cloud {
-            switch cloudProvider {
-            case .applePCC:
-                return "Apple Private Cloud Compute"
-            case .openRouter:
-                return "\(OpenRouterCatalog.productionProfile.displayName) via OpenRouter"
-            }
-        }
-        return "On-Device — Experimental"
+        useMockAI ? "the mock generator" : CloudModelCatalog.productionProfile.displayName
     }
 
-    /// The active session-title backend. Overridable for tests.
-    public var titleGenerator: any SessionTitleGenerating {
+    /// The session-title backend for a first message. Particle-1 names the
+    /// session only when the message was a plain-English question, mock AI is
+    /// off, Particle has reported no problem with the key, the connection
+    /// shares schema metadata and a key is saved. Otherwise the title comes
+    /// from the first question on this Mac, with no model involved.
+    public func titleGenerator(
+        for source: SessionTitleSource,
+        connectionID: UUID?
+    ) -> any SessionTitleGenerating {
         if let titleGeneratorOverride { return titleGeneratorOverride }
-        if useMockAI { return MockTitleGenerator() }
-        #if canImport(FoundationModels)
-            if #available(macOS 26.0, *), localLLMEligibility.isReady {
-                return FoundationModelsTitleGenerator()
-            }
-        #endif
-        return MockTitleGenerator()
+        // The key is read last, so the Keychain is only consulted when
+        // everything else already allows a Particle title.
+        guard source == .naturalLanguage, !useMockAI, particleRuntimeIssue == nil,
+            let connectionID,
+            connection(for: connectionID)?.allowCloudSchemaMetadata == true,
+            let key = particleAPIKey, !key.isEmpty
+        else { return MockTitleGenerator() }
+        if let particleTitleGeneratorFactory { return particleTitleGeneratorFactory(key) }
+        return ParticleTitleGenerator(
+            apiKey: key,
+            profile: CloudModelCatalog.productionProfile,
+            transport: cloudTransportOverride
+        )
     }
+    /// Test seam: replaces every title backend, deterministic or not.
     var titleGeneratorOverride: (any SessionTitleGenerating)?
+    /// Test seam: builds the Particle-1 title generator for a saved key, so
+    /// tests can see when a session would be named by Particle-1.
+    var particleTitleGeneratorFactory: ((String) -> any SessionTitleGenerating)?
 
-    /// The paste-autofill backend. Local-only by design: pasted text can
-    /// contain credentials, so there is no cloud fallback. Deterministic URL
-    /// parsing still works when the on-device model is unavailable.
-    public var connectionDetailsParser: (any ConnectionDetailsParsing)? {
-        if useMockAI { return MockConnectionDetailsParser() }
-        #if canImport(FoundationModels)
-            if #available(macOS 26.0, *), localLLMEligibility.isReady {
-                return FoundationModelsConnectionParser()
-            }
-        #endif
-        return MockConnectionDetailsParser()
-    }
-
-    /// nil when paste autofill is available; otherwise the user-readable
-    /// reason the feature is disabled.
-    public var connectionAutofillUnavailableMessage: String? {
-        nil
+    /// The paste-autofill backend. Deterministic and local by design: pasted
+    /// text can contain credentials, so it is never sent to any model.
+    public var connectionDetailsParser: any ConnectionDetailsParsing {
+        MockConnectionDetailsParser()
     }
 
     /// nil when AI generation is ready; otherwise a user-readable reason.
-    /// In cloud mode an unusable provider surfaces here instead of silently
-    /// falling back to another backend.
     public var modelAvailabilityMessage: String? {
-        if useMockAI { return nil }
-        if aiBackendMode == .cloud {
-            if let message = cloudBackendStatus.message {
-                return message
-            }
-            if cloudProvider == .applePCC {
-                return PCCSupport.quotaWarning
-            }
-            return nil
-        }
-        return localModelAvailabilityMessage
-    }
-
-    /// nil when the on-device model is ready; otherwise a user-readable
-    /// reason. Mode-independent — Settings › LLM shows it for the Local
-    /// section regardless of the active backend.
-    public var localModelAvailabilityMessage: String? {
-        if let localModelAvailabilityMessageOverride { return localModelAvailabilityMessageOverride }
-        let status = localLLMEligibility
-        return status.isReady ? nil : status.message
-    }
-
-    public var localLLMEligibility: LocalLLMEligibility {
-        localLLMEligibilityOverride ?? LocalLLMEligibilityChecker.status()
-    }
-
-    public var isLocalBackendVisible: Bool {
-        localLLMEligibility.canShowLocalBackendOption
+        textToSQLStatus.message
     }
 
     public let connectionStore: ConnectionStore
@@ -441,42 +405,66 @@ public final class AppState {
     /// on Sparkle. Nil in tests and until the app wires it up.
     public var updaterControl: (any UpdaterControlling)?
 
+    /// nil in the app, where each agent uses the default index directory;
+    /// the test initializer points it at the temporary directory.
+    private let schemaSearchIndexStore: SchemaSearchIndexStore?
+    private let retiredAIStateCleanup: RetiredAIStateCleanup
     private let introspection = SchemaIntrospectionService()
     private var saveTask: Task<Void, Never>?
     private var didLaunch = false
 
     public init() {
-        self.connectionStore = ConnectionStore()
+        let connectionStore = ConnectionStore()
+        self.connectionStore = connectionStore
         self.sessionStore = SessionStore()
         self.schemaStore = SchemaStore()
         self.semanticBindingStore = DatabaseSemanticBindingStore()
+        self.schemaSearchIndexStore = nil
+        self.retiredAIStateCleanup = RetiredAIStateCleanup(
+            defaults: .standard,
+            applicationSupportDirectory: connectionStore.fileURL.deletingLastPathComponent(),
+            deleteLegacyOpenRouterAPIKey: { try KeychainService().deleteLegacyOpenRouterAPIKey() }
+        )
     }
 
-    /// Test initializer: points both stores at a temporary directory.
+    /// Test initializer: points both stores at a temporary directory. Unless a
+    /// test injects its own `retiredAIStateCleanup`, the launch cleanup runs
+    /// against that directory with a no-op Keychain deleter, so tests that
+    /// call `onLaunch` never touch the real Keychain.
     init(
         connectionStore: ConnectionStore, sessionStore: SessionStore,
         schemaStore: SchemaStore,
-        semanticBindingStore: DatabaseSemanticBindingStore? = nil
+        semanticBindingStore: DatabaseSemanticBindingStore? = nil,
+        retiredAIStateCleanup: RetiredAIStateCleanup? = nil
     ) {
+        let directory = connectionStore.fileURL.deletingLastPathComponent()
         self.connectionStore = connectionStore
         self.sessionStore = sessionStore
         self.schemaStore = schemaStore
         self.semanticBindingStore =
-            semanticBindingStore
-            ?? DatabaseSemanticBindingStore(
-                directory: connectionStore.fileURL.deletingLastPathComponent()
+            semanticBindingStore ?? DatabaseSemanticBindingStore(directory: directory)
+        self.schemaSearchIndexStore = SchemaSearchIndexStore(
+            directory: directory.appendingPathComponent("schema-indexes", isDirectory: true)
+        )
+        self.retiredAIStateCleanup =
+            retiredAIStateCleanup
+            ?? RetiredAIStateCleanup(
+                defaults: .standard,
+                applicationSupportDirectory: directory,
+                deleteLegacyOpenRouterAPIKey: {}
             )
     }
 
     // MARK: - Launch
 
-    /// Called once at launch: loads the saved connections, schemas, and
-    /// sessions. Nothing auto-opens — a fresh install starts on the welcome
-    /// screen, whose Add Database button leads to Settings › Databases.
+    /// Called once at launch: removes the retired AI backends' leftovers,
+    /// then loads the saved connections, schemas, and sessions. Nothing
+    /// auto-opens — a fresh install starts on the welcome screen, whose Add
+    /// Database button leads to Settings › Databases.
     public func onLaunch() async {
         guard !didLaunch else { return }
         didLaunch = true
-        removeObsoleteOpenRouterPreferences()
+        retiredAIStateCleanup.run()
         do {
             connections = try connectionStore.load()
         } catch {
@@ -491,6 +479,12 @@ public final class AppState {
         }
         do {
             sessions = try sessionStore.load()
+        } catch let error as SessionStore.UnreadableFileError {
+            let folder = (error.backupURL.deletingLastPathComponent().path as NSString)
+                .abbreviatingWithTildeInPath
+            errorBanner =
+                "Could not read the saved sessions. The unreadable file was kept as "
+                + "\(error.backupURL.lastPathComponent) in \(folder)."
         } catch {
             errorBanner = "Could not load the saved sessions: \(error.localizedDescription)"
         }
@@ -502,76 +496,26 @@ public final class AppState {
 
         UserDefaults.standard.removeObject(forKey: Self.selectedSessionKey)
         sidebarSelection = nil
-        if aiBackendMode == .local && !isLocalBackendVisible {
-            aiBackendMode = .cloud
+        #if DEBUG
+            openDebugSettingsTab(from: ProcessInfo.processInfo.arguments)
+        #endif
+    }
+
+    #if DEBUG
+        static let debugOpenSettingsTabArgument = "-WidenDebugOpenSettingsTab"
+
+        /// Debug builds only: `-WidenDebugOpenSettingsTab <tab>` (`general`,
+        /// `llm`, `databases` or `archived`) opens Settings on that tab at
+        /// launch, so screenshots can be taken without accessibility access.
+        /// Nothing is saved; an unknown tab is ignored.
+        func openDebugSettingsTab(from arguments: [String]) {
+            guard let index = arguments.lastIndex(of: Self.debugOpenSettingsTabArgument),
+                arguments.indices.contains(index + 1),
+                let tab = SettingsTab(rawValue: arguments[index + 1].lowercased())
+            else { return }
+            openSettings(tab: tab)
         }
-        checkLocalLLMEligibilityForInstallIfNeeded()
-    }
-
-    private func removeObsoleteOpenRouterPreferences() {
-        UserDefaults.standard.removeObject(forKey: Self.openRouterModelIDKey)
-        UserDefaults.standard.removeObject(forKey: Self.openRouterSchemaToolAgentEnabledKey)
-        UserDefaults.standard.removeObject(forKey: Self.legacyExperimentalCloudSchemaAgentEnabledKey)
-    }
-
-    public func checkLocalLLMEligibilityForInstallIfNeeded() {
-        guard aiBackendMode == .local else { return }
-        let status = localLLMEligibility
-        guard !status.isReady else { return }
-        guard !UserDefaults.standard.bool(forKey: Self.didShowInstallLLMCompatibilityAlertKey)
-        else { return }
-
-        UserDefaults.standard.set(true, forKey: Self.didShowInstallLLMCompatibilityAlertKey)
-        llmCompatibilityAlert = compatibilityAlert(for: status)
-    }
-
-    @discardableResult
-    public func requestAIBackendMode(_ mode: AIBackendMode) -> Bool {
-        switch mode {
-        case .local:
-            let status = localLLMEligibility
-            guard status.canShowLocalBackendOption else {
-                llmCompatibilityAlert = compatibilityAlert(for: status)
-                return false
-            }
-            guard status.isReady else {
-                llmCompatibilityAlert = compatibilityAlert(for: status)
-                return false
-            }
-            aiBackendMode = .local
-            return true
-        case .cloud:
-            if case .ready = cloudBackendStatus {
-                aiBackendMode = .cloud
-                return true
-            }
-            openSettings(tab: .llm)
-            return false
-        }
-    }
-
-    private func compatibilityAlert(for status: LocalLLMEligibility) -> LLMCompatibilityAlert {
-        switch status {
-        case .appleIntelligenceDisabled:
-            return LLMCompatibilityAlert(
-                kind: .appleIntelligenceDisabled,
-                title: "Enable Apple Intelligence for Local mode",
-                message: status.message
-            )
-        case .ready:
-            return LLMCompatibilityAlert(
-                kind: .localUnavailable,
-                title: "Local model ready",
-                message: status.message
-            )
-        default:
-            return LLMCompatibilityAlert(
-                kind: .localUnavailable,
-                title: "Local model unavailable",
-                message: status.message
-            )
-        }
-    }
+    #endif
 
     /// Asks the UI to show Settings on the given tab. MainView watches
     /// `openSettingsRequest` and opens the Settings window.
@@ -708,14 +652,6 @@ public final class AppState {
             }
         }
         return names
-    }
-
-    static var didShowInstallLLMCompatibilityAlertKey: String {
-        let version =
-            Bundle.main.object(forInfoDictionaryKey: "CFBundleShortVersionString") as? String
-            ?? "dev"
-        let build = Bundle.main.object(forInfoDictionaryKey: "CFBundleVersion") as? String ?? "0"
-        return "WidenDidShowInstallLLMCompatibilityAlert.\(version).\(build).v1"
     }
 
     private static func loadSelectedSchemaNames() -> [UUID: String] {
@@ -1143,15 +1079,23 @@ public final class AppState {
         flushSessions()
     }
 
-    /// Names a session after its first question. The model's title is
-    /// sanitized; on failure (or an unusable result) the truncated question
-    /// is used instead.
-    public func autoTitleSession(_ id: UUID, question: String) async {
+    /// Names a session after its first question. `source` and `connectionID`
+    /// decide whether Particle-1 may name it (see `titleGenerator(for:
+    /// connectionID:)`); without a connection the title stays on this Mac.
+    /// The model's title is sanitized; on failure (or an unusable result) the
+    /// truncated question is used instead.
+    public func autoTitleSession(
+        _ id: UUID,
+        question: String,
+        source: SessionTitleSource = .naturalLanguage,
+        connectionID: UUID? = nil
+    ) async {
         guard let session = session(for: id),
             !session.titleWasManuallySet,
             session.title == QuerySession.placeholderTitle
         else { return }
-        let generated = try? await titleGenerator.generateTitle(for: question)
+        let generator = titleGenerator(for: source, connectionID: connectionID)
+        let generated = try? await generator.generateTitle(for: question)
         let title =
             generated.flatMap(SessionTitleFallback.sanitize)
             ?? SessionTitleFallback.title(from: question)

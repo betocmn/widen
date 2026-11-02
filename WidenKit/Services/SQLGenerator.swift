@@ -87,11 +87,11 @@ public struct SQLRepairContext: Equatable, Sendable {
     }
 }
 
-/// Compact conversational context for one generation. The on-device model
-/// has a small context window, so this carries only what a follow-up needs:
-/// a short ordered chat transcript, the SQL currently on screen, and the last
-/// error when the previous run failed. With it, "make it last month instead"
-/// or "the query is failing" can be answered against the right query.
+/// Compact conversational context for one generation. It carries only what a
+/// follow-up needs: a short ordered chat transcript, the SQL currently on
+/// screen, and the last error when the previous run failed. With it, "make it
+/// last month instead" or "the query is failing" can be answered against the
+/// right query.
 public struct SQLGenerationContext: Equatable, Sendable {
     public var mode: SQLGenerationMode
     /// Earlier user questions, oldest first, excluding the current one.
@@ -110,8 +110,9 @@ public struct SQLGenerationContext: Equatable, Sendable {
     /// not schema objects, and are used only to bias deterministic packaging.
     public var schemaSearchQueries: [String]
     /// App-side count of model calls consumed for the current user request,
-    /// including optional local discovery. Used for telemetry and local budget
-    /// enforcement only; it is never rendered into prompts.
+    /// including earlier repair attempts and HTTP retries. Used for telemetry
+    /// and the eval HTTP-attempt budget only; repair budgets count logical
+    /// generator invocations instead. It is never rendered into prompts.
     public var modelCallCount: Int
     /// User-confirmed business definitions for this database/schema scope.
     /// These are app-managed semantic bindings, separate from connection
@@ -150,30 +151,11 @@ public struct SQLGenerationContext: Equatable, Sendable {
     }
 }
 
-public struct SchemaDiscoveryRequestResult: Codable, Equatable, Sendable {
-    public var searchQueries: [String]
-    public var reason: String
-
-    public init(searchQueries: [String], reason: String) {
-        self.searchQueries = Array(searchQueries.prefix(3))
-        self.reason = reason
-    }
-
-    public var sanitizedSearchQueries: [String] {
-        var seen = Set<String>()
-        return searchQueries
-            .map { $0.trimmingCharacters(in: .whitespacesAndNewlines) }
-            .filter { !$0.isEmpty }
-            .filter { seen.insert($0.lowercased()).inserted }
-            .prefix(3)
-            .map { $0 }
-    }
-}
-
 /// A backend that turns an English question plus a schema into one PostgreSQL
 /// statement — a SELECT/WITH read, or an INSERT/UPDATE/DELETE write when the
-/// user asks to modify data. Implementations: `FoundationModelsSQLGenerator`
-/// (Apple's on-device model) and `MockSQLGenerator` (tests / developer mode).
+/// user asks to modify data. Implementations: `SchemaToolSQLAgent` (a cloud
+/// model that discovers schema through tools), `CloudSQLGenerator` (one-shot
+/// cloud prompt) and `MockSQLGenerator` (tests / developer mode).
 public protocol SQLGenerator: Sendable {
     func generateSQL(
         question: String,
@@ -182,10 +164,6 @@ public protocol SQLGenerator: Sendable {
         config: SQLGenerationConfig
     ) async throws -> SQLGenerationResult
 }
-
-/// Marker for the constrained on-device SQL path. The shared pipeline uses
-/// this to apply stricter experimental limits without weakening cloud repair.
-public protocol ConstrainedLocalSQLGenerator: SQLGenerator {}
 
 extension SQLGenerator {
     /// Context-free convenience for callers without a conversation.

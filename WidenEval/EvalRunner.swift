@@ -1,10 +1,6 @@
 import CryptoKit
 import Foundation
 
-#if canImport(FoundationModels)
-    import FoundationModels
-#endif
-
 import WidenKit
 
 struct EvalRun {
@@ -33,6 +29,16 @@ struct EvalRunManifest: Codable {
     var schemaAgentPlanConsistencyMode: String?
     var model: String?
     var expectedCanonicalModelID: String?
+    /// `"particle"` or `"openrouter"`, inferred from the model. Manifests
+    /// written before it was recorded resolve to OpenRouter for cloud runs.
+    var provider: String?
+    var providerEndpointHost: String?
+    /// The `reasoning_effort` sent from the run's call site (agent turns for
+    /// the tools agent, one-shot SQL for legacy), or nil when none was sent.
+    var reasoningEffort: String?
+    /// The schema agent's reported budgets, for evidence, and its critic
+    /// mode, which a resume inherits and must match.
+    var agentConfiguration: [String: String]?
     var osVersion: String
     var architecture: String
     var caseCount: Int
@@ -118,6 +124,8 @@ struct EvalRunSummary: Codable {
     var totalModelCalls: Int?
     var totalTokenUsage: Int?
     var estimatedCloudCostUSD: Double?
+    /// A `CloudCostSource` raw value; an estimate when any result's cost was.
+    var estimatedCloudCostSource: String?
     var totalSchemaToolCalls: Int?
     var totalInspectionToolCalls: Int?
     var totalAgentModelTurns: Int?
@@ -126,6 +134,18 @@ struct EvalRunSummary: Codable {
     var repeatedNoProgressRepairCount: Int
     var averageEstimatedInitialPromptCharacters: Double?
     var maxEstimatedInitialPromptCharacters: Int?
+    /// Nil when no result ran with the critic on, and in runs written
+    /// before it was recorded.
+    var schemaAgentCritic: TextToSQLEvalCriticSummary?
+    /// Nil when no result has schema-agent diagnostics, and in runs written
+    /// before it was recorded.
+    var forcedTerminal: TextToSQLEvalForcedTerminalSummary?
+    /// Nil when no result withheld SQL, and in runs written before it was
+    /// recorded.
+    var withheldSQL: TextToSQLEvalWithheldSQLSummary?
+    /// Nil when no result ran with the grounding judge on, and in runs
+    /// written before it was recorded.
+    var groundingJudge: TextToSQLEvalGroundingJudgeSummary?
 }
 
 struct LatencySummary: Codable {
@@ -165,15 +185,24 @@ struct EvalRunner {
         }
         try TextToSQLReleaseGateModelPolicy.validate(
             model: runner.options.model,
-            backendIncludesCloud: runner.options.backendMode.backends.contains(.cloud),
+            reasoningEffortOverride: runner.options.reasoningEffort,
+            agentModes: runner.options.releaseGateAgentModes,
             releaseGateVersion: runner.options.releaseGateVersion,
             releaseTriageVersion: runner.options.releaseTriageVersion,
             allowModelOverride: runner.options.allowModelOverride
         )
-        return try await runner.runResolved(resumeRun: resumeRun)
+        let cloud = try TextToSQLEvalCloudSettings(
+            requestedModelID: runner.options.model,
+            reasoningEffortOverride: runner.options.reasoningEffort
+        )
+        try runner.options.budgetLimits.validateCostAccounting(for: cloud.profile)
+        return try await runner.runResolved(resumeRun: resumeRun, cloud: cloud)
     }
 
-    private func runResolved(resumeRun: EvalPreviousRun?) async throws -> EvalRun {
+    private func runResolved(
+        resumeRun: EvalPreviousRun?,
+        cloud: TextToSQLEvalCloudSettings
+    ) async throws -> EvalRun {
         let startedAt = ISO8601DateFormatter().string(from: Date())
         let suiteURL = URL(fileURLWithPath: options.suitePath).standardizedFileURL
         let suiteData = try Data(contentsOf: suiteURL)
@@ -205,21 +234,20 @@ struct EvalRunner {
             schemaDirectory: schemaDirectory
         )
         let databaseDirectory = evalDirectory.appendingPathComponent("databases", isDirectory: true)
-        let isOpenRouterSmoke = suite.name.hasPrefix("openrouter-smoke")
+        let isTransportSmoke = suite.name.hasPrefix("provider-smoke")
         let expectedCanonicalModelID = options.backendMode.backends.contains(.cloud)
-            ? OpenRouterCatalog.expectedCanonicalModelID(forRequestedModelID: options.model)
+            ? cloud.profile.expectedReturnedModelID
             : nil
-        let scorerSourcePaths = scorerSourcePaths(isOpenRouterSmoke: isOpenRouterSmoke)
-        let scorerSourceHash = Self.sourceHash(
-            relativePaths: scorerSourcePaths,
+        let reasoningEffort = cloud.reasoningEffort(for: options.cloudCallSite)
+        let scorerSourceHash = try TextToSQLEvalSourceManifest.sourceHash(
+            relativePaths: TextToSQLEvalSourceManifest.scorerSourcePaths(
+                includesSchemaToolAgent: options.cloudAgentMode == .tools
+            ),
             relativeTo: repositoryRoot
         )
         let semanticComparatorSourceHash = options.semanticDatabase
-            ? Self.sourceHash(
-                relativePaths: [
-                    "WidenKit/Evals/TextToSQLSemanticComparator.swift",
-                    "WidenKit/Evals/TextToSQLSemanticDatabase.swift",
-                ],
+            ? try TextToSQLEvalSourceManifest.sourceHash(
+                relativePaths: TextToSQLEvalSourceManifest.semanticComparatorSourcePaths,
                 relativeTo: repositoryRoot
             )
             : nil
@@ -232,17 +260,28 @@ struct EvalRunner {
         let negativeControlMetadataHash = options.semanticDatabase
             ? Self.negativeControlMetadataHash(cases: selectedCases)
             : nil
+        let agentConfiguration = options.usesCloudSchemaAgent
+            ? EvalCloudSchemaToolSQLGenerator.baseConfiguration(
+                clarificationCorrectionMode: options.schemaAgentClarificationCorrectionMode,
+                intentCoverageMode: options.schemaAgentIntentCoverageMode,
+                planConsistencyMode: options.schemaAgentPlanConsistencyMode,
+                groundingJudgeMode: options.schemaAgentGroundingJudgeMode,
+                criticMode: options.schemaAgentCriticMode
+            ).reportedSettings
+            : nil
         let currentCompatibility = TextToSQLEvalResumeCompatibilityManifest(
             suiteName: suite.name,
             suiteVersion: suite.version,
             suiteFileHash: Self.sha256(suiteData),
             schemaFixtureHashes: schemas.mapValues(\.sha256),
-            model: options.backendMode == .local ? nil : options.model,
+            provider: cloud.provider,
+            model: options.model,
             expectedCanonicalModelID: expectedCanonicalModelID,
             backendMode: options.backendMode.rawValue,
             cloudAgentMode: options.backendMode.backends.contains(.cloud)
                 ? options.cloudAgentMode.rawValue
                 : nil,
+            reasoningEffort: reasoningEffort,
             schemaAgentClarificationCorrectionMode: options.usesCloudSchemaAgent
                 ? options.schemaAgentClarificationCorrectionMode.rawValue
                 : nil,
@@ -252,6 +291,10 @@ struct EvalRunner {
             schemaAgentPlanConsistencyMode: options.usesCloudSchemaAgent
                 ? options.schemaAgentPlanConsistencyMode.rawValue
                 : nil,
+            schemaAgentCriticMode: TextToSQLEvalSchemaAgentCritic.recordedMode(in: agentConfiguration),
+            schemaAgentGroundingJudgeMode: TextToSQLEvalSchemaAgentGroundingJudge.recordedMode(
+                in: agentConfiguration
+            ),
             semanticDatabaseEnabled: options.semanticDatabase,
             scorerSourceHash: scorerSourceHash,
             semanticComparatorSourceHash: semanticComparatorSourceHash,
@@ -284,7 +327,9 @@ struct EvalRunner {
             limits: options.budgetLimits,
             seedResults: results
         )
-        var budgetStopReason: String?
+        // A resumed result that used tokens without a cost stops the run
+        // before its first request.
+        var budgetStopReason: String? = budgetTracker.costAccountingFailure
         var backendStates: [TextToSQLEvalBackend: EvalBackendRuntime] = [:]
         var semanticPreparation: SemanticPreparation?
         if options.semanticDatabase {
@@ -318,8 +363,8 @@ struct EvalRunner {
                 suiteName: suite.name,
                 suiteVersion: suite.version,
                 suitePath: suiteURL.path,
-                evaluationMode: isOpenRouterSmoke
-                    ? "openrouter-transport-smoke"
+                evaluationMode: isTransportSmoke
+                    ? "provider-transport-smoke"
                     : options.semanticDatabase
                     ? "production-pipeline-static-shape-plus-seeded-postgres-semantic"
                     : "production-pipeline-static-shape",
@@ -339,8 +384,12 @@ struct EvalRunner {
                 schemaAgentPlanConsistencyMode: options.usesCloudSchemaAgent
                     ? options.schemaAgentPlanConsistencyMode.rawValue
                     : nil,
-                model: options.backendMode == .local ? nil : options.model,
+                model: options.model,
                 expectedCanonicalModelID: expectedCanonicalModelID,
+                provider: cloud.provider,
+                providerEndpointHost: cloud.endpointHost,
+                reasoningEffort: reasoningEffort,
+                agentConfiguration: agentConfiguration,
                 osVersion: ProcessInfo.processInfo.operatingSystemVersionString,
                 architecture: Self.architecture(),
                 caseCount: selectedCases.count,
@@ -348,8 +397,8 @@ struct EvalRunner {
                 repeatCount: options.repeatCount,
                 caseTimeoutSeconds: options.caseTimeoutSeconds,
                 suiteFileHash: currentCompatibility.suiteFileHash,
-                scorerVersion: isOpenRouterSmoke
-                    ? "openrouter-transport-smoke-v1"
+                scorerVersion: isTransportSmoke
+                    ? "provider-transport-smoke-v1"
                     : "production-pipeline-static-shape-v1",
                 scorerSourceHash: scorerSourceHash,
                 schemaFixtureHashes: currentCompatibility.schemaFixtureHashes,
@@ -415,14 +464,14 @@ struct EvalRunner {
                 }
 
                 if backendStates[key.backend] == nil {
-                    let unavailable = backendUnavailableReason(for: key.backend)
+                    let unavailable = backendUnavailableReason(for: key.backend, cloud: cloud)
                     backendStates[key.backend] = EvalBackendRuntime(
                         unavailableReason: unavailable
                     )
                 }
                 let backendState = backendStates[key.backend]
 
-                let result: TextToSQLEvalResult
+                var result: TextToSQLEvalResult
                 if let unavailable = backendState?.unavailableReason {
                     result = backendUnavailableResult(
                         evalCase: evalCase,
@@ -434,16 +483,17 @@ struct EvalRunner {
                     let semanticSkip = semanticPreparation.skipResult(
                         for: evalCase,
                         backend: key.backend,
-                        model: key.backend == .cloud ? options.model : nil,
+                        model: options.model,
                         repeatIndex: key.repeatIndex
                     )
                 {
                     result = semanticSkip
                 } else if let generator = makeGenerator(
                     for: key.backend,
+                    cloud: cloud,
                     maximumHTTPAttempts: budgetTracker.remainingHTTPAttempts(for: key.backend)
                 ) {
-                    let prompt = promptText(for: key.backend, evalCase: evalCase, schema: schema)
+                    let prompt = promptText(evalCase: evalCase, schema: schema)
                     let verificationService: PostgresService?
                     let verificationConnection: PostgresConnectionHandle?
                     if let semanticPreparation,
@@ -462,7 +512,7 @@ struct EvalRunner {
                             result = semanticVerificationUnavailableResult(
                                 evalCase: evalCase,
                                 backend: key.backend,
-                                model: key.backend == .cloud ? options.model : nil,
+                                model: options.model,
                                 repeatIndex: key.repeatIndex,
                                 message:
                                     "PostgreSQL verification connection failed: \(error.localizedDescription)"
@@ -478,7 +528,7 @@ struct EvalRunner {
                     }
                     let runOptions = TextToSQLEvalRunOptions(
                         backend: key.backend,
-                        model: key.backend == .cloud ? options.model : nil,
+                        model: options.model,
                         repeatIndex: key.repeatIndex,
                         estimatedInitialPromptCharacters: prompt.count,
                         estimatedInitialPrompt: options.recordPrompts ? prompt : nil,
@@ -498,7 +548,8 @@ struct EvalRunner {
                     if let semanticPreparation {
                         result = await semanticPreparation.annotate(
                             staticResult,
-                            evalCase: evalCase
+                            evalCase: evalCase,
+                            schema: schema
                         )
                     } else {
                         result = staticResult
@@ -511,11 +562,19 @@ struct EvalRunner {
                         repeatIndex: key.repeatIndex
                     )
                 }
+                // The paired judge-off arm, once the result's own end-to-end
+                // value is known.
+                if options.usesGroundingJudge {
+                    result = result.withGroundingJudgeOffArm()
+                }
 
                 results.append(result)
                 budgetTracker.record(result)
                 if options.stopBeforeProviderLimit, result.status.isProviderBudgetUnavailable {
-                    budgetStopReason = "OpenRouter provider budget was unavailable."
+                    budgetStopReason = "\(cloud.profile.provider.displayName) provider budget was unavailable."
+                }
+                if let costAccountingFailure = budgetTracker.costAccountingFailure {
+                    budgetStopReason = costAccountingFailure
                 }
                 try writePartialArtifacts()
             }
@@ -523,6 +582,15 @@ struct EvalRunner {
         } catch {
             await semanticPreparation?.cleanup()
             throw error
+        }
+
+        // The remaining results were skipped and the partial artifacts are
+        // written; fail so a cost cap that went blind never looks satisfied.
+        if let costAccountingFailure = budgetTracker.costAccountingFailure {
+            throw EvalRunnerError.costAccountingUnavailable(
+                costAccountingFailure,
+                artifactsPath: outputDirectory.path
+            )
         }
 
         return makeRun(finishedAt: ISO8601DateFormatter().string(from: Date()))
@@ -535,7 +603,9 @@ struct EvalRunner {
         if !options.explicitOptions.contains(.backendMode) {
             guard let backendMode = EvalBackendMode(rawValue: previousRun.manifest.backendMode) else {
                 throw EvalRunnerError.invalidResumeRun(
-                    "Previous run has unknown backend mode \(previousRun.manifest.backendMode)."
+                    EvalBackendMode.removedRawValues.contains(previousRun.manifest.backendMode)
+                        ? TextToSQLEvalBackend.removedOnDeviceBackendMessage
+                        : "Previous run has unknown backend mode \(previousRun.manifest.backendMode)."
                 )
             }
             options.backendMode = backendMode
@@ -568,8 +638,27 @@ struct EvalRunner {
         {
             options.schemaAgentPlanConsistencyMode = mode
         }
+        options.schemaAgentCriticMode = TextToSQLEvalSchemaAgentCritic.resumedMode(
+            current: options.schemaAgentCriticMode,
+            isExplicit: options.explicitOptions.contains(.schemaAgentCriticMode),
+            previousAgentConfiguration: previousRun.manifest.agentConfiguration
+        )
+        options.schemaAgentGroundingJudgeMode = TextToSQLEvalSchemaAgentGroundingJudge.resumedMode(
+            current: options.schemaAgentGroundingJudgeMode,
+            isExplicit: options.explicitOptions.contains(.schemaAgentGroundingJudgeMode),
+            previousAgentConfiguration: previousRun.manifest.agentConfiguration
+        )
         if let model = previousRun.manifest.model, !options.explicitOptions.contains(.model) {
             options.model = model
+        }
+        // The provider follows the inherited model; an effort override is
+        // inherited only when the previous run sent a non-default effort.
+        if !options.explicitOptions.contains(.reasoningEffort) {
+            options.reasoningEffort = try TextToSQLEvalCloudSettings.resumedReasoningEffortOverride(
+                previousReasoningEffort: previousRun.manifest.reasoningEffort,
+                requestedModelID: options.model,
+                callSite: options.cloudCallSite
+            )
         }
         if !options.explicitOptions.contains(.repeatCount) {
             options.repeatCount = previousRun.manifest.repeatCount
@@ -669,36 +758,6 @@ struct EvalRunner {
         }
     }
 
-    private func scorerSourcePaths(isOpenRouterSmoke: Bool) -> [String] {
-        [
-            "WidenKit/Evals/TextToSQLEvalCase.swift",
-            "WidenKit/Evals/TextToSQLEvalScorer.swift",
-            "WidenKit/Evals/TextToSQLEvalResult.swift",
-            "WidenKit/Evals/TextToSQLEvalRunPlanning.swift",
-            "WidenEval/EvalRunner.swift",
-            "WidenKit/Models/SQLGenerationResult.swift",
-            "WidenKit/Services/TextToSQLPipeline.swift",
-            "WidenKit/Services/SQLGenerationFailure.swift",
-            "WidenKit/Services/GeneratedSQLRepairSupport.swift",
-            "WidenKit/Services/GeneratedSQLVerifier.swift",
-            "WidenKit/Services/PostgresErrorMapper.swift",
-            "WidenKit/Services/PostgresService.swift",
-        ] + ((isOpenRouterSmoke || options.backendMode.backends.contains(.cloud))
-            ? [
-                "WidenKit/Models/OpenRouterCatalog.swift",
-                "WidenKit/Services/OpenRouterSQLGenerator.swift",
-            ]
-            : [])
-            + (options.cloudAgentMode == .tools ? [
-                "WidenKit/Services/OpenRouterSchemaToolSQLAgent.swift",
-                "WidenKit/Services/OpenRouterToolChatProtocol.swift",
-                "WidenKit/Services/SchemaToolAgentClarificationPolicy.swift",
-                "WidenKit/Services/SchemaToolAgentPlanConsistencyPolicy.swift",
-                "WidenKit/Services/SchemaToolAgentSQLIntentCoveragePolicy.swift",
-                "WidenKit/Services/SchemaToolSession.swift",
-            ] : [])
-    }
-
     private struct SemanticFixtureIssue: Sendable {
         var status: TextToSQLEvalCaseStatus
         var semanticStatus: TextToSQLSemanticStatus
@@ -777,6 +836,15 @@ struct EvalRunner {
 
         func annotate(
             _ result: TextToSQLEvalResult,
+            evalCase: TextToSQLEvalCase,
+            schema: DatabaseSchema
+        ) async -> TextToSQLEvalResult {
+            let annotated = await annotateAnswer(result, evalCase: evalCase)
+            return await scoringWithheldSQL(annotated, evalCase: evalCase, schema: schema)
+        }
+
+        private func annotateAnswer(
+            _ result: TextToSQLEvalResult,
             evalCase: TextToSQLEvalCase
         ) async -> TextToSQLEvalResult {
             guard evalCase.expected.decision == .sql else {
@@ -832,6 +900,45 @@ struct EvalRunner {
                     comparisonMode: semantic.comparisonMode,
                     message: "PostgreSQL semantic execution failed: \(error.localizedDescription)"
                 )
+            }
+        }
+
+        /// Compares the SQL the grounding postprocessor withheld with the
+        /// golden SQL, for results that expected SQL. It records only the
+        /// withheld SQL's metrics and never changes the result's status.
+        private func scoringWithheldSQL(
+            _ result: TextToSQLEvalResult,
+            evalCase: TextToSQLEvalCase,
+            schema: DatabaseSchema
+        ) async -> TextToSQLEvalResult {
+            switch TextToSQLEvalWithheldSQL.scoring(for: result, evalCase: evalCase, schema: schema) {
+            case .skipped:
+                return result
+            case .rejectedByGuards:
+                return result.withWithheldSQLSemantic(status: .candidateExecutionFailure)
+            case .compare(let withheldSQL):
+                guard let goldenSQL = evalCase.expected.goldenSQL?.trimmingCharacters(
+                    in: .whitespacesAndNewlines
+                ),
+                    !goldenSQL.isEmpty,
+                    let semantic = evalCase.expected.semantic,
+                    let database = databases[evalCase.schemaFixture]
+                else {
+                    return result.withWithheldSQLSemantic(status: .notApplicable)
+                }
+                do {
+                    let output = try await executor.executePair(
+                        goldenSQL: goldenSQL,
+                        candidateSQL: withheldSQL,
+                        expectation: semantic,
+                        database: database
+                    )
+                    return result.withWithheldSQLSemantic(
+                        status: TextToSQLEvalWithheldSQL.semanticStatus(for: output)
+                    )
+                } catch {
+                    return result.withWithheldSQLSemantic(status: .semanticEnvironmentUnavailable)
+                }
             }
         }
     }
@@ -1058,38 +1165,30 @@ struct EvalRunner {
 
     private func makeGenerator(
         for backend: TextToSQLEvalBackend,
+        cloud: TextToSQLEvalCloudSettings,
         maximumHTTPAttempts: Int?
     ) -> (any SQLGenerator)? {
         switch backend {
-        case .local:
-            #if canImport(FoundationModels)
-                if #available(macOS 26.0, *) {
-                    return FoundationModelsSQLGenerator()
-                }
-                return nil
-            #else
-                return nil
-            #endif
         case .cloud:
-            guard let apiKey = Self.openRouterAPIKey() else { return nil }
-            let expectedCanonicalModelID = OpenRouterCatalog.expectedCanonicalModelID(
-                forRequestedModelID: options.model
-            )
+            guard let apiKey = cloud.apiKey(in: ProcessInfo.processInfo.environment) else {
+                return nil
+            }
+            let profile = cloud.profile
             if options.cloudAgentMode == .tools {
                 return EvalCloudSchemaToolSQLGenerator(
                     apiKey: apiKey,
-                    model: options.model,
-                    expectedCanonicalModelID: expectedCanonicalModelID,
+                    profile: profile,
                     maximumHTTPAttempts: maximumHTTPAttempts,
                     clarificationCorrectionMode: options.schemaAgentClarificationCorrectionMode,
                     intentCoverageMode: options.schemaAgentIntentCoverageMode,
-                    planConsistencyMode: options.schemaAgentPlanConsistencyMode
+                    planConsistencyMode: options.schemaAgentPlanConsistencyMode,
+                    groundingJudgeMode: options.schemaAgentGroundingJudgeMode,
+                    criticMode: options.schemaAgentCriticMode
                 )
             }
-            return OpenRouterSQLGenerator(
+            return CloudSQLGenerator(
                 apiKey: apiKey,
-                model: options.model,
-                expectedCanonicalModelID: expectedCanonicalModelID,
+                profile: profile,
                 maximumHTTPAttempts: maximumHTTPAttempts.map { min(3, max(1, $0)) } ?? 3,
                 countCapabilityLookupHTTPAttempts: maximumHTTPAttempts != nil
             )
@@ -1132,30 +1231,23 @@ struct EvalRunner {
         return result
     }
 
-    private func backendUnavailableReason(for backend: TextToSQLEvalBackend) -> String? {
+    private func backendUnavailableReason(
+        for backend: TextToSQLEvalBackend,
+        cloud: TextToSQLEvalCloudSettings
+    ) -> String? {
         switch backend {
-        case .local:
-            #if canImport(FoundationModels)
-                if #available(macOS 26.0, *) {
-                    return FoundationModelsSQLGenerator.availabilityMessage
-                }
-                return "Foundation Models requires macOS 26 or later."
-            #else
-                return "Foundation Models is not available in this build."
-            #endif
         case .cloud:
-            return Self.openRouterAPIKey() == nil
-                ? "WIDEN_EVAL_OPENROUTER_API_KEY is not set."
+            return cloud.apiKey(in: ProcessInfo.processInfo.environment) == nil
+                ? cloud.missingAPIKeyMessage
                 : nil
         }
     }
 
     private func promptText(
-        for backend: TextToSQLEvalBackend,
         evalCase: TextToSQLEvalCase,
         schema: DatabaseSchema
     ) -> String {
-        if backend == .cloud, options.cloudAgentMode == .tools {
+        if options.cloudAgentMode == .tools {
             return [
                 "Schema-tool agent initial request estimate.",
                 "The full DatabaseSchema is intentionally not sent in the first request.",
@@ -1163,12 +1255,11 @@ struct EvalRunner {
                 "Database context: \(evalCase.databaseContext ?? "")",
             ].joined(separator: "\n")
         }
-        let budget = backend == .cloud ? 60_000 : 8_000
         return SQLPromptBuilder.prompt(
             question: evalCase.question,
             schema: schema,
             databaseContext: evalCase.databaseContext,
-            maxSchemaCharacters: budget
+            maxSchemaCharacters: 60_000
         )
     }
 
@@ -1182,7 +1273,7 @@ struct EvalRunner {
         return TextToSQLEvalResult(
             caseID: evalCase.id,
             backend: backend,
-            model: backend == .cloud ? options.model : nil,
+            model: options.model,
             repeatIndex: repeatIndex,
             status: .backendUnavailable,
             metrics: TextToSQLEvalMetrics(
@@ -1209,7 +1300,7 @@ struct EvalRunner {
         TextToSQLEvalResult(
             caseID: evalCase.id,
             backend: backend,
-            model: backend == .cloud ? options.model : nil,
+            model: options.model,
             repeatIndex: repeatIndex,
             status: .skippedBudgetLimit,
             metrics: TextToSQLEvalMetrics(
@@ -1264,6 +1355,8 @@ struct EvalRunner {
         let modelCalls = results.compactMap(\.metrics.modelCallCount)
         let tokenUsage = results.compactMap(\.metrics.tokenUsage)
         let cloudCosts = results.compactMap(\.metrics.estimatedCloudCostUSD)
+        let cloudCostSource = results.compactMap(\.metrics.estimatedCloudCostSource)
+            .reduce(String?.none) { CloudCostSource.combined($0, $1) }
         let schemaToolCalls = results.compactMap(\.metrics.openRouterSchemaToolCallCount)
         let inspectionToolCalls = results.compactMap(\.metrics.openRouterInspectionToolCallCount)
         let agentModelTurns = results.compactMap(\.metrics.openRouterAgentLogicalTurnCount)
@@ -1445,6 +1538,7 @@ struct EvalRunner {
             totalModelCalls: modelCalls.isEmpty ? nil : modelCalls.reduce(0, +),
             totalTokenUsage: tokenUsage.isEmpty ? nil : tokenUsage.reduce(0, +),
             estimatedCloudCostUSD: cloudCosts.isEmpty ? nil : cloudCosts.reduce(0, +),
+            estimatedCloudCostSource: cloudCostSource,
             totalSchemaToolCalls: schemaToolCalls.isEmpty ? nil : schemaToolCalls.reduce(0, +),
             totalInspectionToolCalls: inspectionToolCalls.isEmpty ? nil : inspectionToolCalls.reduce(0, +),
             totalAgentModelTurns: agentModelTurns.isEmpty ? nil : agentModelTurns.reduce(0, +),
@@ -1456,7 +1550,14 @@ struct EvalRunner {
             averageEstimatedInitialPromptCharacters: promptEstimateValues.isEmpty
                 ? nil
                 : Double(promptEstimateValues.reduce(0, +)) / Double(promptEstimateValues.count),
-            maxEstimatedInitialPromptCharacters: promptEstimateValues.max()
+            maxEstimatedInitialPromptCharacters: promptEstimateValues.max(),
+            schemaAgentCritic: TextToSQLEvalCriticSummary(results: results),
+            forcedTerminal: TextToSQLEvalForcedTerminalSummary(results: results),
+            withheldSQL: TextToSQLEvalWithheldSQLSummary(results: results),
+            groundingJudge: TextToSQLEvalGroundingJudgeSummary(
+                results: results,
+                expectedDecisions: casesByID.mapValues(\.expected.decision)
+            )
         )
     }
 
@@ -1570,21 +1671,6 @@ struct EvalRunner {
         return sha256(Data(lines.utf8))
     }
 
-    private static func sourceHash(relativePaths: [String], relativeTo directory: URL) -> String {
-        var data = Data()
-        for path in relativePaths.sorted() {
-            data.append(Data(path.utf8))
-            data.append(0)
-            let url = directory.appendingPathComponent(path)
-            guard let fileData = try? Data(contentsOf: url) else {
-                return "unknown"
-            }
-            data.append(fileData)
-            data.append(0)
-        }
-        return sha256(data)
-    }
-
     private static func outputDirectory(base: String) -> URL {
         let timestamp = DateFormatter.evalTimestamp.string(from: Date())
         let baseURL = URL(fileURLWithPath: base, isDirectory: true)
@@ -1597,12 +1683,6 @@ struct EvalRunner {
             suffix += 1
         }
         return candidate
-    }
-
-    private static func openRouterAPIKey() -> String? {
-        let value = ProcessInfo.processInfo.environment["WIDEN_EVAL_OPENROUTER_API_KEY"]?
-            .trimmingCharacters(in: .whitespacesAndNewlines)
-        return value?.isEmpty == false ? value : nil
     }
 
     private static func readCasesJSONL(_ url: URL) throws -> [TextToSQLEvalResult] {
@@ -1647,6 +1727,7 @@ enum EvalRunnerError: LocalizedError {
     case missingCase(String)
     case missingSchemaFixture(String)
     case invalidResumeRun(String)
+    case costAccountingUnavailable(String, artifactsPath: String)
 
     var errorDescription: String? {
         switch self {
@@ -1656,6 +1737,8 @@ enum EvalRunnerError: LocalizedError {
             "No schema fixture loaded for \(fixture)."
         case .invalidResumeRun(let message):
             message
+        case .costAccountingUnavailable(let reason, let artifactsPath):
+            "\(reason) Any remaining cases were skipped; the run's artifacts are in \(artifactsPath)."
         }
     }
 }
@@ -1671,13 +1754,17 @@ private extension EvalRunManifest {
             suiteVersion: suiteVersion,
             suiteFileHash: suiteFileHash,
             schemaFixtureHashes: schemaFixtureHashes,
+            provider: provider,
             model: model,
             expectedCanonicalModelID: expectedCanonicalModelID,
             backendMode: backendMode,
             cloudAgentMode: cloudAgentMode,
+            reasoningEffort: reasoningEffort,
             schemaAgentClarificationCorrectionMode: schemaAgentClarificationCorrectionMode,
             schemaAgentIntentCoverageMode: schemaAgentIntentCoverageMode,
             schemaAgentPlanConsistencyMode: schemaAgentPlanConsistencyMode,
+            schemaAgentCriticMode: schemaAgentCriticMode,
+            schemaAgentGroundingJudgeMode: schemaAgentGroundingJudgeMode,
             semanticDatabaseEnabled: semanticDatabaseEnabled,
             scorerSourceHash: scorerSourceHash,
             semanticComparatorSourceHash: semanticComparatorSourceHash,
@@ -1690,6 +1777,29 @@ private extension EvalRunManifest {
 private extension EvalCLIOptions {
     var usesCloudSchemaAgent: Bool {
         backendMode.backends.contains(.cloud) && cloudAgentMode == .tools
+    }
+
+    var usesGroundingJudge: Bool {
+        usesCloudSchemaAgent && schemaAgentGroundingJudgeMode == .enabled
+    }
+
+    /// The schema agent modes the run uses, flags and resumed modes included,
+    /// which committed docs require to be the app's. Nil without the schema
+    /// agent.
+    var releaseGateAgentModes: TextToSQLReleaseGateModelPolicy.AgentModes? {
+        guard usesCloudSchemaAgent else { return nil }
+        return TextToSQLReleaseGateModelPolicy.AgentModes(
+            clarificationCorrection: schemaAgentClarificationCorrectionMode.rawValue,
+            intentCoverage: schemaAgentIntentCoverageMode.rawValue,
+            planConsistency: schemaAgentPlanConsistencyMode.rawValue,
+            critic: schemaAgentCriticMode.rawValue,
+            groundingJudge: schemaAgentGroundingJudgeMode.rawValue
+        )
+    }
+
+    /// The call site whose policy the run's cloud requests follow.
+    var cloudCallSite: CloudCallSite {
+        cloudAgentMode == .tools ? .agentTurn : .oneShotSQL
     }
 
     var budgetLimits: TextToSQLEvalBudgetLimits {
@@ -1839,12 +1949,13 @@ private extension TextToSQLEvalResult {
 
 private struct EvalCloudSchemaToolSQLGenerator: SQLGenerator, Sendable {
     var apiKey: String
-    var model: String
-    var expectedCanonicalModelID: String?
+    var profile: CloudModelProfile
     var maximumHTTPAttempts: Int?
     var clarificationCorrectionMode: SchemaToolAgentClarificationCorrectionMode
     var intentCoverageMode: SchemaToolAgentIntentCoverageMode
     var planConsistencyMode: SchemaToolAgentPlanConsistencyMode
+    var groundingJudgeMode: SchemaToolAgentGroundingJudgeMode
+    var criticMode: SchemaToolAgentCriticMode
 
     func generateSQL(
         question: String,
@@ -1857,10 +1968,9 @@ private struct EvalCloudSchemaToolSQLGenerator: SQLGenerator, Sendable {
         let connectionID = deterministicConnectionID(
             for: "\(schemaFingerprint)|\(selectedSchemas.joined(separator: ","))"
         )
-        let agent = OpenRouterSchemaToolSQLAgent(
+        let agent = SchemaToolSQLAgent(
             apiKey: apiKey,
-            model: model,
-            expectedCanonicalModelID: expectedCanonicalModelID,
+            profile: profile,
             connectionID: connectionID,
             selectedSchemas: selectedSchemas,
             configuration: agentConfiguration()
@@ -1873,11 +1983,32 @@ private struct EvalCloudSchemaToolSQLGenerator: SQLGenerator, Sendable {
         )
     }
 
-    private func agentConfiguration() -> OpenRouterSchemaToolSQLAgentConfiguration {
-        var configuration = OpenRouterSchemaToolSQLAgentConfiguration.default
+    /// The agent configuration before a per-case HTTP budget clamps it,
+    /// which is also what the run manifest reports.
+    static func baseConfiguration(
+        clarificationCorrectionMode: SchemaToolAgentClarificationCorrectionMode,
+        intentCoverageMode: SchemaToolAgentIntentCoverageMode,
+        planConsistencyMode: SchemaToolAgentPlanConsistencyMode,
+        groundingJudgeMode: SchemaToolAgentGroundingJudgeMode,
+        criticMode: SchemaToolAgentCriticMode
+    ) -> SchemaToolSQLAgentConfiguration {
+        var configuration = SchemaToolSQLAgentConfiguration.default
         configuration.clarificationCorrectionMode = clarificationCorrectionMode
         configuration.intentCoverageMode = intentCoverageMode
         configuration.planConsistencyMode = planConsistencyMode
+        configuration.groundingJudgeMode = groundingJudgeMode
+        configuration.criticMode = criticMode
+        return configuration
+    }
+
+    private func agentConfiguration() -> SchemaToolSQLAgentConfiguration {
+        var configuration = Self.baseConfiguration(
+            clarificationCorrectionMode: clarificationCorrectionMode,
+            intentCoverageMode: intentCoverageMode,
+            planConsistencyMode: planConsistencyMode,
+            groundingJudgeMode: groundingJudgeMode,
+            criticMode: criticMode
+        )
         if let maximumHTTPAttempts {
             configuration.maximumHTTPAttempts = min(
                 configuration.maximumHTTPAttempts,

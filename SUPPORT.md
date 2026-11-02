@@ -15,7 +15,7 @@ Widen is an open-source project, not a commercial support product.
 - Widen version or commit.
 - macOS version and Mac model.
 - Xcode version if building from source.
-- Whether you are using local AI, cloud AI, or manual SQL only.
+- Whether you are using text-to-SQL (Particle-1) or manual SQL only.
 - PostgreSQL version and whether the server is local or remote.
 - Exact steps to reproduce.
 - Sanitized error text, logs, screenshots, schema snippets, or SQL.

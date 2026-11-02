@@ -97,12 +97,12 @@ public struct PromptTelemetry: Codable, Equatable, Sendable {
     }
 }
 
-/// Append-only debug log of every on-device generation: the full prompt and
-/// the structured result (or the error). Written to
+/// Append-only debug log of every one-shot `CloudSQLGenerator` generation:
+/// the full prompt and the structured result (or the error). The schema-tool
+/// agent does not write it. Written to
 /// `~/Library/Application Support/Widen/generation.log` — local only, plain
-/// text, meant for inspecting what the small local model actually saw and
-/// said. Logging failures are swallowed; debugging must never break
-/// generation.
+/// text, meant for inspecting what the model actually saw and said. Logging
+/// failures are swallowed; debugging must never break generation.
 public actor GenerationLog {
     public static let shared = GenerationLog()
 

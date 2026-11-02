@@ -78,111 +78,135 @@ The script:
      --account "$SPARKLE_ACCOUNT" -p
    ```
 
-## OpenRouter Canonical Rollover
+## Particle Model Change and Re-Gate
 
-Treat a canonical rollover reported by Widen's runtime model-version checks as
-a new model version, not a routine constant update. The requested production
-alias must remain `openai/gpt-5.5`; the gate must exercise that alias so Widen
-verifies the route OpenRouter will actually use.
+Text-to-SQL requests `particle-1` and discards any completion that does not
+report `particle-ai/particle-1`. Particle publishes no dated snapshots, so
+that check verifies the model name only: Particle can change the model behind
+the name without a Widen release, and there is no earlier version to roll
+back to. Re-gating the shipped configuration is how Widen notices. Nothing
+schedules a re-gate between the triggers below, so a silent change can go
+unnoticed until one of them fires. Run this procedure when any of these
+happens:
 
-1. Confirm the mismatch with a fresh OpenRouter public-model metadata lookup
-   and the in-app model test. Record the old expected and newly observed
-   canonical IDs in the rollover issue.
-2. Choose the target patch version, obtain explicit authorization for the
-   paid gate, and record one total authorized cap, a small smoke allocation,
-   a one-case overrun reserve, and the conjunctive non-regression criteria
-   below before making completion requests. `MAX_CLOUD_COST_USD` is checked
-   before each case, so a command can exceed it by the final case's cost. Keep
-   the smoke allocation plus reserve below the total authorization. After the
-   smoke, choose one full-gate cumulative ceiling such that actual smoke spend
-   plus that ceiling plus the reserve does not exceed the branch-wide
-   authorization. Command-level ceilings do not replace cumulative branch
-   accounting.
-3. Create a candidate branch from current `origin/main` in a fresh worktree.
-4. Update only `OpenRouterCatalog.productionProfile.expectedCanonicalModelID`
-   and deterministic fixtures that assert that production pin. Do not change
-   the requested alias, private routing, canonical verification, safety or
-   schema validation, PostgreSQL verification, or release-gate enforcement.
-   This pin update must precede the paid gate because eval preflight otherwise
-   rejects the newly routed canonical version before any completion.
-5. Regenerate the project, run the focused canonical/parser/routing suites,
-   then run the full tests and eval build:
+- Particle announces a change to `particle-1`.
+- A user or an eval reports an identity mismatch: a completion that names
+  another model, or none. Test Connection in Settings > LLM shows the
+  returned model.
+- The model-list fields that `make eval-provider-probe` records (context
+  window, max output tokens, capabilities, default and supported reasoning
+  efforts) differ from the last recorded probe.
+- A minor release is planned. Re-gate before it ships.
 
-   ```sh
-   make project
-   DEVELOPER_DIR="$(bash scripts/xcode-developer-dir.sh)" \
-     xcodebuild -project Widen.xcodeproj -scheme Widen -configuration Debug \
-       -derivedDataPath build test \
-       -only-testing:WidenTests/OpenRouterCatalogTests \
-       -only-testing:WidenTests/OpenRouterSQLGeneratorTests \
-       -only-testing:WidenTests/OpenRouterSchemaToolSQLAgentTests \
-       -only-testing:WidenTests/AIBackendSelectionTests \
-       -only-testing:WidenTests/TextToSQLEvalRunPlanningTests
-   make test
-   make eval-build
-   ```
-
-6. With `ALLOW_MODEL_OVERRIDE` unset, run the requested alias through the
-   smoke and complete release gates:
+1. Open a re-gate issue that names the trigger. For an identity mismatch,
+   record the expected and observed returned model IDs.
+2. Choose the version the evidence is filed under: the planned release, or
+   otherwise the next patch version. Obtain explicit authorization for the
+   paid run and record, before any completion request, one total authorized
+   cap, a small smoke allocation, a one-result overrun reserve, and the
+   decision criteria in step 7. `MAX_CLOUD_COST_USD` is checked before each
+   result, so a command can exceed it by its last result's cost. Keep the
+   probe and smoke allocation plus the reserve below the total. After the
+   smoke, choose one full-gate ceiling such that actual probe and smoke spend
+   plus that ceiling plus the reserve does not exceed the authorization.
+   Command-level ceilings do not replace cumulative accounting across
+   commands.
+3. Create a worktree from current `origin/main`, then probe the API. The probe
+   costs under $0.02 and reads only `WIDEN_EVAL_PARTICLE_API_KEY` from
+   `.env.eval.local`:
 
    ```sh
-   make eval-openrouter-smoke MODEL=openai/gpt-5.5 REPEAT=3 MAX_CLOUD_COST_USD=<smoke-allocation>
-   make eval-release-triage MODEL=openai/gpt-5.5 RELEASE_VERSION=X.Y.Z MAX_CLOUD_COST_USD=<full-gate-cumulative-ceiling>
+   make eval-provider-probe
    ```
 
-   If the complete run is interrupted, resume its existing output directory
-   instead of restarting completed cases:
+   It writes `probe.json` and `probe.md` under
+   `.eval-results/provider-probe-<timestamp>/` and exits nonzero on a critical
+   failure: `particle-1` missing from the model list, a failed plain
+   completion or one from another model, no accepted second-turn shape, or an
+   invalid `json_object` reply. Stop on a critical failure, or on a warning
+   that the second-turn shape the Particle profile sends was not accepted;
+   the app's requests would fail the same way. Compare the model-list fields
+   with the last recorded probe and note every difference in the issue.
+4. Run the smoke at the shipped reasoning effort, with `REASONING_EFFORT`
+   unset:
 
    ```sh
-   make eval-release-resume RESUME=<run-directory> MODEL=openai/gpt-5.5 RELEASE_VERSION=X.Y.Z MAX_CLOUD_COST_USD=<full-gate-cumulative-ceiling>
+   make eval-smoke REPEAT=3 MAX_CLOUD_COST_USD=<smoke-allocation>
    ```
 
-   Reuse the same full-gate ceiling when persisted results account for every
-   prior request. Reused results seed the run's recorded spend, so the resume
-   value is a cumulative gate ceiling, not an additional allowance. If an
-   interruption may have left billed in-flight work unpersisted, reconcile
-   actual provider spend and reduce the ceiling—or obtain new authorization—
-   before resuming. Track smoke plus gate spend against the branch-wide
-   authorization separately.
+   It runs the five provider-smoke cases three times through the schema-tool
+   agent. Stop if any result is incomplete, times out, or reports a returned
+   model other than `particle-ai/particle-1`.
+5. With `MODEL` and `ALLOW_MODEL_OVERRIDE` unset, run the complete gate.
+   `RELEASE_VERSION` defaults to the app's `CFBundleShortVersionString`, so
+   pass it explicitly:
 
-   Never gate the concrete canonical ID and never set `ALLOW_MODEL_OVERRIDE`;
-   either would bypass the production routing contract under evaluation.
-7. Apply every pre-registered rollover criterion mechanically. The retained
-   comparator requires all of the following:
+   ```sh
+   make eval-release-triage RELEASE_VERSION=X.Y.Z MAX_CLOUD_COST_USD=<full-gate-ceiling>
+   ```
 
-   - 60/60 complete results.
-   - Semantic end-to-end at least 19/60.
-   - Clarification decisions at least 11/12.
-   - Exclusive expected-SQL clarification at most 28.
-   - Tool-budget triage at most 6 and static schema failures at most 1.
-   - Safety, schema, and PostgreSQL verification at 100% for evaluated SQL.
-   - Transport and structured parsing at least 95%.
-   - Zero forbidden bindings, repeated/no-progress repairs, eval timeouts,
-     and internal schema-agent timeouts.
-   - Private routing plus requested/routed/canonical model verification on
-     every completion request.
+   It writes `docs/evals/X.Y.Z.md` and `docs/evals/X.Y.Z-triage.md` when the
+   run is eligible for committed docs; see the
+   [Release Gate](../Evals/README.md#release-gate) section of the eval
+   README. If an infrastructure problem interrupts the run, resume its output
+   directory instead of restarting completed cases:
 
-   Also report cumulative branch spend, total and per-result gate cost,
-   P50/P95/maximum latency, semantic mismatches, and every triage bucket even
-   where no threshold applies.
-8. If any criterion fails, revert the candidate pin, do not merge or ship it,
-   and keep the rollover issue open. Evaluate alternatives separately without
-   weakening fail-closed behavior.
-9. If every criterion passes, commit only sanitized gate and triage evidence,
-   merge the pin, then create a fresh `release/X.Y.Z` worktree and run
-   `scripts/publish_release.sh X.Y.Z`.
-10. Inspect the draft and verify that it contains exactly the three expected
-    assets, then publish it. After publishing, verify the latest appcast/DMG
-    URLs, perform the Sparkle end-to-end update test from an older build,
-    verify the public catalog and in-app model test accept the new canonical
-    version, and close the rollover issue with links to the sanitized gate and
-    release.
+   ```sh
+   make eval-release-resume RESUME=<run-directory> RELEASE_VERSION=X.Y.Z MAX_CLOUD_COST_USD=<full-gate-ceiling>
+   ```
 
-Passing these rollover non-regression criteria restores the existing beta
-cloud path for the new canonical version. It does not satisfy the separate
-90% semantic production-readiness gate or authorize removing beta wording.
+   Reused results seed the run's recorded spend, so the resume value is the
+   same cumulative gate ceiling, not an additional allowance. If an
+   interruption may have left billed in-flight work unpersisted, lower the
+   ceiling or obtain new authorization before resuming. Never rerun a
+   complete gate to get a better number.
+6. Account for spend. Particle reports no cost, so WidenEval estimates each
+   request from its token usage at Particle's peak list prices. That estimate
+   is an upper bound for requests that report usage, but a request that
+   returns no usage, such as one cut off by a timeout, adds nothing, so the
+   total can understate what Particle bills (see
+   [Cost Accounting](../Evals/README.md#cost-accounting)). If Particle's
+   console shows the key's usage, compare it with the estimate and record the
+   larger figure. Record probe, smoke, and gate spend against the
+   authorization in the issue.
+7. Apply the recorded criteria mechanically. Unless the issue recorded
+   stricter ones, the run is valid only with 60/60 complete results,
+   transport and structured parsing at least 57/60, zero eval timeouts, the
+   tools agent on 60/60, and `particle-ai/particle-1` on every completion.
+   Against the last committed Particle-1 gate in `docs/evals/`, a valid run
+   passes the re-gate if semantic end-to-end is at most 2 results lower, no
+   case loses 2 or more of its 3 passes, clarification decisions are not
+   lower, safety and schema validity stay at 100% of evaluated SQL, and
+   repeated/no-progress repairs and internal schema-agent timeouts are not
+   higher. Also report cumulative spend, per-result cost, P50/P95/maximum
+   latency, and every triage bucket, even where no criterion applies.
+8. If the re-gate passes, commit only the sanitized gate and triage evidence
+   and continue with the release steps below.
+9. If it fails, there is no dated snapshot to roll back to and no other model
+   in the app. Commit the sanitized evidence anyway, report the regression to
+   Particle with it, and keep the issue open. The maintainer decides whether
+   to keep text-to-SQL enabled. Never weaken the validators, the identity
+   check, or the gate criteria to make a run pass.
+
+Before committing evidence, confirm that nothing from `.eval-results/` or
+`.env*` is staged and that the staged diff contains no API keys, `Bearer`
+tokens, URLs, or `/Users/` paths.
+
+If Particle starts reporting a new name for `particle-1`, the probe fails at
+its plain completion, and every app and eval completion fails the identity
+check until a release expects the new name. Treat that as a new model, not a
+constant update: on a candidate branch, change only `expectedReturnedModelID`
+in `CloudModelProfile.particle` and the tests that assert it, then run this
+procedure on that branch before merging.
+
+Passing a re-gate keeps the beta text-to-SQL path on the current model. It
+does not satisfy the separate 90% semantic production-readiness gate or
+authorize removing beta wording.
 
 ## Per-Release Steps
+
+Before a minor release, complete the
+[Particle re-gate](#particle-model-change-and-re-gate) first.
 
 1. Start a fresh release worktree from `origin/main`:
 

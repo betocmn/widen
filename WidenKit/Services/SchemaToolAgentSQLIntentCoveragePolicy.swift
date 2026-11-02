@@ -48,7 +48,7 @@ public enum SchemaToolAgentSQLIntentCoveragePolicy {
     public static func evaluate(
         question: String,
         databaseContext: String,
-        evidence: OpenRouterSchemaToolEvidenceSummary,
+        evidence: SchemaToolEvidenceSummary,
         sql: String
     ) -> SchemaToolAgentSQLIntentCoverageResult {
         let signals = IntentSignals(
@@ -237,7 +237,7 @@ public enum SchemaToolAgentSQLIntentCoveragePolicy {
     public static func semanticMismatchCategory(
         question: String,
         databaseContext: String,
-        evidence: OpenRouterSchemaToolEvidenceSummary,
+        evidence: SchemaToolEvidenceSummary,
         sql: String,
         comparatorMismatchCategory: String?
     ) -> String {
@@ -272,7 +272,7 @@ public enum SchemaToolAgentSQLIntentCoveragePolicy {
     private struct IntentSignals {
         var question: String
         var databaseContext: String
-        var evidence: OpenRouterSchemaToolEvidenceSummary
+        var evidence: SchemaToolEvidenceSummary
         var sql: String
 
         private var questionTokens: Set<String> { Set(Self.tokens(in: question)) }

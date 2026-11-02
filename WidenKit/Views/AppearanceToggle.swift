@@ -1,10 +1,6 @@
 import SwiftUI
 
-/// Three-segment Light / Dark / System switch in the sidebar footer, in the
-/// same capsule style as the toolbar's Local/Cloud toggle (system = display
-/// icon, the convention theme switchers use on the web). Unlike the toolbar
-/// control it sits outside the system glass, so it carries its own subtle
-/// track.
+/// Three-segment Light / Dark / System switch in the sidebar footer.
 struct AppearanceToggle: View {
     @AppStorage(AppearancePreference.storageKey)
     private var appearanceRaw = AppearancePreference.system.rawValue

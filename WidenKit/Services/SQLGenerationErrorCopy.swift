@@ -5,20 +5,39 @@ import Foundation
 /// diagnostics and prompt context; this map rewrites the common failure
 /// modes into copy that says what happened and what to do next, keeping the
 /// original technical message as a trailing detail line so diagnostics are
-/// never lost. Mapping happens only at display time — the typed failures,
-/// retry policy, routing, and fail-closed behavior are untouched.
+/// never lost. The copy keys on the failure category and Particle's error
+/// code, and names the model and provider from the production profile.
+/// Mapping happens only at display time — the typed failures, retry policy,
+/// and fail-closed behavior are untouched.
 public enum SQLGenerationErrorCopy {
     /// Provider-side failures a plain retry of the same question is likely
-    /// to resolve. These earn the "Try Again" button on the error bubble.
-    private static let transientCategories: Set<OpenRouterFailure.Category> = [
+    /// to resolve. These get the outage copy.
+    private static let transientCategories: Set<CloudRequestFailure.Category> = [
         .providerUnavailable, .providerOverloaded, .serverFailure, .timeout, .rateLimited,
     ]
+
+    /// Failures that earn the "Try Again" button on the error bubble: the
+    /// transient ones, plus a reply Widen could not use, which a fresh run
+    /// usually fixes.
+    private static let retryableCategories = transientCategories.union([.malformedStructuredResponse])
+
+    /// The typed provider failure behind a generation error: its category
+    /// and the provider's own error code, when it sent one.
+    private struct ProviderFailure {
+        var category: CloudRequestFailure.Category
+        var providerCode: String?
+
+        init(_ diagnostic: CloudRequestFailureDiagnostic) {
+            category = diagnostic.category
+            providerCode = diagnostic.providerCode?.lowercased()
+        }
+    }
 
     /// User-facing text for a chat error bubble produced by a failed
     /// pipeline run.
     public static func chatText(for failure: TextToSQLPipelineFailure) -> String {
         mappedText(
-            openRouterCategory: failure.openRouterFailure?.category,
+            for: failure.openRouterFailure.map(ProviderFailure.init),
             message: failure.message
         ) ?? failure.message
     }
@@ -30,32 +49,47 @@ public enum SQLGenerationErrorCopy {
             return error.localizedDescription
         }
         return mappedText(
-            openRouterCategory: openRouterCategory(of: failure),
+            for: providerFailure(of: failure),
             message: failure.localizedDescription
         ) ?? failure.localizedDescription
     }
 
-    /// True when the failure is transient and resubmitting the same
-    /// question is a reasonable next step.
+    /// True when resubmitting the same question is a reasonable next step.
     public static func isRetryable(_ failure: TextToSQLPipelineFailure) -> Bool {
         isRetryable(
-            openRouterCategory: failure.openRouterFailure?.category,
+            failure.openRouterFailure.map(ProviderFailure.init),
             message: failure.message
         )
     }
 
     public static func isRetryable(_ error: any Error) -> Bool {
         guard let failure = SQLGenerationFailure.typed(error) else { return false }
-        return isRetryable(
-            openRouterCategory: openRouterCategory(of: failure),
-            message: failure.localizedDescription
-        )
+        return isRetryable(providerFailure(of: failure), message: failure.localizedDescription)
     }
 
-    /// Short human label for the Settings › LLM "Test Model" error row. The
-    /// raw category and provider message stay available in the row tooltip.
-    public static func testModelLabel(for category: OpenRouterFailure.Category) -> String {
-        switch category {
+    /// The provider failure category behind a thrown generation error, if any.
+    static func cloudFailureCategory(of error: any Error) -> CloudRequestFailure.Category? {
+        SQLGenerationFailure.typed(error).flatMap(providerFailure(of:))?.category
+    }
+
+    /// Short human label for the Settings › LLM "Test Connection" rows. A
+    /// Particle error code that says more than its category gets its own
+    /// label. The raw category and code stay available in the row tooltip.
+    public static func testConnectionLabel(
+        for category: CloudRequestFailure.Category,
+        providerCode: String?
+    ) -> String {
+        switch providerCode?.lowercased() {
+        case "insufficient_scope":
+            return "No inference access"
+        case "fleet_capacity_exhausted":
+            return "\(providerName) at capacity"
+        case "invalid_model_output":
+            return "Invalid model output"
+        default:
+            break
+        }
+        return switch category {
         case .authentication:
             "API key rejected"
         case .paymentRequired:
@@ -69,7 +103,7 @@ public enum SQLGenerationErrorCopy {
         case .modelNotFound:
             "Model not available"
         case .modelVersionMismatch:
-            "Model version changed"
+            "Another model answered"
         case .invalidRequest:
             "Request rejected"
         case .unsupportedFeature:
@@ -81,9 +115,9 @@ public enum SQLGenerationErrorCopy {
         case .rateLimited:
             "Rate limited"
         case .providerOverloaded:
-            "Provider overloaded"
+            "\(providerName) overloaded"
         case .providerUnavailable:
-            "Provider outage"
+            "\(providerName) outage"
         case .timeout:
             "Request timed out"
         case .contentPolicy:
@@ -97,60 +131,56 @@ public enum SQLGenerationErrorCopy {
         case .networkTransport:
             "Network error"
         case .serverFailure:
-            "Provider server error"
+            "\(providerName) server error"
         }
     }
 
     private static var modelName: String {
-        OpenRouterCatalog.productionProfile.displayName
+        CloudModelCatalog.productionProfile.displayName
     }
 
-    private static func mappedText(
-        openRouterCategory: OpenRouterFailure.Category?,
-        message: String
-    ) -> String? {
-        // ZDR routing failures already explain the fail-closed policy, but
-        // present a usually-transient provider gap as a permanent stalemate;
-        // lead with the transient framing. Detection keys on the fixed
-        // prefix OpenRouterSQLGenerator injects for data-policy routing
-        // failures, so it holds for both the 404 and 503 shapes.
-        if message.contains("private-routing requirements") {
-            return withDetail(
-                "No provider currently offers \(modelName) with the zero-data-retention guarantee Widen requires, so the request was not sent. This is usually a temporary provider outage — try again in a few minutes. Widen never relaxes this privacy requirement.",
-                message
-            )
+    private static var providerName: String {
+        CloudModelCatalog.productionProfile.provider.displayName
+    }
+
+    private static var expectedModelID: String {
+        let profile = CloudModelCatalog.productionProfile
+        return profile.expectedReturnedModelID ?? profile.requestedModelID
+    }
+
+    /// The plain-language copy for a provider failure, or nil when the
+    /// technical message already says it best.
+    private static func copy(for failure: ProviderFailure) -> String? {
+        if transientCategories.contains(failure.category) {
+            return "\(modelName) is having a temporary outage. Your question is safe — try again in a moment."
         }
-        if let openRouterCategory {
-            if transientCategories.contains(openRouterCategory) {
-                return withDetail(
-                    "OpenRouter's servers for \(modelName) are having a temporary outage. Your question is safe — try again in a moment.",
-                    message
-                )
-            }
-            switch openRouterCategory {
-            case .authentication:
-                return withDetail(
-                    "OpenRouter rejected your API key. Re-enter it in Settings › LLM, or create a new one at openrouter.ai/keys.",
-                    message
-                )
-            case .paymentRequired:
-                return withDetail(
-                    "Your OpenRouter account is out of credits. Add credits at openrouter.ai, then try again.",
-                    message
-                )
-            case .providerLimit:
-                return withDetail(
-                    "Your OpenRouter key hit its spending or usage limit. Raise the limit at openrouter.ai, then try again.",
-                    message
-                )
-            case .modelVersionMismatch:
-                return withDetail(
-                    "OpenAI shipped a new \(modelName) version that Widen hasn't verified yet, so cloud SQL generation is paused to protect accuracy. Check Settings › General › Check for Updates Now… — a Widen update re-enables it. You can still browse schemas and run SQL directly.",
-                    message
-                )
-            default:
-                break
-            }
+        switch failure.category {
+        case .authentication:
+            return "\(providerName) rejected your API key. Re-enter it in Settings › LLM, or create a new key at platform.particle.ai."
+        case .paymentRequired:
+            return "Your \(providerName) account is out of credits. Add credits at platform.particle.ai, then try again."
+        case .permissionDenied:
+            return "Your \(providerName) API key isn't allowed to run inference. Create a key with inference access at platform.particle.ai and save it in Settings › LLM."
+        case .malformedStructuredResponse:
+            // Includes Particle's invalid_model_output, already resent once.
+            return "\(modelName) returned a response Widen couldn't use. Try again, or rephrase the question."
+        case .modelVersionMismatch:
+            return "\(providerName) answered with a model other than \(modelName) (\(expectedModelID)), so Widen discarded the response. Check Settings › General › Check for Updates Now…; you can still browse schemas and run SQL."
+        case .contextWindow:
+            return "This request is too large for \(modelName). Narrow the open schema or ask about fewer tables."
+        case .modelNotFound:
+            return "\(modelName) isn't available to your key right now. Check platform.particle.ai."
+        case .providerLimit:
+            // Only eval providers report key limits; keep it provider-neutral.
+            return "Your API key reached its usage limit. Raise the limit with your provider, then try again."
+        default:
+            return nil
+        }
+    }
+
+    private static func mappedText(for providerFailure: ProviderFailure?, message: String) -> String? {
+        if let providerFailure, let copy = copy(for: providerFailure) {
+            return withDetail(copy, message)
         }
         // The schema agent's typed category is flattened into the pipeline
         // failure message, and the pipeline types are pinned by the eval
@@ -174,14 +204,8 @@ public enum SQLGenerationErrorCopy {
         return nil
     }
 
-    private static func isRetryable(
-        openRouterCategory: OpenRouterFailure.Category?,
-        message: String
-    ) -> Bool {
-        if message.contains("private-routing requirements") {
-            return true
-        }
-        if let openRouterCategory, transientCategories.contains(openRouterCategory) {
+    private static func isRetryable(_ providerFailure: ProviderFailure?, message: String) -> Bool {
+        if let providerFailure, retryableCategories.contains(providerFailure.category) {
             return true
         }
         // The agent's wall-clock timeout usually clears on a retry (repeat
@@ -190,14 +214,12 @@ public enum SQLGenerationErrorCopy {
         return message.contains("schema-tool agent") && message.contains("timed out")
     }
 
-    private static func openRouterCategory(
-        of failure: SQLGenerationFailure
-    ) -> OpenRouterFailure.Category? {
+    private static func providerFailure(of failure: SQLGenerationFailure) -> ProviderFailure? {
         switch failure {
-        case .openRouter(let openRouterFailure):
-            openRouterFailure.category
+        case .cloudRequest(let cloudFailure):
+            ProviderFailure(cloudFailure.diagnostic)
         case .schemaToolAgent(let agentFailure):
-            agentFailure.openRouterFailure?.category
+            agentFailure.cloudFailure.map { ProviderFailure($0.diagnostic) }
         default:
             nil
         }

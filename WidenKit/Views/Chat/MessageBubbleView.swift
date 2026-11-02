@@ -57,14 +57,13 @@ struct MessageBubbleView: View {
         .background(.regularMaterial, in: RoundedRectangle(cornerRadius: 10))
     }
 
-    /// The user bubble gets real glass; assistant and error bubbles use a
-    /// plain material — they live in a scrolling LazyVStack, where stacked
-    /// glass is needlessly expensive.
+    /// A simple tint distinguishes user messages without stacking glass
+    /// effects inside the scrolling transcript.
     @ViewBuilder
     private var bubble: some View {
         if message.role == .user {
             content
-                .widenTintedGlassEffect(Color.accentColor.opacity(0.35), cornerRadius: 14)
+                .background(Color.accentColor.opacity(0.18), in: RoundedRectangle(cornerRadius: 14))
         } else {
             content
                 .background(.regularMaterial, in: RoundedRectangle(cornerRadius: 14))

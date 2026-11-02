@@ -345,22 +345,6 @@ struct ConnectionURLParserTests {
     }
 }
 
-@Suite("ConnectionAutofillPromptBuilder")
-struct ConnectionAutofillPromptBuilderTests {
-    @Test func promptEmbedsPastedText() {
-        let prompt = ConnectionAutofillPromptBuilder.prompt(
-            for: "postgres://widen@localhost/app")
-        #expect(prompt.contains("postgres://widen@localhost/app"))
-    }
-
-    @Test func promptTruncatesLongText() {
-        let long = String(repeating: "x", count: 10_000)
-        let truncated = ConnectionAutofillPromptBuilder.truncated(long)
-        #expect(truncated.count == ConnectionAutofillPromptBuilder.maxPastedCharacters + 1)
-        #expect(truncated.hasSuffix("…"))
-    }
-}
-
 @Suite("MockConnectionDetailsParser")
 struct MockConnectionDetailsParserTests {
     @Test func parsesConnectionURL() async throws {
@@ -679,36 +663,6 @@ struct MockConnectionDetailsParserTests {
         #expect(details.isEmpty)
     }
 }
-
-#if canImport(FoundationModels)
-    @Suite("FoundationModelsConnectionParser helpers")
-    struct FoundationModelsConnectionParserHelperTests {
-        @Test func sslMentionAcceptsTLS() {
-            guard #available(macOS 26.0, *) else { return }
-            #expect(FoundationModelsConnectionParser.mentionsSSLSetting(in: "TLS required"))
-            #expect(FoundationModelsConnectionParser.mentionsSSLSetting(in: "sslmode=require"))
-            #expect(!FoundationModelsConnectionParser.mentionsSSLSetting(in: "use a password"))
-        }
-
-        @Test func deterministicKeyValuesCanClearModelPassword() {
-            guard #available(macOS 26.0, *) else { return }
-            let modelDetails = ParsedConnectionDetails(host: "model-host", password: "old-password")
-            let deterministicDetails = FoundationModelsConnectionParser.deterministicDetails(
-                in:
-                    """
-                    DB_HOST=db.internal
-                    DB_PASSWORD=
-                    """,
-                urlDetails: nil
-            )
-
-            let merged = modelDetails.overridden(by: deterministicDetails!)
-
-            #expect(merged.host == "db.internal")
-            #expect(merged.password == "")
-        }
-    }
-#endif
 
 private struct StubParser: ConnectionDetailsParsing {
     var result: Result<ParsedConnectionDetails, AppError>
