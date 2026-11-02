@@ -4098,102 +4098,7 @@ private struct SchemaToolEvidenceLedger {
         referencedTables: [String],
         schema: DatabaseSchema
     ) -> [(table: String, column: String)] {
-        let referencedTableNames = Set(referencedTables)
-        let referencedTableInfos = schema.tables.filter {
-            referencedTableNames.contains($0.qualifiedName)
-        }
-        let aliases = relationAliasMap(analysis: analysis, schema: schema)
-        var bindings: [(table: String, column: String)] = []
-        for column in analysis.columns {
-            if column.name == "*" {
-                if let qualifier = column.qualifier,
-                    let table = aliases[Self.lookupKey(qualifier, quoted: column.qualifierIsQuoted)]
-                {
-                    bindings.append((table.qualifiedName, "*"))
-                } else if column.qualifier == nil {
-                    for table in referencedTableInfos {
-                        bindings.append((table.qualifiedName, "*"))
-                    }
-                }
-                continue
-            }
-            if let qualifier = column.qualifier,
-                let table = aliases[Self.lookupKey(qualifier, quoted: column.qualifierIsQuoted)],
-                let resolvedColumn = Self.columnName(in: table, matching: column)
-            {
-                bindings.append((table.qualifiedName, resolvedColumn))
-            } else if column.qualifier == nil {
-                let matches = referencedTableInfos.compactMap { table -> (TableInfo, String)? in
-                    guard let columnName = Self.columnName(in: table, matching: column) else { return nil }
-                    return (table, columnName)
-                }
-                if matches.count == 1, let match = matches.first {
-                    bindings.append((match.0.qualifiedName, match.1))
-                }
-            }
-        }
-        var seen = Set<String>()
-        return bindings.filter { seen.insert("\($0.table).\($0.column)").inserted }
-    }
-
-    private func relationAliasMap(
-        analysis: SQLReferenceAnalysis,
-        schema: DatabaseSchema
-    ) -> [String: TableInfo] {
-        var aliases: [String: TableInfo] = [:]
-        for relation in analysis.relations where !relation.isDerived {
-            guard let table = table(for: relation, schema: schema) else { continue }
-            Self.insertAlias(relation.name, quoted: relation.nameIsQuoted, table: table, into: &aliases)
-            Self.insertAlias(
-                relation.displayName,
-                quoted: relation.schemaIsQuoted || relation.nameIsQuoted,
-                table: table,
-                into: &aliases
-            )
-            if let alias = relation.alias {
-                Self.insertAlias(alias, quoted: relation.aliasIsQuoted, table: table, into: &aliases)
-            }
-        }
-        return aliases
-    }
-
-    private func table(for relation: SQLRelationReference, schema: DatabaseSchema) -> TableInfo? {
-        if let relationSchema = relation.schema {
-            return schema.tables.first {
-                Self.identifier($0.schema, matches: relationSchema, quoted: relation.schemaIsQuoted)
-                    && Self.identifier($0.name, matches: relation.name, quoted: relation.nameIsQuoted)
-            }
-        }
-        let matches = schema.tables.filter {
-            Self.identifier($0.name, matches: relation.name, quoted: relation.nameIsQuoted)
-        }
-        return matches.count == 1 ? matches.first : nil
-    }
-
-    private static func identifier(_ stored: String, matches referenced: String, quoted: Bool) -> Bool {
-        quoted ? stored == referenced : stored.lowercased() == referenced.lowercased()
-    }
-
-    private static func columnName(in table: TableInfo, matching column: SQLColumnReference) -> String? {
-        table.columns.first {
-            column.isQuoted ? $0.name == column.name : $0.name.lowercased() == column.name.lowercased()
-        }?.name
-    }
-
-    private static func lookupKey(_ value: String, quoted: Bool) -> String {
-        quoted ? "q:\(value)" : "u:\(value.lowercased())"
-    }
-
-    private static func insertAlias(
-        _ value: String,
-        quoted: Bool,
-        table: TableInfo,
-        into aliases: inout [String: TableInfo]
-    ) {
-        aliases[lookupKey(value, quoted: quoted)] = table
-        if quoted, isUnquotedPostgresIdentifier(value) {
-            aliases[lookupKey(value, quoted: false)] = table
-        }
+        analysis.columnBindings(referencedTables: referencedTables, schema: schema)
     }
 
     private static func rejected(
@@ -4298,20 +4203,6 @@ private struct SchemaToolEvidenceLedger {
         "from", "where", "group", "having", "window", "order", "limit", "offset", "fetch",
         "union", "intersect", "except",
     ]
-
-    private static func isUnquotedPostgresIdentifier(_ value: String) -> Bool {
-        guard let first = value.first,
-            first == "_" || (first >= "a" && first <= "z")
-        else {
-            return false
-        }
-        return value.allSatisfy { character in
-            character == "_"
-                || character == "$"
-                || (character >= "a" && character <= "z")
-                || (character >= "0" && character <= "9")
-        }
-    }
 
     private static func normalizedSQLPath(_ value: String) -> String? {
         let components = sqlPathComponents(value)

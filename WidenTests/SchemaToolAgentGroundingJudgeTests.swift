@@ -275,6 +275,54 @@ struct SchemaToolAgentGroundingJudgeTests {
         #expect(verified.map(\.verified) == [false])
     }
 
+    @Test func schemaMatchNeedsTheColumnReadFromTheCitedTable() {
+        let schema = DatabaseSchema(
+            schemas: [SchemaInfo(name: "public")],
+            tables: [
+                Self.table("orders", columns: [Self.column("orders", "id"), Self.column("orders", "amount")]),
+                Self.table(
+                    "refunds",
+                    columns: [
+                        Self.column("refunds", "id"),
+                        Self.column("refunds", "order_id"),
+                        Self.column("refunds", "amount"),
+                    ]
+                ),
+            ]
+        )
+        let request = SchemaToolAgentGroundingJudgeRequest(
+            question: "Order totals",
+            mode: .initial,
+            schemaEvidence: SchemaToolAgentCriticSchemaEvidence(),
+            schema: schema,
+            referencedTables: ["public.orders", "public.refunds"],
+            flaggedTerms: ["totals"]
+        )
+        func verified(_ citation: String, sql: String) -> Bool? {
+            SchemaToolAgentGroundingJudge.verify(
+                reply: SchemaToolAgentGroundingJudgeReply(
+                    terms: [.init(term: "totals", label: .schemaMatch, evidence: citation)]
+                ),
+                request: request,
+                sqlAnalysis: SQLReferenceAnalyzer.analyze(sql),
+                schema: schema
+            ).first?.verified
+        }
+        let joined = "SELECT o.amount FROM public.orders o JOIN public.refunds r ON r.order_id = o.id"
+
+        // Both tables have an amount column, but the SQL reads only the
+        // order's.
+        #expect(verified("public.orders.amount", sql: joined) == true)
+        #expect(verified("public.refunds.amount", sql: joined) == false)
+        // An unqualified amount could be either table's, so it proves neither.
+        #expect(
+            verified(
+                "public.orders.amount",
+                sql: "SELECT amount FROM public.orders o JOIN public.refunds r ON r.order_id = o.id"
+            ) == false
+        )
+    }
+
     @Test func schemaMatchMatchesQuotedColumnsExactly() {
         let schema = DatabaseSchema(
             schemas: [SchemaInfo(name: "public")],

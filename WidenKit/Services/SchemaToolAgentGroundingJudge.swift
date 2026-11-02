@@ -439,8 +439,16 @@ enum SchemaToolAgentGroundingJudge {
             matching: { $0.name == columnName },
             folded: { $0.name.lowercased() == columnName.lowercased() }
         ) else { return false }
+        // The SQL must read this exact column (Postgres folds unquoted names)
+        // from the cited table: a same-named column of another joined table
+        // does not count, and an unqualified reference counts only when no
+        // other referenced table has the column.
         let identifier = SQLIdentifierName(name: column.name, isQuoted: true)
-        guard sqlAnalysis.columns.contains(where: identifier.matches) else { return false }
+        var references = sqlAnalysis
+        references.columns = sqlAnalysis.columns.filter(identifier.matches)
+        let reads = references.columnBindings(referencedTables: referencedTables, schema: schema)
+        guard reads.contains(where: { $0.table == table.qualifiedName && $0.column == column.name })
+        else { return false }
         guard let value = citation.value else { return true }
         return (column.valueConstraints ?? []).contains { $0.values.contains(value) }
     }
