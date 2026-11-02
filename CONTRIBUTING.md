@@ -52,6 +52,12 @@ run `swift scripts/make_icon.swift` and commit all generated PNGs in
 
 ## Testing Expectations
 
+CI builds and runs unit tests on macOS 15, 26, and 27 using the repository's
+Xcode discovery helper. For UI changes, also check light and dark appearance,
+narrow and wide windows, and both panel toggles. The schema inspector's table
+and column lists should share the panel's native background without opaque
+rectangles. Keep controls on standard system styles so they adapt to each OS.
+
 Run the narrowest test set that covers your change:
 
 - Documentation-only changes do not need the full Xcode test suite.
