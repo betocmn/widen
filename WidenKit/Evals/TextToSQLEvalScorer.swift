@@ -257,13 +257,18 @@ public enum TextToSQLEvalCaseRunner {
         }
     }
 
+    /// The longest timeout sleep: one year. On the macOS 15 concurrency
+    /// runtime, `Task.sleep(nanoseconds: UInt64.max)` returns at once, which
+    /// timed out cases immediately; a year is still longer than any case.
+    private static let maximumTimeoutNanoseconds: UInt64 = 365 * 24 * 60 * 60 * 1_000_000_000
+
     private static func timeoutDuration(for timeoutSeconds: Double) -> (
         seconds: Double, nanoseconds: UInt64
     ) {
         let seconds = timeoutSeconds.isFinite && timeoutSeconds > 0 ? timeoutSeconds : 120
         let nanoseconds = seconds * 1_000_000_000
-        guard nanoseconds < Double(UInt64.max) else {
-            return (seconds, UInt64.max)
+        guard nanoseconds < Double(maximumTimeoutNanoseconds) else {
+            return (seconds, maximumTimeoutNanoseconds)
         }
         return (seconds, UInt64(max(1.0, nanoseconds)))
     }
