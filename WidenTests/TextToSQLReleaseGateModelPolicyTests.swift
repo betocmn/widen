@@ -43,6 +43,7 @@ struct TextToSQLReleaseGateModelPolicyTests {
                 expectedReturnedModelID: Self.pinnedReturnedModel,
                 reasoningEffort: Self.productionEffort,
                 callSite: .agentTurn,
+                agentModes: .production,
                 cloudEvaluatedResultCount: 1
             )
         )
@@ -89,6 +90,7 @@ struct TextToSQLReleaseGateModelPolicyTests {
             expectedReturnedModelID: gpt55.expectedReturnedModelID,
             reasoningEffort: gpt55.policy(for: .agentTurn).reasoningEffort?.rawValue,
             callSite: .agentTurn,
+            agentModes: .production,
             cloudEvaluatedResultCount: 60
         )
         #expect(reason == .pinnedModelRequired(actual: "openai/gpt-5.5"))
@@ -236,6 +238,7 @@ struct TextToSQLReleaseGateModelPolicyTests {
                 expectedReturnedModelID: Self.pinnedReturnedModel,
                 reasoningEffort: Self.productionEffort,
                 callSite: .agentTurn,
+                agentModes: .production,
                 cloudEvaluatedResultCount: 0
             )
         )
@@ -295,6 +298,156 @@ struct TextToSQLReleaseGateModelPolicyTests {
         )
     }
 
+    @Test func productionAgentModesAreTheAppsGatedConfiguration() {
+        // The configuration the 0.2.0 Stage 6 gate ran and the app ships.
+        #expect(
+            Policy.AgentModes.production
+                == Policy.AgentModes(
+                    clarificationCorrection: "diagnosticsOnly",
+                    intentCoverage: "diagnosticsOnly",
+                    planConsistency: "diagnosticsOnly",
+                    critic: "disabled",
+                    groundingJudge: "enabled"
+                )
+        )
+        #expect(Policy.AgentModes.production.firstNonProductionMode == nil)
+    }
+
+    @Test func committedDocsRequireTheProductionAgentModes() {
+        let production = Policy.AgentModes.production
+        let changes: [(modes: Policy.AgentModes, difference: Policy.AgentModeDifference)] = [
+            (
+                Self.modes { $0.clarificationCorrection = "correctOverClarificationExperimental" },
+                Self.difference("clarification correction", "correctOverClarificationExperimental", "diagnosticsOnly")
+            ),
+            (
+                Self.modes { $0.intentCoverage = "disabled" },
+                Self.difference("intent coverage", "disabled", "diagnosticsOnly")
+            ),
+            (
+                Self.modes { $0.planConsistency = "correctAndRetryExperimental" },
+                Self.difference("plan consistency", "correctAndRetryExperimental", "diagnosticsOnly")
+            ),
+            (Self.modes { $0.critic = "enabled" }, Self.difference("critic", "enabled", "disabled")),
+            (
+                Self.modes { $0.groundingJudge = "disabled" },
+                Self.difference("grounding judge", "disabled", "enabled")
+            ),
+            // A manifest from before the judge recorded no judge mode.
+            (Self.modes { $0.groundingJudge = nil }, Self.difference("grounding judge", nil, "enabled")),
+        ]
+        for change in changes {
+            #expect(change.modes.firstNonProductionMode == change.difference, "\(change.difference)")
+            // Even run with --allow-model-override, the mode keeps the docs
+            // unpublished.
+            #expect(
+                Self.ineligibility(agentModes: change.modes) == .productionAgentModeRequired(change.difference),
+                "\(change.difference)"
+            )
+        }
+        #expect(Self.ineligibility(agentModes: production) == nil)
+        // A one-shot run has no schema agent and so no modes to check.
+        #expect(
+            Self.ineligibility(
+                reasoningEffort: CloudModelProfile.particle.policy(for: .oneShotSQL).reasoningEffort?.rawValue,
+                callSite: .oneShotSQL,
+                agentModes: nil
+            ) == nil
+        )
+
+        let reason = Policy.CommittedDocIneligibility.productionAgentModeRequired(
+            Policy.AgentModeDifference(setting: "grounding judge", actual: "disabled", expected: "enabled")
+        )
+        #expect(reason.description.contains("schema agent grounding judge mode is disabled"))
+        #expect(reason.description.contains("production enabled"))
+        #expect(reason.description.contains("MODEL=particle-1"))
+        #expect(
+            Policy.CommittedDocIneligibility.productionAgentModeRequired(
+                Policy.AgentModeDifference(setting: "critic", actual: nil, expected: "disabled")
+            ).description.contains("critic mode is unset")
+        )
+    }
+
+    @Test func releaseGateModelPolicyRejectsAgentModeOverridesWithoutTheOverrideFlag() {
+        let judgeOff = Self.modes { $0.groundingJudge = "disabled" }
+        let violation = Policy.Violation(
+            model: Self.pinnedModel,
+            agentModeOverride: judgeOff.firstNonProductionMode
+        )
+        for versions in Self.docVersions {
+            #expect(throws: violation) {
+                try Policy.validate(
+                    model: Self.pinnedModel,
+                    agentModes: judgeOff,
+                    releaseGateVersion: versions.gate,
+                    releaseTriageVersion: versions.triage,
+                    allowModelOverride: false
+                )
+            }
+            #expect(throws: Never.self) {
+                try Policy.validate(
+                    model: Self.pinnedModel,
+                    agentModes: judgeOff,
+                    releaseGateVersion: versions.gate,
+                    releaseTriageVersion: versions.triage,
+                    allowModelOverride: true
+                )
+            }
+            for modes in [Policy.AgentModes.production, nil] {
+                #expect(throws: Never.self) {
+                    try Policy.validate(
+                        model: Self.pinnedModel,
+                        agentModes: modes,
+                        releaseGateVersion: versions.gate,
+                        releaseTriageVersion: versions.triage,
+                        allowModelOverride: false
+                    )
+                }
+            }
+        }
+        // Runs that publish no docs may use any mode.
+        #expect(throws: Never.self) {
+            try Policy.validate(
+                model: Self.pinnedModel,
+                agentModes: Self.modes { $0.critic = "enabled" },
+                releaseGateVersion: nil,
+                releaseTriageVersion: nil,
+                allowModelOverride: false
+            )
+        }
+        // An unpinned model is reported as the model violation it already was.
+        #expect(throws: Policy.Violation(model: "vendor/other")) {
+            try Policy.validate(
+                model: "vendor/other",
+                agentModes: judgeOff,
+                releaseGateVersion: "0.2.0",
+                releaseTriageVersion: nil,
+                allowModelOverride: false
+            )
+        }
+        #expect(violation.localizedDescription.contains("MODEL=particle-1 (Particle-1)"))
+        #expect(violation.localizedDescription.contains("the app's schema agent modes"))
+        #expect(violation.localizedDescription.contains("grounding judge mode is disabled, not enabled"))
+        #expect(violation.localizedDescription.contains("--allow-model-override"))
+    }
+
+    private static func difference(
+        _ setting: String,
+        _ actual: String?,
+        _ expected: String
+    ) -> Policy.AgentModeDifference {
+        Policy.AgentModeDifference(setting: setting, actual: actual, expected: expected)
+    }
+
+    /// The production agent modes with one change.
+    private static func modes(
+        _ change: (inout Policy.AgentModes) -> Void
+    ) -> Policy.AgentModes {
+        var modes = Policy.AgentModes.production
+        change(&modes)
+        return modes
+    }
+
     /// The committed-doc check for a pinned, verified, evaluated tools-agent
     /// run, with one field replaced.
     private static func ineligibility(
@@ -302,6 +455,7 @@ struct TextToSQLReleaseGateModelPolicyTests {
         expectedReturnedModelID: String? = pinnedReturnedModel,
         reasoningEffort: String? = productionEffort,
         callSite: CloudCallSite = .agentTurn,
+        agentModes: Policy.AgentModes? = .production,
         cloudEvaluatedResultCount: Int = 60
     ) -> Policy.CommittedDocIneligibility? {
         Policy.committedDocIneligibility(
@@ -309,6 +463,7 @@ struct TextToSQLReleaseGateModelPolicyTests {
             expectedReturnedModelID: expectedReturnedModelID,
             reasoningEffort: reasoningEffort,
             callSite: callSite,
+            agentModes: agentModes,
             cloudEvaluatedResultCount: cloudEvaluatedResultCount
         )
     }

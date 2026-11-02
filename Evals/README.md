@@ -306,14 +306,16 @@ gate and writes no release docs.
 `particle-1`. Engineering comparisons must opt in with
 `make eval-release MODEL=<model> ALLOW_MODEL_OVERRIDE=1`; direct CLI runs that
 publish release-gate or triage docs equally require `--allow-model-override`
-for a non-pinned `--model` or a non-default recorded reasoning effort
-(including offline `--triage-release` re-runs). Even with the override, such a
-run never writes the committed `docs/evals/` files — its gate summary and
-triage stay in the run directory.
+for a non-pinned `--model`, a non-default recorded reasoning effort, or a
+schema agent mode other than the app's, whether a `--schema-agent-*` flag or
+a resumed run's recorded mode sets it (including offline `--triage-release`
+re-runs). Even with the override, such a run never writes the committed
+`docs/evals/` files — its gate summary and triage stay in the run directory.
 Neither override changes the app's production profile. Committed docs also
 require the run to expect the returned model `particle-ai/particle-1`, to use
-the production reasoning effort, and to have at least one evaluated cloud
-result.
+the production reasoning effort and, for a schema-tool agent run, the app's
+clarification-correction, intent-coverage, plan-consistency, critic and
+grounding judge modes, and to have at least one evaluated cloud result.
 
 The target runs `Evals/suites/text-to-sql-v1.json` with `--cloud-agent tools`,
 `--semantic-db`, and `--repeat 3`, because the Particle-1 schema-tool agent is

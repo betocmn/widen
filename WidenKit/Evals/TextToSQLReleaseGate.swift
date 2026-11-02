@@ -34,10 +34,79 @@ public enum TextToSQLReleaseArtifactVersionPolicy {
 
 /// Runs that publish committed release-gate or triage docs must evaluate the
 /// pinned production model, Particle-1: requested as `particle-1` and
-/// verified as `particle-ai/particle-1`. Enforced at the eval CLI so a future
-/// Makefile target or direct binary invocation cannot bypass the Makefile
-/// guard.
+/// verified as `particle-ai/particle-1`, through the schema agent modes the
+/// app ships. Enforced at the eval CLI so a future Makefile target or direct
+/// binary invocation cannot bypass the Makefile guard.
 public enum TextToSQLReleaseGateModelPolicy {
+    /// The schema agent's switchable modes as raw values: what a run manifest
+    /// recorded, or what an eval is about to run. Nil is a mode the run did
+    /// not record, as in a manifest from before the critic or the judge.
+    public struct AgentModes: Equatable, Sendable {
+        public var clarificationCorrection: String?
+        public var intentCoverage: String?
+        public var planConsistency: String?
+        public var critic: String?
+        public var groundingJudge: String?
+
+        public init(
+            clarificationCorrection: String?,
+            intentCoverage: String?,
+            planConsistency: String?,
+            critic: String?,
+            groundingJudge: String?
+        ) {
+            self.clarificationCorrection = clarificationCorrection
+            self.intentCoverage = intentCoverage
+            self.planConsistency = planConsistency
+            self.critic = critic
+            self.groundingJudge = groundingJudge
+        }
+
+        /// The modes the app's agent runs with.
+        public static var production: AgentModes {
+            let configuration = SchemaToolSQLAgentConfiguration.default
+            return AgentModes(
+                clarificationCorrection: configuration.clarificationCorrectionMode.rawValue,
+                intentCoverage: configuration.intentCoverageMode.rawValue,
+                planConsistency: configuration.planConsistencyMode.rawValue,
+                critic: configuration.criticMode.rawValue,
+                groundingJudge: configuration.groundingJudgeMode.rawValue
+            )
+        }
+
+        /// The first mode that is not the app's, in the order gate reports
+        /// list them. Nil when every mode is.
+        public var firstNonProductionMode: AgentModeDifference? {
+            let production = Self.production
+            let modes: [(setting: String, actual: String?, expected: String?)] = [
+                ("clarification correction", clarificationCorrection, production.clarificationCorrection),
+                ("intent coverage", intentCoverage, production.intentCoverage),
+                ("plan consistency", planConsistency, production.planConsistency),
+                ("critic", critic, production.critic),
+                ("grounding judge", groundingJudge, production.groundingJudge),
+            ]
+            return modes.first { $0.actual != $0.expected }.map {
+                AgentModeDifference(setting: $0.setting, actual: $0.actual, expected: $0.expected)
+            }
+        }
+    }
+
+    /// A schema agent mode a run used instead of the app's, as an eval-only
+    /// `--schema-agent-*` flag or a resumed run's recorded mode sets.
+    public struct AgentModeDifference: Equatable, Sendable {
+        /// The mode as gate reports label it, such as `grounding judge`.
+        public var setting: String
+        /// Nil means the run recorded no mode.
+        public var actual: String?
+        public var expected: String?
+
+        public init(setting: String, actual: String?, expected: String?) {
+            self.setting = setting
+            self.actual = actual
+            self.expected = expected
+        }
+    }
+
     public enum CommittedDocIneligibility: Equatable, Sendable, CustomStringConvertible {
         case pinnedModelRequired(actual: String?)
         case expectedReturnedModelRequired(actual: String?)
@@ -45,6 +114,9 @@ public enum TextToSQLReleaseGateModelPolicy {
         /// profile's, as an eval-only `--reasoning-effort` does. Nil means
         /// no effort was sent.
         case productionReasoningEffortRequired(actual: String?, expected: String?)
+        /// The schema agent ran a mode other than the app's, as an eval-only
+        /// `--schema-agent-*` flag sets.
+        case productionAgentModeRequired(AgentModeDifference)
         case cloudEvaluationRequired
 
         public var description: String {
@@ -57,6 +129,8 @@ public enum TextToSQLReleaseGateModelPolicy {
                 return "the manifest expected returned model is \(actual ?? "missing"), not \(profile.expectedReturnedModelID ?? "missing") for \(pinned)"
             case .productionReasoningEffortRequired(let actual, let expected):
                 return "the run's reasoning effort is \(actual ?? "unset"), not the production \(expected ?? "unset") for \(pinned)"
+            case .productionAgentModeRequired(let difference):
+                return "the run's schema agent \(difference.setting) mode is \(difference.actual ?? "unset"), not the production \(difference.expected ?? "unset") for \(pinned)"
             case .cloudEvaluationRequired:
                 return "the run has no backend-available cloud results"
             }
@@ -67,6 +141,8 @@ public enum TextToSQLReleaseGateModelPolicy {
         public var model: String?
         /// Set when the pinned model ran with an eval-only `--reasoning-effort`.
         public var reasoningEffortOverride: ReasoningEffort? = nil
+        /// Set when the pinned model ran a schema agent mode the app does not.
+        public var agentModeOverride: AgentModeDifference? = nil
         public var pinnedModel: String {
             TextToSQLReleaseGateModelPolicy.pinnedProfile.requestedModelID
         }
@@ -75,6 +151,9 @@ public enum TextToSQLReleaseGateModelPolicy {
             let pinned = TextToSQLReleaseGateModelPolicy.pinnedModelArgument
             if let reasoningEffortOverride {
                 return "Release-gate and triage docs require \(pinned) at its production reasoning effort, but --reasoning-effort \(reasoningEffortOverride.rawValue) overrides it; pass --allow-model-override to run an engineering comparison."
+            }
+            if let agentModeOverride {
+                return "Release-gate and triage docs require \(pinned) with the app's schema agent modes, but the run's \(agentModeOverride.setting) mode is \(agentModeOverride.actual ?? "unset"), not \(agentModeOverride.expected ?? "unset"); pass --allow-model-override to run an engineering comparison."
             }
             guard let model else {
                 return "Release-gate and triage docs require \(pinned), but the run recorded no model; pass --allow-model-override to run an engineering comparison."
@@ -98,10 +177,13 @@ public enum TextToSQLReleaseGateModelPolicy {
 
     /// `reasoningEffortOverride` is the eval-only `--reasoning-effort`. It
     /// changes what the pinned model is asked to do, so a doc-publishing run
-    /// that passes it needs the same override flag as another model.
+    /// that passes it needs the same override flag as another model. So does
+    /// a run whose `agentModes`, the schema agent modes it will use, are not
+    /// the app's; nil means it runs no schema agent.
     public static func validate(
         model: String?,
         reasoningEffortOverride: ReasoningEffort? = nil,
+        agentModes: AgentModes? = nil,
         releaseGateVersion: String?,
         releaseTriageVersion: String?,
         allowModelOverride: Bool
@@ -121,6 +203,9 @@ public enum TextToSQLReleaseGateModelPolicy {
         if let reasoningEffortOverride {
             throw Violation(model: model, reasoningEffortOverride: reasoningEffortOverride)
         }
+        if let difference = agentModes?.firstNonProductionMode {
+            throw Violation(model: model, agentModeOverride: difference)
+        }
     }
 
     /// Sink-time eligibility is deliberately stricter than the override used
@@ -130,6 +215,7 @@ public enum TextToSQLReleaseGateModelPolicy {
         expectedReturnedModelID: String?,
         reasoningEffort: String?,
         callSite: CloudCallSite,
+        agentModes: AgentModes?,
         cloudEvaluatedResultCount: Int
     ) -> Bool {
         committedDocIneligibility(
@@ -137,18 +223,22 @@ public enum TextToSQLReleaseGateModelPolicy {
             expectedReturnedModelID: expectedReturnedModelID,
             reasoningEffort: reasoningEffort,
             callSite: callSite,
+            agentModes: agentModes,
             cloudEvaluatedResultCount: cloudEvaluatedResultCount
         ) == nil
     }
 
     /// `reasoningEffort` is the effort the run manifest recorded for
     /// `callSite`. Only the production profile's own effort for that call
-    /// site publishes, so a `--reasoning-effort` run never does.
+    /// site publishes, so a `--reasoning-effort` run never does. Likewise
+    /// `agentModes`, the schema agent modes the manifest recorded, publish
+    /// only as the app's; nil means the run had no schema agent.
     public static func committedDocIneligibility(
         model: String?,
         expectedReturnedModelID: String?,
         reasoningEffort: String?,
         callSite: CloudCallSite,
+        agentModes: AgentModes?,
         cloudEvaluatedResultCount: Int
     ) -> CommittedDocIneligibility? {
         let profile = pinnedProfile
@@ -166,6 +256,9 @@ public enum TextToSQLReleaseGateModelPolicy {
                 actual: reasoningEffort,
                 expected: productionReasoningEffort
             )
+        }
+        if let difference = agentModes?.firstNonProductionMode {
+            return .productionAgentModeRequired(difference)
         }
         guard cloudEvaluatedResultCount > 0 else {
             return .cloudEvaluationRequired

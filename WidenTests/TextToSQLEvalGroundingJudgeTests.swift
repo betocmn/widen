@@ -638,9 +638,11 @@ struct TextToSQLEvalGroundingJudgeTests {
         #expect(section.contains("\"## Reported (not gated)\","))
         #expect(section.contains("lines += TextToSQLEvalGroundingJudgeSummary.markdownRows(groundingJudge)"))
 
-        // The gate itself never reads the judge's counts.
+        // The gate itself never reads the judge's counts; only the committed
+        // doc policy before it checks the judge's mode.
         let gate = try Self.source("WidenKit/Evals/TextToSQLReleaseGate.swift")
-        #expect(!gate.contains("groundingJudge"))
+        let criteriaStart = try #require(gate.range(of: "public struct TextToSQLReleaseGateCount"))
+        #expect(!gate[criteriaStart.lowerBound...].contains("groundingJudge"))
 
         // The triage's Policy column names the judge step and what the
         // postprocessor did with it.

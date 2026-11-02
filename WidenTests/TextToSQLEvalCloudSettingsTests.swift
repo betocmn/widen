@@ -277,6 +277,8 @@ struct TextToSQLEvalCloudSettingsTests {
         let settings = try #require(runText.range(of: "try TextToSQLEvalCloudSettings("))
         #expect(gateCheck.lowerBound < effortArgument.lowerBound)
         #expect(effortArgument.lowerBound < settings.lowerBound)
+        // The modes it checks include flags and resumed modes.
+        #expect(runText.contains("agentModes: runner.options.releaseGateAgentModes,"))
         #expect(runner.contains("cloud.apiKey(in: ProcessInfo.processInfo.environment)"))
         #expect(runner.contains("cloud.missingAPIKeyMessage"))
         #expect(!runner.contains("WIDEN_EVAL_OPENROUTER_API_KEY"))
@@ -301,6 +303,7 @@ struct TextToSQLEvalCloudSettingsTests {
         let eligibility = String(reporter[eligibilityStart.upperBound...].prefix(1_200))
         #expect(eligibility.contains("reasoningEffort: manifest.reasoningEffort,"))
         #expect(eligibility.contains("callSite: manifest.cloudCallSite,"))
+        #expect(eligibility.contains("agentModes: manifest.releaseGateAgentModes,"))
         #expect(
             reporter.contains(
                 "cloudAgentMode == EvalCloudAgentMode.tools.rawValue ? .agentTurn : .oneShotSQL"
@@ -322,6 +325,7 @@ struct TextToSQLEvalCloudSettingsTests {
             retriage.range(of: "reasoningEffortOverride: reasoningEffortOverride,")
         )
         #expect(retriage.contains("callSite: runFile.manifest.cloudCallSite"))
+        #expect(retriage.contains("agentModes: runFile.manifest.releaseGateAgentModes,"))
         #expect(override.lowerBound < recorded.lowerBound)
         #expect(recorded.lowerBound < gateCheck.lowerBound)
         #expect(gateCheck.lowerBound < overrideArgument.lowerBound)

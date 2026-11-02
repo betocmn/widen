@@ -20,6 +20,7 @@ extension EvalRun {
             expectedReturnedModelID: manifest.expectedCanonicalModelID,
             reasoningEffort: manifest.reasoningEffort,
             callSite: manifest.cloudCallSite,
+            agentModes: manifest.releaseGateAgentModes,
             cloudEvaluatedResultCount: cloudEvaluatedResultCount
         )
     }
@@ -30,6 +31,19 @@ extension EvalRunManifest {
     /// the one its recorded reasoning effort belongs to.
     var cloudCallSite: CloudCallSite {
         cloudAgentMode == EvalCloudAgentMode.tools.rawValue ? .agentTurn : .oneShotSQL
+    }
+
+    /// The schema agent modes the run recorded, which committed docs require
+    /// to be the app's. Nil for a run without the schema agent.
+    var releaseGateAgentModes: TextToSQLReleaseGateModelPolicy.AgentModes? {
+        guard cloudCallSite == .agentTurn else { return nil }
+        return TextToSQLReleaseGateModelPolicy.AgentModes(
+            clarificationCorrection: schemaAgentClarificationCorrectionMode,
+            intentCoverage: schemaAgentIntentCoverageMode,
+            planConsistency: schemaAgentPlanConsistencyMode,
+            critic: schemaAgentCriticMode,
+            groundingJudge: schemaAgentGroundingJudgeMode
+        )
     }
 }
 
@@ -434,9 +448,10 @@ enum TextToSQLReleaseTriageReporter {
             from: Data(contentsOf: runURL)
         )
         // Offline re-triage publishes committed docs too, so it enforces the
-        // same pinned-model and reasoning-effort policy as evaluated runs —
-        // and even with the override, a non-pinned or non-default-effort run
-        // never replaces the committed copy.
+        // same pinned-model, reasoning-effort and agent-mode policy as
+        // evaluated runs — and even with the override, a non-pinned,
+        // non-default-effort or non-production-mode run never replaces the
+        // committed copy.
         var reasoningEffortOverride: ReasoningEffort?
         if copyVersion != nil {
             reasoningEffortOverride = try TextToSQLEvalCloudSettings.resumedReasoningEffortOverride(
@@ -448,6 +463,7 @@ enum TextToSQLReleaseTriageReporter {
         try TextToSQLReleaseGateModelPolicy.validate(
             model: runFile.manifest.model,
             reasoningEffortOverride: reasoningEffortOverride,
+            agentModes: runFile.manifest.releaseGateAgentModes,
             releaseGateVersion: nil,
             releaseTriageVersion: copyVersion,
             allowModelOverride: allowModelOverride

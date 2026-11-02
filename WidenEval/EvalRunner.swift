@@ -186,6 +186,7 @@ struct EvalRunner {
         try TextToSQLReleaseGateModelPolicy.validate(
             model: runner.options.model,
             reasoningEffortOverride: runner.options.reasoningEffort,
+            agentModes: runner.options.releaseGateAgentModes,
             releaseGateVersion: runner.options.releaseGateVersion,
             releaseTriageVersion: runner.options.releaseTriageVersion,
             allowModelOverride: runner.options.allowModelOverride
@@ -1780,6 +1781,20 @@ private extension EvalCLIOptions {
 
     var usesGroundingJudge: Bool {
         usesCloudSchemaAgent && schemaAgentGroundingJudgeMode == .enabled
+    }
+
+    /// The schema agent modes the run uses, flags and resumed modes included,
+    /// which committed docs require to be the app's. Nil without the schema
+    /// agent.
+    var releaseGateAgentModes: TextToSQLReleaseGateModelPolicy.AgentModes? {
+        guard usesCloudSchemaAgent else { return nil }
+        return TextToSQLReleaseGateModelPolicy.AgentModes(
+            clarificationCorrection: schemaAgentClarificationCorrectionMode.rawValue,
+            intentCoverage: schemaAgentIntentCoverageMode.rawValue,
+            planConsistency: schemaAgentPlanConsistencyMode.rawValue,
+            critic: schemaAgentCriticMode.rawValue,
+            groundingJudge: schemaAgentGroundingJudgeMode.rawValue
+        )
     }
 
     /// The call site whose policy the run's cloud requests follow.
