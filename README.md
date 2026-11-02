@@ -49,8 +49,8 @@ Passwords and API keys live in the macOS Keychain, never on disk in plaintext.
 Text-to-SQL ships behind a hard release gate: 60 pinned-model gate results
 with at least 90% end-to-end semantic pass rate, 100% safety validity, 100%
 schema validity, 100% clarification decision accuracy, at least 95% transport
-reliability, and zero repeated-repair failures. Particle-1 has not been
-gated yet, so text-to-SQL stays beta and should not be described as
+reliability, and zero repeated-repair failures. Particle-1 failed the 0.2.0
+gate, so text-to-SQL stays beta and should not be described as
 production-ready until it passes.
 
 Widen requests the `particle-1` model, and every response must report

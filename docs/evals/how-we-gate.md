@@ -27,10 +27,11 @@ passes only if all of the following hold:
 ("Clarification" means that when a question is ambiguous, the model should ask
 a follow-up question instead of guessing at SQL.)
 
-Particle-1 has not been gated yet, so text-to-SQL stays beta and is not
-described as production-ready. The previous OpenRouter GPT-5.5 profile failed
-the 0.1.0 gate on semantic pass rate. The committed gate report for each
-release lives in [docs/evals/](.).
+Particle-1 failed the 0.2.0 gate on end-to-end semantic pass rate (27/60)
+and clarification decision accuracy (11/12), so text-to-SQL stays beta and is
+not described as production-ready. The previous OpenRouter GPT-5.5 profile
+failed the 0.1.0 gate on semantic pass rate. The committed gate report for
+each release lives in [docs/evals/](.).
 
 ### What the gate does not measure
 
