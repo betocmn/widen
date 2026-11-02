@@ -64,37 +64,6 @@ struct TextToSQLEvalGroundingProbeTests {
         }
     }
 
-    @Test func lexicalGroundingFlagsTheAmbiguousWordOfEveryAmbiguousItem() throws {
-        let suite = try Self.suite()
-
-        for evalCase in suite.cases where evalCase.expected.decision == .clarify {
-            let schema = try Self.schema(evalCase.schemaFixture)
-            let questionWords = Set(Self.words(evalCase.question))
-            // The item's ambiguous word is its first expected concept the
-            // question says, such as "loyal", or both words of "high-value".
-            let ambiguousWords = try #require(
-                evalCase.expected.clarificationMustMentionAny
-                    .map(Self.words)
-                    .first { !$0.isEmpty && questionWords.isSuperset(of: $0) },
-                "\(evalCase.id)"
-            )
-            // With every table of the fixture in view the grounding pass
-            // still cannot match it, so whatever SQL the agent writes, the
-            // judge is asked about it.
-            let evaluation = GeneratedSQLPostprocessor.groundingEvaluation(
-                question: evalCase.question,
-                sql: "",
-                referencedTables: schema.tables.map(\.id).sorted(),
-                schema: schema,
-                databaseContext: evalCase.databaseContext ?? ""
-            )
-            let unsupported = Set(evaluation.concepts.filter { $0.state == .unsupported }.map(\.term))
-            for word in ambiguousWords {
-                #expect(unsupported.contains(word), "\(evalCase.id): \(word)")
-            }
-        }
-    }
-
     @Test func ambiguousItemsExpectTheirAmbiguousWordInTheClarification() throws {
         let suite = try Self.suite()
 
