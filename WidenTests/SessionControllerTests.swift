@@ -782,6 +782,19 @@ struct SessionControllerTests {
         ),
     ]
 
+    /// A judgment of "Which accounts are healthy?" over
+    /// `SELECT id FROM public.users`: "accounts" names the table, but
+    /// "healthy" needs a definition.
+    private static let healthyAccountsJudgedTerms = [
+        SchemaToolAgentGroundingJudgedTerm(
+            term: "accounts",
+            label: "schema_match",
+            verified: true,
+            evidence: "public.users"
+        ),
+        SchemaToolAgentGroundingJudgedTerm(term: "healthy", label: "needs_definition", verified: false, evidence: ""),
+    ]
+
     private func groundingJudgePostprocessorOutcome(_ message: ChatMessage?) -> String? {
         message?.generation?.backendMetadata?.agentDiagnostics?.groundingJudgment?.postprocessorOutcome
     }
@@ -2298,6 +2311,145 @@ struct SessionControllerTests {
         #expect(last?.generation?.needsClarification == true)
         #expect(last?.pendingClarification?.concept.term == "write")
         #expect(groundingJudgePostprocessorOutcome(last) == "lexical:releaseNotAllowed")
+    }
+
+    @Test func replyToAReAimedClarificationStoresTheBindingUnderTheJudgedWord() async {
+        let connectionID = UUID()
+        let (state, dir) = makeState(connectionID: connectionID, connected: true)
+        defer { try? FileManager.default.removeItem(at: dir) }
+        let schema = makeUsersUnconstrainedStatusSchema()
+        state.schemas[connectionID] = schema
+        let question = "Which accounts are healthy?"
+        let sql = "SELECT id FROM public.users"
+        // Without the judgment the grounding pass asks about "accounts".
+        let lexical = GeneratedSQLPostprocessor.enriched(
+            makeGeneration(sql: sql),
+            question: question,
+            schema: schema,
+            databaseContext: ""
+        )
+        #expect(lexical.pendingClarification?.concept.term == "accounts")
+        let judged = makeJudgedGeneration(
+            sql: sql,
+            question: question,
+            schema: schema,
+            terms: Self.healthyAccountsJudgedTerms
+        )
+        let generator = RecordingRepairGenerator(results: [
+            judged,
+            makeGeneration(sql: "SELECT id FROM public.users WHERE status = 'active'"),
+        ])
+        state.sqlGeneratorOverride = generator
+        let controller = makeController(connectionID: connectionID)
+        controller.chatVM.input = question
+
+        await controller.submit(appState: state)
+
+        let clarification = controller.chatVM.messages.last
+        #expect(clarification?.pendingClarification?.concept.term == "healthy")
+        #expect(clarification?.text.contains("\"healthy\"") == true)
+        #expect(groundingJudgePostprocessorOutcome(clarification)?.hasPrefix("reAimed:") == true)
+        #expect(controller.queryVM.sqlText.isEmpty)
+
+        let reply = "healthy means status = 'active'"
+        controller.chatVM.input = reply
+        await controller.submit(appState: state)
+
+        // The reply defines the word the judge asked about, for this
+        // request and for the connection.
+        #expect(generator.questions == [question, question])
+        #expect(generator.contexts.count == 2)
+        #expect(generator.contexts[1].confirmedSemanticBindings.contains("healthy: \(reply)"))
+        #expect(state.semanticBindings.count == 1)
+        #expect(state.semanticBindings.first?.concept == "healthy")
+        #expect(state.semanticBindings.first?.definition == reply)
+    }
+
+    @Test func generatedRunRepairAsksTheReAimedClarification() async {
+        let connectionID = UUID()
+        let (state, dir) = makeState(connectionID: connectionID, connected: true)
+        defer { try? FileManager.default.removeItem(at: dir) }
+        let schema = makeUsersUnconstrainedStatusSchema()
+        state.schemas[connectionID] = schema
+        let question = "Which accounts are healthy?"
+        let initialGeneration = makeGeneration(
+            sql: "SELECT timeout FROM public.users",
+            explanation: "Uses a missing timeout column."
+        )
+        let generator = RecordingRepairGenerator(results: [
+            makeJudgedGeneration(
+                sql: "SELECT id FROM public.users",
+                question: question,
+                schema: schema,
+                terms: Self.healthyAccountsJudgedTerms
+            ),
+        ])
+        state.sqlGeneratorOverride = generator
+        let recorder = SQLRecorder()
+        let controller = makeController(
+            connectionID: connectionID,
+            executor: TimeoutColumnExecutor(recorder: recorder)
+        )
+        controller.chatVM.messages = [
+            ChatMessage(role: .user, text: question),
+            ChatMessage(
+                role: .assistant,
+                text: initialGeneration.explanation,
+                generation: initialGeneration
+            ),
+        ]
+        controller.queryVM.setGeneration(initialGeneration)
+
+        controller.runQuery(appState: state)
+        await waitUntil {
+            !controller.queryVM.isRunning
+                && !controller.chatVM.isGenerating
+                && conversationMessages(controller.chatVM.messages).count == 3
+        }
+
+        // A re-aim only changes the question, so the repair loop asks it.
+        let statements = await recorder.all()
+        #expect(statements == [initialGeneration.sql])
+        let last = controller.chatVM.messages.last
+        #expect(last?.generation?.needsClarification == true)
+        #expect(last?.pendingClarification?.concept.term == "healthy")
+        #expect(groundingJudgePostprocessorOutcome(last)?.hasPrefix("reAimed:") == true)
+    }
+
+    @Test func failedWriteRetryIgnoresTheGroundingJudgment() async {
+        let connectionID = UUID()
+        let (state, dir) = makeState(connectionID: connectionID, connected: true)
+        defer { try? FileManager.default.removeItem(at: dir) }
+        let schema = makeSchema()
+        state.schemas[connectionID] = schema
+        let fixedSQL = "UPDATE public.users SET id = 2 WHERE id = 1"
+        // Even a judgment that asks for a definition changes nothing where
+        // the grounding pass may not clarify.
+        let fixed = makeJudgedGeneration(
+            sql: fixedSQL,
+            question: "bump ids",
+            schema: schema,
+            terms: [judgedTerm("bump", "needs_definition", verified: false)]
+        )
+        state.sqlGeneratorOverride = RecordingRepairGenerator(results: [fixed])
+        let recorder = SQLRecorder()
+        let controller = makeController(
+            connectionID: connectionID,
+            executor: FailingWriteExecutor(recorder: recorder)
+        )
+        controller.chatVM.messages = [ChatMessage(role: .user, text: "bump ids")]
+
+        await controller.retryFailedWrite(
+            appState: state, failedSQL: "UPDATE public.users SET id = 9", error: "boom")
+
+        #expect(await recorder.all().isEmpty)
+        #expect(controller.queryVM.sqlText == fixedSQL)
+        let last = controller.chatVM.messages.last
+        #expect(last?.role == .assistant)
+        #expect(last?.generation?.needsClarification == false)
+        #expect(last?.pendingClarification == nil)
+        #expect(last?.generation?.backendMetadata?.agentDiagnostics?.groundingJudgment != nil)
+        #expect(groundingJudgePostprocessorOutcome(last) == nil)
     }
 
     @Test func clarificationOptionReplyResolvesPendingClarificationAndStoresBinding() async {
