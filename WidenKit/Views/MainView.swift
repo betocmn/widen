@@ -121,6 +121,10 @@ public struct MainView: View {
                     .help("Switch the open schema")
                 }
             }
+            // Custom toolbar content needs its own inset; unlike a Button,
+            // the system doesn't add space between the status dot and bezel.
+            .padding(.horizontal, 10)
+            .padding(.vertical, 2)
             .fixedSize(horizontal: true, vertical: false)
             .help("\(config.name) · \(config.host):\(String(config.port)) — \(status.label)")
         }
