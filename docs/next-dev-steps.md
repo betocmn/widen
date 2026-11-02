@@ -357,6 +357,94 @@ the next experiment.
 commits newest first, `make build && make test`, and commit
 `docs: record failed budget layer gate`.
 
+#### Stage 5: the verified grounding judge (preregistered 2026-11-02)
+
+**What it changes.** The lexical grounder in `GeneratedSQLPostprocessor`
+replaces accepted agent SQL with a clarification whenever one question word
+does not match the referenced schema, context or definitions. It is the
+largest triage bucket (28 of Stage 4's 60 results). The candidate adds one
+Particle-1 call, the *grounding judge*, that labels each flagged word
+(request wording, query operation, schema match, context-defined,
+question-defined, needs a definition, unsupported). The judge never sees the
+drafted SQL, the plan or data values. Its citations are checked
+deterministically against the schema, the SQL's column references, the
+context and the question. `enriched` releases the SQL only when every flagged
+word is verified as answerable and the existing guards hold (digest of the
+exact SQL/question/context/definitions/words, read-only, described tables,
+no rejected literals, no anchored-window rule, the intent-coverage
+`mustClarify` backstop). Otherwise it can only re-aim the clarification at
+the word the judge says needs a definition. It never adds a clarification,
+any skip or failure gives today's behavior, and released SQL still goes
+through safety, closed-world schema validation and PREPARE. The app's
+run-time repair loop never releases judge-kept SQL. The fallback metric
+clarification also stops asking "Which should define what?".
+
+**Candidate commits** (reverted on failure, newest first): `c4c9b7f`
+`feat: enable the grounding judge by default`, `3cd8041`, `2c6a51b`,
+`17281e9`, `6971337`, `97f83b9`, `86f12a0`, `9f146f5`, `a13cb11`, `fe84059`,
+`3e7b61e`, `bbd3f9c`, `129ed82`, `08a6f07`, `3232a5e`. Kept even on failure
+(no behavior change: a pure refactor and eval-only scoring of withheld SQL):
+`8c1af2d` and `e1c0e98`. **Comparator C:** Stage 4 (run
+`20261102-001836-771`, commit `c0b0c4b`): 19/60 end-to-end, 11/12
+clarification decisions, 28 expected-SQL-got-clarification, P95 11.7 s,
+$0.00265 per result, 0 internal timeouts and 0 no-progress repairs.
+
+**Runs** (branch cap $15.00; $0.6494 spent before this stage):
+
+```sh
+make eval-release-triage RELEASE_VERSION=0.2.0 MAX_CLOUD_COST_USD=0.75
+make eval-grounding-probe REPEAT=2 MAX_CLOUD_COST_USD=0.30
+```
+
+The gate ceiling is a $1.00 allocation minus a $0.25 reserve; the probe
+ceiling is a $0.40 allocation minus a $0.10 reserve. The probe suite
+(`Evals/suites/grounding-probe-v1.json`, 9 ambiguous and 9 answerable
+questions over the existing fixtures, none a paraphrase of the gate suite)
+was committed before any judge call; the judge prompt contains none of the
+gate suite's flagged words. "On" is the run itself; "off" is the paired
+counterfactual the scorer derives from the same run (the lexical
+clarification each judge release or re-aim replaced).
+
+**Keep the candidate only if all hold.** Gate run, against its off arm and C:
+
+* V valid: 60/60 complete; identity 100%; tools 60/60; transport ≥ 57/60;
+  cost reported; code is C plus the candidate commits (and the two kept
+  commits) only; 0 eval timeouts.
+* G1 end-to-end semantic passes, paired: on ≥ off + 5.
+* G2 end-to-end semantic passes across runs: on ≥ C − 2 (19 − 2 = 17). G1
+  carries the improvement; G2 only bounds cross-run regression, with the same
+  noise margin as K2.
+* G3 clarification decisions: on ≥ max(C, off) (C = 11/12), and 0 judge
+  releases on expected-clarify results.
+* G4 expected-SQL results answered with a clarification: on ≤ off − 15.
+* G5 safety and schema validity 100%, and every release-rule violation
+  counter 0 (digest mismatch, write, rejected literal, anchored window,
+  undescribed tables, `mustClarify`).
+* G6 at least 25% of judge-released expected-SQL results pass semantically,
+  and at least 5 in total.
+* G7 the judge ran on at least 90% of judgeable results (eligible minus
+  rule-based skips) and failed on at most 10% of them.
+* G8 internal agent timeouts and repeated/no-progress repairs ≤ C (0 and 0).
+* G9 cost per result ≤ 1.5 × C ($0.0040); P95 ≤ C + 15 s (26.7 s) and
+  ≤ 150 s.
+* G10 paired: no case loses 2 or more of its 3 passes, on versus off.
+
+Probe run (36 results), on against its off arm:
+
+* P0 valid: 36/36 complete; identity 100%; transport ≥ 95%.
+* P1 judge releases on expected-clarify probe results ≤ 2 of 18.
+* P2 decision matches, paired: on ≥ off + 3.
+
+**Pass:** commit `docs: publish the Particle-1 release gate with the
+grounding judge`: the 0.2.0 reports from the gate run, the probe evidence, a
+how-we-gate row; this run becomes the next comparator.
+
+**Fail (any criterion, either run, or a breached ceiling):** copy the gate
+reports into its run directory, `git restore docs/evals/0.2.0*.md`,
+`git revert --no-edit` the fifteen candidate commits newest first,
+`make build && make test`, and commit `docs: record failed grounding judge
+gate`. Never rerun to fish for a better number.
+
 ### Evidence
 
 #### Stage 1
@@ -560,6 +648,8 @@ column after each command and record the larger figure.
 | 2 | `make eval-release-triage` | $1.40 | $0.1409 | $0.2081 |
 | 3 | `make eval-release-triage` | $2.25 | $0.2821 | $0.4902 |
 | 4 | `make eval-release-triage` | $0.50 | $0.1592 | $0.6494 |
+| 5 | `make eval-release-triage` | $0.75 | - | - |
+| 5 | `make eval-grounding-probe` | $0.30 | - | - |
 
 ## Completed and remaining work
 
