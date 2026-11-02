@@ -2525,6 +2525,7 @@ public final class SchemaToolSQLAgent: SQLGenerator, Sendable {
             question: question,
             mode: context.mode,
             recentQuestions: context.recentQuestions,
+            currentSQL: context.currentSQL,
             databaseContext: config.databaseContext,
             confirmedSemanticBindings: context.confirmedSemanticBindings,
             schemaEvidence: evidence.criticSchemaEvidence,

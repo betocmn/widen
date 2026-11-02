@@ -6012,50 +6012,6 @@ struct SchemaToolSQLAgentTests {
         #expect(result.backendMetadata?.agentDiagnostics?.groundingJudgment?.outcome == "judged")
     }
 
-    @Test func groundingJudgeSendsAFollowUpItsRecentQuestionsButNoSQL() async throws {
-        let schema = Self.makeSchema()
-        // The SQL a follow-up edits is usually the agent's earlier draft of
-        // the SQL under review, so the judge never sees it either.
-        let currentSQL = "SELECT id FROM public.users WHERE created_at >= CURRENT_DATE"
-        let sql = "SELECT id, name FROM public.users LIMIT 100"
-        let chatTransport = Self.criticScript([
-            { _ in Self.particleToolCalls([Self.terminalSQL(id: "answer-follow-up", sql: sql)]) },
-            { _ in
-                Self.groundingJudgeReply([
-                    ["term": "write", "label": "request_wording"],
-                    ["term": "query", "label": "request_wording"],
-                ])
-            },
-        ])
-        let agent = makeAgent(
-            schema: schema,
-            chatTransport: chatTransport,
-            configuration: Self.groundingJudgeConfiguration(),
-            groundingJudgeMode: .enabled
-        )
-
-        let result = try await agent.generateSQL(
-            question: "Write a query that lists user names",
-            schema: schema,
-            context: SQLGenerationContext(
-                mode: .followUp,
-                recentQuestions: ["List users created today"],
-                currentSQL: currentSQL
-            ),
-            config: SQLGenerationConfig()
-        )
-
-        #expect(result.sql == sql)
-        #expect(chatTransport.requests.count == 4)
-        #expect(try Self.requestBodyText(chatTransport.requests[0]).contains(currentSQL))
-        let prompt = try Self.criticUserPrompt(in: chatTransport.requests[3])
-        #expect(prompt.contains("Mode:\nfollow-up"))
-        #expect(prompt.contains("Recent questions:\nList users created today"))
-        #expect(!prompt.contains("SELECT"))
-        #expect(!prompt.contains("CURRENT_DATE"))
-        #expect(result.backendMetadata?.agentDiagnostics?.groundingJudgment?.outcome == "judged")
-    }
-
     @Test func groundingJudgeRunsOnForcedTerminalSQL() async throws {
         let schema = Self.makeSchema()
         let sql = "SELECT id, name FROM public.users LIMIT 100"

@@ -18,15 +18,17 @@ enum SchemaToolAgentGroundingJudgeLabel: String, CaseIterable, Equatable, Sendab
 /// What the grounding judge sees: the question and its context, the schema
 /// the tools exposed, the allowed values and comments of the exposed columns
 /// of the tables the SQL references, and the words the grounder flagged. It
-/// has no field for any SQL, its query plan or inspected data values: not
-/// the SQL under review, and not the SQL a follow-up edits, which is usually
-/// an earlier draft of it. The judge rules on the question and never on the
-/// agent's SQL. The initializer applies the size caps.
+/// has no field for the SQL under review, its query plan or inspected data
+/// values, so the judge rules on the question and never on the agent's SQL.
+/// The initializer applies the size caps.
 struct SchemaToolAgentGroundingJudgeRequest: Equatable, Sendable {
     var question: String
     var mode: SQLGenerationMode
     /// Empty unless the question is a follow-up.
     var recentQuestions: [String]
+    /// The SQL a follow-up refers to; `nil` for any other mode. Never the
+    /// SQL under review.
+    var currentSQL: String?
     var databaseContext: String
     /// The last 12, each cut to 500 characters.
     var confirmedSemanticBindings: [String]
@@ -46,6 +48,7 @@ struct SchemaToolAgentGroundingJudgeRequest: Equatable, Sendable {
         question: String,
         mode: SQLGenerationMode,
         recentQuestions: [String] = [],
+        currentSQL: String? = nil,
         databaseContext: String = "",
         confirmedSemanticBindings: [String] = [],
         schemaEvidence: SchemaToolAgentCriticSchemaEvidence,
@@ -63,6 +66,9 @@ struct SchemaToolAgentGroundingJudgeRequest: Equatable, Sendable {
                     .suffix(SchemaToolAgentGroundingJudge.maximumRecentQuestionCount)
             )
             : []
+        self.currentSQL = mode == .followUp
+            ? currentSQL?.trimmingCharacters(in: .whitespacesAndNewlines).nilIfEmpty
+            : nil
         self.databaseContext = databaseContext.trimmingCharacters(in: .whitespacesAndNewlines)
         self.confirmedSemanticBindings = confirmedSemanticBindings
             .map { $0.trimmingCharacters(in: .whitespacesAndNewlines) }
@@ -168,6 +174,9 @@ enum SchemaToolAgentGroundingJudge {
         ]
         if !request.recentQuestions.isEmpty {
             sections.append("Recent questions:\n\(request.recentQuestions.joined(separator: "\n"))")
+        }
+        if let currentSQL = request.currentSQL {
+            sections.append("Current SQL for follow-up:\n\(currentSQL)")
         }
         if !request.databaseContext.isEmpty {
             sections.append("Database context (authoritative):\n\(request.databaseContext)")
