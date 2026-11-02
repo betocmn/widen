@@ -151,7 +151,6 @@ enum TextToSQLReleaseGateReporter {
             "| Schema agent intent coverage | \(tableCell(run.manifest.schemaAgentIntentCoverageMode ?? "-")) |",
             "| Schema agent plan consistency | \(tableCell(run.manifest.schemaAgentPlanConsistencyMode ?? "-")) |",
             "| Schema agent critic | \(tableCell(run.manifest.schemaAgentCriticMode ?? "-")) |",
-            "| Schema agent grounding judge | \(tableCell(run.manifest.schemaAgentGroundingJudgeMode ?? "-")) |",
             "| Provider | \(tableCell(run.manifest.resolvedProvider ?? "-")) |",
             "| Endpoint | \(tableCell(run.manifest.providerEndpointHost ?? "-")) |",
             "| Model | \(tableCell(run.manifest.model ?? "-")) |",
@@ -198,10 +197,7 @@ enum TextToSQLReleaseGateReporter {
             lines += evaluation.thresholdFailureMessages.map { "- \($0)" }
         }
 
-        lines += reportedUsageSection(
-            results: releaseGateResults(for: run),
-            groundingJudge: (run.backendSummaries[.cloud] ?? run.summary).groundingJudge
-        )
+        lines += reportedUsageSection(results: releaseGateResults(for: run))
         lines += historicalRegressionSection(results: run.results)
 
         lines += [
@@ -222,21 +218,16 @@ enum TextToSQLReleaseGateReporter {
     }
 
     /// Spend for the gate's results, how often the schema agent forced a
-    /// final answer or asked its critic, the SQL the grounding postprocessor
-    /// withheld, and the grounding judge's counts with their paired
-    /// judge-off arm, reported for tracking only. The forced-answer and
-    /// critic counts are the extra-calls layer's K12 evidence that the layer
-    /// ran. The judge counts come from the run summary, which knows each
-    /// case's expected decision.
-    private static func reportedUsageSection(
-        results: [TextToSQLEvalResult],
-        groundingJudge: TextToSQLEvalGroundingJudgeSummary?
-    ) -> [String] {
+    /// final answer or asked its critic, and the SQL the grounding
+    /// postprocessor withheld, reported for tracking only. The forced-answer
+    /// and critic counts are the extra-calls layer's K12 evidence that the
+    /// layer ran.
+    private static func reportedUsageSection(results: [TextToSQLEvalResult]) -> [String] {
         var lines = [
             "",
             "## Reported (not gated)",
             "",
-            "These figures track spend, the schema agent's extra calls, the SQL grounding withheld and the grounding judge, and do not affect the gate.",
+            "These figures track spend, the schema agent's extra calls and the SQL grounding withheld, and do not affect the gate.",
             "",
             "| Metric | Value |",
             "| --- | --- |",
@@ -249,7 +240,6 @@ enum TextToSQLReleaseGateReporter {
         lines += TextToSQLEvalWithheldSQLSummary.markdownRows(
             TextToSQLEvalWithheldSQLSummary(results: results)
         )
-        lines += TextToSQLEvalGroundingJudgeSummary.markdownRows(groundingJudge)
         return lines
     }
 
@@ -518,7 +508,6 @@ enum TextToSQLReleaseTriageReporter {
             "| Schema agent intent coverage | \(tableCell(run.manifest.schemaAgentIntentCoverageMode ?? "-")) |",
             "| Schema agent plan consistency | \(tableCell(run.manifest.schemaAgentPlanConsistencyMode ?? "-")) |",
             "| Schema agent critic | \(tableCell(run.manifest.schemaAgentCriticMode ?? "-")) |",
-            "| Schema agent grounding judge | \(tableCell(run.manifest.schemaAgentGroundingJudgeMode ?? "-")) |",
             "| Provider | \(tableCell(run.manifest.resolvedProvider ?? "-")) |",
             "| Endpoint | \(tableCell(run.manifest.providerEndpointHost ?? "-")) |",
             "| Model | \(tableCell(run.manifest.model ?? "-")) |",
@@ -862,7 +851,6 @@ enum TextToSQLReleaseTriageReporter {
                     || !diagnostics.sqlIntentCoverageDecision.isEmpty
                     || !diagnostics.planConsistencyDecision.isEmpty
                     || diagnostics.planConsistencyCorrectionAttempted
-                    || diagnostics.groundingJudgment != nil
             else { return "-" }
             var parts: [String] = []
             if !diagnostics.clarificationPolicyDecision.isEmpty {
@@ -899,12 +887,6 @@ enum TextToSQLReleaseTriageReporter {
                     diagnostics.planConsistencyCorrectionSucceeded
                         ? "plan correction succeeded"
                         : "plan correction attempted"
-                )
-            }
-            if let judgment = diagnostics.groundingJudgment {
-                parts.append(
-                    "judge: " + ([judgment.outcome] + [judgment.postprocessorOutcome].compactMap { $0 })
-                        .joined(separator: ", ")
                 )
             }
             return parts.joined(separator: "; ")

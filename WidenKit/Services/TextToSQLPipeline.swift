@@ -67,49 +67,17 @@ public struct TextToSQLRun: Equatable, Sendable {
     /// on such a replacement. A run is never persisted, so this SQL stays in
     /// memory; evals score it without writing it.
     public var groundingWithheldSQL: String?
-    /// The first `enriched` call where the agent's grounding judgment changed
-    /// the result. Nil when the judgment changed nothing, as with the judge
-    /// off. Like `groundingWithheldSQL` it stays in memory; evals derive the
-    /// judge-off result from it.
-    public var groundingJudgeDivergence: TextToSQLGroundingJudgeDivergence?
 
     public init(
         finalDecision: TextToSQLDecision,
         trace: TextToSQLTrace,
         events: [TextToSQLPipelineEvent] = [],
-        groundingWithheldSQL: String? = nil,
-        groundingJudgeDivergence: TextToSQLGroundingJudgeDivergence? = nil
+        groundingWithheldSQL: String? = nil
     ) {
         self.finalDecision = finalDecision
         self.trace = trace
         self.events = events
         self.groundingWithheldSQL = groundingWithheldSQL
-        self.groundingJudgeDivergence = groundingJudgeDivergence
-    }
-}
-
-/// Where a grounding judgment made `GeneratedSQLPostprocessor.enriched`
-/// return something other than its lexical result for the same generation.
-/// A clarification from `enriched` ends a run on every path, so with the
-/// judge off the run would have ended there, on `lexicalClarificationQuestion`.
-/// That holds up to the judge request's own time and HTTP attempts, which
-/// only later repair runs could feel.
-public struct TextToSQLGroundingJudgeDivergence: Equatable, Sendable {
-    public enum Kind: String, Equatable, Sendable {
-        /// The judgment kept SQL the lexical pass would have replaced with a
-        /// clarification.
-        case released
-        /// The judgment pointed the clarification at another flagged word.
-        case reAimed
-    }
-
-    public var kind: Kind
-    /// The clarification `enriched` asks without the judgment.
-    public var lexicalClarificationQuestion: String
-
-    public init(kind: Kind, lexicalClarificationQuestion: String) {
-        self.kind = kind
-        self.lexicalClarificationQuestion = lexicalClarificationQuestion
     }
 }
 
@@ -382,15 +350,6 @@ public struct TextToSQLPipeline: TextToSQLRunning {
             databaseContext: request.config.databaseContext,
             confirmedSemanticBindings: request.context.confirmedSemanticBindings,
             allowGroundingClarification: request.allowGroundingClarification
-        )
-        trace.recordGroundingJudgeDivergence(
-            Self.groundingJudgeDivergence(
-                generated: generated,
-                postprocessed: result,
-                question: request.question,
-                confirmedSemanticBindings: request.context.confirmedSemanticBindings,
-                request: request
-            )
         )
         trace.append(
             .postprocessing,
@@ -835,15 +794,6 @@ public struct TextToSQLPipeline: TextToSQLRunning {
                 generated: generated,
                 postprocessed: generation
             )
-            trace.recordGroundingJudgeDivergence(
-                Self.groundingJudgeDivergence(
-                    generated: generated,
-                    postprocessed: generation,
-                    question: repairQuestionContext.question,
-                    confirmedSemanticBindings: context.confirmedSemanticBindings,
-                    request: request
-                )
-            )
         } catch is CancellationError {
             trace.append(
                 .postgresVerificationRepair,
@@ -1144,15 +1094,6 @@ public struct TextToSQLPipeline: TextToSQLRunning {
                 groundingWithheldSQL = Self.groundingWithheldSQL(
                     generated: generated,
                     postprocessed: generation
-                )
-                trace.recordGroundingJudgeDivergence(
-                    Self.groundingJudgeDivergence(
-                        generated: generated,
-                        postprocessed: generation,
-                        question: repairQuestionContext.question,
-                        confirmedSemanticBindings: context.confirmedSemanticBindings,
-                        request: request
-                    )
                 )
             } catch is CancellationError {
                 trace.append(
@@ -1662,8 +1603,7 @@ public struct TextToSQLPipeline: TextToSQLRunning {
                 inspectionToolCalls: trace.inspectionToolCalls
             ),
             events: events,
-            groundingWithheldSQL: groundingWithheldSQL,
-            groundingJudgeDivergence: trace.groundingJudgeDivergence
+            groundingWithheldSQL: groundingWithheldSQL
         )
     }
 
@@ -1677,51 +1617,6 @@ public struct TextToSQLPipeline: TextToSQLRunning {
         guard !generated.needsClarification, postprocessed.needsClarification else { return nil }
         let sql = generated.sql.trimmingCharacters(in: .whitespacesAndNewlines)
         return sql.isEmpty ? nil : sql
-    }
-
-    /// How the generation's grounding judgment changed what `enriched`
-    /// returned. `enriched` is pure, so running it again without the
-    /// judgment gives exactly the lexical result. Nil when the generation
-    /// carries no judgment, or `enriched` had no clarification to keep or
-    /// re-aim (it records a postprocessor outcome only then).
-    private static func groundingJudgeDivergence(
-        generated: SQLGenerationResult,
-        postprocessed: SQLGenerationResult,
-        question: String,
-        confirmedSemanticBindings: [String],
-        request: TextToSQLRequest
-    ) -> TextToSQLGroundingJudgeDivergence? {
-        guard generated.backendMetadata?.agentDiagnostics?.groundingJudgment != nil,
-            postprocessed.backendMetadata?.agentDiagnostics?.groundingJudgment?.postprocessorOutcome != nil
-        else { return nil }
-        var unjudged = generated
-        unjudged.backendMetadata?.agentDiagnostics?.groundingJudgment = nil
-        let lexical = GeneratedSQLPostprocessor.enriched(
-            unjudged,
-            question: question,
-            schema: request.schema,
-            databaseContext: request.config.databaseContext,
-            confirmedSemanticBindings: confirmedSemanticBindings,
-            allowGroundingClarification: request.allowGroundingClarification
-        )
-        guard lexical.needsClarification,
-            let lexicalQuestion = lexical.clarificationQuestion?
-                .trimmingCharacters(in: .whitespacesAndNewlines),
-            !lexicalQuestion.isEmpty
-        else { return nil }
-        if !postprocessed.needsClarification {
-            return TextToSQLGroundingJudgeDivergence(
-                kind: .released,
-                lexicalClarificationQuestion: lexicalQuestion
-            )
-        }
-        let judgedQuestion = postprocessed.clarificationQuestion?
-            .trimmingCharacters(in: .whitespacesAndNewlines)
-        guard judgedQuestion != lexicalQuestion else { return nil }
-        return TextToSQLGroundingJudgeDivergence(
-            kind: .reAimed,
-            lexicalClarificationQuestion: lexicalQuestion
-        )
     }
 }
 
@@ -1747,18 +1642,9 @@ private struct TraceBuilder {
     var stages: [TextToSQLStageResult] = []
     var schemaToolCalls: [SchemaToolCallTrace] = []
     var inspectionToolCalls: [DatabaseInspectionToolCallTrace] = []
-    /// The run's first grounding-judge divergence. Every path that calls
-    /// `enriched` carries this builder, and with the judge off the run would
-    /// have ended at the first one, so later ones are ignored.
-    private(set) var groundingJudgeDivergence: TextToSQLGroundingJudgeDivergence?
 
     init(schema: DatabaseSchema) {
         self.schemaFingerprint = Self.fingerprint(schema)
-    }
-
-    mutating func recordGroundingJudgeDivergence(_ divergence: TextToSQLGroundingJudgeDivergence?) {
-        guard groundingJudgeDivergence == nil else { return }
-        groundingJudgeDivergence = divergence
     }
 
     mutating func append(

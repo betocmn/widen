@@ -317,9 +317,6 @@ public struct TextToSQLEvalResumeCompatibilityManifest: Equatable, Sendable {
     /// The critic mode the run's agent configuration recorded, or nil for a
     /// run without the schema agent or from before the critic existed.
     public var schemaAgentCriticMode: String?
-    /// The grounding judge mode the run's agent configuration recorded, or
-    /// nil for a run without the schema agent or from before the judge.
-    public var schemaAgentGroundingJudgeMode: String?
     public var semanticDatabaseEnabled: Bool
     public var scorerSourceHash: String
     public var semanticComparatorSourceHash: String?
@@ -341,7 +338,6 @@ public struct TextToSQLEvalResumeCompatibilityManifest: Equatable, Sendable {
         schemaAgentIntentCoverageMode: String? = nil,
         schemaAgentPlanConsistencyMode: String? = nil,
         schemaAgentCriticMode: String? = nil,
-        schemaAgentGroundingJudgeMode: String? = nil,
         semanticDatabaseEnabled: Bool,
         scorerSourceHash: String,
         semanticComparatorSourceHash: String?,
@@ -362,7 +358,6 @@ public struct TextToSQLEvalResumeCompatibilityManifest: Equatable, Sendable {
         self.schemaAgentIntentCoverageMode = schemaAgentIntentCoverageMode
         self.schemaAgentPlanConsistencyMode = schemaAgentPlanConsistencyMode
         self.schemaAgentCriticMode = schemaAgentCriticMode
-        self.schemaAgentGroundingJudgeMode = schemaAgentGroundingJudgeMode
         self.semanticDatabaseEnabled = semanticDatabaseEnabled
         self.scorerSourceHash = scorerSourceHash
         self.semanticComparatorSourceHash = semanticComparatorSourceHash
@@ -472,12 +467,6 @@ public enum TextToSQLEvalResumeCompatibility {
             issues: &issues
         )
         compare(
-            "schema agent grounding judge mode",
-            normalizedSchemaAgentGroundingJudgeMode(previous.schemaAgentGroundingJudgeMode),
-            normalizedSchemaAgentGroundingJudgeMode(current.schemaAgentGroundingJudgeMode),
-            issues: &issues
-        )
-        compare(
             "semantic DB",
             String(previous.semanticDatabaseEnabled),
             String(current.semanticDatabaseEnabled),
@@ -558,11 +547,6 @@ public enum TextToSQLEvalResumeCompatibility {
     /// A run that recorded no critic mode ran without the critic.
     private static func normalizedSchemaAgentCriticMode(_ value: String?) -> String {
         value ?? SchemaToolAgentCriticMode.disabled.rawValue
-    }
-
-    /// A run that recorded no grounding judge mode ran without the judge.
-    private static func normalizedSchemaAgentGroundingJudgeMode(_ value: String?) -> String {
-        value ?? SchemaToolAgentGroundingJudgeMode.disabled.rawValue
     }
 }
 
