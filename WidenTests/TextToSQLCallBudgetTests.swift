@@ -7,35 +7,23 @@ import Testing
 /// made deliberately. The agent wall clock moved for Particle-1 (90 s to
 /// 180 s) to fit high reasoning. Repair budgets count logical generator
 /// invocations, not HTTP attempts, and repair runs get a shorter wall clock.
-/// The extra-calls layer doubles the agent's turn, schema-call and correction
-/// budgets for Particle-1; reverting the layer restores six calls.
 @Suite("Text-to-SQL call budgets")
 struct TextToSQLCallBudgetTests {
-    @Test func particleAgentBudgetsMatchTheExtraCallsLayer() {
+    @Test func straightSwapCallBudgetsKeepCurrentDefaults() {
         let agent = SchemaToolSQLAgentConfiguration.default
         #expect(agent == SchemaToolSQLAgentConfiguration())
-        #expect(agent.maximumModelTurns == 12)
-        #expect(agent.maximumSchemaToolCalls == 12)
-        #expect(agent.maximumRepairSchemaToolCalls == 4)
-        #expect(agent.maximumHTTPAttempts == 30)
-        #expect(agent.maximumMalformedTerminalCorrections == 2)
-        #expect(agent.maximumRepeatedToolCorrections == 2)
-        #expect(agent.maximumInvalidTerminalSQLCorrections == 2)
+        #expect(agent.maximumModelTurns == 6)
+        #expect(agent.maximumSchemaToolCalls == 6)
+        #expect(agent.maximumRepairSchemaToolCalls == 2)
+        #expect(agent.maximumHTTPAttempts == 12)
+        #expect(agent.maximumMalformedTerminalCorrections == 1)
+        #expect(agent.maximumRepeatedToolCorrections == 1)
+        #expect(agent.maximumInvalidTerminalSQLCorrections == 1)
         #expect(agent.maximumOverClarificationCorrections == 1)
         #expect(agent.maximumIntentCoverageCorrections == 1)
         #expect(agent.maximumPlanConsistencyCorrections == 1)
         #expect(agent.maximumTerminalRequiredCorrections == 1)
         #expect(agent.wallClockTimeoutSeconds == 180)
-
-        let schemaTools = SchemaToolPolicy.cloudAgent
-        #expect(schemaTools.maximumResultBytes == 16_000)
-        #expect(schemaTools.maximumSessionResultBytes == 64_000)
-
-        // Inspection sends user data values, so its budgets stay put.
-        let inspection = DatabaseInspectionPolicy(allowLocalDataInspection: true)
-        #expect(inspection.maximumCallCount == 4)
-        #expect(inspection.maximumResultBytes == 8_000)
-        #expect(inspection.maximumSessionResultBytes == 20_000)
 
         #expect(ChatCompletionRetryPolicy.defaultMaxAttempts == 3)
         #expect(ChatCompletionRetryPolicy().maxAttempts == 3)

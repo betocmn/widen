@@ -4935,28 +4935,9 @@ struct SchemaToolSQLAgentTests {
         #expect(toolBudget.pipelineCategory == .modelGeneration)
     }
 
-    @Test func defaultConfigurationUsesParticleBudgets() {
-        let configuration = SchemaToolSQLAgentConfiguration()
-        #expect(SchemaToolSQLAgentConfiguration.default == configuration)
-        #expect(configuration.maximumSchemaToolCalls == 12)
-        #expect(configuration.maximumRepairSchemaToolCalls == 4)
-        #expect(configuration.maximumModelTurns == 12)
-        #expect(configuration.maximumHTTPAttempts == 30)
-        #expect(configuration.maximumMalformedTerminalCorrections == 2)
-        #expect(configuration.maximumRepeatedToolCorrections == 2)
-        #expect(configuration.maximumInvalidTerminalSQLCorrections == 2)
-        #expect(configuration.maximumTerminalRequiredCorrections == 1)
-        #expect(configuration.maximumOverClarificationCorrections == 1)
-        #expect(configuration.maximumIntentCoverageCorrections == 1)
-        #expect(configuration.maximumPlanConsistencyCorrections == 1)
-        #expect(configuration.countCapabilityLookupHTTPAttempts == false)
-        #expect(configuration.wallClockTimeoutSeconds == 180)
-        #expect(configuration.repairWallClockTimeoutSeconds == 120)
-        #expect(configuration.clarificationCorrectionMode == .diagnosticsOnly)
-        #expect(configuration.intentCoverageMode == .diagnosticsOnly)
-        #expect(configuration.planConsistencyMode == .diagnosticsOnly)
-        #expect(SchemaToolPolicy.cloudAgent.maximumResultBytes == 16_000)
-        #expect(SchemaToolPolicy.cloudAgent.maximumSessionResultBytes == 64_000)
+    @Test func defaultConfigurationKeepsSixSchemaToolCalls() {
+        #expect(SchemaToolSQLAgentConfiguration.default.maximumSchemaToolCalls == 6)
+        #expect(SchemaToolSQLAgentConfiguration().maximumSchemaToolCalls == 6)
     }
 
     @Test func byteVariantDuplicateSchemaCallIsInterceptedWithoutBurningBudget() async throws {
@@ -5638,7 +5619,6 @@ struct SchemaToolSQLAgentTests {
             maximumModelTurns: 6,
             maximumMalformedTerminalCorrections: 1,
             maximumRepeatedToolCorrections: 1,
-            maximumInvalidTerminalSQLCorrections: 1,
             maximumHTTPAttempts: 8,
             wallClockTimeoutSeconds: 10
         ),
@@ -5690,7 +5670,6 @@ struct SchemaToolSQLAgentTests {
             maximumModelTurns: maximumModelTurns,
             maximumMalformedTerminalCorrections: 1,
             maximumRepeatedToolCorrections: 1,
-            maximumInvalidTerminalSQLCorrections: 1,
             maximumHTTPAttempts: maximumHTTPAttempts,
             wallClockTimeoutSeconds: wallClockTimeoutSeconds,
             clarificationCorrectionMode: .correctOverClarificationExperimental,
