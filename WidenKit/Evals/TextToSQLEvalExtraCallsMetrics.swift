@@ -182,6 +182,11 @@ public struct TextToSQLEvalForcedTerminalSummary: Codable, Equatable, Sendable {
     /// a forced answer, including one that ran out of time or HTTP attempts
     /// before it could send the request.
     public var reasonCounts: [String: Int]
+    /// Results whose forced run ran into the agent's wall clock, in a forced
+    /// request or before one could be sent. The run reports the failure
+    /// that forced it, or that failure's fallback clarification, so only
+    /// its `forcedTerminalFailure` records the timeout.
+    public var timedOut: Int
     /// Results whose forced request the provider refused as a request it
     /// does not accept (`invalidRequest` or `unsupportedFeature`), which
     /// means it did not honor the forced request's shape: the named
@@ -189,6 +194,10 @@ public struct TextToSQLEvalForcedTerminalSummary: Codable, Equatable, Sendable {
     /// alone. Rate limits, timeouts, server errors and invalid model output
     /// are not rejections.
     public var providerRejected: Int
+
+    /// The `forcedTerminalFailure` of a forced run that ran into the agent's
+    /// wall clock.
+    public static let timedOutFailure = SchemaToolAgentFailure.Category.wallClockTimeout.rawValue
 
     /// The `forcedTerminalFailure` values of a provider rejection.
     public static let providerRejectionFailures = Set(
@@ -201,11 +210,13 @@ public struct TextToSQLEvalForcedTerminalSummary: Codable, Equatable, Sendable {
         attempted: Int,
         succeeded: Int,
         reasonCounts: [String: Int],
+        timedOut: Int,
         providerRejected: Int
     ) {
         self.attempted = attempted
         self.succeeded = succeeded
         self.reasonCounts = reasonCounts
+        self.timedOut = timedOut
         self.providerRejected = providerRejected
     }
 
@@ -220,6 +231,7 @@ public struct TextToSQLEvalForcedTerminalSummary: Codable, Equatable, Sendable {
             reasonCounts: TextToSQLEvalExtraCallsRows.counts(
                 diagnostics.compactMap(\.forcedTerminalReason)
             ),
+            timedOut: diagnostics.filter { $0.forcedTerminalFailure == Self.timedOutFailure }.count,
             providerRejected: diagnostics.filter {
                 $0.forcedTerminalFailure.map(Self.providerRejectionFailures.contains) == true
             }.count
@@ -233,8 +245,28 @@ public struct TextToSQLEvalForcedTerminalSummary: Codable, Equatable, Sendable {
             "| Forced final answers attempted | \(Rows.value(summary?.attempted)) |",
             "| Forced final answers succeeded | \(Rows.share(summary?.succeeded, of: summary?.attempted)) |",
             "| Forced final answer reasons | \(Rows.countList(summary?.reasonCounts)) |",
+            "| Forced final answers timed out | \(Rows.value(summary?.timedOut)) |",
             "| Forced requests rejected by the provider | \(Rows.value(summary?.providerRejected)) |",
         ]
+    }
+}
+
+/// Internal schema-agent timeouts, the count criterion K9 compares with
+/// Stage 2: results whose agent run ran into its wall clock. A run whose
+/// forced final request timed out reports the failure that forced it, so
+/// its forced-terminal failure counts too; otherwise K9 would miss the
+/// timeouts the extra-calls layer itself causes. That includes a run that
+/// then released the SQL from before a revision.
+public enum TextToSQLEvalInternalAgentTimeouts {
+    public static func count(_ results: [TextToSQLEvalResult]) -> Int {
+        results.filter { result in
+            result.metrics.openRouterAgentDiagnostics.map(timedOut) == true
+        }.count
+    }
+
+    static func timedOut(_ diagnostics: SchemaToolAgentDiagnostics) -> Bool {
+        diagnostics.appSideRejectionReason == .timedOut
+            || diagnostics.forcedTerminalFailure == TextToSQLEvalForcedTerminalSummary.timedOutFailure
     }
 }
 
