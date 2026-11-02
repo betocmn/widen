@@ -1151,6 +1151,8 @@ struct TextToSQLEvalRunPlanningTests {
         #expect(agentPaths.contains("WidenKit/Services/SchemaToolRuntime.swift"))
         #expect(agentPaths.contains("WidenKit/Services/SchemaToolAgentCritic.swift"))
         #expect(!oneShotPaths.contains("WidenKit/Services/SchemaToolAgentCritic.swift"))
+        #expect(agentPaths.contains("WidenKit/Services/SchemaToolAgentGroundingJudge.swift"))
+        #expect(!oneShotPaths.contains("WidenKit/Services/SchemaToolAgentGroundingJudge.swift"))
 
         let hash = try TextToSQLEvalSourceManifest.sourceHash(
             relativePaths: agentPaths,

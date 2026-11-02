@@ -171,7 +171,7 @@ enum ParticleTestSupport {
             #expect(body["response_format"] == nil)
             let messages = try #require(body["messages"] as? [[String: Any]])
             #expect(messages.allSatisfy { $0["name"] == nil })
-        case .oneShotSQL, .connectivityProbe, .sessionTitle, .critic:
+        case .oneShotSQL, .connectivityProbe, .sessionTitle, .critic, .groundingJudge:
             #expect(body["tools"] == nil)
             #expect(body["tool_choice"] == nil)
             #expect(body["parallel_tool_calls"] == nil)
