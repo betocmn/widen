@@ -64,7 +64,7 @@ We publish negative results: pre-registered, paid gate experiments that fail
 their criteria are reverted and documented. See
 [how we gate releases](docs/evals/how-we-gate.md) for the design and the
 experiment log. Particle-1 gate evidence: the
-[0.2.0 release-gate report](docs/evals/0.2.0.md) (failed: 19/60 end-to-end
+[0.2.0 release-gate report](docs/evals/0.2.0.md) (failed: 27/60 end-to-end
 semantic passes and 11/12 clarification decisions). The
 [0.1.0 release-gate report](docs/evals/0.1.0.md)
 covers the previous OpenRouter GPT-5.5 profile and is kept as history; that
