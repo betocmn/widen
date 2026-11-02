@@ -99,7 +99,7 @@ public struct SchemaToolSQLAgentConfiguration: Equatable, Sendable {
     /// of revising it.
     public var criticRevisionMinimumRemainingSeconds: TimeInterval
     /// The grounding judge looks at the final SQL of every mode, forced
-    /// final requests included. Off by default until its eval gate passes.
+    /// final requests included.
     public var groundingJudgeMode: SchemaToolAgentGroundingJudgeMode
     /// HTTP attempts the judge's request may use, including the one resend
     /// after `invalid_model_output`. They also count against
@@ -134,7 +134,7 @@ public struct SchemaToolSQLAgentConfiguration: Equatable, Sendable {
         maximumCriticHTTPAttempts: Int = 2,
         criticMinimumRemainingSeconds: TimeInterval = 30,
         criticRevisionMinimumRemainingSeconds: TimeInterval = 60,
-        groundingJudgeMode: SchemaToolAgentGroundingJudgeMode = .disabled,
+        groundingJudgeMode: SchemaToolAgentGroundingJudgeMode = .enabled,
         maximumGroundingJudgeHTTPAttempts: Int = 2,
         groundingJudgeMinimumRemainingSeconds: TimeInterval = 15
     ) {

@@ -5662,11 +5662,10 @@ struct SchemaToolSQLAgentTests {
 
     // MARK: - Grounding judge
 
-    @Test func productionDefaultLeavesTheGroundingJudgeOff() {
-        // The app and evals build the agent with the default configuration;
-        // the judge stays off until its preregistered gate passes.
+    @Test func productionDefaultEnablesTheGroundingJudge() {
+        // The app and evals build the agent with the default configuration.
         let configuration = SchemaToolSQLAgentConfiguration.default
-        #expect(configuration.groundingJudgeMode == .disabled)
+        #expect(configuration.groundingJudgeMode == .enabled)
         #expect(configuration.maximumGroundingJudgeHTTPAttempts == 2)
         #expect(configuration.groundingJudgeMinimumRemainingSeconds == 15)
         #expect(SchemaToolAgentGroundingJudgeMode.enabled.rawValue == "enabled")
@@ -7618,7 +7617,7 @@ struct SchemaToolSQLAgentTests {
         #expect(configuration.maximumCriticHTTPAttempts == 2)
         #expect(configuration.criticMinimumRemainingSeconds == 30)
         #expect(configuration.criticRevisionMinimumRemainingSeconds == 60)
-        #expect(configuration.groundingJudgeMode == .disabled)
+        #expect(configuration.groundingJudgeMode == .enabled)
         #expect(configuration.maximumGroundingJudgeHTTPAttempts == 2)
         #expect(configuration.groundingJudgeMinimumRemainingSeconds == 15)
         #expect(SchemaToolPolicy.cloudAgent.maximumResultBytes == 16_000)
