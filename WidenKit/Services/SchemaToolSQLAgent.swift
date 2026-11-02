@@ -26,6 +26,18 @@ public struct SchemaToolSQLAgentConfiguration: Equatable, Sendable {
     public var maximumModelTurns: Int
     public var maximumMalformedTerminalCorrections: Int
     public var maximumRepeatedToolCorrections: Int
+    /// Corrections for terminal SQL the evidence ledger rejects, such as SQL
+    /// naming objects the model never inspected.
+    public var maximumInvalidTerminalSQLCorrections: Int
+    /// Corrections the experimental over-clarification policy may send.
+    public var maximumOverClarificationCorrections: Int
+    /// Corrections the experimental intent-coverage policy may send.
+    public var maximumIntentCoverageCorrections: Int
+    /// Corrections the experimental plan-consistency policy may send.
+    public var maximumPlanConsistencyCorrections: Int
+    /// Corrections for schema-tool calls made after the evidence was already
+    /// sufficient for a terminal answer.
+    public var maximumTerminalRequiredCorrections: Int
     public var maximumHTTPAttempts: Int
     public var countCapabilityLookupHTTPAttempts: Bool
     public var wallClockTimeoutSeconds: TimeInterval
@@ -39,6 +51,11 @@ public struct SchemaToolSQLAgentConfiguration: Equatable, Sendable {
         maximumModelTurns: Int = 6,
         maximumMalformedTerminalCorrections: Int = 1,
         maximumRepeatedToolCorrections: Int = 1,
+        maximumInvalidTerminalSQLCorrections: Int = 1,
+        maximumOverClarificationCorrections: Int = 1,
+        maximumIntentCoverageCorrections: Int = 1,
+        maximumPlanConsistencyCorrections: Int = 1,
+        maximumTerminalRequiredCorrections: Int = 1,
         maximumHTTPAttempts: Int = 12,
         countCapabilityLookupHTTPAttempts: Bool = false,
         wallClockTimeoutSeconds: TimeInterval = 180,
@@ -51,6 +68,11 @@ public struct SchemaToolSQLAgentConfiguration: Equatable, Sendable {
         self.maximumModelTurns = maximumModelTurns
         self.maximumMalformedTerminalCorrections = maximumMalformedTerminalCorrections
         self.maximumRepeatedToolCorrections = maximumRepeatedToolCorrections
+        self.maximumInvalidTerminalSQLCorrections = maximumInvalidTerminalSQLCorrections
+        self.maximumOverClarificationCorrections = maximumOverClarificationCorrections
+        self.maximumIntentCoverageCorrections = maximumIntentCoverageCorrections
+        self.maximumPlanConsistencyCorrections = maximumPlanConsistencyCorrections
+        self.maximumTerminalRequiredCorrections = maximumTerminalRequiredCorrections
         self.maximumHTTPAttempts = maximumHTTPAttempts
         self.countCapabilityLookupHTTPAttempts = countCapabilityLookupHTTPAttempts
         self.wallClockTimeoutSeconds = wallClockTimeoutSeconds
@@ -71,6 +93,11 @@ public struct SchemaToolSQLAgentConfiguration: Equatable, Sendable {
             "maximumHTTPAttempts": String(maximumHTTPAttempts),
             "maximumMalformedTerminalCorrections": String(maximumMalformedTerminalCorrections),
             "maximumRepeatedToolCorrections": String(maximumRepeatedToolCorrections),
+            "maximumInvalidTerminalSQLCorrections": String(maximumInvalidTerminalSQLCorrections),
+            "maximumOverClarificationCorrections": String(maximumOverClarificationCorrections),
+            "maximumIntentCoverageCorrections": String(maximumIntentCoverageCorrections),
+            "maximumPlanConsistencyCorrections": String(maximumPlanConsistencyCorrections),
+            "maximumTerminalRequiredCorrections": String(maximumTerminalRequiredCorrections),
             "wallClockTimeoutSeconds": String(format: "%g", wallClockTimeoutSeconds),
         ]
     }
@@ -395,7 +422,7 @@ public final class SchemaToolSQLAgent: SQLGenerator, Sendable {
         var exploredJoinPathScopes: [String: [SchemaToolJoinPathScope]] = [:]
         var malformedTerminalCorrections = 0
         var repeatedToolCorrections = 0
-        var uninspectedSQLCorrections = 0
+        var invalidTerminalSQLCorrections = 0
         var overClarificationCorrections = 0
         var intentCoverageCorrections = 0
         var planConsistencyCorrections = 0
@@ -661,7 +688,9 @@ public final class SchemaToolSQLAgent: SQLGenerator, Sendable {
                             case .asksForAlreadyKnownEvidence, .shouldAnswerWithSQL:
                                 diagnostics.appSideRejectionReason = .clarificationRejected
                                 diagnostics.terminalValidationFailureReason = policyDecision.decision.rawValue
-                                if overClarificationCorrections < 1 {
+                                if overClarificationCorrections
+                                    < configuration.maximumOverClarificationCorrections
+                                {
                                     overClarificationCorrections += 1
                                     terminalRequiredAfterSufficientEvidence = true
                                     diagnostics.overClarificationCorrectionAttempted = true
@@ -775,8 +804,10 @@ public final class SchemaToolSQLAgent: SQLGenerator, Sendable {
                         if !inspection.accepted {
                             diagnostics.appSideRejectionReason = inspection.rejectionReason
                             diagnostics.terminalValidationFailureReason = inspection.reasonCode
-                            if uninspectedSQLCorrections < 1 {
-                                uninspectedSQLCorrections += 1
+                            if invalidTerminalSQLCorrections
+                                < configuration.maximumInvalidTerminalSQLCorrections
+                            {
+                                invalidTerminalSQLCorrections += 1
                                 messages.append(
                                     toolErrorResponse(
                                         call: terminal,
@@ -819,7 +850,8 @@ public final class SchemaToolSQLAgent: SQLGenerator, Sendable {
                                 diagnostics.appSideRejectionReason = .intentCoverageRejected
                                 diagnostics.terminalValidationFailureReason = "intentCoverageFailed"
                                 if configuration.intentCoverageMode == .correctAndRetryExperimental,
-                                    intentCoverageCorrections < 1
+                                    intentCoverageCorrections
+                                        < configuration.maximumIntentCoverageCorrections
                                 {
                                     intentCoverageCorrections += 1
                                     terminalRequiredAfterSufficientEvidence = true
@@ -888,7 +920,9 @@ public final class SchemaToolSQLAgent: SQLGenerator, Sendable {
                                 {
                                     diagnostics.appSideRejectionReason = .planConsistencyRejected
                                     diagnostics.terminalValidationFailureReason = "planConsistencyFailed"
-                                    if planConsistencyCorrections < 1 {
+                                    if planConsistencyCorrections
+                                        < configuration.maximumPlanConsistencyCorrections
+                                    {
                                         planConsistencyCorrections += 1
                                         terminalRequiredAfterSufficientEvidence = true
                                         diagnostics.planConsistencyCorrectionAttempted = true
@@ -956,7 +990,9 @@ public final class SchemaToolSQLAgent: SQLGenerator, Sendable {
                         code: "terminal_required_after_sufficient_evidence",
                         message: "Schema evidence is already sufficient for a terminal SQL answer or concrete clarification."
                     )
-                    if terminalRequiredCorrections < 1 {
+                    if terminalRequiredCorrections
+                        < configuration.maximumTerminalRequiredCorrections
+                    {
                         terminalRequiredCorrections += 1
                         messages.append(correction(Self.terminalRequiredAfterSufficientEvidenceCorrection))
                         continue

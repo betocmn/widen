@@ -17,6 +17,11 @@ struct TextToSQLCallBudgetTests {
         #expect(agent.maximumHTTPAttempts == 12)
         #expect(agent.maximumMalformedTerminalCorrections == 1)
         #expect(agent.maximumRepeatedToolCorrections == 1)
+        #expect(agent.maximumInvalidTerminalSQLCorrections == 1)
+        #expect(agent.maximumOverClarificationCorrections == 1)
+        #expect(agent.maximumIntentCoverageCorrections == 1)
+        #expect(agent.maximumPlanConsistencyCorrections == 1)
+        #expect(agent.maximumTerminalRequiredCorrections == 1)
         #expect(agent.wallClockTimeoutSeconds == 180)
 
         #expect(ChatCompletionRetryPolicy.defaultMaxAttempts == 3)
