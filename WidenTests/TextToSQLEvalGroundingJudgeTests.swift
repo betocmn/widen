@@ -339,7 +339,6 @@ struct TextToSQLEvalGroundingJudgeTests {
         )
 
         #expect(summary.eligibleResults == 7)
-        #expect(summary.judgeableResults == 7)
         #expect(summary.judgedResults == 5)
         #expect(summary.judgeCalls == 6)
         #expect(summary.failedResults == 1)
@@ -377,7 +376,6 @@ struct TextToSQLEvalGroundingJudgeTests {
 
         #expect(TextToSQLEvalGroundingJudgeSummary.markdownRows(summary) == [
             "| Grounding judge eligible results | 7 |",
-            "| Grounding judge judgeable results | 7 |",
             "| Grounding judge judged results | 5 of 7 (71.4%) |",
             "| Grounding judge calls | 6 |",
             "| Grounding judge failed results | 1 of 6 (16.7%) |",
@@ -420,40 +418,6 @@ struct TextToSQLEvalGroundingJudgeTests {
         )
     }
 
-    @Test func judgeRunRateLeavesOutTheSkipsTheAgentsRulesMake() throws {
-        let notJudged = "lexical:notJudged"
-        let results = [
-            Self.result(judgment: Self.judgment(postprocessorOutcome: "released")),
-            Self.result(judgment: Self.judgment(outcome: "failed", postprocessorOutcome: notJudged)),
-            Self.result(judgment: Self.judgment(outcome: "skippedDeadline", calls: 0, postprocessorOutcome: notJudged)),
-            Self.result(judgment: Self.judgment(outcome: "skippedHTTPBudget", calls: 0, postprocessorOutcome: notJudged)),
-        ] + ["skippedLiteralRejected", "skippedWrite", "skippedUndescribedTables", "skippedTooManyTerms"].map {
-            Self.result(judgment: Self.judgment(outcome: $0, calls: 0, postprocessorOutcome: notJudged))
-        }
-        let summary = try #require(
-            TextToSQLEvalGroundingJudgeSummary(results: results, expectedDecisions: [Self.caseID: .sql])
-        )
-
-        // The judge is never asked about a write, a rejected literal, an
-        // undescribed table or too many words, so only the deadline, the
-        // HTTP budget and failures count against its run rate.
-        #expect(summary.eligibleResults == 8)
-        #expect(summary.judgeableResults == 4)
-        #expect(summary.judgedResults == 1)
-        #expect(summary.failedResults == 1)
-        #expect(
-            TextToSQLEvalGroundingJudgeSummary.markdownRows(summary).contains(
-                "| Grounding judge judged results | 1 of 4 (25.0%) |"
-            )
-        )
-        #expect(
-            TextToSQLEvalGroundingJudgeSummary.ruleSkipOutcomes
-                == Set(SchemaToolAgentGroundingJudgeOutcome.allCases.map(\.rawValue)).subtracting([
-                    "judged", "failed", "skippedDeadline", "skippedHTTPBudget",
-                ])
-        )
-    }
-
     @Test func runsWithoutTheJudgeHaveNoSummary() {
         let off = [
             Self.result(status: .passed, sql: "SELECT 1"),
@@ -471,7 +435,6 @@ struct TextToSQLEvalGroundingJudgeTests {
             expectedDecisions: [Self.caseID: .sql]
         )
         #expect(summary?.eligibleResults == 0)
-        #expect(summary?.judgeableResults == 0)
         #expect(summary?.decisionMatches == TextToSQLEvalPairedCount(onArm: 2, offArm: 2, denominator: 2))
     }
 

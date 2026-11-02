@@ -115,13 +115,6 @@ public struct TextToSQLEvalGroundingJudgeSummary: Codable, Equatable, Sendable {
     /// `enriched` writes only when the lexical grounding pass flagged the
     /// agent's accepted SQL and would replace it with a clarification.
     public var eligibleResults: Int
-    /// Eligible results the judge was meant to answer: every one but those
-    /// the agent's rules skip, because a flagged word matches a rejected
-    /// literal, the SQL writes, a table it reads was not described, or more
-    /// words were flagged than one request carries. The judge's run rate is
-    /// `judgedResults` of these; the others were skipped for the deadline or
-    /// the HTTP budget, or failed.
-    public var judgeableResults: Int
     /// Eligible results whose judgment outcome is `judged`: the judge answered
     /// and its labels were verified.
     public var judgedResults: Int
@@ -188,24 +181,11 @@ public struct TextToSQLEvalGroundingJudgeSummary: Codable, Equatable, Sendable {
     public static let failedOutcome = SchemaToolAgentGroundingJudgeOutcome.failed.rawValue
     /// The prefix of the outcomes that skipped the request.
     public static let skippedOutcomePrefix = "skipped"
-    /// The outcomes of a request the agent's rules skip, whatever its
-    /// deadline and HTTP budget, which `judgeableResults` leaves out.
-    public static let ruleSkipOutcomes = Set(
-        [
-            SchemaToolAgentGroundingJudgeOutcome.skippedNoFlags,
-            .skippedAnchored,
-            .skippedLiteralRejected,
-            .skippedWrite,
-            .skippedUndescribedTables,
-            .skippedTooManyTerms,
-        ].map(\.rawValue)
-    )
     /// The postprocessor outcome that kept the SQL.
     public static let releasedPostprocessorOutcome = "released"
 
     public init(
         eligibleResults: Int,
-        judgeableResults: Int,
         judgedResults: Int,
         judgeCalls: Int,
         failedResults: Int,
@@ -226,7 +206,6 @@ public struct TextToSQLEvalGroundingJudgeSummary: Codable, Equatable, Sendable {
         expectedSQLClarified: TextToSQLEvalPairedCount
     ) {
         self.eligibleResults = eligibleResults
-        self.judgeableResults = judgeableResults
         self.judgedResults = judgedResults
         self.judgeCalls = judgeCalls
         self.failedResults = failedResults
@@ -259,7 +238,6 @@ public struct TextToSQLEvalGroundingJudgeSummary: Codable, Equatable, Sendable {
         guard results.contains(where: Self.ranWithTheJudge) else { return nil }
         let judgments = results.compactMap(\.metrics.openRouterAgentDiagnostics?.groundingJudgment)
         let eligible = judgments.filter { $0.postprocessorOutcome != nil }
-        let judgeable = eligible.filter { !Self.ruleSkipOutcomes.contains($0.outcome) }
         let judged = judgments.filter { $0.outcome == Self.judgedOutcome }
         let judgedTerms = judged.flatMap(\.terms)
         let released = results.filter {
@@ -272,8 +250,7 @@ public struct TextToSQLEvalGroundingJudgeSummary: Codable, Equatable, Sendable {
         let parsedResults = results.filter(\.metrics.structuredResponseParsed)
         self.init(
             eligibleResults: eligible.count,
-            judgeableResults: judgeable.count,
-            judgedResults: judgeable.filter { $0.outcome == Self.judgedOutcome }.count,
+            judgedResults: eligible.filter { $0.outcome == Self.judgedOutcome }.count,
             judgeCalls: judgments.reduce(0) { $0 + $1.callCount },
             failedResults: judgments.filter { $0.outcome == Self.failedOutcome }.count,
             skipReasonCounts: TextToSQLEvalExtraCallsRows.counts(
@@ -325,8 +302,7 @@ public struct TextToSQLEvalGroundingJudgeSummary: Codable, Equatable, Sendable {
         typealias Rows = TextToSQLEvalExtraCallsRows
         return [
             "| Grounding judge eligible results | \(Rows.value(summary?.eligibleResults)) |",
-            "| Grounding judge judgeable results | \(Rows.value(summary?.judgeableResults)) |",
-            "| Grounding judge judged results | \(Rows.share(summary?.judgedResults, of: summary?.judgeableResults)) |",
+            "| Grounding judge judged results | \(Rows.share(summary?.judgedResults, of: summary?.eligibleResults)) |",
             "| Grounding judge calls | \(Rows.value(summary?.judgeCalls)) |",
             "| Grounding judge failed results | \(Rows.share(summary?.failedResults, of: summary?.judgeCalls)) |",
             "| Grounding judge skips | \(Rows.countList(summary?.skipReasonCounts)) |",
