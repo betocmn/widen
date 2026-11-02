@@ -80,7 +80,7 @@ struct ConnectionEditorForm: View {
                                 RoundedRectangle(cornerRadius: 6)
                                     .stroke(Color.primary.opacity(0.12), lineWidth: 1)
                             }
-                            .help("Included with each text-to-SQL generation for the selected backend.")
+                            .help("Included with each text-to-SQL request to Particle-1.")
 
                             Text("\(viewModel.databaseContext.count) / \(SQLPromptBuilder.maxDatabaseContextCharacters.formatted()) characters")
                                 .font(.caption2.monospacedDigit())
