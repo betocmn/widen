@@ -1951,6 +1951,33 @@ private struct IdentifierExpression: Equatable {
     }
 }
 
+/// The grounding decision the postprocessor makes about accepted SQL that it
+/// would replace with a clarification: the question words it could not match
+/// to the referenced tables, the database context or confirmed definitions.
+public struct GroundingReviewCandidate: Equatable, Sendable {
+    /// Tables the SQL references, as the schema validator resolved them.
+    public var referencedTables: [String]
+    /// Every question word the grounder could not match, in question order.
+    public var unresolvedTerms: [String]
+    /// Unresolved words that share a token with a SQL string literal the
+    /// grounder rejected: a value outside the compared column's allowed values,
+    /// or a status value nothing in the schema, context or definitions proves.
+    public var literalRejectedTerms: [String]
+    public var evaluation: SQLGroundingEvaluation
+
+    public init(
+        referencedTables: [String],
+        unresolvedTerms: [String],
+        literalRejectedTerms: [String],
+        evaluation: SQLGroundingEvaluation
+    ) {
+        self.referencedTables = referencedTables
+        self.unresolvedTerms = unresolvedTerms
+        self.literalRejectedTerms = literalRejectedTerms
+        self.evaluation = evaluation
+    }
+}
+
 public enum GeneratedSQLPostprocessor {
     public static func enriched(
         _ generation: SQLGenerationResult,
@@ -1988,7 +2015,7 @@ public enum GeneratedSQLPostprocessor {
                 copy.riskLevel = .medium
                 return copy
             }
-            let grounding = groundingEvaluation(
+            let review = reviewGrounding(
                 question: question,
                 sql: sql,
                 referencedTables: schemaValidation.referencedTables,
@@ -1996,9 +2023,9 @@ public enum GeneratedSQLPostprocessor {
                 databaseContext: databaseContext,
                 confirmedSemanticBindings: confirmedSemanticBindings
             )
-            copy.groundingConcepts = grounding.concepts
+            copy.groundingConcepts = review.evaluation.concepts
             if allowGroundingClarification,
-                let pending = grounding.pendingClarification
+                let pending = review.evaluation.pendingClarification
             {
                 if schemaToolEvidenceAllowsSQL(
                     question: question,
@@ -2020,6 +2047,38 @@ public enum GeneratedSQLPostprocessor {
             }
         }
         return copy
+    }
+
+    /// The words `enriched` would ask about instead of keeping this SQL, so
+    /// a caller sees the same terms the postprocessor will act on. Nil when
+    /// there is no SQL, the SQL has definite schema errors, the anchored-window
+    /// rule replaces it, or every question word is grounded.
+    public static func groundingReview(
+        sql: String,
+        question: String,
+        schema: DatabaseSchema,
+        databaseContext: String,
+        confirmedSemanticBindings: [String] = []
+    ) -> GroundingReviewCandidate? {
+        let sql = sql.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !sql.isEmpty else { return nil }
+        let schemaValidation = SQLSchemaValidator.validate(sql: sql, against: schema)
+        guard !schemaValidation.hasDefiniteErrors,
+            anchoredWindowClarification(
+                question: question,
+                sql: sql,
+                databaseContext: databaseContext
+            ) == nil
+        else { return nil }
+        let review = reviewGrounding(
+            question: question,
+            sql: sql,
+            referencedTables: schemaValidation.referencedTables,
+            schema: schema,
+            databaseContext: databaseContext,
+            confirmedSemanticBindings: confirmedSemanticBindings
+        )
+        return review.evaluation.pendingClarification == nil ? nil : review
     }
 
     private static func schemaToolEvidenceAllowsSQL(
@@ -2147,6 +2206,24 @@ public enum GeneratedSQLPostprocessor {
         databaseContext: String,
         confirmedSemanticBindings: [String] = []
     ) -> SQLGroundingEvaluation {
+        reviewGrounding(
+            question: question,
+            sql: sql,
+            referencedTables: referencedTables,
+            schema: schema,
+            databaseContext: databaseContext,
+            confirmedSemanticBindings: confirmedSemanticBindings
+        ).evaluation
+    }
+
+    private static func reviewGrounding(
+        question: String,
+        sql: String,
+        referencedTables: [String],
+        schema: DatabaseSchema,
+        databaseContext: String,
+        confirmedSemanticBindings: [String]
+    ) -> GroundingReviewCandidate {
         let schemaAndContextTokens = referencedSchemaTokens(
             referencedTables: referencedTables,
             schema: schema
@@ -2159,7 +2236,12 @@ public enum GeneratedSQLPostprocessor {
 
         let terms = meaningfulRequestWords(question)
         guard !terms.isEmpty else {
-            return SQLGroundingEvaluation(concepts: notRequiredConcepts(question))
+            return GroundingReviewCandidate(
+                referencedTables: referencedTables,
+                unresolvedTerms: [],
+                literalRejectedTerms: [],
+                evaluation: SQLGroundingEvaluation(concepts: notRequiredConcepts(question))
+            )
         }
         let literalTokens = literalValueTokenEvaluation(
             in: sql,
@@ -2167,10 +2249,13 @@ public enum GeneratedSQLPostprocessor {
             schema: schema,
             availableTokens: literalProofTokens
         )
+        let literalRejected = terms.filter { word in
+            SchemaIndex.tokens(in: word).contains(where: literalTokens.rejected.contains)
+        }
         let unresolved = terms.filter { word in
             let variants = SchemaIndex.tokens(in: word)
             guard !variants.isEmpty else { return false }
-            if variants.contains(where: literalTokens.rejected.contains) {
+            if literalRejected.contains(word) {
                 return true
             }
             if variants.contains(where: literalTokens.accepted.contains) {
@@ -2185,7 +2270,7 @@ public enum GeneratedSQLPostprocessor {
             let variants = SchemaIndex.tokens(in: term)
             let state: GroundingState
             let evidence: [String]
-            if variants.contains(where: literalTokens.rejected.contains) || unresolved.contains(term) {
+            if unresolved.contains(term) {
                 state = .unsupported
                 evidence = []
             } else if variants.contains(where: literalTokens.accepted.contains)
@@ -2214,28 +2299,49 @@ public enum GeneratedSQLPostprocessor {
         }
 
         concepts.append(contentsOf: notRequiredConcepts(question))
-        guard let first = concepts.first(where: {
+        let pending = concepts.first(where: {
             $0.required && ($0.state == .unsupported || $0.state == .ambiguous)
-        }) else {
-            return SQLGroundingEvaluation(concepts: concepts)
+        }).map { first in
+            makePendingClarification(
+                for: first,
+                question: question,
+                schema: schema,
+                referencedTables: referencedTables,
+                databaseContext: databaseContext
+            )
         }
+        return GroundingReviewCandidate(
+            referencedTables: referencedTables,
+            unresolvedTerms: unresolved,
+            literalRejectedTerms: literalRejected,
+            evaluation: SQLGroundingEvaluation(concepts: concepts, pendingClarification: pending)
+        )
+    }
 
-        let options = clarificationOptions(for: first, schema: schema, referencedTables: referencedTables)
+    /// The clarification for one ungrounded concept, with the winner,
+    /// time-field and allowed-value wording whichever term is chosen.
+    private static func makePendingClarification(
+        for concept: SQLGroundingConcept,
+        question: String,
+        schema: DatabaseSchema,
+        referencedTables: [String],
+        databaseContext: String
+    ) -> PendingClarification {
+        let options = clarificationOptions(for: concept, schema: schema, referencedTables: referencedTables)
         let clarificationQuestion = clarificationQuestion(
-            for: first,
+            for: concept,
             question: question,
             schema: schema,
             referencedTables: referencedTables,
             databaseContext: databaseContext
         )
-        let pending = PendingClarification(
-            concept: first,
+        return PendingClarification(
+            concept: concept,
             originalQuestion: question,
             question: clarificationQuestion,
             options: options,
-            evidence: first.evidence
+            evidence: concept.evidence
         )
-        return SQLGroundingEvaluation(concepts: concepts, pendingClarification: pending)
     }
 
     private static func clarificationQuestion(
@@ -2977,7 +3083,7 @@ public enum GeneratedSQLPostprocessor {
         return tokens
     }
 
-    private static func meaningfulRequestWords(_ question: String) -> [String] {
+    static func meaningfulRequestWords(_ question: String) -> [String] {
         let words = rawWords(in: question)
         var seen = Set<String>()
         return words.enumerated().compactMap { index, word in

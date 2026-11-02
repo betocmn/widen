@@ -2498,6 +2498,133 @@ struct SQLSchemaValidatorTests {
         #expect(enriched.referencedTables == ["public.orders", "public.users"])
     }
 
+    @Test func groundingReviewMatchesEnrichedPendingTerm() throws {
+        let fixtures: [(sql: String, question: String, schema: DatabaseSchema, unresolved: [String], literalRejected: [String])] = [
+            (
+                "SELECT COUNT(*) FROM public.users WHERE status = 'churned'",
+                "how many churned users do we have this quarter?",
+                makeUsersStatusSchema(),
+                ["churned", "quarter"],
+                ["churned"]
+            ),
+            (
+                "SELECT email FROM public.users",
+                "Write a query that lists user emails",
+                makeUsersOrdersSchema(),
+                ["write", "query"],
+                []
+            ),
+        ]
+
+        for fixture in fixtures {
+            let generation = SQLGenerationResult(
+                sql: fixture.sql,
+                explanation: "Answers the question.",
+                assumptions: [],
+                referencedTables: [],
+                confidence: 1,
+                riskLevel: .low,
+                needsClarification: false,
+                clarificationQuestion: nil
+            )
+            let enriched = GeneratedSQLPostprocessor.enriched(
+                generation,
+                question: fixture.question,
+                schema: fixture.schema,
+                databaseContext: ""
+            )
+            let review = try #require(
+                GeneratedSQLPostprocessor.groundingReview(
+                    sql: fixture.sql,
+                    question: fixture.question,
+                    schema: fixture.schema,
+                    databaseContext: ""
+                )
+            )
+
+            #expect(enriched.needsClarification)
+            #expect(review.referencedTables == ["public.users"])
+            #expect(review.referencedTables == enriched.referencedTables)
+            #expect(review.unresolvedTerms == fixture.unresolved)
+            #expect(review.literalRejectedTerms == fixture.literalRejected)
+            #expect(review.unresolvedTerms.first == enriched.pendingClarification?.concept.term)
+            #expect(review.evaluation.pendingClarification?.question == enriched.clarificationQuestion)
+            #expect(
+                review.evaluation.pendingClarification?.options.map(\.definition)
+                    == enriched.clarificationOptions.map(\.definition)
+            )
+            #expect(review.evaluation.concepts.map(\.term) == enriched.groundingConcepts.map(\.term))
+            #expect(review.evaluation.concepts.map(\.state) == enriched.groundingConcepts.map(\.state))
+            #expect(
+                review.unresolvedTerms
+                    == review.evaluation.concepts.filter { $0.state == .unsupported }.map(\.term)
+            )
+        }
+    }
+
+    @Test func groundingReviewIsNilWhenEnrichedWouldNotAskAboutAWord() {
+        let usersStatus = makeUsersStatusSchema()
+        #expect(
+            GeneratedSQLPostprocessor.groundingReview(
+                sql: "SELECT COUNT(*) FROM public.users WHERE status = 'active'",
+                question: "how many active users do we have?",
+                schema: usersStatus,
+                databaseContext: ""
+            ) == nil
+        )
+        #expect(
+            GeneratedSQLPostprocessor.groundingReview(
+                sql: "  \n",
+                question: "how many churned users do we have?",
+                schema: usersStatus,
+                databaseContext: ""
+            ) == nil
+        )
+        #expect(
+            GeneratedSQLPostprocessor.groundingReview(
+                sql: "SELECT churn_reason FROM public.users",
+                question: "how many churned users do we have?",
+                schema: usersStatus,
+                databaseContext: ""
+            ) == nil
+        )
+
+        let anchoredSQL = """
+            SELECT t.name, t.slug, COUNT(*) AS wins
+            FROM public.preseason_match_evaluation AS e
+            JOIN public.preseason_tool AS t ON e.winner_id = t.id
+            WHERE e.winner_id IS NOT NULL
+              AND e."createdAt" >= NOW() - INTERVAL '14 days'
+            GROUP BY t.name, t.slug
+            ORDER BY COUNT(*) DESC
+            """
+        let anchoredQuestion = "Which tools have the most wins in the two weeks ending 2026-06-24 12:00 UTC?"
+        let anchored = GeneratedSQLPostprocessor.enriched(
+            SQLGenerationResult(
+                sql: anchoredSQL,
+                explanation: "Counts winning evaluations by tool.",
+                assumptions: [],
+                referencedTables: [],
+                confidence: 1,
+                riskLevel: .low,
+                needsClarification: false,
+                clarificationQuestion: nil
+            ),
+            question: anchoredQuestion,
+            schema: makePreseasonWinnerSchema(),
+            databaseContext: ""
+        )
+        #expect(anchored.pendingClarification?.concept.term == "time window anchor")
+        #expect(
+            GeneratedSQLPostprocessor.groundingReview(
+                sql: anchoredSQL,
+                question: anchoredQuestion,
+                schema: makePreseasonWinnerSchema(),
+                databaseContext: ""
+            ) == nil
+        )
+    }
+
     private func makeUsersOrdersSchema() -> DatabaseSchema {
         DatabaseSchema(
             schemas: [SchemaInfo(name: "public")],
