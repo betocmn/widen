@@ -149,11 +149,6 @@ public struct TextToSQLEvalMetrics: Codable, Equatable, Sendable {
     /// `endToEndPassed` is, as outside semantic runs, and when the judge was
     /// off.
     public var groundingJudgeOffArmEndToEndPassed: Bool?
-    /// For a `released` divergence, the `GroundingJudgeReleaseViolation`
-    /// names of the release rules the kept SQL breaks when checked again,
-    /// which the decision rule keeps empty. Nil without a release, and in
-    /// results written before it was recorded.
-    public var groundingJudgeReleaseViolations: [String]?
 
     public init(
         backendAvailable: Bool,
@@ -213,8 +208,7 @@ public struct TextToSQLEvalMetrics: Codable, Equatable, Sendable {
         groundingJudgeDivergence: String? = nil,
         groundingJudgeOffArmDecisionMatches: Bool? = nil,
         groundingJudgeOffArmPassed: Bool? = nil,
-        groundingJudgeOffArmEndToEndPassed: Bool? = nil,
-        groundingJudgeReleaseViolations: [String]? = nil
+        groundingJudgeOffArmEndToEndPassed: Bool? = nil
     ) {
         self.backendAvailable = backendAvailable
         self.transportSuccess = transportSuccess
@@ -274,7 +268,6 @@ public struct TextToSQLEvalMetrics: Codable, Equatable, Sendable {
         self.groundingJudgeOffArmDecisionMatches = groundingJudgeOffArmDecisionMatches
         self.groundingJudgeOffArmPassed = groundingJudgeOffArmPassed
         self.groundingJudgeOffArmEndToEndPassed = groundingJudgeOffArmEndToEndPassed
-        self.groundingJudgeReleaseViolations = groundingJudgeReleaseViolations
     }
 }
 

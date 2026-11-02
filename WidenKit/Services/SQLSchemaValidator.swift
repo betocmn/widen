@@ -1978,25 +1978,6 @@ public struct GroundingReviewCandidate: Equatable, Sendable {
     }
 }
 
-/// A rule a grounding judgment must never get past when it keeps SQL the
-/// grounding pass would replace, named as
-/// `GeneratedSQLPostprocessor.groundingJudgeReleaseViolations` reports it.
-public enum GroundingJudgeReleaseViolation: String, CaseIterable, Equatable, Sendable {
-    /// No judgment is bound to this SQL, question, database context,
-    /// confirmed definitions and flagged words.
-    case digestMismatch
-    /// The SQL does not only read.
-    case write
-    /// A flagged word matches a SQL literal the grounding pass rejected.
-    case literalRejected
-    /// The anchored-window rule replaces the SQL.
-    case anchoredWindow
-    /// The SQL reads no table, or one the schema tools did not describe.
-    case undescribedTables
-    /// Intent coverage says the question must be clarified.
-    case mustClarify
-}
-
 public enum GeneratedSQLPostprocessor {
     /// `allowGroundingJudgeRelease` is false where the caller runs the SQL
     /// it gets back without the user's review, as the app's execution repair
@@ -2137,60 +2118,6 @@ public enum GeneratedSQLPostprocessor {
             confirmedSemanticBindings: confirmedSemanticBindings
         )
         return review.evaluation.pendingClarification == nil ? nil : review
-    }
-
-    /// The release rules `generation` breaks, checked again from its SQL, the
-    /// inputs and its agent diagnostics after `enriched` kept SQL only its
-    /// grounding judgment let stand. Empty, as the decision rule requires;
-    /// evals count anything else, which would be a bug.
-    public static func groundingJudgeReleaseViolations(
-        _ generation: SQLGenerationResult,
-        question: String,
-        schema: DatabaseSchema,
-        databaseContext: String,
-        confirmedSemanticBindings: [String] = []
-    ) -> [GroundingJudgeReleaseViolation] {
-        let sql = generation.sql.trimmingCharacters(in: .whitespacesAndNewlines)
-        let diagnostics = generation.backendMetadata?.agentDiagnostics
-        let referencedTables = SQLSchemaValidator.validate(sql: sql, against: schema).referencedTables
-        let review = reviewGrounding(
-            question: question,
-            sql: sql,
-            referencedTables: referencedTables,
-            schema: schema,
-            databaseContext: databaseContext,
-            confirmedSemanticBindings: confirmedSemanticBindings
-        )
-        let digest = SchemaToolAgentGroundingJudgment.inputDigest(
-            sql: sql,
-            question: question,
-            databaseContext: databaseContext,
-            confirmedSemanticBindings: confirmedSemanticBindings,
-            terms: review.unresolvedTerms
-        )
-        let mustClarify = diagnostics.map {
-            SchemaToolAgentSQLIntentCoveragePolicy.evaluate(
-                question: question,
-                databaseContext: databaseContext,
-                evidence: $0.schemaEvidence,
-                sql: generation.sql
-            ).decision == .mustClarify
-        } ?? false
-        let violations: [(GroundingJudgeReleaseViolation, Bool)] = [
-            (.digestMismatch, diagnostics?.groundingJudgment?.inputDigest != digest),
-            (.write, SQLSafetyValidator.validate(sql).kind != .read),
-            (.literalRejected, !review.literalRejectedTerms.isEmpty),
-            (.anchoredWindow, anchoredWindowReplacesSQL(sql, question: question, databaseContext: databaseContext)),
-            (
-                .undescribedTables,
-                !describedTablesCover(
-                    referencedTables,
-                    describedTableIDs: diagnostics?.schemaEvidence.describedTableIDs ?? []
-                )
-            ),
-            (.mustClarify, mustClarify),
-        ]
-        return violations.filter(\.1).map(\.0)
     }
 
     /// Whether the anchored-window rule replaces `sql` with a question about

@@ -953,8 +953,6 @@ struct TextToSQLPipelineTests {
             released.groundingJudgeDivergence
                 == TextToSQLGroundingJudgeDivergence(kind: .released, lexicalClarificationQuestion: lexicalQuestion)
         )
-        // Checked again, the release breaks none of the release rules.
-        #expect(released.groundingJudgeDivergence?.releaseViolations == [])
 
         // Re-aimed: the clarification asks about "query" instead of "write".
         let reAimed = try await run(

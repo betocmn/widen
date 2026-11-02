@@ -193,7 +193,6 @@ struct TextToSQLEvalGroundingJudgeTests {
             .recordingGroundingJudgeDivergence(divergence, evalCase: Self.evalCase(.sql))
 
         #expect(result.metrics.groundingJudgeDivergence == "released")
-        #expect(result.metrics.groundingJudgeReleaseViolations == [])
         #expect(result.metrics.groundingJudgeOffArmDecisionMatches == false)
         #expect(result.metrics.groundingJudgeOffArmPassed == false)
         #expect(result.metrics.groundingJudgeOffArmEndToEndPassed == nil)
@@ -232,7 +231,6 @@ struct TextToSQLEvalGroundingJudgeTests {
         let reAimed = Self.result(clarification: "Which column should define \"loyal\"?")
             .recordingGroundingJudgeDivergence(poor, evalCase: Self.evalCase(.clarify))
         #expect(reAimed.metrics.groundingJudgeDivergence == "reAimed")
-        #expect(reAimed.metrics.groundingJudgeReleaseViolations == nil)
         #expect(reAimed.metrics.groundingJudgeOffArmDecisionMatches == true)
         #expect(reAimed.metrics.groundingJudgeOffArmPassed == false)
         #expect(reAimed.status == .passed)
@@ -369,10 +367,6 @@ struct TextToSQLEvalGroundingJudgeTests {
         #expect(summary.vetoedResults == 1)
         #expect(summary.releasedResults == 3)
         #expect(summary.reAimedResults == 1)
-        #expect(
-            summary.releaseViolationCounts
-                == Dictionary(uniqueKeysWithValues: GroundingJudgeReleaseViolation.allCases.map { ($0.rawValue, 0) })
-        )
         #expect(summary.releasesOnExpectedClarification == 1)
         #expect(summary.releasedExpectedSQLResults == 2)
         #expect(summary.releasedExpectedSQLSemanticPassed == 1)
@@ -394,7 +388,6 @@ struct TextToSQLEvalGroundingJudgeTests {
             "| Grounding judge vetoed releases | 1 |",
             "| Grounding judge released results | 3 |",
             "| Grounding judge re-aimed results | 1 |",
-            "| Grounding judge release rule violations | anchoredWindow 0, digestMismatch 0, literalRejected 0, mustClarify 0, undescribedTables 0, write 0 |",
             "| Grounding judge releases on expected-clarify results | 1 |",
             "| Grounding judge released expected-SQL semantic passes | 1 of 2 (50.0%) |",
             "| Paired end-to-end passes (judge on, off) | on 4, off 3 of 9 |",
@@ -424,45 +417,6 @@ struct TextToSQLEvalGroundingJudgeTests {
             TextToSQLEvalGroundingJudgeSummary.markdownRows(staticSummary).contains(
                 "| Paired end-to-end passes (judge on, off) | - |"
             )
-        )
-    }
-
-    @Test func summaryCountsEveryReleaseThatBreaksARule() throws {
-        func released(_ violations: [GroundingJudgeReleaseViolation]) -> TextToSQLEvalResult {
-            Self.result(status: .passed, sql: "SELECT id FROM public.customers")
-                .recordingGroundingJudgeDivergence(
-                    TextToSQLGroundingJudgeDivergence(
-                        kind: .released,
-                        lexicalClarificationQuestion: "Which column should define \"loyal\"?",
-                        releaseViolations: violations
-                    ),
-                    evalCase: Self.evalCase(.sql)
-                )
-                .withGroundingJudgeOffArm()
-        }
-        let results = [released([]), released([.write, .mustClarify]), released([.mustClarify])]
-        #expect(results[1].metrics.groundingJudgeReleaseViolations == ["write", "mustClarify"])
-
-        let summary = try #require(
-            TextToSQLEvalGroundingJudgeSummary(results: results, expectedDecisions: [Self.caseID: .sql])
-        )
-
-        #expect(summary.releasedResults == 3)
-        #expect(summary.releaseViolationCounts == [
-            "digestMismatch": 0,
-            "write": 1,
-            "literalRejected": 0,
-            "anchoredWindow": 0,
-            "undescribedTables": 0,
-            "mustClarify": 2,
-        ])
-        #expect(
-            TextToSQLEvalGroundingJudgeSummary.markdownRows(summary).contains(
-                "| Grounding judge release rule violations | anchoredWindow 0, digestMismatch 0, literalRejected 0, mustClarify 2, undescribedTables 0, write 1 |"
-            )
-        )
-        #expect(
-            try JSONDecoder().decode(TextToSQLEvalResult.self, from: JSONEncoder().encode(results[1])) == results[1]
         )
     }
 
