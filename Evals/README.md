@@ -223,6 +223,9 @@ predate the shared production pipeline and must be treated as stale.
 Regenerate cloud baselines only with a real `WIDEN_EVAL_PARTICLE_API_KEY`,
 from a run of the shipped configuration; do not replace a cloud baseline with
 an all-`backendUnavailable` run.
+`Evals/baselines/text-to-sql-v1-cloud-particle-1-baseline.md` is the current
+cloud baseline: the summary of the 0.2.0 gate run of the shipped
+configuration (Particle-1, budget layer, critic off, grounding judge on).
 `Evals/baselines/text-to-sql-v1-cloud-openai-gpt-5.5-baseline.md` is a stale
 record of the previous OpenRouter GPT-5.5 profile, kept as history; that
 profile's gate evidence is `docs/evals/0.1.0.md` and
