@@ -11,7 +11,7 @@ struct ParticleStatusChip: View {
         Button {
             appState.openSettings(tab: .llm)
         } label: {
-            HStack(spacing: 6) {
+            HStack(spacing: 8) {
                 // Muted prefix so the chip reads as "which LLM generates the
                 // SQL", not "is the database local or cloud". Hidden from
                 // VoiceOver — the button already carries the full label.
@@ -24,6 +24,8 @@ struct ParticleStatusChip: View {
                     .font(.callout)
             }
             .lineLimit(1)
+            .padding(.horizontal, 6)
+            .padding(.vertical, 2)
         }
         .help(help(for: status))
         .accessibilityLabel("Text-to-SQL model: \(CloudModelCatalog.productionProfile.displayName)")
@@ -35,8 +37,7 @@ struct ParticleStatusChip: View {
     private func icon(for status: TextToSQLStatus) -> some View {
         switch status {
         case .ready:
-            Image(systemName: "sparkles")
-                .foregroundStyle(.secondary)
+            EmptyView()
         case .mock:
             Image(systemName: "hammer")
                 .foregroundStyle(.secondary)
