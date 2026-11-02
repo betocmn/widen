@@ -158,10 +158,15 @@ struct SchemaToolAgentGroundingJudgeTests {
         VerificationRow(.contextDefined, "the sum", verified: false),
         VerificationRow(.contextDefined, "Revenue is net of refunds", verified: false),
         VerificationRow(.questionDefined, "paid revenue per customer", verified: true),
+        VerificationRow(.questionDefined, "Paid revenue", verified: true),
         VerificationRow(.questionDefined, "revenue", verified: false),
         VerificationRow(.questionDefined, "\"revenue.\"", verified: false),
         VerificationRow(.questionDefined, "paid re", verified: false),
         VerificationRow(.questionDefined, "revenue after refunds", verified: false),
+        // A quote that does not name the word, and the whole question.
+        VerificationRow(.questionDefined, "total paid", verified: false),
+        VerificationRow(.questionDefined, "Show total paid revenue per customer", verified: false),
+        VerificationRow(.questionDefined, "\"show total paid revenue per customer.\"", verified: false),
         VerificationRow(.needsDefinition, "public.orders.total_cents", verified: false),
         VerificationRow(.unsupported, "", verified: false),
         VerificationRow(.invalid, "", verified: false),
@@ -215,6 +220,39 @@ struct SchemaToolAgentGroundingJudgeTests {
         }
 
         #expect(verified == [[false], [false], [true]])
+    }
+
+    @Test func questionDefinedQuoteMustNameTheWordShortOfTheWholeQuestion() {
+        let request = SchemaToolAgentGroundingJudgeRequest(
+            question: "Who are our best customers?",
+            mode: .initial,
+            schemaEvidence: Self.evidence,
+            schema: Self.schema,
+            referencedTables: Self.referencedTables,
+            flaggedTerms: ["best", "customer"]
+        )
+        let quotes = [
+            // The whole question names every word it asks about.
+            "Who are our best customers",
+            "who are our BEST customers?",
+            // A quote that leaves the word out.
+            "Who are our",
+            // The word, and in the plural.
+            "our best customers",
+        ]
+        let verified = quotes.map { quote in
+            SchemaToolAgentGroundingJudge.verify(
+                reply: SchemaToolAgentGroundingJudgeReply(terms: [
+                    .init(term: "best", label: .questionDefined, evidence: quote),
+                    .init(term: "customer", label: .questionDefined, evidence: quote),
+                ]),
+                request: request,
+                sqlAnalysis: SQLReferenceAnalyzer.analyze(Self.candidateSQL),
+                schema: Self.schema
+            ).map(\.verified)
+        }
+
+        #expect(verified == [[false, false], [false, false], [false, false], [true, true]])
     }
 
     @Test func schemaMatchNeedsTheColumnInTheCandidateSQL() {
