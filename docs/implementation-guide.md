@@ -716,11 +716,13 @@ pushed the 0.2.0 gate's P95 latency over its ceiling), 8,000 completion
 tokens, `json_object`, no tools, and at most 2 HTTP attempts within the run's
 deadline and HTTP budget. The agent sends it after accepting SQL in any mode,
 forced final answers included, when the lexical pass would replace that SQL.
-It sends the question, up to 3 recent questions (follow-ups only), the
-database context, the last 12 confirmed definitions, the tables, columns,
-types and foreign keys the schema tools returned, the allowed values and
-comments of those columns on tables the SQL reads (at most 8,000 bytes), and
-the first 8 flagged words. It never sends the SQL under review, the SQL a
+It sends the question, the database context, the last 12 confirmed
+definitions, the tables, columns, types and foreign keys the schema tools
+returned, the allowed values and comments of those columns on tables the SQL
+reads (at most 8,000 bytes), and the first 8 flagged words. The request would
+add up to 3 recent questions in `followUp` mode, but no app or eval caller
+sets that mode yet, so a follow-up reaches the judge as an initial question
+with no earlier questions. It never sends the SQL under review, the SQL a
 follow-up edits, a query plan, or data values. It is skipped, with the reason
 recorded, when a flagged word matches a SQL literal the grounder rejected,
 the SQL writes, a table it reads was never described, more than 8 words are
