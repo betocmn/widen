@@ -203,11 +203,6 @@ struct TextToSQLEvalCloudSettingsTests {
                 "maximumHTTPAttempts": "12",
                 "maximumMalformedTerminalCorrections": "1",
                 "maximumRepeatedToolCorrections": "1",
-                "maximumInvalidTerminalSQLCorrections": "1",
-                "maximumOverClarificationCorrections": "1",
-                "maximumIntentCoverageCorrections": "1",
-                "maximumPlanConsistencyCorrections": "1",
-                "maximumTerminalRequiredCorrections": "1",
                 "wallClockTimeoutSeconds": "180",
             ]
         )
