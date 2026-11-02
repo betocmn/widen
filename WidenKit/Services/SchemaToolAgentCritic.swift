@@ -393,9 +393,7 @@ enum SchemaToolAgentCritic {
         )
     }
 
-    /// The reply as a JSON object, or its first `{…}` block. The grounding
-    /// judge reads its replies the same way.
-    static func jsonObject(in content: String) -> [String: JSONValue]? {
+    private static func jsonObject(in content: String) -> [String: JSONValue]? {
         let trimmed = content.trimmingCharacters(in: .whitespacesAndNewlines)
         if let object = decodedObject(trimmed) {
             return object

@@ -35,9 +35,6 @@ public enum CloudCallSite: String, CaseIterable, Sendable {
     case sessionTitle
     /// The schema-tool agent's second-opinion review of its own SQL.
     case critic
-    /// The schema-tool agent's check of the question words the grounder
-    /// could not match. It never sees the SQL.
-    case groundingJudge
 }
 
 public enum CloudResponseFormat: Equatable, Sendable {
@@ -298,11 +295,6 @@ extension CloudModelProfile {
                 maxCompletionTokens: 16_000,
                 responseFormat: .jsonObject
             ),
-            .groundingJudge: CloudCallSitePolicy(
-                reasoningEffort: .high,
-                maxCompletionTokens: 8_000,
-                responseFormat: .jsonObject
-            ),
         ],
         supportsReasoningEffort: true,
         parallelToolCalls: true,
@@ -388,16 +380,11 @@ extension CloudModelProfile {
                 ),
                 .oneShotSQL: oneShot,
                 .connectivityProbe: oneShot,
-                // The critic and the grounding judge send `json_object` only
-                // when the catalog advertises `response_format`.
+                // `json_object` is sent only when the catalog advertises
+                // `response_format`.
                 .critic: CloudCallSitePolicy(
                     reasoningEffort: nil,
                     maxCompletionTokens: 2_048,
-                    responseFormat: .jsonObject
-                ),
-                .groundingJudge: CloudCallSitePolicy(
-                    reasoningEffort: nil,
-                    maxCompletionTokens: 1_024,
                     responseFormat: .jsonObject
                 ),
             ],
