@@ -162,7 +162,16 @@ struct TextToSQLEvalUsageTotalsTests {
             #expect(markdownText.contains(row), "\(row)")
             #expect(triageRunTable.contains(row), "triage \(row)")
         }
-        #expect(markdownText.contains("lines += reportedUsageSection(results: releaseGateResults(for: run))"))
+        #expect(
+            markdownText.contains(
+                """
+                        lines += reportedUsageSection(
+                            results: releaseGateResults(for: run),
+                            groundingJudge: (run.backendSummaries[.cloud] ?? run.summary).groundingJudge
+                        )
+                """
+            )
+        )
 
         let sectionStart = try #require(text.range(of: "private static func reportedUsageSection("))
         let sectionEnd = try #require(

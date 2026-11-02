@@ -129,6 +129,26 @@ public struct TextToSQLEvalMetrics: Codable, Equatable, Sendable {
     /// guards stopped it. Nil when it was not compared, or when the golden
     /// SQL or the database failed and the comparison could not judge it.
     public var withheldSQLSemanticPassed: Bool?
+    /// How the grounding judge changed this result's answer, at the run's
+    /// first `TextToSQLGroundingJudgeDivergence`: `released` or `reAimed`.
+    /// Nil when it changed nothing, when the judge was off, and in results
+    /// written before it was recorded.
+    public var groundingJudgeDivergence: String?
+    /// The paired judge-off arm of `decisionMatches`. A result that did not
+    /// diverge equals its own; one that did would have answered with the
+    /// lexical clarification, which matches only a case that expects one.
+    /// Nil when the judge was off, and in results written before it.
+    public var groundingJudgeOffArmDecisionMatches: Bool?
+    /// The paired judge-off arm of `status == .passed`. A result that did not
+    /// diverge equals its own; one that did fails when its case expects SQL,
+    /// and otherwise passes when the lexical clarification meets the case's
+    /// clarification quality check. Nil when the judge was off.
+    public var groundingJudgeOffArmPassed: Bool?
+    /// The paired judge-off arm of `endToEndPassed`: its own value without a
+    /// divergence, `groundingJudgeOffArmPassed` with one. Nil when
+    /// `endToEndPassed` is, as outside semantic runs, and when the judge was
+    /// off.
+    public var groundingJudgeOffArmEndToEndPassed: Bool?
 
     public init(
         backendAvailable: Bool,
@@ -184,7 +204,11 @@ public struct TextToSQLEvalMetrics: Codable, Equatable, Sendable {
         semanticMismatchCategory: String? = nil,
         groundingWithheldSQL: Bool? = nil,
         withheldSQLSemanticStatus: TextToSQLSemanticStatus? = nil,
-        withheldSQLSemanticPassed: Bool? = nil
+        withheldSQLSemanticPassed: Bool? = nil,
+        groundingJudgeDivergence: String? = nil,
+        groundingJudgeOffArmDecisionMatches: Bool? = nil,
+        groundingJudgeOffArmPassed: Bool? = nil,
+        groundingJudgeOffArmEndToEndPassed: Bool? = nil
     ) {
         self.backendAvailable = backendAvailable
         self.transportSuccess = transportSuccess
@@ -240,6 +264,10 @@ public struct TextToSQLEvalMetrics: Codable, Equatable, Sendable {
         self.groundingWithheldSQL = groundingWithheldSQL
         self.withheldSQLSemanticStatus = withheldSQLSemanticStatus
         self.withheldSQLSemanticPassed = withheldSQLSemanticPassed
+        self.groundingJudgeDivergence = groundingJudgeDivergence
+        self.groundingJudgeOffArmDecisionMatches = groundingJudgeOffArmDecisionMatches
+        self.groundingJudgeOffArmPassed = groundingJudgeOffArmPassed
+        self.groundingJudgeOffArmEndToEndPassed = groundingJudgeOffArmEndToEndPassed
     }
 }
 

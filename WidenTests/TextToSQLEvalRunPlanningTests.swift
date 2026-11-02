@@ -860,6 +860,58 @@ struct TextToSQLEvalRunPlanningTests {
         }
     }
 
+    @Test func makefilePassesTheGroundingJudgeToNonGateTargetsOnly() throws {
+        let repoRoot = URL(fileURLWithPath: #filePath)
+            .deletingLastPathComponent()
+            .deletingLastPathComponent()
+        let text = try String(
+            contentsOf: repoRoot.appendingPathComponent("Makefile"),
+            encoding: .utf8
+        )
+
+        for target in ["eval-cloud", "eval-cloud-agent", "eval-smoke", "eval-db-cloud", "eval-db-cloud-agent"] {
+            let command = try Self.makeDryRunCommand(
+                repoRoot: repoRoot,
+                target: target,
+                assignments: ["GROUNDING_JUDGE=on"],
+                commandContaining: Self.evalCommandMarker
+            )
+            #expect(command.contains("--schema-agent-grounding-judge on"), "make -n \(target): \(command)")
+        }
+        let caseCommand = try Self.makeDryRunCommand(
+            repoRoot: repoRoot,
+            target: "eval-db-case",
+            assignments: ["CASE=commerce.fixture", "GROUNDING_JUDGE=off"],
+            commandContaining: Self.evalCommandMarker
+        )
+        #expect(caseCommand.contains("--schema-agent-grounding-judge off"))
+
+        // Without the variable the eval follows the app's default.
+        let withoutJudge = try Self.makeDryRunCommand(
+            repoRoot: repoRoot,
+            target: "eval-cloud",
+            commandContaining: Self.evalCommandMarker
+        )
+        #expect(!withoutJudge.contains("--schema-agent-grounding-judge"))
+
+        // The release gate runs the app's default, so its recipes never see
+        // the variable.
+        for target in Self.releaseGateTargets {
+            let recipe = try #require(Self.makefileRecipe(named: target, in: text), "\(target)")
+            for forbidden in ["GROUNDING_JUDGE", "--schema-agent-grounding-judge"] {
+                #expect(!recipe.contains(forbidden), "\(target) recipe mentions \(forbidden)")
+            }
+            let assignments = Self.modelEvalTargets.first { $0.target == target }?.assignments ?? []
+            let command = try Self.makeDryRunCommand(
+                repoRoot: repoRoot,
+                target: target,
+                assignments: assignments + ["GROUNDING_JUDGE=on"],
+                commandContaining: Self.evalCommandMarker
+            )
+            #expect(!command.contains("--schema-agent-grounding-judge"), "make -n \(target): \(command)")
+        }
+    }
+
     @Test func makefileRejectsRemovedBackendInsteadOfRunningPaidCloudEval() throws {
         let repoRoot = URL(fileURLWithPath: #filePath)
             .deletingLastPathComponent()
@@ -1301,8 +1353,8 @@ struct TextToSQLEvalRunPlanningTests {
     ) throws -> (status: Int32, output: String) {
         var environment = ProcessInfo.processInfo.environment
         for name in [
-            "ALLOW_MODEL_OVERRIDE", "BACKEND", "CASE", "CASES", "CLOUD_AGENT", "MAKEFLAGS", "MAKELEVEL",
-            "MFLAGS", "MODEL", "REASONING_EFFORT",
+            "ALLOW_MODEL_OVERRIDE", "BACKEND", "CASE", "CASES", "CLOUD_AGENT", "GROUNDING_JUDGE", "MAKEFLAGS",
+            "MAKELEVEL", "MFLAGS", "MODEL", "REASONING_EFFORT",
         ] {
             environment.removeValue(forKey: name)
         }
