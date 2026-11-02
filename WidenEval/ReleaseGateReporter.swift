@@ -152,6 +152,7 @@ enum TextToSQLReleaseGateReporter {
             "| Schema agent clarification correction | \(tableCell(run.manifest.schemaAgentClarificationCorrectionMode ?? "-")) |",
             "| Schema agent intent coverage | \(tableCell(run.manifest.schemaAgentIntentCoverageMode ?? "-")) |",
             "| Schema agent plan consistency | \(tableCell(run.manifest.schemaAgentPlanConsistencyMode ?? "-")) |",
+            "| Schema agent critic | \(tableCell(run.manifest.schemaAgentCriticMode ?? "-")) |",
             "| Provider | \(tableCell(run.manifest.resolvedProvider ?? "-")) |",
             "| Endpoint | \(tableCell(run.manifest.providerEndpointHost ?? "-")) |",
             "| Model | \(tableCell(run.manifest.model ?? "-")) |",
@@ -218,17 +219,26 @@ enum TextToSQLReleaseGateReporter {
         return lines.joined(separator: "\n")
     }
 
-    /// Spend for the gate's results, reported for cost tracking only.
+    /// Spend for the gate's results, and how often the schema agent forced
+    /// a final answer or asked its critic, reported for tracking only. The
+    /// forced-answer and critic counts are the extra-calls layer's K12
+    /// evidence that the layer ran.
     private static func reportedUsageSection(results: [TextToSQLEvalResult]) -> [String] {
-        [
+        var lines = [
             "",
             "## Reported (not gated)",
             "",
-            "These figures track spend and do not affect the gate.",
+            "These figures track spend and the schema agent's extra calls, and do not affect the gate.",
             "",
             "| Metric | Value |",
             "| --- | --- |",
-        ] + TextToSQLEvalUsageTotals(results: results).markdownRows
+        ]
+        lines += TextToSQLEvalUsageTotals(results: results).markdownRows
+        lines += TextToSQLEvalForcedTerminalSummary.markdownRows(
+            TextToSQLEvalForcedTerminalSummary(results: results)
+        )
+        lines += TextToSQLEvalCriticSummary.markdownRows(TextToSQLEvalCriticSummary(results: results))
+        return lines
     }
 
     private static func historicalRegressionSection(results: [TextToSQLEvalResult]) -> [String] {
@@ -495,6 +505,7 @@ enum TextToSQLReleaseTriageReporter {
             "| Schema agent clarification correction | \(tableCell(run.manifest.schemaAgentClarificationCorrectionMode ?? "-")) |",
             "| Schema agent intent coverage | \(tableCell(run.manifest.schemaAgentIntentCoverageMode ?? "-")) |",
             "| Schema agent plan consistency | \(tableCell(run.manifest.schemaAgentPlanConsistencyMode ?? "-")) |",
+            "| Schema agent critic | \(tableCell(run.manifest.schemaAgentCriticMode ?? "-")) |",
             "| Provider | \(tableCell(run.manifest.resolvedProvider ?? "-")) |",
             "| Endpoint | \(tableCell(run.manifest.providerEndpointHost ?? "-")) |",
             "| Model | \(tableCell(run.manifest.model ?? "-")) |",

@@ -4493,6 +4493,11 @@ struct SchemaToolSQLAgentTests {
         #expect(diagnostics.forcedTerminalRequestCount == 1)
         #expect(diagnostics.forcedTerminalSucceeded == false)
         #expect(diagnostics.forcedTerminalFailure == "cloudRequestFailure:invalidRequest")
+        // The eval counts this as a provider rejection for criterion K12.
+        #expect(
+            TextToSQLEvalForcedTerminalSummary.providerRejectionFailures
+                .contains(diagnostics.forcedTerminalFailure ?? "")
+        )
     }
 
     @Test(arguments: [
