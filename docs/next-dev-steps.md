@@ -445,6 +445,19 @@ reports into its run directory, `git restore docs/evals/0.2.0*.md`,
 `make build && make test`, and commit `docs: record failed grounding judge
 gate`. Never rerun to fish for a better number.
 
+#### Stage 6: the grounding judge at low reasoning effort (preregistered 2026-11-02)
+
+Stage 5's judge met every accuracy criterion but failed G9 on P95 latency
+(29.2 s against 26.7 s); judged results took a median 8.2 s longer than in
+Stage 4, almost all of it the judge's high-effort call. Stage 6 re-lands the
+fifteen Stage 5 commits unchanged (`Reapply "…"` commits, identical in code
+to `c4c9b7f`) plus `perf: run the grounding judge at low reasoning effort`,
+which changes only the judge call site's `reasoning_effort` from high to low.
+The criteria are **not** loosened: everything about Stage 5 applies
+unchanged — the comparator C (Stage 4), the two commands and their ceilings
+($0.75 and $0.30), V, G1–G10, P0–P2, the never-rerun rule and the failure
+procedure — with "candidate" meaning these sixteen commits.
+
 ### Evidence
 
 #### Stage 1
@@ -694,6 +707,8 @@ column after each command and record the larger figure.
 | 4 | `make eval-release-triage` | $0.50 | $0.1592 | $0.6494 |
 | 5 | `make eval-release-triage` | $0.75 | $0.2159 | $0.8653 |
 | 5 | `make eval-grounding-probe` | $0.30 | $0.1485 | $1.0138 |
+| 6 | `make eval-release-triage` | $0.75 | - | - |
+| 6 | `make eval-grounding-probe` | $0.30 | - | - |
 
 ## Completed and remaining work
 
