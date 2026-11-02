@@ -140,10 +140,9 @@ struct TextToSQLEvalExtraCallsMetricsTests {
     @Test func criticSummaryCountsEligibleReviewedAndFailedOpenResults() throws {
         let summary = try #require(TextToSQLEvalCriticSummary(results: Self.scriptedResults()))
 
-        // Repair-mode SQL, forced final answers and answers that never
-        // reached the critic step are not eligible; reviews skipped for
-        // time or budget are eligible but not reviewed.
-        #expect(summary.eligibleSQLTerminals == 5)
+        // Repair-mode SQL and answers that never reached the critic step are
+        // not eligible; skipped reviews are eligible but not reviewed.
+        #expect(summary.eligibleSQLTerminals == 6)
         #expect(summary.reviewedResults == 4)
         #expect(summary.criticCalls == 5)
         #expect(summary.verdictCounts == ["accept": 2, "revise": 2, "error": 1])
@@ -163,8 +162,8 @@ struct TextToSQLEvalExtraCallsMetricsTests {
         #expect(summary.failedOpenCalls == 1)
         #expect(summary.releasedPreviousResults == 1)
         #expect(TextToSQLEvalCriticSummary.markdownRows(summary) == [
-            "| Critic eligible SQL terminals | 5 |",
-            "| Critic reviewed results | 4 of 5 (80.0%) |",
+            "| Critic eligible SQL terminals | 6 |",
+            "| Critic reviewed results | 4 of 6 (66.7%) |",
             "| Critic calls | 5 |",
             "| Critic failed-open calls | 1 of 5 (20.0%) |",
             "| Critic verdicts | accept 2, error 1, revise 2 |",
@@ -173,52 +172,6 @@ struct TextToSQLEvalExtraCallsMetricsTests {
             "| Critic revisions | 2 |",
             "| Critic releases of pre-revision SQL | 1 |",
         ])
-    }
-
-    @Test func forcedFinalAnswersAreNotEligibleForReview() throws {
-        // The critic skips a forced final answer by design, so forced
-        // answers leave the reviewed share of eligible SQL unchanged.
-        let summary = try #require(
-            TextToSQLEvalCriticSummary(results: [
-                Self.result(Self.critic(calls: 1, verdicts: ["accept"], outcome: "accepted")),
-                Self.result(Self.critic(outcome: "skippedDeadline")),
-                Self.result(
-                    Self.critic(
-                        outcome: "skippedForcedTerminal",
-                        forcedReason: "timeReserve",
-                        forcedRequests: 1,
-                        forcedSucceeded: true
-                    )
-                ),
-                // An answer forced after a revision was never reviewed
-                // either, though the SQL before it was.
-                Self.result(
-                    Self.critic(
-                        calls: 1,
-                        verdicts: ["revise"],
-                        revisions: 1,
-                        outcome: "skippedForcedTerminal",
-                        forcedReason: "toolBudget",
-                        forcedRequests: 1,
-                        forcedSucceeded: true
-                    )
-                ),
-            ])
-        )
-
-        #expect(summary.eligibleSQLTerminals == 2)
-        #expect(summary.reviewedResults == 1)
-        #expect(summary.criticCalls == 2)
-        #expect(summary.revisedResults == 1)
-        #expect(
-            TextToSQLEvalCriticSummary.ineligibleOutcomes == ["skippedRepairMode", "skippedForcedTerminal"]
-        )
-        #expect(
-            TextToSQLEvalCriticSummary.markdownRows(summary).prefix(2) == [
-                "| Critic eligible SQL terminals | 2 |",
-                "| Critic reviewed results | 1 of 2 (50.0%) |",
-            ]
-        )
     }
 
     @Test func forcedTerminalSummaryCountsAttemptsReasonsAndProviderRejections() throws {
@@ -316,7 +269,6 @@ struct TextToSQLEvalExtraCallsMetricsTests {
         let agent = try Self.source("WidenKit/Services/SchemaToolSQLAgent.swift")
 
         #expect(agent.contains("\"\(TextToSQLEvalCriticSummary.repairModeOutcome)\""))
-        #expect(agent.contains("\"\(TextToSQLEvalCriticSummary.forcedTerminalOutcome)\""))
         #expect(agent.contains("criticVerdicts.append(\"\(TextToSQLEvalCriticSummary.failedOpenVerdict)\")"))
         for outcome in [
             "revisionFailedReleasedPrevious",
@@ -389,8 +341,7 @@ struct TextToSQLEvalExtraCallsMetricsTests {
             result(critic(outcome: "skippedRepairMode")),
             // A clarification never reaches the critic step.
             result(critic()),
-            // A forced final answer that succeeded skips the critic, so it is
-            // not eligible.
+            // A forced final answer that succeeded skips the critic.
             result(
                 critic(
                     outcome: "skippedForcedTerminal",
