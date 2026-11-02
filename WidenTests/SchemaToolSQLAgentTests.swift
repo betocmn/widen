@@ -608,7 +608,7 @@ struct SchemaToolSQLAgentTests {
         #expect(metadata.agentLogicalTurnCount == 3)
         // Each turn: 6 uncached and 4 cached prompt tokens, and 5 completion
         // tokens, at Particle-1's $0.25 / $0.03 / $1.00 per 1M tokens.
-        let perTurn = (6 * 0.25 + 4 * 0.03 + 5 * 1.00) / 1_000_000
+        let perTurn: Double = (6.0 * 0.25 + 4.0 * 0.03 + 5.0 * 1.00) / 1_000_000.0
         #expect(abs((metadata.costUSD ?? 0) - 3 * perTurn) < 1e-12)
         #expect(metadata.costSource == "estimatedPeakList")
         #expect(metadata.cachedPromptTokens == 12)

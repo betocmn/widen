@@ -598,7 +598,7 @@ struct ProviderAPIProbeTests {
 
         // Each priced reply: 600 uncached prompt tokens at $0.25, 400 cached
         // at $0.03 and 200 completion tokens at $1.00 per 1M.
-        let perCompletion = (600 * 0.25 + 400 * 0.03 + 200 * 1.00) / 1_000_000
+        let perCompletion: Double = (600.0 * 0.25 + 400.0 * 0.03 + 200.0 * 1.00) / 1_000_000.0
         let cost = report.cost
         #expect(cost.pricing == ProviderAPIProbeReport.Pricing(CloudModelProfile.particle.pricing!))
         #expect(cost.sentCompletionCount == 8)

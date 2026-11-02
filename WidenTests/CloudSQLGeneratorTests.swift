@@ -1796,7 +1796,8 @@ struct CloudSQLGeneratorTests {
         // OpenRouter reports usage.cost. Particle doesn't, so each attempt's
         // 11 prompt and 22 completion tokens are priced at $0.25 and $1.00
         // per 1M tokens.
-        let expectedCost = profile.reportsUsageCost ? 0.00024 : 2 * (11 * 0.25 + 22 * 1.00) / 1_000_000
+        let estimatedAttemptCost: Double = (11.0 * 0.25 + 22.0 * 1.00) / 1_000_000.0
+        let expectedCost: Double = profile.reportsUsageCost ? 0.00024 : 2.0 * estimatedAttemptCost
         #expect(abs((result.backendMetadata?.costUSD ?? 0) - expectedCost) < 1e-12)
         #expect(
             result.backendMetadata?.costSource
@@ -1841,7 +1842,8 @@ struct CloudSQLGeneratorTests {
         // An OpenRouter profile has no prices, so it never estimates.
         #expect(unreported.priced(by: .openRouterTest).costUSD == nil)
         let estimated = unreported.priced(by: .particleTest)
-        #expect(abs((estimated.costUSD ?? 0) - (1000 * 0.25 + 100 * 1.00) / 1_000_000) < 1e-12)
+        let expectedEstimate: Double = (1000.0 * 0.25 + 100.0 * 1.00) / 1_000_000.0
+        #expect(abs((estimated.costUSD ?? 0) - expectedEstimate) < 1e-12)
         #expect(estimated.costSource == "estimatedPeakList")
 
         let parsed = try CloudSQLResponseParser(profile: .particleTest).parse(
@@ -1886,7 +1888,7 @@ struct CloudSQLGeneratorTests {
         )
 
         // 3 uncached and 8 cached prompt tokens, and 22 completion tokens.
-        let expectedCost = (3 * 0.25 + 8 * 0.03 + 22 * 1.00) / 1_000_000
+        let expectedCost: Double = (3.0 * 0.25 + 8.0 * 0.03 + 22.0 * 1.00) / 1_000_000.0
         let usage = try #require(events.events.first { $0.httpAttemptCount == 0 })
         #expect(usage.promptTokens == 11)
         #expect(usage.cachedPromptTokens == 8)
@@ -1924,7 +1926,7 @@ struct CloudSQLGeneratorTests {
             #expect(failure.diagnostic.attemptCount == 2)
             // Each billed attempt: 7 uncached and 4 cached prompt tokens, and
             // 22 completion tokens.
-            let perAttempt = (7 * 0.25 + 4 * 0.03 + 22 * 1.00) / 1_000_000
+            let perAttempt: Double = (7.0 * 0.25 + 4.0 * 0.03 + 22.0 * 1.00) / 1_000_000.0
             #expect(abs((failure.diagnostic.costUSD ?? 0) - 2 * perAttempt) < 1e-12)
             #expect(failure.diagnostic.costSource == "estimatedPeakList")
             #expect(failure.diagnostic.cachedPromptTokens == 8)
