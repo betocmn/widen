@@ -306,7 +306,6 @@ struct SchemaToolAgentGroundingJudgeTests {
             question: " Total paid revenue per customer ",
             mode: .followUp,
             recentQuestions: ["Top customers", " "],
-            currentSQL: " SELECT id FROM public.customers LIMIT 100 ",
             databaseContext: Self.databaseContext,
             confirmedSemanticBindings: ["paid: status = 'paid' only", " "],
             schemaEvidence: Self.evidence,
@@ -325,9 +324,6 @@ struct SchemaToolAgentGroundingJudgeTests {
 
             Recent questions:
             Top customers
-
-            Current SQL for follow-up:
-            SELECT id FROM public.customers LIMIT 100
 
             Database context (authoritative):
             Revenue is the sum of total_cents for paid orders.
@@ -351,12 +347,11 @@ struct SchemaToolAgentGroundingJudgeTests {
             """)
     }
 
-    @Test func initialQuestionsCarryNoRecentQuestionsOrCurrentSQL() {
+    @Test func initialQuestionsCarryNoRecentQuestions() {
         let request = SchemaToolAgentGroundingJudgeRequest(
             question: "Total paid revenue per customer",
             mode: .initial,
             recentQuestions: ["Top customers"],
-            currentSQL: "SELECT 1",
             schemaEvidence: Self.evidence,
             schema: Self.schema,
             referencedTables: Self.referencedTables,
@@ -365,9 +360,7 @@ struct SchemaToolAgentGroundingJudgeTests {
         let prompt = SchemaToolAgentGroundingJudge.userPrompt(for: request)
 
         #expect(request.recentQuestions.isEmpty)
-        #expect(request.currentSQL == nil)
         #expect(!prompt.contains("Recent questions"))
-        #expect(!prompt.contains("Current SQL"))
         #expect(!prompt.contains("Database context"))
         #expect(!prompt.contains("Confirmed definitions"))
         #expect(prompt.contains("Mode:\ninitial question"))
@@ -404,7 +397,9 @@ struct SchemaToolAgentGroundingJudgeTests {
             #expect(!prompt.contains(leaked), "\(leaked)")
         }
         let fields = Set(Mirror(reflecting: request).children.compactMap(\.label))
-        #expect(fields.isDisjoint(with: ["sql", "queryPlanJSON", "inspectedValueEvidence", "defaultRowLimit"]))
+        #expect(
+            fields.isDisjoint(with: ["sql", "currentSQL", "queryPlanJSON", "inspectedValueEvidence", "defaultRowLimit"])
+        )
     }
 
     @Test func excerptAndNotesHoldOnlyExposedColumns() {
