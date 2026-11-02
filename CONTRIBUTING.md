@@ -44,6 +44,12 @@ make eval-release  # text-to-SQL release gate (pinned Particle-1)
 The committed `Widen.xcodeproj` is generated. Edit `project.yml`, run
 `make project`, and commit both files when project settings change.
 
+The app icon uses the website's W mark and colors. Its vector master is
+`scripts/app_icon.svg`, matching `widen-web/public/logo/mark.svg` and the icon
+layout in that repository's `scripts/images.mjs`. After updating the master,
+run `swift scripts/make_icon.swift` and commit all generated PNGs in
+`Widen/Assets.xcassets/AppIcon.appiconset`.
+
 ## Testing Expectations
 
 Run the narrowest test set that covers your change:

@@ -1,0 +1,9 @@
+<!-- Matches widen-web/public/logo/mark.svg and the app-icon layout in scripts/images.mjs. -->
+<svg xmlns="http://www.w3.org/2000/svg" width="1024" height="1024" viewBox="0 0 512 512">
+  <rect width="512" height="512" rx="96" fill="#08080a" />
+  <g transform="translate(96 96) scale(10)" fill="#edeef1">
+    <path d="M1 4L8 4L10.275 13.425L3.046 11.015Z" />
+    <path d="M3.757 13.452L8 28L14.5 28L16 23L17.5 28L24 28L28.243 13.452L21.148 15.817L20.5 18.5L17 9L15 9L11.5 18.5L10.852 15.817Z" />
+    <path d="M31 4L24 4L21.725 13.425L28.954 11.015Z" />
+  </g>
+</svg>
