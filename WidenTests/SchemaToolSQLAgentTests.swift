@@ -4949,9 +4949,9 @@ struct SchemaToolSQLAgentTests {
 
     // MARK: - Critic
 
-    @Test func productionDefaultEnablesTheCritic() {
+    @Test func productionDefaultLeavesTheCriticOff() {
         // The app and evals build the agent with the default configuration.
-        #expect(SchemaToolSQLAgentConfiguration.default.criticMode == .enabled)
+        #expect(SchemaToolSQLAgentConfiguration.default.criticMode == .disabled)
         #expect(SchemaToolAgentCriticMode.enabled.rawValue == "enabled")
         #expect(SchemaToolAgentCriticMode.disabled.rawValue == "disabled")
     }
@@ -6663,7 +6663,7 @@ struct SchemaToolSQLAgentTests {
         #expect(configuration.forcedTerminalMode == .terminalToolOnly)
         #expect(configuration.maximumForcedTerminalRequests == 2)
         #expect(configuration.forcedTerminalTimeReserveSeconds == 45)
-        #expect(configuration.criticMode == .enabled)
+        #expect(configuration.criticMode == .disabled)
         #expect(configuration.maximumCriticRevisions == 2)
         #expect(configuration.maximumCriticHTTPAttempts == 2)
         #expect(configuration.criticMinimumRemainingSeconds == 30)

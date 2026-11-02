@@ -290,8 +290,8 @@ struct EvalCLIOptions {
         .diagnosticsOnly
     var schemaAgentIntentCoverageMode: SchemaToolAgentIntentCoverageMode = .diagnosticsOnly
     var schemaAgentPlanConsistencyMode: SchemaToolAgentPlanConsistencyMode = .diagnosticsOnly
-    /// On by default, as in the app.
-    var schemaAgentCriticMode: SchemaToolAgentCriticMode = .enabled
+    /// Off by default, as in the app.
+    var schemaAgentCriticMode: SchemaToolAgentCriticMode = .disabled
     /// The provider follows from the model: `particle-1` is Particle-1 and
     /// an OpenRouter `vendor/model` ID runs through OpenRouter.
     var model: String = TextToSQLEvalDefaults.requestedModelID
@@ -335,7 +335,7 @@ struct EvalCLIOptions {
           --schema-agent-clarification-correction disabled|diagnostics|experimental
           --schema-agent-intent-coverage disabled|diagnostics|reject-only|experimental
           --schema-agent-plan-consistency disabled|diagnostics|experimental
-          --schema-agent-critic on|off|enabled|disabled (default: on)
+          --schema-agent-critic on|off|enabled|disabled (default: off)
           --model <model-id> (default: \(TextToSQLEvalDefaults.requestedModelID); a vendor/model ID runs through OpenRouter)
           --reasoning-effort \(ReasoningEffort.allCases.map(\.rawValue).joined(separator: "|")) (eval-only; \(TextToSQLEvalDefaults.requestedModelID) only)
           --suite <path>

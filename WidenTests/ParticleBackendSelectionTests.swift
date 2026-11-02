@@ -475,9 +475,9 @@ struct ParticleBackendSelectionTests {
         )
         #expect(oneShotResult.sql == ParticleLeakFixtures.oneShotSQL)
 
-        // Three agent turns, the critic's review and the one-shot request.
+        // Three agent turns and the one-shot request; the critic is off.
         let requests = transport.requests
-        #expect(requests.count == 5)
+        #expect(requests.count == 4)
         for request in requests {
             #expect(request.url?.scheme == "https")
             #expect(request.url?.host == "api.particle.ai")

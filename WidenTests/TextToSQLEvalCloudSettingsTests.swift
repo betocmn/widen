@@ -216,7 +216,7 @@ struct TextToSQLEvalCloudSettingsTests {
                 "forcedTerminalMode": "terminalToolOnly",
                 "maximumForcedTerminalRequests": "2",
                 "forcedTerminalTimeReserveSeconds": "45",
-                "criticMode": "enabled",
+                "criticMode": "disabled",
                 "maximumCriticRevisions": "2",
                 "maximumCriticHTTPAttempts": "2",
                 "criticMinimumRemainingSeconds": "30",

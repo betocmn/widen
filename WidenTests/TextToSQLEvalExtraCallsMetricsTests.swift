@@ -17,13 +17,13 @@ struct TextToSQLEvalExtraCallsMetricsTests {
         }
     }
 
-    @Test func widenEvalParsesTheCriticFlagAndRunsTheCriticByDefault() throws {
+    @Test func widenEvalParsesTheCriticFlagAndLeavesTheCriticOffByDefault() throws {
         let main = try Self.source("WidenEval/WidenEvalMain.swift")
 
-        // On by default, as in the app.
-        #expect(main.contains("var schemaAgentCriticMode: SchemaToolAgentCriticMode = .enabled"))
-        #expect(SchemaToolSQLAgentConfiguration.default.criticMode == .enabled)
-        #expect(main.contains("--schema-agent-critic on|off|enabled|disabled (default: on)"))
+        // Off by default, as in the app.
+        #expect(main.contains("var schemaAgentCriticMode: SchemaToolAgentCriticMode = .disabled"))
+        #expect(SchemaToolSQLAgentConfiguration.default.criticMode == .disabled)
+        #expect(main.contains("--schema-agent-critic on|off|enabled|disabled (default: off)"))
 
         let flagStart = try #require(main.range(of: #"case "--schema-agent-critic":"#))
         let flagCase = String(main[flagStart.upperBound...].prefix(500))
@@ -89,7 +89,7 @@ struct TextToSQLEvalExtraCallsMetricsTests {
         #expect(
             TextToSQLEvalSchemaAgentCritic.recordedMode(
                 in: SchemaToolSQLAgentConfiguration.default.reportedSettings
-            ) == "enabled"
+            ) == "disabled"
         )
     }
 

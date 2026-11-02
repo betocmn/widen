@@ -75,7 +75,9 @@ public struct SchemaToolSQLAgentConfiguration: Equatable, Sendable {
     /// wall clock forces its final answer. Zero turns the reserve off.
     public var forcedTerminalTimeReserveSeconds: TimeInterval
     /// The critic reviews SQL from initial and follow-up runs only, never
-    /// from repairs or forced final requests.
+    /// from repairs or forced final requests. Off by default: in the 0.2.0
+    /// Stage 3 gate its projection revisions trimmed columns the expected
+    /// results keep, so evals turn it on only with `--schema-agent-critic on`.
     public var criticMode: SchemaToolAgentCriticMode
     /// Times the critic may send SQL back for revision in one run.
     public var maximumCriticRevisions: Int
@@ -109,7 +111,7 @@ public struct SchemaToolSQLAgentConfiguration: Equatable, Sendable {
         forcedTerminalMode: SchemaToolAgentForcedTerminalMode = .terminalToolOnly,
         maximumForcedTerminalRequests: Int = 2,
         forcedTerminalTimeReserveSeconds: TimeInterval = 45,
-        criticMode: SchemaToolAgentCriticMode = .enabled,
+        criticMode: SchemaToolAgentCriticMode = .disabled,
         maximumCriticRevisions: Int = 2,
         maximumCriticHTTPAttempts: Int = 2,
         criticMinimumRemainingSeconds: TimeInterval = 30,
