@@ -5836,12 +5836,12 @@ struct SchemaToolSQLAgentTests {
         #expect(!result.needsClarification)
         #expect(chatTransport.requests.count == 4)
         let agentTurn = try ParticleTestSupport.expectRequestShape(chatTransport.requests[0], callSite: .agentTurn)
-        // No tools, json_object, high effort and 8k tokens.
+        // No tools, json_object, low effort and 8k tokens.
         let judge = try ParticleTestSupport.expectRequestShape(
             chatTransport.requests[3],
             callSite: .groundingJudge
         )
-        #expect(judge["reasoning_effort"] as? String == "high")
+        #expect(judge["reasoning_effort"] as? String == "low")
         #expect(judge["max_completion_tokens"] as? Int == 8_000)
         #expect((judge["response_format"] as? [String: Any])?["type"] as? String == "json_object")
         #expect(

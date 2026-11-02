@@ -298,8 +298,10 @@ extension CloudModelProfile {
                 maxCompletionTokens: 16_000,
                 responseFormat: .jsonObject
             ),
+            // Low effort: the judge only labels words, and at high effort
+            // its call pushed the 0.2.0 gate's P95 latency over its ceiling.
             .groundingJudge: CloudCallSitePolicy(
-                reasoningEffort: .high,
+                reasoningEffort: .low,
                 maxCompletionTokens: 8_000,
                 responseFormat: .jsonObject
             ),

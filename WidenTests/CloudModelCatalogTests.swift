@@ -80,7 +80,7 @@ struct CloudModelCatalogTests {
         )
         #expect(
             profile.policy(for: .groundingJudge)
-                == CloudCallSitePolicy(reasoningEffort: .high, maxCompletionTokens: 8_000, responseFormat: .jsonObject)
+                == CloudCallSitePolicy(reasoningEffort: .low, maxCompletionTokens: 8_000, responseFormat: .jsonObject)
         )
         #expect(profile.supportsReasoningEffort)
         #expect(profile.parallelToolCalls == true)
