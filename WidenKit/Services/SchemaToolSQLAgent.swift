@@ -1211,7 +1211,7 @@ public final class SchemaToolSQLAgent: SQLGenerator, Sendable {
             messages: messages,
             tools: tools,
             capabilities: capabilities,
-            promptCacheKey: promptCacheKey
+            options: ChatRequestOptions(promptCacheKey: promptCacheKey)
         )
         var attempt = 1
         var noContentRetries = 0
