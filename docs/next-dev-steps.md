@@ -430,7 +430,44 @@ each new paid experiment is still preregistered here before any spend.
 
 #### Stage 3
 
-Pending.
+Recorded 2026-11-02. **The extra-calls layer failed K2 and K3, so all eleven
+layer commits were reverted** (`Revert "…"` commits `a600cf7` … `2fc11a0`);
+the code is back to Stage 2's. The Stage 3 reports were kept beside the run
+artifacts and `docs/evals/0.2.0*.md` still hold Stage 2's.
+
+`make eval-release-triage RELEASE_VERSION=0.2.0 MAX_CLOUD_COST_USD=2.25` at
+commit `0a34d49` (ceiling: min($2.50, $5.00 − $0.2081) − $0.25 reserve):
+
+| Criterion | Stage 2 | Stage 3 | Result |
+| --- | --- | --- | --- |
+| K1 valid (60/60, identity, tools, layer-only diff, < 72 h) | - | 60/60, 60/60, 60/60 | pass |
+| K2 end-to-end semantic ≥ Stage 2 − 2 | 16/60 | 12/60 | **fail** |
+| K3 no case loses ≥ 2 of 3 passes | - | 3 cases did | **fail** |
+| K4 safety / schema | 14/14 / 14/14 | 15/15 / 15/15 | pass |
+| K5 clarification decisions | 7/12 | 11/12 | pass |
+| K6 critic invariant violations | - | 0 | pass |
+| K7 transport | 60/60 | 60/60 | pass |
+| K8 repeated/no-progress repairs | 0 | 0 | pass |
+| K9 eval / internal agent timeouts | 0 / 0 | 0 / 0 | pass |
+| K10 cost per result (≤ 3×) | $0.00235 | $0.00470 (2.0×) | pass |
+| K11 P95 latency (≤ 45.5 s) | 15.5 s | 32.6 s | pass |
+| K12 critic reviewed / failed-open / forced rejected | - | 54/54 / 0/78 / 0 | pass |
+
+Per-case changes in end-to-end passes (of 3): `saas.healthy-accounts` 0 → 3,
+`support.important-cluster` 1 → 2, and three regressions:
+`preseason.verified-tools` 3 → 0, `preseason.latest-failed-runs` 3 → 0 and
+`commerce.recent-orders` 2 → 0. Structured parsing rose from 56/60 to 60/60
+and tool-budget failures fell from 4 to 0.
+
+Attribution (diagnostics, not gated): every regressed result was a critic
+`projection` revision, or an answer that trimmed the projection the same
+way. The critic asked the agent to drop columns the golden result keeps
+(for example `slug`, `status` and `createdAt`), so the result digest no
+longer matched. It revised 26 of 54 reviewed answers. The gains came from
+the budget side: `saas.healthy-accounts` had exhausted the six-call schema
+budget three times in Stage 2 and now clarified correctly three times (one
+via a forced final answer). The critic recorded 5 clarify verdicts, none
+trusted, and never failed open.
 
 #### Spend ledger
 
@@ -449,7 +486,7 @@ column after each command and record the larger figure.
 | 1 | `make eval-db-cloud-agent` (high) | $0.04 | $0.0125 | $0.0557 |
 | 1 | `make eval-db-cloud-agent` (medium) | $0.03 | $0.0115 | $0.0672 |
 | 2 | `make eval-release-triage` | $1.40 | $0.1409 | $0.2081 |
-| 3 | `make eval-release-triage` | Stage 3 formula | - | - |
+| 3 | `make eval-release-triage` | $2.25 | $0.2821 | $0.4902 |
 
 ## Completed and remaining work
 

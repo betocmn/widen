@@ -68,6 +68,12 @@ before the paid gate run, and the criteria are conjunctive — one miss rejects
 the whole candidate. Rejected candidates are reverted from the product; the
 sanitized evidence stays published.
 
+### Particle-1 (0.2.0)
+
+| Experiment | Outcome |
+| --- | --- |
+| Extra-calls layer: larger agent budgets, repair accounting by logical invocation, a forced final answer and an LLM critic pass | Rejected — clarification decisions rose from 7/12 to 11/12 and tool-budget failures fell to zero, but end-to-end semantic passes fell from 16/60 to 12/60 because the critic trimmed projections; all eleven commits were reverted. |
+
 ### Previous provider (OpenRouter GPT-5.5/5.6, before 0.2.0) — results don't transfer
 
 These experiments ran on OpenRouter models before Widen moved to Particle-1
