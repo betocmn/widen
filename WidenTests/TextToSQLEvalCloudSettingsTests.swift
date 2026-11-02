@@ -213,9 +213,6 @@ struct TextToSQLEvalCloudSettingsTests {
                 "maximumTerminalRequiredCorrections": "1",
                 "wallClockTimeoutSeconds": "180",
                 "repairWallClockTimeoutSeconds": "120",
-                "forcedTerminalMode": "terminalToolOnly",
-                "maximumForcedTerminalRequests": "2",
-                "forcedTerminalTimeReserveSeconds": "45",
             ]
         )
         var configuration = SchemaToolSQLAgentConfiguration.default

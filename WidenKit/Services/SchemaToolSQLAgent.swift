@@ -20,18 +20,6 @@ public enum SchemaToolAgentPlanConsistencyMode: String, Codable, Equatable, Send
     case correctAndRetryExperimental
 }
 
-/// How the agent asks for a final answer once a run is out of tool or turn
-/// budget, keeps calling tools after it was told to finish, or nears its
-/// deadline.
-public enum SchemaToolAgentForcedTerminalMode: String, Codable, Equatable, Sendable {
-    /// Send no forced request; the run fails as it always has.
-    case disabled
-    /// Send only the terminal tool, named in `tool_choice`.
-    case terminalToolOnly
-    /// Send every tool, with the terminal tool named in `tool_choice`.
-    case allToolsNamedChoice
-}
-
 public struct SchemaToolSQLAgentConfiguration: Equatable, Sendable {
     public var maximumSchemaToolCalls: Int
     public var maximumRepairSchemaToolCalls: Int
@@ -59,13 +47,6 @@ public struct SchemaToolSQLAgentConfiguration: Equatable, Sendable {
     public var clarificationCorrectionMode: SchemaToolAgentClarificationCorrectionMode
     public var intentCoverageMode: SchemaToolAgentIntentCoverageMode
     public var planConsistencyMode: SchemaToolAgentPlanConsistencyMode
-    public var forcedTerminalMode: SchemaToolAgentForcedTerminalMode
-    /// Forced final requests one run may send. They do not count against
-    /// `maximumModelTurns`, but they spend HTTP attempts and the wall clock.
-    public var maximumForcedTerminalRequests: Int
-    /// A run that has searched the schema and has less than this left on its
-    /// wall clock forces its final answer. Zero turns the reserve off.
-    public var forcedTerminalTimeReserveSeconds: TimeInterval
 
     public init(
         maximumSchemaToolCalls: Int = 12,
@@ -84,10 +65,7 @@ public struct SchemaToolSQLAgentConfiguration: Equatable, Sendable {
         repairWallClockTimeoutSeconds: TimeInterval = 120,
         clarificationCorrectionMode: SchemaToolAgentClarificationCorrectionMode = .diagnosticsOnly,
         intentCoverageMode: SchemaToolAgentIntentCoverageMode = .diagnosticsOnly,
-        planConsistencyMode: SchemaToolAgentPlanConsistencyMode = .diagnosticsOnly,
-        forcedTerminalMode: SchemaToolAgentForcedTerminalMode = .terminalToolOnly,
-        maximumForcedTerminalRequests: Int = 2,
-        forcedTerminalTimeReserveSeconds: TimeInterval = 45
+        planConsistencyMode: SchemaToolAgentPlanConsistencyMode = .diagnosticsOnly
     ) {
         self.maximumSchemaToolCalls = maximumSchemaToolCalls
         self.maximumRepairSchemaToolCalls = maximumRepairSchemaToolCalls
@@ -106,16 +84,12 @@ public struct SchemaToolSQLAgentConfiguration: Equatable, Sendable {
         self.clarificationCorrectionMode = clarificationCorrectionMode
         self.intentCoverageMode = intentCoverageMode
         self.planConsistencyMode = planConsistencyMode
-        self.forcedTerminalMode = forcedTerminalMode
-        self.maximumForcedTerminalRequests = maximumForcedTerminalRequests
-        self.forcedTerminalTimeReserveSeconds = forcedTerminalTimeReserveSeconds
     }
 
     public static let `default` = SchemaToolSQLAgentConfiguration()
 
     /// The call budgets and wall clock, as an eval records them in its run
-    /// manifest for evidence. Keys are stable; values are plain numbers,
-    /// except the forced-terminal mode's name.
+    /// manifest for evidence. Keys are stable; values are plain numbers.
     public var reportedSettings: [String: String] {
         [
             "maximumModelTurns": String(maximumModelTurns),
@@ -131,9 +105,6 @@ public struct SchemaToolSQLAgentConfiguration: Equatable, Sendable {
             "maximumTerminalRequiredCorrections": String(maximumTerminalRequiredCorrections),
             "wallClockTimeoutSeconds": String(format: "%g", wallClockTimeoutSeconds),
             "repairWallClockTimeoutSeconds": String(format: "%g", repairWallClockTimeoutSeconds),
-            "forcedTerminalMode": forcedTerminalMode.rawValue,
-            "maximumForcedTerminalRequests": String(maximumForcedTerminalRequests),
-            "forcedTerminalTimeReserveSeconds": String(format: "%g", forcedTerminalTimeReserveSeconds),
         ]
     }
 
@@ -505,65 +476,18 @@ public final class SchemaToolSQLAgent: SQLGenerator, Sendable {
                 )
             }
 
-            // Model turns used, not counting forced final requests. Once a
-            // run forces its final answer, every later request is forced.
-            var turn = 0
-            while true {
-                if diagnostics.forcedTerminalReason == nil,
-                    turn >= configuration.maximumModelTurns
-                {
-                    guard configuration.forcedTerminalMode != .disabled else {
-                        throw await turnBudgetExhaustedFailure(
-                            question: question,
-                            databaseContext: config.databaseContext,
-                            evidence: evidence,
-                            session: session,
-                            inspectionSession: inspectionSession,
-                            diagnostics: &diagnostics
-                        )
-                    }
-                    diagnostics.forcedTerminalReason = .turnBudget
-                }
+            for turn in 1...configuration.maximumModelTurns {
                 try Task.checkCancellation()
                 try await checkStaleSnapshot(expected: initialFingerprint)
                 try checkDeadline(deadline)
-                if diagnostics.forcedTerminalReason == nil,
-                    configuration.forcedTerminalMode != .disabled,
-                    configuration.forcedTerminalTimeReserveSeconds > 0,
-                    evidence.hasSuccessfulSearch,
-                    deadline.timeIntervalSinceNow < configuration.forcedTerminalTimeReserveSeconds
-                {
-                    diagnostics.forcedTerminalReason = .timeReserve
-                }
-                let options: ChatRequestOptions
-                if diagnostics.forcedTerminalReason != nil {
-                    guard diagnostics.forcedTerminalRequestCount
-                        < configuration.maximumForcedTerminalRequests
-                    else {
-                        diagnostics.forcedTerminalFailure = "requestLimitReached"
-                        throw await agentFailure(
-                            .modelTurnBudgetExhausted,
-                            "The schema-tool agent exhausted its forced final requests.",
-                            session: session
-                        )
-                    }
-                    diagnostics.forcedTerminalRequestCount += 1
-                    appendForcedTerminalCorrection(to: &messages)
-                    options = forcedTerminalRequestOptions(promptCacheKey: promptCacheKey)
-                } else {
-                    turn += 1
-                    options = ChatRequestOptions(promptCacheKey: promptCacheKey)
-                }
-                // Counts forced requests too, so tool-call ids stay unique.
-                let requestNumber = turn + diagnostics.forcedTerminalRequestCount
 
                 let parsed: ChatToolParser.ParsedTurn
                 do {
                     parsed = try await performRequest(
                         messages: messages,
                         tools: tools,
-                        options: options,
                         capabilities: capabilities,
+                        promptCacheKey: promptCacheKey,
                         aggregate: &aggregate,
                         maximumHTTPAttempts: availableHTTPAttempts,
                         deadline: deadline,
@@ -600,19 +524,8 @@ public final class SchemaToolSQLAgent: SQLGenerator, Sendable {
                         cloudFailure: failure
                     )
                 }
-                aggregate.logicalTurnCount = requestNumber
-                diagnostics.logicalTurnCount = requestNumber
-
-                if diagnostics.forcedTerminalReason != nil,
-                    !parsed.toolCalls.contains(where: { $0.name == Self.terminalToolName })
-                {
-                    diagnostics.forcedTerminalFailure = "nonTerminalResponse"
-                    throw await agentFailure(
-                        .terminalResultMissing,
-                        "The model did not call the terminal tool in a forced final request.",
-                        session: session
-                    )
-                }
+                aggregate.logicalTurnCount = turn
+                diagnostics.logicalTurnCount = turn
 
                 guard !parsed.toolCalls.isEmpty else {
                     if parsed.content?.isEmpty == false {
@@ -648,11 +561,7 @@ public final class SchemaToolSQLAgent: SQLGenerator, Sendable {
                 }.count
                 var toolCalls: [ChatToolCall] = []
                 for (index, call) in parsed.toolCalls.enumerated() {
-                    let internalCall = call.internalized(
-                        turn: requestNumber,
-                        index: index,
-                        usedIDs: internalCallIDs
-                    )
+                    let internalCall = call.internalized(turn: turn, index: index, usedIDs: internalCallIDs)
                     internalCallIDs.insert(internalCall.id)
                     toolCalls.append(internalCall)
                 }
@@ -897,7 +806,6 @@ public final class SchemaToolSQLAgent: SQLGenerator, Sendable {
                             aggregate.terminalOutcome = "clarify"
                         }
                         diagnostics.resetPlanConsistencyForClarifyTerminal()
-                        diagnostics.recordTerminalAccepted()
                         aggregate.agentDiagnostics = diagnostics.snapshot(
                             evidence: evidence,
                             inspectionToolCalls: await inspectionSession?.tracesSnapshot() ?? []
@@ -1001,7 +909,6 @@ public final class SchemaToolSQLAgent: SQLGenerator, Sendable {
                                 )
                                 diagnostics.terminalQueryPlan = ""
                                 diagnostics.resetPlanConsistencyForClarifyTerminal()
-                                diagnostics.recordTerminalAccepted()
                                 aggregate.terminalOutcome = "clarify_fallback"
                                 aggregate.agentDiagnostics = diagnostics.snapshot(
                                     evidence: evidence,
@@ -1080,7 +987,6 @@ public final class SchemaToolSQLAgent: SQLGenerator, Sendable {
                             diagnostics.planConsistencyCorrectionSucceeded = true
                         }
                         diagnostics.clearResolvedPlanConsistencyRejection()
-                        diagnostics.recordTerminalAccepted()
                         aggregate.agentDiagnostics = diagnostics.snapshot(
                             evidence: evidence,
                             inspectionToolCalls: await inspectionSession?.tracesSnapshot() ?? []
@@ -1111,26 +1017,21 @@ public final class SchemaToolSQLAgent: SQLGenerator, Sendable {
                         messages.append(correction(Self.terminalRequiredAfterSufficientEvidenceCorrection))
                         continue
                     }
-                    guard configuration.forcedTerminalMode != .disabled else {
-                        throw await terminalRequiredNoProgressFailure(session: session)
-                    }
-                    // Every call already has its tool error, so the forced
-                    // request can follow straight away.
-                    diagnostics.forcedTerminalReason = .terminalRequired
-                    continue
+                    throw await agentFailure(
+                        .terminalRequiredAfterSufficientEvidenceNoProgress,
+                        "The model kept using schema tools after evidence was sufficient for a terminal result.",
+                        session: session
+                    )
                 }
 
                 // A session that ran out of budget on an earlier turn stays
-                // out. A model that keeps calling it is forced to answer
-                // after this batch, whose calls to the spent session get
-                // budget errors. Without forced answers it gets the budget
-                // failure, and with it the inspected-evidence fallback.
+                // out. A model that keeps calling it gets the budget failure,
+                // and with it the inspected-evidence fallback.
                 let exhaustedBeforeBatch = diagnostics.exhaustedToolSessions
-                let callsSpentSession = toolCalls.contains(where: { call in
+                if toolCalls.contains(where: { call in
                     Self.toolSessionKind(of: call, hasInspectionSession: inspectionSession != nil)
                         .map(exhaustedBeforeBatch.contains) ?? false
-                })
-                if callsSpentSession, configuration.forcedTerminalMode == .disabled {
+                }) {
                     throw await toolBudgetExhaustedFailure(
                         question: question,
                         databaseContext: config.databaseContext,
@@ -1245,40 +1146,26 @@ public final class SchemaToolSQLAgent: SQLGenerator, Sendable {
                         )
                     }
                 }
-                // With the schema session spent, or a spent session called
-                // again, only a terminal answer can make progress.
-                if configuration.forcedTerminalMode != .disabled,
-                    callsSpentSession || diagnostics.exhaustedToolSessions.contains(.schema)
-                {
-                    diagnostics.forcedTerminalReason = .toolBudget
-                }
             }
+
+            if !diagnostics.exhaustedToolSessions.isEmpty {
+                throw await toolBudgetExhaustedFailure(
+                    question: question,
+                    databaseContext: config.databaseContext,
+                    evidence: evidence,
+                    session: session,
+                    inspectionSession: inspectionSession,
+                    diagnostics: &diagnostics
+                )
+            }
+            throw await agentFailure(
+                .modelTurnBudgetExhausted,
+                "The schema-tool agent exhausted its model-turn budget.",
+                session: session
+            )
         } catch is CancellationError {
             throw CancellationError()
-        } catch let thrown as SchemaToolAgentFailure {
-            var failure = thrown
-            // A forced final request that fails, or whose answer is
-            // rejected, leaves the run as its trigger left it: the trigger's
-            // own failure is thrown, so the evidence fallback still applies.
-            // A schema change is a real failure and always propagates.
-            if let reason = diagnostics.forcedTerminalReason {
-                if diagnostics.forcedTerminalFailure == nil {
-                    diagnostics.forcedTerminalFailure = Self.forcedTerminalFailureDescription(thrown)
-                }
-                if thrown.category != .staleSchemaSnapshot,
-                    let trigger = await forcedTerminalTriggerFailure(
-                        reason,
-                        question: question,
-                        databaseContext: config.databaseContext,
-                        evidence: evidence,
-                        session: session,
-                        inspectionSession: inspectionSession,
-                        diagnostics: &diagnostics
-                    )
-                {
-                    failure = trigger
-                }
-            }
+        } catch let failure as SchemaToolAgentFailure {
             diagnostics.recordFailureCategory(failure.category)
             let inspectionTraces = await inspectionSession?.tracesSnapshot() ?? []
             aggregate.agentDiagnostics = diagnostics.snapshot(
@@ -1312,8 +1199,8 @@ public final class SchemaToolSQLAgent: SQLGenerator, Sendable {
     private func performRequest(
         messages: [ChatToolMessage],
         tools: [ChatToolDefinition],
-        options: ChatRequestOptions,
         capabilities: CloudModelCapabilities,
+        promptCacheKey: String?,
         aggregate: inout AgentMetadataAccumulator,
         maximumHTTPAttempts: Int,
         deadline: Date,
@@ -1324,7 +1211,7 @@ public final class SchemaToolSQLAgent: SQLGenerator, Sendable {
             messages: messages,
             tools: tools,
             capabilities: capabilities,
-            options: options
+            options: ChatRequestOptions(promptCacheKey: promptCacheKey)
         )
         var attempt = 1
         var noContentRetries = 0
@@ -1942,121 +1829,6 @@ public final class SchemaToolSQLAgent: SQLGenerator, Sendable {
         )
     }
 
-    /// The failure for a run whose last model turn ended without a terminal
-    /// answer. A run that also spent a tool session gets the budget failure.
-    private func turnBudgetExhaustedFailure(
-        question: String,
-        databaseContext: String,
-        evidence: SchemaToolEvidenceLedger,
-        session: SchemaToolSession,
-        inspectionSession: DatabaseInspectionToolSession?,
-        diagnostics: inout SchemaToolAgentDiagnosticState
-    ) async -> SchemaToolAgentFailure {
-        guard diagnostics.exhaustedToolSessions.isEmpty else {
-            return await toolBudgetExhaustedFailure(
-                question: question,
-                databaseContext: databaseContext,
-                evidence: evidence,
-                session: session,
-                inspectionSession: inspectionSession,
-                diagnostics: &diagnostics
-            )
-        }
-        return await agentFailure(
-            .modelTurnBudgetExhausted,
-            "The schema-tool agent exhausted its model-turn budget.",
-            session: session
-        )
-    }
-
-    private func terminalRequiredNoProgressFailure(
-        session: SchemaToolSession
-    ) async -> SchemaToolAgentFailure {
-        await agentFailure(
-            .terminalRequiredAfterSufficientEvidenceNoProgress,
-            "The model kept using schema tools after evidence was sufficient for a terminal result.",
-            session: session
-        )
-    }
-
-    /// The failure the run would have ended with had `reason` not forced a
-    /// final request. It is built only when a forced run fails, so a forced
-    /// answer that succeeds leaves no budget rejection behind. The time
-    /// reserve stands in for no failure: the run's own failure propagates.
-    private func forcedTerminalTriggerFailure(
-        _ reason: ForcedTerminalReason,
-        question: String,
-        databaseContext: String,
-        evidence: SchemaToolEvidenceLedger,
-        session: SchemaToolSession,
-        inspectionSession: DatabaseInspectionToolSession?,
-        diagnostics: inout SchemaToolAgentDiagnosticState
-    ) async -> SchemaToolAgentFailure? {
-        switch reason {
-        case .toolBudget:
-            await toolBudgetExhaustedFailure(
-                question: question,
-                databaseContext: databaseContext,
-                evidence: evidence,
-                session: session,
-                inspectionSession: inspectionSession,
-                diagnostics: &diagnostics
-            )
-        case .turnBudget:
-            await turnBudgetExhaustedFailure(
-                question: question,
-                databaseContext: databaseContext,
-                evidence: evidence,
-                session: session,
-                inspectionSession: inspectionSession,
-                diagnostics: &diagnostics
-            )
-        case .terminalRequired:
-            await terminalRequiredNoProgressFailure(session: session)
-        case .timeReserve:
-            nil
-        }
-    }
-
-    /// The diagnostics' name for how a forced run failed: the provider's
-    /// failure category after `cloudRequestFailure:` for a request that
-    /// failed, otherwise the agent's failure category.
-    private static func forcedTerminalFailureDescription(
-        _ failure: SchemaToolAgentFailure
-    ) -> String {
-        if let cloudFailure = failure.cloudFailure {
-            return "cloudRequestFailure:\(cloudFailure.category.rawValue)"
-        }
-        return failure.category.rawValue
-    }
-
-    /// A forced request names the terminal tool and allows a single call.
-    /// In `.terminalToolOnly` mode it also sends no other tool.
-    private func forcedTerminalRequestOptions(promptCacheKey: String?) -> ChatRequestOptions {
-        ChatRequestOptions(
-            toolChoice: .function(name: Self.terminalToolName),
-            parallelToolCalls: false,
-            toolNames: configuration.forcedTerminalMode == .terminalToolOnly
-                ? [Self.terminalToolName]
-                : nil,
-            promptCacheKey: promptCacheKey
-        )
-    }
-
-    /// Ends the transcript with the forced-terminal instruction. A transcript
-    /// that already ends with a correction gets the instruction added to it,
-    /// so a request never carries two user messages in a row.
-    private func appendForcedTerminalCorrection(to messages: inout [ChatToolMessage]) {
-        // The first two messages are the instructions and the question.
-        if messages.count > 2, let last = messages.last, last.role == .user {
-            messages[messages.count - 1].content = [last.content, Self.forcedTerminalCorrection]
-                .compactMap { $0 }
-                .joined(separator: "\n\n")
-        } else {
-            messages.append(correction(Self.forcedTerminalCorrection))
-        }
-    }
-
     private func correction(_ text: String) -> ChatToolMessage {
         ChatToolMessage(role: .user, content: text)
     }
@@ -2241,8 +2013,6 @@ public final class SchemaToolSQLAgent: SQLGenerator, Sendable {
         "The schema evidence and database context are sufficient to answer with SQL. Do not ask the user to confirm facts already supplied. Finish by calling submit_text_to_sql_result with action='sql' and a concise query_plan. Use only inspected tables, columns, and join paths. If a genuinely unresolved database decision remains, name that exact unresolved metric, relationship, status value, or time field."
     fileprivate static let terminalRequiredAfterSufficientEvidenceCorrection =
         "The schema evidence is already sufficient for a terminal result. Stop calling schema tools. Finish by calling submit_text_to_sql_result with action='sql' and a concise query_plan, or action='clarify' only if you name one concrete unresolved database decision."
-    fileprivate static let forcedTerminalCorrection =
-        "Do not call other tools. Call submit_text_to_sql_result exactly once now: action='sql' using only inspected tables/columns with a matching query_plan, or action='clarify' naming the one unresolved database decision."
 
     fileprivate static func planConsistencyCorrection(divergences: [String]) -> String {
         let details = divergences.prefix(4).joined(separator: "; ")
@@ -2679,19 +2449,6 @@ private enum AgentToolSessionKind: Hashable {
     case inspection
 }
 
-/// Why a run forced its final terminal request. The raw values go into the
-/// diagnostics.
-private enum ForcedTerminalReason: String {
-    /// The schema session was spent, or a spent session was called again.
-    case toolBudget
-    /// The last model turn ended without a terminal answer.
-    case turnBudget
-    /// The model kept calling tools after its terminal-required correction.
-    case terminalRequired
-    /// Too little wall clock was left for another tool turn.
-    case timeReserve
-}
-
 private struct SchemaToolAgentDiagnosticState {
     var logicalTurnCount: Int?
     var terminalToolSeen = false
@@ -2730,19 +2487,6 @@ private struct SchemaToolAgentDiagnosticState {
     var budgetRejectedToolCallCount = 0
     var resultBudgetToolErrorCount = 0
     var exhaustedToolSessions: Set<AgentToolSessionKind> = []
-    /// Set once the run forces its final answer; it stays forced from then.
-    var forcedTerminalReason: ForcedTerminalReason?
-    var forcedTerminalRequestCount = 0
-    var forcedTerminalSucceeded = false
-    var forcedTerminalFailure: String?
-
-    /// Records that the run's terminal answer was accepted, which for a
-    /// forced run means its forced request succeeded.
-    mutating func recordTerminalAccepted() {
-        if forcedTerminalReason != nil {
-            forcedTerminalSucceeded = true
-        }
-    }
 
     mutating func recordFailureCategory(_ category: SchemaToolAgentFailure.Category) {
         if category == .wallClockTimeout {
@@ -2909,13 +2653,7 @@ private struct SchemaToolAgentDiagnosticState {
                 ? resultBudgetToolErrorCount
                 : nil,
             toolBudgetExhausted: exhaustedToolSessions.contains(.schema) ? true : nil,
-            inspectionBudgetExhausted: exhaustedToolSessions.contains(.inspection) ? true : nil,
-            forcedTerminalReason: forcedTerminalReason?.rawValue,
-            forcedTerminalRequestCount: forcedTerminalRequestCount > 0
-                ? forcedTerminalRequestCount
-                : nil,
-            forcedTerminalSucceeded: forcedTerminalReason != nil ? forcedTerminalSucceeded : nil,
-            forcedTerminalFailure: forcedTerminalFailure
+            inspectionBudgetExhausted: exhaustedToolSessions.contains(.inspection) ? true : nil
         )
     }
 }
