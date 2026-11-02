@@ -869,7 +869,10 @@ struct TextToSQLEvalRunPlanningTests {
             encoding: .utf8
         )
 
-        for target in ["eval-cloud", "eval-cloud-agent", "eval-smoke", "eval-db-cloud", "eval-db-cloud-agent"] {
+        for target in [
+            "eval-cloud", "eval-cloud-agent", "eval-smoke", "eval-db-cloud", "eval-db-cloud-agent",
+            "eval-grounding-probe",
+        ] {
             let command = try Self.makeDryRunCommand(
                 repoRoot: repoRoot,
                 target: target,
@@ -910,6 +913,55 @@ struct TextToSQLEvalRunPlanningTests {
             )
             #expect(!command.contains("--schema-agent-grounding-judge"), "make -n \(target): \(command)")
         }
+    }
+
+    @Test func makefileGroundingProbeTargetRunsTheProbeSuiteWithSemanticGrading() throws {
+        let repoRoot = URL(fileURLWithPath: #filePath)
+            .deletingLastPathComponent()
+            .deletingLastPathComponent()
+        let text = try String(
+            contentsOf: repoRoot.appendingPathComponent("Makefile"),
+            encoding: .utf8
+        )
+
+        let phony = try #require(text.split(separator: "\n").first { $0.hasPrefix(".PHONY:") })
+        #expect(phony.split(separator: " ").contains("eval-grounding-probe"))
+        let recipe = try #require(Self.makefileRecipe(named: "eval-grounding-probe", in: text))
+        #expect(recipe.contains("set -a; if [ -f .env.eval.local ]; then . ./.env.eval.local; fi; set +a;"))
+
+        let command = try Self.makeDryRunCommand(
+            repoRoot: repoRoot,
+            target: "eval-grounding-probe",
+            commandContaining: Self.evalCommandMarker
+        )
+        #expect(
+            command.contains(
+                #"WidenEval --model "particle-1" --cloud-agent tools --suite Evals/suites/grounding-probe-v1.json --semantic-db"#
+            )
+        )
+        #expect(!command.contains("text-to-sql-v1.json"))
+        // Without GROUNDING_JUDGE the probe runs the app's default.
+        #expect(!command.contains("--schema-agent-grounding-judge"))
+
+        let configured = try Self.makeDryRunCommand(
+            repoRoot: repoRoot,
+            target: "eval-grounding-probe",
+            assignments: [
+                "GROUNDING_JUDGE=on", "REPEAT=3", "MAX_CLOUD_COST_USD=0.25", "OUTPUT=fixture-results",
+            ],
+            commandContaining: Self.evalCommandMarker
+        )
+        for flag in [
+            "--schema-agent-grounding-judge on", "--repeat 3", "--max-cloud-cost-usd 0.25",
+            "--output fixture-results",
+        ] {
+            #expect(configured.contains(flag), "make -n eval-grounding-probe: \(configured)")
+        }
+        // It is not a gate: it publishes no release docs.
+        for gateFlag in ["--release-gate-version", "--write-release-triage", "--release-triage-version"] {
+            #expect(!configured.contains(gateFlag), "make -n eval-grounding-probe: \(configured)")
+        }
+        #expect(!Self.releaseGateTargets.contains("eval-grounding-probe"))
     }
 
     @Test func makefileRejectsRemovedBackendInsteadOfRunningPaidCloudEval() throws {
@@ -1278,6 +1330,7 @@ struct TextToSQLEvalRunPlanningTests {
         ("eval-db-cloud-agent", []),
         ("eval-db-cloud-agent-case", ["CASE=commerce.fixture"]),
         ("eval-db-case", ["CASE=commerce.fixture"]),
+        ("eval-grounding-probe", []),
         ("eval-release", ["RELEASE_VERSION=fixture"]),
         ("eval-release-triage", ["RELEASE_VERSION=fixture"]),
         ("eval-release-preseason", []),
