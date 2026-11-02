@@ -45,11 +45,12 @@ public enum TextToSQLEvalSchemaAgentGroundingJudge {
 }
 
 extension TextToSQLEvalResult {
-    /// Records the run's first grounding-judge divergence and the judge-off
-    /// arm it implies. With the judge off the run would have ended on the
-    /// lexical clarification, so the off arm fails a case that expects SQL
-    /// and otherwise passes when that clarification meets the case's
-    /// clarification quality check, as the scorer would have scored it.
+    /// Records the run's first grounding-judge divergence, the release rules
+    /// a release breaks, and the judge-off arm it implies. With the judge off
+    /// the run would have ended on the lexical clarification, so the off arm
+    /// fails a case that expects SQL and otherwise passes when that
+    /// clarification meets the case's clarification quality check, as the
+    /// scorer would have scored it.
     func recordingGroundingJudgeDivergence(
         _ divergence: TextToSQLGroundingJudgeDivergence?,
         evalCase: TextToSQLEvalCase
@@ -58,6 +59,9 @@ extension TextToSQLEvalResult {
         let expectsClarification = evalCase.expected.decision == .clarify
         var copy = self
         copy.metrics.groundingJudgeDivergence = divergence.kind.rawValue
+        copy.metrics.groundingJudgeReleaseViolations = divergence.kind == .released
+            ? divergence.releaseViolations.map(\.rawValue)
+            : nil
         copy.metrics.groundingJudgeOffArmDecisionMatches = expectsClarification
         copy.metrics.groundingJudgeOffArmPassed = expectsClarification
             && TextToSQLEvalScorer.clarificationQuality(
@@ -155,6 +159,10 @@ public struct TextToSQLEvalGroundingJudgeSummary: Codable, Equatable, Sendable {
     /// Results whose divergence is `reAimed`: the judgment pointed the
     /// clarification at another word.
     public var reAimedResults: Int
+    /// Every `GroundingJudgeReleaseViolation` name, with the released
+    /// results whose kept SQL breaks that rule when checked again. Each count
+    /// is 0 unless the decision rule has a bug.
+    public var releaseViolationCounts: [String: Int]
     /// Released results whose case expects a clarification.
     public var releasesOnExpectedClarification: Int
     /// Released results whose case expects SQL.
@@ -217,6 +225,7 @@ public struct TextToSQLEvalGroundingJudgeSummary: Codable, Equatable, Sendable {
         vetoedResults: Int,
         releasedResults: Int,
         reAimedResults: Int,
+        releaseViolationCounts: [String: Int],
         releasesOnExpectedClarification: Int,
         releasedExpectedSQLResults: Int,
         releasedExpectedSQLSemanticPassed: Int,
@@ -238,6 +247,7 @@ public struct TextToSQLEvalGroundingJudgeSummary: Codable, Equatable, Sendable {
         self.vetoedResults = vetoedResults
         self.releasedResults = releasedResults
         self.reAimedResults = reAimedResults
+        self.releaseViolationCounts = releaseViolationCounts
         self.releasesOnExpectedClarification = releasesOnExpectedClarification
         self.releasedExpectedSQLResults = releasedExpectedSQLResults
         self.releasedExpectedSQLSemanticPassed = releasedExpectedSQLSemanticPassed
@@ -295,6 +305,16 @@ public struct TextToSQLEvalGroundingJudgeSummary: Codable, Equatable, Sendable {
             reAimedResults: results.filter {
                 $0.metrics.groundingJudgeDivergence == TextToSQLGroundingJudgeDivergence.Kind.reAimed.rawValue
             }.count,
+            releaseViolationCounts: Dictionary(
+                uniqueKeysWithValues: GroundingJudgeReleaseViolation.allCases.map { violation in
+                    (
+                        violation.rawValue,
+                        released.filter {
+                            $0.metrics.groundingJudgeReleaseViolations?.contains(violation.rawValue) == true
+                        }.count
+                    )
+                }
+            ),
             releasesOnExpectedClarification: released.filter {
                 expectedDecisions[$0.caseID] == .clarify
             }.count,
@@ -336,6 +356,7 @@ public struct TextToSQLEvalGroundingJudgeSummary: Codable, Equatable, Sendable {
             "| Grounding judge vetoed releases | \(Rows.value(summary?.vetoedResults)) |",
             "| Grounding judge released results | \(Rows.value(summary?.releasedResults)) |",
             "| Grounding judge re-aimed results | \(Rows.value(summary?.reAimedResults)) |",
+            "| Grounding judge release rule violations | \(Rows.countList(summary?.releaseViolationCounts)) |",
             "| Grounding judge releases on expected-clarify results | \(Rows.value(summary?.releasesOnExpectedClarification)) |",
             "| Grounding judge released expected-SQL semantic passes | \(Rows.share(summary?.releasedExpectedSQLSemanticPassed, of: summary?.releasedExpectedSQLResults)) |",
             "| Paired end-to-end passes (judge on, off) | \(pairedCell(summary?.endToEnd)) |",
